@@ -17,6 +17,13 @@ use mycode_core::{ProviderError, ProviderErrorKind};
 /// Default ceiling for establishing a connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Idle ceiling between response body chunks.
+///
+/// A peer that connects and then stops sending must not pin a turn until
+/// the user notices. Models that keep streaming reset the timer on every
+/// chunk, so a long generation is unaffected.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// One outbound POST described by an adapter.
 #[derive(Debug, Clone)]
 pub struct TransportCall {
@@ -65,6 +72,7 @@ impl ReqwestTransport {
     pub fn new() -> Result<Self, ProviderError> {
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
             .build()
             .map_err(|_| ProviderError::new(ProviderErrorKind::Unavailable))?;
         Ok(Self { client })

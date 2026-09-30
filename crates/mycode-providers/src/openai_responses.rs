@@ -12,7 +12,8 @@ use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    apply_reasoning_effort, assemble_blocks, join_text, merge_usage, usage_from_value,
+    MAX_STREAM_INDEX, apply_reasoning_effort, assemble_blocks, charge_stream, join_text,
+    merge_usage, usage_from_value,
 };
 
 /// Converts one provider-neutral request into a Responses body.
@@ -112,6 +113,10 @@ pub(crate) struct ResponsesReducer {
     function_calls: Vec<FunctionCallAccumulator>,
     usage: Option<Usage>,
     terminal_sent: bool,
+    /// Bytes retained across text, thinking, and tool-argument fragments.
+    accumulated: usize,
+    /// The provider cut the response off at the output-token limit.
+    length_limited: bool,
 }
 
 impl ResponsesReducer {
@@ -133,16 +138,18 @@ impl ResponsesReducer {
                 )
             }),
         );
-        let tool_use = !self.function_calls.is_empty();
+        let stop_reason = if self.length_limited {
+            StopReason::Length
+        } else if !self.function_calls.is_empty() {
+            StopReason::ToolUse
+        } else {
+            StopReason::Stop
+        };
         StreamEvent::Done {
             message: AssistantMessage {
                 blocks,
                 usage: self.usage,
-                stop_reason: if tool_use {
-                    StopReason::ToolUse
-                } else {
-                    StopReason::Stop
-                },
+                stop_reason,
             },
         }
     }
@@ -160,6 +167,12 @@ impl FrameReducer for ResponsesReducer {
             "response.output_text.delta" => {
                 let part = event["delta"].as_str().unwrap_or_default();
                 if !part.is_empty() {
+                    if !charge_stream(&mut self.accumulated, part.len()) {
+                        self.terminal_sent = true;
+                        return vec![crate::driver::protocol_error(
+                            "stream exceeded the output limit",
+                        )];
+                    }
                     self.text.push_str(part);
                     return vec![StreamEvent::TextDelta(part.to_owned())];
                 }
@@ -167,6 +180,12 @@ impl FrameReducer for ResponsesReducer {
             "response.reasoning_summary_text.delta" => {
                 let part = event["delta"].as_str().unwrap_or_default();
                 if !part.is_empty() {
+                    if !charge_stream(&mut self.accumulated, part.len()) {
+                        self.terminal_sent = true;
+                        return vec![crate::driver::protocol_error(
+                            "stream exceeded the output limit",
+                        )];
+                    }
                     self.thinking.push_str(part);
                     return vec![StreamEvent::ThinkingDelta(part.to_owned())];
                 }
@@ -174,9 +193,23 @@ impl FrameReducer for ResponsesReducer {
             "response.output_item.added" => {
                 let item = &event["item"];
                 if item["type"].as_str() == Some("function_call") {
+                    if self.function_calls.len() as u64 > MAX_STREAM_INDEX {
+                        self.terminal_sent = true;
+                        return vec![crate::driver::protocol_error(
+                            "tool call index exceeds the stream limit",
+                        )];
+                    }
+                    let id = item["call_id"].as_str().unwrap_or_default();
+                    let name = item["name"].as_str().unwrap_or_default();
+                    if !charge_stream(&mut self.accumulated, id.len() + name.len()) {
+                        self.terminal_sent = true;
+                        return vec![crate::driver::protocol_error(
+                            "stream exceeded the output limit",
+                        )];
+                    }
                     self.function_calls.push(FunctionCallAccumulator {
-                        id: item["call_id"].as_str().unwrap_or_default().to_owned(),
-                        name: item["name"].as_str().unwrap_or_default().to_owned(),
+                        id: id.to_owned(),
+                        name: name.to_owned(),
                         arguments: String::new(),
                         text_emitted: false,
                     });
@@ -184,6 +217,12 @@ impl FrameReducer for ResponsesReducer {
             }
             "response.function_call_arguments.delta" => {
                 let part = event["delta"].as_str().unwrap_or_default();
+                if !part.is_empty() && !charge_stream(&mut self.accumulated, part.len()) {
+                    self.terminal_sent = true;
+                    return vec![crate::driver::protocol_error(
+                        "stream exceeded the output limit",
+                    )];
+                }
                 if let Some(call) = self.function_calls.last_mut() {
                     call.arguments.push_str(part);
                     if !part.is_empty() && !call.id.is_empty() {
@@ -196,8 +235,15 @@ impl FrameReducer for ResponsesReducer {
                 }
             }
             "response.completed" | "response.incomplete" => {
-                let usage = &event["response"]["usage"];
+                let response = &event["response"];
+                let usage = &response["usage"];
                 self.usage = Some(merge_usage(self.usage, usage_from_value(usage)));
+                if event["type"].as_str() == Some("response.incomplete") {
+                    let reason = response["incomplete_details"]["reason"].as_str();
+                    if matches!(reason, Some("max_output_tokens" | "max_tokens" | "length")) {
+                        self.length_limited = true;
+                    }
+                }
                 return vec![self.assemble()];
             }
             "response.failed" | "error" => {

@@ -205,13 +205,11 @@ fn render_fold_chip(hidden: usize, cx: &Context<Workspace>) -> impl IntoElement 
             workspace.on_reveal_transcript(cx);
         }))
         .child(crate::ui::lamp(desk.violet))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!(
-                    "{} {hidden}",
-                    crate::i18n::t("earlier entries", "条更早的记录")
-                )),
-        )
+        .child(div().text_xs().text_color(theme.muted_foreground).child(
+            if crate::i18n::is_chinese() {
+                format!("{hidden} 条更早的记录")
+            } else {
+                format!("{hidden} earlier entries")
+            },
+        ))
 }

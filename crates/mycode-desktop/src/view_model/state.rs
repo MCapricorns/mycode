@@ -312,8 +312,19 @@ pub enum DesktopAction {
     AskAnswered,
     /// Mount another page of folded transcript blocks.
     TranscriptRevealMore,
-    /// Settings were persisted under CAS; carries the new revision.
-    SettingsSaved(u64),
+    /// Settings were persisted under CAS.
+    ///
+    /// `edit_epoch` is the epoch captured when the save was dispatched. The
+    /// reducer clears `dirty` only when the editor has not changed since.
+    SettingsSaved {
+        /// Revision the store assigned.
+        revision: u64,
+        /// Editor epoch at dispatch.
+        edit_epoch: u64,
+    },
+    /// A settings save failed. The document stays dirty and a chat turn's
+    /// `sending` flag is left alone.
+    SettingsSaveFailed(String),
     /// One provider's API key was stored or cleared; refreshes key markers.
     ProviderKeySaved {
         /// Provider ids with a stored key.

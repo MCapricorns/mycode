@@ -750,11 +750,12 @@ impl Workspace {
         let document = settings.to_settings();
         if let Err(message) = document.validate() {
             self.apply_action(
-                DesktopAction::Failed(format!("invalid settings: {message}")),
+                DesktopAction::SettingsSaveFailed(format!("invalid settings: {message}")),
                 cx,
             );
             return;
         }
+        self.settings_save_epoch = settings.edit_epoch;
         self.vm.settings.as_mut().expect("settings").saving = true;
         let revision = mycode_config::AuthorityRevision::new(settings.revision)
             .unwrap_or(mycode_config::AuthorityRevision::ABSENT);

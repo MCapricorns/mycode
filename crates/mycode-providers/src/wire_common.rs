@@ -7,7 +7,49 @@
 
 use serde_json::{Value, json};
 
-use mycode_core::{ContentBlock, ReasoningLevel, TextBlock, ThinkingBlock, ToolCall, Usage};
+use mycode_core::{
+    ContentBlock, ReasoningLevel, StopReason, TextBlock, ThinkingBlock, ToolCall, Usage,
+};
+
+/// Ceiling for one streamed assistant payload (text, thinking, and tool JSON).
+///
+/// Each SSE frame is already capped. This bounds the sum so a long or
+/// hostile stream cannot grow without limit before the terminal event.
+pub(crate) const MAX_STREAM_ACCUMULATED_BYTES: usize = 8 * 1024 * 1024;
+
+/// Highest content-block or tool-call index accepted in one stream.
+///
+/// A frame that names an enormous index would otherwise allocate that many
+/// accumulator slots in a single `feed` call.
+pub(crate) const MAX_STREAM_INDEX: u64 = 64;
+
+/// Maps a provider finish or stop token onto the agent stop reason.
+///
+/// `length` / `max_tokens` must stay [`StopReason::Length`]. The agent
+/// refuses to execute tool calls that were cut off by the output limit;
+/// folding those tokens into `Stop` makes it run the partial arguments.
+#[must_use]
+pub(crate) fn map_stop_reason(token: &str) -> StopReason {
+    match token {
+        "tool_calls" | "function_call" | "tool_use" => StopReason::ToolUse,
+        "length" | "max_tokens" => StopReason::Length,
+        _ => StopReason::Stop,
+    }
+}
+
+/// Accounts `extra` bytes toward [`MAX_STREAM_ACCUMULATED_BYTES`].
+///
+/// Returns false once the ceiling is crossed. The caller ends the stream
+/// with a protocol error instead of dispatching a partial tool call.
+pub(crate) fn charge_stream(used: &mut usize, extra: usize) -> bool {
+    match used.checked_add(extra) {
+        Some(next) if next <= MAX_STREAM_ACCUMULATED_BYTES => {
+            *used = next;
+            true
+        }
+        _ => false,
+    }
+}
 
 /// Applies the requested reasoning effort to an OpenAI-style body.
 pub(crate) fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {

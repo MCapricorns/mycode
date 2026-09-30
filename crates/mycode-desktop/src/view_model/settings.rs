@@ -62,6 +62,10 @@ pub struct SettingsState {
     pub saving: bool,
     /// Unsaved local edits exist.
     pub dirty: bool,
+    /// Bumped on every local edit. A save ack clears `dirty` only when this
+    /// still matches the epoch captured at dispatch, so edits made while the
+    /// save was in flight are not reported as persisted.
+    pub edit_epoch: u64,
 }
 
 impl SettingsState {
@@ -90,6 +94,7 @@ impl SettingsState {
             tools: settings.tools.clone(),
             saving: false,
             dirty: false,
+            edit_epoch: 0,
         }
     }
 

@@ -14,7 +14,9 @@ use mycode_core::{
 use mycode_core::{ProviderError, ProviderErrorKind, ReasoningLevel, Request, StreamEvent};
 
 use crate::driver::FrameReducer;
-use crate::wire_common::{merge_usage, usage_from_value};
+use crate::wire_common::{
+    MAX_STREAM_INDEX, charge_stream, map_stop_reason, merge_usage, usage_from_value,
+};
 
 /// Output ceiling sent with every request; the Messages API requires it.
 pub const MAX_TOKENS_DEFAULT: u64 = 4096;
@@ -176,6 +178,8 @@ pub(crate) struct MessagesReducer {
     stop_reason: Option<StopReason>,
     message_stopped: bool,
     terminal_sent: bool,
+    /// Bytes retained across text, thinking, and tool-argument fragments.
+    accumulated: usize,
     /// Extracts `<tool_call>` markup some endpoints stream as plain text.
     xml: crate::xml_tool_calls::XmlToolCallParser,
     /// Counter for synthetic ids minted by the XML filter.
@@ -288,7 +292,13 @@ impl FrameReducer for MessagesReducer {
                 self.cache_read_tokens = merged.cache_read_tokens;
             }
             "content_block_start" => {
-                let index = event["index"].as_u64().unwrap_or_default() as usize;
+                let index = event["index"].as_u64().unwrap_or_default();
+                if index > MAX_STREAM_INDEX {
+                    self.terminal_sent = true;
+                    return vec![crate::driver::protocol_error(
+                        "content block index exceeds the stream limit",
+                    )];
+                }
                 let block = &event["content_block"];
                 let accumulator = match block["type"].as_str().unwrap_or_default() {
                     "thinking" | "redacted_thinking" => BlockAccumulator::Thinking {
@@ -304,6 +314,25 @@ impl FrameReducer for MessagesReducer {
                         text: block["text"].as_str().unwrap_or_default().to_owned(),
                     },
                 };
+                let weight = match &accumulator {
+                    BlockAccumulator::Thinking { text, signature } => {
+                        text.len() + signature.as_ref().map_or(0, String::len)
+                    }
+                    BlockAccumulator::ToolUse {
+                        id,
+                        name,
+                        arguments,
+                    } => id.len() + name.len() + arguments.len(),
+                    BlockAccumulator::Text { text } => text.len(),
+                    BlockAccumulator::Empty => 0,
+                };
+                if !charge_stream(&mut self.accumulated, weight) {
+                    self.terminal_sent = true;
+                    return vec![crate::driver::protocol_error(
+                        "stream exceeded the output limit",
+                    )];
+                }
+                let index = index as usize;
                 while self.blocks.len() <= index {
                     self.blocks.push(BlockAccumulator::Empty);
                 }
@@ -317,6 +346,12 @@ impl FrameReducer for MessagesReducer {
                         let part = delta["text"].as_str().unwrap_or_default();
                         if part.is_empty() {
                             return Vec::new();
+                        }
+                        if !charge_stream(&mut self.accumulated, part.len()) {
+                            self.terminal_sent = true;
+                            return vec![crate::driver::protocol_error(
+                                "stream exceeded the output limit",
+                            )];
                         }
                         let mut events = Vec::new();
                         for piece in self.xml.feed(part) {
@@ -349,14 +384,20 @@ impl FrameReducer for MessagesReducer {
                         return events;
                     }
                     "thinking_delta" => {
-                        if let BlockAccumulator::Thinking { text, .. } = self
-                            .blocks
-                            .get_mut(self.current)
-                            .unwrap_or(&mut BlockAccumulator::Empty)
-                        {
-                            let part = delta["thinking"].as_str().unwrap_or_default();
-                            text.push_str(part);
-                            if !part.is_empty() {
+                        let part = delta["thinking"].as_str().unwrap_or_default();
+                        if !part.is_empty() {
+                            if !charge_stream(&mut self.accumulated, part.len()) {
+                                self.terminal_sent = true;
+                                return vec![crate::driver::protocol_error(
+                                    "stream exceeded the output limit",
+                                )];
+                            }
+                            if let BlockAccumulator::Thinking { text, .. } = self
+                                .blocks
+                                .get_mut(self.current)
+                                .unwrap_or(&mut BlockAccumulator::Empty)
+                            {
+                                text.push_str(part);
                                 return vec![StreamEvent::ThinkingDelta(part.to_owned())];
                             }
                         }
@@ -373,6 +414,12 @@ impl FrameReducer for MessagesReducer {
                     }
                     "input_json_delta" => {
                         let part = delta["partial_json"].as_str().unwrap_or_default();
+                        if !part.is_empty() && !charge_stream(&mut self.accumulated, part.len()) {
+                            self.terminal_sent = true;
+                            return vec![crate::driver::protocol_error(
+                                "stream exceeded the output limit",
+                            )];
+                        }
                         if let Some(id) = self.current_id() {
                             if let BlockAccumulator::ToolUse { arguments, .. } =
                                 &mut self.blocks[self.current]
@@ -393,10 +440,7 @@ impl FrameReducer for MessagesReducer {
             "content_block_stop" => {}
             "message_delta" => {
                 if let Some(stop) = event["delta"]["stop_reason"].as_str() {
-                    self.stop_reason = Some(match stop {
-                        "tool_use" => StopReason::ToolUse,
-                        _ => StopReason::Stop,
-                    });
+                    self.stop_reason = Some(map_stop_reason(stop));
                 }
                 if event.get("usage").is_some() {
                     let parsed = usage_from_value(&event["usage"]);

@@ -19,6 +19,15 @@ impl Workspace {
     // ---- updates ----
 
     pub(crate) fn on_check_update(&mut self, manual: bool, cx: &mut Context<Self>) {
+        // Checking replaces the update state with `Checking`. Doing that
+        // mid-download makes the next offer look idle and starts a second
+        // download of the same package.
+        if matches!(
+            self.vm.update,
+            UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+        ) {
+            return;
+        }
         if manual {
             self.manual_update_check = true;
         }

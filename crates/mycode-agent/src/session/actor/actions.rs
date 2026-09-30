@@ -128,9 +128,11 @@ impl SessionCore {
             .ok_or(OpFail::Domain(SessionError::NotFound))?;
         SessionLedger::check_ordering(branch_state, kind, call_id.as_ref())
             .map_err(OpFail::Domain)?;
+        let record_len = store::encoded_record_len(call_id.is_some(), payload.len())
+            .ok_or(OpFail::Domain(SessionError::Limit))?;
         let total = ledger
             .total_bytes
-            .checked_add(payload.len() as u64)
+            .checked_add(record_len)
             .ok_or(OpFail::Domain(SessionError::Limit))?;
         if total > MAX_SESSION_TOTAL_BYTES {
             return Err(OpFail::Domain(SessionError::Limit));
