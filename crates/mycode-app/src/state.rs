@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use std::sync::mpsc;
 
 use mycode_agent::session::SessionId;
 use mycode_agent::session::SessionService;
@@ -109,7 +108,7 @@ pub(crate) fn catalog_info_from(cache: CachedCatalog) -> CatalogInfo {
 /// Refreshes the provider catalog and reports a successful swap.
 pub(crate) async fn refresh_catalog(
     state: &CoreState,
-    events: &mpsc::Sender<BridgeEvent>,
+    events: &crate::BridgeEventTx,
     force: bool,
 ) -> BridgeReply {
     let settings = match read_app_settings(&state.home) {
@@ -138,7 +137,7 @@ pub(crate) async fn refresh_catalog(
             if let Ok(mut guard) = state.catalog.write() {
                 *guard = info.clone();
             }
-            let _ = events.send(BridgeEvent::CatalogUpdated {
+            let _ = events.try_send(BridgeEvent::CatalogUpdated {
                 providers,
                 fetched_at,
             });
@@ -149,14 +148,14 @@ pub(crate) async fn refresh_catalog(
 }
 
 /// One background catalog refresh shortly after startup.
-pub(crate) fn spawn_catalog_refresh(state: Arc<CoreState>, events: mpsc::Sender<BridgeEvent>) {
+pub(crate) fn spawn_catalog_refresh(state: Arc<CoreState>, events: crate::BridgeEventTx) {
     tokio::spawn(async move {
         refresh_catalog(&state, &events, false).await;
     });
 }
 
 /// One background update check shortly after startup.
-pub(crate) fn spawn_update_check(state: Arc<CoreState>, events: mpsc::Sender<BridgeEvent>) {
+pub(crate) fn spawn_update_check(state: Arc<CoreState>, events: crate::BridgeEventTx) {
     tokio::spawn(async move {
         let home = state.home.clone();
         let Ok(Ok(ui_state)) = tokio::task::spawn_blocking(move || read_ui_state(&home)).await
@@ -170,7 +169,7 @@ pub(crate) fn spawn_update_check(state: Arc<CoreState>, events: mpsc::Sender<Bri
             return;
         };
         if let Ok(Some(offer)) = crate::updates::latest_release(&client).await {
-            let _ = events.send(BridgeEvent::UpdateAvailable { offer });
+            let _ = events.try_send(BridgeEvent::UpdateAvailable { offer });
         }
     });
 }

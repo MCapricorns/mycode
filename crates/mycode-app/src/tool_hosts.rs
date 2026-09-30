@@ -1,8 +1,6 @@
 //! Host-backed tools bridged into the agent's registry: `ask_user` and the
 //! settings-configured web search backend.
 
-use std::sync::mpsc;
-
 use mycode_config::{AppSettings, HomeLayout, read_app_settings, read_provider_secrets};
 use tokio_util::sync::CancellationToken;
 
@@ -66,7 +64,7 @@ pub(crate) fn deliver_ask_answer(session_id: &str, answers: Vec<String>) -> Resu
 /// Host channel forwarding `ask_user` waits through the UI event stream.
 pub(crate) struct BridgeAskChannel {
     pub(crate) session_id: String,
-    pub(crate) events: mpsc::Sender<BridgeEvent>,
+    pub(crate) events: crate::BridgeEventTx,
     pub(crate) answer: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<Vec<String>>>>,
 }
 
@@ -87,7 +85,7 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
                 )
             })
             .collect();
-        let _ = self.events.send(BridgeEvent::AskRequested {
+        let _ = self.events.try_send(BridgeEvent::AskRequested {
             session_id: self.session_id.clone(),
             questions: rows,
         });

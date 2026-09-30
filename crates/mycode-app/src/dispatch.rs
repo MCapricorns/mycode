@@ -2,7 +2,6 @@
 //! runtime, dispatches each to its owning module, and replies.
 
 use std::sync::Arc;
-use std::sync::mpsc;
 
 use mycode_config::{HomeLayout, read_ui_state, replace_ui_state};
 use mycode_providers::catalog::http_client;
@@ -21,14 +20,12 @@ use crate::state::{
 };
 use crate::tool_hosts::deliver_ask_answer;
 use crate::turn::chat_turn;
-use crate::{
-    BridgeCommand, BridgeEvent, BridgeReply, CatalogInfo, WithReply, protocol::SessionSummary,
-};
+use crate::{BridgeCommand, BridgeReply, CatalogInfo, WithReply, protocol::SessionSummary};
 
 pub(crate) fn run_core(
     home: HomeLayout,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<WithReply>,
-    events: mpsc::Sender<BridgeEvent>,
+    events: crate::BridgeEventTx,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()

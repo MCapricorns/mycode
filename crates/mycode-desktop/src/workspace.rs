@@ -12,9 +12,10 @@ use mycode_config::HomeLayout;
 
 use crate::ui::{BackendForm, McpForm, ProviderForm};
 use crate::view_model::{DesktopAction, MainView, WorkspaceState, reduce};
-use mycode_app::{BridgeCommand, BridgeEvent, CoreBridge};
+use mycode_app::{BridgeCommand, BridgeEventRx, CoreBridge};
 
 mod bridge;
+mod git;
 mod projects;
 mod settings_editor;
 mod updates_data;
@@ -42,20 +43,6 @@ fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
     let room = (available - px(64.)).max(floor.min(available));
     desired.min(room)
 }
-
-/// Poll cadence for streaming chat events from the core thread.
-const EVENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// Git status poll cadence (ticks) while the working tree keeps changing.
-const GIT_POLL_FAST_TICKS: u64 = 40;
-
-/// Idle backoff cap for the git poll: 2 s → 4 s → 8 s while the snapshot is
-/// unchanged, so an idle window stops spawning a `git status` process every
-/// 2 s; any change or folder switch snaps back to the fast cadence.
-const GIT_POLL_MAX_STRETCH: u32 = 2;
-
-/// Re-run the automatic update check after one day of runtime.
-const UPDATE_RECHECK_TICKS: u64 = 24 * 60 * 60 * 1000 / EVENT_POLL_INTERVAL.as_millis() as u64;
 
 /// Opens the main window over one owned home.
 ///
@@ -149,29 +136,31 @@ pub struct Workspace {
     next_toast_id: u64,
     /// In-app folder browser. `None` while the native dialog is not used.
     pub(crate) project_picker: Option<crate::ui::project_picker::ProjectPicker>,
-    runtime_ticks: u64,
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
     conversation_scroll: gpui_kit::ScrollHandle,
     /// Latest git status for the open folder.
     git: crate::git_status::GitSnapshot,
-    git_rx: Option<std::sync::mpsc::Receiver<crate::git_status::GitSnapshot>>,
-    /// Folder the in-flight status poll was started for.
-    git_poll_root: Option<String>,
+    /// Platform watcher for the open folder. Dropping it stops refresh.
+    git_watcher: Option<git::Watcher>,
+    /// Bumped when the watched folder changes so a stale read is dropped.
+    git_generation: u64,
+    /// A `git status` process is running.
+    git_status_inflight: bool,
+    /// The tree changed again while a status read was in flight.
+    git_status_pending: bool,
     /// Path whose diff is shown in the changes panel.
     git_diff_path: Option<String>,
     git_diff: String,
-    git_diff_rx: Option<std::sync::mpsc::Receiver<(String, String)>>,
-    git_seen: Option<String>,
-    git_poll_stretch: u32,
-    git_next_poll: u64,
+    /// Bumped when the diff target changes so a stale diff is dropped.
+    git_diff_generation: u64,
 }
 
 impl Workspace {
     /// Builds the workspace and issues the initial core loads.
     pub fn new(
         bridge: CoreBridge,
-        events: std::sync::mpsc::Receiver<BridgeEvent>,
+        events: BridgeEventRx,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
@@ -215,17 +204,15 @@ impl Workspace {
             toasts: Vec::new(),
             next_toast_id: 0,
             project_picker: None,
-            runtime_ticks: 0,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
             git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
-            git_rx: None,
-            git_poll_root: None,
+            git_watcher: None,
+            git_generation: 0,
+            git_status_inflight: false,
+            git_status_pending: false,
             git_diff_path: None,
             git_diff: String::new(),
-            git_diff_rx: None,
-            git_seen: None,
-            git_poll_stretch: 0,
-            git_next_poll: 0,
+            git_diff_generation: 0,
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -234,6 +221,7 @@ impl Workspace {
             })
             .detach();
             workspace.spawn_event_pump(events, cx);
+            workspace.spawn_update_recheck(cx);
             workspace.dispatch(BridgeCommand::ListSessions, cx);
             workspace.dispatch(BridgeCommand::LoadSettings, cx);
             workspace.dispatch(BridgeCommand::LoadUiState, cx);
@@ -242,65 +230,31 @@ impl Workspace {
         workspace
     }
 
-    /// Polls the core event channel and folds streaming events into state.
-    fn spawn_event_pump(
-        &self,
-        events: std::sync::mpsc::Receiver<BridgeEvent>,
-        cx: &mut Context<Self>,
-    ) {
+    /// Parks until the core sends, then folds that burst into state.
+    fn spawn_event_pump(&self, events: BridgeEventRx, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(EVENT_POLL_INTERVAL).await;
-                loop {
-                    match events.try_recv() {
-                        Ok(event) => {
-                            if this
-                                .update(cx, |workspace, cx| workspace.apply_event(event, cx))
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(_) => return,
+                };
+                if this
+                    .update(cx, |workspace, cx| workspace.apply_event(event, cx))
+                    .is_err()
+                {
+                    return;
+                }
+                while let Ok(event) = events.try_recv() {
+                    if this
+                        .update(cx, |workspace, cx| workspace.apply_event(event, cx))
+                        .is_err()
+                    {
+                        return;
                     }
                 }
-                let _ = this.update(cx, |workspace, cx| workspace.on_runtime_tick(cx));
             }
         })
         .detach();
-    }
-
-    /// Periodic background work: the daily update re-check.
-    fn on_runtime_tick(&mut self, cx: &mut Context<Self>) {
-        self.runtime_ticks += 1;
-        if self.runtime_ticks.is_multiple_of(UPDATE_RECHECK_TICKS) && self.vm.auto_update {
-            self.on_check_update(false, cx);
-        }
-        self.poll_git(cx);
-        let current = self.vm.project_dir.clone();
-        if current != self.git_seen {
-            self.git_seen = current.clone();
-            self.git_poll_stretch = 0;
-            // Drop a poll started for the previous folder. Applying it
-            // would paint that folder's status onto the one now open.
-            self.git_rx = None;
-            self.git_poll_root = None;
-            self.git_diff_rx = None;
-            self.git_diff_path = None;
-            self.git_diff.clear();
-            self.git = match current {
-                Some(_) => {
-                    crate::git_status::GitSnapshot::empty(crate::i18n::t("Loading…", "正在加载…"))
-                }
-                None => {
-                    crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录"))
-                }
-            };
-            self.request_git_status();
-        } else if self.runtime_ticks >= self.git_next_poll {
-            self.request_git_status();
-        }
     }
 
     pub(crate) fn git(&self) -> &crate::git_status::GitSnapshot {
@@ -313,80 +267,6 @@ impl Workspace {
 
     pub(crate) fn git_diff(&self) -> &str {
         &self.git_diff
-    }
-
-    pub(crate) fn on_select_git_file(&mut self, path: &str) {
-        if self.git_diff_path.as_deref() == Some(path) {
-            self.git_diff_path = None;
-            self.git_diff.clear();
-            return;
-        }
-        let Some(root) = self.vm.project_dir.clone() else {
-            return;
-        };
-        let path = path.to_owned();
-        self.git_diff_path = Some(path.clone());
-        self.git_diff = crate::i18n::t("Loading diff…", "正在加载差异…").to_owned();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let diff = crate::git_status::read_diff(std::path::Path::new(&root), &path);
-            let _ = tx.send((path, diff));
-        });
-        self.git_diff_rx = Some(rx);
-    }
-
-    fn request_git_status(&mut self) {
-        self.git_next_poll =
-            self.runtime_ticks + GIT_POLL_FAST_TICKS * (1_u64 << self.git_poll_stretch);
-        if self.git_rx.is_some() {
-            return;
-        }
-        let Some(root) = self.vm.project_dir.clone() else {
-            self.git =
-                crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录"));
-            self.git_poll_root = None;
-            return;
-        };
-        self.git_poll_root = Some(root.clone());
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(crate::git_status::read_status(std::path::Path::new(&root)));
-        });
-        self.git_rx = Some(rx);
-    }
-
-    fn poll_git(&mut self, cx: &mut Context<Self>) {
-        let mut changed = false;
-        if let Some(rx) = &self.git_rx
-            && let Ok(snapshot) = rx.try_recv()
-        {
-            self.git_rx = None;
-            let current = self.vm.project_dir.clone();
-            if self.git_poll_root != current {
-                self.git_poll_root = None;
-            } else if self.git != snapshot {
-                self.git = snapshot;
-                self.git_poll_stretch = 0;
-                changed = true;
-            } else {
-                self.git_poll_stretch = self
-                    .git_poll_stretch
-                    .saturating_add(1)
-                    .min(GIT_POLL_MAX_STRETCH);
-            }
-        }
-        if let Some(rx) = &self.git_diff_rx
-            && let Ok((path, diff)) = rx.try_recv()
-        {
-            if self.git_diff_path.as_deref() == Some(path.as_str()) {
-                self.git_diff = diff;
-            }
-            self.git_diff_rx = None;
-            changed = true;
-        }
-        if changed {
-            cx.notify();
-        }
     }
 
     fn on_composer_event(
@@ -422,7 +302,11 @@ impl Workspace {
                 | DesktopAction::UsageRecorded { .. }
         );
         let previous_error = self.vm.error.clone();
+        let previous_project = self.vm.project_dir.clone();
         reduce(&mut self.vm, action);
+        if self.vm.project_dir != previous_project {
+            self.rewatch_git(cx);
+        }
         if self.vm.error.is_some()
             && self.vm.error != previous_error
             && let Some(message) = self.vm.error.take()

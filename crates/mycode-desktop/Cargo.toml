@@ -6,7 +6,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+async-channel = { workspace = true }
 gpui-kit = "0.6"
+notify = "7"
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
 mycode-providers = { path = "../mycode-providers" }
