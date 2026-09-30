@@ -59,7 +59,6 @@
 
 - 删除全部测试套件与仅被测试引用的代码（测试钩子、注入缝隙、dev 依赖），共约 1.3 万行；测试将在之后按需重写。
 - 工作区内 21 个 `mod.rs` 全部改为现代模块文件布局，并以工作区级 `clippy::mod_module_files` 强制不再出现。
-- 删除从未接入产品的 Pack/WASM 插件子系统（约 1.4 万行死代码）。配置库只保留实际使用的设置、密钥、UI 状态、待办、会话与子代理文档。
 - 删除只有测试在用的接口：agent 的 steer/follow-up 队列、`AgentHandle` 与队列模式（消息排队由应用层调度负责，`TurnOutcome` 只剩 Completed / Aborted），桌面的 `MentionDismissed` / `UnboundSessionsAssigned` / `DismissError` 动作。
 - 编译提速：HTTP 客户端改用 OS TLS 并去掉 http2 特性；`base64` 对齐到 0.22；移除未使用的 `syn` 依赖。
 - 发布构建打开 fat LTO、O3 与单 codegen unit，追求最佳运行性能。

@@ -1,5 +1,5 @@
 //! The per-turn environment: everything one turn of the agent loop needs
-//! from its surroundings (design doc `01-agent-core.md` §3).
+//! from its surroundings. See `docs/agent.md`.
 
 use std::path::PathBuf;
 

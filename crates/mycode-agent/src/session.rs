@@ -4,11 +4,10 @@
 //! strict manifests are published through the hardened owned-file
 //! transaction, branch logs are append-only framed records with payload
 //! digests, and staged payloads make reservations single-use under
-//! expected-head compare-and-swap. The service runs on the T8 typed task
-//! runtime inside a Host-owned generation fence; recovery is chunked per
-//! pull and reports the frozen `recovering`/`replaying` progress phases.
-//! The typed surface is the first-party Rust projection of design doc
-//! `07-pack-abi-session-resources.md` §3.
+//! expected-head compare-and-swap. The service runs on one session actor
+//! inside a generation fence; recovery is chunked per pull and reports
+//! `recovering` / `replaying` before the requested action runs.
+//! The typed surface is documented in `docs/agent.md`.
 mod actor;
 mod digest;
 mod dto;

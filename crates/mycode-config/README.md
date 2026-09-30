@@ -1,6 +1,6 @@
 # mycode-config
 
-MYCode 的 home 布局与严格配置文档。产品路径不再使用 Pack/WASM 插件树；会话与压缩检查点都在 `sessions/` 下。
+MYCode 的 home 布局与严格配置文档。会话与压缩检查点都在 `sessions/` 下。
 
 ## Home
 
@@ -26,4 +26,4 @@ MYCode 的 home 布局与严格配置文档。产品路径不再使用 Pack/WASM
 - `session_relative(id, file)` 生成 `sessions/<id>/<file>`。
 - 未绑定项目时工具 cwd 是 `scratch/`，不是按会话 id 命名的目录。
 
-解析失败闭包。没有旧布局迁移。
+路径不合法或文档校验失败时拒绝读取。

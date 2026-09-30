@@ -1,10 +1,9 @@
-//! Message model — the core vocabulary exchanged between user, model, tools,
-//! and plugins (design doc `01-agent-core.md` §1).
+//! Message model: the shared conversation values exchanged by the user, the
+//! model, and tools.
 //!
-//! Serde uses the default externally-tagged representation here. Provider wire
-//! handling belongs to a future signed Provider Pack behind the Host
-//! `ProviderPackService`; durable Session encoding belongs to the future signed
-//! Session Pack behind `SessionPackService`.
+//! Serde uses the default externally-tagged representation. Wire encoding
+//! belongs to `mycode-providers`; durable session encoding belongs to
+//! `mycode-agent`. See `docs/core.md`.
 
 use std::sync::Arc;
 

@@ -1,7 +1,6 @@
-//! The `Tool` trait — builtin tools and Rust-side plugin tools implement it;
-//! `ToolDyn` erases the associated argument type for storage in the
-//! [`ToolRegistry`](crate::registry::ToolRegistry) (design doc
-//! `02-tools-permissions.md` §1–2).
+//! The `Tool` trait. Builtin tools implement it; `ToolDyn` erases the
+//! associated argument type for storage in the
+//! [`ToolRegistry`](crate::registry::ToolRegistry). See `docs/tools.md`.
 //!
 //! Single-source schema: `schemars` derives one JSON Schema per tool's
 //! `Args`, used both for the LLM tool spec (`ToolSpec::params_schema`) and
@@ -66,7 +65,7 @@ impl ToolResult {
 
 /// Failure modes of a tool invocation. The dispatcher (agent loop)
 /// converts these into `is_error` tool results for the model rather than
-/// crashing the loop (design doc `01-agent-core.md` §3).
+/// crashing the loop. See `docs/agent.md`.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ToolError {
     /// Arguments failed schema validation or are semantically invalid.
@@ -75,7 +74,7 @@ pub enum ToolError {
     /// The tool ran but failed (missing file, I/O error, …).
     #[error("{0}")]
     Execution(String),
-    /// A plugin trap fired (WASM trap or plugin panic).
+    /// The tool implementation panicked.
     #[error("plugin trap: {0}")]
     PluginTrap(String),
 }

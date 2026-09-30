@@ -1,8 +1,7 @@
-//! `ToolRegistry` — name-keyed store of type-erased tools
-//! (design doc `02-tools-permissions.md` §2).
+//! `ToolRegistry` — name-keyed store of type-erased tools. See `docs/tools.md`.
 //!
-//! Registration is **last-wins** per name (pi semantics): a plugin can
-//! override a builtin by registering under the same name. Specs are
+//! Registration is **last-wins** per name: a later registration replaces an
+//! earlier tool under the same name. Specs are
 //! served sorted by tool name so provider requests serialize
 //! deterministically.
 

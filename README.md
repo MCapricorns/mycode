@@ -1,99 +1,135 @@
 # mycode
 
-A local-first desktop coding agent for Windows and macOS. The model
-conversation, the tool calls, and every session live on your machine —
-you bring your own API keys, the app does the rest.
+本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。支持 Windows 10/11 x64 与 macOS Apple Silicon。
 
-## The window
+[许可证](LICENSE) · [文档](docs/README.md) · [发布](https://github.com/MCapricorns/mycode/releases) · [更新日志](CHANGELOG.md)
 
-- **Left — workspace.** One workspace can mount several folders (a
-  frontend and a backend, say). Sessions hang off their folder; the
-  current session's working directory resolves relative paths, other
-  folders use absolute paths.
-- **Center — chat.** Switch model and thinking effort next to the
-  composer.
-- **Right — context.** The model the session is using plus the current
-  folder's git changes; click a file to see its diff.
+English notes are [below](#english).
 
-Light and dark themes with several color schemes.
+## 功能
 
-## Models
+- **命名工作区。** 一个工作区挂多个文件夹（例如前端和后端）。会话属于工作区；当前文件夹解析相对路径，其它文件夹用绝对路径。
+- **对话。** 输入框旁切换模型和思考强度。
+- **改动。** 右侧是当前模型和该文件夹的 git 改动，点文件看 diff。
+- **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
+- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及钉住程序映像的 `exec` 和走 shell 的 `shell`。网页检索、向你提问、子代理和 MCP 走同一张注册表。
+- **子代理。** 内置 scout、artisan、steward、sentinel，也可以在 `agents/` 里加 Markdown 角色。
+- **界面。** 中英双语，浅色 / 深色和几套配色。发现新版本后下载校验，确认后再重启安装。
 
-The built-in [models.dev](https://models.dev) catalog covers the common
-providers — paste an API key and go. Custom endpoints speak one of three
-protocols: `anthropic-messages`, `openai-completions`,
-`openai-responses`.
+工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
-## Tools
+## 下载
 
-**Files**
+发布页：[Releases](https://github.com/MCapricorns/mycode/releases)
 
-- `read` — read a file with line numbers.
-- `write` — create or replace a file.
-- `edit` — apply exact string replacements; fuzzy matching recovers from
-  small drift.
+| 文件 | 平台 |
+| --- | --- |
+| `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
+| `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
 
-**Search**
+每个 zip 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。
 
-- `find` — find files by glob, bounded by the search root.
-- `grep` — ripgrep-style content search with include/exclude globs.
+## 从源码构建
 
-**Execution**
-
-- `exec` — run a pinned executable with argument limits and output caps.
-- `shell` — run a command through the user's shell profile.
-
-**Web**
-
-- `web_search` — bounded web search (Querit, AnySearch, or a custom
-  backend).
-- `fetch_content` — fetch page text before citing it.
-
-**Coordination**
-
-- `ask_user` — ask you a clarifying question mid-turn.
-- `task` — delegate to subagents: the built-in scout, artisan, steward,
-  and sentinel roles, or custom roles from `agents/`. Subagents can use
-  connected MCP servers and skills.
-
-**MCP**
-
-Connect local commands over stdio or remote servers over Streamable
-HTTP. Tools are used in two steps: `search_tool` fetches a schema, then
-`use_tool` calls it.
-
-Tool lines always say what happened — which file was read, what was
-searched, which command ran.
-
-## Download
-
-[Releases](https://github.com/MCapricorns/mycode/releases)
-
-- `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` — Windows 10/11 x64
-- `mycode-desktop-v<version>-aarch64-apple-darwin.zip` — macOS Apple Silicon
-
-Intel macOS builds were dropped after 0.4.0. See
-[CHANGELOG.md](CHANGELOG.md).
-
-## Build
-
-Rust stable; MSVC toolchain on Windows.
+需要 Rust stable。Windows 使用 MSVC。
 
 ```text
 cargo build --release -p mycode-desktop
 ```
 
-Checks (no test suites; CI runs the same fmt + clippy gates):
+发布配置打开 fat LTO，链接会比开发构建慢。开发配置只保留行号表，避免调试信息占满磁盘。
+
+## 数据
+
+`MYCODE_HOME` 未设置时，数据在 `~/.mycode`。
+
+```text
+~/.mycode/
+├─ settings.json          提供商、MCP、网页、外观。不含密钥
+├─ secrets.json           API 密钥
+├─ ui.json                工作区、文件夹、会话归属
+├─ catalog-cache.json     模型目录缓存
+├─ sessions/<id>/         账本、压缩检查点
+├─ checkpoints/<id>/      改文件之前的快照
+└─ scratch/               未绑定文件夹时的工作目录
+```
+
+把整个目录换到另一台机器时，设置 `MYCODE_HOME` 指向它。应用不会跟随符号链接走出这个根。
+
+## 文档
+
+模块怎么划分、一条消息怎么走完，见 [docs/README.md](docs/README.md)。
+
+## 开发
+
+质量门与 CI 相同，目前没有测试套件：
 
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Releases are manual: tag first, then run the `ci` workflow via
-`workflow_dispatch` with the tag and hand-written notes.
+推送到 `main` 的 pull request 在 Windows x64 和 macOS Apple Silicon 上跑这两步。发版是手动的：先打标签，再对 `ci` workflow 做 `workflow_dispatch`，填入标签和手写说明。说明不会从提交记录生成。
 
-## Data
+## 许可
+
+[Apache-2.0](LICENSE)
+
+---
+
+## English
+
+mycode is a local-first desktop coding agent for Windows and macOS. The
+conversation, the tool calls, and every session stay on your machine. You
+bring the API keys.
+
+### Features
+
+- **Named workspaces.** One workspace mounts several folders. Sessions
+  belong to the workspace. The current folder resolves relative paths;
+  the others are absolute.
+- **Chat.** Switch model and thinking effort beside the composer.
+- **Changes.** The right-hand pane shows the session model and the
+  current folder's git diff.
+- **Models.** The built-in [models.dev](https://models.dev) catalog
+  covers common providers. Custom endpoints speak
+  `anthropic-messages`, `openai-completions`, or `openai-responses`.
+  Copilot, Codex, and xAI can sign in with a device code.
+- **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`.
+  `exec` launches a pinned executable; `shell` uses your shell profile.
+  Web search, questions, subagents, and MCP share one registry.
+- **Subagents.** Built-in scout, artisan, steward, and sentinel roles,
+  or custom Markdown roles under `agents/`.
+- **UI.** English and Chinese, light and dark themes, several palettes.
+  Updates download and verify, then wait for a restart confirmation.
+
+A tool line names its target: which file was read, what was searched,
+which command ran. Keys live only in `secrets.json`. Saved keys show as
+a lock in Settings.
+
+### Download
+
+[Releases](https://github.com/MCapricorns/mycode/releases)
+
+| Asset | Platform |
+| --- | --- |
+| `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
+| `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
+
+Each zip has a `.sha256` sidecar. Intel macOS builds stopped after 0.4.0.
+
+### Build
+
+Rust stable. MSVC on Windows.
+
+```text
+cargo build --release -p mycode-desktop
+```
+
+Release builds use fat LTO. Dev builds keep line tables only, so
+debuginfo stays small.
+
+### Data
 
 `MYCODE_HOME` defaults to `~/.mycode`.
 
@@ -108,51 +144,27 @@ Releases are manual: tag first, then run the `ci` workflow via
 └─ scratch/
 ```
 
-API keys live only in `secrets.json`.
+Point `MYCODE_HOME` at a copied tree to move the app. Path resolution
+does not follow symlinks out of that root.
 
-## License
+### Documentation
 
-Apache-2.0
+Module boundaries and the path of one user message:
+[docs/README.md](docs/README.md).
 
----
+### Development
 
-# 中文说明
+CI is rustfmt and clippy. There is no test suite.
 
-mycode 是本地优先的桌面编码代理，支持 Windows 与 macOS。对话、工具调用和全部会话都保存在你自己的电脑上；API 密钥自己填，其余交给应用。
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
 
-## 窗口
+Pull requests to `main` run those gates on Windows x64 and macOS Apple
+Silicon. Releases are manual: tag first, then `workflow_dispatch` the
+`ci` workflow with the tag and hand-written notes.
 
-- 左边是工作区：一个工作区可同时挂多个文件夹（比如前端和后端），会话挂在对应文件夹下；当前会话的工作目录决定相对路径，其它文件夹用绝对路径。
-- 中间是对话：输入框旁可直接换模型和思考强度。
-- 右边是上下文：当前会话使用的模型和该文件夹的 git 改动，点文件看 diff。
+### License
 
-支持浅色/深色主题和几套配色。
-
-## 模型
-
-内置 models.dev 目录，填 API key 即可使用。自定义 endpoint 支持 `anthropic-messages`、`openai-completions`、`openai-responses` 三种协议。
-
-## 工具
-
-- **文件**：`read` 读文件、`write` 写文件、`edit` 做精确替换（模糊匹配兜底小偏移）。
-- **搜索**：`find` 按 glob 找文件，`grep` 做内容搜索（支持 include/exclude）。
-- **执行**：`exec` 运行校验过的可执行文件（带参数与输出上限），`shell` 走用户 shell 配置执行命令。
-- **网络**：`web_search` 有界网页检索（Querit / AnySearch / 自定义后端），`fetch_content` 在引用前抓取网页正文。
-- **协调**：`ask_user` 中途向你提问，`task` 委派子代理（内置 scout / artisan / steward / sentinel，或 `agents/` 里的自定义角色；子代理可用 MCP 与 skills）。
-- **MCP**：本地命令走 stdio，远程走 Streamable HTTP；先用 `search_tool` 取 schema，再 `use_tool` 调用。
-
-工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。
-
-## 下载与构建
-
-到 [Releases](https://github.com/MCapricorns/mycode/releases) 下载对应平台的 zip（Windows x64 / macOS Apple Silicon；0.4.0 起不再提供 macOS Intel 构建）。
-
-源码构建需要 Rust stable（Windows 用 MSVC）：`cargo build --release -p mycode-desktop`。检查只跑 fmt + clippy，与 CI 一致；发版在 GitHub Actions 手动触发。
-
-## 数据
-
-`MYCODE_HOME` 默认 `~/.mycode`，包含设置、密钥、UI 状态、模型目录缓存、会话、检查点与临时目录；API 密钥只保存在 `secrets.json`。
-
-## 许可
-
-Apache-2.0
+[Apache-2.0](LICENSE)

@@ -1,10 +1,9 @@
 //! Workspace and global resource files feeding the system prompt.
 //!
-//! Resources are the built-in replacement for the old resources Pack world:
-//! bounded markdown files discovered at fixed, safe locations — the session
-//! workspace (AGENTS.md, MYCODE.md) and the MYCode home (AGENTS.md). Each file
-//! becomes one system prompt contribution; nothing enters the prompt
-//! unbounded or from arbitrary paths.
+//! Bounded markdown files discovered at fixed locations: the session
+//! workspace (`AGENTS.md`, `MYCODE.md`) and the MYCode home (`AGENTS.md`).
+//! Each file becomes one system prompt contribution. Nothing enters the
+//! prompt unbounded or from arbitrary paths.
 
 use std::path::{Path, PathBuf};
 
