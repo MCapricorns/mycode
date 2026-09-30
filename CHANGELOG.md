@@ -1,7 +1,18 @@
 # Changelog
 
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
-发布说明在发版时手写，与本文件相互独立。
+推送到 `main` 时，如果工作区版本还没有带齐两个平台压缩包的 GitHub Release，就用本文件里该版本的条目作为发布说明并自动发版。
+
+## [0.7.1] - 2026-09-30
+
+### Fixed
+
+- 含有旧待办事件（账本 tag 4）的会话可以再次打开。这些事件不进入模型上下文，也不会显示成用量行。新的待办事件不再写入。
+- 压缩检查点只按账本回放的下标复用。已经摘要过的历史如果再次超过阈值，只在内存里再压一次，避免用错误下标切掉尾部。
+- MCP 有服务器没连上时不缓存连接池，下一回合会重试。连接中途断开后，下一回合整池重连。
+- 0.7.0 之前导出的数据包仍能导入；顶层待办字段会被忽略。
+- `@` 文件搜索在提及已经改成命令之后，不会再发出一次过期的文件搜索。
+- 工具规格缓存和注册表写在同一把锁里，注册和读取交错时不会把旧规格留在缓存里。
 
 ## [0.7.0] - 2026-09-30
 
@@ -81,7 +92,8 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.1
 [0.7.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.0
 [0.5.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.1
 [0.5.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.0

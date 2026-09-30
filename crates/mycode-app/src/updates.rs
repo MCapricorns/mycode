@@ -6,7 +6,7 @@
 //! digest, extracts the new binary into a staging directory, and hands the
 //! actual swap to a small detached updater script so the running process can
 //! exit first. Asset names and staging conventions are produced by the
-//! release workflow (`.github/workflows/release.yml`).
+//! release jobs in `.github/workflows/ci.yml`.
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
