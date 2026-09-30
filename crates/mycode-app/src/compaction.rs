@@ -6,6 +6,8 @@
 //! prompt (goals, files, decisions, errors, next steps). The session ledger
 //! is never rewritten; only the in-memory request history shrinks.
 
+use std::sync::Arc;
+
 use mycode_core::{Message, Provider as _, Request, StreamEvent};
 use mycode_providers::WireProvider;
 use tokio_util::sync::CancellationToken;
@@ -48,8 +50,8 @@ pub(crate) struct CompactScope<'a> {
 /// original history so a turn never dies on housekeeping.
 pub(crate) async fn compact_history(
     scope: &CompactScope<'_>,
-    history: Vec<Message>,
-) -> Vec<Message> {
+    history: Vec<Arc<Message>>,
+) -> Vec<Arc<Message>> {
     let threshold = compaction_threshold(scope.context_window);
     let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
         return history;
@@ -58,6 +60,32 @@ pub(crate) async fn compact_history(
         .ok()
         .flatten()
         .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
+    // This turn already summarized this ledger head. Tool rounds after that
+    // stay on the compacted history instead of calling the model again.
+    if let Some(checkpoint) = prior.as_ref()
+        && checkpoint.covered_head == scope.head
+        && history
+            .first()
+            .is_some_and(|message| is_summary_message(message))
+    {
+        return history;
+    }
+    // The checkpoint covers this exact head but the in-memory history is
+    // still the full ledger. Rebuild summary + tail without another call.
+    if let Some(checkpoint) = prior.as_ref()
+        && checkpoint.covered_head == scope.head
+        && checkpoint.covered_messages > 0
+        && checkpoint.covered_messages < history.len()
+        && !is_tool_result(&history[checkpoint.covered_messages])
+    {
+        let tail = checkpoint.covered_messages;
+        let mut compacted = Vec::with_capacity(history.len() - tail + 1);
+        compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
+            format!("{SUMMARY_PREFIX}\n\n{}", checkpoint.summary),
+        ))));
+        compacted.extend(history[tail..].iter().cloned());
+        return compacted;
+    }
     let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
     let transcript = compaction_transcript(prior_summary, &history[..head_end]);
     let summarized = tokio::time::timeout(
@@ -95,8 +123,8 @@ pub(crate) async fn compact_history(
         return history;
     }
     let mut compacted = Vec::with_capacity(history.len() - head_end + 1);
-    compacted.push(Message::User(mycode_core::UserMessage::text(format!(
-        "{SUMMARY_PREFIX}\n\n{summary}"
+    compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
+        format!("{SUMMARY_PREFIX}\n\n{summary}"),
     ))));
     compacted.extend(history[head_end..].iter().cloned());
     eprintln!(
@@ -107,7 +135,48 @@ pub(crate) async fn compact_history(
 }
 
 fn message_tokens(message: &Message) -> usize {
-    mycode_config::estimate_tokens(&message_text(message))
+    mycode_config::estimate_token_count(message_chars(message))
+}
+
+fn message_chars(message: &Message) -> usize {
+    match message {
+        Message::User(user) => blocks_chars(&user.content),
+        Message::Assistant(assistant) => blocks_chars(&assistant.blocks),
+        Message::ToolResult(result) => {
+            // Matches the old `tool_result {id} {body}` spelling's length.
+            12 + result.tool_call_id.chars().count() + blocks_chars(&result.content)
+        }
+        Message::Custom(custom) => 7 + custom.kind.chars().count(),
+    }
+}
+
+fn blocks_chars(blocks: &[mycode_core::ContentBlock]) -> usize {
+    let mut chars = 0usize;
+    let mut parts = 0usize;
+    for block in blocks {
+        match block {
+            mycode_core::ContentBlock::Text(text) => {
+                chars += text.text.chars().count();
+                parts += 1;
+            }
+            mycode_core::ContentBlock::ToolCall(call) => {
+                chars += 10 + call.name.chars().count() + json_chars(&call.arguments);
+                parts += 1;
+            }
+            mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {}
+        }
+    }
+    chars + parts.saturating_sub(1)
+}
+
+fn json_chars(value: &serde_json::Value) -> usize {
+    // Compact JSON length is a close stand-in for the old `Display` of the
+    // arguments value, without building an intermediate string when the
+    // value is already a short string.
+    match value {
+        serde_json::Value::String(text) => text.chars().count() + 2,
+        other => other.to_string().chars().count(),
+    }
 }
 
 fn message_text(message: &Message) -> String {
@@ -146,11 +215,15 @@ fn is_summary_message(message: &Message) -> bool {
 
 /// Returns the split index when compaction is due: everything before it is
 /// summarized, everything from it on stays verbatim.
-fn compaction_split(history: &[Message], threshold: usize, tail_budget: usize) -> Option<usize> {
+fn compaction_split(
+    history: &[Arc<Message>],
+    threshold: usize,
+    tail_budget: usize,
+) -> Option<usize> {
     if history.len() < 2 {
         return None;
     }
-    let estimate: usize = history.iter().map(message_tokens).sum();
+    let estimate: usize = history.iter().map(|message| message_tokens(message)).sum();
     if estimate <= threshold {
         return None;
     }
@@ -173,7 +246,7 @@ fn compaction_split(history: &[Message], threshold: usize, tail_budget: usize) -
     Some(tail_start)
 }
 
-fn compaction_transcript(prior_summary: Option<&str>, head: &[Message]) -> String {
+fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> String {
     let mut transcript = String::new();
     if let Some(summary) = prior_summary {
         transcript.push_str("Previous checkpoint:\n");
@@ -184,7 +257,7 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Message]) -> Strin
         if is_summary_message(message) {
             continue;
         }
-        let role = match message {
+        let role = match message.as_ref() {
             Message::User(_) => "user",
             Message::Assistant(_) => "assistant",
             Message::ToolResult(_) => "tool",

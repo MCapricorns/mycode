@@ -83,8 +83,6 @@ pub(crate) struct WorkspaceState {
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// Draft answers aligned with [`Self::pending_ask`].
     pub ask_answers: Vec<String>,
-    /// Durable task list rows: (content, status). Completed tasks are dropped.
-    pub todo_rows: Vec<(String, String)>,
     /// Extra folded transcript blocks the user asked to mount above the tail.
     pub transcript_extra: usize,
     /// Cumulative usage per provider/model, in first-seen order.
@@ -306,8 +304,6 @@ pub enum DesktopAction {
         elapsed_ms: u64,
         entry: ConversationEntry,
     },
-    /// The durable task list changed.
-    TodoUpdated(Vec<(String, String)>),
     /// The agent asked the user structured questions.
     AskRequested(Vec<(String, Vec<String>, bool)>),
     /// The user picked one choice on a pending ask question.

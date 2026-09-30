@@ -188,7 +188,7 @@ impl SessionCore {
                     .ok_or_else(corrupt)?;
                 load.open_calls.swap_remove(position);
             }
-            EventKind::Message | EventKind::Usage | EventKind::Task => {}
+            EventKind::Message | EventKind::Usage => {}
         }
         load.events.push(EventMeta {
             digest: format_digest(&decoded.payload_digest),

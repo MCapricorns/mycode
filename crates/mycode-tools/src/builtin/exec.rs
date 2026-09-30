@@ -50,7 +50,7 @@ use crate::builtin::process::{
 };
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
-use crate::tool::{Concurrency, Tool, ToolError, ToolResult};
+use crate::tool::{Tool, ToolError, ToolResult};
 
 use prepare::environment_summary;
 use resolve::encode_hex;
@@ -320,14 +320,6 @@ impl Tool for ExecTool {
             "exec: run one kernel-loadable program with explicit arguments and \
              no shell parsing (program, args[], optional timeout_secs).",
         )
-    }
-
-    fn concurrency(&self) -> Concurrency {
-        Concurrency::Exclusive
-    }
-
-    fn mutates_fs(&self) -> bool {
-        true
     }
 
     async fn execute(

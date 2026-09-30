@@ -101,10 +101,6 @@ impl Tool for AskTool {
         )
     }
 
-    fn concurrency(&self) -> crate::tool::Concurrency {
-        crate::tool::Concurrency::Exclusive
-    }
-
     async fn execute(
         &self,
         args: Self::Args,

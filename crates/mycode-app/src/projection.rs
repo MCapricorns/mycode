@@ -12,17 +12,16 @@ pub(crate) fn project_replayed_entry(event: &SessionEvent, payload: &[u8]) -> Co
     match event.kind {
         EventKind::Message => {
             // Assistant messages are typed JSON; a parse miss means the
-            // payload is the user's plain-text message.
-            if serde_json::from_slice::<AssistantMessage>(payload).is_ok() {
-                project_assistant_from(event.event_id.as_str(), payload)
-            } else {
-                ConversationEntry {
+            // payload is the user's plain-text message. Parse once.
+            match serde_json::from_slice::<AssistantMessage>(payload) {
+                Ok(message) => project_assistant_message(event.event_id.as_str(), &message),
+                Err(_) => ConversationEntry {
                     event_id: event.event_id.as_str().to_owned(),
                     kind: EntryKind::UserMessage,
                     text: decode_text(payload).into(),
                     call_id: None,
                     thinking: String::new(),
-                }
+                },
             }
         }
         EventKind::ToolResult => project_tool_result(event.event_id.as_str(), payload),
@@ -42,13 +41,6 @@ pub(crate) fn project_replayed_entry(event: &SessionEvent, payload: &[u8]) -> Co
             }
         }
         EventKind::Usage => project_usage(event.event_id.as_str(), payload),
-        EventKind::Task => ConversationEntry {
-            event_id: event.event_id.as_str().to_owned(),
-            kind: EntryKind::Usage,
-            text: "".into(),
-            call_id: None,
-            thinking: String::new(),
-        },
     }
 }
 
@@ -116,6 +108,14 @@ pub(crate) fn project_tool_result(event_id: &str, payload: &[u8]) -> Conversatio
             is_error: true,
             details: None,
         });
+    project_tool_result_message(event_id, &result)
+}
+
+/// Projects an in-memory tool result without a second JSON parse.
+pub(crate) fn project_tool_result_message(
+    event_id: &str,
+    result: &ToolResultMessage,
+) -> ConversationEntry {
     let text: String = result
         .content
         .iter()
@@ -134,29 +134,30 @@ pub(crate) fn project_tool_result(event_id: &str, payload: &[u8]) -> Conversatio
         } else {
             text.into()
         },
-        call_id: Some(result.tool_call_id),
+        call_id: Some(result.tool_call_id.clone()),
         thinking: String::new(),
     }
 }
 
-/// Projects a committed assistant payload into a display entry.
-pub(crate) fn project_assistant_from(event_id: &str, payload: &[u8]) -> ConversationEntry {
+/// Projects an in-memory assistant message without a second JSON parse.
+pub(crate) fn project_assistant_message(
+    event_id: &str,
+    message: &AssistantMessage,
+) -> ConversationEntry {
     let mut text = String::new();
     let mut thinking = String::new();
-    if let Ok(message) = serde_json::from_slice::<AssistantMessage>(payload) {
-        for block in &message.blocks {
-            match block {
-                ContentBlock::Text(block) => text.push_str(&block.text),
-                ContentBlock::Thinking(block) => {
-                    if !thinking.is_empty() {
-                        thinking.push('\n');
-                    }
-                    thinking.push_str(&block.text);
+    for block in &message.blocks {
+        match block {
+            ContentBlock::Text(block) => text.push_str(&block.text),
+            ContentBlock::Thinking(block) => {
+                if !thinking.is_empty() {
+                    thinking.push('\n');
                 }
-                // Tool calls already render as their own ledger rows.
-                ContentBlock::ToolCall(_) => {}
-                _ => {}
+                thinking.push_str(&block.text);
             }
+            // Tool calls already render as their own ledger rows.
+            ContentBlock::ToolCall(_) => {}
+            _ => {}
         }
     }
     ConversationEntry {

@@ -237,7 +237,7 @@ impl Workspace {
 
     // ---- data export / import ----
 
-    /// Exports product data (settings, UI state, todos, session ledgers) to
+    /// Exports product data (settings, UI state, session ledgers) to
     /// a file chosen in a save dialog. Secrets never travel.
     pub(crate) fn on_export_data(&mut self, cx: &mut Context<Self>) {
         let directory = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -258,8 +258,8 @@ impl Workspace {
         .detach();
     }
 
-    /// Applies one export bundle chosen in an open dialog. Existing todos and
-    /// sessions are never overwritten.
+    /// Applies one export bundle chosen in an open dialog. Existing sessions
+    /// are never overwritten.
     pub(crate) fn on_import_data(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
             files: true,

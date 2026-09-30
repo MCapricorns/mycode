@@ -11,8 +11,7 @@ you bring your own API keys, the app does the rest.
   current session's working directory resolves relative paths, other
   folders use absolute paths.
 - **Center — chat.** Switch model and thinking effort next to the
-  composer. The todo list sits above the composer; finished items
-  disappear.
+  composer.
 - **Right — context.** The model the session is using plus the current
   folder's git changes; click a file to see its diff.
 
@@ -53,7 +52,6 @@ protocols: `anthropic-messages`, `openai-completions`,
 **Coordination**
 
 - `ask_user` — ask you a clarifying question mid-turn.
-- `todo_write` — keep the visible task list current.
 - `task` — delegate to subagents: the built-in scout, artisan, steward,
   and sentinel roles, or custom roles from `agents/`. Subagents can use
   connected MCP servers and skills.
@@ -125,7 +123,7 @@ mycode 是本地优先的桌面编码代理，支持 Windows 与 macOS。对话�
 ## 窗口
 
 - 左边是工作区：一个工作区可同时挂多个文件夹（比如前端和后端），会话挂在对应文件夹下；当前会话的工作目录决定相对路径，其它文件夹用绝对路径。
-- 中间是对话：输入框旁可直接换模型和思考强度；待办显示在输入框上方，做完的项会消失。
+- 中间是对话：输入框旁可直接换模型和思考强度。
 - 右边是上下文：当前会话使用的模型和该文件夹的 git 改动，点文件看 diff。
 
 支持浅色/深色主题和几套配色。
@@ -140,7 +138,7 @@ mycode 是本地优先的桌面编码代理，支持 Windows 与 macOS。对话�
 - **搜索**：`find` 按 glob 找文件，`grep` 做内容搜索（支持 include/exclude）。
 - **执行**：`exec` 运行校验过的可执行文件（带参数与输出上限），`shell` 走用户 shell 配置执行命令。
 - **网络**：`web_search` 有界网页检索（Querit / AnySearch / 自定义后端），`fetch_content` 在引用前抓取网页正文。
-- **协调**：`ask_user` 中途向你提问，`todo_write` 维护可见待办，`task` 委派子代理（内置 scout / artisan / steward / sentinel，或 `agents/` 里的自定义角色；子代理可用 MCP 与 skills）。
+- **协调**：`ask_user` 中途向你提问，`task` 委派子代理（内置 scout / artisan / steward / sentinel，或 `agents/` 里的自定义角色；子代理可用 MCP 与 skills）。
 - **MCP**：本地命令走 stdio，远程走 Streamable HTTP；先用 `search_tool` 取 schema，再 `use_tool` 调用。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。

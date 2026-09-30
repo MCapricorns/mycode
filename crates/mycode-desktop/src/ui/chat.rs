@@ -123,11 +123,6 @@ pub(super) fn render_chat(
                 .is_some_and(|mention| !mention.items.is_empty()),
             |this| this.child(menus::render_mention_layer(workspace, cx)),
         )
-        .when(
-            crate::view_model::task_surface_visible(workspace.vm())
-                && !workspace.vm().todo_rows.is_empty(),
-            |this| this.child(super::todos::render_todo_inline(workspace, cx)),
-        )
         .when(workspace.vm().pending_ask.is_some(), |this| {
             this.child(ask::render_ask_panel(workspace, window, cx))
         })

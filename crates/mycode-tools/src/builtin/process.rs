@@ -129,8 +129,7 @@ fn ignore_missing_process_group(result: std::io::Result<()>) -> std::io::Result<
 
 #[cfg(any(
     all(windows, target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    test
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 pub(crate) fn combine_teardown_results(
     containment: std::io::Result<()>,

@@ -89,21 +89,19 @@ async fn session_title(
     branch: &BranchId,
     head: &HeadStamp,
 ) -> String {
-    let Ok(page) = service.read(session, branch, head, None, 8).await else {
+    let Ok(page) = service.read_payloads(session, branch, head, None, 8).await else {
         return String::new();
     };
-    for event in &page.items {
-        if event.kind != EventKind::Message {
+    for loaded in &page.items {
+        if loaded.event.kind != EventKind::Message {
             continue;
         }
-        if let Ok(loaded) = service.load_event(session, branch, &event.event_id).await {
-            // A parse miss means the payload is the user's plain-text
-            // message; assistant messages decode as typed JSON.
-            if serde_json::from_slice::<AssistantMessage>(&loaded.payload).is_ok() {
-                continue;
-            }
-            return title_from_text(&decode_text(&loaded.payload));
+        // A parse miss means the payload is the user's plain-text
+        // message; assistant messages decode as typed JSON.
+        if serde_json::from_slice::<AssistantMessage>(&loaded.payload).is_ok() {
+            continue;
         }
+        return title_from_text(&decode_text(&loaded.payload));
     }
     String::new()
 }
@@ -161,15 +159,20 @@ async fn for_each_event(
     let mut after: Option<SessionEventId> = None;
     loop {
         let page = service
-            .read(session, branch, snapshot_head, after.as_ref(), 256)
+            .read_payloads(session, branch, snapshot_head, after.as_ref(), 256)
             .await?;
         if page.items.is_empty() {
             break;
         }
-        let last = page.items.last().expect("nonempty page").event_id.clone();
-        for event in &page.items {
-            let loaded = service.load_event(session, branch, &event.event_id).await?;
-            visit(event, &loaded.payload)?;
+        let last = page
+            .items
+            .last()
+            .expect("nonempty page")
+            .event
+            .event_id
+            .clone();
+        for loaded in &page.items {
+            visit(&loaded.event, &loaded.payload)?;
         }
         match page.next {
             Some(cursor) => after = Some(cursor),
@@ -190,14 +193,14 @@ async fn for_each_event(
 /// valid across turns. Thinking signatures stay on the replay: stripping
 /// them and then enabling thinking on the next turn makes Anthropic-compatible
 /// gateways return 400 "unrecognized chat message". Adapters that cannot
-/// replay thinking drop those blocks themselves. Usage and task bookkeeping
-/// never reach the provider.
+/// replay thinking drop those blocks themselves. Usage bookkeeping never
+/// reaches the provider.
 pub(crate) async fn ledger_history(
     service: &SessionService,
     session: &SessionId,
     branch: &BranchId,
     snapshot_head: &HeadStamp,
-) -> Result<Vec<Message>, SessionError> {
+) -> Result<Vec<Arc<Message>>, SessionError> {
     let mut history = Vec::new();
     for_each_event(service, session, branch, snapshot_head, |event, payload| {
         match event.kind {
@@ -212,18 +215,20 @@ pub(crate) async fn ledger_history(
                         // chat message"). Each wire adapter drops blocks
                         // it cannot replay.
                         if !assistant.blocks.is_empty() {
-                            history.push(Message::Assistant(assistant));
+                            history.push(Arc::new(Message::Assistant(assistant)));
                         }
                     }
-                    Err(_) => history.push(Message::User(UserMessage::text(decode_text(payload)))),
+                    Err(_) => history.push(Arc::new(Message::User(UserMessage::text(
+                        decode_text(payload),
+                    )))),
                 }
             }
             EventKind::ToolResult => {
                 if let Ok(result) = serde_json::from_slice::<ToolResultMessage>(payload) {
-                    history.push(Message::ToolResult(result));
+                    history.push(Arc::new(Message::ToolResult(result)));
                 }
             }
-            EventKind::ToolCall | EventKind::Usage | EventKind::Task => {}
+            EventKind::ToolCall | EventKind::Usage => {}
         }
         Ok(())
     })
@@ -317,12 +322,11 @@ pub(crate) async fn send_message(
     ))
 }
 
-/// Deletes one session's durable footprint: ledger, todos, compaction
-/// checkpoint, and file snapshots. The ids are plain names by construction.
+/// Deletes one session's durable footprint: ledger, compaction checkpoint,
+/// and file snapshots. The ids are plain names by construction.
 ///
-/// Only the ledger directory always exists; todos and snapshots are created
-/// lazily by tools, so an absent directory is a successful delete rather than
-/// an error.
+/// Only the ledger directory always exists; snapshots are created lazily,
+/// so an absent directory is a successful delete rather than an error.
 pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), String> {
     if session_id.is_empty()
         || session_id.contains(['/', '\\', ':', '\0'])

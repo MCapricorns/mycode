@@ -35,12 +35,12 @@ Workspace 成员只有这 7 个 crate：`mycode-core`、`mycode-config`、`mycod
 ├─ secrets.json
 ├─ ui.json
 ├─ catalog-cache.json
-├─ sessions/<ses1-id>/     # manifest、branches、pending、todos、compaction
+├─ sessions/<ses1-id>/     # manifest、branches、pending、compaction
 ├─ checkpoints/<ses1-id>/
 └─ scratch/
 ```
 
-会话 ledger、todos、压缩检查点共处同一会话目录，不再拆到 `plugins/session/…` 与 `workspace/ses1-…`。
+会话 ledger 与压缩检查点共处同一会话目录，不再拆到 `plugins/session/…` 与 `workspace/ses1-…`。
 
 ## 4. 相关文档
 

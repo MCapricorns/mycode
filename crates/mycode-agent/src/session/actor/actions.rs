@@ -13,7 +13,7 @@ use super::super::digest::{
 use super::super::dto::{
     AppendedResult, BranchMutationKind, BranchReservationView, BranchedResult, ConflictResult,
     CreatedResult, EventKind, EventReservationView, HeadStamp, LoadedEvent, MAX_BRANCHES,
-    OpenedResult, SessionError, SessionPull, SessionResult,
+    OpenedResult, PayloadPage, SessionError, SessionPull, SessionResult,
 };
 use super::super::fs;
 use super::super::ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
@@ -302,7 +302,7 @@ impl SessionCore {
                     .open_calls
                     .remove(&row.call_id.clone().expect("tool result carries an id"));
             }
-            EventKind::Message | EventKind::Usage | EventKind::Task => {}
+            EventKind::Message | EventKind::Usage => {}
         }
         branch_state.head = HeadStamp::Event(reservation.event_id.clone());
         branch_state.events.push(EventMeta {
@@ -569,7 +569,7 @@ impl SessionCore {
                 EventKind::ToolResult => {
                     open_calls.remove(&row.call_id.clone().expect("tool result carries an id"));
                 }
-                EventKind::Message | EventKind::Usage | EventKind::Task => {}
+                EventKind::Message | EventKind::Usage => {}
             }
         }
         let new_state = BranchLedger {
@@ -610,22 +610,68 @@ impl SessionCore {
         let absolute = paths
             .absolute(&paths.branch_events(branch))
             .map_err(|_| OpFail::Storage)?;
-        let bytes =
-            fs::read_range(&absolute, meta.offset, meta.record_len).map_err(|_| OpFail::Storage)?;
-        let decoded =
-            store::decode_record(&bytes).map_err(|_| OpFail::Domain(SessionError::Corrupt))?;
-        if decoded.event_id != event.as_str() || decoded.record_len != meta.record_len {
-            return Err(OpFail::Domain(SessionError::Corrupt));
-        }
-        let start = decoded.payload_offset;
-        let end = start + decoded.payload_len as usize;
-        let payload = bytes
-            .get(start..end)
-            .ok_or(OpFail::Domain(SessionError::Corrupt))?
-            .to_vec();
+        let payload = read_verified_payload(&absolute, meta, event.as_str())?;
         Ok(SessionPull::Complete(SessionResult::Loaded(LoadedEvent {
             event: meta.to_session_event(),
             payload,
         })))
     }
+
+    pub(super) fn action_read_payloads(
+        &mut self,
+        session: &SessionId,
+        branch: &BranchId,
+        snapshot_head: &HeadStamp,
+        after: Option<&SessionEventId>,
+        limit: u16,
+    ) -> Result<SessionPull, OpFail> {
+        let Some(ledger) = self.sessions.get(session) else {
+            return Err(OpFail::Domain(SessionError::NotFound));
+        };
+        let window = ledger
+            .page_window(branch, snapshot_head, after, limit)
+            .map_err(OpFail::Domain)?;
+        let branch_state = ledger
+            .branches
+            .get(branch)
+            .ok_or(OpFail::Domain(SessionError::NotFound))?;
+        let paths = SessionPaths::new(&self.home, session);
+        let absolute = paths
+            .absolute(&paths.branch_events(branch))
+            .map_err(|_| OpFail::Storage)?;
+        let mut items = Vec::with_capacity(window.end - window.start);
+        for meta in &branch_state.events[window.start..window.end] {
+            let payload = read_verified_payload(&absolute, meta, meta.event_id.as_str())?;
+            items.push(LoadedEvent {
+                event: meta.to_session_event(),
+                payload,
+            });
+        }
+        Ok(SessionPull::Complete(SessionResult::Payloads(
+            PayloadPage {
+                items,
+                next: window.next,
+            },
+        )))
+    }
+}
+
+fn read_verified_payload(
+    absolute: &std::path::Path,
+    meta: &EventMeta,
+    event_id: &str,
+) -> Result<Vec<u8>, OpFail> {
+    let bytes =
+        fs::read_range(absolute, meta.offset, meta.record_len).map_err(|_| OpFail::Storage)?;
+    let decoded =
+        store::decode_record(&bytes).map_err(|_| OpFail::Domain(SessionError::Corrupt))?;
+    if decoded.event_id != event_id || decoded.record_len != meta.record_len {
+        return Err(OpFail::Domain(SessionError::Corrupt));
+    }
+    let start = decoded.payload_offset;
+    let end = start + decoded.payload_len as usize;
+    bytes
+        .get(start..end)
+        .ok_or(OpFail::Domain(SessionError::Corrupt))
+        .map(<[u8]>::to_vec)
 }

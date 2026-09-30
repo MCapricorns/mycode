@@ -1,6 +1,8 @@
 //! Token accounting: the rebuild that replays durable usage records when a
 //! recovered conversation opens.
 
+use std::collections::HashMap;
+
 use crate::view_model::{EntryKind, TurnStats, UsageTotal, WorkspaceState, parse_usage_text};
 
 pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
@@ -14,6 +16,7 @@ pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
         return;
     };
     let mut totals: Vec<UsageTotal> = Vec::new();
+    let mut by_key: HashMap<String, usize> = HashMap::new();
     let mut last = None;
     for entry in entries {
         if entry.kind != EntryKind::Usage {
@@ -25,16 +28,20 @@ pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
         // Older events carry a bare model key; newer ones `provider/model`.
         // Fold into whichever row either spelling matches so the panel keeps
         // one row per model instead of a stale orphan beside the live one.
-        let row = totals
-            .iter_mut()
-            .find(|row| row.key == key || usage_row_matches(row, &key));
+        let row = by_key
+            .get(&key)
+            .copied()
+            .or_else(|| totals.iter().position(|row| usage_row_matches(row, &key)));
         let cache_value = cache.unwrap_or_default();
-        if let Some(row) = row {
+        if let Some(index) = row {
+            let row = &mut totals[index];
             row.input = row.input.saturating_add(input);
             row.output = row.output.saturating_add(output);
             row.cache = row.cache.saturating_add(cache_value);
             row.requests = row.requests.saturating_add(1);
+            by_key.insert(key.clone(), index);
         } else {
+            by_key.insert(key.clone(), totals.len());
             totals.push(UsageTotal {
                 key: key.clone(),
                 input,

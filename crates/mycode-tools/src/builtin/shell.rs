@@ -43,7 +43,7 @@ use crate::builtin::process::{
 };
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
-use crate::tool::{Concurrency, Tool, ToolError, ToolResult};
+use crate::tool::{Tool, ToolError, ToolResult};
 
 /// Default command timeout (seconds).
 pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -194,14 +194,6 @@ impl Tool for ShellTool {
             "shell: run a platform shell script (command, optional \
              timeout_secs).",
         )
-    }
-
-    fn concurrency(&self) -> Concurrency {
-        Concurrency::Exclusive
-    }
-
-    fn mutates_fs(&self) -> bool {
-        true
     }
 
     async fn execute(
