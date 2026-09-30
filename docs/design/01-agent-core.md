@@ -26,7 +26,7 @@ loop {
 - `manifest.json` — 分支头、committed 长度（CAS 权威）
 - `branches/<br1-id>.events` — 追加日志
 - `pending/<evt1-id>.payload` — 提交前暂存
-- `todos.json` / `compaction.json` — 与 ledger 同目录，不再另开 workspace 树
+- `compaction.json` — 与 ledger 同目录，不再另开 workspace 树
 
 `ses1-` id 只是内部身份。界面标题取会话首条用户消息；空标题时用绑定项目的文件夹名（如 `MCode`），不用 `ses1-…`。
 

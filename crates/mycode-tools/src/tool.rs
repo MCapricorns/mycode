@@ -86,18 +86,6 @@ impl From<std::io::Error> for ToolError {
     }
 }
 
-/// How a tool may be scheduled relative to other tools
-/// (design doc `02-tools-permissions.md` §2 capability markers).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Concurrency {
-    /// Only one instance may run at a time (e.g. `shell`, which mutates
-    /// arbitrary state).
-    Exclusive,
-    /// Safe to run alongside other tool calls (default).
-    #[default]
-    Parallel,
-}
-
 /// A tool with typed arguments. Builtin tools and Rust-side plugins
 /// implement this; the blanket [`ToolDyn`] impl type-erases it.
 ///
@@ -119,18 +107,6 @@ pub trait Tool: Send + Sync + 'static {
     /// `promptSnippet`). `None` by default.
     fn prompt_snippet(&self) -> Option<&str> {
         None
-    }
-
-    /// Scheduling capability marker; see [`Concurrency`]. Overridden by
-    /// e.g. `shell` (Exclusive).
-    fn concurrency(&self) -> Concurrency {
-        Concurrency::Parallel
-    }
-
-    /// Whether the tool can modify the filesystem for scheduling decisions.
-    /// Overridden by `write`/`edit`/`shell`.
-    fn mutates_fs(&self) -> bool {
-        false
     }
 
     /// Access mode for a retained local search root.
@@ -181,14 +157,6 @@ pub trait ToolDyn: Send + Sync {
     /// Returns the optional compact usage hint through type erasure.
     fn prompt_snippet_dyn(&self) -> Option<&str> {
         None
-    }
-    /// Scheduling capability marker; see [`Concurrency`].
-    fn concurrency(&self) -> Concurrency {
-        Concurrency::Parallel
-    }
-    /// Whether the tool can modify the filesystem for scheduling decisions.
-    fn mutates_fs(&self) -> bool {
-        false
     }
     /// Access mode for a retained local search root.
     fn search_access(&self) -> Option<SearchAccess> {
@@ -304,16 +272,6 @@ impl<T: Tool> ToolDyn for T {
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
         Tool::prompt_snippet(self)
-    }
-
-    // Capability markers are declared on `Tool` and forwarded here so
-    // there is exactly one place for tools to override them.
-    fn concurrency(&self) -> Concurrency {
-        Tool::concurrency(self)
-    }
-
-    fn mutates_fs(&self) -> bool {
-        Tool::mutates_fs(self)
     }
 
     fn search_access(&self) -> Option<SearchAccess> {

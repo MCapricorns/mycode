@@ -1,15 +1,12 @@
-//! Host-backed tools bridged into the agent's registry: `ask_user`, todo
-//! persistence, and the settings-configured web search backend.
+//! Host-backed tools bridged into the agent's registry: `ask_user` and the
+//! settings-configured web search backend.
 
-use std::collections::HashMap;
 use std::sync::mpsc;
 
-use mycode_agent::session::EventKind;
 use mycode_config::{AppSettings, HomeLayout, read_app_settings, read_provider_secrets};
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
-use crate::ledger::{HeadWriter, render_error};
 use crate::settings_io::render_config_error;
 
 /// Environment variable carrying the Querit API key, checked before the vault
@@ -116,130 +113,6 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
             })
             .collect())
     }
-}
-
-/// Persists `todo_write` payloads and mirrors them to the UI.
-pub(crate) struct BridgeTodoStore {
-    pub(crate) events: mpsc::Sender<BridgeEvent>,
-    pub(crate) session_id: String,
-    pub(crate) writer: HeadWriter,
-    pub(crate) home: HomeLayout,
-}
-
-#[async_trait::async_trait]
-impl mycode_tools::builtin::TodoStore for BridgeTodoStore {
-    async fn store(
-        &self,
-        tasks: &[mycode_tools::builtin::TodoWireTask],
-    ) -> Result<String, mycode_tools::ToolError> {
-        // Models often send short ids (`"1"`) or omit them. Mint canonical
-        // ids and remap dependencies so a usable plan is not rejected as an
-        // invalid authority document.
-        let document =
-            normalize_todo_document(tasks).map_err(mycode_tools::ToolError::Execution)?;
-        document
-            .validate()
-            .map_err(|error| mycode_tools::ToolError::Execution(error.to_string()))?;
-
-        // CAS revision: read the current header.
-        let revision = mycode_config::read_todo_revision(&self.home, &self.session_id)
-            .map_err(|error| mycode_tools::ToolError::Execution(error.to_string()))?;
-        mycode_config::replace_todo_document(&self.home, &self.session_id, revision, &document)
-            .map_err(|error| mycode_tools::ToolError::Execution(error.to_string()))?;
-
-        // Durable Task event on the branch.
-        let payload = document
-            .to_payload()
-            .map_err(|error| mycode_tools::ToolError::Execution(error.to_string()))?;
-        if let Err(error) = self.writer.write(EventKind::Task, &payload).await {
-            return Err(mycode_tools::ToolError::Execution(render_error(error)));
-        }
-
-        let in_progress = document
-            .tasks
-            .iter()
-            .filter(|task| matches!(task.status, mycode_config::TodoStatus::InProgress))
-            .count();
-        let completed = document
-            .tasks
-            .iter()
-            .filter(|task| matches!(task.status, mycode_config::TodoStatus::Completed))
-            .count();
-        let _ = self.events.send(BridgeEvent::TodoUpdated {
-            session_id: self.session_id.clone(),
-            tasks: document
-                .tasks
-                .iter()
-                .map(|task| {
-                    (
-                        task.content.clone(),
-                        match task.status {
-                            mycode_config::TodoStatus::Pending => "pending".to_owned(),
-                            mycode_config::TodoStatus::InProgress => "in progress".to_owned(),
-                            mycode_config::TodoStatus::Completed => "done".to_owned(),
-                        },
-                    )
-                })
-                .collect(),
-        });
-        Ok(format!(
-            "stored {} tasks ({completed} done, {in_progress} in progress)",
-            document.tasks.len()
-        ))
-    }
-}
-
-fn normalize_todo_document(
-    tasks: &[mycode_tools::builtin::TodoWireTask],
-) -> Result<mycode_config::TodoDocument, String> {
-    let mut id_map = HashMap::new();
-    let mut assigned = Vec::with_capacity(tasks.len());
-    for task in tasks {
-        let raw = task.id.as_deref().unwrap_or("").trim();
-        let id =
-            if mycode_config::is_todo_id(raw) && !id_map.values().any(|existing| existing == raw) {
-                raw.to_owned()
-            } else {
-                mycode_config::new_todo_id().ok_or_else(|| "id minting failed".to_owned())?
-            };
-        if !raw.is_empty() {
-            id_map.insert(raw.to_owned(), id.clone());
-        }
-        assigned.push((id, task));
-    }
-    let mut in_progress_kept = false;
-    let mut document = mycode_config::TodoDocument::default();
-    for (id, task) in assigned {
-        let mut status = match task.status.as_str() {
-            "pending" => mycode_config::TodoStatus::Pending,
-            "in_progress" | "in progress" => mycode_config::TodoStatus::InProgress,
-            "completed" | "done" => mycode_config::TodoStatus::Completed,
-            other => {
-                return Err(format!("unknown status: {other}"));
-            }
-        };
-        if matches!(status, mycode_config::TodoStatus::InProgress) {
-            if in_progress_kept {
-                status = mycode_config::TodoStatus::Pending;
-            } else {
-                in_progress_kept = true;
-            }
-        }
-        let blocked_by = task
-            .blocked_by
-            .iter()
-            .filter_map(|dep| id_map.get(dep.trim()).cloned())
-            .filter(|dep| dep != &id)
-            .collect();
-        document.tasks.push(mycode_config::TodoTask {
-            id,
-            content: task.content.trim().to_owned(),
-            status,
-            blocked_by,
-        });
-    }
-    document.validate().map_err(|error| error.to_string())?;
-    Ok(document)
 }
 
 /// Builds the web client for the enabled backend, or the first builtin that

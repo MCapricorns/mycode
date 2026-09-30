@@ -13,7 +13,9 @@ pub use error::{ProviderError, ProviderErrorKind};
 #[doc(inline)]
 pub use stream::{EVENT_STREAM_CAPACITY, EventStream, EventStreamSender, MAX_EVENT_ENCODED_BYTES};
 
-use crate::{AssistantMessage, Message, ToolSpec};
+use std::sync::Arc;
+
+use crate::{AssistantMessage, Message, SharedMessage, ToolSpec};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -99,18 +101,31 @@ impl ReasoningLevel {
 }
 
 /// A provider-neutral completion request.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     /// Ordered system prompt parts.
     pub system_prompt: Vec<String>,
-    /// Conversation history.
-    pub messages: Vec<Message>,
-    /// Tools available for the response.
-    pub tools: Vec<ToolSpec>,
+    /// Conversation history. Entries are shared with the agent so a request
+    /// round does not deep-copy tool output.
+    pub messages: Vec<SharedMessage>,
+    /// Tools available for the response. Shared so each LLM round does not
+    /// deep-copy every tool schema.
+    pub tools: Arc<[ToolSpec]>,
     /// Reasoning effort; `None` leaves the provider default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningLevel>,
+}
+
+impl Default for Request {
+    fn default() -> Self {
+        Self {
+            system_prompt: Vec::new(),
+            messages: Vec::new(),
+            tools: Arc::from([]),
+            reasoning: None,
+        }
+    }
 }
 
 impl Request {
@@ -130,14 +145,17 @@ impl Request {
     /// Appends one conversation message.
     #[must_use]
     pub fn with_message(mut self, message: Message) -> Self {
-        self.messages.push(message);
+        self.messages.push(Arc::new(message));
         self
     }
 
     /// Appends one tool specification.
     #[must_use]
     pub fn with_tool(mut self, tool: ToolSpec) -> Self {
-        self.tools.push(tool);
+        let mut tools = Vec::with_capacity(self.tools.len() + 1);
+        tools.extend(self.tools.iter().cloned());
+        tools.push(tool);
+        self.tools = Arc::from(tools);
         self
     }
 

@@ -92,7 +92,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.live_jobs.clear();
             state.subagent_window = None;
             state.changes_panel_open = false;
-            state.todo_rows.clear();
             state.pending_ask = None;
             state.transcript_extra = 0;
             state.composer_draft.clear();
@@ -112,7 +111,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.live_jobs.clear();
                 state.subagent_window = None;
                 state.changes_panel_open = false;
-                state.todo_rows.clear();
                 state.pending_ask = None;
                 state.sending = false;
                 state.transcript_extra = 0;
@@ -281,12 +279,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             row.cache = row.cache.saturating_add(cache.unwrap_or_default());
             row.requests = row.requests.saturating_add(1);
             state.live_turn = None;
-        }
-        DesktopAction::TodoUpdated(tasks) => {
-            state.todo_rows = tasks
-                .into_iter()
-                .filter(|(_, status)| status != "done")
-                .collect();
         }
         DesktopAction::AskRequested(rows) => {
             state.ask_answers = vec![String::new(); rows.len()];

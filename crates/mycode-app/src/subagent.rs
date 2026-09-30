@@ -48,6 +48,7 @@ pub(crate) struct BridgeTaskHost {
     session_id: String,
     /// Child cancel tokens keyed by `session_id:call_id`.
     cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
 }
 
 impl BridgeTaskHost {
@@ -59,6 +60,7 @@ impl BridgeTaskHost {
         settings: &AppSettings,
         session_id: String,
         cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+        mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     ) -> Self {
         let slots = settings.subagents.max_concurrent as usize;
         let slots = if slots == 0 {
@@ -74,6 +76,7 @@ impl BridgeTaskHost {
             slots: Arc::new(Semaphore::new(slots)),
             session_id,
             cancels,
+            mcp_pool,
         }
     }
 
@@ -347,7 +350,8 @@ impl BridgeTaskHost {
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>(),
         );
-        let mcp_tools = crate::mcp_tools::connect_mcp_tools(&self.home, &self.settings).await;
+        let mcp_tools =
+            crate::mcp_tools::connect_mcp_tools(&self.home, &self.settings, &self.mcp_pool).await;
         let registry = Arc::new({
             let registry = child_registry(&self.home, &allowed);
             if let Some(catalog) = crate::mcp_tools::McpCatalog::from_tools(mcp_tools) {
@@ -454,7 +458,7 @@ impl BridgeTaskHost {
                 .messages()
                 .iter()
                 .rev()
-                .find_map(|message| match message {
+                .find_map(|message| match message.as_ref() {
                     Message::Assistant(assistant) => {
                         let text = assistant.text();
                         (!text.trim().is_empty()).then_some(text)

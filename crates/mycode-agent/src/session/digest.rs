@@ -13,11 +13,8 @@ use super::ids::SessionEventId;
 
 /// Lowercase digest prefix shared by every session digest spelling.
 ///
-/// The spelling matches `mycode_config::authority::Sha256Digest` exactly,
-/// but the two stay separate on purpose: the config type is a parse-only
-/// validated wrapper (allocating, error-returning) while the session
-/// ledger needs raw hashing, boolean canonical-spelling checks, and
-/// formatting from raw digest bytes.
+/// The spelling is `sha256:` plus 64 lowercase hex digits. The session
+/// ledger hashes raw bytes and checks that spelling directly.
 pub const DIGEST_PREFIX: &str = "sha256:";
 /// ASCII digest payload length: 64 lowercase hexadecimal digits.
 pub const DIGEST_HEX_BYTES: usize = 64;

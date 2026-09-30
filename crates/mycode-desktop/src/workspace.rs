@@ -138,6 +138,8 @@ pub struct Workspace {
     pending_composer_prefill: Option<String>,
     /// Last `@` fragment already searched, to dedupe bridge dispatches.
     mention_query: Option<String>,
+    /// Bumped on each composer edit so a stale mention timer does not search.
+    mention_generation: u64,
     pending_catalog_refresh: bool,
     /// The in-flight check was started from About, so its result may toast.
     manual_update_check: bool,
@@ -202,6 +204,7 @@ impl Workspace {
             suppress_open: false,
             pending_composer_prefill: None,
             mention_query: None,
+            mention_generation: 0,
             pending_catalog_refresh: false,
             manual_update_check: false,
             toasts: Vec::new(),

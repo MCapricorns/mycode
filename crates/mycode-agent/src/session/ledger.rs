@@ -10,6 +10,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::dto::{BranchHead, EventKind, EventsResult, HeadStamp, SessionError, SessionEvent};
 use super::ids::{BranchId, SessionCallId, SessionEventId};
 
+/// Half-open index range of one read page, plus the pagination cursor.
+pub(crate) struct PageWindow {
+    /// First included event index.
+    pub(crate) start: usize,
+    /// One past the last included event index.
+    pub(crate) end: usize,
+    /// Cursor of the last returned event; `None` at snapshot EOF.
+    pub(crate) next: Option<SessionEventId>,
+}
+
 /// One committed event's index row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EventMeta {
@@ -169,8 +179,29 @@ impl SessionLedger {
         after: Option<&SessionEventId>,
         limit: u16,
     ) -> Result<EventsResult, SessionError> {
+        let window = self.page_window(branch, snapshot_head, after, limit)?;
         let branch_state = self.branches.get(branch).ok_or(SessionError::NotFound)?;
-        let end = match snapshot_head {
+        let items = branch_state.events[window.start..window.end]
+            .iter()
+            .map(EventMeta::to_session_event)
+            .collect();
+        Ok(EventsResult {
+            items,
+            next: window.next,
+        })
+    }
+
+    /// Index window for one read page. Payload reads use the same bounds so
+    /// a page of events is loaded without a second cursor scan.
+    pub(crate) fn page_window(
+        &self,
+        branch: &BranchId,
+        snapshot_head: &HeadStamp,
+        after: Option<&SessionEventId>,
+        limit: u16,
+    ) -> Result<PageWindow, SessionError> {
+        let branch_state = self.branches.get(branch).ok_or(SessionError::NotFound)?;
+        let boundary = match snapshot_head {
             HeadStamp::Empty if branch_state.events.is_empty() => 0,
             HeadStamp::Empty => return Err(SessionError::InvalidArgument),
             HeadStamp::Event(event) => {
@@ -181,21 +212,16 @@ impl SessionLedger {
             None => 0,
             Some(event) => Self::index_of(branch_state, event).ok_or(SessionError::NotFound)? + 1,
         };
-        if start > end {
+        if start > boundary {
             return Err(SessionError::InvalidArgument);
         }
-        let items = branch_state.events[start..end]
-            .iter()
-            .take(usize::from(limit))
-            .map(EventMeta::to_session_event)
-            .collect::<Vec<_>>();
-        let returned_end = start + items.len();
-        let next = if items.is_empty() || returned_end >= end {
+        let end = start + (boundary - start).min(usize::from(limit));
+        let next = if end == 0 || end >= boundary {
             None
         } else {
-            Some(branch_state.events[returned_end - 1].event_id.clone())
+            Some(branch_state.events[end - 1].event_id.clone())
         };
-        Ok(EventsResult { items, next })
+        Ok(PageWindow { start, end, next })
     }
 
     fn index_of(branch: &BranchLedger, event: &SessionEventId) -> Option<usize> {

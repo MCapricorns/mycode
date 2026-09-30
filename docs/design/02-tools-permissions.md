@@ -11,7 +11,7 @@
 | 来源 | 工具 | 何时 |
 | --- | --- | --- |
 | builtins | `read` `write` `edit` `find` `grep` `shell` `exec` | 总是 |
-| hosts | `ask_user` `todo_write` | 总是 |
+| hosts | `ask_user` | 总是 |
 | web | `web_search` `fetch_content` | 总是（无 key 时调用失败，提示去设置页粘贴） |
 | subagent | `task` | 至少一个角色启用 |
 | MCP | 各服务器 `tools/list` | 连接成功且不阴影内置名 |

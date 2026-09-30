@@ -170,7 +170,7 @@ pub enum BridgeCommand {
         /// Edited text to prefill for re-sending.
         edit: Option<String>,
     },
-    /// Deletes one session's durable data (ledger, todos, checkpoints).
+    /// Deletes one session's durable data (ledger and checkpoints).
     DeleteSession {
         /// Session identity spelling.
         session_id: String,
@@ -311,13 +311,6 @@ pub enum BridgeEvent {
         elapsed_ms: u64,
         /// Committed usage entry projection.
         entry: ConversationEntry,
-    },
-    /// The durable task list changed.
-    TodoUpdated {
-        /// Session identity spelling.
-        session_id: String,
-        /// (content, status) rows in list order.
-        tasks: Vec<(String, String)>,
     },
     /// The agent asked the user structured questions.
     AskRequested {

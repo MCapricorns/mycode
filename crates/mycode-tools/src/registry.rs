@@ -16,12 +16,16 @@ use crate::tool::ToolDyn;
 /// Thread-safe registry of tools, keyed by name.
 pub struct ToolRegistry {
     tools: RwLock<BTreeMap<String, Arc<dyn ToolDyn>>>,
+    /// Built once per registration. Provider requests reuse this instead of
+    /// regenerating every JSON schema on each LLM round.
+    specs: RwLock<Option<Arc<[ToolSpec]>>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: RwLock::new(BTreeMap::new()),
+            specs: RwLock::new(None),
         }
     }
 
@@ -31,6 +35,7 @@ impl ToolRegistry {
     pub fn register(&self, tool: Arc<dyn ToolDyn>) {
         let name = tool.spec().name;
         self.write().insert(name, tool);
+        *self.specs.write().expect("tool registry lock poisoned") = None;
     }
 
     /// Look up a tool by name.
@@ -40,8 +45,18 @@ impl ToolRegistry {
 
     /// Specs of all registered tools, sorted by tool name for stable
     /// provider serialization.
-    pub fn specs(&self) -> Vec<ToolSpec> {
-        self.read().values().map(|tool| tool.spec()).collect()
+    pub fn specs(&self) -> Arc<[ToolSpec]> {
+        if let Some(cached) = self
+            .specs
+            .read()
+            .expect("tool registry lock poisoned")
+            .clone()
+        {
+            return cached;
+        }
+        let built: Arc<[ToolSpec]> = self.read().values().map(|tool| tool.spec()).collect();
+        *self.specs.write().expect("tool registry lock poisoned") = Some(Arc::clone(&built));
+        built
     }
 
     /// Names and optional prompt snippets of all registered tools, sorted by name.

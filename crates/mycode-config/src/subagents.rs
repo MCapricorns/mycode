@@ -163,7 +163,7 @@ impl RoleOrigin {
 /// when a project override lists them.
 const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "web_search", "fetch_content"];
 /// Tools that would let a child re-enter the parent or talk to the user.
-const PARENT_ONLY_TOOLS: &[&str] = &["task", "ask_user", "todo_write"];
+const PARENT_ONLY_TOOLS: &[&str] = &["task", "ask_user"];
 
 /// One resolved delegation role.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,7 +188,7 @@ impl SubagentRole {
     /// Tools this role may use, intersected with the parent's live set.
     ///
     /// An omitted allowlist inherits the parent set. Scout is hard
-    /// read-only. Parent-only tools (`task`, `ask_user`, `todo_write`) never
+    /// read-only. Parent-only tools (`task`, `ask_user`) never
     /// reach a child, so depth stays at one.
     #[must_use]
     pub fn resolve_tools(&self, parent_tools: &[String]) -> Vec<String> {
@@ -238,23 +238,11 @@ impl SubagentRole {
     }
 }
 
-/// Why a role file was rejected. Surfaced so a typo is visible in the UI
-/// rather than silently reverting to the built-in definition.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RoleProblem {
-    /// The file that failed, or the intended role name for embedded defects.
-    pub source: String,
-    /// What was wrong, in one line.
-    pub detail: String,
-}
-
-/// A resolved catalog plus whatever was rejected building it.
+/// A resolved catalog of delegation roles.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoleCatalog {
     /// Roles in stable name order.
     pub roles: Vec<SubagentRole>,
-    /// Rejected role files, in discovery order.
-    pub problems: Vec<RoleProblem>,
 }
 
 impl RoleCatalog {
@@ -273,19 +261,17 @@ impl RoleCatalog {
 
 /// Returns the embedded role definitions.
 ///
-/// Built-ins are part of the binary, so a parse failure here is a build
-/// defect; it is reported as a problem rather than panicking so one bad role
-/// cannot take the application down.
+/// Built-ins are part of the binary. A parse failure is a build defect and
+/// is skipped so one bad role cannot take the application down.
 #[must_use]
 pub fn builtin_roles() -> RoleCatalog {
     let mut catalog = RoleCatalog::default();
     for (name, text) in BUILTIN_ROLES {
         match parse_role(text, RoleOrigin::Builtin) {
             Ok(role) => catalog.roles.push(role),
-            Err(detail) => catalog.problems.push(RoleProblem {
-                source: format!("built-in {name}"),
-                detail,
-            }),
+            Err(detail) => {
+                eprintln!("mycode-config: built-in role {name} skipped: {detail}");
+            }
         }
     }
     catalog
@@ -310,28 +296,31 @@ pub fn discover_roles(home: &crate::HomeLayout, workspace_root: Option<&Path>) -
         ));
     }
     for (origin, dir) in layers {
-        for (path, text) in read_role_dir(&dir, &mut catalog.problems) {
+        for (path, text) in read_role_dir(&dir) {
             let stem = path
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let source = path.to_string_lossy();
             match parse_role(&text, origin) {
-                Ok(role) if role.name != stem => catalog.problems.push(RoleProblem {
-                    source: path.to_string_lossy().into_owned(),
-                    detail: format!("name \"{}\" does not match the file name", role.name),
-                }),
+                Ok(role) if role.name != stem => {
+                    eprintln!(
+                        "mycode-config: role {source} skipped: name \"{}\" does not match the file name",
+                        role.name
+                    );
+                }
                 Ok(role) => match catalog.roles.iter().position(|held| held.name == role.name) {
                     Some(index) => catalog.roles[index] = role,
                     None if catalog.roles.len() < MAX_ROLES => catalog.roles.push(role),
-                    None => catalog.problems.push(RoleProblem {
-                        source: path.to_string_lossy().into_owned(),
-                        detail: format!("catalog is full at {MAX_ROLES} roles"),
-                    }),
+                    None => {
+                        eprintln!(
+                            "mycode-config: role {source} skipped: catalog is full at {MAX_ROLES} roles"
+                        );
+                    }
                 },
-                Err(detail) => catalog.problems.push(RoleProblem {
-                    source: path.to_string_lossy().into_owned(),
-                    detail,
-                }),
+                Err(detail) => {
+                    eprintln!("mycode-config: role {source} skipped: {detail}");
+                }
             }
         }
     }
@@ -340,7 +329,7 @@ pub fn discover_roles(home: &crate::HomeLayout, workspace_root: Option<&Path>) -
 }
 
 /// Reads the `<name>.md` files of one role directory in stable name order.
-fn read_role_dir(dir: &Path, problems: &mut Vec<RoleProblem>) -> Vec<(PathBuf, String)> {
+fn read_role_dir(dir: &Path) -> Vec<(PathBuf, String)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -355,35 +344,30 @@ fn read_role_dir(dir: &Path, problems: &mut Vec<RoleProblem>) -> Vec<(PathBuf, S
     paths.truncate(MAX_ROLES);
     let mut files = Vec::new();
     for path in paths {
+        let source = path.to_string_lossy();
         match std::fs::metadata(&path) {
             Ok(metadata) if metadata.len() as usize > MAX_ROLE_BYTES => {
-                problems.push(RoleProblem {
-                    source: path.to_string_lossy().into_owned(),
-                    detail: format!("larger than {MAX_ROLE_BYTES} bytes"),
-                });
+                eprintln!(
+                    "mycode-config: role {source} skipped: larger than {MAX_ROLE_BYTES} bytes"
+                );
                 continue;
             }
             Ok(_) => {}
             Err(error) => {
-                problems.push(RoleProblem {
-                    source: path.to_string_lossy().into_owned(),
-                    detail: format!("unreadable: {error}"),
-                });
+                eprintln!("mycode-config: role {source} skipped: unreadable: {error}");
                 continue;
             }
         }
         match std::fs::read(&path) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) => files.push((path, text)),
-                Err(_) => problems.push(RoleProblem {
-                    source: path.to_string_lossy().into_owned(),
-                    detail: "not valid UTF-8".to_owned(),
-                }),
+                Err(_) => {
+                    eprintln!("mycode-config: role {source} skipped: not valid UTF-8");
+                }
             },
-            Err(error) => problems.push(RoleProblem {
-                source: path.to_string_lossy().into_owned(),
-                detail: format!("unreadable: {error}"),
-            }),
+            Err(error) => {
+                eprintln!("mycode-config: role {source} skipped: unreadable: {error}");
+            }
         }
     }
     files

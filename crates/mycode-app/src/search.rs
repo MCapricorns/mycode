@@ -48,7 +48,7 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
                     continue;
                 };
                 let spelling = rel.to_string_lossy().replace('\\', "/");
-                if needle.is_empty() || spelling.to_ascii_lowercase().contains(&needle) {
+                if needle.is_empty() || contains_ignore_ascii_case(&spelling, &needle) {
                     matches.push(spelling);
                     if matches.len() >= MAX_COLLECT {
                         return finish_mention_matches(matches);
@@ -60,10 +60,25 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
     finish_mention_matches(matches)
 }
 
+/// ASCII case-insensitive substring test that does not allocate a lowered copy.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    let haystack = haystack.as_bytes();
+    haystack.windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle)
+            .all(|(left, right)| left.to_ascii_lowercase() == *right)
+    })
+}
+
 /// Shortest-first truncation shared by the walk's exit points.
 fn finish_mention_matches(mut matches: Vec<String>) -> Vec<String> {
     const MAX_MATCHES: usize = 8;
-    matches.sort_by_key(|path| (path.len(), path.clone()));
+    matches.sort_by(|left, right| left.len().cmp(&right.len()).then_with(|| left.cmp(right)));
     matches.truncate(MAX_MATCHES);
     matches
 }

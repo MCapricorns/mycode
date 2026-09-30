@@ -4,12 +4,6 @@
 //! [`HookRunner::with_before_request`] (history compaction immediately
 //! before a provider request) and [`HookRunner::with_before_tool`] (an
 //! observer fired after tool-call admission, right before dispatch).
-//!
-//! The three dispatch semantics (pi's model):
-//!
-//! * [`notify`](HookRunner::notify) — fire-and-forget broadcast.
-//! * [`transform`](HookRunner::transform) — middleware chain: value in,
-//!   possibly rewritten value out.
 
 use mycode_core::Request;
 use serde_json::Value;
@@ -17,40 +11,16 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// The loop node at which a hook is invoked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookEvent {
-    /// A turn started (Notify).
-    TurnStart,
-    /// A turn ended (Notify).
-    TurnEnd,
-    /// User input is about to enter the context — prompt, steer, or
-    /// follow-up (Transform).
-    UserPrompt,
-    /// Before every LLM request (Transform: may rewrite the request).
-    BeforeProviderRequest,
-    /// An assistant message started streaming (Notify).
-    MessageStart,
-    /// An assistant message finished streaming (Transform: may rewrite
-    /// the whole message before it enters history).
-    MessageEnd,
-    /// A tool result is about to be written back into the context
-    /// (Transform: redaction, summarization, truncation).
-    ToolResult,
-}
-
 /// Hook runner for the loop's dispatch points.
 ///
-/// [`notify`](HookRunner::notify) and [`transform`](HookRunner::transform)
-/// are pass-throughs with no production subscriber today. The live production
-/// paths are [`prepare_request`](HookRunner::prepare_request), which runs
-/// the installed before-request rewrite (history compaction), and
-/// [`observe_before_tool`](HookRunner::observe_before_tool), which fires
-/// the installed before-tool observer immediately before dispatch;
-/// panics in the observer are contained and never affect the turn.
-/// The observer clones what it needs while invoked and returns a future;
-/// asynchronous observers may offload blocking work (file snapshots) onto
-/// `spawn_blocking` instead of stalling the calling executor.
+/// The live production paths are [`prepare_request`](HookRunner::prepare_request),
+/// which runs the installed before-request rewrite (history compaction), and
+/// [`observe_before_tool`](HookRunner::observe_before_tool), which fires the
+/// installed before-tool observer immediately before dispatch; panics in the
+/// observer are contained and never affect the turn. The observer clones what
+/// it needs while invoked and returns a future; asynchronous observers may
+/// offload blocking work (file snapshots) onto `spawn_blocking` instead of
+/// stalling the calling executor.
 type BeforeToolFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type BeforeToolObserver = Arc<dyn Fn(&str, &Value) -> BeforeToolFuture + Send + Sync>;
 type BeforeRequestFuture = Pin<Box<dyn Future<Output = Request> + Send>>;
@@ -130,15 +100,5 @@ impl HookRunner {
 impl Default for HookRunner {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl HookRunner {
-    /// Broadcast an event; the return value is ignored (Notify).
-    pub async fn notify(&self, _event: HookEvent) {}
-
-    /// Passes `value` through the transform point.
-    pub async fn transform<T>(&self, _event: HookEvent, value: T) -> T {
-        value
     }
 }

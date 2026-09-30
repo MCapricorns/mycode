@@ -146,6 +146,13 @@ enum Action {
         branch: BranchId,
         event: SessionEventId,
     },
+    ReadPayloads {
+        session: SessionId,
+        branch: BranchId,
+        snapshot_head: HeadStamp,
+        after: Option<SessionEventId>,
+        limit: u16,
+    },
 }
 
 struct BranchPlan {
@@ -355,6 +362,22 @@ impl SessionCore {
                     event: event.clone(),
                 },
             ),
+            SessionRequest::ReadPayloads {
+                session,
+                branch,
+                snapshot_head,
+                after,
+                limit,
+            } => self.stage_for(
+                session.clone(),
+                Action::ReadPayloads {
+                    session: session.clone(),
+                    branch: branch.clone(),
+                    snapshot_head: snapshot_head.clone(),
+                    after: after.clone(),
+                    limit: *limit,
+                },
+            ),
         };
         Ok(SessionOperation::new(admission, stage))
     }
@@ -522,6 +545,15 @@ impl SessionCore {
                 branch,
                 event,
             } => self.action_load_event(&session, &branch, &event),
+            Action::ReadPayloads {
+                session,
+                branch,
+                snapshot_head,
+                after,
+                limit,
+            } => {
+                self.action_read_payloads(&session, &branch, &snapshot_head, after.as_ref(), limit)
+            }
         }
     }
 }

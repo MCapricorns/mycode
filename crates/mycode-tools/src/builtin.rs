@@ -16,7 +16,6 @@ pub mod read;
 pub(crate) mod search_report;
 pub mod shell;
 pub mod task;
-pub mod todo;
 pub mod web;
 pub mod write;
 
@@ -28,7 +27,6 @@ pub use grep::GrepTool;
 pub use read::ReadTool;
 pub use shell::ShellTool;
 pub use task::{SubagentRequest, TaskHost, TaskTool};
-pub use todo::{TodoStore, TodoWireTask, TodoWriteTool};
 pub use web::{FetchContentTool, WebHit, WebHost, WebPage, WebSearchTool};
 pub use write::WriteTool;
 

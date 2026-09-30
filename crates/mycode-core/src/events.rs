@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::MycodeError;
 use crate::ids::CallId;
-use crate::message::{Message, ToolResultMessage};
+use crate::message::{SharedMessage, ToolResultMessage};
 
 /// Events emitted by the Agent loop.
 ///
@@ -21,7 +21,10 @@ pub enum AgentEvent {
     /// Incremental delta while an assistant message streams in.
     MessageDelta(MessageDelta),
     /// A complete message was appended to the Agent history.
-    MessageAdded(Message),
+    ///
+    /// Shared with the in-memory history so a broadcast clone does not copy
+    /// the message body.
+    MessageAdded(SharedMessage),
     /// A tool call started executing.
     ToolStarted {
         call_id: CallId,

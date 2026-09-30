@@ -45,8 +45,8 @@ use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
 pub const SETTINGS_PATH: &str = "settings.json";
 /// Maximum encoded authority document size: 256 KiB.
 ///
-/// The cap is domain-neutral on purpose: the todos, compaction, and export
-/// authorities bound their documents with the same limit.
+/// The cap is domain-neutral on purpose: compaction and export authorities
+/// bound their documents with the same limit.
 pub const MAX_AUTHORITY_DOCUMENT_BYTES: usize = 256 * 1024;
 /// Back-compat alias of [`MAX_AUTHORITY_DOCUMENT_BYTES`] under the previous
 /// settings-scoped name, kept so existing cross-crate callers keep compiling.

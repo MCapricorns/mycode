@@ -60,6 +60,10 @@ pub(super) fn spawn_linux(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the enroller is the only extra argument over the shared spawn shape"
+)]
 fn spawn_linux_with_enroller<F>(
     mut pinned: PinnedImage,
     argv0: &str,
