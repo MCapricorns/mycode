@@ -74,7 +74,7 @@ pub enum ToolError {
     /// The tool ran but failed (missing file, I/O error, …).
     #[error("{0}")]
     Execution(String),
-    /// A plugin trap fired (WASM trap or plugin panic).
+    /// The tool implementation panicked.
     #[error("plugin trap: {0}")]
     PluginTrap(String),
 }

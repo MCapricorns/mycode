@@ -4,7 +4,7 @@
 //! components are opened no-follow, one name at a time. Absolute arguments are
 //! accepted only when they are lexically and handle-proven inside that cwd.
 //! Hidden names are readable and writable; Search ignore policy is not applied.
-//! Prepared handles are host-owned and are never re-exported to WASM.
+//! Prepared handles stay inside this process.
 use std::sync::Mutex;
 
 /// Access requested when binding a local file capability.

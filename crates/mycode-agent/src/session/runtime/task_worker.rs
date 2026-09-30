@@ -1,4 +1,4 @@
-//! Serialized FeaturePack owner loop and non-blocking operation cleanup.
+//! Serialized owner loop for one session actor, and non-blocking operation cleanup.
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};

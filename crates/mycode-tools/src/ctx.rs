@@ -30,7 +30,7 @@ pub struct ToolCtx {
     /// Ready file capability bound at dispatch preflight, if any.
     ///
     /// Host-owned. Execution takes the inner handles once and never
-    /// re-resolves. Not exposed to WASM.
+    /// re-resolves.
     pub prepared_file: Option<Arc<PreparedFile>>,
 }
 
