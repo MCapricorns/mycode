@@ -9,7 +9,6 @@ mod settings;
 mod sidebar;
 mod skin;
 mod title_bar;
-mod todos;
 mod update_dialog;
 
 use gpui_kit::assets::IconName;

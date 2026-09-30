@@ -70,10 +70,6 @@ impl Tool for WriteTool {
         )
     }
 
-    fn mutates_fs(&self) -> bool {
-        true
-    }
-
     fn file_access(&self) -> Option<FileAccess> {
         Some(FileAccess::ExistingOrMissing)
     }

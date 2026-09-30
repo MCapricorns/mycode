@@ -30,7 +30,7 @@ mycode-app         应用核。会话、回合、工具宿主、MCP、网页、�
 | `mycode-app` | 把上面拼成产品 | 前端只看见命令、回复和事件。回合在这里装配 provider、工具和压缩 |
 | `mycode-desktop` | 窗口 | 视图模型是纯函数。GPUI 只画状态、收集点击 |
 
-工作区成员只有这七个。配置、密钥、界面状态、待办、会话和角色都在 `mycode-config` 与 `mycode-agent` 里，没有独立的 web / mcp crate。
+工作区成员只有这七个。配置、密钥、界面状态、会话和角色都在 `mycode-config` 与 `mycode-agent` 里，没有独立的 web / mcp crate。
 
 ## 一条消息怎么走完
 
@@ -70,7 +70,7 @@ mycode-app         应用核。会话、回合、工具宿主、MCP、网页、�
 ├─ secrets.json           API 密钥与网页 / MCP 凭证
 ├─ ui.json                工作区、文件夹、会话归属、最近项目。可丢弃
 ├─ catalog-cache.json     models.dev 目录缓存
-├─ sessions/<id>/         账本、待办、压缩检查点
+├─ sessions/<id>/         账本、压缩检查点
 ├─ checkpoints/<id>/      write/edit 之前的文件快照
 └─ scratch/               没有绑定文件夹时的工具工作目录
 ```
@@ -85,4 +85,4 @@ mycode-app         应用核。会话、回合、工具宿主、MCP、网页、�
 - `shell` 和 `exec` 会钉住要启动的程序映像并回收进程树。环境变量过滤不是隔离。
 - 持续集成跑 `rustfmt` 和 `clippy -D warnings`，不跑测试套件。
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
-- 回合钩子里，生产路径只用「请求前压缩」和「工具前观察」。其余 notify / transform 点保留着，没有订阅者。
+- 回合钩子只有两个：请求前压缩，以及工具前观察。

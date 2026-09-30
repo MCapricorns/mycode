@@ -1,6 +1,6 @@
 # mycode-config
 
-MYCode 的 home 布局与严格配置文档。会话、todos、压缩检查点都在 `sessions/` 下。
+MYCode 的 home 布局与严格配置文档。会话与压缩检查点都在 `sessions/` 下。
 
 ## Home
 
@@ -13,7 +13,7 @@ MYCode 的 home 布局与严格配置文档。会话、todos、压缩检查点�
 ├─ ui.json
 ├─ catalog-cache.json
 ├─ agents/<role>.md
-├─ sessions/<ses1-id>/{manifest.json,todos.json,compaction.json,…}
+├─ sessions/<ses1-id>/{manifest.json,compaction.json,…}
 ├─ checkpoints/<ses1-id>/
 └─ scratch/
 ```

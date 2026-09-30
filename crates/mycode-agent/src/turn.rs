@@ -10,6 +10,7 @@ use std::any::Any;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use mycode_core::events::{AgentEvent, MessageDelta};
@@ -24,7 +25,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::{AgentConfig, AgentState};
 use crate::env::TurnEnv;
-use crate::hooks::HookEvent;
 use crate::prompt::build_system_prompt;
 
 /// Why an in-flight response cycle ended unsuccessfully.
@@ -44,7 +44,8 @@ pub(crate) fn emit(env: &TurnEnv<'_>, event: AgentEvent) {
 
 /// Append a message to the history and announce it.
 pub(crate) fn push_message(env: &TurnEnv<'_>, state: &mut AgentState, msg: Message) {
-    state.messages.push(msg.clone());
+    let msg = Arc::new(msg);
+    state.messages.push(Arc::clone(&msg));
     emit(env, AgentEvent::MessageAdded(msg));
 }
 
@@ -66,15 +67,16 @@ pub(crate) async fn stream_assistant(
     } else {
         config.system_prompt.clone()
     };
+    // Move history into the request so compaction can rewrite it in place.
+    // Writing it back clones `Arc`s, not tool output. The provider borrows
+    // the request.
     let request = Request {
         system_prompt,
-        messages: state.messages.clone(),
+        messages: std::mem::take(&mut state.messages),
         tools: env.tools.specs(),
         reasoning: config.reasoning,
     };
     let request = env.hooks.prepare_request(request).await;
-    // Compaction (and any other before-request rewrite) must stick on the
-    // in-memory history so the next cycle does not re-summarize the same head.
     state.messages.clone_from(&request.messages);
 
     if token.is_cancelled() {
@@ -103,8 +105,6 @@ pub(crate) async fn stream_assistant(
             return Err(TurnFailure::Error(error));
         }
     };
-    env.hooks.notify(HookEvent::MessageStart).await;
-
     while let Some(event) = stream.next().await {
         match event {
             StreamEvent::TextDelta(delta) => {
@@ -126,12 +126,9 @@ pub(crate) async fn stream_assistant(
                 );
             }
             StreamEvent::Done { message } => {
-                let message = env.hooks.transform(HookEvent::MessageEnd, message).await;
-                state.messages.push(Message::Assistant(message.clone()));
-                emit(
-                    env,
-                    AgentEvent::MessageAdded(Message::Assistant(message.clone())),
-                );
+                let shared = Arc::new(Message::Assistant(message.clone()));
+                state.messages.push(Arc::clone(&shared));
+                emit(env, AgentEvent::MessageAdded(shared));
                 return Ok(message);
             }
             StreamEvent::Error(error) => {
@@ -211,7 +208,6 @@ pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
 fn canonical_tool_name(name: &str) -> &str {
     match name {
         "ask" => "ask_user",
-        "todo" | "todos" => "todo_write",
         other => other,
     }
 }
@@ -323,7 +319,6 @@ pub(crate) async fn dispatch_tool_call(
     let result = streamed_terminal
         .or(exec_result)
         .unwrap_or_else(|| ToolResult::error("tool task ended without a result".to_owned()));
-    let result = env.hooks.transform(HookEvent::ToolResult, result).await;
 
     let message = ToolResultMessage {
         tool_call_id: call.id.clone(),

@@ -21,10 +21,10 @@ use tokio_util::sync::CancellationToken;
 use crate::BridgeEvent;
 use crate::ledger::{HeadWriter, head_spelling, ledger_history, render_error};
 use crate::oauth::resolve_request_auth;
-use crate::projection::{project_assistant_from, project_tool_result, project_usage};
+use crate::projection::{project_assistant_message, project_tool_result_message, project_usage};
 use crate::protocol::CHAT_CANCELLED;
 use crate::state::{CoreState, model_context_window};
-use crate::tool_hosts::{BridgeAskChannel, BridgeTodoStore, BridgeWebHost, register_ask};
+use crate::tool_hosts::{BridgeAskChannel, BridgeWebHost, register_ask};
 
 /// One model turn: resolve the provider, stream the reply into the event
 /// channel, and commit the assistant message to the session ledger.
@@ -212,7 +212,7 @@ async fn run_chat_turn(
             .unwrap_or(expected_head),
         Err(_) => expected_head,
     };
-    let history = ledger_history(&state.service, &session, &branch, &expected_head)
+    let mut history = ledger_history(&state.service, &session, &branch, &expected_head)
         .await
         .map_err(render_error)?;
     let usage_enabled = settings.usage.enabled;
@@ -228,7 +228,8 @@ async fn run_chat_turn(
     // MCP servers connect here (spawn + handshake + tools/list): awaited on
     // the spawned turn task, so command processing never blocks. A server
     // that fails to connect is skipped, never a failed turn.
-    let mcp_tools = crate::mcp_tools::connect_mcp_tools(home, &settings).await;
+    let mcp_tools = crate::mcp_tools::connect_mcp_tools(home, &settings, &state.mcp_pool).await;
+    let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
     let registry = Arc::new({
         let registry = ToolRegistry::new();
         mycode_tools::register_builtins(&registry);
@@ -245,7 +246,6 @@ async fn run_chat_turn(
         registry.register(Arc::new(mycode_tools::builtin::AskTool::new(channel)));
         // task delegates scoped work to a catalog role; slots, isolation,
         // and per-role model routes live in the host.
-        let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
         if crate::subagent::any_role_enabled(&role_catalog, &settings.subagents) {
             registry.register(Arc::new(mycode_tools::builtin::TaskTool::new(Arc::new(
                 crate::subagent::BridgeTaskHost::new(
@@ -255,6 +255,7 @@ async fn run_chat_turn(
                     &settings,
                     session_id.to_owned(),
                     state.subagent_cancels.clone(),
+                    state.mcp_pool.clone(),
                 ),
             ))));
         }
@@ -267,18 +268,6 @@ async fn run_chat_turn(
         registry.register(Arc::new(mycode_tools::builtin::FetchContentTool::new(
             web_host,
         )));
-        // todo_write persists the plan and appends a durable Task event.
-        let todo_events = events.clone();
-        let todo_session = session_id.to_owned();
-        let todo_writer = writer.clone();
-        let todo_home = home.clone();
-        let store: Arc<dyn mycode_tools::builtin::TodoStore> = Arc::new(BridgeTodoStore {
-            events: todo_events,
-            session_id: todo_session,
-            writer: todo_writer,
-            home: todo_home,
-        });
-        registry.register(Arc::new(mycode_tools::builtin::TodoWriteTool::new(store)));
         registry
     });
     let mcp_catalog = crate::mcp_tools::McpCatalog::from_tools(mcp_tools);
@@ -291,8 +280,11 @@ async fn run_chat_turn(
 
     // Split the last committed user message off as the prompt; everything
     // before it is replay history.
-    let (history, prompt) = match history.split_last() {
-        Some((Message::User(user), prefix)) => (prefix.to_vec(), user.clone()),
+    let Some(last) = history.pop() else {
+        return Err("the turn has no user message to answer".to_owned());
+    };
+    let prompt = match Arc::unwrap_or_clone(last) {
+        Message::User(user) => user,
         _ => return Err("the turn has no user message to answer".to_owned()),
     };
     // session_id is borrowed by the checkpoint closure and later moved into
@@ -375,7 +367,6 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
     }
     system_prompt.push_str("\n\n");
     system_prompt.push_str(&mycode_agent::build_system_prompt(&registry));
-    let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     if !directive.is_empty() {
         system_prompt.push_str(&directive);
@@ -438,7 +429,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
     let pump_events = events.clone();
     let pump_session_id = session_id.to_owned();
     let pump = tokio::spawn(async move {
-        let mut pending_assistant: Option<mycode_core::AssistantMessage> = None;
+        let mut pending_assistant: Option<std::sync::Arc<mycode_core::Message>> = None;
         let mut turn_usage = TurnUsage::default();
         loop {
             let event = match agent_rx.recv().await {
@@ -512,7 +503,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     };
                     match writer.close_call(call_id.as_str(), &payload).await {
                         Ok(event_id) => {
-                            let entry = project_tool_result(&event_id, &payload);
+                            let entry = project_tool_result_message(&event_id, &tool_result);
                             let _ = pump_events.send(BridgeEvent::ToolCompleted {
                                 session_id: pump_session_id.clone(),
                                 entry,
@@ -527,11 +518,14 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                         }
                     }
                 }
-                mycode_core::events::AgentEvent::MessageAdded(Message::Assistant(message)) => {
+                mycode_core::events::AgentEvent::MessageAdded(message) => {
+                    let mycode_core::Message::Assistant(assistant) = message.as_ref() else {
+                        continue;
+                    };
                     // Usage is reported per response cycle, so it has to be
                     // summed here: reading it off the closing message alone
                     // would bill a ten-step turn as one.
-                    if let Some(usage) = message.usage.as_ref() {
+                    if let Some(usage) = assistant.usage.as_ref() {
                         turn_usage.fold(usage);
                         let _ = pump_events.send(BridgeEvent::UsageSnapshot {
                             session_id: pump_session_id.clone(),
@@ -546,7 +540,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     // Commit it now so the ledger and the transcript keep the
                     // model's real order instead of collapsing the turn into
                     // its last message.
-                    let is_step = message
+                    let is_step = assistant
                         .blocks
                         .iter()
                         .any(|block| matches!(block, mycode_core::ContentBlock::ToolCall(_)));
@@ -554,7 +548,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                         pending_assistant = Some(message);
                         continue;
                     }
-                    let Ok(payload) = serde_json::to_vec(&message) else {
+                    let Ok(payload) = serde_json::to_vec(assistant) else {
                         let _ = pump_events.send(BridgeEvent::ChatFailed {
                             session_id: pump_session_id.clone(),
                             message: "assistant step could not be encoded".to_owned(),
@@ -565,7 +559,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                         Ok(event_id) => {
                             let _ = pump_events.send(BridgeEvent::AssistantStep {
                                 session_id: pump_session_id.clone(),
-                                entry: project_assistant_from(&event_id, &payload),
+                                entry: project_assistant_message(&event_id, assistant),
                             });
                         }
                         Err(error) => {
@@ -577,7 +571,6 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                         }
                     }
                 }
-                mycode_core::events::AgentEvent::MessageAdded(_) => {}
                 mycode_core::events::AgentEvent::TurnStarted => {}
                 mycode_core::events::AgentEvent::TurnEnded(outcome) => {
                     let Some(message) = pending_assistant.take() else {
@@ -595,11 +588,14 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                         });
                         return;
                     };
-                    match serde_json::to_vec(&message) {
+                    let mycode_core::Message::Assistant(assistant) = message.as_ref() else {
+                        return;
+                    };
+                    match serde_json::to_vec(assistant) {
                         Ok(payload) => {
                             match writer.write(EventKind::Message, &payload).await {
                                 Ok(event_id) => {
-                                    let entry = project_assistant_from(&event_id, &payload);
+                                    let entry = project_assistant_message(&event_id, assistant);
                                     if usage_enabled && turn_usage.seen {
                                         let elapsed_ms = turn_started.elapsed().as_millis() as u64;
                                         let usage_payload = serde_json::json!({

@@ -5,7 +5,9 @@
 //! `use_tool` with arguments that match it. A failed server is skipped.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mycode_config::AppSettings;
 use mycode_core::ToolSpec;
@@ -20,13 +22,17 @@ use serde_json::Value;
 /// `Args = serde_json::Value`, which is just `true`.
 pub(crate) struct DynamicMcpTool {
     server_id: String,
-    tool: crate::mcp_client::McpTool,
+    tool_name: String,
+    /// Built once. `spec()` clones this instead of rebuilding the schema.
+    spec: ToolSpec,
     /// Compiled once from the server's schema; `None` when it does not
     /// compile — args then pass through and the server's rejection is the
     /// backstop.
     validator: Option<jsonschema::Validator>,
     client: Arc<tokio::sync::Mutex<crate::mcp_client::McpClient>>,
     snippet: String,
+    /// Set when the shared connection dies so the next turn reconnects.
+    broken: Arc<AtomicBool>,
 }
 
 impl DynamicMcpTool {
@@ -34,17 +40,28 @@ impl DynamicMcpTool {
         server_id: String,
         tool: crate::mcp_client::McpTool,
         client: Arc<tokio::sync::Mutex<crate::mcp_client::McpClient>>,
+        broken: Arc<AtomicBool>,
     ) -> Self {
         let validator = jsonschema::validator_for(&tool.input_schema).ok();
         let snippet = format!(
             "MCP tool on server '{server_id}'. Call it when the task matches; do not wait to be asked."
         );
+        let spec = ToolSpec {
+            name: tool.name.clone(),
+            description: tool
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("MCP tool '{}' on server '{server_id}'.", tool.name)),
+            params_schema: tool.input_schema,
+        };
         Self {
             server_id,
-            tool,
+            tool_name: tool.name,
+            spec,
             validator,
             client,
             snippet,
+            broken,
         }
     }
 }
@@ -52,16 +69,7 @@ impl DynamicMcpTool {
 #[async_trait::async_trait]
 impl ToolDyn for DynamicMcpTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: self.tool.name.clone(),
-            description: self.tool.description.clone().unwrap_or_else(|| {
-                format!(
-                    "MCP tool '{}' on server '{}'.",
-                    self.tool.name, self.server_id
-                )
-            }),
-            params_schema: self.tool.input_schema.clone(),
-        }
+        self.spec.clone()
     }
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
@@ -85,18 +93,21 @@ impl ToolDyn for DynamicMcpTool {
         }
         out.progress(format!(
             "calling {} on MCP server {}",
-            self.tool.name, self.server_id
+            self.tool_name, self.server_id
         ));
         let mut client = self.client.lock().await;
         // The dispatcher does not select on the turn token while a tool
         // runs; bound the call here so Escape actually cancels an MCP call.
-        let call = client.call_tool(&self.tool.name, args);
+        let call = client.call_tool(&self.tool_name, args);
         let output = tokio::select! {
             biased;
             () = ctx.cancel.cancelled() => {
                 return Err(ToolError::Execution("MCP call cancelled".to_owned()));
             }
             result = call => result.map_err(|error| {
+                if error.is_connection_lost() {
+                    self.broken.store(true, Ordering::Relaxed);
+                }
                 let detail = if error.is_connection_lost() {
                     format!(
                         "MCP server '{}' lost the connection: {error}",
@@ -119,19 +130,39 @@ impl ToolDyn for DynamicMcpTool {
     }
 }
 
+/// Live MCP clients reused across turns until settings change or a
+/// connection dies.
+pub(crate) struct McpPool {
+    fingerprint: u64,
+    broken: Arc<AtomicBool>,
+    tools: Vec<Arc<DynamicMcpTool>>,
+}
+
 /// Connects every enabled MCP server and flattens its tools.
 ///
-/// Any per-server failure (spawn, handshake, listing) skips that server.
-/// Runs inside the spawned turn task on the single-threaded core runtime —
-/// plain `.await` only, never `block_on`.
+/// A matching live pool is reused. Any per-server failure (spawn, handshake,
+/// listing) skips that server. Runs inside the spawned turn task on the
+/// single-threaded core runtime — plain `.await` only, never `block_on`.
 pub(crate) async fn connect_mcp_tools(
     home: &mycode_config::HomeLayout,
     settings: &AppSettings,
+    pool: &tokio::sync::Mutex<Option<McpPool>>,
 ) -> Vec<Arc<DynamicMcpTool>> {
-    let mut tools = Vec::new();
     let Ok(secrets) = mycode_config::read_provider_secrets(home) else {
-        return tools;
+        return Vec::new();
     };
+    let fingerprint = mcp_fingerprint(settings, &secrets);
+    {
+        let guard = pool.lock().await;
+        if let Some(cached) = guard.as_ref()
+            && cached.fingerprint == fingerprint
+            && !cached.broken.load(Ordering::Relaxed)
+        {
+            return cached.tools.clone();
+        }
+    }
+    let mut tools = Vec::new();
+    let broken = Arc::new(AtomicBool::new(false));
     for server in settings.mcp_servers.iter().filter(|server| server.enabled) {
         let api_key = secrets
             .key(&format!("mcp-{}", server.id))
@@ -153,10 +184,31 @@ pub(crate) async fn connect_mcp_tools(
                 server.id.clone(),
                 tool,
                 client.clone(),
+                Arc::clone(&broken),
             )));
         }
     }
+    *pool.lock().await = Some(McpPool {
+        fingerprint,
+        broken,
+        tools: tools.clone(),
+    });
     tools
+}
+
+fn mcp_fingerprint(settings: &AppSettings, secrets: &mycode_config::ProviderSecrets) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for server in settings.mcp_servers.iter().filter(|server| server.enabled) {
+        server.id.hash(&mut hasher);
+        server.transport.hash(&mut hasher);
+        server.command.hash(&mut hasher);
+        server.args.hash(&mut hasher);
+        server.env.hash(&mut hasher);
+        server.endpoint.hash(&mut hasher);
+        server.key_header.hash(&mut hasher);
+        secrets.key(&format!("mcp-{}", server.id)).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Connected MCP tools, addressed by name. Schemas stay here until
@@ -174,8 +226,8 @@ impl McpCatalog {
         let mut by_name = HashMap::new();
         let mut names = Vec::new();
         for tool in tools {
-            names.push(tool.tool.name.clone());
-            by_name.insert(tool.tool.name.clone(), tool);
+            names.push(tool.tool_name.clone());
+            by_name.insert(tool.tool_name.clone(), tool);
         }
         names.sort();
         names.dedup();

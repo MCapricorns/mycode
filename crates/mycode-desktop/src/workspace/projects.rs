@@ -31,21 +31,36 @@ impl Workspace {
         if kind != crate::view_model::MentionKind::File {
             return;
         }
-        let session_id = self
-            .vm
-            .active
-            .as_ref()
-            .map(|conversation| conversation.session_id.clone());
-        let Some(session_id) = session_id else {
+        if self.vm.active.is_none() {
             return;
-        };
-        self.dispatch(
-            BridgeCommand::SearchProjectFiles {
-                session_id,
-                query: fragment,
-            },
-            cx,
-        );
+        }
+        // Typing `@` walks the project tree. Wait until the fragment settles
+        // so each keystroke does not start another full walk.
+        self.mention_generation = self.mention_generation.wrapping_add(1);
+        let generation = self.mention_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(180))
+                .await;
+            let _ = this.update(cx, |workspace, cx| {
+                if workspace.mention_generation != generation {
+                    return;
+                }
+                let Some(query) = workspace.mention_query.clone() else {
+                    return;
+                };
+                let Some(session_id) = workspace
+                    .vm
+                    .active
+                    .as_ref()
+                    .map(|conversation| conversation.session_id.clone())
+                else {
+                    return;
+                };
+                workspace.dispatch(BridgeCommand::SearchProjectFiles { session_id, query }, cx);
+            });
+        })
+        .detach();
     }
 
     fn skill_roots(&self) -> (std::path::PathBuf, Option<std::path::PathBuf>) {

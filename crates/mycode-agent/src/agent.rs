@@ -15,13 +15,14 @@
 //! `prompt()` returns [`TurnOutcome::Aborted`] — never a half
 //! `TurnEnded::Completed`.
 
+use std::sync::Arc;
+
 use mycode_core::MycodeError;
 use mycode_core::events::{AgentEvent, TurnOutcome};
 use mycode_core::message::{ContentBlock, Message, StopReason, ToolCall, ToolResultMessage};
 use tokio_util::sync::CancellationToken;
 
 use crate::env::TurnEnv;
-use crate::hooks::HookEvent;
 use crate::turn::{self, TurnFailure};
 
 /// Static provider-neutral agent configuration.
@@ -60,15 +61,15 @@ impl AgentConfig {
 pub struct AgentState {
     /// Conversation history: user inputs, assistant messages, tool
     /// results. Only completed messages live here — a response aborted
-    /// mid-stream never enters.
-    pub messages: Vec<Message>,
+    /// mid-stream never enters. Entries are shared with provider requests.
+    pub messages: Vec<Arc<Message>>,
     /// Whether a turn is currently streaming.
     pub is_streaming: bool,
 }
 
 impl AgentState {
     /// The message history.
-    pub fn messages(&self) -> &[Message] {
+    pub fn messages(&self) -> &[Arc<Message>] {
         &self.messages
     }
 }
@@ -100,7 +101,7 @@ impl Agent {
 
     /// Read-only access to the conversation state.
     /// Loads replay history before the first prompt.
-    pub fn seed_history(&mut self, messages: impl IntoIterator<Item = Message>) {
+    pub fn seed_history(&mut self, messages: impl IntoIterator<Item = Arc<Message>>) {
         self.state.messages.extend(messages);
     }
 
@@ -147,11 +148,9 @@ async fn run_turn(
     token: &CancellationToken,
 ) -> Result<TurnOutcome, MycodeError> {
     turn::emit(env, AgentEvent::TurnStarted);
-    env.hooks.notify(HookEvent::TurnStart).await;
 
     let outcome = agent_loop(config, state, msg, env, token).await;
 
-    env.hooks.notify(HookEvent::TurnEnd).await;
     match &outcome {
         Ok(outcome) => turn::emit(env, AgentEvent::TurnEnded(*outcome)),
         // The Error event was already emitted at the failure site; the
@@ -169,8 +168,6 @@ async fn agent_loop(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
 ) -> Result<TurnOutcome, MycodeError> {
-    // The user prompt enters the context (hooks may rewrite it first).
-    let prompt_msg = env.hooks.transform(HookEvent::UserPrompt, prompt_msg).await;
     turn::push_message(env, state, prompt_msg);
 
     let mut aborted = false;

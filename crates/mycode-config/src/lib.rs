@@ -25,23 +25,20 @@ mod secrets;
 mod secure_fs;
 mod settings;
 mod subagents;
-mod todos;
 mod ui_state;
 
 #[doc(inline)]
-pub use authority::{
-    ArtifactRef, AuthorityRevision, CanonicalVersion, Sha256Digest, SourceBindingId, TrustHighWater,
-};
+pub use authority::AuthorityRevision;
 pub use checkpoints::{checkpoint_file, rollback_session};
 #[doc(inline)]
 pub use compaction::{
     COMPACTION_FORMAT_VERSION, COMPACTION_KIND, CompactionCheckpoint, MAX_SUMMARY_CHARS,
-    estimate_tokens, read_compaction, write_compaction,
+    estimate_token_count, estimate_tokens, read_compaction, write_compaction,
 };
 pub use error::{ConfigError, ConfigErrorKind};
 pub use home::{
     HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, SCRATCH_DIR, SESSIONS_DIR,
-    project_folder_name, session_relative,
+    session_relative,
 };
 pub use mcp_import::{normalize_api_key, parse_mcp_import};
 #[doc(inline)]
@@ -55,7 +52,7 @@ pub use secrets::{
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{
-    ensure_owned_directory, locked_update_owned_file, read_owned_file, replace_owned_file,
+    ensure_owned_directory, locked_update_owned_file, read_owned_file,
 };
 #[doc(inline)]
 pub use settings::{
@@ -70,13 +67,8 @@ pub use settings::{
 };
 #[doc(inline)]
 pub use subagents::{
-    MAX_ROLE_BYTES, MAX_ROLES, ROLE_DIR_NAME, RoleCatalog, RoleIsolation, RoleOrigin, RoleProblem,
-    RoleThinking, SubagentRole, builtin_roles, discover_roles,
-};
-pub use todos::{
-    MAX_TODO_CONTENT_CHARS, MAX_TODO_DEPS, MAX_TODO_TASKS, TODO_FORMAT_VERSION, TODO_KIND,
-    TodoDocument, TodoStatus, TodoTask, is_todo_id, new_todo_id, read_todo_document,
-    read_todo_revision, replace_todo_document,
+    MAX_ROLE_BYTES, MAX_ROLES, ROLE_DIR_NAME, RoleCatalog, RoleIsolation, RoleOrigin, RoleThinking,
+    SubagentRole, builtin_roles, discover_roles,
 };
 #[doc(inline)]
 pub use ui_state::{

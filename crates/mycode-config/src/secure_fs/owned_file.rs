@@ -100,23 +100,6 @@ pub fn read_owned_file(
     platform::read_file(&path.root, &path.components, maximum_bytes)
 }
 
-/// Replaces a private regular file while holding its persistent lock.
-///
-/// # Errors
-///
-/// Returns [`ConfigError`] for owned-path security, lock, access, identity,
-/// serialization-bound, or durability failures.
-pub fn replace_owned_file(
-    home: &HomeLayout,
-    relative: impl AsRef<Path>,
-    bytes: &[u8],
-) -> Result<(), ConfigError> {
-    let path = OwnedPath::new(home, relative.as_ref())?;
-    require_file_name(&path)?;
-    let mut transaction = platform::Transaction::begin(&path.root, &path.components)?;
-    transaction.replace(bytes)
-}
-
 /// Runs one read-modify-replace callback under a persistent advisory lock.
 ///
 /// # Errors

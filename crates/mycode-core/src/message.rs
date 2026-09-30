@@ -5,7 +5,13 @@
 //! belongs to `mycode-providers`; durable session encoding belongs to
 //! `mycode-agent`. See `docs/core.md`.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// One history entry shared by the agent, the provider request, and live
+/// events. Cloning bumps a refcount instead of copying tool output.
+pub type SharedMessage = Arc<Message>;
 
 /// A message in the conversation tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

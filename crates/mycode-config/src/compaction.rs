@@ -71,7 +71,16 @@ impl CompactionCheckpoint {
 /// Rough token estimate: four characters per token plus a small constant.
 #[must_use]
 pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count() / 4 + 8
+    estimate_token_count(text.chars().count())
+}
+
+/// Token estimate from an already-counted character length.
+///
+/// Callers that already walk message text use this so compaction does not
+/// allocate a second copy of the transcript just to measure it.
+#[must_use]
+pub fn estimate_token_count(chars: usize) -> usize {
+    chars / 4 + 8
 }
 
 fn compaction_path(session_id: &str) -> Result<String, ConfigError> {

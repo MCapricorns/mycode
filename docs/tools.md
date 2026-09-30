@@ -1,6 +1,6 @@
 # mycode-tools
 
-模型能调用的工具。这里定义 trait、注册表，以及文件、搜索和进程这组内置实现。`ask_user`、`todo_write`、`task`、网页和 MCP 的宿主在 `mycode-app`，它们实现同一个 trait，在每个回合注册进去。
+模型能调用的工具。这里定义 trait、注册表，以及文件、搜索和进程这组内置实现。`ask_user`、`task`、网页和 MCP 的宿主在 `mycode-app`，它们实现同一个 trait，在每个回合注册进去。
 
 ```text
 模型的 tool_call
@@ -24,7 +24,7 @@
 
 | 模块 | 干什么 |
 | --- | --- |
-| `tool` | `Tool` / `ToolDyn`、`ToolResult`、`ToolError`、`Concurrency`（`Parallel` 或 `Exclusive`） |
+| `tool` | `Tool` / `ToolDyn`、`ToolResult`、`ToolError` |
 | `registry` | 名字 → 工具。`prompt_entries` 给 system prompt 列名字和一句说明 |
 | `ctx` | 一次调用的上下文：取消令牌、会话工作目录、额外根、进度流 |
 | `roots` | 把模型给的路径锚到工作目录，拒绝逃出根的相对路径 |
@@ -56,7 +56,6 @@ Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。she
 | 工具 | 宿主提供什么 |
 | --- | --- |
 | `ask_user` | 把问题送到界面，等用户答完再继续 |
-| `todo_write` | 读写该会话的 `todos.json` |
 | `task` | 按角色再跑一个有白名单的子循环 |
 | `web_search` / `fetch_content` | 有界 HTTP。没钥匙时调用失败，并提示去设置页粘贴 |
 

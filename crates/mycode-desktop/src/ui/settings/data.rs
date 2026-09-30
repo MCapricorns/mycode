@@ -63,8 +63,8 @@ pub(super) fn render_data_section(
                 })),
         )
         .child(div().text_xs().opacity(0.55).child(t(
-            "Settings, todos, and sessions \u{2014} API keys stay on this machine.",
-            "设置、待办与会话 — API 密钥只保留在本机。",
+            "Settings and sessions \u{2014} API keys stay on this machine.",
+            "设置与会话 — API 密钥只保留在本机。",
         )))
         .into_any_element();
     settings_card(

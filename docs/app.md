@@ -21,7 +21,7 @@
 | `turn` | 一次 `ChatTurn`：读设置和密钥、解析 provider、注册工具、跑 `Agent`、把完成的消息提交回账本 |
 | `projection` | 账本事件 → 转录行。用量行把「裸模型名」和「provider/model」收成同一行 |
 | `compaction` | 请求前钩子。见下文 |
-| `tool_hosts` | `ask_user` 和 `todo_write` 怎么接到桥和待办文件 |
+| `tool_hosts` | `ask_user` 怎么接到桥 |
 | `subagent` | `task`：解析角色、工具白名单、并发许可、可选 worktree |
 | `mcp_client` / `mcp_tools` | stdio 或 Streamable HTTP。对模型暴露 `search_tool` 和 `use_tool` |
 | `web_client` | Querit、AnySearch、自定义后端。有界请求，Bearer 由传输层加 |
@@ -38,7 +38,7 @@
 1. 用会话绑定的文件夹当工作目录；没有文件夹时用 `scratch/`。
 2. 读设置和密钥。和保存并发时最多重试三次，间隔 150ms，避免刚加的提供商还没落盘。
 3. `ResolvedProvider::resolve`，认证头来自密钥或 OAuth 令牌。
-4. 注册内置工具、提问、待办、网页。至少一个角色启用时注册 `task`。连上的 MCP 再注册两个桥接工具；某个服务器连不上就跳过，不让这一回合失败。
+4. 注册内置工具、提问、网页。至少一个角色启用时注册 `task`。连上的 MCP 再注册两个桥接工具；某个服务器连不上就跳过，不让这一回合失败。
 5. system prompt = 身份与工具约定 + 资源文件 + 注册表清单 + 子代理委派表。
 6. 装上压缩钩子和工具前快照观察者，调用 `Agent::prompt`。
 7. 流式事件投影成 `BridgeEvent`。正常结束把助手消息按期望头提交。

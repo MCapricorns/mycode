@@ -24,8 +24,9 @@ pub use error::MycodeError;
 pub use events::{AgentEvent, MessageDelta, TurnOutcome};
 pub use ids::CallId;
 pub use message::{
-    AssistantMessage, BinaryData, ContentBlock, CustomMessage, Message, StopReason, TextBlock,
-    ThinkingBlock, ToolCall, ToolResultMessage, Usage, UserMessage, tool_label, tool_target,
+    AssistantMessage, BinaryData, ContentBlock, CustomMessage, Message, SharedMessage, StopReason,
+    TextBlock, ThinkingBlock, ToolCall, ToolResultMessage, Usage, UserMessage, tool_label,
+    tool_target,
 };
 #[doc(inline)]
 pub use provider::{

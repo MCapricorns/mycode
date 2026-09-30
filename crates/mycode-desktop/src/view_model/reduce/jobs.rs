@@ -1,8 +1,8 @@
 //! Live tool and subagent progress: the `task|role|phase|detail` protocol,
 //! the inspector-panel job cards, and the status lines they feed.
 //!
-//! Finished jobs drop out of the list the way completed todos do: the panel
-//! and the status line only ever describe work that is still running.
+//! Finished jobs drop out of the list: the panel and the status line only
+//! ever describe work that is still running.
 
 use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind, LiveJob, WorkspaceState};

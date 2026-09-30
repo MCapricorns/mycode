@@ -3,6 +3,20 @@
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
 发布说明在发版时手写，与本文件相互独立。
 
+## [0.7.0] - 2026-09-30
+
+### Removed
+
+- 去掉已经过时的待办：`todo_write`、输入框上方的待办条，以及会话目录里的 `todos.json`。导出包不再携带待办。子代理也不能再调用这个工具。
+
+### Changed
+
+- 打开会话和重建模型历史时，一页事件的载荷在同一次会话读取里取回，不再对每条事件各走一轮。
+- MCP 连接在设置不变时跨回合复用；连接断开后下一回合重连。
+- 同一回合里，历史已经压过且检查点仍覆盖当前 head 时，不再重复调用摘要模型。token 估算直接数字符，不再为每条消息拼一份全文。
+- `@` 文件提及在输入停顿后再搜索。工具 schema 注册后缓存，并在每一轮模型请求之间共享。对话消息用 `Arc` 共享，压缩只替换前缀，尾部不再整份深拷贝。
+- 删掉未接入的 pack 权威类型、没人读取的角色发现问题列表、空转的 hook，以及从未参与调度的工具并发标记。
+
 ## [0.6.0] - 2026-09-24
 
 ### Added
@@ -68,7 +82,8 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.0
 [0.5.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.1
 [0.5.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.0
 [0.4.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.4.7

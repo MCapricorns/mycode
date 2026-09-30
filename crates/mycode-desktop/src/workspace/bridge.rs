@@ -113,12 +113,6 @@ impl Workspace {
                     entry,
                 }
             }
-            BridgeEvent::TodoUpdated { session_id, tasks } => {
-                if !matches_active(&session_id) {
-                    return;
-                }
-                DesktopAction::TodoUpdated(tasks)
-            }
             BridgeEvent::AskRequested {
                 session_id,
                 questions,

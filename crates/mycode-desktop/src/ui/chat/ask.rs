@@ -1,4 +1,4 @@
-//! Structured questions, docked with the todos above the composer.
+//! Structured questions, docked above the composer.
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};

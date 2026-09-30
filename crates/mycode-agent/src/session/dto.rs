@@ -42,8 +42,6 @@ pub enum EventKind {
     ToolResult,
     /// A bounded usage record.
     Usage,
-    /// A durable task/todo state payload.
-    Task,
 }
 
 impl EventKind {
@@ -55,7 +53,6 @@ impl EventKind {
             Self::ToolCall => 1,
             Self::ToolResult => 2,
             Self::Usage => 3,
-            Self::Task => 4,
         }
     }
 
@@ -67,7 +64,6 @@ impl EventKind {
             1 => Some(Self::ToolCall),
             2 => Some(Self::ToolResult),
             3 => Some(Self::Usage),
-            4 => Some(Self::Task),
             _ => None,
         }
     }
@@ -77,9 +73,7 @@ impl EventKind {
     pub const fn payload_bound(self) -> usize {
         match self {
             Self::Usage => MAX_USAGE_PAYLOAD_BYTES,
-            Self::Message | Self::ToolCall | Self::ToolResult | Self::Task => {
-                MAX_EVENT_PAYLOAD_BYTES
-            }
+            Self::Message | Self::ToolCall | Self::ToolResult => MAX_EVENT_PAYLOAD_BYTES,
         }
     }
 }
@@ -137,16 +131,6 @@ impl BranchMutationKind {
         match self {
             Self::Fork => 0,
             Self::Rewind => 1,
-        }
-    }
-
-    /// Parses the zero-based digest tag.
-    #[must_use]
-    pub const fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::Fork),
-            1 => Some(Self::Rewind),
-            _ => None,
         }
     }
 }
@@ -258,6 +242,22 @@ pub enum SessionRequest {
         /// The single-use reservation.
         reservation: BranchReservationView,
     },
+    /// Reads one page of committed events together with their payloads.
+    ///
+    /// One actor round-trip covers the metadata page and every payload in
+    /// it, so replaying a branch does not pay a separate invoke per event.
+    ReadPayloads {
+        /// The session to read.
+        session: SessionId,
+        /// The branch to read.
+        branch: BranchId,
+        /// The snapshot boundary head.
+        snapshot_head: HeadStamp,
+        /// Exclusive start cursor; `None` starts at the first event.
+        after: Option<SessionEventId>,
+        /// Page size (`1..=256`).
+        limit: u16,
+    },
     /// Loads one committed event with its verified payload.
     LoadEvent {
         /// The session to read.
@@ -310,6 +310,17 @@ pub enum SessionResult {
     ReservedBranch(BranchReservationView),
     /// `load-event` finished (first-party only).
     Loaded(LoadedEvent),
+    /// `read-payloads` finished (first-party only).
+    Payloads(PayloadPage),
+}
+
+/// One page of committed events with their verified payloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PayloadPage {
+    /// Events in ledger order, each with its payload.
+    pub items: Vec<LoadedEvent>,
+    /// Cursor of the last returned event; `None` only at snapshot EOF.
+    pub next: Option<SessionEventId>,
 }
 
 /// `create` result: both identifiers are Host-minted and the head is empty.

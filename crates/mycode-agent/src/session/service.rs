@@ -321,6 +321,35 @@ impl SessionService {
         }
     }
 
+    /// Reads one page of committed events and their verified payloads.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::NotFound`] for an unknown session or branch
+    /// and the actor's terminal error otherwise.
+    pub async fn read_payloads(
+        &self,
+        session: &SessionId,
+        branch: &BranchId,
+        snapshot_head: &HeadStamp,
+        after: Option<&SessionEventId>,
+        limit: u16,
+    ) -> Result<super::dto::PayloadPage, SessionError> {
+        match self
+            .run(SessionRequest::ReadPayloads {
+                session: session.clone(),
+                branch: branch.clone(),
+                snapshot_head: snapshot_head.clone(),
+                after: after.cloned(),
+                limit,
+            })
+            .await?
+        {
+            SessionResult::Payloads(page) => Ok(page),
+            _ => Err(SessionError::Unavailable),
+        }
+    }
+
     /// Retires the publication, closes live operations, and awaits drain.
     ///
     /// After this call the service rejects every further operation; other

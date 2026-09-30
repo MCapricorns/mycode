@@ -113,10 +113,6 @@ impl Tool for TaskTool {
         )
     }
 
-    fn concurrency(&self) -> crate::tool::Concurrency {
-        crate::tool::Concurrency::Parallel
-    }
-
     async fn execute(
         &self,
         args: Self::Args,

@@ -43,4 +43,4 @@ pub use ctx::ToolCtx;
 pub use registry::ToolRegistry;
 pub use roots::anchor_tool_path;
 pub use stream::{ToolProgress, ToolStream, ToolStreamItem, ToolStreamReceiver};
-pub use tool::{Concurrency, Tool, ToolDyn, ToolError, ToolResult};
+pub use tool::{Tool, ToolDyn, ToolError, ToolResult};

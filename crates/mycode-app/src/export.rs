@@ -1,6 +1,6 @@
 //! Product data export/import: one JSON bundle carrying settings, UI state,
-//! todos, and session ledgers between machines. Secrets never travel — the
-//! vault stays local and keys must be re-entered after an import.
+//! and session ledgers between machines. Secrets never travel — the vault
+//! stays local and keys must be re-entered after an import.
 
 use std::path::{Path, PathBuf};
 
@@ -22,8 +22,6 @@ const MAX_SESSION_FILES: usize = 16;
 const MAX_SESSION_BYTES: usize = 512 * 1024;
 /// Largest accepted bundle file.
 const MAX_BUNDLE_BYTES: u64 = 48 * 1024 * 1024;
-/// Todos carried by one bundle.
-const MAX_EXPORT_TODOS: usize = 256;
 
 /// One session directory's text files.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,8 +44,6 @@ pub struct ExportBundle {
     pub settings: AppSettings,
     /// UI state document.
     pub ui_state: UiState,
-    /// Todo documents by session id, file bodies verbatim.
-    pub todos: Vec<(String, String)>,
     /// Session ledger directories.
     pub sessions: Vec<ExportedSession>,
 }
@@ -57,7 +53,6 @@ pub struct ExportBundle {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportSummary {
     pub sessions: usize,
-    pub todos: usize,
     pub bytes: usize,
 }
 
@@ -67,7 +62,6 @@ pub struct ExportSummary {
 pub struct ImportSummary {
     pub settings: bool,
     pub ui_state: bool,
-    pub todos: usize,
     pub sessions: usize,
 }
 
@@ -94,22 +88,6 @@ fn plain_name(name: &str) -> bool {
 pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
     let settings = read_app_settings(home).map_err(|error| format!("settings: {error}"))?;
     let ui_state = read_ui_state(home).map_err(|error| format!("ui state: {error}"))?;
-    let mut todos = Vec::new();
-    let sessions_dir = home.root().join(mycode_config::SESSIONS_DIR);
-    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
-        for entry in entries.flatten() {
-            if todos.len() >= MAX_EXPORT_TODOS {
-                break;
-            }
-            let path = entry.path().join("todos.json");
-            if let Ok(body) = std::fs::read_to_string(&path)
-                && let Some(session_id) = entry.file_name().to_str()
-                && plain_name(session_id)
-            {
-                todos.push((session_id.to_owned(), body));
-            }
-        }
-    }
     let mut sessions = Vec::new();
     let root = sessions_root(home)?;
     if let Ok(entries) = std::fs::read_dir(&root) {
@@ -164,7 +142,6 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
             .unwrap_or_default(),
         settings,
         ui_state,
-        todos,
         sessions,
     })
 }
@@ -179,7 +156,6 @@ pub fn export_to_file(home: &HomeLayout, path: &Path) -> Result<ExportSummary, S
     let bundle = build_bundle(home)?;
     let summary = ExportSummary {
         sessions: bundle.sessions.len(),
-        todos: bundle.todos.len(),
         bytes: 0,
     };
     let mut body =
@@ -192,8 +168,8 @@ pub fn export_to_file(home: &HomeLayout, path: &Path) -> Result<ExportSummary, S
     })
 }
 
-/// Applies one bundle: settings and UI state replace local values; todos and
-/// sessions only fill gaps, never overwrite.
+/// Applies one bundle: settings and UI state replace local values; sessions
+/// only fill gaps, never overwrite.
 ///
 /// # Errors
 ///
@@ -219,27 +195,6 @@ pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary,
     replace_app_settings(home, current, &bundle.settings)
         .map_err(|error| format!("settings: {error}"))?;
     replace_ui_state(home, &bundle.ui_state).map_err(|error| format!("ui state: {error}"))?;
-
-    let mut todos_applied = 0usize;
-    for (session_id, body) in &bundle.todos {
-        if !plain_name(session_id) || body.len() > mycode_config::MAX_SETTINGS_BYTES {
-            continue;
-        }
-        let target = home
-            .root()
-            .join(mycode_config::SESSIONS_DIR)
-            .join(session_id)
-            .join("todos.json");
-        if target.exists() {
-            continue;
-        }
-        if let Some(parent) = target.parent()
-            && std::fs::create_dir_all(parent).is_ok()
-            && std::fs::write(&target, body).is_ok()
-        {
-            todos_applied += 1;
-        }
-    }
 
     let mut sessions_applied = 0usize;
     let root = sessions_root(home)?;
@@ -274,7 +229,6 @@ pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary,
     Ok(ImportSummary {
         settings: true,
         ui_state: true,
-        todos: todos_applied,
         sessions: sessions_applied,
     })
 }

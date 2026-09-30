@@ -9,10 +9,10 @@ English notes are [below](#english).
 ## 功能
 
 - **命名工作区。** 一个工作区挂多个文件夹（例如前端和后端）。会话属于工作区；当前文件夹解析相对路径，其它文件夹用绝对路径。
-- **对话。** 输入框旁切换模型和思考强度。待办在输入框上方，做完即消失。
+- **对话。** 输入框旁切换模型和思考强度。
 - **改动。** 右侧是当前模型和该文件夹的 git 改动，点文件看 diff。
 - **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
-- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及钉住程序映像的 `exec` 和走 shell 的 `shell`。网页检索、向你提问、待办、子代理和 MCP 走同一张注册表。
+- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及钉住程序映像的 `exec` 和走 shell 的 `shell`。网页检索、向你提问、子代理和 MCP 走同一张注册表。
 - **子代理。** 内置 scout、artisan、steward、sentinel，也可以在 `agents/` 里加 Markdown 角色。
 - **界面。** 中英双语，浅色 / 深色和几套配色。发现新版本后下载校验，确认后再重启安装。
 
@@ -49,7 +49,7 @@ cargo build --release -p mycode-desktop
 ├─ secrets.json           API 密钥
 ├─ ui.json                工作区、文件夹、会话归属
 ├─ catalog-cache.json     模型目录缓存
-├─ sessions/<id>/         账本、待办、压缩检查点
+├─ sessions/<id>/         账本、压缩检查点
 ├─ checkpoints/<id>/      改文件之前的快照
 └─ scratch/               未绑定文件夹时的工作目录
 ```
@@ -88,8 +88,7 @@ bring the API keys.
 - **Named workspaces.** One workspace mounts several folders. Sessions
   belong to the workspace. The current folder resolves relative paths;
   the others are absolute.
-- **Chat.** Switch model and thinking effort beside the composer. The
-  todo list sits above it; finished items disappear.
+- **Chat.** Switch model and thinking effort beside the composer.
 - **Changes.** The right-hand pane shows the session model and the
   current folder's git diff.
 - **Models.** The built-in [models.dev](https://models.dev) catalog
@@ -98,7 +97,7 @@ bring the API keys.
   Copilot, Codex, and xAI can sign in with a device code.
 - **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`.
   `exec` launches a pinned executable; `shell` uses your shell profile.
-  Web search, questions, todos, subagents, and MCP share one registry.
+  Web search, questions, subagents, and MCP share one registry.
 - **Subagents.** Built-in scout, artisan, steward, and sentinel roles,
   or custom Markdown roles under `agents/`.
 - **UI.** English and Chinese, light and dark themes, several palettes.
