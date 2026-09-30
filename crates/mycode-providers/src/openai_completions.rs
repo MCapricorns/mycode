@@ -11,7 +11,8 @@ use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    apply_reasoning_effort, assemble_blocks, join_text, merge_usage, usage_from_value,
+    MAX_STREAM_INDEX, apply_reasoning_effort, assemble_blocks, charge_stream, join_text,
+    map_stop_reason, merge_usage, usage_from_value,
 };
 
 /// Concatenation separator for multi-part system prompts.
@@ -148,6 +149,8 @@ pub(crate) struct CompletionsReducer {
     usage: Option<Usage>,
     stop_reason: Option<StopReason>,
     terminal_sent: bool,
+    /// Bytes retained across text, thinking, and tool-argument fragments.
+    accumulated: usize,
     /// Extracts `<tool_call>` markup some endpoints stream as plain text.
     xml: crate::xml_tool_calls::XmlToolCallParser,
     /// Counter for synthetic ids minted by the XML filter.
@@ -239,6 +242,12 @@ impl FrameReducer for CompletionsReducer {
             if let Some(text) = delta["content"].as_str()
                 && !text.is_empty()
             {
+                if !charge_stream(&mut self.accumulated, text.len()) {
+                    self.terminal_sent = true;
+                    return vec![crate::driver::protocol_error(
+                        "stream exceeded the output limit",
+                    )];
+                }
                 self.absorb_text(text, &mut events);
             }
             let reasoning = delta["reasoning_content"]
@@ -247,19 +256,25 @@ impl FrameReducer for CompletionsReducer {
             if let Some(text) = reasoning
                 && !text.is_empty()
             {
+                if !charge_stream(&mut self.accumulated, text.len()) {
+                    self.terminal_sent = true;
+                    return vec![crate::driver::protocol_error(
+                        "stream exceeded the output limit",
+                    )];
+                }
                 self.thinking.push_str(text);
                 events.push(StreamEvent::ThinkingDelta(text.to_owned()));
             }
             if let Some(fragments) = delta["tool_calls"].as_array() {
                 for fragment in fragments {
-                    self.absorb_tool_fragment(fragment, &mut events);
+                    if let Err(message) = self.absorb_tool_fragment(fragment, &mut events) {
+                        self.terminal_sent = true;
+                        return vec![crate::driver::protocol_error(message)];
+                    }
                 }
             }
             if let Some(finish) = choice["finish_reason"].as_str() {
-                self.stop_reason = Some(match finish {
-                    "tool_calls" | "function_call" => StopReason::ToolUse,
-                    _ => StopReason::Stop,
-                });
+                self.stop_reason = Some(map_stop_reason(finish));
             }
         }
         if let Some(usage) = chunk.get("usage").filter(|usage| !usage.is_null()) {
@@ -278,15 +293,26 @@ impl FrameReducer for CompletionsReducer {
 }
 
 impl CompletionsReducer {
-    fn absorb_tool_fragment(&mut self, fragment: &Value, events: &mut Vec<StreamEvent>) {
-        let index = fragment["index"].as_u64().unwrap_or_default() as usize;
+    fn absorb_tool_fragment(
+        &mut self,
+        fragment: &Value,
+        events: &mut Vec<StreamEvent>,
+    ) -> Result<(), &'static str> {
+        let index = fragment["index"].as_u64().unwrap_or_default();
+        if index > MAX_STREAM_INDEX {
+            return Err("tool call index exceeds the stream limit");
+        }
+        let index = index as usize;
         while self.tool_calls.len() <= index {
             self.tool_calls.push(ToolCallAccumulator::default());
         }
-        let call = &mut self.tool_calls[index];
         if let Some(id) = fragment["id"].as_str()
-            && call.id.is_none()
+            && self.tool_calls[index].id.is_none()
         {
+            if !charge_stream(&mut self.accumulated, id.len()) {
+                return Err("stream exceeded the output limit");
+            }
+            let call = &mut self.tool_calls[index];
             call.id = Some(id.to_owned());
             if !call.pending.is_empty() {
                 let pending = std::mem::take(&mut call.pending);
@@ -298,21 +324,30 @@ impl CompletionsReducer {
             }
         }
         if let Some(name) = fragment["function"]["name"].as_str() {
-            call.name.push_str(name);
+            if !charge_stream(&mut self.accumulated, name.len()) {
+                return Err("stream exceeded the output limit");
+            }
+            self.tool_calls[index].name.push_str(name);
         }
         if let Some(arguments) = fragment["function"]["arguments"].as_str()
             && !arguments.is_empty()
         {
+            if !charge_stream(&mut self.accumulated, arguments.len()) {
+                return Err("stream exceeded the output limit");
+            }
+            let call = &mut self.tool_calls[index];
             match &call.id {
                 Some(id) => {
+                    let id = id.clone();
                     call.arguments.push_str(arguments);
                     events.push(StreamEvent::ToolCallDelta {
-                        id: id.clone(),
+                        id,
                         partial_json: arguments.to_owned(),
                     });
                 }
                 None => call.pending.push_str(arguments),
             }
         }
+        Ok(())
     }
 }

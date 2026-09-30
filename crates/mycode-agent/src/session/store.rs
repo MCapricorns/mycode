@@ -244,6 +244,20 @@ pub(crate) enum RecordError {
     Corrupt,
 }
 
+/// Bytes one committed record occupies, including the 4-byte frame prefix.
+///
+/// Reservations must charge this length, not the bare payload: the append
+/// path commits `record.len()`, and a payload-only check lets a reservation
+/// succeed and then fail at the limit after the reservation row is consumed.
+pub(crate) fn encoded_record_len(has_call_id: bool, payload_len: usize) -> Option<u64> {
+    let call = if has_call_id { CALL_ID_LEN } else { 0 };
+    let body = RECORD_BODY_FIXED
+        .checked_add(call)?
+        .checked_add(payload_len)?
+        .checked_add(RECORD_DIGEST_BYTES)?;
+    u64::try_from(body.checked_add(4)?).ok()
+}
+
 /// Encodes one durable event record.
 ///
 /// # Panics

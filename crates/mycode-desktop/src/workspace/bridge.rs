@@ -172,24 +172,27 @@ impl Workspace {
                 DesktopAction::CopilotSignInFinished(Err(message))
             }
             BridgeEvent::UpdateAvailable { offer } => {
-                let version = offer.version.clone();
-                let notes_url = offer.notes_url.clone();
-                let can_start = !matches!(
+                // A second offer must not knock a download or a staged
+                // package back to "available" — that both lies about the
+                // in-flight work and starts another download.
+                if matches!(
                     self.vm.update,
                     UpdateState::Downloading { .. } | UpdateState::Ready { .. }
-                );
-                self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
-                if can_start {
-                    self.push_toast(
-                        format!(
-                            "{} v{version}{}",
-                            crate::i18n::t("New version", "发现新版本"),
-                            crate::i18n::t(", downloading…", ",正在下载…")
-                        ),
-                        crate::workspace::ToastKind::Info,
-                        cx,
-                    );
+                ) {
+                    return;
                 }
+                let version = offer.version.clone();
+                let notes_url = offer.notes_url.clone();
+                self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
+                self.push_toast(
+                    format!(
+                        "{} v{version}{}",
+                        crate::i18n::t("New version", "发现新版本"),
+                        crate::i18n::t(", downloading…", ",正在下载…")
+                    ),
+                    crate::workspace::ToastKind::Info,
+                    cx,
+                );
                 self.apply_action(
                     DesktopAction::UpdateStateChanged(UpdateState::Available {
                         version,
@@ -245,7 +248,16 @@ impl Workspace {
                     }
                 }
                 self.pending_open = None;
+                let switching = self
+                    .vm
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.session_id != conversation.session_id);
                 self.apply_action(DesktopAction::ConversationOpened(conversation), cx);
+                if switching {
+                    self.pending_composer_prefill = Some(String::new());
+                    self.mention_query = None;
+                }
                 self.follow_session_project(&session_id, cx);
                 self.dispatch(BridgeCommand::ListResources { session_id }, cx);
                 self.refresh_skills(cx);
@@ -279,20 +291,28 @@ impl Workspace {
                 let revision = revision.get();
                 let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
                 state.mcp_with_keys = mcp_keys;
-                // Apply the persisted theme only when it differs from the
-                // live one: reloads (import, sign-in) must not clobber a
-                // runtime toggle that has not been saved yet.
-                let mode = if state.theme == "light" {
-                    ThemeMode::Light
-                } else {
-                    ThemeMode::Dark
-                };
-                if cx.theme().mode != mode {
-                    Theme::change(mode, None, cx);
+                // A dirty or in-flight editor keeps its theme, palette, and
+                // user-agent field. Applying the disk copy here would undo
+                // unsaved appearance edits before the reducer can refuse the
+                // document swap.
+                let preserve_editor = self
+                    .vm
+                    .settings
+                    .as_ref()
+                    .is_some_and(|settings| settings.dirty || settings.saving);
+                if !preserve_editor {
+                    let mode = if state.theme == "light" {
+                        ThemeMode::Light
+                    } else {
+                        ThemeMode::Dark
+                    };
+                    if cx.theme().mode != mode {
+                        Theme::change(mode, None, cx);
+                    }
+                    crate::ui::desk::apply_palette(Theme::global_mut(cx), &state.palette);
+                    Theme::sync_base(cx);
+                    self.ua_sync_pending = true;
                 }
-                crate::ui::desk::apply_palette(Theme::global_mut(cx), &state.palette);
-                Theme::sync_base(cx);
-                self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
                 self.apply_runtime_shell();
             }
@@ -348,7 +368,13 @@ impl Workspace {
                 self.dispatch(BridgeCommand::ListSessions, cx);
             }
             BridgeReply::SettingsSaved(Ok(revision)) => {
-                self.apply_action(DesktopAction::SettingsSaved(revision.get()), cx);
+                self.apply_action(
+                    DesktopAction::SettingsSaved {
+                        revision: revision.get(),
+                        edit_epoch: self.settings_save_epoch,
+                    },
+                    cx,
+                );
             }
             BridgeReply::ProviderKeySaved(Ok((provider_keys, mcp_keys))) => {
                 // Refresh the key markers in place: reloading settings here
@@ -532,17 +558,25 @@ impl Workspace {
                 self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
                 self.apply_action(DesktopAction::UpdateDialogToggled(true), cx);
             }
+            BridgeReply::SettingsSaved(Err(message)) => {
+                self.apply_action(DesktopAction::SettingsSaveFailed(message), cx);
+            }
+            BridgeReply::SessionDeleted(Err(message)) => {
+                // The sidebar row was dropped optimistically. Put the session
+                // back from disk when the delete did not actually happen.
+                self.apply_action(DesktopAction::Failed(message), cx);
+                self.dispatch(BridgeCommand::ListSessions, cx);
+                self.dispatch(BridgeCommand::LoadUiState, cx);
+            }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))
             | BridgeReply::Conversation(Err(message))
             | BridgeReply::Sent(Err(message))
             | BridgeReply::Settings(Err(message))
-            | BridgeReply::SettingsSaved(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
             | BridgeReply::ChatStarted(Err(message))
             | BridgeReply::RolledBack(Err(message))
             | BridgeReply::Recalled(Err(message))
-            | BridgeReply::SessionDeleted(Err(message))
             | BridgeReply::Resources(Err(message))
             | BridgeReply::AskAnswered(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);

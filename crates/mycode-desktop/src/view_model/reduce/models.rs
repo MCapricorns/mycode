@@ -45,7 +45,7 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
         if !known {
             if provider.models.len() < mycode_config::MAX_MODELS_PER_PROVIDER {
                 provider.models.push(model.clone());
-                settings.dirty = true;
+                super::mark_settings_dirty(settings);
             } else {
                 capped = true;
             }
@@ -194,6 +194,6 @@ pub(super) fn clamp_reasoning_to_catalog(state: &mut WorkspaceState) {
     };
     if !levels.iter().any(|level| level == current) {
         settings.reasoning = None;
-        settings.dirty = true;
+        super::mark_settings_dirty(settings);
     }
 }

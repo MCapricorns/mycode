@@ -136,6 +136,8 @@ pub struct Workspace {
     suppress_open: bool,
     /// Draft restored by 撤回修改, applied on the next render (needs a window).
     pending_composer_prefill: Option<String>,
+    /// Settings edit epoch captured when the in-flight save was dispatched.
+    settings_save_epoch: u64,
     /// Last `@` fragment already searched, to dedupe bridge dispatches.
     mention_query: Option<String>,
     /// Bumped on each composer edit so a stale mention timer does not search.
@@ -154,6 +156,8 @@ pub struct Workspace {
     /// Latest git status for the open folder.
     git: crate::git_status::GitSnapshot,
     git_rx: Option<std::sync::mpsc::Receiver<crate::git_status::GitSnapshot>>,
+    /// Folder the in-flight status poll was started for.
+    git_poll_root: Option<String>,
     /// Path whose diff is shown in the changes panel.
     git_diff_path: Option<String>,
     git_diff: String,
@@ -203,6 +207,7 @@ impl Workspace {
             pending_open: None,
             suppress_open: false,
             pending_composer_prefill: None,
+            settings_save_epoch: 0,
             mention_query: None,
             mention_generation: 0,
             pending_catalog_refresh: false,
@@ -214,6 +219,7 @@ impl Workspace {
             conversation_scroll: gpui_kit::ScrollHandle::new(),
             git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
             git_rx: None,
+            git_poll_root: None,
             git_diff_path: None,
             git_diff: String::new(),
             git_diff_rx: None,
@@ -274,8 +280,23 @@ impl Workspace {
         self.poll_git(cx);
         let current = self.vm.project_dir.clone();
         if current != self.git_seen {
-            self.git_seen = current;
+            self.git_seen = current.clone();
             self.git_poll_stretch = 0;
+            // Drop a poll started for the previous folder. Applying it
+            // would paint that folder's status onto the one now open.
+            self.git_rx = None;
+            self.git_poll_root = None;
+            self.git_diff_rx = None;
+            self.git_diff_path = None;
+            self.git_diff.clear();
+            self.git = match current {
+                Some(_) => {
+                    crate::git_status::GitSnapshot::empty(crate::i18n::t("Loading…", "正在加载…"))
+                }
+                None => {
+                    crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录"))
+                }
+            };
             self.request_git_status();
         } else if self.runtime_ticks >= self.git_next_poll {
             self.request_git_status();
@@ -323,8 +344,10 @@ impl Workspace {
         let Some(root) = self.vm.project_dir.clone() else {
             self.git =
                 crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录"));
+            self.git_poll_root = None;
             return;
         };
+        self.git_poll_root = Some(root.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(crate::git_status::read_status(std::path::Path::new(&root)));
@@ -338,7 +361,10 @@ impl Workspace {
             && let Ok(snapshot) = rx.try_recv()
         {
             self.git_rx = None;
-            if self.git != snapshot {
+            let current = self.vm.project_dir.clone();
+            if self.git_poll_root != current {
+                self.git_poll_root = None;
+            } else if self.git != snapshot {
                 self.git = snapshot;
                 self.git_poll_stretch = 0;
                 changed = true;

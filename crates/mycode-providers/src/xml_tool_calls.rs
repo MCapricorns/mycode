@@ -81,14 +81,17 @@ impl XmlToolCallParser {
         pieces
     }
 
-    /// Flushes at end-of-stream: trailing text is emitted, an unterminated
-    /// call body is dropped (it never completed, so it is not a call).
+    /// Flushes at end-of-stream. Trailing text is emitted. An unterminated
+    /// call is not a call, but the buffered markup is still model output, so
+    /// it surfaces as text instead of disappearing from the assembled message.
     pub(crate) fn finish(&mut self) -> Vec<XmlPiece> {
         let inside = self.inside;
         let rest = std::mem::take(&mut self.buffer);
         self.inside = false;
-        if rest.is_empty() || inside {
+        if rest.is_empty() {
             Vec::new()
+        } else if inside {
+            vec![XmlPiece::Text(format!("{OPEN_TAG}{rest}"))]
         } else {
             vec![XmlPiece::Text(rest)]
         }
