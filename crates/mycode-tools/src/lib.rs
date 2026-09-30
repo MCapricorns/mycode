@@ -11,8 +11,7 @@
 //!
 //! * Every tool derives **one** JSON Schema via `schemars`, used both for
 //!   the LLM tool spec and runtime argument validation.
-//! * [`ToolRegistry`] is last-wins per name, so plugins can override
-//!   builtins.
+//! * [`ToolRegistry`] is last-wins per name.
 //! * A registered, schema-valid call executes directly. Unknown tools,
 //!   invalid arguments, cancellation, and tool errors fail as lifecycle
 //!   errors, not user authorization.

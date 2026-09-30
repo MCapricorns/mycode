@@ -1,5 +1,5 @@
 //! `ToolStream` — the per-call progress/terminal channel tools write into
-//! while executing (design doc `02-tools-permissions.md` §3).
+//! while executing. See `docs/tools.md`.
 //!
 //! Stream invariant: any number of [`ToolStreamItem::Progress`] items
 //! followed by **exactly one** [`ToolStreamItem::Terminal`]. The producer

@@ -1,6 +1,5 @@
-//! The agent loop (design doc `01-agent-core.md` §3, adopting pi's
-//! `runAgentLoop` structure): stream→tool cycles until the model stops
-//! calling tools.
+//! The agent loop: stream-then-tool cycles until the model stops calling
+//! tools. See `docs/agent.md`. The shape follows pi's `runAgentLoop`.
 //!
 //! # Turn model
 //!

@@ -42,8 +42,7 @@ pub enum AgentEvent {
     Error(MycodeError),
 }
 
-/// Incremental assistant content while streaming (mirrors the provider
-/// stream events of design doc `01-agent-core.md` §2).
+/// Incremental assistant content while streaming. See `docs/core.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum MessageDelta {

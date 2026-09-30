@@ -1,5 +1,5 @@
-//! Inner-loop mechanics: one LLM response cycle and one tool dispatch
-//! (design doc `01-agent-core.md` §3, the body of the pseudocode loop).
+//! Inner-loop mechanics: one LLM response cycle and one tool dispatch.
+//! See `docs/agent.md`.
 //!
 //! Everything here is a free function over `(&TurnEnv, &mut AgentState)`
 //! so the agent's double loop in [`crate::agent`] can call it with
@@ -222,7 +222,7 @@ fn canonical_tool_name(name: &str) -> &str {
 /// Lookup, hook gating, search/file capability binding, argument validation,
 /// cancellation, and tool errors are lifecycle failures: they
 /// return **as an `is_error` tool result** so the loop continues and the
-/// model can react (`01-agent-core.md` §3). Nothing here waits for a
+/// model can react. See `docs/agent.md`. Nothing here waits for a
 /// Core permission prompt.
 ///
 /// The hook gate runs before capability binding. Tools that declare

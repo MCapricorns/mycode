@@ -1,11 +1,8 @@
-//! Typed session DTOs: the frozen `session` world projection.
+//! Typed session requests and results.
 //!
-//! These types are the first-party Rust projection of design doc
-//! `07-pack-abi-session-resources.md` §3. The `create/open/append/read/
-//! fork/rewind` request cases, `session-pull`, and the error surface keep the
-//! exact ABI shape; `reserve-event`, `reserve-branch`, and `load-event` are
-//! first-party-only extensions that expose the Host-side reservation issuance
-//! and payload reads the external world reaches through Host imports.
+//! `create`, `open`, `append`, `read`, `fork`, and `rewind` are the durable
+//! operations. `reserve-event`, `reserve-branch`, and `load-event` issue
+//! reservations and read payloads inside the session actor. See `docs/agent.md`.
 use super::ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
 
 /// Maximum number of branches in one session ledger.
