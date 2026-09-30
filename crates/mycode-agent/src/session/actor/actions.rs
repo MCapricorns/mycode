@@ -302,7 +302,7 @@ impl SessionCore {
                     .open_calls
                     .remove(&row.call_id.clone().expect("tool result carries an id"));
             }
-            EventKind::Message | EventKind::Usage => {}
+            EventKind::Message | EventKind::Usage | EventKind::Task => {}
         }
         branch_state.head = HeadStamp::Event(reservation.event_id.clone());
         branch_state.events.push(EventMeta {
@@ -569,7 +569,7 @@ impl SessionCore {
                 EventKind::ToolResult => {
                     open_calls.remove(&row.call_id.clone().expect("tool result carries an id"));
                 }
-                EventKind::Message | EventKind::Usage => {}
+                EventKind::Message | EventKind::Usage | EventKind::Task => {}
             }
         }
         let new_state = BranchLedger {

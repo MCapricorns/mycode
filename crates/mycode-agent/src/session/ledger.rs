@@ -200,6 +200,9 @@ impl SessionLedger {
         after: Option<&SessionEventId>,
         limit: u16,
     ) -> Result<PageWindow, SessionError> {
+        if limit == 0 {
+            return Err(SessionError::Limit);
+        }
         let branch_state = self.branches.get(branch).ok_or(SessionError::NotFound)?;
         let boundary = match snapshot_head {
             HeadStamp::Empty if branch_state.events.is_empty() => 0,

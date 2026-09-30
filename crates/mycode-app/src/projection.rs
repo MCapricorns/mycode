@@ -8,23 +8,26 @@ use mycode_core::{AssistantMessage, ContentBlock};
 use crate::ledger::decode_text;
 use crate::protocol::{ConversationEntry, EntryKind};
 
-pub(crate) fn project_replayed_entry(event: &SessionEvent, payload: &[u8]) -> ConversationEntry {
+pub(crate) fn project_replayed_entry(
+    event: &SessionEvent,
+    payload: &[u8],
+) -> Option<ConversationEntry> {
     match event.kind {
         EventKind::Message => {
             // Assistant messages are typed JSON; a parse miss means the
             // payload is the user's plain-text message. Parse once.
             match serde_json::from_slice::<AssistantMessage>(payload) {
-                Ok(message) => project_assistant_message(event.event_id.as_str(), &message),
-                Err(_) => ConversationEntry {
+                Ok(message) => Some(project_assistant_message(event.event_id.as_str(), &message)),
+                Err(_) => Some(ConversationEntry {
                     event_id: event.event_id.as_str().to_owned(),
                     kind: EntryKind::UserMessage,
                     text: decode_text(payload).into(),
                     call_id: None,
                     thinking: String::new(),
-                },
+                }),
             }
         }
-        EventKind::ToolResult => project_tool_result(event.event_id.as_str(), payload),
+        EventKind::ToolResult => Some(project_tool_result(event.event_id.as_str(), payload)),
         EventKind::ToolCall => {
             let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
             let name = value["name"]
@@ -32,15 +35,17 @@ pub(crate) fn project_replayed_entry(event: &SessionEvent, payload: &[u8]) -> Co
                 .or_else(|| value["toolCall"]["name"].as_str())
                 .unwrap_or("tool");
             let target = value["target"].as_str().unwrap_or("");
-            ConversationEntry {
+            Some(ConversationEntry {
                 event_id: event.event_id.as_str().to_owned(),
                 kind: EntryKind::ToolCall,
                 text: mycode_core::tool_label(name, target).into(),
                 call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
                 thinking: String::new(),
-            }
+            })
         }
-        EventKind::Usage => project_usage(event.event_id.as_str(), payload),
+        EventKind::Usage => Some(project_usage(event.event_id.as_str(), payload)),
+        // Legacy todo snapshots. They are not conversation and not usage.
+        EventKind::Task => None,
     }
 }
 

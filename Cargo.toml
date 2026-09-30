@@ -21,7 +21,8 @@ license = "Apache-2.0"
 # Single source of truth for shared dependency versions.
 # Crates opt in via `dep.workspace = true` and may add features locally.
 [workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
+# `rc` serializes `Arc<Message>` and `Arc<[ToolSpec]>` inside `Request`.
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 base64 = "0.22"
 thiserror = "2"
