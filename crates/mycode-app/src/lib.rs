@@ -11,7 +11,7 @@
 //! hosting the session service, so a frontend never touches tokio types and
 //! its own executor stays free. Replies ride tokio oneshot channels, whose
 //! receivers are executor-agnostic futures. Model turns run as concurrent
-//! runtime tasks streaming events back through a channel the frontend polls;
+//! runtime tasks streaming events back through a channel the frontend awaits;
 //! configuration reads stay synchronous on the same thread.
 //!
 //! The command channel is unbounded on purpose: the worker loop must `await`
@@ -56,18 +56,17 @@ pub use updates::{apply_and_restart, brief_error, cleanup_stale_stages, current_
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use mycode_config::{HomeLayout, UiState};
 use mycode_providers::catalog::CatalogDocument;
 use tokio::sync::oneshot;
 
-// The event channel is unbounded on purpose: `Sender::send` never blocks,
-// so a slow or stalled UI frame can never freeze the single-threaded core
-// runtime mid-turn. The UI drains with `try_recv` on a fixed poll tick and
-// already collapses the queue per pass, so the unbounded queue only ever
-// holds at most one interval's worth of events.
+// The event channel is unbounded on purpose: `try_send` never blocks, so a
+// slow or stalled UI frame can never freeze the single-threaded core runtime
+// mid-turn. `try_send` wakes the frontend task parked on `recv`. That task
+// applies the event and drains whatever else is already queued, so one wake
+// folds a whole burst.
 
 /// A request from the UI to the core thread.
 #[derive(Debug)]
@@ -467,6 +466,20 @@ pub struct CatalogInfo {
     pub fetched_at: u64,
 }
 
+/// Unbounded sender for [`BridgeEvent`]s.
+///
+/// `try_send` returns immediately and wakes the task parked on the paired
+/// [`BridgeEventRx`]. A closed receiver is ignored; the core keeps running
+/// after the UI is gone.
+pub(crate) type BridgeEventTx = async_channel::Sender<BridgeEvent>;
+
+/// Receiving end of the bridge event stream.
+///
+/// Waiting on the receiver parks until the core sends or every sender is
+/// dropped. Events already queued can be drained in the same wake, so one
+/// wake applies a whole burst.
+pub type BridgeEventRx = async_channel::Receiver<BridgeEvent>;
+
 /// Handle to the core thread.
 pub struct CoreBridge {
     command_tx: Option<tokio::sync::mpsc::UnboundedSender<WithReply>>,
@@ -477,11 +490,12 @@ impl CoreBridge {
     /// Starts the core thread over one owned home.
     ///
     /// Returns the bridge handle together with the receiving end of the
-    /// streaming event channel.
+    /// streaming event channel. Sending wakes the receiver and never waits
+    /// on it.
     #[must_use]
-    pub fn start(home: HomeLayout) -> (Self, mpsc::Receiver<BridgeEvent>) {
+    pub fn start(home: HomeLayout) -> (Self, BridgeEventRx) {
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (event_tx, event_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
         let worker = std::thread::Builder::new()
             .name("mycode-core".into())
             .spawn(move || dispatch::run_core(home, command_rx, event_tx))

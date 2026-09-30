@@ -1,5 +1,7 @@
 //! Self-update, data export/import, MCP probes, the pending-ask flow, and
 //! the Escape key's floating-menu dismissal.
+use std::time::Duration;
+
 use gpui_kit::component::input::InputState;
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
@@ -8,7 +10,30 @@ use mycode_app::BridgeCommand;
 use crate::view_model::{DesktopAction, MainView, UpdateState, close_floating_menus};
 use crate::workspace::Workspace;
 
+/// Wakes once a day of runtime, then checks for an update when that is enabled.
+const UPDATE_RECHECK_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
+
 impl Workspace {
+    /// Parks until a day has passed, then runs the automatic update check.
+    pub(super) fn spawn_update_recheck(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(UPDATE_RECHECK_AFTER).await;
+                if this
+                    .update(cx, |workspace, cx| {
+                        if workspace.vm.auto_update {
+                            workspace.on_check_update(false, cx);
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     // ---- catalog ----
 
     pub(crate) fn on_refresh_catalog(&mut self, cx: &mut Context<Self>) {

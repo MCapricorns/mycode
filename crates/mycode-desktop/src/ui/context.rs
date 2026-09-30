@@ -232,7 +232,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                 .when(open, |row| row.bg(theme.accent))
                 .hover(|row| row.bg(theme.secondary_hover))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_select_git_file(&path);
+                    workspace.on_select_git_file(&path, cx);
                     cx.notify();
                 }))
                 .child(
@@ -393,7 +393,7 @@ pub(super) fn render_changes_drawer(
                                 .when(open, |row| row.bg(theme.accent))
                                 .hover(|row| row.bg(theme.secondary_hover))
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
-                                    workspace.on_select_git_file(&path);
+                                    workspace.on_select_git_file(&path, cx);
                                     cx.notify();
                                 }))
                                 .child(
