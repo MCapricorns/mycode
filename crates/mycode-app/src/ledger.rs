@@ -134,7 +134,9 @@ pub(crate) async fn read_branch(
 ) -> Result<ActiveConversation, SessionError> {
     let mut entries = Vec::new();
     for_each_event(service, session, branch, snapshot_head, |event, payload| {
-        entries.push(project_replayed_entry(event, payload));
+        if let Some(entry) = project_replayed_entry(event, payload) {
+            entries.push(entry);
+        }
         Ok(())
     })
     .await?;
@@ -228,7 +230,7 @@ pub(crate) async fn ledger_history(
                     history.push(Arc::new(Message::ToolResult(result)));
                 }
             }
-            EventKind::ToolCall | EventKind::Usage => {}
+            EventKind::ToolCall | EventKind::Usage | EventKind::Task => {}
         }
         Ok(())
     })

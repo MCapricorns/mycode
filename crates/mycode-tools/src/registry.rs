@@ -12,19 +12,25 @@ use mycode_core::tool::ToolSpec;
 
 use crate::tool::ToolDyn;
 
+struct RegistryInner {
+    tools: BTreeMap<String, Arc<dyn ToolDyn>>,
+    /// Built under the same lock as `tools`, so a registration cannot
+    /// publish a spec list that no longer matches the map.
+    specs: Option<Arc<[ToolSpec]>>,
+}
+
 /// Thread-safe registry of tools, keyed by name.
 pub struct ToolRegistry {
-    tools: RwLock<BTreeMap<String, Arc<dyn ToolDyn>>>,
-    /// Built once per registration. Provider requests reuse this instead of
-    /// regenerating every JSON schema on each LLM round.
-    specs: RwLock<Option<Arc<[ToolSpec]>>>,
+    inner: RwLock<RegistryInner>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
-            tools: RwLock::new(BTreeMap::new()),
-            specs: RwLock::new(None),
+            inner: RwLock::new(RegistryInner {
+                tools: BTreeMap::new(),
+                specs: None,
+            }),
         }
     }
 
@@ -33,34 +39,35 @@ impl ToolRegistry {
     /// override builtins).
     pub fn register(&self, tool: Arc<dyn ToolDyn>) {
         let name = tool.spec().name;
-        self.write().insert(name, tool);
-        *self.specs.write().expect("tool registry lock poisoned") = None;
+        let mut inner = self.write();
+        inner.tools.insert(name, tool);
+        inner.specs = None;
     }
 
     /// Look up a tool by name.
     pub fn get(&self, name: &str) -> Option<Arc<dyn ToolDyn>> {
-        self.read().get(name).cloned()
+        self.read().tools.get(name).cloned()
     }
 
     /// Specs of all registered tools, sorted by tool name for stable
     /// provider serialization.
     pub fn specs(&self) -> Arc<[ToolSpec]> {
-        if let Some(cached) = self
-            .specs
-            .read()
-            .expect("tool registry lock poisoned")
-            .clone()
-        {
+        if let Some(cached) = self.read().specs.clone() {
             return cached;
         }
-        let built: Arc<[ToolSpec]> = self.read().values().map(|tool| tool.spec()).collect();
-        *self.specs.write().expect("tool registry lock poisoned") = Some(Arc::clone(&built));
+        let mut inner = self.write();
+        if let Some(cached) = inner.specs.clone() {
+            return cached;
+        }
+        let built: Arc<[ToolSpec]> = inner.tools.values().map(|tool| tool.spec()).collect();
+        inner.specs = Some(Arc::clone(&built));
         built
     }
 
     /// Names and optional prompt snippets of all registered tools, sorted by name.
     pub fn prompt_entries(&self) -> Vec<(String, Option<String>)> {
         self.read()
+            .tools
             .iter()
             .map(|(name, tool)| {
                 (
@@ -73,23 +80,23 @@ impl ToolRegistry {
 
     /// Names of all registered tools, sorted.
     pub fn names(&self) -> Vec<String> {
-        self.read().keys().cloned().collect()
+        self.read().tools.keys().cloned().collect()
     }
 
     pub fn len(&self) -> usize {
-        self.read().len()
+        self.read().tools.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.read().is_empty()
+        self.read().tools.is_empty()
     }
 
-    fn read(&self) -> RwLockReadGuard<'_, BTreeMap<String, Arc<dyn ToolDyn>>> {
-        self.tools.read().expect("tool registry lock poisoned")
+    fn read(&self) -> RwLockReadGuard<'_, RegistryInner> {
+        self.inner.read().expect("tool registry lock poisoned")
     }
 
-    fn write(&self) -> RwLockWriteGuard<'_, BTreeMap<String, Arc<dyn ToolDyn>>> {
-        self.tools.write().expect("tool registry lock poisoned")
+    fn write(&self) -> RwLockWriteGuard<'_, RegistryInner> {
+        self.inner.write().expect("tool registry lock poisoned")
     }
 }
 

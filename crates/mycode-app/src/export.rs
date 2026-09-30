@@ -46,6 +46,10 @@ pub struct ExportBundle {
     pub ui_state: UiState,
     /// Session ledger directories.
     pub sessions: Vec<ExportedSession>,
+    /// Bundles exported before 0.7.0 carried a top-level todo list. Imports
+    /// ignore it so those files still load.
+    #[serde(default, rename = "todos", skip_serializing)]
+    _todos: Vec<serde_json::Value>,
 }
 
 /// What an export wrote.
@@ -143,6 +147,7 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
         settings,
         ui_state,
         sessions,
+        _todos: Vec::new(),
     })
 }
 

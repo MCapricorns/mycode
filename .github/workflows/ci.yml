@@ -4,10 +4,10 @@
 #    product runners (windows-latest -> x86_64-pc-windows-msvc,
 #    macos-latest -> aarch64-apple-darwin). No test suites exist.
 #
-# 2. release (manual) — triggered via workflow_dispatch with `tag` and
-#    hand-written `notes`; builds both product targets and attaches the
-#    zips to the GitHub Release for that tag. The release body is the
-#    `notes` input verbatim; nothing is auto-generated.
+# 2. release — a push to main publishes `v<workspace version>` when that
+#    GitHub Release is missing either platform archive. The release body is
+#    the matching CHANGELOG section, not generated commit notes. A push whose
+#    version already has both archives does not build release binaries.
 #
 # Assets produced per release:
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
@@ -19,16 +19,12 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing tag to release, e.g. v0.4.7"
-        required: true
-        type: string
-      notes:
-        description: "Hand-written release notes (release body)"
-        required: true
-        type: string
+
+# One run per ref. Pull requests cancel their previous run. Pushes to main
+# wait, so a release tag and the binaries uploaded for it stay on one commit.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -39,7 +35,6 @@ env:
 
 jobs:
   core:
-    if: github.event_name != 'workflow_dispatch'
     name: core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -75,7 +70,6 @@ jobs:
           --all-targets --locked -- -D warnings
 
   desktop:
-    if: github.event_name != 'workflow_dispatch'
     name: desktop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -103,8 +97,79 @@ jobs:
       - name: cargo clippy
         run: cargo clippy -p mycode-desktop --all-targets --locked -- -D warnings
 
+  release-plan:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [core, desktop]
+    name: release-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      tag: ${{ steps.plan.outputs.tag }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Decide whether this commit needs a release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 << 'PY'
+          import os, re, subprocess
+          from pathlib import Path
+
+          cargo = Path("Cargo.toml").read_text(encoding="utf-8")
+          match = re.search(r'(?m)^version = "([^"]+)"', cargo)
+          if not match:
+              raise SystemExit("Cargo.toml has no workspace version")
+          version = match.group(1)
+          if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version):
+              raise SystemExit(f"workspace version is not semver: {version}")
+          tag = f"v{version}"
+          required = [
+              f"mycode-desktop-{tag}-x86_64-pc-windows-msvc.zip",
+              f"mycode-desktop-{tag}-x86_64-pc-windows-msvc.zip.sha256",
+              f"mycode-desktop-{tag}-aarch64-apple-darwin.zip",
+              f"mycode-desktop-{tag}-aarch64-apple-darwin.zip.sha256",
+          ]
+          viewed = subprocess.run(
+              ["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
+              text=True,
+              capture_output=True,
+          )
+          if viewed.returncode != 0 and "not found" not in (viewed.stderr or "").lower():
+              raise SystemExit(viewed.stderr.strip() or f"gh release view failed ({viewed.returncode})")
+          present = set(viewed.stdout.splitlines()) if viewed.returncode == 0 else set()
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write(f"tag={tag}\n")
+              if viewed.returncode == 0 and all(name in present for name in required):
+                  handle.write("publish=false\n")
+                  print(f"Release {tag} already has both platform archives.")
+                  raise SystemExit(0)
+              text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+              notes = re.search(
+                  rf"(?ms)^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## |\Z)",
+                  text,
+              )
+              body = notes.group(1).strip() if notes else ""
+              if not body:
+                  raise SystemExit(f"CHANGELOG.md has no notes for {version}")
+              delim = "NOTES_" + os.urandom(8).hex()
+              handle.write("publish=true\n")
+              handle.write(f"notes<<{delim}\n")
+              handle.write(body)
+              if not body.endswith("\n"):
+                  handle.write("\n")
+              handle.write(f"{delim}\n")
+          print(f"Will publish {tag}.")
+          PY
+
   release-build:
-    if: github.event_name == 'workflow_dispatch'
+    needs: release-plan
+    if: needs.release-plan.outputs.publish == 'true'
     name: release-build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -120,10 +185,6 @@ jobs:
             binary: mycode-desktop
     steps:
       - uses: actions/checkout@v5
-        with:
-          # The tag must exist before dispatch; check it out so the
-          # binaries match the released commit exactly.
-          ref: ${{ inputs.tag }}
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -137,7 +198,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $tag = "${{ inputs.tag }}"
+          $tag = "${{ needs.release-plan.outputs.tag }}"
           $stage = "mycode-desktop-$tag-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
@@ -152,7 +213,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          tag="${{ inputs.tag }}"
+          tag="${{ needs.release-plan.outputs.tag }}"
           stage="mycode-desktop-$tag-${{ matrix.target }}"
           mkdir -p "$stage"
           chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
@@ -175,23 +236,22 @@ jobs:
           if-no-files-found: error
 
   release-publish:
-    if: github.event_name == 'workflow_dispatch'
-    needs: [release-build]
+    needs: [release-plan, release-build]
+    if: needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success'
+    name: release-publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag }}
 
       - name: Verify tag matches workspace version
         shell: bash
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          echo "tag=${{ inputs.tag }} workspace=${version}"
-          test "${{ inputs.tag }}" = "v${version}"
+          echo "tag=${{ needs.release-plan.outputs.tag }} workspace=${version}"
+          test "${{ needs.release-plan.outputs.tag }}" = "v${version}"
 
       - name: Download assets
         uses: actions/download-artifact@v4
@@ -202,9 +262,11 @@ jobs:
       - name: Attach assets to the release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag }}
-          body: ${{ inputs.notes }}
+          tag_name: ${{ needs.release-plan.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          body: ${{ needs.release-plan.outputs.notes }}
           files: |
             dist/*.zip
             dist/*.zip.sha256
+          fail_on_unmatched_files: true
           generate_release_notes: false

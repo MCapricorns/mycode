@@ -46,9 +46,13 @@ impl Workspace {
                 if workspace.mention_generation != generation {
                     return;
                 }
-                let Some(query) = workspace.mention_query.clone() else {
+                let Some(mention) = workspace.vm.mention.as_ref() else {
                     return;
                 };
+                if mention.kind != crate::view_model::MentionKind::File {
+                    return;
+                }
+                let query = mention.fragment.clone();
                 let Some(session_id) = workspace
                     .vm
                     .active

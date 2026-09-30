@@ -238,6 +238,10 @@ impl SessionCore {
                 call_id,
                 payload,
             } => {
+                // Tag 4 stays readable so old ledgers open. Nothing writes it.
+                if matches!(kind, EventKind::Task) {
+                    return failed(admission, SessionError::InvalidArgument);
+                }
                 if payload.is_empty() || payload.len() > kind.payload_bound() {
                     return failed(admission, SessionError::Limit);
                 }
@@ -368,16 +372,21 @@ impl SessionCore {
                 snapshot_head,
                 after,
                 limit,
-            } => self.stage_for(
-                session.clone(),
-                Action::ReadPayloads {
-                    session: session.clone(),
-                    branch: branch.clone(),
-                    snapshot_head: snapshot_head.clone(),
-                    after: after.clone(),
-                    limit: *limit,
-                },
-            ),
+            } => {
+                if *limit == 0 || *limit > MAX_READ_LIMIT {
+                    return failed(admission, SessionError::Limit);
+                }
+                self.stage_for(
+                    session.clone(),
+                    Action::ReadPayloads {
+                        session: session.clone(),
+                        branch: branch.clone(),
+                        snapshot_head: snapshot_head.clone(),
+                        after: after.clone(),
+                        limit: *limit,
+                    },
+                )
+            }
         };
         Ok(SessionOperation::new(admission, stage))
     }

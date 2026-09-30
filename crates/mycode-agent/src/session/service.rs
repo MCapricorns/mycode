@@ -325,7 +325,8 @@ impl SessionService {
     ///
     /// # Errors
     ///
-    /// Returns [`SessionError::NotFound`] for an unknown session or branch
+    /// Returns [`SessionError::NotFound`] for an unknown session or branch,
+    /// [`SessionError::Limit`] when `limit` is `0` or above [`super::dto::MAX_READ_LIMIT`],
     /// and the actor's terminal error otherwise.
     pub async fn read_payloads(
         &self,

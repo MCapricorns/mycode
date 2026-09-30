@@ -140,9 +140,11 @@ pub(crate) struct McpPool {
 
 /// Connects every enabled MCP server and flattens its tools.
 ///
-/// A matching live pool is reused. Any per-server failure (spawn, handshake,
-/// listing) skips that server. Runs inside the spawned turn task on the
-/// single-threaded core runtime — plain `.await` only, never `block_on`.
+/// A matching live pool is reused only when every enabled server connected.
+/// A server that fails to spawn, handshake, or list tools is skipped for
+/// this turn and is not cached, so the next turn tries it again. Runs
+/// inside the spawned turn task on the single-threaded core runtime —
+/// plain `.await` only, never `block_on`.
 pub(crate) async fn connect_mcp_tools(
     home: &mycode_config::HomeLayout,
     settings: &AppSettings,
@@ -161,9 +163,15 @@ pub(crate) async fn connect_mcp_tools(
             return cached.tools.clone();
         }
     }
+    let enabled: Vec<_> = settings
+        .mcp_servers
+        .iter()
+        .filter(|server| server.enabled)
+        .collect();
     let mut tools = Vec::new();
+    let mut connected = 0usize;
     let broken = Arc::new(AtomicBool::new(false));
-    for server in settings.mcp_servers.iter().filter(|server| server.enabled) {
+    for server in &enabled {
         let api_key = secrets
             .key(&format!("mcp-{}", server.id))
             .map(str::to_owned);
@@ -178,6 +186,7 @@ pub(crate) async fn connect_mcp_tools(
         let Ok(listed) = client.list_tools().await else {
             continue;
         };
+        connected += 1;
         let client = Arc::new(tokio::sync::Mutex::new(client));
         for tool in listed {
             tools.push(Arc::new(DynamicMcpTool::new(
@@ -188,11 +197,13 @@ pub(crate) async fn connect_mcp_tools(
             )));
         }
     }
-    *pool.lock().await = Some(McpPool {
-        fingerprint,
-        broken,
-        tools: tools.clone(),
-    });
+    if connected == enabled.len() {
+        *pool.lock().await = Some(McpPool {
+            fingerprint,
+            broken,
+            tools: tools.clone(),
+        });
+    }
     tools
 }
 

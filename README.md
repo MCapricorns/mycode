@@ -69,7 +69,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-推送到 `main` 的 pull request 在 Windows x64 和 macOS Apple Silicon 上跑这两步。发版是手动的：先打标签，再对 `ci` workflow 做 `workflow_dispatch`，填入标签和手写说明。说明不会从提交记录生成。
+推送到 `main` 的 pull request 在 Windows x64 和 macOS Apple Silicon 上跑这两步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐两个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本没变时，推送不会重新打包。
 
 ## 许可
 
@@ -162,8 +162,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 Pull requests to `main` run those gates on Windows x64 and macOS Apple
-Silicon. Releases are manual: tag first, then `workflow_dispatch` the
-`ci` workflow with the tag and hand-written notes.
+Silicon. After the gates pass, a push to `main` publishes `v<version>`
+when that GitHub Release is missing either platform archive. The body
+is the matching `CHANGELOG.md` section, not generated commit notes. A
+push that does not change the version does not rebuild the archives.
 
 ### License
 

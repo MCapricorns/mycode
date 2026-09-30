@@ -60,31 +60,20 @@ pub(crate) async fn compact_history(
         .ok()
         .flatten()
         .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
-    // This turn already summarized this ledger head. Tool rounds after that
-    // stay on the compacted history instead of calling the model again.
-    if let Some(checkpoint) = prior.as_ref()
-        && checkpoint.covered_head == scope.head
-        && history
-            .first()
-            .is_some_and(|message| is_summary_message(message))
-    {
-        return history;
-    }
-    // The checkpoint covers this exact head but the in-memory history is
-    // still the full ledger. Rebuild summary + tail without another call.
-    if let Some(checkpoint) = prior.as_ref()
+    // `covered_messages` indexes a ledger replay, which has no summary
+    // prefix. Once a summary has replaced that prefix, the same index
+    // points into the tail and would drop messages that must stay.
+    let already_summarized = history
+        .first()
+        .is_some_and(|message| is_summary_message(message));
+    if !already_summarized
+        && let Some(checkpoint) = prior.as_ref()
         && checkpoint.covered_head == scope.head
         && checkpoint.covered_messages > 0
         && checkpoint.covered_messages < history.len()
         && !is_tool_result(&history[checkpoint.covered_messages])
     {
-        let tail = checkpoint.covered_messages;
-        let mut compacted = Vec::with_capacity(history.len() - tail + 1);
-        compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
-            format!("{SUMMARY_PREFIX}\n\n{}", checkpoint.summary),
-        ))));
-        compacted.extend(history[tail..].iter().cloned());
-        return compacted;
+        return with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
     }
     let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
     let transcript = compaction_transcript(prior_summary, &history[..head_end]);
@@ -104,6 +93,17 @@ pub(crate) async fn compact_history(
             return history;
         }
     };
+    let compacted = with_summary(&summary, &history[head_end..]);
+    // A history that already starts with a summary is not the ledger
+    // replay. Persisting `head_end` would store an index into that shorter
+    // vector, and the next open of this head would slice the ledger with it.
+    if already_summarized {
+        eprintln!(
+            "[mycode-compaction] shrunk an already summarized history in memory ({} remain)",
+            compacted.len()
+        );
+        return compacted;
+    }
     let checkpoint = mycode_config::CompactionCheckpoint {
         format_version: mycode_config::COMPACTION_FORMAT_VERSION,
         kind: mycode_config::COMPACTION_KIND.to_owned(),
@@ -111,7 +111,7 @@ pub(crate) async fn compact_history(
         branch_id: scope.branch_id.to_owned(),
         covered_head: scope.head.to_owned(),
         covered_messages: head_end,
-        summary: summary.clone(),
+        summary,
         model: scope.model.to_owned(),
         created_at_unix: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -122,15 +122,19 @@ pub(crate) async fn compact_history(
         eprintln!("[mycode-compaction] checkpoint write failed: {error:?}");
         return history;
     }
-    let mut compacted = Vec::with_capacity(history.len() - head_end + 1);
-    compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
-        format!("{SUMMARY_PREFIX}\n\n{summary}"),
-    ))));
-    compacted.extend(history[head_end..].iter().cloned());
     eprintln!(
         "[mycode-compaction] replaced {head_end} messages with a checkpoint ({} remain)",
         compacted.len()
     );
+    compacted
+}
+
+fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {
+    let mut compacted = Vec::with_capacity(tail.len() + 1);
+    compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
+        format!("{SUMMARY_PREFIX}\n\n{summary}"),
+    ))));
+    compacted.extend(tail.iter().cloned());
     compacted
 }
 
@@ -143,10 +147,13 @@ fn message_chars(message: &Message) -> usize {
         Message::User(user) => blocks_chars(&user.content),
         Message::Assistant(assistant) => blocks_chars(&assistant.blocks),
         Message::ToolResult(result) => {
-            // Matches the old `tool_result {id} {body}` spelling's length.
-            12 + result.tool_call_id.chars().count() + blocks_chars(&result.content)
+            // `tool_result {id} {body}`
+            "tool_result ".chars().count()
+                + result.tool_call_id.chars().count()
+                + 1
+                + blocks_chars(&result.content)
         }
-        Message::Custom(custom) => 7 + custom.kind.chars().count(),
+        Message::Custom(custom) => "custom ".chars().count() + custom.kind.chars().count(),
     }
 }
 
@@ -160,7 +167,11 @@ fn blocks_chars(blocks: &[mycode_core::ContentBlock]) -> usize {
                 parts += 1;
             }
             mycode_core::ContentBlock::ToolCall(call) => {
-                chars += 10 + call.name.chars().count() + json_chars(&call.arguments);
+                // `tool_call {name} {arguments}`
+                chars += "tool_call ".chars().count()
+                    + call.name.chars().count()
+                    + 1
+                    + json_chars(&call.arguments);
                 parts += 1;
             }
             mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {}
@@ -170,13 +181,24 @@ fn blocks_chars(blocks: &[mycode_core::ContentBlock]) -> usize {
 }
 
 fn json_chars(value: &serde_json::Value) -> usize {
-    // Compact JSON length is a close stand-in for the old `Display` of the
-    // arguments value, without building an intermediate string when the
-    // value is already a short string.
+    // Same length as `Display` for JSON, without allocating when the value
+    // is a string.
     match value {
-        serde_json::Value::String(text) => text.chars().count() + 2,
+        serde_json::Value::String(text) => json_string_chars(text),
         other => other.to_string().chars().count(),
     }
+}
+
+fn json_string_chars(text: &str) -> usize {
+    let mut count = 2;
+    for ch in text.chars() {
+        count += match ch {
+            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
+            control if (control as u32) < 0x20 => 6,
+            _ => 1,
+        };
+    }
+    count
 }
 
 fn message_text(message: &Message) -> String {
