@@ -42,7 +42,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             | DesktopAction::SettingsProviderAdded(_)
             | DesktopAction::SettingsProviderRemoved(_)
             | DesktopAction::SettingsProviderToggled(_, _)
-            | DesktopAction::SettingsSaved(_)
+            | DesktopAction::SettingsSaved { .. }
             | DesktopAction::UiStateLoaded { .. }
     );
     match action {
@@ -100,6 +100,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.live_turn = None;
         }
         DesktopAction::ConversationOpened(conversation) => {
+            let had_other = state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.session_id != conversation.session_id);
             let switched = state
                 .active
                 .as_ref()
@@ -123,6 +127,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if switched {
                 rebuild_session_usage(state);
                 state.live_turn = None;
+            }
+            // The composer is one widget. A draft typed in the previous
+            // session must not ride along and send into this one. Opening
+            // the first session keeps a welcome-screen draft.
+            if had_other {
+                state.composer_draft.clear();
+                state.mention = None;
             }
         }
         DesktopAction::ComposerChanged(text) => {
@@ -350,15 +361,44 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sending = false;
         }
         DesktopAction::SettingsLoaded(settings) => {
-            let dark = settings.theme != "light";
-            crate::i18n::apply_language(&settings.language);
-            state.settings = Some(settings);
-            state.dark_theme = dark;
+            match state.settings.as_mut() {
+                Some(current) if current.dirty || current.saving => {
+                    // Key badges live outside the settings document. Refresh
+                    // them even while a save is in flight. New provider rows
+                    // are adopted only when nothing is saving: merging them
+                    // into the snapshot already on the wire would mark the
+                    // editor clean while memory and disk disagree.
+                    current.providers_with_keys = settings.providers_with_keys;
+                    current.mcp_with_keys = settings.mcp_with_keys;
+                    if !current.saving {
+                        current.revision = settings.revision;
+                        for provider in settings.providers {
+                            if current.providers.len() >= mycode_config::MAX_PROVIDERS {
+                                break;
+                            }
+                            if !current
+                                .providers
+                                .iter()
+                                .any(|existing| existing.id == provider.id)
+                            {
+                                current.providers.push(provider);
+                                mark_settings_dirty(current);
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let dark = settings.theme != "light";
+                    crate::i18n::apply_language(&settings.language);
+                    state.settings = Some(settings);
+                    state.dark_theme = dark;
+                }
+            }
         }
         DesktopAction::SettingsThemeSelected(dark) => {
             if let Some(settings) = state.settings.as_mut() {
                 settings.theme = if dark { "dark" } else { "light" }.to_owned();
-                settings.dirty = true;
+                mark_settings_dirty(settings);
             }
             state.dark_theme = dark;
         }
@@ -369,14 +409,14 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             crate::i18n::apply_language(&language);
             if let Some(settings) = state.settings.as_mut() {
                 settings.language = language;
-                settings.dirty = true;
+                mark_settings_dirty(settings);
             }
         }
         DesktopAction::SettingsPaletteSelected(palette) => {
             let palette = crate::ui::desk::normalize_palette(&palette).to_owned();
             if let Some(settings) = state.settings.as_mut() {
                 settings.palette = palette;
-                settings.dirty = true;
+                mark_settings_dirty(settings);
             }
         }
         DesktopAction::SettingsUserAgentChanged(user_agent) => {
@@ -467,13 +507,24 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             });
         }
         DesktopAction::SubagentMenuToggled(menu) => state.subagent_menu = menu,
-        DesktopAction::SettingsSaved(revision) => {
+        DesktopAction::SettingsSaved {
+            revision,
+            edit_epoch,
+        } => {
             if let Some(settings) = state.settings.as_mut() {
                 settings.revision = revision;
                 settings.saving = false;
-                settings.dirty = false;
+                if settings.edit_epoch == edit_epoch {
+                    settings.dirty = false;
+                }
                 settings.effective_user_agent = settings.to_settings().effective_user_agent();
             }
+        }
+        DesktopAction::SettingsSaveFailed(message) => {
+            if let Some(settings) = state.settings.as_mut() {
+                settings.saving = false;
+            }
+            state.error = Some(message);
         }
         DesktopAction::ProviderKeySaved {
             provider_keys,
@@ -499,7 +550,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 && index < settings.mcp_servers.len()
             {
                 let removed = settings.mcp_servers.remove(index);
-                settings.dirty = true;
+                mark_settings_dirty(settings);
                 // A stale listing for a deleted row must not resurface if a
                 // server with the same id is added again later.
                 state.mcp_tools.retain(|(id, _)| *id != removed.id);
@@ -709,10 +760,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
         DesktopAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
         DesktopAction::UpdateStaged(prepared) => {
+            let version = state
+                .last_offer
+                .as_ref()
+                .map(|offer| offer.version.clone())
+                .unwrap_or_else(|| mycode_app::current_version().to_owned());
             state.prepared_update = Some(prepared);
-            state.update = UpdateState::Ready {
-                version: mycode_app::current_version().to_owned(),
-            };
+            state.update = UpdateState::Ready { version };
         }
     }
     if touches_providers {
@@ -727,8 +781,14 @@ fn edit_settings(state: &mut WorkspaceState, edit: impl FnOnce(&mut SettingsStat
     if let Some(settings) = state.settings.as_mut()
         && edit(settings)
     {
-        settings.dirty = true;
+        mark_settings_dirty(settings);
     }
+}
+
+/// Records one local settings edit so an in-flight save cannot clear it.
+fn mark_settings_dirty(settings: &mut SettingsState) {
+    settings.dirty = true;
+    settings.edit_epoch = settings.edit_epoch.wrapping_add(1);
 }
 
 /// Closes every floating menu layer, whatever view it belongs to. Returns

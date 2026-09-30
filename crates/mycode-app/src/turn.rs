@@ -6,7 +6,6 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::mpsc;
 
 use mycode_agent::session::{BranchId, EventKind, HeadStamp, SessionId};
 use mycode_agent::{Agent, AgentConfig, HookRunner};
@@ -31,7 +30,7 @@ use crate::tool_hosts::{BridgeAskChannel, BridgeWebHost, register_ask};
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn chat_turn(
     state: Arc<CoreState>,
-    events: mpsc::Sender<BridgeEvent>,
+    events: crate::BridgeEventTx,
     session: SessionId,
     branch: BranchId,
     expected_head: HeadStamp,
@@ -53,7 +52,7 @@ pub(crate) async fn chat_turn(
     )
     .await
     {
-        let _ = events.send(BridgeEvent::ChatFailed {
+        let _ = events.try_send(BridgeEvent::ChatFailed {
             session_id,
             message,
         });
@@ -167,7 +166,7 @@ fn same_dir(left: &str, right: &str) -> bool {
 #[allow(clippy::too_many_arguments)]
 async fn run_chat_turn(
     state: &CoreState,
-    events: &mpsc::Sender<BridgeEvent>,
+    events: &crate::BridgeEventTx,
     session_id: &str,
     session: SessionId,
     branch: BranchId,
@@ -435,7 +434,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
             let event = match agent_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    let _ = pump_events.send(BridgeEvent::ChatFailed {
+                    let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                         session_id: pump_session_id.clone(),
                         message: "agent event stream lagged".to_owned(),
                     });
@@ -447,7 +446,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                 mycode_core::events::AgentEvent::MessageDelta(
                     mycode_core::events::MessageDelta::TextDelta(delta),
                 ) => {
-                    let _ = pump_events.send(BridgeEvent::ChatText {
+                    let _ = pump_events.try_send(BridgeEvent::ChatText {
                         session_id: pump_session_id.clone(),
                         delta,
                     });
@@ -455,7 +454,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                 mycode_core::events::AgentEvent::MessageDelta(
                     mycode_core::events::MessageDelta::ThinkingDelta(delta),
                 ) => {
-                    let _ = pump_events.send(BridgeEvent::ChatThinking {
+                    let _ = pump_events.try_send(BridgeEvent::ChatThinking {
                         session_id: pump_session_id.clone(),
                         delta,
                     });
@@ -473,13 +472,13 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     // ledger's ordering check rejects results for calls that
                     // were never opened.
                     if let Err(error) = writer.open_call(&spelling, &name, &target).await {
-                        let _ = pump_events.send(BridgeEvent::ChatFailed {
+                        let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                             session_id: pump_session_id.clone(),
                             message: render_error(error),
                         });
                         return;
                     }
-                    let _ = pump_events.send(BridgeEvent::ToolStarted {
+                    let _ = pump_events.try_send(BridgeEvent::ToolStarted {
                         session_id: pump_session_id.clone(),
                         call_id: spelling,
                         name,
@@ -487,7 +486,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     });
                 }
                 mycode_core::events::AgentEvent::ToolProgress { call_id, message } => {
-                    let _ = pump_events.send(BridgeEvent::ToolProgress {
+                    let _ = pump_events.try_send(BridgeEvent::ToolProgress {
                         session_id: pump_session_id.clone(),
                         call_id: call_id.to_string(),
                         name: String::new(),
@@ -504,13 +503,13 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     match writer.close_call(call_id.as_str(), &payload).await {
                         Ok(event_id) => {
                             let entry = project_tool_result_message(&event_id, &tool_result);
-                            let _ = pump_events.send(BridgeEvent::ToolCompleted {
+                            let _ = pump_events.try_send(BridgeEvent::ToolCompleted {
                                 session_id: pump_session_id.clone(),
                                 entry,
                             });
                         }
                         Err(error) => {
-                            let _ = pump_events.send(BridgeEvent::ChatFailed {
+                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                                 session_id: pump_session_id.clone(),
                                 message: render_error(error),
                             });
@@ -527,7 +526,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     // would bill a ten-step turn as one.
                     if let Some(usage) = assistant.usage.as_ref() {
                         turn_usage.fold(usage);
-                        let _ = pump_events.send(BridgeEvent::UsageSnapshot {
+                        let _ = pump_events.try_send(BridgeEvent::UsageSnapshot {
                             session_id: pump_session_id.clone(),
                             model: usage_model.clone(),
                             input: turn_usage.input,
@@ -549,7 +548,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                         continue;
                     }
                     let Ok(payload) = serde_json::to_vec(assistant) else {
-                        let _ = pump_events.send(BridgeEvent::ChatFailed {
+                        let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                             session_id: pump_session_id.clone(),
                             message: "assistant step could not be encoded".to_owned(),
                         });
@@ -557,13 +556,13 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     };
                     match writer.write(EventKind::Message, &payload).await {
                         Ok(event_id) => {
-                            let _ = pump_events.send(BridgeEvent::AssistantStep {
+                            let _ = pump_events.try_send(BridgeEvent::AssistantStep {
                                 session_id: pump_session_id.clone(),
                                 entry: project_assistant_message(&event_id, assistant),
                             });
                         }
                         Err(error) => {
-                            let _ = pump_events.send(BridgeEvent::ChatFailed {
+                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                                 session_id: pump_session_id.clone(),
                                 message: render_error(error),
                             });
@@ -582,7 +581,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                             } else {
                                 "the turn ended without an assistant message".to_owned()
                             };
-                        let _ = pump_events.send(BridgeEvent::ChatFailed {
+                        let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                             session_id: pump_session_id.clone(),
                             message,
                         });
@@ -610,30 +609,31 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                                             && let Ok(usage_event) =
                                                 writer.write(EventKind::Usage, &bytes).await
                                         {
-                                            let _ = pump_events.send(BridgeEvent::UsageRecorded {
-                                                session_id: pump_session_id.clone(),
-                                                provider: usage_provider.clone(),
-                                                model: usage_model.clone(),
-                                                input: turn_usage.input,
-                                                output: turn_usage.output,
-                                                cache: turn_usage.cache,
-                                                elapsed_ms,
-                                                entry: project_usage(&usage_event, &bytes),
-                                            });
+                                            let _ =
+                                                pump_events.try_send(BridgeEvent::UsageRecorded {
+                                                    session_id: pump_session_id.clone(),
+                                                    provider: usage_provider.clone(),
+                                                    model: usage_model.clone(),
+                                                    input: turn_usage.input,
+                                                    output: turn_usage.output,
+                                                    cache: turn_usage.cache,
+                                                    elapsed_ms,
+                                                    entry: project_usage(&usage_event, &bytes),
+                                                });
                                         }
                                     }
                                     // Sent after the trailing usage write so the
                                     // head the UI receives is the ledger's final
                                     // head; a stale head fails the next append's
                                     // compare-and-swap as "session unavailable".
-                                    let _ = pump_events.send(BridgeEvent::ChatDone {
+                                    let _ = pump_events.try_send(BridgeEvent::ChatDone {
                                         session_id: pump_session_id.clone(),
                                         head: writer.head().await,
                                         entry,
                                     });
                                 }
                                 Err(error) => {
-                                    let _ = pump_events.send(BridgeEvent::ChatFailed {
+                                    let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                                         session_id: pump_session_id.clone(),
                                         message: render_error(error),
                                     });
@@ -641,7 +641,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                             }
                         }
                         Err(_) => {
-                            let _ = pump_events.send(BridgeEvent::ChatFailed {
+                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                                 session_id: pump_session_id.clone(),
                                 message: "assistant message could not be encoded".to_owned(),
                             });
@@ -650,7 +650,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
                     return;
                 }
                 mycode_core::events::AgentEvent::Error(error) => {
-                    let _ = pump_events.send(BridgeEvent::ChatFailed {
+                    let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                         session_id: pump_session_id.clone(),
                         message: format!("agent error: {error}"),
                     });

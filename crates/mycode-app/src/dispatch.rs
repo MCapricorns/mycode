@@ -2,7 +2,6 @@
 //! runtime, dispatches each to its owning module, and replies.
 
 use std::sync::Arc;
-use std::sync::mpsc;
 
 use mycode_config::{HomeLayout, read_ui_state, replace_ui_state};
 use mycode_providers::catalog::http_client;
@@ -21,14 +20,12 @@ use crate::state::{
 };
 use crate::tool_hosts::deliver_ask_answer;
 use crate::turn::chat_turn;
-use crate::{
-    BridgeCommand, BridgeEvent, BridgeReply, CatalogInfo, WithReply, protocol::SessionSummary,
-};
+use crate::{BridgeCommand, BridgeReply, CatalogInfo, WithReply, protocol::SessionSummary};
 
 pub(crate) fn run_core(
     home: HomeLayout,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<WithReply>,
-    events: mpsc::Sender<BridgeEvent>,
+    events: crate::BridgeEventTx,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -84,6 +81,10 @@ pub(crate) fn run_core(
                     provider_id,
                     model,
                 } => {
+                    // One live turn per session. A second turn used to replace
+                    // the cancel token without stopping the first, so both
+                    // pumps appended to the same branch.
+                    cancel_session_work(&state, session.as_str());
                     let task = chat_turn(
                         state.clone(),
                         events.clone(),
@@ -401,14 +402,21 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                 let _ = state.service.forget(&id).await;
             }
             let home = state.home.clone();
-            let session_id = session_id.clone();
-            BridgeReply::SessionDeleted(
-                blocking(move || {
-                    delete_session(&home, &session_id)?;
-                    forget_session_bindings(&home, &session_id)
-                })
-                .await,
-            )
+            let forgotten = session_id.clone();
+            let deleted = blocking(move || {
+                delete_session(&home, &forgotten)?;
+                forget_session_bindings(&home, &forgotten)
+            })
+            .await;
+            // Drop the in-memory project binding only after the directory is
+            // gone. Leaving it made tool cwd and file search keep using a
+            // session the user had already deleted.
+            if deleted.is_ok()
+                && let Ok(mut projects) = state.projects.lock()
+            {
+                projects.remove(session_id.as_str());
+            }
+            BridgeReply::SessionDeleted(deleted)
         }
         BridgeCommand::RemoveRecent { project } => {
             let home = state.home.clone();

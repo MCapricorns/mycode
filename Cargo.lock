@@ -4236,6 +4236,7 @@ dependencies = [
 name = "mycode-app"
 version = "0.7.1"
 dependencies = [
+ "async-channel",
  "async-trait",
  "jsonschema",
  "mycode-agent",
@@ -4284,11 +4285,13 @@ dependencies = [
 name = "mycode-desktop"
 version = "0.7.1"
 dependencies = [
+ "async-channel",
  "gpui-kit",
  "mycode-app",
  "mycode-config",
  "mycode-providers",
  "mycode-tools",
+ "notify",
  "windows-sys 0.61.2",
  "winresource",
 ]
