@@ -2,9 +2,9 @@
 //!
 //! On Windows the first `window_control_area` hitbox that contains the
 //! pointer wins, and a parent `Drag` region is inserted before its children.
-//! A DAY/NIGHT control nested inside that region is `HTCAPTION`, so the click
-//! never reaches the button. The drag region, the toggle, and the caption
-//! buttons are siblings: only the title strip is `Drag`.
+//! Caption buttons nested in that region are `HTCAPTION`, so the click never
+//! reaches them. The drag region and the caption buttons are siblings: only
+//! the title strip is `Drag`.
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Sizable as _,
@@ -52,7 +52,6 @@ pub(super) fn render_title_bar(
         }
         _ => None,
     };
-    let dark = workspace.vm().dark_theme;
     div()
         .id("title-bar")
         .flex()
@@ -66,7 +65,7 @@ pub(super) fn render_title_bar(
         .border_color(skin::glass_border(&theme))
         .bg(skin::glass(&theme))
         .child(drag_region(subtitle, window, cx))
-        .child(title_controls(update_label, dark, window, cx))
+        .child(title_controls(update_label, window, cx))
 }
 
 fn title_pad() -> gpui_kit::Pixels {
@@ -161,11 +160,9 @@ impl Render for TitleDrag {
 
 fn title_controls(
     update_label: Option<SharedString>,
-    dark: bool,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let theme = cx.theme().clone();
     div()
         .id("title-controls")
         .flex()
@@ -189,57 +186,7 @@ fn title_controls(
                     })),
             )
         })
-        .child(theme_toggle(dark, &theme, cx))
         .child(window_controls(window, cx))
-}
-
-fn theme_toggle(
-    dark: bool,
-    theme: &gpui_kit::component::theme::Theme,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    div()
-        .id("day-night-toggle")
-        .flex()
-        .flex_row()
-        .items_center()
-        .h(px(24.))
-        .rounded(px(8.))
-        .text_xs()
-        .child(theme_seg("light", t("Light", "浅色"), !dark, theme, cx))
-        .child(theme_seg("dark", t("Dark", "深色"), dark, theme, cx))
-}
-
-fn theme_seg(
-    id: &'static str,
-    label: &'static str,
-    on: bool,
-    theme: &gpui_kit::component::theme::Theme,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    div()
-        .id(format!("theme-{id}"))
-        .px_2()
-        .h_full()
-        .flex()
-        .items_center()
-        .rounded(px(8.))
-        .cursor_pointer()
-        .text_color(if on {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        })
-        .when(on, |this| this.bg(theme.accent))
-        .when(!on, |this| this.text_color(theme.muted_foreground))
-        .child(label)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .on_click(cx.listener(move |workspace, _, window, cx| {
-            cx.stop_propagation();
-            workspace.on_select_theme(id == "dark", window, cx);
-        }))
 }
 
 fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl IntoElement {

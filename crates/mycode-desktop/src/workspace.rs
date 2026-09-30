@@ -64,9 +64,11 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         titlebar.title = Some("MYCode Harness".into());
     }
     cx.open_window(options, |window, cx| {
-        // Paint the Desk palette before first layout: `init` leaves the stock
-        // light theme active until settings load.
-        crate::ui::desk::apply(gpui_kit::component::theme::Theme::global_mut(cx));
+        // `init` installs the stock light theme. The product paints dark only,
+        // then pushes that theme (and its code-block highlighter) into Base.
+        Theme::change(ThemeMode::Dark, Some(window), cx);
+        crate::ui::desk::apply(Theme::global_mut(cx));
+        Theme::sync_base(cx);
         let workspace = Workspace::new(bridge, events, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
     })
@@ -408,36 +410,6 @@ impl Workspace {
         }
         self.follow_session_project(session_id, cx);
         self.request_open_session(session_id, cx);
-    }
-
-    /// Applies and persists the light/dark theme choice: the appearance
-    /// setting is marked dirty and saved immediately, mirroring the
-    /// reasoning-effort flow.
-    pub(crate) fn on_select_theme(
-        &mut self,
-        dark: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.vm.dark_theme == dark {
-            return;
-        }
-        let mode = if dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        };
-        Theme::change(mode, Some(window), cx);
-        let palette = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| settings.palette.clone())
-            .unwrap_or_else(|| "slate".to_owned());
-        crate::ui::desk::apply_palette(Theme::global_mut(cx), &palette);
-        Theme::sync_base(cx);
-        self.apply_action(DesktopAction::SettingsThemeSelected(dark), cx);
-        self.on_save_settings(cx);
     }
 
     pub(crate) fn on_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {

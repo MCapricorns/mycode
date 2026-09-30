@@ -1,4 +1,4 @@
-//! Day and night palettes. Surfaces are solid. The page background is a
+//! Dark palettes. Surfaces are solid. The page background is a
 //! two-stop gradient so the chat column shows the falloff; rails and dialogs
 //! stay opaque so text never sits on a washed-out fill.
 //!
@@ -6,7 +6,7 @@
 //! `Theme::change`, including the button tokens GPUI actually paints.
 
 use gpui_kit::Hsla;
-use gpui_kit::component::theme::{Theme, ThemeMode};
+use gpui_kit::component::theme::Theme;
 
 fn hex(value: u32) -> Hsla {
     gpui_kit::rgb(value).into()
@@ -50,8 +50,8 @@ pub fn palette_label(palette: &str) -> &'static str {
 
 /// Accent swatch for the settings picker.
 #[must_use]
-pub fn palette_swatch(palette: &str, dark: bool) -> Hsla {
-    hex(spec_for(normalize_palette(palette), dark).accent)
+pub fn palette_swatch(palette: &str) -> Hsla {
+    hex(spec_for(normalize_palette(palette)).accent)
 }
 
 struct Spec {
@@ -71,9 +71,9 @@ struct Spec {
     info: u32,
 }
 
-fn spec_for(palette: &str, dark: bool) -> Spec {
-    match (palette, dark) {
-        ("ocean", true) => Spec {
+fn spec_for(palette: &str) -> Spec {
+    match palette {
+        "ocean" => Spec {
             bg: 0x0E1A20,
             wash: 0x12343C,
             surface: 0x15242C,
@@ -89,23 +89,7 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        ("ocean", false) => Spec {
-            bg: 0xF3FAFB,
-            wash: 0xB7E0E6,
-            surface: 0xFFFFFF,
-            card: 0xF6FBFB,
-            hover: 0xE4F2F2,
-            ink: 0x123038,
-            dim: 0x4E6A72,
-            line: 0xD0E2E4,
-            accent: 0x0E7490,
-            accent_ink: 0xFFFFFF,
-            tint: 0xE3F4F6,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
-        ("forest", true) => Spec {
+        "forest" => Spec {
             bg: 0x121814,
             wash: 0x1A2A1E,
             surface: 0x1A221C,
@@ -121,23 +105,7 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        ("forest", false) => Spec {
-            bg: 0xF4F8F4,
-            wash: 0xC5E0CC,
-            surface: 0xFFFFFF,
-            card: 0xF7FBF7,
-            hover: 0xE7F1E9,
-            ink: 0x1A2A1E,
-            dim: 0x4E6A56,
-            line: 0xD4E2D6,
-            accent: 0x2F7D52,
-            accent_ink: 0xFFFFFF,
-            tint: 0xE5F3EA,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
-        ("dusk", true) => Spec {
+        "dusk" => Spec {
             bg: 0x16141C,
             wash: 0x261C34,
             surface: 0x1E1A26,
@@ -153,23 +121,7 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        ("dusk", false) => Spec {
-            bg: 0xF7F4FB,
-            wash: 0xD9C8EE,
-            surface: 0xFFFFFF,
-            card: 0xFBF9FC,
-            hover: 0xF0EAF6,
-            ink: 0x241C30,
-            dim: 0x665C78,
-            line: 0xE0D6EA,
-            accent: 0x6D28D9,
-            accent_ink: 0xFFFFFF,
-            tint: 0xF0E8FA,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
-        ("sand", true) => Spec {
+        "sand" => Spec {
             bg: 0x1A1714,
             wash: 0x2A2218,
             surface: 0x221E1A,
@@ -185,23 +137,7 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        ("sand", false) => Spec {
-            bg: 0xFBF6F0,
-            wash: 0xE6CDB0,
-            surface: 0xFFFCF8,
-            card: 0xFFF9F3,
-            hover: 0xF3EADF,
-            ink: 0x2A2218,
-            dim: 0x6A5E52,
-            line: 0xE4D8C8,
-            accent: 0xA15C28,
-            accent_ink: 0xFFFCF8,
-            tint: 0xF6E8D8,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
-        ("rose", true) => Spec {
+        "rose" => Spec {
             bg: 0x1C1418,
             wash: 0x3A2230,
             surface: 0x26181E,
@@ -217,23 +153,7 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        ("rose", false) => Spec {
-            bg: 0xFBF4F6,
-            wash: 0xF0C9D6,
-            surface: 0xFFFFFF,
-            card: 0xFFF7F9,
-            hover: 0xF8E4EB,
-            ink: 0x2C1820,
-            dim: 0x7A5562,
-            line: 0xE8D0D8,
-            accent: 0xB44B6A,
-            accent_ink: 0xFFFFFF,
-            tint: 0xF8E6EC,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
-        ("ink", true) => Spec {
+        "ink" => Spec {
             bg: 0x10141C,
             wash: 0x243044,
             surface: 0x181E28,
@@ -249,23 +169,7 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        ("ink", false) => Spec {
-            bg: 0xF4F7FC,
-            wash: 0xC5D4F0,
-            surface: 0xFFFFFF,
-            card: 0xF7F9FD,
-            hover: 0xE4EBF8,
-            ink: 0x162033,
-            dim: 0x516078,
-            line: 0xD0D8EA,
-            accent: 0x2F5FBF,
-            accent_ink: 0xFFFFFF,
-            tint: 0xE4ECFA,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
-        ("moss", true) => Spec {
+        "moss" => Spec {
             bg: 0x121814,
             wash: 0x243028,
             surface: 0x1A221C,
@@ -281,23 +185,7 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        ("moss", false) => Spec {
-            bg: 0xF4F8F2,
-            wash: 0xC9E0C0,
-            surface: 0xFFFFFF,
-            card: 0xF7FBF6,
-            hover: 0xE6F2E0,
-            ink: 0x1A2818,
-            dim: 0x516850,
-            line: 0xD0E0CC,
-            accent: 0x3E7A45,
-            accent_ink: 0xFFFFFF,
-            tint: 0xE6F4E4,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
-        (_, true) => Spec {
+        _ => Spec {
             bg: 0x171A20,
             wash: 0x1E2A3A,
             surface: 0x22262E,
@@ -313,22 +201,6 @@ fn spec_for(palette: &str, dark: bool) -> Spec {
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
-        (_, false) => Spec {
-            bg: 0xF4F6FA,
-            wash: 0xC9D7EE,
-            surface: 0xFFFFFF,
-            card: 0xF7F8FA,
-            hover: 0xE8EDF4,
-            ink: 0x1C2430,
-            dim: 0x5C6778,
-            line: 0xD5DCE6,
-            accent: 0x3D6FBF,
-            accent_ink: 0xFFFFFF,
-            tint: 0xE7F0FB,
-            green: 0x2F7D52,
-            red: 0xC4543E,
-            info: 0x3D6E86,
-        },
     }
 }
 
@@ -337,9 +209,9 @@ pub fn apply(theme: &mut Theme) {
     apply_palette(theme, "slate");
 }
 
-/// Applies one named palette over the resolved light or dark mode.
+/// Applies one named palette. The window is always dark.
 pub fn apply_palette(theme: &mut Theme, palette: &str) {
-    let spec = spec_for(normalize_palette(palette), theme.mode == ThemeMode::Dark);
+    let spec = spec_for(normalize_palette(palette));
     paint(theme, &spec);
     sync_controls(theme);
 }
@@ -428,11 +300,7 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.scrollbar_thumb = line;
     theme.scrollbar_thumb_hover = dim;
     theme.window_border = line;
-    theme.overlay = if theme.mode == ThemeMode::Dark {
-        hex_a(0x000000, 0.45)
-    } else {
-        hex_a(0x1C2430, 0.18)
-    };
+    theme.overlay = hex_a(0x000000, 0.45);
 
     theme.green = green;
     theme.green_light = green;

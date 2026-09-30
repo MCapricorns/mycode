@@ -14,7 +14,7 @@ English notes are [below](#english).
 - **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
 - **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及钉住程序映像的 `exec` 和走 shell 的 `shell`。网页检索、向你提问、子代理和 MCP 走同一张注册表。
 - **子代理。** 内置 scout、artisan、steward、sentinel，也可以在 `agents/` 里加 Markdown 角色。
-- **界面。** 中英双语，浅色 / 深色和几套配色。发现新版本后下载校验，确认后再重启安装。
+- **界面。** 中英双语，深色界面和几套配色。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
@@ -100,8 +100,9 @@ bring the API keys.
   Web search, questions, subagents, and MCP share one registry.
 - **Subagents.** Built-in scout, artisan, steward, and sentinel roles,
   or custom Markdown roles under `agents/`.
-- **UI.** English and Chinese, light and dark themes, several palettes.
-  Updates download and verify, then wait for a restart confirmation.
+- **UI.** English and Chinese, a dark theme, and several palettes.
+  Fenced code in the transcript is highlighted with gpui-kit's Tree-sitter
+  grammars. Updates download and verify, then wait for a restart confirmation.
 
 A tool line names its target: which file was read, what was searched,
 which command ran. Keys live only in `secrets.json`. Saved keys show as

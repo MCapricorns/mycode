@@ -100,8 +100,6 @@ pub(crate) struct WorkspaceState {
     pub copilot_error: Option<String>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
-    /// True when the window uses the dark theme.
-    pub dark_theme: bool,
     /// Last terminal error surfaced to the user.
     pub error: Option<String>,
     /// Chat or settings main view.
@@ -214,8 +212,6 @@ pub enum DesktopAction {
     /// The user picked a UI language (`auto`, `en`, `zh`); applies live and
     /// persists with settings.
     SettingsLanguageSelected(String),
-    /// The user picked the light or dark theme; persists with settings.
-    SettingsThemeSelected(bool),
     /// The user picked a color palette; persists with settings.
     SettingsPaletteSelected(String),
     /// The user dismissed the composer mention menu without picking a row.

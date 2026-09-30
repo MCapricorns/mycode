@@ -1,10 +1,8 @@
-//! The General settings page: theme, language, request identity, and the
+//! The General settings page: palette, language, request identity, and the
 //! platform shell preference.
-use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, px,
@@ -39,7 +37,6 @@ pub(super) fn render_general_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let ua_input = workspace.settings_ua_input(window, cx);
-    let dark = workspace.vm().dark_theme;
     let palette = workspace
         .vm()
         .settings
@@ -64,48 +61,14 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.effective_user_agent.clone())
         .unwrap_or_default();
-    let theme_row = settings_row(
-        "theme",
-        t("Color theme", "配色主题"),
-        None,
-        div()
-            .flex()
-            .flex_row()
-            .gap_1()
-            .child(
-                Button::new("theme-light")
-                    .icon(IconName::Sun)
-                    .label(t("Light", "浅色"))
-                    .small()
-                    .when(!dark, |this| this.primary())
-                    .when(dark, |this| this.ghost())
-                    .on_click(cx.listener(|workspace, _, window, cx| {
-                        workspace.on_select_theme(false, window, cx);
-                    }))
-                    .into_any_element(),
-            )
-            .child(
-                Button::new("theme-dark")
-                    .icon(IconName::Moon)
-                    .label(t("Dark", "深色"))
-                    .small()
-                    .when(dark, |this| this.primary())
-                    .when(!dark, |this| this.ghost())
-                    .on_click(cx.listener(|workspace, _, window, cx| {
-                        workspace.on_select_theme(true, window, cx);
-                    }))
-                    .into_any_element(),
-            )
-            .into_any_element(),
-    );
     let palette_row = settings_row(
         "palette",
         t("Palette", "色板"),
         Some(t(
-            "Solid panels over a page gradient. Pick a hue; light and dark stay separate.",
-            "页面渐变之上的实色面板。选一个色调；浅色与深色各自独立。",
+            "Solid panels over a page gradient. Pick a hue.",
+            "页面渐变之上的实色面板。选一个色调。",
         )),
-        palette_choices(&palette, dark, cx).into_any_element(),
+        palette_choices(&palette, cx).into_any_element(),
     );
     let language_row = dropdown_field(
         "language",
@@ -190,11 +153,11 @@ pub(super) fn render_general_section(
             "appearance",
             t("Appearance", "外观"),
             Some(t(
-                "Theme applies immediately and is saved to settings right away.",
-                "主题立即生效并随设置保存。",
+                "The palette applies immediately and is saved to settings right away.",
+                "色板立即生效并随设置保存。",
             )),
             theme,
-            vec![theme_row, palette_row, language_row, ua_field],
+            vec![palette_row, language_row, ua_field],
         ))
         .child(settings_card(
             "shell",
@@ -253,7 +216,7 @@ pub(super) fn render_general_section(
         .into_any_element()
 }
 
-fn palette_choices(selected: &str, dark: bool, cx: &mut Context<Workspace>) -> impl IntoElement {
+fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme().clone();
     div()
         .flex()
@@ -262,7 +225,7 @@ fn palette_choices(selected: &str, dark: bool, cx: &mut Context<Workspace>) -> i
         .gap_1()
         .children(crate::ui::desk::PALETTES.into_iter().map(|id| {
             let on = selected == id;
-            let swatch = crate::ui::desk::palette_swatch(id, dark);
+            let swatch = crate::ui::desk::palette_swatch(id);
             div()
                 .id(format!("palette-{id}"))
                 .flex()

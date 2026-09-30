@@ -388,19 +388,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                     }
                 }
                 _ => {
-                    let dark = settings.theme != "light";
                     crate::i18n::apply_language(&settings.language);
                     state.settings = Some(settings);
-                    state.dark_theme = dark;
                 }
             }
-        }
-        DesktopAction::SettingsThemeSelected(dark) => {
-            if let Some(settings) = state.settings.as_mut() {
-                settings.theme = if dark { "dark" } else { "light" }.to_owned();
-                mark_settings_dirty(settings);
-            }
-            state.dark_theme = dark;
         }
         DesktopAction::SettingsLanguageSelected(language) => {
             if !mycode_config::VALID_LANGUAGES.contains(&language.as_str()) {

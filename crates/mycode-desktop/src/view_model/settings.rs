@@ -39,7 +39,7 @@ pub struct SettingsState {
     pub web_backends: Vec<mycode_config::WebBackendSettings>,
     /// MCP servers.
     pub mcp_servers: Vec<mycode_config::McpServerSettings>,
-    /// Appearance theme: `light` or `dark`.
+    /// Appearance theme. Always `dark`; light mode is not painted.
     pub theme: String,
     /// Appearance palette: slate, ocean, forest, dusk, sand, rose, ink, or moss.
     pub palette: String,
@@ -83,7 +83,7 @@ impl SettingsState {
             providers: settings.providers.clone(),
             web_backends: merge_web_backends(&settings.web.backends),
             mcp_servers: settings.mcp_servers.clone(),
-            theme: settings.appearance.theme.clone(),
+            theme: settings.effective_theme().to_owned(),
             palette: settings.effective_palette().to_owned(),
             language: settings.appearance.language.clone(),
             reasoning: settings.reasoning_effort.clone(),

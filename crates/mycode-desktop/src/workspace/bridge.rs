@@ -291,7 +291,7 @@ impl Workspace {
                 let revision = revision.get();
                 let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
                 state.mcp_with_keys = mcp_keys;
-                // A dirty or in-flight editor keeps its theme, palette, and
+                // A dirty or in-flight editor keeps its palette and
                 // user-agent field. Applying the disk copy here would undo
                 // unsaved appearance edits before the reducer can refuse the
                 // document swap.
@@ -301,13 +301,8 @@ impl Workspace {
                     .as_ref()
                     .is_some_and(|settings| settings.dirty || settings.saving);
                 if !preserve_editor {
-                    let mode = if state.theme == "light" {
-                        ThemeMode::Light
-                    } else {
-                        ThemeMode::Dark
-                    };
-                    if cx.theme().mode != mode {
-                        Theme::change(mode, None, cx);
+                    if cx.theme().mode != ThemeMode::Dark {
+                        Theme::change(ThemeMode::Dark, None, cx);
                     }
                     crate::ui::desk::apply_palette(Theme::global_mut(cx), &state.palette);
                     Theme::sync_base(cx);

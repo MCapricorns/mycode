@@ -37,7 +37,7 @@
 | --- | --- |
 | `read` | 带行号读文件，输出有字节上限 |
 | `write` | 创建或整文件替换 |
-| `edit` | 精确字符串替换。小幅漂移用模糊匹配；支持的语言再用 tree-sitter 对一下语法 |
+| `edit` | 精确字符串替换。小幅漂移用模糊匹配；`ast` 用 gpui-kit 注册的 Tree-sitter 语法对一下 |
 | `find` | 按 glob 找文件，限制在搜索根内 |
 | `grep` | 进程内的内容搜索，支持 include / exclude |
 | `exec` | 显式参数运行一个可加载映像（PE / ELF / Mach-O）。不经过 shell |

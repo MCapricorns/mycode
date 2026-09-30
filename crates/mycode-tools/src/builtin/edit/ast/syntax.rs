@@ -1,5 +1,7 @@
 //! Syntax-error validation for tree-sitter edit results.
+use std::ops::ControlFlow;
 use tokio_util::sync::CancellationToken;
+
 use tree_sitter::{ParseOptions, Parser};
 
 use super::{
@@ -69,13 +71,19 @@ pub(in crate::builtin::edit) fn parse_body(
 ) -> Result<tree_sitter::Tree, ToolError> {
     check_cancel(cancel)?;
     let mut parser = Parser::new();
-    parser.set_language(&language.to_ts()).map_err(|error| {
+    parser.set_language(&language.grammar()?).map_err(|error| {
         ToolError::Execution(format!("tree-sitter language failed to load: {error}"))
     })?;
     let bytes = body.as_bytes();
     let mut input =
         |offset: usize, _position: tree_sitter::Point| bytes.get(offset..).unwrap_or_default();
-    let mut progress = |_state: &tree_sitter::ParseState| cancel.is_cancelled();
+    let mut progress = |_state: &tree_sitter::ParseState| {
+        if cancel.is_cancelled() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
     let options = ParseOptions::new().progress_callback(&mut progress);
     let tree = parser.parse_with_options(&mut input, None, Some(options));
     check_cancel(cancel)?;

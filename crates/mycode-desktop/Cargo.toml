@@ -7,7 +7,10 @@ license.workspace = true
 
 [dependencies]
 async-channel = { workspace = true }
-gpui-kit = "0.6"
+# `tree-sitter-languages` turns on gpui-kit's own grammars. Fenced code in
+# TextView is highlighted by that highlighter; this crate does not depend
+# on tree-sitter itself.
+gpui-kit = { version = "0.6", features = ["tree-sitter-languages"] }
 notify = "7"
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }

@@ -31,7 +31,7 @@
 
 `AppSettings` 是设置页的唯一文档。
 
-- **外观**：主题、调色板、`appearance.language`（`auto` / `en` / `zh`）
+- **外观**：`appearance.theme` 只接受 `dark`（读到 `light` 会改成 `dark` 并写回）、调色板、`appearance.language`（`auto` / `en` / `zh`）
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、base URL、模型 id 列表、上下文窗口。密钥不在此列
 - **Shell**：Windows 只接受 `pwsh` 和 `bash`。存过的 `powershell` / `cmd` 在加载时丢掉，重新侦查
 - **网页**：Querit、AnySearch 或自定义后端。密钥放在 `secrets.json` 的 `web-<id>`，或环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`

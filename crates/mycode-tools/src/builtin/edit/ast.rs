@@ -5,8 +5,10 @@
 //! the result is reparsed and rejected when the edit introduces syntax errors
 //! that were not present before.
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::path::Path;
 
+use gpui_kit::component::highlighter::{Language, LanguageRegistry};
 use tokio_util::sync::CancellationToken;
 use tree_sitter::{Query, QueryCursor, QueryCursorOptions, StreamingIterator};
 
@@ -51,37 +53,21 @@ const AST_CAPTURE_CANCEL_INTERVAL: usize = 256;
 /// Syntax-tree nodes visited between cancellation checks.
 const AST_SYNTAX_CANCEL_INTERVAL: usize = 256;
 
-/// Supported grammar for an `ast` operation.
+/// Grammar name registered by gpui-kit (`"rust"`, `"tsx"`, …).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum AstLanguage {
-    Rust,
-    TypeScript,
-    Tsx,
-    JavaScript,
-    Python,
-    Go,
-    Java,
-    C,
-    Cpp,
-    CSharp,
-    Json,
-}
+pub(super) struct AstLanguage(&'static str);
 
 impl AstLanguage {
-    fn to_ts(self) -> tree_sitter::Language {
-        match self {
-            Self::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            Self::Python => tree_sitter_python::LANGUAGE.into(),
-            Self::Go => tree_sitter_go::LANGUAGE.into(),
-            Self::Java => tree_sitter_java::LANGUAGE.into(),
-            Self::C => tree_sitter_c::LANGUAGE.into(),
-            Self::Cpp => tree_sitter_cpp::LANGUAGE.into(),
-            Self::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
-            Self::Json => tree_sitter_json::LANGUAGE.into(),
-        }
+    fn grammar(self) -> Result<tree_sitter::Language, ToolError> {
+        LanguageRegistry::singleton()
+            .language(self.0)
+            .and_then(|config| config.language)
+            .ok_or_else(|| {
+                ToolError::Execution(format!(
+                    "tree-sitter grammar for {} is not available",
+                    self.0
+                ))
+            })
     }
 }
 
@@ -184,43 +170,52 @@ pub(super) fn resolve_language(named: Option<&str>, path: &str) -> Result<AstLan
     })
 }
 
+/// Maps a caller token onto a gpui-kit grammar name.
+///
+/// gpui already aliases `rs`/`ts`/`py` and the rest of its registry.
+/// Extensions it does not alias (`h`, `jsx`, …) are folded here first.
 fn parse_language_name(name: &str) -> Option<AstLanguage> {
-    Some(match name {
-        "rust" => AstLanguage::Rust,
-        "typescript" | "ts" => AstLanguage::TypeScript,
-        "tsx" => AstLanguage::Tsx,
-        "javascript" | "js" => AstLanguage::JavaScript,
-        "python" | "py" => AstLanguage::Python,
-        "go" => AstLanguage::Go,
-        "java" => AstLanguage::Java,
-        "c" => AstLanguage::C,
-        "cpp" | "c++" | "cxx" => AstLanguage::Cpp,
-        "csharp" | "c#" | "cs" => AstLanguage::CSharp,
-        "json" => AstLanguage::Json,
-        _ => return None,
+    lookup_grammar(match name {
+        "c#" => "csharp",
+        "cxx" => "cpp",
+        other => other,
     })
 }
 
 fn infer_from_path(path: &str) -> Option<AstLanguage> {
-    let ext = Path::new(path).extension()?.to_str()?;
-    Some(match ext {
-        "rs" => AstLanguage::Rust,
-        "ts" => AstLanguage::TypeScript,
-        "tsx" => AstLanguage::Tsx,
-        "js" | "mjs" | "cjs" | "jsx" => AstLanguage::JavaScript,
-        "py" => AstLanguage::Python,
-        "go" => AstLanguage::Go,
-        "java" => AstLanguage::Java,
-        "c" | "h" => AstLanguage::C,
-        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => AstLanguage::Cpp,
-        "cs" => AstLanguage::CSharp,
-        "json" => AstLanguage::Json,
-        _ => return None,
+    let path = Path::new(path);
+    if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+        if file_name.eq_ignore_ascii_case("makefile") {
+            return lookup_grammar("make");
+        }
+        if file_name.eq_ignore_ascii_case("cmakelists.txt") {
+            return lookup_grammar("cmake");
+        }
+    }
+    let ext = path.extension()?.to_str()?;
+    lookup_grammar(match ext {
+        "h" => "c",
+        "hpp" | "hh" | "hxx" | "cc" | "cxx" => "cpp",
+        "jsx" | "mjs" | "cjs" => "javascript",
+        other => other,
     })
 }
 
+fn lookup_grammar(token: &str) -> Option<AstLanguage> {
+    let language = Language::from_str(token);
+    if matches!(language, Language::Plain) {
+        return None;
+    }
+    let name = language.name();
+    LanguageRegistry::singleton()
+        .language(name)
+        .and_then(|config| config.language)
+        .is_some()
+        .then_some(AstLanguage(name))
+}
+
 fn compile_query(language: AstLanguage, source: &str) -> Result<Query, ToolError> {
-    Query::new(&language.to_ts(), source).map_err(|error| {
+    Query::new(&language.grammar()?, source).map_err(|error| {
         ToolError::InvalidArgs(format!(
             "invalid tree-sitter query: {:?} at {}:{}",
             error.kind,
@@ -295,7 +290,13 @@ pub(super) fn plan_ast(
     let mut cursor = QueryCursor::new();
     // This tree-sitter limit bounds simultaneously in-progress matches only.
     cursor.set_match_limit(MAX_MATCHES.min(65_536) as u32);
-    let mut progress = |_state: &tree_sitter::QueryCursorState| cancel.is_cancelled();
+    let mut progress = |_state: &tree_sitter::QueryCursorState| {
+        if cancel.is_cancelled() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
     let options = QueryCursorOptions::new().progress_callback(&mut progress);
     let mut selected = 0usize;
     let mut scanned_matches = 0usize;

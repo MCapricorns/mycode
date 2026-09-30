@@ -63,20 +63,6 @@ sha2 = "0.11"
 getrandom = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1", features = ["serde"] }
-# tree-sitter 0.25.10: Parser::set_language(&Language), Query::new(&Language, &str),
-# QueryCursor::matches + StreamingIterator. Grammar crates export LanguageFn via
-# LANGUAGE / LANGUAGE_TYPESCRIPT / LANGUAGE_TSX; pin exact so ABI stays compatible.
-tree-sitter = "=0.25.10"
-tree-sitter-rust = "=0.24.2"
-tree-sitter-javascript = "=0.25.0"
-tree-sitter-typescript = "=0.23.2"
-tree-sitter-python = "=0.25.0"
-tree-sitter-go = "=0.25.0"
-tree-sitter-java = "=0.23.5"
-tree-sitter-c = "=0.24.2"
-tree-sitter-cpp = "=0.23.4"
-tree-sitter-c-sharp = "=0.23.5"
-tree-sitter-json = "=0.24.8"
 
 # Disk-conscious dev profile: line tables keep backtraces useful while
 # cutting debuginfo from multi-GiB full DWARF to a fraction.

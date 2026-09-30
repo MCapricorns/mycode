@@ -220,11 +220,13 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
         )
 }
 
-/// Assistant reply bubble: Markdown-rendered via gpui's TextView, which
-/// picks up code/link/inline-code styling from the active theme
-/// (`install_text_view_defaults` runs on every `Theme::change`). The id must
-/// be unique per entry — `ElementId::CodeLocation` would collide across
-/// blocks since all bubbles render from the same call site.
+/// Assistant reply bubble: Markdown via gpui-kit's TextView.
+///
+/// Fenced code is highlighted by the kit's tree-sitter grammars
+/// (`tree-sitter-languages`). The highlighter is installed with the theme
+/// (`install_text_view_defaults` on `Theme::change` and `Theme::sync_base`).
+/// The id must be unique per entry — `ElementId::CodeLocation` would collide
+/// across blocks since all bubbles render from the same call site.
 fn agent_text(id: SharedString, text: SharedString, theme: &Theme) -> impl IntoElement {
     // The theme default leaves a full rem between paragraphs, which paints
     // as a tall empty slab when a reply is short or still streaming.

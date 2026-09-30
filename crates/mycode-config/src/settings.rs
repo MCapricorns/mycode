@@ -94,7 +94,7 @@ fn default_language() -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceSettings {
-    /// `light` or `dark`.
+    /// Always `dark`. A stored `light` is rewritten on read.
     pub theme: String,
     /// `slate`, `ocean`, `forest`, `dusk`, `sand`, `rose`, `ink`, or `moss`.
     #[serde(default = "default_palette")]
@@ -179,13 +179,22 @@ impl AppSettings {
         }
     }
 
-    /// Returns the effective theme (`light` or `dark`).
+    /// The only painted theme. Stored `light` is retired before this is read.
     #[must_use]
     pub fn effective_theme(&self) -> &'static str {
+        "dark"
+    }
+
+    /// Rewrites a stored light theme to dark.
+    ///
+    /// Light mode is no longer painted. Call this before [`Self::validate`]
+    /// so an older document stays readable and can be published back as dark.
+    pub fn retire_light_theme(&mut self) -> bool {
         if self.appearance.theme == "light" {
-            "light"
+            self.appearance.theme = "dark".to_owned();
+            true
         } else {
-            "dark"
+            false
         }
     }
 
@@ -222,8 +231,8 @@ impl AppSettings {
         self.validate_providers()?;
         self.validate_web()?;
         self.validate_mcp()?;
-        if self.appearance.theme != "light" && self.appearance.theme != "dark" {
-            return Err(invalid("appearance.theme: must be light or dark"));
+        if self.appearance.theme != "dark" {
+            return Err(invalid("appearance.theme: must be dark"));
         }
         if !VALID_PALETTES.contains(&self.appearance.palette.as_str()) {
             return Err(invalid(
@@ -353,12 +362,13 @@ fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
     }
     let revision = AuthorityRevision::new(document.revision)?;
     let mut settings = document.settings;
-    let retired = retire_unsupported_shell(&mut settings);
+    let retired_shell = retire_unsupported_shell(&mut settings);
+    let retired_theme = settings.retire_light_theme();
     settings.validate()?;
     Ok(ParsedSettings {
         settings,
         revision,
-        migrated: decoded.migrated || retired,
+        migrated: decoded.migrated || retired_shell || retired_theme,
     })
 }
 
