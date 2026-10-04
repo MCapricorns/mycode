@@ -1,13 +1,13 @@
 # Changelog
 
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
-推送到 `main` 时，如果工作区版本还没有带齐四个平台压缩包的 GitHub Release，就用本文件里该版本的条目作为发布说明并自动发版。
+推送到 `main` 时，如果工作区版本还没有带齐三个平台压缩包的 GitHub Release，就用本文件里该版本的条目作为发布说明并自动发版。
 
 ## [Unreleased]
 
 ### Added
 
-- 发布包增加 Linux x86_64（glibc，`x86_64-unknown-linux-gnu`）和 Windows 11 ARM64（`aarch64-pc-windows-msvc`）。应用内更新按这两个平台选择对应压缩包。
+- 发布包增加 Linux x86_64（glibc，`x86_64-unknown-linux-gnu`）。应用内更新按该平台选择对应压缩包。
 - 对话里的围栏代码块使用 gpui-kit 自带的 Tree-sitter 高亮，覆盖 kit 提供的全部语言。`edit` 的 `ast` 操作改为读取这份注册表，不再自带语法包。
 
 ### Removed

@@ -11,17 +11,7 @@
 //! non-zero exit is an error result, not a tool failure. Timeout and cancel
 //! await terminate-and-reap; dropping the future transfers cleanup ownership.
 //! Launch is Windows x86_64, Linux x86_64 GNU, and macOS Apple Silicon.
-//! Windows ARM64 and other Unix (musl, Android, BSD) are unsupported. The
-//! spawn helpers stay compiled there and return before launch, so their
-//! unused items are expected on those targets.
-#![cfg_attr(
-    not(any(
-        all(windows, target_arch = "x86_64"),
-        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
-    )),
-    allow(dead_code, unused_imports, unused_variables)
-)]
+//! Other Unix (musl, Android, BSD) is unsupported.
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod argv;
 mod env;

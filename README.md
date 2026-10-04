@@ -1,6 +1,6 @@
 # mycode
 
-本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。支持 Windows 10/11 x64、Windows 11 ARM64、Linux x86_64（glibc）与 macOS Apple Silicon。
+本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。支持 Windows 10/11 x64、Linux x86_64（glibc）与 macOS Apple Silicon。
 
 [许可证](LICENSE) · [文档](docs/README.md) · [发布](https://github.com/MCapricorns/mycode/releases) · [更新日志](CHANGELOG.md)
 
@@ -27,7 +27,6 @@ English notes are [below](#english).
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
 | `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64（glibc） |
-| `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 
 每个 zip 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。
 
@@ -71,7 +70,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-推送到 `main` 的 pull request 在 Windows x64、Windows ARM64、Linux x86_64 和 macOS Apple Silicon 上跑这两步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐四个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本没变时，推送不会重新打包。
+推送到 `main` 的 pull request 在 Windows x64、Linux x86_64 和 macOS Apple Silicon 上跑这两步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐三个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本没变时，推送不会重新打包。
 
 ## 许可
 
@@ -119,7 +118,6 @@ a lock in Settings.
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
 | `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 (glibc) |
-| `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 
 Each zip has a `.sha256` sidecar. Intel macOS builds stopped after 0.4.0.
 
@@ -168,10 +166,10 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Pull requests to `main` run those gates on Windows x64, Windows ARM64,
-Linux x86_64, and macOS Apple Silicon. After the gates pass, a push to
-`main` publishes `v<version>` when that GitHub Release is missing any of
-the four platform archives. The body is the matching `CHANGELOG.md`
+Pull requests to `main` run those gates on Windows x64, Linux x86_64,
+and macOS Apple Silicon. After the gates pass, a push to `main` publishes
+`v<version>` when that GitHub Release is missing any of the three platform
+archives. The body is the matching `CHANGELOG.md`
 section, not generated commit notes. A push that does not change the
 version does not rebuild the archives.
 

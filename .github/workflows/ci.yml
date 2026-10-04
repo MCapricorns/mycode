@@ -3,13 +3,10 @@
 # 1. push/PR quality gate — rustfmt + clippy -D warnings on the native
 #    product runners:
 #      windows-latest  -> x86_64-pc-windows-msvc
-#      windows-11-arm  -> aarch64-pc-windows-msvc
 #      ubuntu-latest   -> x86_64-unknown-linux-gnu
 #      macos-latest    -> aarch64-apple-darwin
-#    No test suites exist. windows-latest is x64. Windows ARM64 uses the
-#    native windows-11-arm image; it is not a cross-compile from
-#    windows-latest. Linux jobs install the GPUI/fontconfig/Wayland/XCB
-#    packages in .github/actions/linux-gpui-deps.
+#    No test suites exist. windows-latest is x64. Linux jobs install the
+#    GPUI/fontconfig/Wayland/XCB packages in .github/actions/linux-gpui-deps.
 #
 # 2. release — a push to main publishes `v<workspace version>` when that
 #    GitHub Release is missing any platform archive. The release body is
@@ -20,7 +17,6 @@
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
 #   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
-#   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 
 name: ci
 
@@ -57,8 +53,6 @@ jobs:
             host: aarch64-apple-darwin
           - os: ubuntu-latest
             host: x86_64-unknown-linux-gnu
-          - os: windows-11-arm
-            host: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v5
 
@@ -100,8 +94,6 @@ jobs:
             host: aarch64-apple-darwin
           - os: ubuntu-latest
             host: x86_64-unknown-linux-gnu
-          - os: windows-11-arm
-            host: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v5
 
@@ -160,8 +152,6 @@ jobs:
               f"mycode-desktop-{tag}-aarch64-apple-darwin.zip.sha256",
               f"mycode-desktop-{tag}-x86_64-unknown-linux-gnu.zip",
               f"mycode-desktop-{tag}-x86_64-unknown-linux-gnu.zip.sha256",
-              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip",
-              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip.sha256",
           ]
           viewed = subprocess.run(
               ["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
@@ -215,9 +205,6 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: mycode-desktop
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            binary: mycode-desktop.exe
     steps:
       - uses: actions/checkout@v5
 
