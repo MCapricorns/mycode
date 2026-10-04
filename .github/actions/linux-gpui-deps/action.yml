@@ -1,0 +1,41 @@
+name: Linux GPUI dependencies
+description: >-
+  Ubuntu packages GPUI, fontconfig, Wayland, X11/XCB, OpenSSL, and libclang
+  need before clippy or a desktop release build.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Linux system packages
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          pkg-config \
+          libfontconfig1-dev \
+          libfreetype-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev \
+          libxcb1-dev \
+          libxcb-composite0-dev \
+          libxcb-cursor-dev \
+          libxcb-icccm4-dev \
+          libxcb-image0-dev \
+          libxcb-keysyms1-dev \
+          libxcb-randr0-dev \
+          libxcb-render0-dev \
+          libxcb-shape0-dev \
+          libxcb-shm0-dev \
+          libxcb-util-dev \
+          libxcb-xfixes0-dev \
+          libxcb-xkb-dev \
+          libx11-dev \
+          libx11-xcb-dev \
+          libxcursor-dev \
+          libxi-dev \
+          libxrandr-dev \
+          libwayland-dev \
+          libssl-dev \
+          clang \
+          libclang-dev \
+          zip

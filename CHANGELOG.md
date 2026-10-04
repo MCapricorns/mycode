@@ -1,12 +1,15 @@
 # Changelog
 
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
-推送到 `main` 时，如果工作区版本还没有带齐两个平台压缩包的 GitHub Release，就用本文件里该版本的条目作为发布说明并自动发版。
+推送到 `main` 时，如果工作区版本还没有带齐三个平台压缩包的 GitHub Release，就用本文件里该版本的条目作为发布说明并自动发版。
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-04
+
 ### Added
 
+- 发布包增加 Linux x86_64（glibc，`x86_64-unknown-linux-gnu`）。应用内更新按该平台选择对应压缩包。
 - 对话里的围栏代码块使用 gpui-kit 自带的 Tree-sitter 高亮，覆盖 kit 提供的全部语言。`edit` 的 `ast` 操作改为读取这份注册表，不再自带语法包。
 
 ### Removed
@@ -102,7 +105,8 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.2
 [0.7.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.1
 [0.7.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.0
 [0.5.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.1
