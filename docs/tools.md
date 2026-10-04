@@ -47,7 +47,7 @@
 
 Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。shell 侦查顺序是 PowerShell 7（`pwsh`），否则 Git bash，不用 Windows PowerShell 5.1 和 `cmd`。
 
-`exec` 的实现按平台拆开（Windows x64、Linux x86_64 glibc、macOS Apple Silicon），摘要复查和参数组装共用。其它 Unix 目标不支持启动。
+`exec` 的实现按平台拆开（Windows x64、Linux x86_64 glibc、macOS Apple Silicon），摘要复查和参数组装共用。Windows ARM64 没有单独的启动实现。其它 Unix 目标不支持启动。
 
 搜索有独立的预算：扫描字节、截止时间、错误样本条数。到顶就停并说明停因，而不是把目录树读完。
 

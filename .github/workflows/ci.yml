@@ -1,17 +1,26 @@
 # Single workflow for the product:
 #
 # 1. push/PR quality gate — rustfmt + clippy -D warnings on the native
-#    product runners (windows-latest -> x86_64-pc-windows-msvc,
-#    macos-latest -> aarch64-apple-darwin). No test suites exist.
+#    product runners:
+#      windows-latest  -> x86_64-pc-windows-msvc
+#      windows-11-arm  -> aarch64-pc-windows-msvc
+#      ubuntu-latest   -> x86_64-unknown-linux-gnu
+#      macos-latest    -> aarch64-apple-darwin
+#    No test suites exist. windows-latest is x64. Windows ARM64 uses the
+#    native windows-11-arm image; it is not a cross-compile from
+#    windows-latest. Linux jobs install the GPUI/fontconfig/Wayland/XCB
+#    packages in .github/actions/linux-gpui-deps.
 #
 # 2. release — a push to main publishes `v<workspace version>` when that
-#    GitHub Release is missing either platform archive. The release body is
+#    GitHub Release is missing any platform archive. The release body is
 #    the matching CHANGELOG section, not generated commit notes. A push whose
-#    version already has both archives does not build release binaries.
+#    version already has every archive does not build release binaries.
 #
 # Assets produced per release:
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
+#   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 
 name: ci
 
@@ -46,6 +55,10 @@ jobs:
             host: x86_64-pc-windows-msvc
           - os: macos-latest
             host: aarch64-apple-darwin
+          - os: ubuntu-latest
+            host: x86_64-unknown-linux-gnu
+          - os: windows-11-arm
+            host: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v5
 
@@ -58,6 +71,10 @@ jobs:
           host=$(rustc -vV | awk '/^host:/{print $2}')
           echo "rustc host=${host} expected=${{ matrix.host }}"
           test "${host}" = "${{ matrix.host }}"
+
+      - name: Install Linux GPUI dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gpui-deps
 
       # Formats every workspace member, including mycode-desktop.
       - name: cargo fmt
@@ -81,6 +98,10 @@ jobs:
             host: x86_64-pc-windows-msvc
           - os: macos-latest
             host: aarch64-apple-darwin
+          - os: ubuntu-latest
+            host: x86_64-unknown-linux-gnu
+          - os: windows-11-arm
+            host: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v5
 
@@ -93,6 +114,10 @@ jobs:
           host=$(rustc -vV | awk '/^host:/{print $2}')
           echo "rustc host=${host} expected=${{ matrix.host }}"
           test "${host}" = "${{ matrix.host }}"
+
+      - name: Install Linux GPUI dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gpui-deps
 
       - name: cargo clippy
         run: cargo clippy -p mycode-desktop --all-targets --locked -- -D warnings
@@ -133,6 +158,10 @@ jobs:
               f"mycode-desktop-{tag}-x86_64-pc-windows-msvc.zip.sha256",
               f"mycode-desktop-{tag}-aarch64-apple-darwin.zip",
               f"mycode-desktop-{tag}-aarch64-apple-darwin.zip.sha256",
+              f"mycode-desktop-{tag}-x86_64-unknown-linux-gnu.zip",
+              f"mycode-desktop-{tag}-x86_64-unknown-linux-gnu.zip.sha256",
+              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip",
+              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip.sha256",
           ]
           viewed = subprocess.run(
               ["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
@@ -147,7 +176,7 @@ jobs:
               handle.write(f"tag={tag}\n")
               if viewed.returncode == 0 and all(name in present for name in required):
                   handle.write("publish=false\n")
-                  print(f"Release {tag} already has both platform archives.")
+                  print(f"Release {tag} already has every platform archive.")
                   raise SystemExit(0)
               text = Path("CHANGELOG.md").read_text(encoding="utf-8")
               notes = re.search(
@@ -183,6 +212,12 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: mycode-desktop
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: mycode-desktop
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary: mycode-desktop.exe
     steps:
       - uses: actions/checkout@v5
 
@@ -190,6 +225,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install Linux GPUI dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gpui-deps
 
       - name: Build release binary
         run: cargo build --release --locked -p mycode-desktop --target ${{ matrix.target }}
@@ -223,6 +262,22 @@ jobs:
           zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
           zip -r "$zip" "$stage"
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
+          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tag="${{ needs.release-plan.outputs.tag }}"
+          stage="mycode-desktop-$tag-${{ matrix.target }}"
+          mkdir -p "$stage"
+          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE "$stage/" 2>/dev/null || true
+          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
+          zip -r "$zip" "$stage"
+          hash=$(sha256sum "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       - name: Upload assets
