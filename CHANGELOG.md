@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-04
+
 ### Changed
 
 - 质量门通过的 `main` 推送都会发布新的 GitHub Release 和新标签。工作区版本的标签已存在时，发布计划把补丁号加一，不再因为该版本的四个平台压缩包已经齐就跳过。
@@ -115,7 +117,8 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.4
 [0.7.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.3
 [0.7.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.2
 [0.7.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.1
