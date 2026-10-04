@@ -4,6 +4,16 @@
 //! are enrolled in a kill-on-close Job Object before their initial thread
 //! resumes. Teardown reports real Job or process-group errors; an invalid
 //! Windows Job handle is not treated as evidence that members exited.
+//! Windows ARM64 does not launch processes, so the Job helpers are unused
+//! there and the warnings are expected.
+#![cfg_attr(
+    not(any(
+        all(windows, target_arch = "x86_64"),
+        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )),
+    allow(dead_code, unused_imports, unused_variables)
+)]
 mod output;
 #[cfg(windows)]
 mod windows;
