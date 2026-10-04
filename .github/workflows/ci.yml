@@ -6,15 +6,22 @@
 #      windows-11-arm  -> aarch64-pc-windows-msvc
 #      ubuntu-latest   -> x86_64-unknown-linux-gnu
 #      macos-latest    -> aarch64-apple-darwin
-#    No other test suite is run. windows-latest is x64. Windows ARM64 uses
-#    the native windows-11-arm image; it is not a cross-compile from
-#    windows-latest. Linux jobs install the GPUI/fontconfig/Wayland/XCB
-#    packages in .github/actions/linux-gpui-deps.
+#    Product gates are rustfmt, clippy, and that exec smoke test.
+#    windows-latest is x64. Windows ARM64 uses the native windows-11-arm
+#    image; it is not a cross-compile from windows-latest. Linux jobs
+#    install the GPUI/fontconfig/Wayland/XCB packages in
+#    .github/actions/linux-gpui-deps. The Linux core job also runs the
+#    release-plan self-test.
 #
-# 2. release — a push to main publishes `v<workspace version>` when that
-#    GitHub Release is missing any platform archive. The release body is
-#    the matching CHANGELOG section, not generated commit notes. A push whose
-#    version already has every archive does not build release binaries.
+# 2. release — a push to main whose quality gates passed publishes a new
+#    GitHub Release. Pull requests do not publish. The tag is
+#    `v<workspace version>` when that tag is free. When the tag already
+#    exists, release-plan bumps the patch in Cargo.toml, Cargo.lock, and
+#    CHANGELOG.md and tags that new version. The body is the matching
+#    CHANGELOG section, not generated commit notes. Archives already
+#    uploaded for the previous tag do not skip the release. The version
+#    commit is pushed with GITHUB_TOKEN, which does not start another
+#    workflow run.
 #
 # Assets produced per release:
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
@@ -61,6 +68,10 @@ jobs:
             host: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v5
+
+      - name: Check release planner
+        if: runner.os == 'Linux'
+        run: python3 .github/scripts/release_plan.py --self-test
 
       - name: Rust toolchain
         run: rustup component add rustfmt clippy
@@ -131,77 +142,86 @@ jobs:
     name: release-plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # contents: write lets this job push the patch bump. The push uses
+    # GITHUB_TOKEN, so it does not start a second workflow run.
+    permissions:
+      contents: write
     outputs:
       publish: ${{ steps.plan.outputs.publish }}
       tag: ${{ steps.plan.outputs.tag }}
       notes: ${{ steps.plan.outputs.notes }}
+      sha: ${{ steps.plan.outputs.sha }}
+      cleanup_ref: ${{ steps.plan.outputs.cleanup_ref }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+          fetch-depth: 1
 
-      - name: Decide whether this commit needs a release
+      - name: Choose a new release tag
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          python3 << 'PY'
-          import os, re, subprocess
-          from pathlib import Path
-
-          cargo = Path("Cargo.toml").read_text(encoding="utf-8")
-          match = re.search(r'(?m)^version = "([^"]+)"', cargo)
-          if not match:
-              raise SystemExit("Cargo.toml has no workspace version")
-          version = match.group(1)
-          if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version):
-              raise SystemExit(f"workspace version is not semver: {version}")
-          tag = f"v{version}"
-          required = [
-              f"mycode-desktop-{tag}-x86_64-pc-windows-msvc.zip",
-              f"mycode-desktop-{tag}-x86_64-pc-windows-msvc.zip.sha256",
-              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip",
-              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip.sha256",
-              f"mycode-desktop-{tag}-aarch64-apple-darwin.zip",
-              f"mycode-desktop-{tag}-aarch64-apple-darwin.zip.sha256",
-              f"mycode-desktop-{tag}-x86_64-unknown-linux-gnu.zip",
-              f"mycode-desktop-{tag}-x86_64-unknown-linux-gnu.zip.sha256",
-          ]
-          viewed = subprocess.run(
-              ["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
-              text=True,
-              capture_output=True,
-          )
-          if viewed.returncode != 0 and "not found" not in (viewed.stderr or "").lower():
-              raise SystemExit(viewed.stderr.strip() or f"gh release view failed ({viewed.returncode})")
-          present = set(viewed.stdout.splitlines()) if viewed.returncode == 0 else set()
-          output = Path(os.environ["GITHUB_OUTPUT"])
-          with output.open("a", encoding="utf-8") as handle:
-              handle.write(f"tag={tag}\n")
-              if viewed.returncode == 0 and all(name in present for name in required):
-                  handle.write("publish=false\n")
-                  print(f"Release {tag} already has every platform archive.")
-                  raise SystemExit(0)
-              text = Path("CHANGELOG.md").read_text(encoding="utf-8")
-              notes = re.search(
-                  rf"(?ms)^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## |\Z)",
-                  text,
-              )
-              body = notes.group(1).strip() if notes else ""
-              if not body:
-                  raise SystemExit(f"CHANGELOG.md has no notes for {version}")
-              delim = "NOTES_" + os.urandom(8).hex()
-              handle.write("publish=true\n")
-              handle.write(f"notes<<{delim}\n")
-              handle.write(body)
-              if not body.endswith("\n"):
-                  handle.write("\n")
-              handle.write(f"{delim}\n")
-          print(f"Will publish {tag}.")
-          PY
+          set -euo pipefail
+          git ls-remote --tags origin 'refs/tags/v*' > /tmp/remote-tags.txt
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[].tag_name' > /tmp/release-tags.txt
+          # Pass the subject through the environment. A commit subject can
+          # contain quotes or command substitutions; the shell must not
+          # expand it again on the python command line.
+          export MYCODE_RELEASE_SUBJECT MYCODE_RELEASE_SHA MYCODE_RELEASE_DATE
+          MYCODE_RELEASE_SUBJECT=$(git log -1 --format=%s)
+          MYCODE_RELEASE_SHA="${GITHUB_SHA}"
+          MYCODE_RELEASE_DATE=$(date -u +%Y-%m-%d)
+          python3 .github/scripts/release_plan.py \
+            --apply \
+            --remote-tags /tmp/remote-tags.txt \
+            --release-tags /tmp/release-tags.txt \
+            --plan-env /tmp/release-plan.env \
+            --notes-file /tmp/release-notes.md
+          # shellcheck disable=SC1091
+          source /tmp/release-plan.env
+          cleanup_ref=""
+          if [[ "${PUBLISH}" == "true" && "${BUMPED}" == "true" ]]; then
+            if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "unexpected version ${VERSION}" >&2
+              exit 1
+            fi
+            if [[ -z "$(git status --porcelain -- Cargo.toml Cargo.lock CHANGELOG.md)" ]]; then
+              echo "bump to ${VERSION} did not change version files" >&2
+              exit 1
+            fi
+            export GIT_AUTHOR_NAME="github-actions[bot]"
+            export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+            export GIT_COMMITTER_NAME="${GIT_AUTHOR_NAME}"
+            export GIT_COMMITTER_EMAIL="${GIT_AUTHOR_EMAIL}"
+            git add Cargo.toml Cargo.lock CHANGELOG.md
+            git commit \
+              -m "chore(release): bump to ${VERSION}" \
+              -m "Record the version published for this qualified main push."
+            if git push origin HEAD:main; then
+              cleanup_ref=""
+            else
+              echo "main did not fast-forward; keeping the version commit on a temporary ref" >&2
+              cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
+              git push origin "HEAD:refs/heads/${cleanup_ref}"
+            fi
+          fi
+          # Outputs are written only after a required version commit is on
+          # some ref. If that push fails, this step stops before publish is set.
+          python3 .github/scripts/release_plan.py \
+            --emit-output \
+            --plan-env /tmp/release-plan.env \
+            --notes-file /tmp/release-notes.md \
+            --sha "$(git rev-parse HEAD)" \
+            --cleanup-ref="${cleanup_ref}" \
+            --github-output "${GITHUB_OUTPUT}"
 
   release-build:
     needs: release-plan
-    if: needs.release-plan.outputs.publish == 'true'
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true'
     name: release-build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -223,6 +243,8 @@ jobs:
             binary: mycode-desktop
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-plan.outputs.sha }}
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -295,7 +317,7 @@ jobs:
 
   release-publish:
     needs: [release-plan, release-build]
-    if: needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success'
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success'
     name: release-publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -303,13 +325,19 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-plan.outputs.sha }}
+          persist-credentials: true
+          fetch-depth: 1
 
       - name: Verify tag matches workspace version
         shell: bash
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          echo "tag=${{ needs.release-plan.outputs.tag }} workspace=${version}"
+          head=$(git rev-parse HEAD)
+          echo "tag=${{ needs.release-plan.outputs.tag }} workspace=${version} head=${head}"
           test "${{ needs.release-plan.outputs.tag }}" = "v${version}"
+          test "${head}" = "${{ needs.release-plan.outputs.sha }}"
 
       - name: Download assets
         uses: actions/download-artifact@v4
@@ -321,10 +349,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release-plan.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ needs.release-plan.outputs.sha }}
           body: ${{ needs.release-plan.outputs.notes }}
           files: |
             dist/*.zip
             dist/*.zip.sha256
           fail_on_unmatched_files: true
           generate_release_notes: false
+
+      - name: Delete temporary release ref
+        if: needs.release-plan.outputs.cleanup_ref != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="${{ needs.release-plan.outputs.cleanup_ref }}"
+          if [[ ! "${ref}" =~ ^ci/release-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]; then
+            echo "unexpected cleanup ref: ${ref}" >&2
+            exit 1
+          fi
+          git push origin --delete "${ref}"
