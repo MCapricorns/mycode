@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-04
+
 ### Added
 
 - 发布包增加 Linux x86_64（glibc，`x86_64-unknown-linux-gnu`）。应用内更新按该平台选择对应压缩包。
@@ -103,7 +105,8 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.2
 [0.7.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.1
 [0.7.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.0
 [0.5.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.1
