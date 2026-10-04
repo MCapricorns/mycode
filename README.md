@@ -72,7 +72,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-推送到 `main` 的 pull request 在 Windows x64、Windows ARM64、Linux x86_64 和 macOS Apple Silicon 上跑这三步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐四个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本号没变也一样：四个平台的 zip 或对应 `.sha256` 缺任意一个，这次推送仍会创建或更新 `v<version>` 并打包。八个文件都已经在该 Release 上时，才跳过打包。
+推送到 `main` 的 pull request 在 Windows x64、Windows ARM64、Linux x86_64 和 macOS Apple Silicon 上跑这三步，不发布。质量门通过的 `main` 推送每次都会新建 GitHub Release：新标签 `v<version>`、四个平台的 zip 和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，再用这个新版本发版。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。
 
 ## 许可
 
@@ -171,14 +171,17 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-Pull requests to `main` run those gates on Windows x64, Windows ARM64,
-Linux x86_64, and macOS Apple Silicon. After the gates pass, a push to
-`main` publishes `v<version>` when that GitHub Release is missing any of
-the four platform archives. The body is the matching `CHANGELOG.md`
-section, not generated commit notes. An unchanged version does not
-skip packaging. The push still creates or updates `v<version>` when any
-of the four platform zips or `.sha256` sidecars is missing, and skips
-packaging only when all eight files are already present.
+Pull requests into `main` run those gates on Windows x64, Windows ARM64,
+Linux x86_64, and macOS Apple Silicon, and do not publish. A push to
+`main` whose gates pass always publishes a new GitHub Release: a new
+`v<version>` tag, the four platform zips, their `.sha256` sidecars, and
+the matching `CHANGELOG.md` section (not generated commit notes). When
+that version already has a tag, release-plan bumps the patch in
+`Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`, then publishes the new
+version. Notes under `## [Unreleased]` in `CHANGELOG.md` move into that
+version; an empty section gets one fixed sentence. Archives already
+uploaded for an older tag do not skip the release. A hand-bumped version
+that has no tag yet still needs its own `CHANGELOG.md` section.
 
 ### License
 
