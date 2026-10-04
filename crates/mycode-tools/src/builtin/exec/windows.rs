@@ -1,4 +1,10 @@
-//! Windows spawn: `CreateProcessW` from a retained executable handle.
+//! Windows x64 and ARM64 spawn: `CreateProcessW` from a retained executable
+//! handle.
+//!
+//! Both targets use this path. `CreateProcessW` asks the OS loader to accept
+//! a native PE (AMD64 on x64, ARM64 or ARM64X on ARM64) and an emulated image
+//! when that host provides the emulator. This module does not filter COFF
+//! machine types itself.
 //!
 //! Sequence: pin (`FILE_SHARE_READ` only) → spawn suspended with Unicode W
 //! APIs → enroll a dedicated kill-on-close Job → verify the actual process
@@ -6,7 +12,7 @@
 //! `CreateProcessW` thread handle. Replacement or rewrite before verification
 //! rejects and reaps. Resume never uses a pid lookup. Same-account writers
 //! that already hold the file remain outside the security boundary.
-#![cfg(all(windows, target_arch = "x86_64"))]
+#![cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};

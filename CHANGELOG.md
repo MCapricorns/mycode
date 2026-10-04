@@ -1,9 +1,15 @@
 # Changelog
 
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
-推送到 `main` 时，如果工作区版本还没有带齐三个平台压缩包的 GitHub Release，就用本文件里该版本的条目作为发布说明并自动发版。
+推送到 `main` 时，如果工作区版本还没有带齐四个平台压缩包的 GitHub Release，就用本文件里该版本的条目作为发布说明并自动发版。
 
 ## [Unreleased]
+
+## [0.7.3] - 2026-10-04
+
+### Added
+
+- 发布包增加 Windows ARM64（`aarch64-pc-windows-msvc`）。该平台的 `exec` 与 `shell` 通过 `CreateProcessW` 启动 PE 程序。应用内更新按该平台选择对应压缩包。
 
 ## [0.7.2] - 2026-10-04
 
@@ -105,7 +111,8 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.3
 [0.7.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.2
 [0.7.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.1
 [0.7.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.0
