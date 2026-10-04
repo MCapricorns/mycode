@@ -70,7 +70,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-推送到 `main` 的 pull request 在 Windows x64、Linux x86_64 和 macOS Apple Silicon 上跑这两步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐三个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本没变时，推送不会重新打包。
+推送到 `main` 的 pull request 在 Windows x64、Linux x86_64 和 macOS Apple Silicon 上跑这两步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐三个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本号没变也一样：三个平台的 zip 或对应 `.sha256` 缺任意一个，这次推送仍会创建或更新 `v<version>` 并打包。六个文件都已经在该 Release 上时，才跳过打包。
 
 ## 许可
 
@@ -170,8 +170,10 @@ Pull requests to `main` run those gates on Windows x64, Linux x86_64,
 and macOS Apple Silicon. After the gates pass, a push to `main` publishes
 `v<version>` when that GitHub Release is missing any of the three platform
 archives. The body is the matching `CHANGELOG.md`
-section, not generated commit notes. A push that does not change the
-version does not rebuild the archives.
+section, not generated commit notes. An unchanged version does not
+skip packaging. The push still creates or updates `v<version>` when any
+of the three platform zips or `.sha256` sidecars is missing, and skips
+packaging only when all of those files are already present.
 
 ### License
 
