@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, MutexGuard};
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 pub(crate) use output::collect_child_output;
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 pub(crate) use output::drain_pipes;
@@ -128,7 +128,7 @@ fn ignore_missing_process_group(result: std::io::Result<()>) -> std::io::Result<
 }
 
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 pub(crate) fn combine_teardown_results(

@@ -33,9 +33,10 @@ pub fn current_version() -> &'static str {
 
 /// Release asset suffix for the running platform, empty when unsupported.
 ///
-/// Published archives are Windows x64, Linux x86_64 GNU, and macOS Apple
-/// Silicon. Intel macOS, Windows aarch64, and every other target, including
-/// Linux aarch64, resolve no asset and stay on their installed version.
+/// Published archives are Windows x64, Windows ARM64, Linux x86_64 GNU, and
+/// macOS Apple Silicon. Intel macOS, Windows x86, and every other target,
+/// including Linux aarch64, resolve no asset and stay on their installed
+/// version.
 /// `std::env::consts` does not distinguish glibc from musl; the Linux x86_64
 /// suffix is the published GNU archive.
 #[must_use]
@@ -46,6 +47,7 @@ pub fn asset_suffix() -> &'static str {
 fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
     match (os, arch) {
         ("windows", "x86_64") => "-x86_64-pc-windows-msvc.zip",
+        ("windows", "aarch64") => "-aarch64-pc-windows-msvc.zip",
         ("linux", "x86_64") => "-x86_64-unknown-linux-gnu.zip",
         ("macos", "aarch64") => "-aarch64-apple-darwin.zip",
         _ => "",
@@ -435,6 +437,10 @@ mod tests {
             "-x86_64-pc-windows-msvc.zip"
         );
         assert_eq!(
+            asset_suffix_for("windows", "aarch64"),
+            "-aarch64-pc-windows-msvc.zip"
+        );
+        assert_eq!(
             asset_suffix_for("linux", "x86_64"),
             "-x86_64-unknown-linux-gnu.zip"
         );
@@ -448,7 +454,6 @@ mod tests {
     fn unsupported_platforms_have_no_asset() {
         assert_eq!(asset_suffix_for("macos", "x86_64"), "");
         assert_eq!(asset_suffix_for("linux", "aarch64"), "");
-        assert_eq!(asset_suffix_for("windows", "aarch64"), "");
         assert_eq!(asset_suffix_for("windows", "x86"), "");
         assert_eq!(asset_suffix_for("freebsd", "x86_64"), "");
     }

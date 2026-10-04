@@ -12,10 +12,10 @@ use super::prepare::PreparedInvocation;
 use super::resolve::PinnedImage;
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 use crate::builtin::process::collect_child_output;
-#[cfg(all(windows, target_arch = "x86_64"))]
+#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 use crate::builtin::process::combine_teardown_results;
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 use crate::builtin::process::drain_pipes;
@@ -128,7 +128,7 @@ pub(super) async fn run_pinned(
     deadline: &mut Pin<&mut Sleep>,
 ) -> Result<RunOutcome, ToolError> {
     #[cfg(any(
-        all(windows, target_arch = "x86_64"),
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
         all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     ))]
@@ -155,7 +155,7 @@ pub(super) async fn run_pinned(
         Ok(program.run_until(cancel, deadline).await)
     }
     #[cfg(not(any(
-        all(windows, target_arch = "x86_64"),
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
         all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     )))]
@@ -168,7 +168,7 @@ pub(super) async fn run_pinned(
 }
 
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
     test
@@ -190,7 +190,7 @@ trait SpawnCleanup: Send + 'static {
 }
 
 /// Classifies a contained spawn failure for Windows nested-Job retry.
-#[cfg(all(windows, target_arch = "x86_64"))]
+#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SpawnFailureKind {
     /// `AssignProcessToJobObject` rejected nested-Job / breakaway enrollment.
@@ -203,7 +203,7 @@ pub(super) enum SpawnFailureKind {
 pub(super) struct SpawnFailure {
     pub(super) error: ToolError,
     pub(super) teardown: Result<(), std::io::Error>,
-    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     pub(super) kind: SpawnFailureKind,
 }
 
@@ -212,13 +212,13 @@ impl SpawnFailure {
         Self {
             error,
             teardown,
-            #[cfg(all(windows, target_arch = "x86_64"))]
+            #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
             kind: SpawnFailureKind::Unrelated,
         }
     }
 
     /// Nested-Job enrollment rejection that may request one breakaway retry.
-    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     pub(super) fn nested_job_enrollment_rejected(
         error: ToolError,
         teardown: Result<(), std::io::Error>,
@@ -354,7 +354,7 @@ impl Drop for CancelSpawnOnDrop {
 }
 
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
     test
@@ -406,7 +406,7 @@ where
 }
 
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
     test
@@ -424,7 +424,7 @@ async fn cleanup_started_spawn<T: SpawnCleanup>(
 }
 
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
@@ -439,10 +439,10 @@ fn spawn_program(
         super::linux::spawn_linux(pinned, &argv0, &args, &cwd, &env, lease, gate)?;
     #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
     let metadata = ExecutionMetadata::default();
-    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     let (child, process_tree, pinned) =
         super::windows::spawn_windows(pinned, &argv0, &args, &cwd, &env, gate)?;
-    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     let metadata = ExecutionMetadata::default();
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let (child, process_tree, pinned, lease, metadata) =
@@ -455,7 +455,7 @@ fn spawn_program(
         live: Some(LiveSpawn {
             #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
             inner: Inner::Tokio(child),
-            #[cfg(all(windows, target_arch = "x86_64"))]
+            #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
             inner: Inner::Windows(child),
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             inner: Inner::Mac(child),
@@ -481,13 +481,13 @@ struct LiveSpawn {
 enum Inner {
     #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
     Tokio(tokio::process::Child),
-    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     Windows(super::windows::WindowsChild),
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     Mac(super::macos::MacChild),
     /// Platform without a supported process runtime.
     #[cfg(not(any(
-        all(windows, target_arch = "x86_64"),
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
         all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     )))]
@@ -503,7 +503,7 @@ impl Drop for SpawnedProgram {
 }
 
 #[cfg(any(
-    all(windows, target_arch = "x86_64"),
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
@@ -548,7 +548,7 @@ fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
             }
             wait_tokio_child_blocking(child)
         }
-        #[cfg(all(windows, target_arch = "x86_64"))]
+        #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
         Inner::Windows(child) => {
             let containment = live.process_tree.terminate(None);
             if containment.is_err() {
@@ -563,7 +563,7 @@ fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
             child.reap_blocking()
         }
         #[cfg(not(any(
-            all(windows, target_arch = "x86_64"),
+            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
             all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
             all(target_os = "macos", target_arch = "aarch64")
         )))]
@@ -608,7 +608,7 @@ async fn teardown_live(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
             }
             wait_tokio_child(child).await
         }
-        #[cfg(all(windows, target_arch = "x86_64"))]
+        #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
         Inner::Windows(child) => {
             let containment = live.process_tree.terminate(None);
             let leader = if containment.is_ok() {
@@ -633,7 +633,7 @@ async fn teardown_live(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
             }
         }
         #[cfg(not(any(
-            all(windows, target_arch = "x86_64"),
+            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
             all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
             all(target_os = "macos", target_arch = "aarch64")
         )))]
@@ -707,7 +707,7 @@ impl SpawnedProgram {
                 collect_child_output(child, &mut stdout_pipe, &mut stderr_pipe, stdout, stderr)
                     .await
             }
-            #[cfg(all(windows, target_arch = "x86_64"))]
+            #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
             Inner::Windows(child) => {
                 let mut stdout_pipe = child.take_stdout();
                 let mut stderr_pipe = child.take_stderr();
@@ -722,7 +722,7 @@ impl SpawnedProgram {
                 child.wait().await
             }
             #[cfg(not(any(
-                all(windows, target_arch = "x86_64"),
+                all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
                 all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
                 all(target_os = "macos", target_arch = "aarch64")
             )))]

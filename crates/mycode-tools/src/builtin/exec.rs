@@ -10,9 +10,10 @@
 //! stdout/stderr are captured with the shared 50 KiB truncation cap; a
 //! non-zero exit is an error result, not a tool failure. Timeout and cancel
 //! await terminate-and-reap; dropping the future transfers cleanup ownership.
-//! Launch is Windows x86_64, Linux x86_64 GNU, and macOS Apple Silicon.
-//! Other Unix (musl, Android, BSD) is unsupported.
-#[cfg(all(windows, target_arch = "x86_64"))]
+//! Launch is Windows x64, Windows ARM64, Linux x86_64 GNU, and macOS Apple
+//! Silicon. Other Unix (musl, Android, BSD) is unsupported. Windows x64 and
+//! Windows ARM64 share the `CreateProcessW` path.
+#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod argv;
 mod env;
 mod image;
@@ -28,7 +29,7 @@ mod spawn;
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 mod unix;
-#[cfg(all(windows, target_arch = "x86_64"))]
+#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod windows;
 
 use std::ffi::OsString;
@@ -697,3 +698,6 @@ fn argument_summary(argv: &[String]) -> Value {
 fn display_exit(status: &std::process::ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
 }
+
+#[cfg(test)]
+mod launch_test;

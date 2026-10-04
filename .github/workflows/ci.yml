@@ -1,12 +1,15 @@
 # Single workflow for the product:
 #
-# 1. push/PR quality gate — rustfmt + clippy -D warnings on the native
-#    product runners:
+# 1. push/PR quality gate — rustfmt + clippy -D warnings, then the
+#    `native_image_launches` exec smoke test, on the native product runners:
 #      windows-latest  -> x86_64-pc-windows-msvc
+#      windows-11-arm  -> aarch64-pc-windows-msvc
 #      ubuntu-latest   -> x86_64-unknown-linux-gnu
 #      macos-latest    -> aarch64-apple-darwin
-#    No test suites exist. windows-latest is x64. Linux jobs install the
-#    GPUI/fontconfig/Wayland/XCB packages in .github/actions/linux-gpui-deps.
+#    No other test suite is run. windows-latest is x64. Windows ARM64 uses
+#    the native windows-11-arm image; it is not a cross-compile from
+#    windows-latest. Linux jobs install the GPUI/fontconfig/Wayland/XCB
+#    packages in .github/actions/linux-gpui-deps.
 #
 # 2. release — a push to main publishes `v<workspace version>` when that
 #    GitHub Release is missing any platform archive. The release body is
@@ -15,6 +18,7 @@
 #
 # Assets produced per release:
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
 #   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
 
@@ -49,6 +53,8 @@ jobs:
         include:
           - os: windows-latest
             host: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            host: aarch64-pc-windows-msvc
           - os: macos-latest
             host: aarch64-apple-darwin
           - os: ubuntu-latest
@@ -80,6 +86,9 @@ jobs:
           -p mycode-tools -p mycode-agent -p mycode-app
           --all-targets --locked -- -D warnings
 
+      - name: exec launches a program
+        run: cargo test -p mycode-tools --lib native_image_launches --locked -- --nocapture
+
   desktop:
     name: desktop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -90,6 +99,8 @@ jobs:
         include:
           - os: windows-latest
             host: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            host: aarch64-pc-windows-msvc
           - os: macos-latest
             host: aarch64-apple-darwin
           - os: ubuntu-latest
@@ -148,6 +159,8 @@ jobs:
           required = [
               f"mycode-desktop-{tag}-x86_64-pc-windows-msvc.zip",
               f"mycode-desktop-{tag}-x86_64-pc-windows-msvc.zip.sha256",
+              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip",
+              f"mycode-desktop-{tag}-aarch64-pc-windows-msvc.zip.sha256",
               f"mycode-desktop-{tag}-aarch64-apple-darwin.zip",
               f"mycode-desktop-{tag}-aarch64-apple-darwin.zip.sha256",
               f"mycode-desktop-{tag}-x86_64-unknown-linux-gnu.zip",
@@ -198,6 +211,9 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            binary: mycode-desktop.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             binary: mycode-desktop.exe
           - os: macos-latest
             target: aarch64-apple-darwin

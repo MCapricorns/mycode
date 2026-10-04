@@ -1,6 +1,6 @@
 # mycode
 
-本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。支持 Windows 10/11 x64、Linux x86_64（glibc）与 macOS Apple Silicon。
+本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。支持 Windows 10/11 x64、Windows 11 ARM64、Linux x86_64（glibc）与 macOS Apple Silicon。
 
 [许可证](LICENSE) · [文档](docs/README.md) · [发布](https://github.com/MCapricorns/mycode/releases) · [更新日志](CHANGELOG.md)
 
@@ -25,6 +25,7 @@ English notes are [below](#english).
 | 文件 | 平台 |
 | --- | --- |
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
+| `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
 | `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64（glibc） |
 
@@ -32,7 +33,7 @@ English notes are [below](#english).
 
 ## 从源码构建
 
-需要 Rust stable。Windows 使用 MSVC。Linux x86_64 还需要 pkg-config、fontconfig、freetype、xkbcommon、X11、xcb、Wayland、OpenSSL 和 libclang 的开发包。
+需要 Rust stable。Windows x64 与 Windows ARM64 都使用 MSVC。Linux x86_64 还需要 pkg-config、fontconfig、freetype、xkbcommon、X11、xcb、Wayland、OpenSSL 和 libclang 的开发包。
 
 ```text
 cargo build --release -p mycode-desktop
@@ -63,14 +64,15 @@ cargo build --release -p mycode-desktop
 
 ## 开发
 
-质量门与 CI 相同，目前没有测试套件：
+质量门与 CI 相同：格式、clippy，以及一次 `exec` 启动烟测。除此之外没有测试套件。
 
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-推送到 `main` 的 pull request 在 Windows x64、Linux x86_64 和 macOS Apple Silicon 上跑这两步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐三个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本号没变也一样：三个平台的 zip 或对应 `.sha256` 缺任意一个，这次推送仍会创建或更新 `v<version>` 并打包。六个文件都已经在该 Release 上时，才跳过打包。
+推送到 `main` 的 pull request 在 Windows x64、Windows ARM64、Linux x86_64 和 macOS Apple Silicon 上跑这三步。质量门通过后，如果 `Cargo.toml` 里的版本还没有带齐四个平台压缩包的 GitHub Release，就会自动创建 `v<version>`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。版本号没变也一样：四个平台的 zip 或对应 `.sha256` 缺任意一个，这次推送仍会创建或更新 `v<version>` 并打包。八个文件都已经在该 Release 上时，才跳过打包。
 
 ## 许可
 
@@ -116,6 +118,7 @@ a lock in Settings.
 | Asset | Platform |
 | --- | --- |
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
+| `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
 | `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 (glibc) |
 
@@ -123,7 +126,7 @@ Each zip has a `.sha256` sidecar. Intel macOS builds stopped after 0.4.0.
 
 ### Build
 
-Rust stable. MSVC on Windows. Linux x86_64 also needs the pkg-config,
+Rust stable. MSVC on Windows x64 and Windows ARM64. Linux x86_64 also needs the pkg-config,
 fontconfig, freetype, xkbcommon, X11, xcb, Wayland, OpenSSL, and libclang
 development packages.
 
@@ -159,21 +162,23 @@ Module boundaries and the path of one user message:
 
 ### Development
 
-CI is rustfmt and clippy. There is no test suite.
+CI is rustfmt, clippy, and one `exec` launch smoke test. There is no
+other test suite.
 
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-Pull requests to `main` run those gates on Windows x64, Linux x86_64,
-and macOS Apple Silicon. After the gates pass, a push to `main` publishes
-`v<version>` when that GitHub Release is missing any of the three platform
-archives. The body is the matching `CHANGELOG.md`
+Pull requests to `main` run those gates on Windows x64, Windows ARM64,
+Linux x86_64, and macOS Apple Silicon. After the gates pass, a push to
+`main` publishes `v<version>` when that GitHub Release is missing any of
+the four platform archives. The body is the matching `CHANGELOG.md`
 section, not generated commit notes. An unchanged version does not
 skip packaging. The push still creates or updates `v<version>` when any
-of the three platform zips or `.sha256` sidecars is missing, and skips
-packaging only when all of those files are already present.
+of the four platform zips or `.sha256` sidecars is missing, and skips
+packaging only when all eight files are already present.
 
 ### License
 
