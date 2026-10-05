@@ -449,11 +449,11 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. `for /f` runs
-    // `cmd /v:on /c certutil` while delayed expansion is off in this script,
-    // so the `!MYCODE_HASH_TARGET!` text reaches that child and the path is
-    // expanded there. A `)` or `%` in the path never appears on the `for`
-    // line. Calling another batch from `for /f` makes cmd lose this file.
+    // which does not expand `%VAR%` inside the value. `certutil` runs on a
+    // normal line: `for /f` of `certutil.exe` makes cmd lose this batch file.
+    // A redirected certutil file is UTF-16; the echo shim used by tests is
+    // not. PowerShell reads whichever encoding the file has and writes the
+    // 64 hex digits as ASCII.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
@@ -510,47 +510,27 @@ rem Same line as the delete: cmd has already read it, so removing this
 rem script does not hide `exit` and turn a good replace into errorlevel 1.
 del "%~f0" & exit /b 0
 :checkhash
-setlocal DisableDelayedExpansion
 set "HASHRESULT="
-set "SEEN="
-for /f "usebackq delims=" %%L in (`cmd /v:on /c certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256`) do (
-  if not defined SEEN set "SEEN=%%L"
-  set "LINE=%%L"
-  call :hashline
+set "HASHOUT=%~dp0mycode-hash.txt"
+set "HASHASCII=%~dp0mycode-hash-ascii.txt"
+del "%HASHOUT%" "%HASHASCII%" >nul 2>&1
+certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256 > "%HASHOUT%"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -EncodedCommand JABiAHkAdABlAHMAIAA9ACAAWwBTAHkAcwB0AGUAbQAuAEkATwAuAEYAaQBsAGUAXQA6ADoAUgBlAGEAZABBAGwAbABCAHkAdABlAHMAKAAkAGUAbgB2ADoASABBAFMASABPAFUAVAApAAoAJABlAG4AYwBvAGQAaQBuAGcAIAA9ACAAWwBTAHkAcwB0AGUAbQAuAFQAZQB4AHQALgBFAG4AYwBvAGQAaQBuAGcAXQA6ADoAQQBTAEMASQBJAAoAaQBmACAAKAAkAGIAeQB0AGUAcwAuAEwAZQBuAGcAdABoACAALQBnAGUAIAAyACAALQBhAG4AZAAgACQAYgB5AHQAZQBzAFsAMABdACAALQBlAHEAIAAyADUANQAgAC0AYQBuAGQAIAAkAGIAeQB0AGUAcwBbADEAXQAgAC0AZQBxACAAMgA1ADQAKQAgAHsAIAAkAGUAbgBjAG8AZABpAG4AZwAgAD0AIABbAFMAeQBzAHQAZQBtAC4AVABlAHgAdAAuAEUAbgBjAG8AZABpAG4AZwBdADoAOgBVAG4AaQBjAG8AZABlACAAfQAKACQAdABlAHgAdAAgAD0AIAAkAGUAbgBjAG8AZABpAG4AZwAuAEcAZQB0AFMAdAByAGkAbgBnACgAJABiAHkAdABlAHMAKQAKACQAdABlAHgAdAAgAD0AIAAkAHQAZQB4AHQAIAAtAHIAZQBwAGwAYQBjAGUAIAAnAFwAcwAnACwAIAAnACcACgAkAG0AYQB0AGMAaAAgAD0AIABbAHIAZQBnAGUAeABdADoAOgBNAGEAdABjAGgAKAAkAHQAZQB4AHQALAAgACcAWwAwAC0AOQBBAC0ARgBhAC0AZgBdAHsANgA0AH0AJwApAAoAaQBmACAAKAAtAG4AbwB0ACAAJABtAGEAdABjAGgALgBTAHUAYwBjAGUAcwBzACkAIAB7ACAAWwBDAG8AbgBzAG8AbABlAF0AOgA6AEUAcgByAG8AcgAuAFcAcgBpAHQAZQBMAGkAbgBlACgAJwBuAG8AIABzAGgAYQAyADUANgAgAGkAbgAgAGMAZQByAHQAdQB0AGkAbAAgAG8AdQB0AHAAdQB0ACcAKQA7ACAAZQB4AGkAdAAgADEAIAB9AAoAWwBTAHkAcwB0AGUAbQAuAEkATwAuAEYAaQBsAGUAXQA6ADoAVwByAGkAdABlAEEAbABsAFQAZQB4AHQAKAAkAGUAbgB2ADoASABBAFMASABBAFMAQwBJAEkALAAgACQAbQBhAHQAYwBoAC4AVgBhAGwAdQBlACAAKwAgAFsAYwBoAGEAcgBdADEAMAApAAoA
+if errorlevel 1 (
+  echo updater: could not read certutil output for [!MYCODE_HASH_TARGET!] 1>&2
+  del "%HASHOUT%" "%HASHASCII%" >nul 2>&1
+  exit /b 1
 )
-if not defined HASHRESULT goto hashmissing
-if /i "%HASHRESULT%"=="%EXPECTED%" (
-  endlocal
-  exit /b 0
+set /p HASHRESULT=<"%HASHASCII%"
+del "%HASHOUT%" "%HASHASCII%" >nul 2>&1
+if not defined HASHRESULT (
+  echo updater: certutil did not return a sha256 target [!MYCODE_HASH_TARGET!] 1>&2
+  exit /b 1
 )
-setlocal EnableDelayedExpansion
-echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
-endlocal
-endlocal
-exit /b 1
-:hashmissing
-setlocal EnableDelayedExpansion
-echo updater: certutil did not return a sha256 [!SEEN!] target [!MYCODE_HASH_TARGET!] 1>&2
-endlocal
-endlocal
-exit /b 1
-:hashline
-setlocal EnableDelayedExpansion
-set "CANDIDATE=!LINE!"
-set "CANDIDATE=!CANDIDATE: =!"
-if defined HASHRESULT (
-  endlocal
-  exit /b 0
+if /i not "!HASHRESULT!"=="!EXPECTED!" (
+  echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
+  exit /b 1
 )
-if not "!CANDIDATE:~64,1!"=="" (
-  endlocal
-  exit /b 0
-)
-if "!CANDIDATE:~63,1!"=="" (
-  endlocal
-  exit /b 0
-)
-endlocal & set "HASHRESULT=%CANDIDATE%"
 exit /b 0
 "#;
     template
@@ -783,9 +763,16 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.contains("cmd /v:on /c certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
+            script.contains(
+                "certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256 > \"%HASHOUT%\""
+            ),
             "{script}"
         );
+        assert!(
+            script.contains("WindowsPowerShell\\v1.0\\powershell.exe"),
+            "{script}"
+        );
+        assert!(script.contains("-EncodedCommand"), "{script}");
     }
 
     #[cfg(unix)]
@@ -1204,7 +1191,7 @@ mod tests {
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let count = dir.join("certutil-count.txt");
-        // The helper runs `certutil` with no extension, so PATH finds
+        // The script runs `certutil` with no extension, so PATH finds
         // certutil.cmd before System32's certutil.exe. The first call
         // hashes for real; the second prints a different hash.
         let wrapper = format!(
