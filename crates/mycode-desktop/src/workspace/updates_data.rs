@@ -241,6 +241,14 @@ impl Workspace {
         }
         if !dismissed
             && self.vm.view == MainView::Settings
+            && self.vm.settings_section == crate::view_model::SettingsSection::Models
+            && self.vm.provider_detail.is_some()
+        {
+            self.apply_action(DesktopAction::ProviderDetailOpened(None), cx);
+            dismissed = true;
+        }
+        if !dismissed
+            && self.vm.view == MainView::Settings
             && self.vm.settings_section == crate::view_model::SettingsSection::Web
             && self.vm.web_subview != crate::view_model::WebSubview::List
         {

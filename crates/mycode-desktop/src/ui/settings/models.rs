@@ -25,7 +25,13 @@ pub(super) fn render_models_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     match workspace.vm().models_subview {
-        crate::view_model::ModelsSubview::List => render_models_list_page(workspace, cx),
+        crate::view_model::ModelsSubview::List => {
+            if workspace.vm().provider_detail.is_some() {
+                super::provider_detail::render_provider_detail(workspace, window, cx)
+            } else {
+                render_models_list_page(workspace, window, cx)
+            }
+        }
         crate::view_model::ModelsSubview::Catalog => {
             render_models_catalog_page(workspace, window, cx)
         }
@@ -35,13 +41,33 @@ pub(super) fn render_models_section(
     }
 }
 
-/// The Models landing page: configured provider rows plus the two add paths.
-fn render_models_list_page(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+/// The Models landing page: default model, thinking, and provider cards.
+fn render_models_list_page(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let Some(settings) = workspace.vm().settings.clone() else {
         return div().into_any_element();
     };
+    let menu_open = workspace.vm().model_menu_open;
+    let picker = menu_open.then(|| {
+        crate::ui::model_picker::render_model_picker(
+            workspace,
+            window,
+            crate::ui::model_picker::ModelPickerTarget::Session,
+            cx,
+        )
+    });
+    let model_label = crate::ui::model_picker::selected_model_label(workspace.vm());
+    let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
+    let current_level = crate::view_model::selected_reasoning_level(workspace.vm()).to_owned();
+    let thinking: Vec<(String, String)> = levels
+        .iter()
+        .map(|level| (level.clone(), crate::ui::chat::reasoning_row_label(level)))
+        .collect();
     let catalog = workspace.vm().catalog.clone();
-    let mut provider_rows: Vec<(usize, String, String, String, usize, bool, bool)> = Vec::new();
+    let mut provider_rows: Vec<(usize, String, String, usize, bool, bool)> = Vec::new();
     for (index, provider) in settings.providers.iter().enumerate() {
         let name = catalog
             .as_ref()
@@ -62,7 +88,6 @@ fn render_models_list_page(workspace: &mut Workspace, cx: &mut Context<Workspace
         provider_rows.push((
             index,
             name,
-            provider.kind.clone(),
             host,
             provider.models.len(),
             keyed,
@@ -71,68 +96,149 @@ fn render_models_list_page(workspace: &mut Workspace, cx: &mut Context<Workspace
     }
     let provider_row_elements: Vec<AnyElement> = provider_rows
         .into_iter()
-        .map(|(index, name, kind, host, models, keyed, enabled)| {
-            provider_row(index, name, kind, host, models, keyed, enabled, cx)
+        .map(|(index, name, host, models, keyed, enabled)| {
+            provider_row(index, name, host, models, keyed, enabled, cx)
         })
         .collect();
     let theme = cx.theme();
     let providers_empty = provider_row_elements.is_empty();
-    settings_card(
-        "providers",
-        t("Model providers", "模型服务商"),
-        Some(t(
-            "Pick a provider, paste its API key, done. Every listed model becomes selectable \
-             in the composer.",
-            "选一个服务商,粘贴 API 密钥即可。列出的每个模型都会出现在输入框的模型菜单中。",
-        )),
-        theme,
-        vec![
-            div()
-                .when(providers_empty, |this| {
-                    this.child(div().text_xs().opacity(0.5).child(t(
-                        "No providers yet — add one below",
-                        "还没有服务商 — 在下方添加",
-                    )))
-                })
-                .children(provider_row_elements)
-                .into_any_element(),
-            div()
-                .id("add-provider-row")
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap_2()
-                .pt_1()
-                .child(
-                    Button::new("add-from-catalog")
-                        .icon(IconName::Plus)
-                        .label(t("Add from catalog\u{2026}", "从目录添加\u{2026}"))
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_show_models_subview(
-                                crate::view_model::ModelsSubview::Catalog,
-                                cx,
-                            );
-                        })),
-                )
-                .child(
-                    Button::new("add-custom-endpoint")
-                        .icon(IconName::Terminal)
-                        .label(t("Add custom endpoint\u{2026}", "添加自定义端点\u{2026}"))
-                        .small()
-                        .outline()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_show_models_subview(
-                                crate::view_model::ModelsSubview::Custom,
-                                cx,
-                            );
-                        })),
-                )
-                .into_any_element(),
-        ],
-    )
-    .into_any_element()
+    div()
+        .id("models-list-page")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(
+            settings_card(
+                "default-model",
+                t("Default model", "默认模型"),
+                Some(t(
+                    "Pick a provider, then search. Starred and recent models stay at the top.",
+                    "先选服务商，再搜索。星标和最近使用的模型固定在顶部。",
+                )),
+                theme,
+                vec![
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("default-model-toggle")
+                                .h(px(36.))
+                                .px_2()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .rounded(skin::radius_control())
+                                .border_1()
+                                .border_color(skin::glass_border(theme))
+                                .bg(skin::frost(theme))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(skin::frost_hover(theme)))
+                                .on_click(cx.listener(|workspace, _, window, cx| {
+                                    let open = !workspace.vm().model_menu_open;
+                                    workspace.on_toggle_model_menu(open, window, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .truncate()
+                                        .text_sm()
+                                        .child(model_label),
+                                )
+                                .child(
+                                    Icon::new(IconName::ChevronDown)
+                                        .xsmall()
+                                        .text_color(theme.muted_foreground),
+                                ),
+                        )
+                        .when_some(picker, |this, picker| this.child(picker))
+                        .into_any_element(),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(t("Thinking", "思考")),
+                        )
+                        .child(super::widgets::choice_chips(
+                            "session-think",
+                            &thinking,
+                            &current_level,
+                            |workspace, level, cx| workspace.on_select_reasoning(level, cx),
+                            cx,
+                        ))
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        )
+        .child(
+            settings_card(
+                "providers",
+                t("Providers", "服务商"),
+                Some(t(
+                    "Connected means a key is stored. Open a provider to replace the key or sign in.",
+                    "已连接表示密钥已保存。打开服务商可更换密钥或登录。",
+                )),
+                theme,
+                vec![
+                    div()
+                        .when(providers_empty, |this| {
+                            this.child(div().text_xs().text_color(theme.muted_foreground).child(t(
+                                "No providers yet — add one below",
+                                "还没有服务商 — 在下方添加",
+                            )))
+                        })
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(provider_row_elements)
+                        .into_any_element(),
+                    div()
+                        .id("add-provider-row")
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            Button::new("add-from-catalog")
+                                .icon(IconName::Plus)
+                                .label(t("Add from catalog\u{2026}", "从目录添加\u{2026}"))
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_models_subview(
+                                        crate::view_model::ModelsSubview::Catalog,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("add-custom-endpoint")
+                                .icon(IconName::Terminal)
+                                .label(t("Add custom endpoint\u{2026}", "添加自定义端点\u{2026}"))
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_models_subview(
+                                        crate::view_model::ModelsSubview::Custom,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        )
+        .into_any_element()
 }
 
 /// The catalog picker page: search + every provider from models.dev; picking
@@ -212,6 +318,11 @@ fn render_models_catalog_page(
     let has_preset = workspace.vm().active_preset.is_some();
     let header = super::subview_header(
         if has_preset {
+            t("Catalog", "目录")
+        } else {
+            t("Providers", "服务商")
+        },
+        if has_preset {
             t("Configure provider", "配置服务商")
         } else {
             t("Add from catalog", "从目录添加")
@@ -269,11 +380,9 @@ fn render_models_catalog_page(
         .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn provider_row(
     index: usize,
     name: String,
-    kind: String,
     host: String,
     models: usize,
     keyed: bool,
@@ -281,29 +390,76 @@ fn provider_row(
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let theme = cx.theme();
+    let desk = crate::ui::desk::Desk::of(theme);
     div()
         .id(format!("provider-row-{index}"))
         .w_full()
         .flex()
         .flex_row()
         .items_center()
-        .gap_3()
+        .gap_2()
         .p_2()
-        .rounded_md()
+        .rounded(skin::radius_control())
         .border_1()
-        .border_color(theme.border)
-        .child(row_header(
-            &name,
-            format!(
-                "{kind} \u{b7} {host} \u{b7} {models} {}",
-                t("model(s)", "个模型")
-            ),
-        ))
-        .child(Icon::new(IconName::KeyRound).small().text_color(if keyed {
-            theme.success
-        } else {
-            theme.danger
-        }))
+        .border_color(skin::glass_border(theme))
+        .bg(skin::frost(theme))
+        .child(
+            div()
+                .id(format!("provider-open-{index}"))
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .cursor_pointer()
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    let Some(id) = workspace
+                        .vm()
+                        .settings
+                        .as_ref()
+                        .and_then(|settings| settings.providers.get(index))
+                        .map(|provider| provider.id.clone())
+                    else {
+                        return;
+                    };
+                    workspace.on_open_provider_detail(&id, cx);
+                }))
+                .child(row_header(
+                    &name,
+                    format!("{host} \u{b7} {models} {}", t("model(s)", "个模型")),
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(if keyed {
+                            theme.success
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(crate::ui::lamp(if keyed {
+                            theme.success
+                        } else {
+                            desk.faint
+                        }))
+                        .child(if keyed {
+                            t("Connected", "已连接")
+                        } else {
+                            t("Not connected", "未连接")
+                        }),
+                )
+                .child(
+                    Icon::new(IconName::ChevronRight)
+                        .xsmall()
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground),
+                ),
+        )
         .child(
             Switch::new(format!("provider-toggle-{index}"))
                 .checked(enabled)
@@ -358,9 +514,9 @@ fn preset_row(
                 .label(t("Add", "添加"))
                 .small()
                 .outline()
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     let _ = weak.update(cx, |workspace, cx| {
-                        workspace.on_open_preset(&id, cx);
+                        workspace.on_open_preset(&id, window, cx);
                     });
                 }),
         )
@@ -423,20 +579,31 @@ fn render_preset_form(
     let Some(preset) = catalog.provider(provider_id) else {
         return div().into_any_element();
     };
+    let model_search = workspace.preset_model_search_input(window, cx);
     let name = preset.name.clone();
-    let models: Vec<String> = preset.models.iter().map(|model| model.id.clone()).collect();
+    let query = workspace.vm().preset_model_query.to_lowercase();
+    let models: Vec<(String, String)> = preset
+        .models
+        .iter()
+        .filter(|model| {
+            query.is_empty()
+                || model.id.to_lowercase().contains(&query)
+                || model.name.to_lowercase().contains(&query)
+        })
+        .map(|model| (model.id.clone(), model.name.clone()))
+        .collect();
     let checked: Vec<String> = workspace.vm().preset_models.clone();
-    let selection_label = if models.is_empty() {
-        t("no models", "无模型").to_owned()
-    } else {
-        format!(
-            "{} / {} {}",
-            checked.len(),
-            models.len(),
-            t("models", "个模型")
-        )
-    };
-    let menu_open = workspace.vm().preset_model_menu_open;
+    let selected_count = preset
+        .models
+        .iter()
+        .filter(|model| checked.contains(&model.id))
+        .count();
+    let selection_label = format!(
+        "{} / {} {}",
+        selected_count,
+        preset.models.len(),
+        t("models", "个模型")
+    );
     let provider_id_owned = provider_id.to_owned();
     let theme = cx.theme();
     div()
@@ -460,39 +627,45 @@ fn render_preset_form(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_xs().opacity(0.6).child(t(
-                    "Models — all are selected by default; uncheck what you do not need",
-                    "模型 — 默认全选;不需要的取消勾选即可",
+                .child(div().text_xs().opacity(0.6).child(format!(
+                    "{} — {}",
+                    selection_label,
+                    t(
+                        "all are selected by default; uncheck what you do not need",
+                        "默认全选；不需要的取消勾选即可",
+                    )
                 )))
-                .child(
-                    Button::new("preset-model-chip")
-                        .label(selection_label)
-                        .small()
-                        .outline()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            let open = !workspace.vm().preset_model_menu_open;
-                            workspace.apply_action(DesktopAction::PresetModelMenuToggled(open), cx);
-                        })),
-                )
-                .when(menu_open, |this| {
-                    // Lazy rows via `uniform_list` under a definite pixel
-                    // height — same fix as the catalog provider list: only
-                    // visible models are measured and painted per frame.
+                .child(div().h(px(32.)).text_sm().child(Input::new(&model_search)))
+                .child({
                     let weak = cx.weak_entity();
                     let list_models = models.clone();
                     let list_checked = checked.clone();
-                    let list_height = px((list_models.len().clamp(1, 8) as f32) * 28. + 2.);
-                    this.child(
-                        div()
-                            .id("preset-model-list")
-                            .w_full()
-                            .h(list_height)
-                            .overflow_hidden()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(skin::popover(theme))
-                            .child(
+                    let shown = list_models.len().clamp(1, 8);
+                    let list_height = px((shown as f32) * 28. + 2.);
+                    let empty = models.is_empty();
+                    div()
+                        .id("preset-model-list")
+                        .w_full()
+                        .h(list_height)
+                        .overflow_hidden()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(skin::popover(theme))
+                        .when(empty, |this| {
+                            this.child(
+                                div()
+                                    .px_2()
+                                    .h(px(28.))
+                                    .flex()
+                                    .items_center()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child(t("No matches", "没有匹配的模型")),
+                            )
+                        })
+                        .when(!empty, |this| {
+                            this.child(
                                 gpui_kit::uniform_list(
                                     "preset-model-rows",
                                     list_models.len(),
@@ -500,7 +673,7 @@ fn render_preset_form(
                                         let theme = cx.theme().clone();
                                         range
                                             .map(|index| {
-                                                let model = &list_models[index];
+                                                let (model, _name) = &list_models[index];
                                                 preset_model_row(
                                                     model,
                                                     list_checked.contains(model),
@@ -512,8 +685,8 @@ fn render_preset_form(
                                     },
                                 )
                                 .h_full(),
-                            ),
-                    )
+                            )
+                        })
                 }),
         )
         .when(
@@ -725,6 +898,7 @@ fn render_custom_provider_page(
         cx,
     );
     let header = super::subview_header(
+        t("Providers", "服务商"),
         t("Add custom endpoint", "添加自定义端点"),
         Some(t(
             "Any endpoint speaking one of the three wire protocols.",

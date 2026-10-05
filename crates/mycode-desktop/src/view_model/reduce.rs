@@ -497,7 +497,16 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 true
             });
         }
-        DesktopAction::SubagentMenuToggled(menu) => state.subagent_menu = menu,
+        DesktopAction::SubagentMenuToggled(menu) => {
+            let opening = menu.is_some();
+            state.subagent_menu = menu;
+            state.model_menu_browse = None;
+            state.picker_query.clear();
+            if opening {
+                state.model_menu_open = false;
+                state.reasoning_menu_open = false;
+            }
+        }
         DesktopAction::SettingsSaved {
             revision,
             edit_epoch,
@@ -576,11 +585,21 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::ShowMainView(view) => {
             state.view = view;
+            state.provider_detail = None;
             // Crossing views closes every floating menu so no stale layer
             // renders above the destination view.
             close_floating_menus(state);
         }
-        DesktopAction::ShowSettingsSection(section) => state.settings_section = section,
+        DesktopAction::ShowSettingsSection(section) => {
+            if section != super::SettingsSection::Models {
+                state.provider_detail = None;
+            }
+            state.model_menu_open = false;
+            state.model_menu_browse = None;
+            state.picker_query.clear();
+            state.subagent_menu = None;
+            state.settings_section = section;
+        }
         DesktopAction::ProjectMenuToggled(open) => state.project_menu_open = open,
         DesktopAction::CatalogLoaded {
             document,
@@ -600,6 +619,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             session_workspaces,
             trusted_projects,
             active_workspace: active,
+            recent_models,
+            starred_models,
         } => {
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
@@ -608,6 +629,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.session_workspaces = session_workspaces;
             state.trusted_projects = trusted_projects;
             state.active_workspace = active;
+            state.recent_models = recent_models;
+            state.starred_models = starred_models;
             sync_workspace_roots(state);
             state.auto_update = auto_update;
             if selected_provider.is_some() {
@@ -680,20 +703,30 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ModelSelected(model) => model_selected(state, model),
         DesktopAction::ModelMenuToggled(open) => {
             state.model_menu_open = open;
+            state.model_menu_browse = None;
+            state.picker_query.clear();
             if open {
                 state.reasoning_menu_open = false;
-                if state.model_menu_browse.is_none() {
-                    state.model_menu_browse = state.selected_provider.clone();
-                }
-            } else {
-                state.model_menu_browse = None;
+                state.subagent_menu = None;
             }
         }
         DesktopAction::ModelMenuBrowse(provider) => {
-            state.model_menu_open = true;
             state.reasoning_menu_open = false;
-            state.model_menu_browse = Some(provider);
+            state.model_menu_browse = provider;
+            state.picker_query.clear();
         }
+        DesktopAction::PickerQueryChanged(query) => state.picker_query = query,
+        DesktopAction::ModelStarToggled { provider, model } => {
+            let _ = mycode_config::toggle_star(&mut state.starred_models, &provider, &model);
+        }
+        DesktopAction::SettingsQueryChanged(query) => state.settings_query = query,
+        DesktopAction::ProviderDetailOpened(provider) => {
+            state.provider_detail = provider;
+            state.model_menu_open = false;
+            state.model_menu_browse = None;
+            state.picker_query.clear();
+        }
+        DesktopAction::PresetModelQueryChanged(query) => state.preset_model_query = query,
         DesktopAction::ReasoningMenuToggled(open) => {
             state.reasoning_menu_open = open;
             if open {
@@ -736,8 +769,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.models_subview = view;
             state.active_preset = None;
             state.preset_model_menu_open = false;
+            state.preset_model_query.clear();
             state.provider_kind_menu_open = false;
             state.mcp_transport_menu_open = false;
+            state.provider_detail = None;
         }
         DesktopAction::ShowWebSubview(view) => state.web_subview = view,
         DesktopAction::ShowMcpSubview(view) => {
@@ -802,6 +837,8 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.workspace_menu_open = false;
     state.workspace_rename_open = false;
     state.model_menu_open = false;
+    state.model_menu_browse = None;
+    state.picker_query.clear();
     state.reasoning_menu_open = false;
     state.subagent_menu = None;
     state.preset_model_menu_open = false;

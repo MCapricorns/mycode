@@ -4,6 +4,7 @@
 mod chat;
 mod context;
 pub(crate) mod desk;
+pub(crate) mod model_picker;
 pub(crate) mod project_picker;
 mod settings;
 mod sidebar;

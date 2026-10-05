@@ -414,32 +414,6 @@ fn session_row(
         ))
 }
 
-/// Section caption used by the sidebar and the model inspector.
-pub(super) fn pane_head(
-    label: &str,
-    count: Option<&str>,
-    color: gpui_kit::Hsla,
-    theme: &Theme,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    div()
-        .id(format!("pane-head-{label}"))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .px_3()
-        .pt(px(10.))
-        .pb(px(8.))
-        .border_b_1()
-        .border_color(theme.border)
-        .text_xs()
-        .text_color(color)
-        .child(div().min_w_0().truncate().child(label.to_owned()))
-        .when_some(count.map(str::to_owned), |this, count| {
-            this.child(div().flex_shrink_0().child(count))
-        })
-}
-
 fn render_sidebar_footer(
     _workspace: &mut Workspace,
     view: MainView,

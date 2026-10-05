@@ -1,6 +1,5 @@
-//! The full-page settings view: a secondary left nav (General / Models /
-//! Agents / Skills / MCP / Web / Data / About) and a sectioned content pane
-//! with switch rows and clean forms.
+//! The full-page settings shell: a top bar back to the desk, a grouped left
+//! nav, and a sectioned content pane.
 //!
 //! Rendering order matters: entities are created and row lists materialized
 //! with `&mut Context` first, and only then is `cx.theme()` borrowed for the
@@ -11,6 +10,7 @@ mod data;
 mod general;
 mod mcp;
 mod models;
+mod provider_detail;
 mod skills;
 mod web;
 mod widgets;
@@ -22,6 +22,7 @@ pub(crate) use web::BackendForm;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Input;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -39,11 +40,14 @@ pub(super) fn render_settings_view(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    let search = workspace.settings_search_input(window, cx);
     let section = workspace.vm().settings_section;
+    let query = workspace.vm().settings_query.clone();
     let settings_ready = workspace.vm().settings.is_some();
     let header_meta = workspace.vm().settings.clone().map(|s| (s.dirty, s.saving));
-    let nav = render_settings_nav(workspace, section, cx).into_any_element();
+    let nav = render_settings_nav(workspace, section, &query, cx).into_any_element();
     let theme = cx.theme();
+    let border = crate::ui::skin::glass_border(theme);
     div()
         .id("settings-view")
         .flex_1()
@@ -54,66 +58,97 @@ pub(super) fn render_settings_view(
         .child(
             div()
                 .id("settings-header")
+                .h(px(56.))
                 .flex()
                 .flex_row()
                 .items_center()
                 .justify_between()
-                .px_6()
-                .py_2()
+                .px_4()
+                .gap_3()
                 .border_b_1()
-                .border_color(theme.border)
+                .border_color(border)
+                .bg(crate::ui::skin::glass(theme))
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap_3()
-                        .child(
-                            Button::new("settings-back")
-                                .icon(IconName::ArrowLeft)
-                                .label(t("Back", "返回"))
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_show_main_view(MainView::Chat, cx);
-                                })),
-                        )
+                        .min_w_0()
                         .child(
                             div()
+                                .id("settings-back")
+                                .h(px(40.))
+                                .px_3()
                                 .flex()
                                 .flex_row()
                                 .items_center()
                                 .gap_2()
-                                .child(
-                                    div()
-                                        .text_lg()
-                                        .font_weight(gpui_kit::FontWeight::BOLD)
-                                        .child(t("Settings", "设置")),
-                                )
+                                .flex_shrink_0()
+                                .rounded(crate::ui::skin::radius_control())
+                                .border_1()
+                                .border_color(border)
+                                .bg(crate::ui::skin::frost(theme))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_main_view(MainView::Chat, cx);
+                                }))
+                                .child(Icon::new(IconName::ArrowLeft).with_size(px(16.)))
                                 .child(
                                     div()
                                         .text_sm()
+                                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                        .child(t("Back to desk", "返回工作台")),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(6.))
+                                        .h(px(18.))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .text_xs()
                                         .text_color(theme.muted_foreground)
-                                        .child(section.label()),
+                                        .child("Esc"),
                                 ),
+                        )
+                        .child(
+                            div()
+                                .text_lg()
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .child(t("Settings", "设置")),
                         ),
                 )
-                .child(div().flex().flex_row().items_center().gap_2().when_some(
-                    header_meta,
-                    |this, (dirty, saving)| {
-                        this.child(
-                            Button::new("settings-save")
-                                .icon(IconName::Check)
-                                .label(t("Save changes", "保存更改"))
-                                .small()
-                                .primary()
-                                .disabled(!dirty || saving)
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_save_settings(cx);
-                                })),
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(220.))
+                                .h(px(32.))
+                                .text_sm()
+                                .child(Input::new(&search)),
                         )
-                    },
-                )),
+                        .when_some(header_meta, |this, (dirty, saving)| {
+                            this.child(
+                                Button::new("settings-save")
+                                    .icon(IconName::Check)
+                                    .label(t("Save changes", "保存更改"))
+                                    .small()
+                                    .primary()
+                                    .disabled(!dirty || saving)
+                                    .on_click(cx.listener(|workspace, _, _, cx| {
+                                        workspace.on_save_settings(cx);
+                                    })),
+                            )
+                        }),
+                ),
         )
         .child(
             div()
@@ -141,6 +176,27 @@ pub(super) fn render_settings_view(
                                 .gap_4()
                                 .px_6()
                                 .py_4()
+                                .child(
+                                    div()
+                                        .id("settings-page-header")
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .pb_1()
+                                        .child(
+                                            div()
+                                                .text_lg()
+                                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                                .child(section.label()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme.muted_foreground)
+                                                .whitespace_normal()
+                                                .child(section.hint()),
+                                        ),
+                                )
                                 .when(!settings_ready, |this| {
                                     this.child(div().text_sm().opacity(0.6).child(t(
                                         "Loading settings\u{2026}",
@@ -156,7 +212,7 @@ pub(super) fn render_settings_view(
                                             models::render_models_section(workspace, window, cx)
                                         }
                                         SettingsSection::Agents => {
-                                            agents::render_agents_section(workspace, cx)
+                                            agents::render_agents_section(workspace, window, cx)
                                         }
                                         SettingsSection::Skills => {
                                             skills::render_skills_section(workspace, cx)
@@ -263,10 +319,11 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     ]
 }
 
-/// Settings navigation: grouped rows with an icon, label, and count.
+/// Settings navigation: grouped single-line rows, filtered by the top-bar search.
 fn render_settings_nav(
     workspace: &Workspace,
     section: SettingsSection,
+    query: &str,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let badges = nav_badges(workspace, cx);
@@ -277,12 +334,18 @@ fn render_settings_nav(
     for (group, members) in SettingsSection::GROUPS {
         let mut rows: Vec<AnyElement> = Vec::new();
         for candidate in members.iter().copied() {
+            if !section_matches(candidate, query) {
+                continue;
+            }
             let badge = badges
                 .iter()
                 .find(|(s, _)| *s == candidate)
                 .map(|(_, badge)| *badge)
                 .unwrap_or_default();
             rows.push(nav_row(candidate, candidate == section, badge, theme, cx));
+        }
+        if rows.is_empty() {
+            continue;
         }
         groups.push(
             div()
@@ -293,7 +356,7 @@ fn render_settings_nav(
                 .child(
                     div()
                         .px_2()
-                        .pt(px(8.))
+                        .pt(px(10.))
                         .pb(px(2.))
                         .text_xs()
                         .text_color(desk.faint)
@@ -305,7 +368,7 @@ fn render_settings_nav(
     }
     div()
         .id("settings-nav")
-        .w(px(212.))
+        .w(px(236.))
         .h_full()
         .flex()
         .flex_col()
@@ -313,12 +376,6 @@ fn render_settings_nav(
         .border_r_1()
         .border_color(crate::ui::skin::glass_border(theme))
         .bg(crate::ui::skin::glass_sidebar(theme))
-        .child(crate::ui::sidebar::pane_head(
-            t("Settings", "设置"),
-            None,
-            desk.faint,
-            theme,
-        ))
         .child(
             div()
                 .id("settings-nav-groups")
@@ -360,8 +417,17 @@ fn render_settings_nav(
         )
 }
 
-/// One nav row: index, icon, label + hint, and the badge column.
-#[allow(clippy::too_many_arguments)]
+fn section_matches(section: SettingsSection, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_lowercase();
+    section.label().to_lowercase().contains(&query)
+        || section.hint().to_lowercase().contains(&query)
+}
+
+/// One nav row: icon, label, and the badge column.
 fn nav_row(
     candidate: SettingsSection,
     selected: bool,
@@ -376,20 +442,17 @@ fn nav_row(
     };
     div()
         .id(format!("settings-nav-{}", candidate.id()))
+        .h(px(36.))
         .flex()
         .flex_row()
         .items_center()
         .gap_2()
-        .pl(px(6.))
-        .pr_2()
-        .py(px(4.))
-        .rounded(px(3.))
-        .border_l_2()
-        .border_color(theme.transparent)
+        .px_2()
+        .rounded(crate::ui::skin::radius_control())
         .cursor_pointer()
         .when(selected, |this| {
             this.bg(crate::ui::skin::frost_accent(theme))
-                .border_color(theme.primary)
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
         })
         .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
         .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -408,24 +471,10 @@ fn nav_row(
             div()
                 .flex_1()
                 .min_w_0()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(ink)
-                        .when(selected, |this| {
-                            this.font_weight(gpui_kit::FontWeight::MEDIUM)
-                        })
-                        .child(candidate.label()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .overflow_hidden()
-                        .child(candidate.hint()),
-                ),
+                .truncate()
+                .text_sm()
+                .text_color(ink)
+                .child(candidate.label()),
         )
         .when_some(badge.lamp, |this, color| this.child(crate::ui::lamp(color)))
         .when_some(badge.count, |this, count| {
@@ -449,13 +498,16 @@ fn nav_row(
         .into_any_element()
 }
 
-/// A secondary-page header: back arrow, title, and optional hint.
+/// A nested-page header. The label names the page this control returns to,
+/// and it is not the control that leaves settings for the desk.
 pub(super) fn subview_header(
+    back_label: &str,
     title: &str,
     hint: Option<&str>,
     on_back: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    let theme = cx.theme();
     div()
         .id("subview-header")
         .flex()
@@ -464,14 +516,26 @@ pub(super) fn subview_header(
         .gap_3()
         .pb_1()
         .child(
-            Button::new("subview-back")
-                .icon(IconName::ArrowLeft)
-                .label(t("Back", "返回"))
-                .small()
-                .ghost()
+            div()
+                .id("subview-back")
+                .h(px(32.))
+                .px_2()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .flex_shrink_0()
+                .rounded(crate::ui::skin::radius_control())
+                .border_1()
+                .border_color(crate::ui::skin::glass_border(theme))
+                .bg(crate::ui::skin::frost(theme))
+                .cursor_pointer()
+                .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     on_back(workspace, cx);
-                })),
+                }))
+                .child(Icon::new(IconName::ArrowLeft).with_size(px(14.)))
+                .child(div().text_sm().child(back_label.to_owned())),
         )
         .child(
             div()

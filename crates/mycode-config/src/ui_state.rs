@@ -2,8 +2,9 @@
 //! of truth for credentials or product behavior.
 //!
 //! Holds the recent project list, the last opened project, the update
-//! preference, and the last selected provider/model so the desktop reopens
-//! where the user left off. Missing or invalid documents reset to defaults.
+//! preference, the last selected provider/model, and the model picker's
+//! recent and starred pins so the desktop reopens where the user left off.
+//! Missing or invalid documents reset to defaults.
 use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
@@ -36,6 +37,12 @@ pub const MAX_TRUSTED_PROJECTS: usize = 64;
 const MAX_SESSION_ID_BYTES: usize = 64;
 /// Maximum length of one remembered project path.
 const MAX_PROJECT_PATH_BYTES: usize = 1024;
+/// Recent model pins kept at the front of the picker.
+pub const MAX_RECENT_MODELS: usize = 8;
+/// Starred model pins kept at the front of the picker.
+pub const MAX_STARRED_MODELS: usize = 24;
+/// Maximum characters in one provider or model id on a pin.
+const MAX_MODEL_PIN_CHARS: usize = 256;
 
 /// One named workspace: a set of folders plus the chats grouped under it.
 ///
@@ -62,6 +69,71 @@ impl WorkspaceDef {
             folders,
         }
     }
+}
+
+/// One provider and model the picker can jump to without scrolling.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPin {
+    /// Provider id.
+    pub provider: String,
+    /// Model id.
+    pub model: String,
+}
+
+impl ModelPin {
+    /// Builds one pin.
+    #[must_use]
+    pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.into(),
+        }
+    }
+}
+
+/// Moves `provider`/`model` to the front of `recent` and drops the tail past
+/// [`MAX_RECENT_MODELS`]. Invalid ids are ignored.
+pub fn remember_model(recent: &mut Vec<ModelPin>, provider: &str, model: &str) {
+    if !valid_pin_part(provider) || !valid_pin_part(model) {
+        return;
+    }
+    recent.retain(|pin| pin.provider != provider || pin.model != model);
+    recent.insert(
+        0,
+        ModelPin {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+        },
+    );
+    recent.truncate(MAX_RECENT_MODELS);
+}
+
+/// Stars `provider`/`model`, or removes the pin when it is already starred.
+///
+/// Returns whether the pair is starred after the toggle. Invalid ids leave
+/// the list unchanged and return `false`.
+#[must_use]
+pub fn toggle_star(starred: &mut Vec<ModelPin>, provider: &str, model: &str) -> bool {
+    if !valid_pin_part(provider) || !valid_pin_part(model) {
+        return false;
+    }
+    if let Some(index) = starred
+        .iter()
+        .position(|pin| pin.provider == provider && pin.model == model)
+    {
+        starred.remove(index);
+        return false;
+    }
+    starred.insert(
+        0,
+        ModelPin {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+        },
+    );
+    starred.truncate(MAX_STARRED_MODELS);
+    true
 }
 
 /// Durable desktop UI state.
@@ -101,6 +173,13 @@ pub struct UiState {
     /// Opening a folder does not add it here.
     #[serde(default)]
     pub trusted_projects: Vec<String>,
+    /// Models picked from the composer or the default-model control, newest
+    /// first. Advisory: a missing provider is dropped at render time.
+    #[serde(default)]
+    pub recent_models: Vec<ModelPin>,
+    /// Models the user starred in the picker, newest first.
+    #[serde(default)]
+    pub starred_models: Vec<ModelPin>,
 }
 
 impl Default for UiState {
@@ -117,6 +196,8 @@ impl Default for UiState {
             session_workspaces: Vec::new(),
             active_workspace: None,
             trusted_projects: Vec::new(),
+            recent_models: Vec::new(),
+            starred_models: Vec::new(),
         }
     }
 }
@@ -318,8 +399,28 @@ impl UiState {
                 return Err(invalid());
             }
         }
+        validate_pins(&self.recent_models, MAX_RECENT_MODELS)?;
+        validate_pins(&self.starred_models, MAX_STARRED_MODELS)?;
         Ok(())
     }
+}
+
+fn validate_pins(pins: &[ModelPin], cap: usize) -> Result<(), ConfigError> {
+    if pins.len() > cap {
+        return Err(ConfigError::authority_rejection());
+    }
+    if pins
+        .iter()
+        .any(|pin| !valid_pin_part(&pin.provider) || !valid_pin_part(&pin.model))
+    {
+        return Err(ConfigError::authority_rejection());
+    }
+    Ok(())
+}
+
+fn valid_pin_part(value: &str) -> bool {
+    let len = value.chars().count();
+    (1..=MAX_MODEL_PIN_CHARS).contains(&len) && !value.chars().any(char::is_control)
 }
 
 fn valid_workspace_id(value: &str) -> bool {
@@ -412,4 +513,62 @@ fn decode_ui_state(bytes: &[u8]) -> Result<(UiState, bool), ConfigError> {
     }
     envelope.state.validate()?;
     Ok((envelope.state, decoded.migrated))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MAX_RECENT_MODELS, MAX_STARRED_MODELS, ModelPin, decode_ui_state, remember_model,
+        toggle_star,
+    };
+
+    #[test]
+    fn missing_pin_fields_decode_empty() {
+        let bytes = br#"{"formatVersion":1,"kind":"mycode-ui-state"}"#;
+        let (state, _) = decode_ui_state(bytes).expect("legacy ui.json");
+        assert!(state.recent_models.is_empty());
+        assert!(state.starred_models.is_empty());
+        assert!(state.auto_update);
+    }
+
+    #[test]
+    fn remember_model_dedupes_and_caps() {
+        let mut recent = Vec::new();
+        remember_model(&mut recent, "openai", "gpt-4");
+        remember_model(&mut recent, "openai", "gpt-4");
+        assert_eq!(recent.len(), 1);
+        for index in 0..MAX_RECENT_MODELS + 2 {
+            remember_model(&mut recent, "openai", &format!("m{index}"));
+        }
+        assert_eq!(recent.len(), MAX_RECENT_MODELS);
+        assert_eq!(recent[0].model, format!("m{}", MAX_RECENT_MODELS + 1));
+        remember_model(&mut recent, "openai\n", "bad");
+        assert_eq!(recent.len(), MAX_RECENT_MODELS);
+    }
+
+    #[test]
+    fn toggle_star_inserts_and_removes() {
+        let mut starred = Vec::new();
+        assert!(toggle_star(&mut starred, "anthropic", "claude"));
+        assert!(!toggle_star(&mut starred, "anthropic", "claude"));
+        assert!(starred.is_empty());
+        for index in 0..MAX_STARRED_MODELS + 3 {
+            assert!(toggle_star(&mut starred, "anthropic", &format!("m{index}")));
+        }
+        assert_eq!(starred.len(), MAX_STARRED_MODELS);
+    }
+
+    #[test]
+    fn pins_reject_control_characters_and_overflow() {
+        let mut state = super::UiState::default();
+        state.recent_models.push(ModelPin::new("ok", "bad\u{0001}"));
+        assert!(state.validate().is_err());
+        state.recent_models.clear();
+        for index in 0..=MAX_RECENT_MODELS {
+            state
+                .recent_models
+                .push(ModelPin::new("openai", format!("m{index}")));
+        }
+        assert!(state.validate().is_err());
+    }
 }

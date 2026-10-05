@@ -2,7 +2,6 @@
 //! two-line row header every settings list reuses.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
@@ -14,7 +13,7 @@ use gpui_kit::{
 
 use crate::workspace::Workspace;
 
-/// One settings card: a hairline border, a solid fill, and a mono caption.
+/// One settings card: a hairline border, a solid fill, and a short title.
 pub(super) fn settings_card(
     id: &str,
     title: &str,
@@ -22,12 +21,23 @@ pub(super) fn settings_card(
     theme: &Theme,
     children: Vec<AnyElement>,
 ) -> impl IntoElement {
+    let body = children
+        .into_iter()
+        .enumerate()
+        .map(|(index, child)| {
+            div()
+                .when(index > 0, |this| {
+                    this.mt_3().pt_3().border_t_1().border_color(theme.border)
+                })
+                .child(child)
+        })
+        .collect::<Vec<_>>();
     div()
         .id(format!("card-{id}"))
         .flex()
         .flex_col()
         .gap_3()
-        .p_4()
+        .p(px(20.))
         .rounded(crate::ui::skin::radius_card())
         .border_1()
         .border_color(crate::ui::skin::glass_border(theme))
@@ -37,19 +47,18 @@ pub(super) fn settings_card(
                 .id(format!("card-{id}-header"))
                 .flex()
                 .flex_col()
-                .gap_0p5()
+                .gap_1()
                 .child(
                     div()
-                        .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_color(crate::ui::desk::Desk::of(theme).faint)
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .child(title.to_owned()),
                 )
                 .when_some(hint, |this, hint| {
                     this.child(
                         div()
                             .text_xs()
-                            .opacity(0.5)
+                            .text_color(theme.muted_foreground)
                             .whitespace_normal()
                             .child(hint.to_owned()),
                     )
@@ -60,8 +69,7 @@ pub(super) fn settings_card(
                 .id(format!("card-{id}-body"))
                 .flex()
                 .flex_col()
-                .gap_2()
-                .children(children),
+                .children(body),
         )
 }
 
@@ -98,6 +106,53 @@ pub(super) fn settings_row(
                 }),
         )
         .child(control)
+        .into_any_element()
+}
+
+/// Wrapping choice chips. The label stays in the parent column so a long
+/// label cannot collapse beside the chips.
+pub(super) fn choice_chips(
+    id_prefix: &str,
+    options: &[(String, String)],
+    current: &str,
+    on_pick: impl Fn(&mut Workspace, &str, &mut Context<Workspace>) + Clone + 'static,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("chips-{id_prefix}"))
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap_1()
+        .children(options.iter().map(|(value, label)| {
+            let value = value.clone();
+            let selected = value == current;
+            let pick = on_pick.clone();
+            div()
+                .id(format!("{id_prefix}-{value}"))
+                .h(px(28.))
+                .px_2()
+                .flex()
+                .items_center()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if selected {
+                    theme.primary
+                } else {
+                    theme.border
+                })
+                .when(selected, |this| {
+                    this.bg(crate::ui::skin::frost_accent(theme))
+                })
+                .text_sm()
+                .cursor_pointer()
+                .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    pick(workspace, &value, cx);
+                }))
+                .child(label.clone())
+        }))
         .into_any_element()
 }
 
@@ -177,14 +232,38 @@ pub(super) fn dropdown_field(
                         }),
                 )
                 .child(
-                    Button::new(format!("dropdown-button-{id}"))
-                        .label(current.to_owned())
-                        .icon(IconName::ChevronDown)
-                        .small()
-                        .outline()
+                    div()
+                        .id(format!("dropdown-button-{id}"))
+                        .h(px(32.))
+                        .min_w(px(140.))
+                        .px_2()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .rounded(crate::ui::skin::radius_control())
+                        .border_1()
+                        .border_color(crate::ui::skin::glass_border(theme))
+                        .bg(crate::ui::skin::frost(theme))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
                         .on_click(cx.listener(move |workspace, _, _, cx| {
                             on_toggle(workspace, !open, cx);
-                        })),
+                        }))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_sm()
+                                .child(current.to_owned()),
+                        )
+                        .child(
+                            Icon::new(IconName::ChevronDown)
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                        ),
                 ),
         )
         .when(open, |this| {
@@ -217,6 +296,9 @@ pub(super) fn dropdown_field(
                             .rounded_md()
                             .text_sm()
                             .cursor_pointer()
+                            .when(selected, |this| {
+                                this.bg(crate::ui::skin::frost_accent(theme))
+                            })
                             .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
                             .on_click(cx.listener(move |workspace, _, _, cx| {
                                 pick(workspace, &row_option, cx);

@@ -62,6 +62,9 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
         ));
         return;
     }
+    if let Some(provider) = state.selected_provider.clone() {
+        mycode_config::remember_model(&mut state.recent_models, &provider, &model);
+    }
     state.selected_model = Some(model);
     state.model_menu_open = false;
     if !selected_model_supports_reasoning(state) {
@@ -74,6 +77,7 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
 pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<String>) {
     state.active_preset = preset.clone();
     state.preset_model_menu_open = false;
+    state.preset_model_query.clear();
     // Opening a provider pre-checks its model list, strongest first,
     // so a long catalog does not bury o3 / gpt-5 under the cap.
     state.preset_models = preset

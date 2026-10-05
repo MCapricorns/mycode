@@ -241,12 +241,15 @@ impl SettingsSection {
         }
     }
 
-    /// One-line hint under the nav label.
+    /// One-line description shown in the page header and matched by nav search.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::General => t("Theme, identity, shell", "主题、身份、Shell"),
-            Self::Models => t("Providers, keys", "服务商、密钥"),
-            Self::Agents => t("Roles, models", "角色、模型"),
+            Self::General => t(
+                "Appearance, language, identity, and shell",
+                "外观、语言、身份与 Shell",
+            ),
+            Self::Models => t("Default model and providers", "默认模型与服务商"),
+            Self::Agents => t("Scout and Artisan", "Scout 与 Artisan"),
             Self::Skills => t("Slash commands", "斜杠命令"),
             Self::Mcp => t("Tool servers", "工具服务器"),
             Self::Web => t("Search backends", "搜索后端"),
@@ -258,19 +261,48 @@ impl SettingsSection {
     /// Nav group captions, resolved per language at render time.
     pub fn group_label(group: &'static str) -> &'static str {
         match group {
-            "Workspace" => t("Workspace", "工作区"),
-            "Connect" => t("Connect", "连接"),
-            _ => t("System", "系统"),
+            "Appearance" => t("General / Appearance", "通用 / 外观"),
+            "Models" => t("Models & Providers", "模型与服务商"),
+            "Agents" => t("Agents", "子代理"),
+            "Tools" => t("Tools / MCP / Web", "工具 / MCP / 网页"),
+            _ => t("Data & Updates", "数据与更新"),
         }
     }
 
     /// Nav groups in display order with their member sections.
     pub const GROUPS: &'static [(&'static str, &'static [SettingsSection])] = &[
-        (
-            "Workspace",
-            &[Self::General, Self::Models, Self::Agents, Self::Skills],
-        ),
-        ("Connect", &[Self::Mcp, Self::Web]),
-        ("System", &[Self::Data, Self::About]),
+        ("Appearance", &[Self::General]),
+        ("Models", &[Self::Models]),
+        ("Agents", &[Self::Agents]),
+        ("Tools", &[Self::Skills, Self::Mcp, Self::Web]),
+        ("Data", &[Self::Data, Self::About]),
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SettingsSection;
+
+    #[test]
+    fn nav_groups_match_the_settings_shell() {
+        let ids: Vec<_> = SettingsSection::GROUPS.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, ["Appearance", "Models", "Agents", "Tools", "Data"]);
+        let mut members = Vec::new();
+        for (_, sections) in SettingsSection::GROUPS {
+            members.extend(sections.iter().copied());
+        }
+        assert_eq!(
+            members,
+            [
+                SettingsSection::General,
+                SettingsSection::Models,
+                SettingsSection::Agents,
+                SettingsSection::Skills,
+                SettingsSection::Mcp,
+                SettingsSection::Web,
+                SettingsSection::Data,
+                SettingsSection::About,
+            ]
+        );
+    }
 }

@@ -114,7 +114,177 @@ impl Workspace {
     }
 
     pub(crate) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
+        let removed = self
+            .vm
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.providers.get(index))
+            .map(|provider| provider.id.clone());
         self.apply_action(DesktopAction::SettingsProviderRemoved(index), cx);
+        if removed.is_some_and(|id| self.vm.provider_detail.as_deref() == Some(id.as_str())) {
+            self.apply_action(DesktopAction::ProviderDetailOpened(None), cx);
+        }
+    }
+
+    /// Search box for the shared model picker. Created once; the value is
+    /// cleared when a provider step opens.
+    pub(crate) fn model_picker_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if self.model_picker_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(crate::i18n::t("Filter by name or id", "按名称或 id 筛选"))
+            });
+            cx.subscribe_in(
+                &input,
+                window,
+                |workspace, entity, event, _, cx| match event {
+                    InputEvent::Change => {
+                        let text = entity.read(cx).value().to_string();
+                        workspace.apply_action(DesktopAction::PickerQueryChanged(text), cx);
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        let text = entity.read(cx).value().to_string();
+                        workspace.apply_action(DesktopAction::PickerQueryChanged(text), cx);
+                        workspace.accept_model_search(cx);
+                    }
+                    InputEvent::Focus | InputEvent::Blur => {}
+                },
+            )
+            .detach();
+            self.model_picker_input = Some(input);
+        }
+        self.model_picker_input.clone().expect("model picker input")
+    }
+
+    /// Top-bar filter for settings navigation.
+    pub(crate) fn settings_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if self.settings_search_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(crate::i18n::t("Search settings", "搜索设置"))
+            });
+            cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    workspace.apply_action(DesktopAction::SettingsQueryChanged(text), cx);
+                }
+            })
+            .detach();
+            self.settings_search_input = Some(input);
+        }
+        self.settings_search_input
+            .clone()
+            .expect("settings search input")
+    }
+
+    /// Filter for the always-visible preset model checklist.
+    pub(crate) fn preset_model_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if self.preset_model_search_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(crate::i18n::t("Filter models", "筛选模型"))
+            });
+            cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    workspace.apply_action(DesktopAction::PresetModelQueryChanged(text), cx);
+                }
+            })
+            .detach();
+            self.preset_model_search_input = Some(input);
+        }
+        self.preset_model_search_input
+            .clone()
+            .expect("preset model search input")
+    }
+
+    pub(crate) fn provider_key_input(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.provider_key_inputs
+            .entry(id.to_owned())
+            .or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+            })
+            .clone()
+    }
+
+    pub(crate) fn provider_key_replacing(&self, id: &str) -> bool {
+        self.provider_key_replace.contains(id)
+    }
+
+    /// Opens an empty field so a stored provider key can be replaced.
+    pub(crate) fn on_replace_provider_key(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = self.provider_key_inputs.get(id).cloned() {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        self.provider_key_replace.insert(id.to_owned());
+        cx.notify();
+    }
+
+    pub(crate) fn on_save_provider_key(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.provider_key_inputs.get(id).cloned() else {
+            return;
+        };
+        let api_key = mycode_config::normalize_api_key(&input.read(cx).value());
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.provider_key_replace.remove(id);
+        self.dispatch(
+            BridgeCommand::SaveProviderKey {
+                provider_id: id.to_owned(),
+                api_key,
+            },
+            cx,
+        );
+    }
+
+    /// Device-code sign-in for a provider that is already configured.
+    ///
+    /// Does not open the add-from-catalog form.
+    pub(crate) fn on_start_provider_oauth(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        let models = self
+            .vm
+            .settings
+            .as_ref()
+            .and_then(|settings| {
+                settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == provider_id)
+            })
+            .map(|provider| provider.models.clone())
+            .unwrap_or_default();
+        self.dispatch(
+            BridgeCommand::StartOAuthSignIn {
+                provider_id: provider_id.to_owned(),
+                models,
+            },
+            cx,
+        );
     }
 
     // ---- provider presets from the catalog ----
@@ -141,8 +311,16 @@ impl Workspace {
             .expect("preset search input")
     }
 
-    pub(crate) fn on_open_preset(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn on_open_preset(
+        &mut self,
+        provider_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.preset_key_input = None;
+        if let Some(input) = self.preset_model_search_input.clone() {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
         self.apply_action(
             DesktopAction::ActivePresetChanged(Some(provider_id.to_owned())),
             cx,

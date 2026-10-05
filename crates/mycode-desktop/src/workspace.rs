@@ -111,6 +111,17 @@ pub struct Workspace {
     web_key_replace: HashSet<String>,
     preset_key_input: Option<Entity<InputState>>,
     preset_search_input: Option<Entity<InputState>>,
+    /// Search box inside the model step of the shared picker.
+    model_picker_input: Option<Entity<InputState>>,
+    /// Top-bar filter for the settings navigation.
+    settings_search_input: Option<Entity<InputState>>,
+    /// Filter for the add-from-catalog model checklist.
+    preset_model_search_input: Option<Entity<InputState>>,
+    provider_key_inputs: HashMap<String, Entity<InputState>>,
+    /// Provider ids whose empty replace-key field is open.
+    provider_key_replace: HashSet<String>,
+    /// The next model-step render should clear and focus the search box.
+    picker_focus_pending: bool,
     ask_input: Option<Entity<InputState>>,
     pending_project: Option<String>,
     /// Folder the user last chose. Opens for other folders are ignored.
@@ -191,6 +202,12 @@ impl Workspace {
             web_key_replace: HashSet::new(),
             preset_key_input: None,
             preset_search_input: None,
+            model_picker_input: None,
+            settings_search_input: None,
+            preset_model_search_input: None,
+            provider_key_inputs: HashMap::new(),
+            provider_key_replace: HashSet::new(),
+            picker_focus_pending: false,
             ask_input: None,
             pending_project: None,
             focused_project: None,
@@ -508,13 +525,112 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn on_toggle_model_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+    pub(crate) fn on_toggle_model_menu(
+        &mut self,
+        open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.apply_action(DesktopAction::ModelMenuToggled(open), cx);
+        if open && let Some(input) = self.model_picker_input.clone() {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
     }
 
-    /// Shows one provider's models in the open picker without saving.
-    pub(crate) fn on_browse_model_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ModelMenuBrowse(provider_id.to_owned()), cx);
+    /// Moves the open picker into one provider, or back to the provider step.
+    ///
+    /// Entering a provider asks the next render to focus the search box.
+    /// Does not record a model selection.
+    pub(crate) fn on_browse_model_provider(
+        &mut self,
+        provider_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        self.picker_focus_pending = provider_id.is_some();
+        self.apply_action(
+            DesktopAction::ModelMenuBrowse(provider_id.map(str::to_owned)),
+            cx,
+        );
+    }
+
+    /// Whether the model step should focus its search box this frame.
+    pub(crate) fn take_model_step_focus(&mut self) -> bool {
+        if self.vm.model_menu_browse.is_none() {
+            return false;
+        }
+        let pending = self.picker_focus_pending;
+        self.picker_focus_pending = false;
+        pending
+    }
+
+    /// Enter in the model search box selects the preferred row.
+    pub(crate) fn accept_model_search(&mut self, cx: &mut Context<Self>) {
+        let Some(provider) = self.vm.model_menu_browse.clone() else {
+            return;
+        };
+        let choices = crate::ui::model_picker::provider_model_choices(&self.vm, &provider);
+        let filtered =
+            crate::ui::model_picker::filter_model_choices(&choices, &self.vm.picker_query);
+        if filtered.is_empty() {
+            return;
+        }
+        let role = self
+            .vm
+            .subagent_menu
+            .clone()
+            .filter(|(_, field)| field == "model");
+        let selected = if let Some((role, _)) = &role {
+            self.vm
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.subagents.role(role))
+                .filter(|entry| entry.provider.as_deref() == Some(provider.as_str()))
+                .and_then(|entry| entry.model.clone())
+        } else if self.vm.selected_provider.as_deref() == Some(provider.as_str()) {
+            self.vm.selected_model.clone()
+        } else {
+            None
+        };
+        let ids: Vec<String> = filtered.iter().map(|choice| choice.id.clone()).collect();
+        let index = crate::ui::model_picker::preferred_index(
+            &ids,
+            &self.vm.picker_query,
+            selected.as_deref(),
+        );
+        let Some(model) = ids.get(index).cloned() else {
+            return;
+        };
+        if let Some((role, _)) = role {
+            self.on_set_subagent_route(&role, Some(provider), Some(model), cx);
+            self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+        } else if self.vm.model_menu_open {
+            self.on_select_model_on(&provider, &model, cx);
+        }
+    }
+
+    /// Stars or unstars one model and persists the pin list.
+    pub(crate) fn on_toggle_model_star(
+        &mut self,
+        provider: &str,
+        model: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_action(
+            DesktopAction::ModelStarToggled {
+                provider: provider.to_owned(),
+                model: model.to_owned(),
+            },
+            cx,
+        );
+        self.persist_ui_state(cx);
+    }
+
+    pub(crate) fn on_open_provider_detail(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ProviderDetailOpened(Some(id.to_owned())), cx);
+    }
+
+    pub(crate) fn on_close_provider_detail(&mut self, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ProviderDetailOpened(None), cx);
     }
 
     pub(crate) fn on_toggle_reasoning_menu(&mut self, open: bool, cx: &mut Context<Self>) {

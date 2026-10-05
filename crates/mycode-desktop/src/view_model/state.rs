@@ -151,15 +151,27 @@ pub(crate) struct WorkspaceState {
     pub selected_provider: Option<String>,
     /// Selected model id for the selected provider.
     pub selected_model: Option<String>,
-    /// Whether the model picker dropdown is open.
+    /// Whether the model picker is open.
     pub model_menu_open: bool,
-    /// Provider whose models the open picker is showing. Does not change
-    /// the session until a model row is picked.
+    /// Provider whose models the open picker is showing. `None` is the
+    /// provider step. Does not change the session until a model row is picked.
     pub model_menu_browse: Option<String>,
+    /// Filter text for the model step of the picker.
+    pub picker_query: String,
+    /// Models picked from the session picker, newest first.
+    pub recent_models: Vec<mycode_config::ModelPin>,
+    /// Models starred in the picker, newest first.
+    pub starred_models: Vec<mycode_config::ModelPin>,
+    /// Provider id open on the Models page, when the user drilled in.
+    pub provider_detail: Option<String>,
+    /// Filter text for the settings navigation.
+    pub settings_query: String,
+    /// Filter text for the add-from-catalog model checklist.
+    pub preset_model_query: String,
     /// Whether the thinking-effort submenu is open.
     pub reasoning_menu_open: bool,
-    /// Open Agents-page dropdown: (role name, field) where field is
-    /// `provider`, `model`, or `thinking`.
+    /// Open Agents-page model picker: (role name, field). The field is
+    /// `model`.
     pub subagent_menu: Option<(String, String)>,
     /// Whether the General page's shell-kind dropdown is open.
     pub shell_kind_menu_open: bool,
@@ -397,6 +409,10 @@ pub enum DesktopAction {
         trusted_projects: Vec<String>,
         /// The workspace the sidebar shows.
         active_workspace: Option<String>,
+        /// Recent model pins, newest first.
+        recent_models: Vec<mycode_config::ModelPin>,
+        /// Starred model pins, newest first.
+        starred_models: Vec<mycode_config::ModelPin>,
     },
     /// The sidebar workspace switcher opened or closed.
     WorkspaceMenuToggled(bool),
@@ -454,10 +470,26 @@ pub enum DesktopAction {
     /// The model picker selected a model; an unknown model joins the
     /// provider row so the next turn can use it.
     ModelSelected(String),
-    /// The model picker dropdown opened or closed.
+    /// The model picker opened or closed. Opening starts on the provider step.
     ModelMenuToggled(bool),
-    /// The open model picker is showing another provider's models.
-    ModelMenuBrowse(String),
+    /// The open picker moved into one provider, or back to the provider step
+    /// when the id is absent. Does not itself open the picker.
+    ModelMenuBrowse(Option<String>),
+    /// The model step's search box changed.
+    PickerQueryChanged(String),
+    /// The user starred or unstarred one model.
+    ModelStarToggled {
+        /// Provider id.
+        provider: String,
+        /// Model id.
+        model: String,
+    },
+    /// The settings navigation filter changed.
+    SettingsQueryChanged(String),
+    /// The Models page opened or closed one provider's detail.
+    ProviderDetailOpened(Option<String>),
+    /// The add-from-catalog model checklist filter changed.
+    PresetModelQueryChanged(String),
     /// The thinking-effort submenu opened or closed.
     ReasoningMenuToggled(bool),
     /// The composer's thinking-effort pick; persists through settings.
