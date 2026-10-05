@@ -14,6 +14,9 @@ pub enum ShellKind {
     Pwsh,
     /// Bash (`bash` / `sh`).
     Bash,
+    /// Windows `cmd.exe`. Runtime fallback only; [`Self::parse`] does not
+    /// accept it, so settings cannot persist this kind.
+    Cmd,
 }
 
 impl ShellKind {
@@ -23,6 +26,7 @@ impl ShellKind {
         match self {
             Self::Pwsh => "pwsh",
             Self::Bash => "bash",
+            Self::Cmd => "cmd",
         }
     }
 
@@ -32,6 +36,7 @@ impl ShellKind {
         match value.trim().to_ascii_lowercase().as_str() {
             "pwsh" => Some(Self::Pwsh),
             "bash" => Some(Self::Bash),
+            // `cmd` is a runtime fallback, not a stored settings kind.
             _ => None,
         }
     }
@@ -46,6 +51,7 @@ impl ShellKind {
         match stem.to_ascii_lowercase().as_str() {
             "pwsh" => Self::Pwsh,
             "bash" | "sh" => Self::Bash,
+            "cmd" => Self::Cmd,
             _ => {
                 #[cfg(windows)]
                 {
@@ -67,6 +73,37 @@ pub struct DetectedShell {
     pub kind: ShellKind,
     /// Absolute or PATH-resolved program path.
     pub program: PathBuf,
+}
+
+/// Picks a detected shell, or `cmd.exe` when nothing else is available.
+///
+/// `cmd_path` is used only when `detected` is empty. Callers must not persist
+/// the `cmd` kind into settings.
+#[must_use]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn select_windows_shell(
+    detected: Option<DetectedShell>,
+    cmd_path: Option<PathBuf>,
+) -> Option<DetectedShell> {
+    if let Some(detected) = detected {
+        return Some(detected);
+    }
+    cmd_path.map(|program| DetectedShell {
+        kind: ShellKind::Cmd,
+        program,
+    })
+}
+
+/// Arguments for a `cmd.exe /d /s /c` invocation.
+#[must_use]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn cmd_fallback_args(command: &str) -> Vec<String> {
+    vec![
+        "/d".to_owned(),
+        "/s".to_owned(),
+        "/c".to_owned(),
+        command.to_owned(),
+    ]
 }
 
 /// First pinnable platform shell for the current host.
@@ -349,4 +386,43 @@ pub(crate) fn fuzzy_windows_apps_pwsh(windows_apps: &Path) -> Vec<PathBuf> {
         .map(|package| package.join("pwsh.exe"))
         .filter(|pwsh| pwsh.exists())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DetectedShell, ShellKind, cmd_fallback_args, select_windows_shell};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn cmd_is_a_runtime_fallback_not_a_settings_kind() {
+        assert_eq!(ShellKind::parse("cmd"), None);
+        assert_eq!(ShellKind::parse("pwsh"), Some(ShellKind::Pwsh));
+        assert_eq!(ShellKind::parse("bash"), Some(ShellKind::Bash));
+        assert_eq!(
+            ShellKind::from_program(Path::new("cmd.exe")),
+            ShellKind::Cmd
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            ShellKind::from_program(Path::new(r"C:\Windows\System32\cmd.exe")),
+            ShellKind::Cmd
+        );
+        let fallback = select_windows_shell(None, Some(PathBuf::from("cmd.exe"))).unwrap();
+        assert_eq!(fallback.kind, ShellKind::Cmd);
+        assert_eq!(
+            cmd_fallback_args("echo hi"),
+            vec![
+                "/d".to_owned(),
+                "/s".to_owned(),
+                "/c".to_owned(),
+                "echo hi".to_owned()
+            ]
+        );
+        let preferred = DetectedShell {
+            kind: ShellKind::Pwsh,
+            program: PathBuf::from("pwsh"),
+        };
+        let kept = select_windows_shell(Some(preferred), Some(PathBuf::from("cmd.exe"))).unwrap();
+        assert_eq!(kept.kind, ShellKind::Pwsh);
+    }
 }

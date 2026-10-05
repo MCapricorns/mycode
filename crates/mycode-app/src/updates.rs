@@ -72,6 +72,8 @@ pub struct PreparedUpdate {
     pub new_binary: PathBuf,
     /// Staging directory; removable on the next startup.
     pub stage_dir: PathBuf,
+    /// SHA-256 of `new_binary`. The swap refuses to run when the file differs.
+    pub binary_sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -98,13 +100,22 @@ struct AssetJson {
 /// # Errors
 ///
 /// Returns the transport, parse, version-parse, or HTTP failure message.
-pub async fn latest_release(client: &reqwest::Client) -> Result<Option<UpdateOffer>, String> {
-    let response = client
-        .get(LATEST_RELEASE_API)
-        .header("accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|error| format!("update check failed: {}", brief_error(&error.to_string())))?;
+pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, String> {
+    let response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
+        method: reqwest::Method::GET,
+        url: LATEST_RELEASE_API.to_owned(),
+        headers: vec![(
+            "accept".to_owned(),
+            "application/vnd.github+json".to_owned(),
+        )],
+        body: None,
+        mode: mycode_providers::PinMode::PublicHttps,
+        timeout: Some(std::time::Duration::from_secs(30)),
+        user_agent: Some(user_agent.to_owned()),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    })
+    .await
+    .map_err(|error| format!("update check failed: {}", brief_error(&error)))?;
     if classify_release_status(response.status())?.is_none() {
         return Ok(None);
     }
@@ -190,7 +201,7 @@ pub fn is_newer(tag: &str, current: &str) -> bool {
 ///
 /// Returns a failure message; the running installation is untouched.
 pub async fn download_update(
-    client: &reqwest::Client,
+    user_agent: &str,
     offer: &UpdateOffer,
 ) -> Result<PreparedUpdate, String> {
     let stage_dir = std::env::temp_dir().join(format!(
@@ -204,11 +215,11 @@ pub async fn download_update(
     std::fs::create_dir_all(&stage_dir).map_err(|error| format!("stage create: {error}"))?;
 
     let asset_path = stage_dir.join("update.asset");
-    fetch_to_file(client, &offer.asset_url, &asset_path, MAX_ASSET_BYTES).await?;
+    fetch_to_file(user_agent, &offer.asset_url, &asset_path, MAX_ASSET_BYTES).await?;
 
     let checksum_path = stage_dir.join("update.sha256");
     fetch_to_file(
-        client,
+        user_agent,
         &offer.checksum_url,
         &checksum_path,
         MAX_CHECKSUM_BYTES,
@@ -217,25 +228,34 @@ pub async fn download_update(
     verify_checksum(&asset_path, &checksum_path)?;
 
     let binary_path = extract_binary(&asset_path, &stage_dir)?;
+    let binary_sha256 = file_sha256(&binary_path)?;
     let _ = std::fs::remove_file(&asset_path);
     let _ = std::fs::remove_file(&checksum_path);
     Ok(PreparedUpdate {
         new_binary: binary_path,
         stage_dir,
+        binary_sha256,
     })
 }
 
 async fn fetch_to_file(
-    client: &reqwest::Client,
+    user_agent: &str,
     url: &str,
     destination: &Path,
     maximum: u64,
 ) -> Result<(), String> {
-    let mut response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("download failed: {}", brief_error(&error.to_string())))?;
+    let mut response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
+        method: reqwest::Method::GET,
+        url: url.to_owned(),
+        headers: Vec::new(),
+        body: None,
+        mode: mycode_providers::PinMode::PublicHttps,
+        timeout: Some(std::time::Duration::from_secs(30)),
+        user_agent: Some(user_agent.to_owned()),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    })
+    .await
+    .map_err(|error| format!("download failed: {}", brief_error(&error)))?;
     if !response.status().is_success() {
         return Err(format!("download returned {}", response.status()));
     }
@@ -348,6 +368,10 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
 ///
 /// Returns a failure message when the script or its process cannot start.
 pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
+    let actual = file_sha256(&prepared.new_binary)?;
+    if !actual.eq_ignore_ascii_case(&prepared.binary_sha256) {
+        return Err("staged update binary failed its sha256 check".to_owned());
+    }
     let current = std::env::current_exe().map_err(|error| format!("current exe: {error}"))?;
     let current = current.canonicalize().unwrap_or(current);
     let script_path = prepared.stage_dir.join(if cfg!(windows) {
@@ -356,9 +380,9 @@ pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
         "update.sh"
     });
     let script = if cfg!(windows) {
-        windows_script(&prepared.new_binary, &current)
+        windows_script(&prepared.new_binary, &current, &prepared.binary_sha256)
     } else {
-        unix_script(&prepared.new_binary, &current)
+        unix_script(&prepared.new_binary, &current, &prepared.binary_sha256)
     };
     std::fs::write(&script_path, script).map_err(|error| format!("updater script: {error}"))?;
 
@@ -403,23 +427,74 @@ pub fn cleanup_stale_stages() {
     }
 }
 
-fn windows_script(new_binary: &Path, current: &Path) -> String {
+fn windows_script(new_binary: &Path, current: &Path, sha256: &str) -> String {
+    let previous = format!("{}.mycode-previous", current.display());
     format!(
-        "@echo off\r\nset /a TRIES=0\r\n:retry\r\ntimeout /t 1 /nobreak >nul\r\nmove /y \"{}\" \"{}\" >nul 2>&1\r\nif not errorlevel 1 goto done\r\nset /a TRIES+=1\r\nif %TRIES% GEQ 30 exit /b 1\r\ngoto retry\r\n:done\r\nstart \"\" \"{}\"\r\ndel \"%~f0\"\r\n",
-        new_binary.display(),
-        current.display(),
-        current.display(),
+        "@echo off\r\nset /a TRIES=0\r\n:retry\r\ntimeout /t 1 /nobreak >nul\r\ncopy /y \"{current}\" \"{previous}\" >nul 2>&1\r\nif errorlevel 1 goto waitmore\r\ncertutil -hashfile \"{new_binary}\" SHA256 | findstr /i \"{sha256}\" >nul\r\nif errorlevel 1 exit /b 1\r\nmove /y \"{new_binary}\" \"{current}\" >nul 2>&1\r\nif errorlevel 1 (\r\n  move /y \"{previous}\" \"{current}\" >nul\r\n  exit /b 1\r\n)\r\ncertutil -hashfile \"{current}\" SHA256 | findstr /i \"{sha256}\" >nul\r\nif errorlevel 1 (\r\n  move /y \"{previous}\" \"{current}\" >nul\r\n  exit /b 1\r\n)\r\ngoto done\r\n:waitmore\r\nset /a TRIES+=1\r\nif %TRIES% GEQ 30 exit /b 1\r\ngoto retry\r\n:done\r\nstart \"\" \"{current}\"\r\ndel \"%~f0\"\r\n",
+        current = current.display(),
+        previous = previous,
+        new_binary = new_binary.display(),
+        sha256 = sha256,
     )
 }
 
-fn unix_script(new_binary: &Path, current: &Path) -> String {
+fn unix_script(new_binary: &Path, current: &Path, sha256: &str) -> String {
+    let previous = format!("{}.mycode-previous", current.display());
     format!(
-        "#!/bin/sh\ni=0\nwhile [ $i -lt 30 ]; do\n  if mv -f \"{}\" \"{}\" 2>/dev/null; then break; fi\n  sleep 1\n  i=$((i+1))\ndone\nchmod +x \"{}\" 2>/dev/null\nnohup \"{}\" >/dev/null 2>&1 &\nrm -f \"$0\"\n",
-        new_binary.display(),
-        current.display(),
-        current.display(),
-        current.display(),
+        "#!/bin/sh\nset -e\ni=0\nprev=\"{previous}\"\nwhile [ \"$i\" -lt 30 ]; do\n  if cp -f \"{current}\" \"$prev\" 2>/dev/null; then break; fi\n  sleep 1\n  i=$((i+1))\ndone\nactual=$(sha256sum \"{new_binary}\" | awk '{{print $1}}')\nif [ \"$actual\" != \"{sha256}\" ]; then exit 1; fi\nif ! mv -f \"{new_binary}\" \"{current}\"; then\n  mv -f \"$prev\" \"{current}\"\n  exit 1\nfi\nactual=$(sha256sum \"{current}\" | awk '{{print $1}}')\nif [ \"$actual\" != \"{sha256}\" ]; then\n  mv -f \"$prev\" \"{current}\"\n  exit 1\nfi\nchmod +x \"{current}\" 2>/dev/null\nnohup \"{current}\" >/dev/null 2>&1 &\nrm -f \"$0\"\n",
+        previous = previous,
+        current = current.display(),
+        new_binary = new_binary.display(),
+        sha256 = sha256,
     )
+}
+
+fn file_sha256(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("hash read: {error}"))?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = sha2::Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Replaces `current` with `new_binary` only when its sha256 matches.
+///
+/// The previous bytes are copied aside first. `corrupt_after_publish` is a
+/// test fault that changes the published file before the post-publish check,
+/// which must restore the previous bytes.
+///
+/// # Errors
+///
+/// Returns a message and leaves the previous bytes in place when the hash
+/// does not match or the publish check fails.
+#[cfg(test)]
+fn replace_verified_binary(
+    current: &Path,
+    new_binary: &Path,
+    expected_sha256: &str,
+    corrupt_after_publish: bool,
+) -> Result<(), String> {
+    let staged = file_sha256(new_binary)?;
+    if !staged.eq_ignore_ascii_case(expected_sha256) {
+        return Err("staged binary sha256 does not match".to_owned());
+    }
+    let backup = PathBuf::from(format!("{}.mycode-previous", current.display()));
+    std::fs::copy(current, &backup).map_err(|error| format!("backup failed: {error}"))?;
+    std::fs::copy(new_binary, current).map_err(|error| {
+        let _ = std::fs::copy(&backup, current);
+        format!("publish failed: {error}")
+    })?;
+    if corrupt_after_publish {
+        std::fs::write(current, b"corrupt").map_err(|error| format!("fault inject: {error}"))?;
+    }
+    let published = file_sha256(current)?;
+    if !published.eq_ignore_ascii_case(expected_sha256) {
+        std::fs::copy(&backup, current).map_err(|error| format!("restore failed: {error}"))?;
+        return Err("published binary sha256 does not match; restored previous binary".to_owned());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -440,6 +515,49 @@ mod tests {
             asset_suffix_for("macos", "aarch64"),
             "-aarch64-apple-darwin.zip"
         );
+    }
+
+    #[test]
+    fn script_checks_hash_and_backup_before_replace() {
+        let new_binary = std::path::Path::new("/tmp/new");
+        let current = std::path::Path::new("/tmp/current");
+        let unix = super::unix_script(new_binary, current, "abc123");
+        let backup = unix.find("mycode-previous").unwrap();
+        let hash = unix.find("sha256sum").unwrap();
+        let publish = unix.find("mv -f").unwrap();
+        assert!(backup < publish && hash < publish, "{unix}");
+        let windows = super::windows_script(new_binary, current, "abc123");
+        let win_backup = windows.find("mycode-previous").unwrap();
+        let win_hash = windows.find("certutil").unwrap();
+        let win_publish = windows.find("move /y").unwrap();
+        assert!(
+            win_backup < win_publish && win_hash < win_publish,
+            "{windows}"
+        );
+    }
+
+    #[test]
+    fn bad_sha256_keeps_the_previous_binary() {
+        let dir = std::env::temp_dir().join(format!(
+            "mycode-update-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let current = dir.join("app");
+        let staged = dir.join("next");
+        std::fs::write(&current, b"old-bytes").unwrap();
+        std::fs::write(&staged, b"new-bytes").unwrap();
+        let wrong = super::replace_verified_binary(&current, &staged, "00", false).unwrap_err();
+        assert!(wrong.contains("sha256"), "{wrong}");
+        assert_eq!(std::fs::read(&current).unwrap(), b"old-bytes");
+        let expected = super::sha256_hex(b"new-bytes");
+        super::replace_verified_binary(&current, &staged, &expected, false).unwrap();
+        assert_eq!(std::fs::read(&current).unwrap(), b"new-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

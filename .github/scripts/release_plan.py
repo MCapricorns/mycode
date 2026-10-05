@@ -730,12 +730,30 @@ def _expect_workflow_contract() -> None:
         "Ubuntu product compile triple remains",
     )
     _expect(
-        workflow.count("runs-on: ubuntu-latest") == 2,
-        "ubuntu-latest should only run release-plan and release-publish",
+        workflow.count("runs-on: ubuntu-latest") == 3,
+        "ubuntu-latest should only run release-plan, release-publish, and cargo-audit",
     )
-    for job in ("release-plan", "release-publish"):
+    for job in ("release-plan", "release-publish", "cargo-audit"):
         body = _yaml_job(workflow, job)
         _expect("ubuntu-latest" in body, f"{job} left ubuntu-latest")
+    plan = _yaml_job(workflow, "release-plan")
+    _expect(
+        "HEAD:main" not in plan,
+        "release-plan still advances main before the platform builds",
+    )
+    _expect(
+        "refs/heads/${cleanup_ref}" in plan,
+        "version bump is not pushed to the temporary release ref",
+    )
+    publish = _yaml_job(workflow, "release-publish")
+    _expect(
+        'git push origin "HEAD:main"' in publish,
+        "release-publish does not fast-forward main to the built commit",
+    )
+    _expect(
+        "needs.release-plan.outputs.sha" in _yaml_job(workflow, "release-build"),
+        "platform builds do not check out the planned commit",
+    )
     gate_hosts = (
         "windows-latest",
         "windows-11-arm",

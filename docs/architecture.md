@@ -71,7 +71,7 @@ mycode-app         应用核。会话、回合、工具宿主、MCP、网页、�
 ├─ ui.json                工作区、文件夹、会话归属、最近项目。可丢弃
 ├─ catalog-cache.json     models.dev 目录缓存
 ├─ sessions/<id>/         账本、压缩检查点
-├─ checkpoints/<id>/      write/edit 之前的文件快照
+├─ checkpoints/<id>/      write/edit 之前的文件快照；当时没有的文件只记缺失
 └─ scratch/               没有绑定文件夹时的工具工作目录
 ```
 

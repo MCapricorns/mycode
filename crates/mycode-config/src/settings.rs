@@ -17,7 +17,8 @@ mod user_agent;
 mod web;
 
 pub use mcp::{
-    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, builtin_mcp_servers, split_command_line,
+    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, builtin_mcp_servers, is_mcp_executable,
+    split_command_line,
 };
 pub use providers::{
     MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings, VALID_PROVIDER_KINDS,

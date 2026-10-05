@@ -14,7 +14,7 @@ use mycode_config::{
 };
 use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
-use mycode_tools::ToolRegistry;
+use mycode_tools::{ToolDyn, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
@@ -103,16 +103,18 @@ async fn turn_credentials(
     Err(last_error)
 }
 
+type CheckpointFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+
 /// Builds the before-tool hook that snapshots a mutating tool's target
 /// before dispatch: `write`/`edit` paths resolve against `cwd` (an absolute
 /// path replaces it), and the copy runs on the blocking pool so the
-/// single-threaded core executor never stalls on file I/O.
+/// single-threaded core executor never stalls on file I/O. A checkpoint
+/// error fails the tool; it is not skipped.
 pub(crate) fn checkpoint_hook(
     home: HomeLayout,
     cwd: PathBuf,
     session: String,
-) -> impl Fn(&str, &serde_json::Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static
-{
+) -> impl Fn(&str, &serde_json::Value) -> CheckpointFuture + Send + Sync + 'static {
     move |tool, args| {
         let raw_path = matches!(tool, "write" | "edit")
             .then(|| {
@@ -125,12 +127,19 @@ pub(crate) fn checkpoint_hook(
         let cwd = cwd.clone();
         let session = session.clone();
         Box::pin(async move {
-            let Some(raw_path) = raw_path else { return };
+            let Some(raw_path) = raw_path else {
+                return Ok(());
+            };
             let path = cwd.join(raw_path);
-            let _ = tokio::task::spawn_blocking(move || {
+            match tokio::task::spawn_blocking(move || {
                 mycode_config::checkpoint_file(&home, &session, &path)
             })
-            .await;
+            .await
+            {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(error)) => Err(format!("checkpoint failed: {}", error.summary())),
+                Err(_) => Err("checkpoint failed: snapshot task panicked".to_owned()),
+            }
         })
     }
 }
@@ -227,7 +236,8 @@ async fn run_chat_turn(
     // MCP servers connect here (spawn + handshake + tools/list): awaited on
     // the spawned turn task, so command processing never blocks. A server
     // that fails to connect is skipped, never a failed turn.
-    let mcp_tools = crate::mcp_tools::connect_mcp_tools(home, &settings, &state.mcp_pool).await;
+    let (mcp_tools, mcp_warning) =
+        crate::mcp_tools::connect_mcp_tools(home, &settings, &state.mcp_pool, Some(&cwd)).await;
     let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
     let registry = Arc::new({
         let registry = ToolRegistry::new();
@@ -269,8 +279,13 @@ async fn run_chat_turn(
         )));
         registry
     });
-    let mcp_catalog = crate::mcp_tools::McpCatalog::from_tools(mcp_tools);
+    let mcp_catalog = crate::mcp_tools::McpCatalog::from_tools_with_warning(mcp_tools, mcp_warning);
     if let Some(catalog) = mcp_catalog.clone() {
+        for tool in catalog.direct_tools() {
+            if registry.get(tool.spec().name.as_str()).is_none() {
+                registry.register(tool);
+            }
+        }
         registry.register(Arc::new(crate::mcp_tools::SearchTool::new(Arc::clone(
             &catalog,
         ))));
@@ -339,15 +354,14 @@ async fn run_chat_turn(
         system_prompt.push_str(&catalog);
     }
     if let Some(catalog) = mcp_catalog.as_ref() {
-        system_prompt.push_str(&format!(
-            "\n\n<mcp>\nConnected tools: {}.\n\
-Built-in tools are called directly. For a connected tool, call `search_tool` \
-with its exact name, then `use_tool` with the returned inputSchema. Do not \
-guess parameters. Do not wait for the user to name the tool. When the user \
-also wants a subagent, emit `search_tool` in the same response as `task`.\n\
-</mcp>",
-            catalog.index()
-        ));
+        system_prompt.push_str("\n\n<mcp>\n");
+        system_prompt.push_str(&catalog.prompt_note());
+        system_prompt.push_str(
+            "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
+call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
+guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
+response as `task`.\n</mcp>",
+        );
     }
     system_prompt.push_str(
         "\n\nFor current facts, call `web_search`, then `fetch_content` on the URLs you will cite. Snippets are not evidence.",

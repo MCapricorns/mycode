@@ -38,6 +38,7 @@ mod mcp_tools;
 mod oauth;
 mod projection;
 pub mod protocol;
+mod rollback;
 mod search;
 mod settings_io;
 mod state;

@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use mycode_config::{HomeLayout, read_ui_state, replace_ui_state};
-use mycode_providers::catalog::http_client;
 
 use crate::ledger::{
     delete_session, forget_session_bindings, inspect_summaries, open_conversation, recall_message,
@@ -147,25 +146,16 @@ pub(crate) fn run_core(
                 BridgeCommand::CheckUpdate => {
                     let reply = with_reply.reply;
                     tokio::spawn(async move {
-                        let client = match http_client(UPDATE_USER_AGENT) {
-                            Ok(client) => client,
-                            Err(message) => {
-                                let _ = reply.send(BridgeReply::UpdateChecked(Err(message)));
-                                return;
-                            }
-                        };
                         let _ = reply.send(BridgeReply::UpdateChecked(
-                            crate::updates::latest_release(&client).await,
+                            crate::updates::latest_release(UPDATE_USER_AGENT).await,
                         ));
                     });
                 }
                 BridgeCommand::DownloadUpdate { offer } => {
                     let reply = with_reply.reply;
                     tokio::spawn(async move {
-                        let outcome = match http_client(UPDATE_USER_AGENT) {
-                            Ok(client) => crate::updates::download_update(&client, &offer).await,
-                            Err(message) => Err(message),
-                        };
+                        let outcome =
+                            crate::updates::download_update(UPDATE_USER_AGENT, &offer).await;
                         let _ = reply.send(BridgeReply::UpdateDownloaded(outcome));
                     });
                 }
@@ -358,11 +348,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             let home = state.home.clone();
             let session_id = session_id.clone();
             BridgeReply::RolledBack(
-                blocking(move || {
-                    mycode_config::rollback_session(&home, &session_id)
-                        .map_err(|error| render_config_error(&error))
-                })
-                .await,
+                blocking(move || crate::rollback::apply_rollback(&home, &session_id)).await,
             )
         }
         BridgeCommand::RecallMessage {

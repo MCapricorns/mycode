@@ -9,18 +9,23 @@
 #    windows-latest is x64. Windows ARM64 uses the native windows-11-arm
 #    image; it is not a cross-compile from windows-latest. The macOS core
 #    job runs the release-plan self-test. There is no Ubuntu product
-#    compile job. release-plan and release-publish still run on
-#    ubuntu-latest only to choose the tag and upload the three archives.
+#    compile job. release-plan, release-publish, and cargo-audit run on
+#    ubuntu-latest. They choose the tag, upload the three archives, and
+#    audit Cargo.lock. They do not compile the product.
 #
 # 2. release — a push to main whose quality gates passed publishes a new
 #    GitHub Release. Pull requests do not publish. The tag is
 #    `v<workspace version>` when that tag is free. When the tag already
 #    exists, release-plan bumps the patch in Cargo.toml, Cargo.lock, and
-#    CHANGELOG.md and tags that new version. The body is the matching
-#    CHANGELOG section, not generated commit notes. Archives already
-#    uploaded for the previous tag do not skip the release. The version
-#    commit is pushed with GITHUB_TOKEN, which does not start another
-#    workflow run.
+#    CHANGELOG.md on a temporary commit and pushes only
+#    `ci/release-<version>-<run id>`. The three product builds check out
+#    that commit, so the version compiled into the binaries is the version
+#    that will be tagged. main is fast-forwarded and the tag is created
+#    only after those builds succeed. The body is the matching CHANGELOG
+#    section, not generated commit notes. Archives already uploaded for
+#    the previous tag do not skip the release. The version ref and the
+#    later main update are pushed with GITHUB_TOKEN, which does not start
+#    another workflow run.
 #
 # Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
@@ -128,8 +133,9 @@ jobs:
     name: release-plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # contents: write lets this job push the patch bump. The push uses
-    # GITHUB_TOKEN, so it does not start a second workflow run.
+    # contents: write lets this job push the patch bump to a temporary
+    # ref. It does not update main. The push uses GITHUB_TOKEN, so it
+    # does not start a second workflow run.
     permissions:
       contents: write
     outputs:
@@ -187,16 +193,15 @@ jobs:
             git commit \
               -m "chore(release): bump to ${VERSION}" \
               -m "Record the version published for this qualified main push."
-            if git push origin HEAD:main; then
-              cleanup_ref=""
-            else
-              echo "main did not fast-forward; keeping the version commit on a temporary ref" >&2
-              cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
-              git push origin "HEAD:refs/heads/${cleanup_ref}"
-            fi
+            # Build this commit before main moves. release-publish
+            # fast-forwards main and creates the tag only after the three
+            # platform archives exist.
+            cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
+            git push origin "HEAD:refs/heads/${cleanup_ref}"
           fi
           # Outputs are written only after a required version commit is on
-          # some ref. If that push fails, this step stops before publish is set.
+          # the temporary ref. If that push fails, this step stops before
+          # publish is set.
           python3 .github/scripts/release_plan.py \
             --emit-output \
             --plan-env /tmp/release-plan.env \
@@ -302,6 +307,14 @@ jobs:
           test "${{ needs.release-plan.outputs.tag }}" = "v${version}"
           test "${head}" = "${{ needs.release-plan.outputs.sha }}"
 
+      - name: Advance main to the built commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The three platform jobs already compiled this commit. Move main
+          # to it before the tag exists, and refuse a non-fast-forward.
+          git push origin "HEAD:main"
+
       - name: Download assets
         uses: actions/download-artifact@v4
         with:
@@ -331,3 +344,15 @@ jobs:
             exit 1
           fi
           git push origin --delete "${ref}"
+
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Audit Cargo.lock
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -4274,6 +4274,7 @@ dependencies = [
  "async-channel",
  "async-trait",
  "jsonschema",
+ "libc",
  "mycode-agent",
  "mycode-config",
  "mycode-core",
@@ -4287,6 +4288,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

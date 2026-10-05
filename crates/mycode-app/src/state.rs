@@ -10,7 +10,7 @@ use std::sync::RwLock;
 use mycode_agent::session::SessionId;
 use mycode_agent::session::SessionService;
 use mycode_config::{HomeLayout, ProviderSettings, read_app_settings, read_ui_state};
-use mycode_providers::catalog::{CachedCatalog, RefreshOutcome, http_client};
+use mycode_providers::catalog::{CachedCatalog, RefreshOutcome};
 use tokio_util::sync::CancellationToken;
 
 use crate::settings_io::render_config_error;
@@ -115,13 +115,9 @@ pub(crate) async fn refresh_catalog(
         Ok(settings) => settings,
         Err(error) => return BridgeReply::Catalog(Err(render_config_error(&error))),
     };
-    let client = match http_client(&settings.effective_user_agent()) {
-        Ok(client) => client,
-        Err(message) => return BridgeReply::Catalog(Err(message)),
-    };
     let outcome = mycode_providers::catalog::refresh(
         &state.home,
-        &client,
+        &settings.effective_user_agent(),
         force,
         mycode_providers::catalog::DEFAULT_MAX_AGE_SECS,
     )
@@ -165,10 +161,7 @@ pub(crate) fn spawn_update_check(state: Arc<CoreState>, events: crate::BridgeEve
         if !ui_state.auto_update {
             return;
         }
-        let Ok(client) = http_client(UPDATE_USER_AGENT) else {
-            return;
-        };
-        if let Ok(Some(offer)) = crate::updates::latest_release(&client).await {
+        if let Ok(Some(offer)) = crate::updates::latest_release(UPDATE_USER_AGENT).await {
             let _ = events.try_send(BridgeEvent::UpdateAvailable { offer });
         }
     });

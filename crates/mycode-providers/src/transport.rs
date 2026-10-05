@@ -58,24 +58,26 @@ pub trait SseTransport: Send + Sync + 'static {
 }
 
 /// reqwest-backed production transport.
+///
+/// Each request builds a client that does not follow redirects and pins the
+/// resolved addresses. The stored builder probe only checks that TLS starts.
 #[derive(Clone)]
-pub struct ReqwestTransport {
-    client: reqwest::Client,
-}
+pub struct ReqwestTransport;
 
 impl ReqwestTransport {
-    /// Builds the shared client with bounded connect and header deadlines.
+    /// Checks that the TLS backend can initialize.
     ///
     /// # Errors
     ///
     /// Returns an unavailable error when the TLS backend cannot initialize.
     pub fn new() -> Result<Self, ProviderError> {
-        let client = reqwest::Client::builder()
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
             .build()
             .map_err(|_| ProviderError::new(ProviderErrorKind::Unavailable))?;
-        Ok(Self { client })
+        Ok(Self)
     }
 }
 
@@ -96,19 +98,29 @@ impl SseTransport for ReqwestTransport {
         call: TransportCall,
         cancel: CancellationToken,
     ) -> Result<ByteStream, ProviderError> {
-        let mut request = self
-            .client
-            .post(&call.endpoint)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(call.body.clone());
-        for (name, value) in &call.headers {
-            request = request.header(name.as_str(), value.as_str());
-        }
-        let mut fetch = std::pin::pin!(request.send());
-        let response = tokio::select! {
-            sent = &mut fetch => sent.map_err(map_reqwest_error)?,
-            () = cancel.cancelled() => return Err(ProviderError::new(ProviderErrorKind::Cancelled)),
-        };
+        let mut headers = call.headers.clone();
+        headers.push((
+            reqwest::header::CONTENT_TYPE.to_string(),
+            "application/json".to_owned(),
+        ));
+        let response = crate::http_pin::send_pinned(crate::http_pin::PinnedRequest {
+            method: reqwest::Method::POST,
+            url: call.endpoint.clone(),
+            headers,
+            body: Some(crate::http_pin::PinnedBody::Bytes(call.body.clone())),
+            mode: crate::http_pin::PinMode::CheckRedirect,
+            timeout: Some(READ_TIMEOUT),
+            user_agent: None,
+            cancel: cancel.clone(),
+        })
+        .await
+        .map_err(|message| {
+            if cancel.is_cancelled() || message == "request cancelled" {
+                ProviderError::new(ProviderErrorKind::Cancelled)
+            } else {
+                ProviderError::with_message(ProviderErrorKind::Unavailable, message)
+            }
+        })?;
         let response = match cancel.is_cancelled() {
             true => return Err(ProviderError::new(ProviderErrorKind::Cancelled)),
             false => response,

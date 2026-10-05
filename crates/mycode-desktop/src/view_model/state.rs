@@ -129,6 +129,9 @@ pub(crate) struct WorkspaceState {
     /// Session-to-workspace bindings (session id, workspace id). A session
     /// missing here belongs to the first workspace (upgrade window only).
     pub session_workspaces: Vec<(String, String)>,
+    /// Projects allowed to contribute `.mycode/mcp.json`. Not set by opening
+    /// a folder.
+    pub trusted_projects: Vec<String>,
     /// The workspace the sidebar currently shows.
     pub active_workspace: Option<String>,
     /// Folders in the open workspace, most recently added first. Mirrors the
@@ -390,6 +393,8 @@ pub enum DesktopAction {
         workspaces: Vec<mycode_config::WorkspaceDef>,
         /// Session-to-workspace bindings.
         session_workspaces: Vec<(String, String)>,
+        /// Projects trusted for project MCP configuration.
+        trusted_projects: Vec<String>,
         /// The workspace the sidebar shows.
         active_workspace: Option<String>,
     },

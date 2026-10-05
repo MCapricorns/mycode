@@ -17,6 +17,7 @@
 mod anthropic_messages;
 pub mod catalog;
 mod driver;
+mod http_pin;
 mod oauth;
 mod openai_completions;
 mod openai_responses;
@@ -32,6 +33,10 @@ use tokio_util::sync::CancellationToken;
 use mycode_config::ProviderSettings;
 use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Request};
 
+pub use http_pin::{
+    AddressClass, PinMode, PinnedBody, PinnedRequest, RedirectStep, classify_addresses,
+    decide_redirect, send_pinned, validate_hop,
+};
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
     CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,

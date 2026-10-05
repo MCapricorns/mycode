@@ -27,6 +27,28 @@ const DEVICE_SCOPE: &str = "read:user";
 /// Bounded string fields from GitHub responses.
 const MAX_FIELD_BYTES: usize = 8 * 1024;
 
+async fn pinned(
+    method: reqwest::Method,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<crate::PinnedBody>,
+) -> Result<reqwest::Response, String> {
+    crate::send_pinned(crate::PinnedRequest {
+        method,
+        url: url.to_owned(),
+        headers: headers
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
+        body,
+        mode: crate::PinMode::CheckRedirect,
+        timeout: Some(std::time::Duration::from_secs(30)),
+        user_agent: Some("mycode".to_owned()),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    })
+    .await
+}
+
 /// A started device authorization: what the user sees and what we poll with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceCodeStart {
@@ -84,13 +106,18 @@ fn field<'a>(payload: &'a Value, name: &str) -> Option<&'a str> {
 ///
 /// Returns a transport or endpoint-shape failure without embedded secrets.
 pub async fn start_device_flow(client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
-    let response = client
-        .post(DEVICE_CODE_URL)
-        .header("accept", "application/json")
-        .form(&[("client_id", DEVICE_CLIENT_ID), ("scope", DEVICE_SCOPE)])
-        .send()
-        .await
-        .map_err(|error| format!("device-code request failed: {error}"))?;
+    let _ = client;
+    let response = pinned(
+        reqwest::Method::POST,
+        DEVICE_CODE_URL,
+        &[("accept", "application/json")],
+        Some(crate::PinnedBody::Form(vec![
+            ("client_id".to_owned(), DEVICE_CLIENT_ID.to_owned()),
+            ("scope".to_owned(), DEVICE_SCOPE.to_owned()),
+        ])),
+    )
+    .await
+    .map_err(|error| format!("device-code request failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
             "device-code endpoint returned {}",
@@ -128,17 +155,22 @@ pub async fn poll_device_token(
     client: &reqwest::Client,
     device_code: &str,
 ) -> Result<DeviceTokenPoll, String> {
-    let response = client
-        .post(DEVICE_TOKEN_URL)
-        .header("accept", "application/json")
-        .form(&[
-            ("client_id", DEVICE_CLIENT_ID),
-            ("device_code", device_code),
-            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-        ])
-        .send()
-        .await
-        .map_err(|error| format!("device-token poll failed: {error}"))?;
+    let _ = client;
+    let response = pinned(
+        reqwest::Method::POST,
+        DEVICE_TOKEN_URL,
+        &[("accept", "application/json")],
+        Some(crate::PinnedBody::Form(vec![
+            ("client_id".to_owned(), DEVICE_CLIENT_ID.to_owned()),
+            ("device_code".to_owned(), device_code.to_owned()),
+            (
+                "grant_type".to_owned(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_owned(),
+            ),
+        ])),
+    )
+    .await
+    .map_err(|error| format!("device-token poll failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
             "device-token endpoint returned {}",
@@ -176,17 +208,23 @@ pub async fn copilot_bearer(
     client: &reqwest::Client,
     github_token: &str,
 ) -> Result<CopilotToken, String> {
-    let response = client
-        .get(COPILOT_TOKEN_URL)
-        .header("authorization", format!("Bearer {github_token}"))
-        .header("accept", "application/vnd.github+json")
-        .header("user-agent", "GitHubCopilotChat/0.35.0")
-        .header("editor-version", "vscode/1.107.0")
-        .header("editor-plugin-version", "copilot-chat/0.35.0")
-        .header("copilot-integration-id", "vscode-chat")
-        .send()
-        .await
-        .map_err(|error| format!("copilot token request failed: {error}"))?;
+    let _ = client;
+    let authorization = format!("Bearer {github_token}");
+    let response = pinned(
+        reqwest::Method::GET,
+        COPILOT_TOKEN_URL,
+        &[
+            ("authorization", authorization.as_str()),
+            ("accept", "application/vnd.github+json"),
+            ("user-agent", "GitHubCopilotChat/0.35.0"),
+            ("editor-version", "vscode/1.107.0"),
+            ("editor-plugin-version", "copilot-chat/0.35.0"),
+            ("copilot-integration-id", "vscode-chat"),
+        ],
+        None,
+    )
+    .await
+    .map_err(|error| format!("copilot token request failed: {error}"))?;
     if let Some(reason) = match response.status().as_u16() {
         401 | 403 => Some("copilot rejected the saved sign-in — sign in again".to_owned()),
         404 => Some("copilot token exchange is unavailable for this account".to_owned()),
@@ -329,17 +367,19 @@ pub const XAI_VERIFICATION_URI: &str = "https://auth.x.ai/device";
 ///
 /// Returns a transport or endpoint-shape failure without embedded secrets.
 pub async fn start_xai_device_flow(client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
-    let response = client
-        .post(XAI_DEVICE_CODE_URL)
-        .header("accept", "application/json")
-        .form(&[
-            ("client_id", XAI_CLIENT_ID),
-            ("scope", XAI_SCOPE),
-            ("referrer", "pi"),
-        ])
-        .send()
-        .await
-        .map_err(|error| format!("xAI device-code request failed: {error}"))?;
+    let _ = client;
+    let response = pinned(
+        reqwest::Method::POST,
+        XAI_DEVICE_CODE_URL,
+        &[("accept", "application/json")],
+        Some(crate::PinnedBody::Form(vec![
+            ("client_id".to_owned(), XAI_CLIENT_ID.to_owned()),
+            ("scope".to_owned(), XAI_SCOPE.to_owned()),
+            ("referrer".to_owned(), "pi".to_owned()),
+        ])),
+    )
+    .await
+    .map_err(|error| format!("xAI device-code request failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
             "xAI device-code endpoint returned {}",
@@ -363,17 +403,22 @@ pub async fn poll_xai_device_token(
     client: &reqwest::Client,
     device_code: &str,
 ) -> Result<DeviceTokenPoll, String> {
-    let response = client
-        .post(XAI_TOKEN_URL)
-        .header("accept", "application/json")
-        .form(&[
-            ("client_id", XAI_CLIENT_ID),
-            ("device_code", device_code),
-            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-        ])
-        .send()
-        .await
-        .map_err(|error| format!("xAI device-token poll failed: {error}"))?;
+    let _ = client;
+    let response = pinned(
+        reqwest::Method::POST,
+        XAI_TOKEN_URL,
+        &[("accept", "application/json")],
+        Some(crate::PinnedBody::Form(vec![
+            ("client_id".to_owned(), XAI_CLIENT_ID.to_owned()),
+            ("device_code".to_owned(), device_code.to_owned()),
+            (
+                "grant_type".to_owned(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_owned(),
+            ),
+        ])),
+    )
+    .await
+    .map_err(|error| format!("xAI device-token poll failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
             "xAI device-token endpoint returned {}",
@@ -419,13 +464,17 @@ pub struct CodexDeviceStart {
 ///
 /// Returns a transport or endpoint-shape failure.
 pub async fn start_codex_device_flow(client: &reqwest::Client) -> Result<CodexDeviceStart, String> {
-    let response = client
-        .post(CODEX_USER_CODE_URL)
-        .header("content-type", "application/json")
-        .json(&serde_json::json!({ "client_id": CODEX_CLIENT_ID }))
-        .send()
-        .await
+    let _ = client;
+    let body = serde_json::to_vec(&serde_json::json!({ "client_id": CODEX_CLIENT_ID }))
         .map_err(|error| format!("Codex device-code request failed: {error}"))?;
+    let response = pinned(
+        reqwest::Method::POST,
+        CODEX_USER_CODE_URL,
+        &[("content-type", "application/json")],
+        Some(crate::PinnedBody::Bytes(body)),
+    )
+    .await
+    .map_err(|error| format!("Codex device-code request failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
             "Codex device-code endpoint returned {}",
@@ -476,16 +525,20 @@ pub async fn poll_codex_device_token(
     client: &reqwest::Client,
     start: &CodexDeviceStart,
 ) -> Result<CodexDevicePoll, String> {
-    let response = client
-        .post(CODEX_DEVICE_TOKEN_URL)
-        .header("content-type", "application/json")
-        .json(&serde_json::json!({
-            "device_auth_id": start.device_auth_id,
-            "user_code": start.user_code,
-        }))
-        .send()
-        .await
-        .map_err(|error| format!("Codex device-token poll failed: {error}"))?;
+    let _ = client;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "device_auth_id": start.device_auth_id,
+        "user_code": start.user_code,
+    }))
+    .map_err(|error| format!("Codex device-token poll failed: {error}"))?;
+    let response = pinned(
+        reqwest::Method::POST,
+        CODEX_DEVICE_TOKEN_URL,
+        &[("content-type", "application/json")],
+        Some(crate::PinnedBody::Bytes(body)),
+    )
+    .await
+    .map_err(|error| format!("Codex device-token poll failed: {error}"))?;
     let status = response.status().as_u16();
     if status == 403 || status == 404 {
         return Ok(CodexDevicePoll::Pending);
@@ -529,19 +582,21 @@ pub async fn exchange_codex_code(
     authorization_code: &str,
     code_verifier: &str,
 ) -> Result<OAuthSecret, String> {
-    let response = client
-        .post(CODEX_TOKEN_URL)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("client_id", CODEX_CLIENT_ID),
-            ("code", authorization_code),
-            ("code_verifier", code_verifier),
-            ("redirect_uri", CODEX_DEVICE_REDIRECT),
-        ])
-        .send()
-        .await
-        .map_err(|error| format!("Codex token exchange failed: {error}"))?;
+    let _ = client;
+    let response = pinned(
+        reqwest::Method::POST,
+        CODEX_TOKEN_URL,
+        &[("content-type", "application/x-www-form-urlencoded")],
+        Some(crate::PinnedBody::Form(vec![
+            ("grant_type".to_owned(), "authorization_code".to_owned()),
+            ("client_id".to_owned(), CODEX_CLIENT_ID.to_owned()),
+            ("code".to_owned(), authorization_code.to_owned()),
+            ("code_verifier".to_owned(), code_verifier.to_owned()),
+            ("redirect_uri".to_owned(), CODEX_DEVICE_REDIRECT.to_owned()),
+        ])),
+    )
+    .await
+    .map_err(|error| format!("Codex token exchange failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
             "Codex token endpoint returned {}",
@@ -581,17 +636,19 @@ async fn refresh_form_token(
     refresh: &str,
     extract_account: Option<bool>,
 ) -> Result<OAuthSecret, String> {
-    let response = client
-        .post(url)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh),
-            ("client_id", client_id),
-        ])
-        .send()
-        .await
-        .map_err(|error| format!("token refresh failed: {error}"))?;
+    let _ = client;
+    let response = pinned(
+        reqwest::Method::POST,
+        url,
+        &[("content-type", "application/x-www-form-urlencoded")],
+        Some(crate::PinnedBody::Form(vec![
+            ("grant_type".to_owned(), "refresh_token".to_owned()),
+            ("refresh_token".to_owned(), refresh.to_owned()),
+            ("client_id".to_owned(), client_id.to_owned()),
+        ])),
+    )
+    .await
+    .map_err(|error| format!("token refresh failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!("token refresh returned {}", response.status()));
     }

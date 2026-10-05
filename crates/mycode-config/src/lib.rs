@@ -20,6 +20,7 @@ mod error;
 mod home;
 mod json_recover;
 mod mcp_import;
+mod project_mcp;
 mod resources;
 mod secrets;
 mod secure_fs;
@@ -29,7 +30,9 @@ mod ui_state;
 
 #[doc(inline)]
 pub use authority::AuthorityRevision;
-pub use checkpoints::{checkpoint_file, rollback_session};
+pub use checkpoints::{
+    CheckpointEntry, CheckpointKind, RollbackAction, checkpoint_file, plan_rollback,
+};
 #[doc(inline)]
 pub use compaction::{
     COMPACTION_FORMAT_VERSION, COMPACTION_KIND, CompactionCheckpoint, MAX_SUMMARY_CHARS,
@@ -41,6 +44,7 @@ pub use home::{
     session_relative,
 };
 pub use mcp_import::{normalize_api_key, parse_mcp_import};
+pub use project_mcp::project_mcp_servers;
 #[doc(inline)]
 pub use resources::{
     ResourceFile, SkillFile, discover_resources, discover_skills, render_resource_prompt,
@@ -62,8 +66,8 @@ pub use settings::{
     ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SETTINGS_PATH, ShellSettings,
     SubagentRoleSettings, SubagentSettings, ToolsSettings, UsageSettings, VALID_LANGUAGES,
     VALID_PALETTES, VALID_PROVIDER_KINDS, VALID_SHELL_KINDS, VALID_WEB_KINDS, WebBackendSettings,
-    WebSettings, builtin_mcp_servers, builtin_web_backends, default_user_agent, read_app_settings,
-    replace_app_settings, split_command_line,
+    WebSettings, builtin_mcp_servers, builtin_web_backends, default_user_agent, is_mcp_executable,
+    read_app_settings, replace_app_settings, split_command_line,
 };
 #[doc(inline)]
 pub use subagents::{
@@ -72,7 +76,7 @@ pub use subagents::{
 };
 #[doc(inline)]
 pub use ui_state::{
-    MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES, MAX_WORKSPACE_NAME_CHARS,
-    MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, UI_STATE_FORMAT_VERSION, UI_STATE_KIND, UI_STATE_PATH,
-    UiState, WorkspaceDef, read_ui_state, replace_ui_state,
+    MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES, MAX_TRUSTED_PROJECTS,
+    MAX_WORKSPACE_NAME_CHARS, MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, UI_STATE_FORMAT_VERSION,
+    UI_STATE_KIND, UI_STATE_PATH, UiState, WorkspaceDef, read_ui_state, replace_ui_state,
 };

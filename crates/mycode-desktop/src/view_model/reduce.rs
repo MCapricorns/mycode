@@ -598,6 +598,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             session_projects,
             workspaces,
             session_workspaces,
+            trusted_projects,
             active_workspace: active,
         } => {
             state.recents = recents;
@@ -605,6 +606,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.session_projects = session_projects;
             state.workspaces = workspaces;
             state.session_workspaces = session_workspaces;
+            state.trusted_projects = trusted_projects;
             state.active_workspace = active;
             sync_workspace_roots(state);
             state.auto_update = auto_update;
