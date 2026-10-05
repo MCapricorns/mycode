@@ -725,6 +725,14 @@ def _expect_workflow_contract() -> None:
     _expect("already has every" not in lowered, "skip-if-complete wording remains")
     _expect(".assets[].name" not in workflow, "asset name check remains")
     _expect("release_plan.py" in workflow, "planner is not wired into release.yml")
+    _expect(
+        "pr-release-build" not in workflow,
+        "release.yml still defines the pull request build",
+    )
+    _expect(
+        "github.event_name == 'pull_request'" not in workflow,
+        "release.yml still has a pull-request-only job",
+    )
     release_header = workflow.split("\njobs:\n", 1)[0]
     _expect(
         "pull_request" not in release_header,
