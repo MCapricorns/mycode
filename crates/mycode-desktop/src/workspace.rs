@@ -185,6 +185,10 @@ pub struct Workspace {
     git_diff: String,
     /// Bumped when the diff target changes so a stale diff is dropped.
     git_diff_generation: u64,
+    /// Tool rows the transcript is showing in full. Empty means one-line summaries.
+    expanded_tools: HashSet<String>,
+    /// Last interface font size applied to the window. Empty until the first frame.
+    applied_font_size: String,
 }
 
 impl Workspace {
@@ -259,6 +263,8 @@ impl Workspace {
             git_diff_path: None,
             git_diff: String::new(),
             git_diff_generation: 0,
+            expanded_tools: HashSet::new(),
+            applied_font_size: String::new(),
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -732,12 +738,68 @@ impl Workspace {
             return;
         }
         crate::ui::desk::apply_palette(Theme::global_mut(cx), palette);
+        self.applied_font_size.clear();
         Theme::sync_base(cx);
         self.apply_action(
             DesktopAction::SettingsPaletteSelected(palette.to_owned()),
             cx,
         );
         self.on_save_settings(cx);
+    }
+
+    /// Applies and persists the interface font size. The next frame paints it.
+    pub(crate) fn on_select_font_size(&mut self, font_size: &str, cx: &mut Context<Self>) {
+        let font_size = crate::ui::desk::normalize_font_size(font_size);
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.font_size == font_size)
+        {
+            return;
+        }
+        self.applied_font_size.clear();
+        self.apply_action(
+            DesktopAction::SettingsFontSizeSelected(font_size.to_owned()),
+            cx,
+        );
+        self.on_save_settings(cx);
+    }
+
+    /// Paints the saved interface font size onto the window, once per change.
+    pub(crate) fn sync_interface_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.font_size.as_str())
+            .unwrap_or("m");
+        let id = crate::ui::desk::normalize_font_size(id);
+        if self.applied_font_size == id {
+            return;
+        }
+        crate::ui::desk::apply_font_size(Theme::global_mut(cx), id);
+        window.set_rem_size(px(crate::ui::desk::interface_rem_px(id)));
+        Theme::sync_base(cx);
+        self.applied_font_size = id.to_owned();
+    }
+
+    /// Opens, closes, or pins the inspector. Does not touch the session.
+    pub(crate) fn on_set_inspector(&mut self, open: bool, pinned: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::InspectorChanged { open, pinned }, cx);
+    }
+
+    /// Whether a tool row is showing its result body.
+    pub(crate) fn tool_row_open(&self, id: &str) -> bool {
+        self.expanded_tools.contains(id)
+    }
+
+    /// Toggles one tool row between a one-line summary and its result body.
+    pub(crate) fn on_toggle_tool_row(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.expanded_tools.remove(id) {
+            self.expanded_tools.insert(id.to_owned());
+        }
+        cx.notify();
     }
 
     /// Applies and persists the UI language. The whole window re-renders on

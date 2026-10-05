@@ -1,18 +1,19 @@
-//! Solid panels over a visible page gradient.
+//! Quiet panels over a near-solid page.
 //!
-//! The window background is the gradient. Rails, dialogs, chips, and the
-//! composer are opaque so a label never disappears into the wash.
+//! The window background is a very slight wash. Rails, dialogs, and the
+//! composer stay opaque enough that a label never disappears, without
+//! stacking a new color block for every control.
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{
-    Background, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Stateful,
-    Styled as _, div, linear_color_stop, linear_gradient, px,
+    Background, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, linear_color_stop,
+    linear_gradient, px,
 };
 
-/// Page gradient. The two stops are far enough apart to read in the chat
-/// column, and close enough that body text stays legible on both.
+/// Page wash. The end stop is already pulled toward the base in the palette,
+/// so the column reads as one dark surface.
 pub(super) fn ambient(theme: &Theme) -> Background {
     linear_gradient(
-        155.,
+        180.,
         linear_color_stop(theme.background, 0.),
         linear_color_stop(theme.status_bar, 1.),
     )
@@ -28,9 +29,9 @@ pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
     theme.sidebar
 }
 
-/// Quiet control fill.
+/// Quiet control fill. Nearly transparent so a border can carry the edge.
 pub(super) fn frost(theme: &Theme) -> Hsla {
-    theme.secondary
+    theme.secondary.opacity(0.28)
 }
 
 /// Dialog and form card fill.
@@ -60,32 +61,28 @@ pub(super) fn radius_card() -> gpui_kit::Pixels {
 
 /// Button and chip corner radius.
 pub(super) fn radius_control() -> gpui_kit::Pixels {
-    px(8.)
+    px(10.)
 }
 
-/// Matched pair of welcome / picker actions.
+/// Primary and secondary actions. Primary is a low-saturation tint with a
+/// thin accent edge; secondary is a border only. Hover deepens the fill.
 pub(super) fn glass_button(
     id: impl Into<gpui_kit::ElementId>,
     emphasized: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
     let fill = if emphasized {
-        theme.primary
+        theme.accent
     } else {
-        theme.secondary
-    };
-    let ink = if emphasized {
-        theme.primary_foreground
-    } else {
-        theme.foreground
+        theme.transparent
     };
     let hover = if emphasized {
-        theme.primary
+        super::desk::deepen(theme.accent)
     } else {
         theme.secondary_hover
     };
     let border = if emphasized {
-        theme.primary
+        theme.primary.opacity(0.45)
     } else {
         theme.border
     };
@@ -96,13 +93,13 @@ pub(super) fn glass_button(
         .items_center()
         .justify_center()
         .gap_2()
-        .h(px(36.))
-        .px(px(14.))
-        .rounded(radius_control())
+        .h(px(32.))
+        .px(px(12.))
+        .rounded(px(11.))
         .border_1()
         .border_color(border)
         .bg(fill)
-        .text_color(ink)
+        .text_color(theme.foreground)
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover).border_color(border))
@@ -123,26 +120,6 @@ pub(super) fn scrim(theme: &Theme) -> Hsla {
     theme.overlay
 }
 
-/// A small mono tag chip.
-pub(super) fn mono_chip(label: &str, color: Hsla, border: Hsla, theme: &Theme) -> impl IntoElement {
-    div().flex().flex_row().child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(px(7.))
-            .py(px(2.))
-            .border_1()
-            .border_color(border)
-            .bg(theme.secondary)
-            .rounded(radius_control())
-            .text_xs()
-            .font_family(theme.mono_font_family.clone())
-            .text_color(color)
-            .child(label.to_owned()),
-    )
-}
-
 /// The shared floating-panel recipe.
 pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
     div()
@@ -152,5 +129,4 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .border_color(glass_border(theme))
         .bg(popover(theme))
         .text_color(theme.popover_foreground)
-        .shadow_lg()
 }

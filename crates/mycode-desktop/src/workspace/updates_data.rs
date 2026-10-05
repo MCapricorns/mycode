@@ -216,6 +216,16 @@ impl Workspace {
             self.apply_action(DesktopAction::ChangesPanelToggled(false), cx);
             return;
         }
+        if self.vm.inspector_open && !self.vm.inspector_pinned {
+            self.apply_action(
+                DesktopAction::InspectorChanged {
+                    open: false,
+                    pinned: false,
+                },
+                cx,
+            );
+            return;
+        }
         if self.vm.update_dialog_open {
             self.apply_action(DesktopAction::UpdateDialogToggled(false), cx);
             return;

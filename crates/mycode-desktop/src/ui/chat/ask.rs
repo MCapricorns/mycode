@@ -23,12 +23,16 @@ pub(crate) fn render_ask_panel(
     let desk = Desk::of(theme);
     div()
         .id("ask-inline")
+        .w_full()
         .px_4()
         .pt_2()
+        .flex()
+        .justify_center()
         .child(
             div()
                 .id("ask-card")
                 .w_full()
+                .max_w(super::COLUMN_MAX)
                 .flex()
                 .flex_col()
                 .gap_3()
@@ -37,7 +41,6 @@ pub(crate) fn render_ask_panel(
                 .border_1()
                 .border_color(skin::glass_border(theme))
                 .bg(skin::popover(theme))
-                .shadow_lg()
                 .child(
                     div()
                         .flex()

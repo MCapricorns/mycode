@@ -1,6 +1,6 @@
-//! Dark palettes. Surfaces are solid. The page background is a
-//! two-stop gradient so the chat column shows the falloff; rails and dialogs
-//! stay opaque so text never sits on a washed-out fill.
+//! Dark palettes. Surfaces stay opaque. The page is a near-solid dark base
+//! with only a hint of the palette wash, so the conversation is not sitting
+//! on a loud gradient.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
@@ -60,6 +60,72 @@ pub fn palette_label(palette: &str) -> &'static str {
 #[must_use]
 pub fn palette_swatch(palette: &str) -> Hsla {
     hex(spec_for(normalize_palette(palette)).accent)
+}
+
+/// Interface font-size ids. Must stay identical to `mycode_config::VALID_FONT_SIZES`.
+pub const FONT_SIZES: [&str; 4] = ["s", "m", "l", "xl"];
+
+/// Canonical font-size id. Unknown values fall back to medium.
+#[must_use]
+pub fn normalize_font_size(id: &str) -> &'static str {
+    FONT_SIZES
+        .into_iter()
+        .find(|item| *item == id)
+        .unwrap_or("m")
+}
+
+/// Body size in pixels. `.text_sm()` is 0.875rem, so the window rem is chosen
+/// to land `text_sm` on this value.
+#[must_use]
+pub fn interface_font_px(id: &str) -> f32 {
+    match normalize_font_size(id) {
+        "s" => 12.,
+        "l" => 14.,
+        "xl" => 16.,
+        _ => 13.,
+    }
+}
+
+/// Root rem that makes `.text_sm()` equal [`interface_font_px`].
+#[must_use]
+pub fn interface_rem_px(id: &str) -> f32 {
+    interface_font_px(id) / 0.875
+}
+
+/// Short label for a font-size id.
+#[must_use]
+pub fn font_size_label(id: &str) -> &'static str {
+    match normalize_font_size(id) {
+        "s" => "S",
+        "l" => "L",
+        "xl" => "XL",
+        _ => "M",
+    }
+}
+
+/// Writes the interface scale onto the theme. The caller also sets the window
+/// rem so every `text_sm` / `text_xs` surface follows.
+pub fn apply_font_size(theme: &mut Theme, id: &str) {
+    let rem = interface_rem_px(id);
+    theme.font_size = gpui_kit::px(rem);
+    theme.mono_font_size = gpui_kit::px(interface_font_px(id));
+}
+
+/// A slightly deeper tint for primary hover.
+#[must_use]
+pub(crate) fn deepen(mut color: Hsla) -> Hsla {
+    color.l = (color.l - 0.05).max(0.);
+    color
+}
+
+/// Moves `from` toward `toward` by `amount` (0 keeps `from`, 1 is `toward`).
+fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
+    Hsla {
+        h: from.h + (toward.h - from.h) * amount,
+        s: from.s + (toward.s - from.s) * amount,
+        l: from.l + (toward.l - from.l) * amount,
+        a: from.a + (toward.a - from.a) * amount,
+    }
 }
 
 struct Spec {
@@ -306,13 +372,13 @@ pub fn apply_palette(theme: &mut Theme, palette: &str) {
 
 fn paint(theme: &mut Theme, spec: &Spec) {
     let bg = hex(spec.bg);
-    let wash = hex(spec.wash);
+    let wash = soften(hex(spec.wash), bg, 0.82);
     let surface = hex(spec.surface);
     let card = hex(spec.card);
     let hover = hex(spec.hover);
     let ink = hex(spec.ink);
     let dim = hex(spec.dim);
-    let line = hex(spec.line);
+    let line = soften(hex(spec.line), bg, 0.32);
     let accent = hex(spec.accent);
     let accent_ink = hex(spec.accent_ink);
     let tint = hex(spec.tint);
@@ -320,9 +386,9 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     let red = hex(spec.red);
     let info = hex(spec.info);
 
-    theme.radius = gpui_kit::px(8.);
+    theme.radius = gpui_kit::px(10.);
     theme.radius_lg = gpui_kit::px(12.);
-    theme.shadow = true;
+    theme.shadow = false;
 
     theme.background = bg;
     theme.foreground = ink;
@@ -407,20 +473,22 @@ fn paint(theme: &mut Theme, spec: &Spec) {
 /// `Theme::change` resets button tokens to the stock theme. Copy the
 /// palette into both the legacy fields and `tokens`.
 fn sync_controls(theme: &mut Theme) {
-    theme.button_primary = theme.primary;
-    theme.button_primary_hover = theme.primary_hover;
-    theme.button_primary_active = theme.primary_active;
-    theme.button_primary_foreground = theme.primary_foreground;
-    theme.tokens.button_primary = theme.primary.into();
-    theme.tokens.button_primary_hover = theme.primary_hover.into();
-    theme.tokens.button_primary_active = theme.primary_active.into();
-    theme.tokens.button_primary_foreground = theme.primary_foreground.into();
+    let primary = theme.accent;
+    let primary_hover = deepen(theme.accent);
+    theme.button_primary = primary;
+    theme.button_primary_hover = primary_hover;
+    theme.button_primary_active = primary_hover;
+    theme.button_primary_foreground = theme.foreground;
+    theme.tokens.button_primary = primary.into();
+    theme.tokens.button_primary_hover = primary_hover.into();
+    theme.tokens.button_primary_active = primary_hover.into();
+    theme.tokens.button_primary_foreground = theme.foreground.into();
 
-    theme.button = theme.secondary;
+    theme.button = theme.transparent;
     theme.button_hover = theme.secondary_hover;
     theme.button_active = theme.secondary_active;
     theme.button_foreground = theme.foreground;
-    theme.tokens.button = theme.secondary.into();
+    theme.tokens.button = theme.transparent.into();
     theme.tokens.button_hover = theme.secondary_hover.into();
     theme.tokens.button_active = theme.secondary_active.into();
     theme.tokens.button_foreground = theme.foreground.into();
@@ -469,5 +537,21 @@ mod tests {
             super::PALETTES.as_slice(),
             mycode_config::VALID_PALETTES.as_slice()
         );
+    }
+
+    #[test]
+    fn font_sizes_match_settings_and_land_on_the_body_scale() {
+        assert_eq!(
+            super::FONT_SIZES.as_slice(),
+            mycode_config::VALID_FONT_SIZES.as_slice()
+        );
+        assert_eq!(super::interface_font_px("s"), 12.);
+        assert_eq!(super::interface_font_px("m"), 13.);
+        assert_eq!(super::interface_font_px("l"), 14.);
+        assert_eq!(super::interface_font_px("xl"), 16.);
+        assert_eq!(super::interface_font_px("nope"), 13.);
+        assert!((super::interface_rem_px("l") - 16.).abs() < f32::EPSILON);
+        assert_eq!(super::normalize_font_size("xl"), "xl");
+        assert_eq!(super::font_size_label("s"), "S");
     }
 }

@@ -79,6 +79,10 @@ pub(crate) struct WorkspaceState {
     pub subagent_window: Option<String>,
     /// Whether the full working-tree changes drawer is open.
     pub changes_panel_open: bool,
+    /// Whether the right inspector is open. It starts closed.
+    pub inspector_open: bool,
+    /// Whether a wide window docks the inspector instead of covering the chat.
+    pub inspector_pinned: bool,
     /// Pending ask rows awaiting user answers.
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// Draft answers aligned with [`Self::pending_ask`].
@@ -229,6 +233,15 @@ pub enum DesktopAction {
     SettingsLanguageSelected(String),
     /// The user picked a color palette; persists with settings.
     SettingsPaletteSelected(String),
+    /// The user picked an interface font size (`s`, `m`, `l`, `xl`).
+    SettingsFontSizeSelected(String),
+    /// Opens, closes, or pins the right inspector. Layout only.
+    InspectorChanged {
+        /// Whether the inspector is visible.
+        open: bool,
+        /// Whether a wide window docks it beside the conversation.
+        pinned: bool,
+    },
     /// The user dismissed the composer mention menu without picking a row.
     /// The settings editor changed the User-Agent.
     SettingsUserAgentChanged(String),

@@ -410,6 +410,19 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 mark_settings_dirty(settings);
             }
         }
+        DesktopAction::SettingsFontSizeSelected(font_size) => {
+            if !mycode_config::VALID_FONT_SIZES.contains(&font_size.as_str()) {
+                return;
+            }
+            if let Some(settings) = state.settings.as_mut() {
+                settings.font_size = font_size;
+                mark_settings_dirty(settings);
+            }
+        }
+        DesktopAction::InspectorChanged { open, pinned } => {
+            state.inspector_open = open;
+            state.inspector_pinned = pinned;
+        }
         DesktopAction::SettingsUserAgentChanged(user_agent) => {
             edit_settings(state, |settings| {
                 settings.user_agent = user_agent;

@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use crate::i18n::t;
-use crate::ui::skin::{self, mono_chip};
+use crate::ui::skin;
 use crate::ui::{desk::Desk, ellipsis};
 use crate::view_model::{ConversationEntry, EntryKind, StreamingReply};
 use crate::workspace::Workspace;
@@ -41,10 +41,9 @@ pub(super) fn render_streaming_entry(
             .flex()
             .flex_col()
             .gap_2()
-            .child(mono_chip(
+            .child(status_line(
                 &format!("{} · {status}", t("WORKING", "进行中")),
                 desk.amber,
-                desk.amber.opacity(0.45),
                 theme,
             ))
             .when(!streaming.thinking.is_empty(), |this| {
@@ -55,17 +54,12 @@ pub(super) fn render_streaming_entry(
                 ))
             })
             .when(!streaming.text.trim().is_empty(), |this| {
-                this.child(mono_chip(
-                    "AGENT",
-                    desk.green,
-                    desk.green.opacity(0.35),
-                    theme,
-                ))
-                .child(agent_text(
-                    "streaming-agent-md".into(),
-                    streaming.text.clone().into(),
-                    theme,
-                ))
+                this.child(status_line("AGENT", desk.green, theme))
+                    .child(agent_text(
+                        "streaming-agent-md".into(),
+                        streaming.text.clone().into(),
+                        theme,
+                    ))
             })
             .when(
                 streaming.thinking.trim().is_empty() && streaming.text.trim().is_empty(),
@@ -94,25 +88,19 @@ pub(super) fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit
                 .flex_col()
                 .gap_2()
                 .when(!entry.thinking.is_empty(), |this| {
-                    this.child(mono_chip("THINKING", desk.faint, theme.border, theme))
-                        .child(thinking_box(
-                            format!("thinking-{}", entry.event_id).into(),
-                            &entry.thinking,
-                            theme,
-                        ))
+                    this.child(thinking_box(
+                        format!("thinking-{}", entry.event_id).into(),
+                        &entry.thinking,
+                        theme,
+                    ))
                 })
                 .when(!entry.text.trim().is_empty(), |this| {
-                    this.child(mono_chip(
-                        "AGENT",
-                        desk.green,
-                        desk.green.opacity(0.35),
-                        theme,
-                    ))
-                    .child(agent_text(
-                        format!("agent-md-{}", entry.event_id).into(),
-                        SharedString::from(entry.text.trim()),
-                        theme,
-                    ))
+                    this.child(status_line("AGENT", desk.green, theme))
+                        .child(agent_text(
+                            format!("agent-md-{}", entry.event_id).into(),
+                            SharedString::from(entry.text.trim()),
+                            theme,
+                        ))
                 })
         })
         .into_any_element(),
@@ -184,33 +172,31 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
         .child(content)
 }
 
+fn status_line(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(crate::ui::lamp(color))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(label.to_owned()),
+        )
+}
+
 fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement {
     let desk = Desk::of(theme);
     div()
         .id(id)
         .w_full()
         .min_w_0()
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .rounded(skin::radius_card())
-        .px_3()
-        .py_2()
-        .bg(skin::frost(theme))
         .flex()
         .flex_col()
         .gap_1()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_1()
-                .text_xs()
-                .font_family(theme.mono_font_family.clone())
-                .text_color(desk.faint)
-                .child(div().text_color(desk.amber).child("▸"))
-                .child("REASONING"),
-        )
+        .child(status_line("REASONING", desk.amber, theme))
         .child(
             div()
                 .text_sm()
@@ -227,19 +213,14 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
 /// (`install_text_view_defaults` on `Theme::change` and `Theme::sync_base`).
 /// The id must be unique per entry — `ElementId::CodeLocation` would collide
 /// across blocks since all bubbles render from the same call site.
-fn agent_text(id: SharedString, text: SharedString, theme: &Theme) -> impl IntoElement {
+fn agent_text(id: SharedString, text: SharedString, _theme: &Theme) -> impl IntoElement {
     // The theme default leaves a full rem between paragraphs, which paints
     // as a tall empty slab when a reply is short or still streaming.
     let style = TextViewStyle::default().paragraph_gap(rems(0.35));
     div()
         .w_full()
         .min_w_0()
-        .rounded(skin::radius_card())
-        .px_3()
-        .py_2()
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .bg(skin::frost(theme))
+        .text_sm()
         .child(TextView::markdown(id, text).style(style).selectable(true))
 }
 
@@ -257,14 +238,15 @@ fn short_stamp(event_id: &str) -> String {
     tail
 }
 
-/// One tool ledger block: header row (lamp + name + target) with the result
-/// rendered inside as diff-green/red or CRT terminal text. Failures paint the
-/// border red; a pending call (no result yet) shows the amber lamp.
+/// One tool row: a single summary line. Clicking it reveals the same result
+/// body the card used to show, without changing the tool call itself.
 pub(super) fn render_tool_block(
     call: &ConversationEntry,
     result: Option<&ConversationEntry>,
-    theme: &Theme,
+    expanded: bool,
+    cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
     let desk = Desk::of(theme);
     let failed = result.is_some_and(|r| r.text.starts_with("failed:"));
     let waiting = result.is_none();
@@ -275,48 +257,89 @@ pub(super) fn render_tool_block(
     } else {
         desk.green
     };
-    let mut card = div()
+    let status = tool_status(result);
+    let event_id = call.event_id.clone();
+    let row = div()
+        .id(format!("tool-{}", call.event_id))
         .flex()
         .flex_col()
-        .rounded(skin::radius_card())
-        .border_1()
-        .border_color(if failed {
-            desk.red.opacity(0.45)
-        } else {
-            skin::glass_border(theme)
-        })
-        .bg(skin::frost(theme))
         .w_full()
         .min_w_0()
         .child(
             div()
+                .id(format!("tool-summary-{}", call.event_id))
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_2()
+                .h(px(28.))
                 .px_2()
-                .py(px(7.))
-                .text_xs()
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(|row| row.bg(theme.secondary_hover.opacity(0.55)))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_toggle_tool_row(&event_id, cx);
+                }))
                 .child(crate::ui::lamp(lamp_color))
                 .child(
                     div()
                         .min_w_0()
+                        .flex_1()
                         .truncate()
+                        .text_xs()
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.foreground)
                         .child(call.text.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(px(220.))
+                        .truncate()
+                        .text_xs()
+                        .text_color(if failed {
+                            desk.red
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(status),
                 ),
         );
-    if let Some(result) = result {
-        let body = result_body(tool_name(call.text.as_ref()), result, theme, &desk);
-        card = card.child(
-            div()
-                .border_t_1()
-                .border_color(skin::glass_border(theme))
-                .child(body),
-        );
+    let row = if let (true, Some(result)) = (expanded, result) {
+        row.child(div().pt_1().pl(px(16.)).child(result_body(
+            tool_name(call.text.as_ref()),
+            result,
+            theme,
+            &desk,
+        )))
+    } else {
+        row
+    };
+    row.into_any_element()
+}
+
+fn tool_status(result: Option<&ConversationEntry>) -> String {
+    let Some(result) = result else {
+        return t("running", "进行中").to_owned();
+    };
+    let text = result.text.as_ref();
+    if text.starts_with("failed:") {
+        return t("failed", "失败").to_owned();
     }
-    desk_block(call, theme, card).into_any_element()
+    let added = text.lines().filter(|line| line.starts_with("+ ")).count();
+    let removed = text.lines().filter(|line| line.starts_with("- ")).count();
+    if added + removed > 0 {
+        return format!("+{added} −{removed}");
+    }
+    let first = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    if first.is_empty() {
+        t("done", "完成").to_owned()
+    } else {
+        ellipsis(first, 48)
+    }
 }
 
 /// The first token of a tool label is the tool name. The rest is the target.
@@ -482,7 +505,7 @@ pub(super) fn render_user_entry(
         .flex()
         .flex_col()
         .gap_1()
-        .child(mono_chip("YOU", desk.cyan, desk.cyan.opacity(0.35), theme))
+        .child(status_line("YOU", desk.cyan, theme))
         .child(
             div()
                 .flex()
@@ -490,10 +513,8 @@ pub(super) fn render_user_entry(
                 .gap_2()
                 .w_full()
                 .min_w_0()
-                .rounded(skin::radius_card())
-                .border_1()
-                .border_color(skin::glass_border(theme))
-                .bg(skin::frost(theme))
+                .rounded(px(12.))
+                .bg(theme.accent.opacity(0.28))
                 .px_3()
                 .py_2()
                 .text_sm()

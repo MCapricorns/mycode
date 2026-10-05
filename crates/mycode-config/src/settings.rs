@@ -82,12 +82,21 @@ pub const VALID_PALETTES: [&str; 13] = [
 /// UI language ids: follow the system, English, or Simplified Chinese.
 pub const VALID_LANGUAGES: [&str; 3] = ["auto", "en", "zh"];
 
+/// Interface font-size ids, smallest to largest.
+///
+/// `s` / `m` / `l` / `xl` are about 12 / 13 / 14 / 16 px of body text.
+pub const VALID_FONT_SIZES: [&str; 4] = ["s", "m", "l", "xl"];
+
 fn default_palette() -> String {
     "slate".to_owned()
 }
 
 fn default_language() -> String {
     "auto".to_owned()
+}
+
+fn default_font_size() -> String {
+    "m".to_owned()
 }
 
 /// Appearance settings.
@@ -102,6 +111,9 @@ pub struct AppearanceSettings {
     /// `auto`, `en`, or `zh`.
     #[serde(default = "default_language")]
     pub language: String,
+    /// `s`, `m`, `l`, or `xl`. Missing values read as medium.
+    #[serde(default = "default_font_size")]
+    pub font_size: String,
 }
 
 impl Default for AppearanceSettings {
@@ -110,6 +122,7 @@ impl Default for AppearanceSettings {
             theme: "dark".to_owned(),
             palette: default_palette(),
             language: default_language(),
+            font_size: default_font_size(),
         }
     }
 }
@@ -207,6 +220,15 @@ impl AppSettings {
             .unwrap_or("slate")
     }
 
+    /// Returns the effective interface font size. Unknown values read as `m`.
+    #[must_use]
+    pub fn effective_font_size(&self) -> &'static str {
+        VALID_FONT_SIZES
+            .into_iter()
+            .find(|id| *id == self.appearance.font_size)
+            .unwrap_or("m")
+    }
+
     /// Validates the complete document.
     ///
     /// Family-specific bounds, grammar, and cross-field rules live in the
@@ -242,6 +264,9 @@ impl AppSettings {
         }
         if !VALID_LANGUAGES.contains(&self.appearance.language.as_str()) {
             return Err(invalid("appearance.language: must be auto, en, or zh"));
+        }
+        if !VALID_FONT_SIZES.contains(&self.appearance.font_size.as_str()) {
+            return Err(invalid("appearance.fontSize: must be s, m, l, or xl"));
         }
         self.validate_subagent_roles()?;
         self.validate_tools_shell()?;
@@ -400,4 +425,49 @@ fn is_https_url(value: &str) -> bool {
         && host
             .bytes()
             .all(|byte| byte.is_ascii_graphic() || byte == b'-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AppSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SerializedSettings, decode_settings,
+    };
+
+    #[test]
+    fn legacy_appearance_without_font_size_defaults_to_medium() {
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 2,
+            "appearance": { "theme": "dark", "palette": "ocean", "language": "zh" }
+        }"#;
+        let parsed = decode_settings(bytes).expect("legacy settings");
+        assert_eq!(parsed.settings.appearance.font_size, "m");
+        assert_eq!(parsed.settings.effective_font_size(), "m");
+        assert_eq!(parsed.settings.appearance.palette, "ocean");
+        assert_eq!(parsed.settings.appearance.language, "zh");
+        assert!(!parsed.migrated);
+    }
+
+    #[test]
+    fn font_size_round_trips_through_the_settings_document() {
+        let mut settings = AppSettings::default();
+        settings.appearance.font_size = "xl".to_owned();
+        assert!(settings.validate().is_ok());
+        let document = SerializedSettings {
+            format_version: SETTINGS_FORMAT_VERSION,
+            kind: SETTINGS_KIND,
+            revision: 4,
+            settings: &settings,
+        };
+        let bytes = serde_json::to_vec_pretty(&document).expect("encode");
+        let parsed = decode_settings(&bytes).expect("decode");
+        assert_eq!(parsed.settings.appearance.font_size, "xl");
+        assert_eq!(parsed.settings.effective_font_size(), "xl");
+        assert!(bytes.windows(10).any(|window| window == br#""fontSize""#));
+
+        settings.appearance.font_size = "huge".to_owned();
+        let error = settings.validate().expect_err("unknown size");
+        assert!(error.summary().contains("fontSize"), "{}", error.summary());
+    }
 }
