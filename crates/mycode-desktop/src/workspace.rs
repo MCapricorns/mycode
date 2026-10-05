@@ -46,6 +46,35 @@ fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
     desired.min(room)
 }
 
+/// AppKit can move the traffic lights but cannot remove them. Park the
+/// cluster outside the window so the custom right-side buttons are the only
+/// ones on screen.
+const PARKED_TRAFFIC_LIGHTS: gpui_kit::Point<Pixels> = gpui_kit::point(px(-240.), px(0.));
+
+/// Window options for the app-drawn chrome.
+///
+/// The system title bar stays hidden on every desktop:
+/// - Linux: `WindowDecorations::Client` asks X11/Wayland not to paint a server
+///   title bar. That request is a no-op on other platforms.
+/// - Windows: `appears_transparent` extends the client area over the caption.
+///   Min, max, and close still go through `WindowControlArea`.
+/// - macOS: `appears_transparent` and `app_owns_titlebar_drag` drop the system
+///   title bar and its drag/double-click. Traffic lights are parked off-window.
+fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
+    let mut options = gpui_kit::component::TitleBar::window_options();
+    options.window_bounds = Some(WindowBounds::Windowed(bounds));
+    options.window_min_size = Some(size(px(960.), px(560.)));
+    options.window_decorations = Some(gpui_kit::WindowDecorations::Client);
+    options.app_owns_titlebar_drag = true;
+    let titlebar = options
+        .titlebar
+        .get_or_insert_with(gpui_kit::component::TitleBar::title_bar_options);
+    titlebar.title = Some("MYCode Harness".into());
+    titlebar.appears_transparent = true;
+    titlebar.traffic_light_position = Some(PARKED_TRAFFIC_LIGHTS);
+    options
+}
+
 /// Opens the main window over one owned home.
 ///
 /// # Panics
@@ -54,17 +83,10 @@ fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
 /// fallback by design.
 pub fn open_window(home: HomeLayout, cx: &mut App) {
     let (bridge, events) = CoreBridge::start(home.clone());
-    // The custom titlebar owns dragging and window controls, so the system
-    // titlebar is hidden (`appears_transparent`).
-    let mut options = gpui_kit::component::TitleBar::window_options();
     // Open as a regular window at the default bounds: the maximize-on-open
     // workaround for gpui's stale-scale sizing is retired by user request
     // (DPI edge cases accepted); the user can maximize manually.
-    options.window_bounds = Some(WindowBounds::Windowed(startup_bounds(cx)));
-    options.window_min_size = Some(size(px(960.), px(560.)));
-    if let Some(titlebar) = options.titlebar.as_mut() {
-        titlebar.title = Some("MYCode Harness".into());
-    }
+    let options = client_window_options(startup_bounds(cx));
     cx.open_window(options, |window, cx| {
         // `init` installs the stock light theme. The product paints dark only,
         // then pushes that theme (and its code-block highlighter) into Base.
@@ -1158,6 +1180,28 @@ impl gpui_kit::Render for Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_chrome_hides_the_system_title_bar() {
+        let options = client_window_options(Bounds {
+            origin: gpui_kit::point(px(0.), px(0.)),
+            size: WINDOW_SIZE,
+        });
+        assert_eq!(
+            options.window_decorations,
+            Some(gpui_kit::WindowDecorations::Client)
+        );
+        assert!(options.app_owns_titlebar_drag);
+        let titlebar = options.titlebar.expect("custom title bar");
+        assert!(titlebar.appears_transparent);
+        assert_eq!(
+            titlebar.title.as_ref().map(AsRef::as_ref),
+            Some("MYCode Harness")
+        );
+        assert_eq!(titlebar.traffic_light_position, Some(PARKED_TRAFFIC_LIGHTS));
+        assert!(f32::from(PARKED_TRAFFIC_LIGHTS.x) < 0.);
+        assert!(f32::from(PARKED_TRAFFIC_LIGHTS.y) >= 0.);
+    }
 
     #[test]
     fn tail_follow_stays_at_the_bottom_and_lets_go_when_scrolled_up() {
