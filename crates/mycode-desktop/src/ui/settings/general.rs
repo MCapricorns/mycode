@@ -95,6 +95,9 @@ pub(super) fn render_general_section(
         cx,
     );
     let ua_field = div()
+        .w_full()
+        .h_auto()
+        .flex_none()
         .flex()
         .flex_col()
         .gap_1()
@@ -139,12 +142,12 @@ pub(super) fn render_general_section(
         .into_any_element()
 }
 
-/// Label above a fixed five-column swatch grid.
+/// Label above a wrapping row of fixed-width swatches.
 ///
-/// Thirteen palettes fill two rows and leave three on the last. Columns are
-/// equal, so the last row stays left-aligned. Rows are max-content: a `1fr`
-/// row track, or a cell with `width: 100%`, grows to the settings scrollport
-/// and the font controls disappear into that gap.
+/// Thirteen palettes fill two rows of five and leave three on the last.
+/// Cells share one width, so the last row stays on the left. The row is a
+/// flex wrap, not a grid: grid row tracks still grew into the settings
+/// scrollport and hid the font controls in that gap.
 fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     div()
         .id("row-palette")
@@ -269,42 +272,46 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_select_palette(id, cx);
                 }))
+                .test_support()
                 .into_any_element()
         })
         .collect::<Vec<_>>();
-    palette_grid(cells)
+    palette_swatches(cells)
 }
 
-/// Five equal columns, three max-content rows. The grid box is content height.
-fn palette_grid(children: Vec<AnyElement>) -> AnyElement {
+/// Fixed cells on a wrapping row. Five fit the row; the rest wrap left.
+///
+/// No grid. GPUI row tracks, including max-content, still absorbed the
+/// settings scrollport and pushed the font controls off the first screen.
+fn palette_swatches(children: Vec<AnyElement>) -> AnyElement {
     div()
-        .id("palette-grid")
+        .id("palette-swatches")
         .w_full()
+        .max_w(px(crate::ui::desk::palette_row_max_px()))
         .h_auto()
         .flex_none()
-        .grid()
-        .grid_cols(crate::ui::desk::PALETTE_GRID_COLUMNS)
-        // `grid_rows` and `grid_rows_min_content` are both minmax(..., 1fr).
-        // Those tracks grow into a definite grid height. Max-content does not.
-        .grid_rows_max_content(crate::ui::desk::palette_grid_rows())
-        .gap_2()
+        .flex()
+        .flex_row()
+        .flex_wrap()
         .items_start()
         .content_start()
         .justify_start()
+        .gap(px(crate::ui::desk::PALETTE_GAP_PX))
         .children(children)
         .test_support()
         .into_any_element()
 }
 
-/// One palette cell: a fixed square over a one-line label.
+/// One palette cell: a fixed 72px column with a 40px swatch and a one-line label.
 ///
-/// No `w_full` and no `size_full`. A percentage size on the cell is resolved
-/// against the settings scrollport and stretches the row.
+/// Width and the color fill are absolute pixels. A percentage size is
+/// resolved against the settings scrollport and stretches the row.
 fn palette_cell(
     id: &'static str,
     selected: &str,
     theme: &Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let cell_px = px(crate::ui::desk::PALETTE_CELL_PX);
     let swatch_px = px(crate::ui::desk::PALETTE_SWATCH_PX);
     let on = selected == id;
     let swatch = crate::ui::desk::palette_swatch(id);
@@ -320,10 +327,11 @@ fn palette_cell(
     };
     div()
         .id(format!("palette-{id}"))
+        .w(cell_px)
         .h_auto()
-        .min_w_0()
         .self_start()
         .flex_none()
+        .flex_shrink_0()
         .flex()
         .flex_col()
         .items_center()
@@ -335,20 +343,25 @@ fn palette_cell(
                 .size(swatch_px)
                 .flex_none()
                 .flex_shrink_0()
-                .overflow_hidden()
-                .flex()
-                .flex_col()
-                .p(px(2.))
                 .rounded(px(8.))
                 .border_1()
                 .border_color(ring)
                 .hover(move |this| this.border_color(hover_ring))
-                .child(div().flex_1().min_h_0().rounded(px(6.)).bg(swatch))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .size(px(crate::ui::desk::PALETTE_SWATCH_PX - 8.))
+                        .flex_none()
+                        .rounded(px(6.))
+                        .bg(swatch),
+                )
                 .test_support(),
         )
         .child(
             div()
-                .max_w_full()
+                .w(cell_px)
                 .text_center()
                 .text_xs()
                 .truncate()
@@ -363,11 +376,11 @@ mod appearance_layout {
     use gpui_kit::test::{TestSupportExt as _, TestWindowExt};
     use gpui_kit::{
         AppContext as _, Context, InteractiveElement, IntoElement, ParentElement, Render,
-        StatefulInteractiveElement, Styled, TestAppContext, Window, div, px, size,
+        StatefulInteractiveElement, Styled, TestAppContext, Window, div, px, rems, size,
     };
 
     use super::super::widgets::settings_card;
-    use super::{palette_cell, palette_grid};
+    use super::{palette_cell, palette_swatches};
 
     /// Settings scrollport at a normal desktop size. The shell matches
     /// `#settings-content`: a fixed-height flex column whose page does not grow.
@@ -376,10 +389,14 @@ mod appearance_layout {
     impl Render for AppearanceProbe {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
-            let grid = palette_grid(
+            let swatches = palette_swatches(
                 crate::ui::desk::PALETTES
                     .into_iter()
-                    .map(|id| palette_cell(id, "slate", &theme).into_any_element())
+                    .map(|id| {
+                        palette_cell(id, "slate", &theme)
+                            .test_support()
+                            .into_any_element()
+                    })
                     .collect(),
             );
             let font = labeled_block("dropdown-font-family", "Interface font", px(32.));
@@ -397,6 +414,7 @@ mod appearance_layout {
                         .min_h_0()
                         .flex()
                         .flex_row()
+                        .child(div().id("settings-nav").w(px(236.)).h_full().flex_none())
                         .child(
                             div()
                                 .id("settings-content")
@@ -406,14 +424,19 @@ mod appearance_layout {
                                 .overflow_y_scroll()
                                 .flex()
                                 .flex_col()
+                                .justify_start()
+                                .test_support()
                                 .child(
                                     div()
                                         .id("settings-content-inner")
+                                        .mx_auto()
+                                        .max_w(rems(52.))
                                         .w_full()
                                         .h_auto()
                                         .flex_none()
                                         .flex()
                                         .flex_col()
+                                        .justify_start()
                                         .px_6()
                                         .py_4()
                                         .child(settings_card(
@@ -431,7 +454,7 @@ mod appearance_layout {
                                                     .flex_col()
                                                     .gap_2()
                                                     .child("Palette")
-                                                    .child(grid)
+                                                    .child(swatches)
                                                     .test_support()
                                                     .into_any_element(),
                                                 font,
@@ -468,11 +491,18 @@ mod appearance_layout {
         let handle = cx.open_window(size(px(1280.), px(800.)), |_, _| AppearanceProbe);
         cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
-            let grid = window.find("palette-grid").bounds();
+            let swatches = window.find("palette-swatches").bounds();
             let swatch = window.find("swatch-slate").bounds();
+            let slate = window.find("palette-slate").bounds();
+            let sand = window.find("palette-sand").bounds();
+            let rose = window.find("palette-rose").bounds();
+            let plum = window.find("palette-plum").bounds();
+            let aurora = window.find("palette-aurora").bounds();
             let font = window.find("dropdown-font-family").bounds();
             let size_row = window.find("row-font-size").bounds();
             let agent = window.find("row-user-agent").bounds();
+            let card = window.find("card-appearance").bounds();
+            let content = window.find("settings-content").bounds();
 
             assert!(
                 (swatch.size.width - px(40.)).abs() <= px(2.)
@@ -480,20 +510,41 @@ mod appearance_layout {
                 "swatch should stay a 40px square, got {swatch:?}"
             );
             assert!(
-                grid.size.height < px(280.),
-                "palette grid should be content height, got {grid:?}"
+                (slate.size.width - px(crate::ui::desk::PALETTE_CELL_PX)).abs() <= px(2.),
+                "palette cell should stay {0}px wide, got {slate:?}",
+                crate::ui::desk::PALETTE_CELL_PX
+            );
+            assert!(
+                swatches.size.height < px(280.),
+                "palette row should be content height, got {swatches:?}"
+            );
+            assert!(
+                (sand.origin.y - slate.origin.y).abs() <= px(2.)
+                    && rose.origin.y > slate.bottom()
+                    && rose.origin.y - slate.bottom() < px(24.),
+                "five cells on the first row, sixth wraps under it: slate {slate:?} sand {sand:?} rose {rose:?}"
+            );
+            assert!(
+                (plum.origin.x - slate.origin.x).abs() <= px(2.)
+                    && aurora.origin.x > plum.origin.x
+                    && aurora.right() < slate.origin.x + px(crate::ui::desk::palette_row_max_px()),
+                "last row stays left-aligned: plum {plum:?} aurora {aurora:?}"
             );
             assert!(
                 font.size.height < px(120.) && size_row.size.height < px(120.),
                 "font controls should not stretch, font {font:?} size {size_row:?}"
             );
+            assert!(
+                card.size.height + px(80.) < content.size.height,
+                "appearance card should not fill the scrollport, card {card:?} content {content:?}"
+            );
 
-            let font_gap = font.origin.y - grid.bottom();
+            let font_gap = font.origin.y - swatches.bottom();
             let size_gap = size_row.origin.y - font.bottom();
             let agent_gap = agent.origin.y - size_row.bottom();
             assert!(
                 font_gap >= px(0.) && font_gap < px(80.),
-                "gap between palette and interface font is {font_gap:?}, grid {grid:?} font {font:?}"
+                "gap between palette and interface font is {font_gap:?}, swatches {swatches:?} font {font:?}"
             );
             assert!(
                 size_gap >= px(0.) && size_gap < px(80.),
