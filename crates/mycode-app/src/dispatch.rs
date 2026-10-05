@@ -205,7 +205,6 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
             server_id: server.id.clone(),
             outcome: Err(message),
         },
-        BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
         BridgeCommand::RecallMessage { .. } => BridgeReply::Recalled(Err(message)),
         BridgeCommand::DeleteSession { .. } => BridgeReply::SessionDeleted(Err(message)),
         BridgeCommand::RemoveRecent { .. } => BridgeReply::UiStateSaved(Err(message)),
@@ -344,13 +343,6 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             server_id: server.id.clone(),
             outcome: mcp_list_tools(&state.home, server).await,
         },
-        BridgeCommand::RollbackWorkspace { session_id } => {
-            let home = state.home.clone();
-            let session_id = session_id.clone();
-            BridgeReply::RolledBack(
-                blocking(move || crate::rollback::apply_rollback(&home, &session_id)).await,
-            )
-        }
         BridgeCommand::RecallMessage {
             session,
             branch,

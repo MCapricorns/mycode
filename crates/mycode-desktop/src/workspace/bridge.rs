@@ -403,14 +403,6 @@ impl Workspace {
             } => {
                 self.apply_action(DesktopAction::McpProbeFailed { server_id, message }, cx);
             }
-            BridgeReply::RolledBack(Ok(restored)) => {
-                let message = if restored.is_empty() {
-                    "nothing to roll back".to_owned()
-                } else {
-                    format!("restored {} file(s)", restored.len())
-                };
-                self.apply_action(DesktopAction::Failed(message), cx);
-            }
             BridgeReply::Catalog(Ok(info)) => {
                 let refreshed = self.pending_catalog_refresh;
                 self.pending_catalog_refresh = false;
@@ -571,7 +563,6 @@ impl Workspace {
             | BridgeReply::Settings(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
             | BridgeReply::ChatStarted(Err(message))
-            | BridgeReply::RolledBack(Err(message))
             | BridgeReply::Recalled(Err(message))
             | BridgeReply::Resources(Err(message))
             | BridgeReply::AskAnswered(Err(message)) => {

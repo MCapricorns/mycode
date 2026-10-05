@@ -460,10 +460,11 @@ fn preview_caption(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl In
         .font_family(theme.mono_font_family.clone())
 }
 
-/// One user bubble with hover actions: edit-and-resend (rewinds to before)
+/// One user bubble with hover actions: edit-and-resend (rewinds to before
 /// this message and prefills the composer) and recall (drops this message
-/// and everything after). The first message has no prior event to rewind
-/// to, so its actions hide.
+/// and everything after). Neither action restores or deletes workspace
+/// files. The first message has no prior event to rewind to, so its
+/// actions hide.
 pub(super) fn render_user_entry(
     entry: &ConversationEntry,
     can_rewind: bool,

@@ -14,7 +14,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod authority;
-mod checkpoints;
 mod compaction;
 mod error;
 mod home;
@@ -30,9 +29,6 @@ mod ui_state;
 
 #[doc(inline)]
 pub use authority::AuthorityRevision;
-pub use checkpoints::{
-    CheckpointEntry, CheckpointKind, RollbackAction, checkpoint_file, plan_rollback,
-};
 #[doc(inline)]
 pub use compaction::{
     COMPACTION_FORMAT_VERSION, COMPACTION_KIND, CompactionCheckpoint, MAX_SUMMARY_CHARS,

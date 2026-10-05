@@ -3,9 +3,10 @@
 //! Two modes share one name, one schema, and one prompt entry:
 //!
 //! * `script` runs `command` in the platform shell (pipelines, redirection,
-//!   expansion, compound scripts). Windows resolves one configured or detected
-//!   shell (`pwsh`, then Git bash). When neither is available it falls back
-//!   to `%SystemRoot%\System32\cmd.exe` at runtime only; that fallback is not
+//!   expansion, compound scripts, and file edits through Python or another
+//!   interpreter). Windows resolves one configured or detected shell (`pwsh`,
+//!   then Git bash). When neither is available it falls back to
+//!   `%SystemRoot%\System32\cmd.exe` at runtime only; that fallback is not
 //!   written into settings. POSIX hosts use an explicit POSIX shell candidate
 //!   list. There is no `bash` tool alias.
 //! * `program` spawns `program` with an explicit `args` vector and does not
@@ -17,8 +18,9 @@
 //! fallback is allowed only for a typed executable-not-found result on the
 //! script path. Execution is unsandboxed current-user file and network
 //! authority; environment filtering is not a sandbox. Valid calls run
-//! directly with no Core permission prompt. Filesystem and search tools stay
-//! in-process.
+//! directly with no Core permission prompt. `write` and `edit` stay
+//! available. `read`, `grep`, and `find` stay in-process. File edits from
+//! either path are not undone.
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -251,25 +253,30 @@ impl Tool for ShellTool {
 
     fn description(&self) -> &str {
         "Run a process in the session cwd. `mode` `script` executes `command` \
-         in the platform shell for pipelines, redirection, expansion, and \
-         shell syntax. `mode` `program` spawns `program` with an explicit \
-         `args` vector and does not start a shell; only a kernel-loadable PE, \
-         ELF, or Mach-O image is accepted. Filesystem and search tools stay \
-         in-process; do not use this tool to read, write, edit, grep, or find \
-         files. The platform shell is pwsh or Git bash on Windows; POSIX hosts \
-         use a POSIX shell. Execution is unsandboxed current-user execution \
-         with normal file and network access; environment filtering is not a \
-         sandbox. Same-account processes outside this host are outside the \
-         security boundary. Captured stdout/stderr is truncated beyond 50 KiB; \
-         a non-zero exit is an error result, not a tool failure. Default \
-         timeout: 120 s. There is no Core permission prompt."
+         in the platform shell for pipelines, redirection, expansion, and for \
+         editing workspace files. On a POSIX shell, run Python (`python3` or \
+         `python`) with a quoted heredoc or a short script. On PowerShell, \
+         pipe a here-string to `python`. `mode` `program` spawns `program` \
+         with an explicit `args` vector and does not start a shell; only a \
+         kernel-loadable PE, ELF, or Mach-O image is accepted. `write` and \
+         `edit` remain available for one UTF-8 file. `read`, `grep`, and \
+         `find` stay in-process. Do not use this tool to talk to the user. \
+         Edits made here are not undone. The platform shell is pwsh or Git \
+         bash on Windows; POSIX hosts use a POSIX shell. Execution is \
+         unsandboxed current-user execution with normal file and network \
+         access; environment filtering is not a sandbox. Same-account \
+         processes outside this host are outside the security boundary. \
+         Captured stdout/stderr is truncated beyond 50 KiB; a non-zero exit \
+         is an error result, not a tool failure. Default timeout: 120 s. \
+         There is no Core permission prompt."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "shell: mode script runs a platform shell script (command); mode \
+            "shell: mode script runs a platform shell script, including a \
+             Python heredoc or short script that edits files (command); mode \
              program runs one kernel-loadable binary with explicit args and no \
-             shell. Optional timeout_secs. Do not use it to read or edit files.",
+             shell. Optional timeout_secs.",
         )
     }
 

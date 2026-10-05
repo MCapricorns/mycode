@@ -4296,7 +4296,6 @@ dependencies = [
 name = "mycode-config"
 version = "0.7.5"
 dependencies = [
- "blake3",
  "rustix",
  "serde",
  "serde_json",

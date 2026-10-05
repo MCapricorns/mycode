@@ -1,6 +1,6 @@
 # mycode-config
 
-本机拥有的配置权威。设置、密钥、界面状态、压缩检查点、文件快照、角色和提示资源都从这里读写。没有网络。
+本机拥有的配置权威。设置、密钥、界面状态、压缩检查点、角色和提示资源都从这里读写。没有网络。
 
 ## 设计思路
 
@@ -22,7 +22,6 @@
 | `secrets` | `secrets.json`：每个提供商一把密钥，按 id 排序。空字符串表示清除 |
 | `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型。坏文件重置为默认，不当作产品配置的真相 |
 | `compaction` | `compaction.json`：摘要覆盖到哪条消息、哪个分支头。账本本身不改写 |
-| `checkpoints` | `checkpoints/<session>/` 下按 blake3 存文件快照，清单是追加 JSONL。每会话 256 份，单文件 8 MiB。检查点时不存在的路径记为缺失，回滚时删除该路径。超过 8 MiB 返回 `Oversized`，不静默跳过 |
 | `subagents` | 内置 scout 与 artisan，再加上家目录和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |
 | `resources` | 发现 `AGENTS.md` / `MYCODE.md` 和 `.agents` 技能，裁剪后交给 system prompt |
 | `mcp_import` | 把粘贴的 MCP JSON 收成服务器行，并把 Authorization 抽成密钥 |
@@ -55,4 +54,4 @@
 
 ## 不放在这里的东西
 
-刷新 models.dev 要发 HTTP，所以目录缓存的下载在 `mycode-providers`。真正跑回合、连接 MCP、应用文件快照回滚的步骤在 `mycode-app`。
+刷新 models.dev 要发 HTTP，所以目录缓存的下载在 `mycode-providers`。真正跑回合、连接 MCP 的步骤在 `mycode-app`。

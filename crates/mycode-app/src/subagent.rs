@@ -487,16 +487,7 @@ impl BridgeAgentHost {
             }
             registry
         });
-        let run_dir_for_hooks = run_dir.clone();
-        let run_home = self.home.clone();
-        // Subagent writes snapshot into a side checkpoint store so the
-        // parent session's rollback surface stays unchanged.
-        let run_session = format!("task-{}", std::process::id());
-        let hooks = HookRunner::default().with_before_tool(crate::turn::checkpoint_hook(
-            run_home,
-            run_dir_for_hooks,
-            run_session,
-        ));
+        let hooks = HookRunner::default();
 
         // A parent interrupt stops the child. Leaving it running held the
         // turn open, so Stop, send, and the window close never came back.

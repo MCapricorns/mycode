@@ -12,7 +12,7 @@ English notes are [below](#english).
 - **对话。** 输入框旁切换模型和思考强度。
 - **改动。** 右侧是当前模型和该文件夹的 git 改动，点文件看 diff。
 - **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
-- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，`program` 直接启动钉住的程序映像）。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
+- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，可以用 Python heredoc 或短脚本改文件；`program` 直接启动钉住的程序映像）。这些改动都没有文件撤销。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
 - **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。
 - **界面。** 中英双语，深色界面和几套配色。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。
 
@@ -51,9 +51,10 @@ cargo build --release -p mycode-desktop
 ├─ ui.json                工作区、文件夹、会话归属
 ├─ catalog-cache.json     模型目录缓存
 ├─ sessions/<id>/         账本、压缩检查点
-├─ checkpoints/<id>/      改文件之前的快照
 └─ scratch/               未绑定文件夹时的工作目录
 ```
+
+更早版本留下的 `checkpoints/<id>/` 会在删除会话时清掉。新的回合不再写文件快照。
 
 把整个目录换到另一台机器时，设置 `MYCODE_HOME` 指向它。应用不会跟随符号链接走出这个根。
 
@@ -99,7 +100,9 @@ You bring the API keys.
   Copilot, Codex, and xAI can sign in with a device code.
 - **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`.
   `shell` is the only process tool: `mode` `program` launches a pinned
-  executable with no shell, and `mode` `script` uses your shell profile.
+  executable with no shell, and `mode` `script` uses your shell profile,
+  including a Python heredoc or short script that edits files. Those edits
+  are not undone.
   Web search, questions, the `agent` tool, and MCP share one registry.
 - **Subagents.** Built-in scout and artisan roles,
   or custom Markdown roles under `agents/`.
@@ -149,9 +152,11 @@ debuginfo stays small.
 ├─ ui.json
 ├─ catalog-cache.json
 ├─ sessions/<id>/
-├─ checkpoints/<id>/
 └─ scratch/
 ```
+
+Older installs may still have `checkpoints/<id>/`. Deleting a session
+removes that directory. New turns do not write file snapshots.
 
 Point `MYCODE_HOME` at a copied tree to move the app. Path resolution
 does not follow symlinks out of that root.

@@ -2,9 +2,7 @@
 //! and per-turn cancellation.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use mycode_agent::session::{BranchId, EventKind, HeadStamp, SessionId};
@@ -101,47 +99,6 @@ async fn turn_credentials(
         return Ok((settings, provider, key.to_owned()));
     }
     Err(last_error)
-}
-
-type CheckpointFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
-
-/// Builds the before-tool hook that snapshots a mutating tool's target
-/// before dispatch: `write`/`edit` paths resolve against `cwd` (an absolute
-/// path replaces it), and the copy runs on the blocking pool so the
-/// single-threaded core executor never stalls on file I/O. A checkpoint
-/// error fails the tool; it is not skipped.
-pub(crate) fn checkpoint_hook(
-    home: HomeLayout,
-    cwd: PathBuf,
-    session: String,
-) -> impl Fn(&str, &serde_json::Value) -> CheckpointFuture + Send + Sync + 'static {
-    move |tool, args| {
-        let raw_path = matches!(tool, "write" | "edit")
-            .then(|| {
-                args.get("path")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .flatten();
-        let home = home.clone();
-        let cwd = cwd.clone();
-        let session = session.clone();
-        Box::pin(async move {
-            let Some(raw_path) = raw_path else {
-                return Ok(());
-            };
-            let path = cwd.join(raw_path);
-            match tokio::task::spawn_blocking(move || {
-                mycode_config::checkpoint_file(&home, &session, &path)
-            })
-            .await
-            {
-                Ok(Ok(_)) => Ok(()),
-                Ok(Err(error)) => Err(format!("checkpoint failed: {}", error.summary())),
-                Err(_) => Err("checkpoint failed: snapshot task panicked".to_owned()),
-            }
-        })
-    }
 }
 
 /// Workspace folders other than the session cwd. Missing UI state is empty.
@@ -301,8 +258,7 @@ async fn run_chat_turn(
         Message::User(user) => user,
         _ => return Err("the turn has no user message to answer".to_owned()),
     };
-    // session_id is borrowed by the checkpoint closure and later moved into
-    // the pump; give each its own copy.
+    // Owned for the compaction hook and the cancel registration.
     let session_id = session_id.to_owned();
 
     let context_window = model_context_window(state, &provider, model);
@@ -374,8 +330,9 @@ response as `agent`.\n</mcp>",
         }
         system_prompt.push_str(
             "Relative paths stay in the session cwd. For the other folders, pass an \
-absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` \
-starts in the session cwd for both script and program mode.",
+absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
+path inside a `shell` script (`mode` `script`). `shell` starts in the session \
+cwd for both script and program mode.",
         );
     }
     system_prompt.push_str("\n\n");
@@ -393,34 +350,27 @@ starts in the session cwd for both script and program mode.",
     let compact_session = session_id.clone();
     let compact_branch = branch.as_str().to_owned();
     let compact_head = head_stamp_text.clone();
-    let hooks = HookRunner::default()
-        .with_before_request(move |mut request| {
-            let home = compact_home.clone();
-            let wire = compact_wire.clone();
-            let model = compact_model.clone();
-            let session_id = compact_session.clone();
-            let branch_id = compact_branch.clone();
-            let head = compact_head.clone();
-            async move {
-                let scope = crate::compaction::CompactScope {
-                    home: &home,
-                    wire: &wire,
-                    model: &model,
-                    session_id: &session_id,
-                    branch_id: &branch_id,
-                    head: &head,
-                    context_window,
-                };
-                request.messages =
-                    crate::compaction::compact_history(&scope, request.messages).await;
-                request
-            }
-        })
-        .with_before_tool(checkpoint_hook(
-            home.clone(),
-            cwd.clone(),
-            session_id.clone(),
-        ));
+    let hooks = HookRunner::default().with_before_request(move |mut request| {
+        let home = compact_home.clone();
+        let wire = compact_wire.clone();
+        let model = compact_model.clone();
+        let session_id = compact_session.clone();
+        let branch_id = compact_branch.clone();
+        let head = compact_head.clone();
+        async move {
+            let scope = crate::compaction::CompactScope {
+                home: &home,
+                wire: &wire,
+                model: &model,
+                session_id: &session_id,
+                branch_id: &branch_id,
+                head: &head,
+                context_window,
+            };
+            request.messages = crate::compaction::compact_history(&scope, request.messages).await;
+            request
+        }
+    });
     let cancel = CancellationToken::new();
     // Publish the token so an Escape-driven CancelChat can abort this turn;
     // the guard unpublishes it on every exit path.

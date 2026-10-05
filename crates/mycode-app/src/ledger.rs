@@ -18,9 +18,9 @@ use crate::protocol::{ActiveConversation, ConversationEntry, EntryKind, SessionS
 /// Rendered wording for a lost expected-head compare-and-swap.
 const HEAD_MOVED_ON: &str = "the session moved on; reopen it";
 
-/// Session checkpoint directory under the home root. Private inside
-/// `mycode-config` (`checkpoints::checkpoint_dir`), so the layout is spelled
-/// here once; `checkpoint_file` records beneath it and rollback applies the plan.
+/// Leftover file-snapshot directory from older versions. New turns do not
+/// write it. Session delete still removes `<home>/checkpoints/<session-id>`
+/// so those snapshots do not outlive the session.
 const CHECKPOINTS_DIR: &str = "checkpoints";
 
 pub(crate) fn render_error(error: SessionError) -> String {
@@ -240,6 +240,9 @@ pub(crate) async fn ledger_history(
 
 /// Rewinds the branch so everything from the recalled message onward is
 /// gone, then returns the truncated conversation plus the edited text.
+///
+/// Workspace files are left unchanged: recall does not restore or delete
+/// them.
 pub(crate) async fn recall_message(
     service: &SessionService,
     session: &SessionId,
@@ -324,11 +327,12 @@ pub(crate) async fn send_message(
     ))
 }
 
-/// Deletes one session's durable footprint: ledger, compaction checkpoint,
-/// and file snapshots. The ids are plain names by construction.
+/// Deletes one session's durable footprint: the ledger directory and, when
+/// present, the leftover file-snapshot directory from older versions. The
+/// ids are plain names by construction.
 ///
-/// Only the ledger directory always exists; snapshots are created lazily,
-/// so an absent directory is a successful delete rather than an error.
+/// Only the ledger directory is created for new sessions. An absent snapshot
+/// directory is a successful delete rather than an error.
 pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), String> {
     if session_id.is_empty()
         || session_id.contains(['/', '\\', ':', '\0'])

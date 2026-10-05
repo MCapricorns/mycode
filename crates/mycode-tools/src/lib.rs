@@ -30,8 +30,7 @@ pub mod tool;
 
 pub use builtin::fs_io::{
     FileAccess, FileRead, FileRevision, FileSnapshot, PreparedFile, prepare_file,
-    prepare_file_async, read_file, read_file_async, read_file_snapshot_async, remove_file_nofollow,
-    restore_file_nofollow,
+    prepare_file_async, read_file, read_file_async, read_file_snapshot_async,
 };
 pub use builtin::fs_search::{
     PreparedSearch, SearchAccess, prepare_search, prepare_search_async,
