@@ -27,7 +27,7 @@ pub(super) fn render_context_panel(
     let theme = cx.theme();
     div()
         .id("context-panel")
-        .w(px(260.))
+        .w(px(300.))
         .h_full()
         .flex()
         .flex_col()
@@ -35,25 +35,118 @@ pub(super) fn render_context_panel(
         .border_l_1()
         .border_color(super::skin::glass_border(theme))
         .bg(super::skin::glass_sidebar(theme))
+        .child(inspector_bar(true, cx))
+        .child(inspector_body(workspace, cx))
+}
+
+/// Inspector as a right-hand drawer. The conversation keeps the full column.
+pub(super) fn render_inspector_drawer(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id("inspector-layer")
+        .absolute()
+        .inset_0()
         .child(
             div()
-                .id("context-body")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px_3()
-                .py_3()
+                .id("inspector-backdrop")
+                .absolute()
+                .size_full()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_set_inspector(false, workspace.vm().inspector_pinned, cx);
+                })),
+        )
+        .child(
+            div()
+                .id("inspector-drawer")
+                .absolute()
+                .top(px(8.))
+                .right(px(8.))
+                .bottom(px(8.))
+                .w(px(320.))
                 .flex()
                 .flex_col()
-                .gap_4()
-                .when(
-                    crate::view_model::task_surface_visible(workspace.vm())
-                        && !workspace.vm().live_jobs.is_empty(),
-                    |this| this.child(render_subagents(workspace, cx)),
-                )
-                .child(render_changes(workspace, cx))
-                .child(render_model_usage(workspace, cx)),
+                .rounded(px(12.))
+                .border_1()
+                .border_color(super::skin::glass_border(theme))
+                .bg(super::skin::glass_sidebar(theme))
+                .overflow_hidden()
+                .child(inspector_bar(false, cx))
+                .child(inspector_body(workspace, cx)),
         )
+}
+
+fn inspector_bar(docked: bool, cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id(if docked {
+            "inspector-bar-docked"
+        } else {
+            "inspector-bar-drawer"
+        })
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .h(px(36.))
+        .border_b_1()
+        .border_color(super::skin::glass_border(theme))
+        .child(
+            div()
+                .flex_1()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(t("Details", "详情")),
+        )
+        .child(super::icon_button(
+            if docked {
+                "inspector-unpin"
+            } else {
+                "inspector-pin"
+            },
+            IconName::Pin,
+            cx.listener(move |workspace, _, _, cx| {
+                if docked {
+                    workspace.on_set_inspector(true, false, cx);
+                } else {
+                    workspace.on_set_inspector(true, true, cx);
+                }
+            }),
+            cx,
+        ))
+        .when(!docked, |this| {
+            this.child(super::icon_button(
+                "inspector-close",
+                IconName::X,
+                cx.listener(|workspace, _, _, cx| {
+                    workspace.on_set_inspector(false, false, cx);
+                }),
+                cx,
+            ))
+        })
+}
+
+fn inspector_body(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
+    div()
+        .id("context-body")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px_3()
+        .py_3()
+        .flex()
+        .flex_col()
+        .gap_4()
+        .when(
+            crate::view_model::task_surface_visible(workspace.vm())
+                && !workspace.vm().live_jobs.is_empty(),
+            |this| this.child(render_subagents(workspace, cx)),
+        )
+        .child(render_changes(workspace, cx))
+        .child(render_model_usage(workspace, cx))
 }
 
 fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
@@ -107,12 +200,9 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                 .flex()
                 .flex_col()
                 .gap_1()
-                .px_2()
-                .py(px(8.))
+                .px_1()
+                .py(px(4.))
                 .rounded(super::skin::radius_control())
-                .bg(super::skin::frost_card(theme))
-                .border_1()
-                .border_color(super::skin::glass_border(theme))
                 .cursor_pointer()
                 .hover(|card| card.bg(super::skin::frost_hover(theme)))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -328,7 +418,6 @@ pub(super) fn render_changes_drawer(
                 .border_1()
                 .border_color(super::skin::glass_border(theme))
                 .bg(theme.popover)
-                .shadow_lg()
                 .overflow_hidden()
                 .child(
                     div()
@@ -715,7 +804,6 @@ pub(super) fn render_subagent_window(
         .border_1()
         .border_color(super::skin::glass_border(theme))
         .bg(theme.popover)
-        .shadow_lg()
         .overflow_hidden()
         .child(
             div()

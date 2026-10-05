@@ -1,6 +1,6 @@
-//! GPUI rendering for the workspace in the Desk look: solid panels over a
-//! page gradient, hairline borders, and signal-color lamps over the
-//! project/sidebar/conversation/settings structure. The window is dark.
+//! GPUI rendering for the workspace: a quiet sidebar, a centered conversation,
+//! and an inspector that stays out of the way until it is opened. The window
+//! is dark.
 mod chat;
 mod context;
 pub(crate) mod desk;
@@ -10,11 +10,8 @@ pub(crate) mod project_picker;
 mod settings;
 mod sidebar;
 mod skin;
-mod splash;
 mod title_bar;
 mod update_dialog;
-
-pub(crate) use splash::SplashGate;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -32,25 +29,22 @@ pub(crate) use settings::{BackendForm, McpForm, ProviderForm, build_mcp_server};
 
 /// How much of the desk chrome fits the current window width.
 ///
-/// The sidebar and the inspector are fixed-width columns, so in a narrow
-/// window they squeeze the transcript down to nothing. The sidebar stays
-/// mounted because it owns the project picker, the session list, and the
-/// Settings entry; the inspector is withdrawn instead.
+/// The inspector starts closed. On a wide window it can be pinned beside the
+/// conversation; otherwise it opens as a drawer over the chat.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct DeskLayout {
-    /// Whether the right inspector column is mounted.
-    inspector: bool,
+    /// Whether pinning the inspector still leaves a readable transcript.
+    wide: bool,
 }
 
 impl DeskLayout {
-    /// Width below which the inspector is withdrawn: both rails plus a
-    /// readable transcript need this much room.
-    const INSPECTOR_MIN: f32 = 1180.;
+    /// Width at which a pinned inspector can sit beside the conversation.
+    const PIN_MIN: f32 = 1280.;
 
     fn of(window: &Window) -> Self {
         let width = f32::from(window.viewport_size().width);
         Self {
-            inspector: width >= Self::INSPECTOR_MIN,
+            wide: width >= Self::PIN_MIN,
         }
     }
 }
@@ -64,8 +58,14 @@ pub fn render_root(
     if let Some(prefer) = motion::system_prefers_reduced_motion() {
         cx.set_reduce_motion(prefer);
     }
-    workspace.begin_splash(cx);
+    workspace.sync_interface_font(window, cx);
     let layout = DeskLayout::of(window);
+    let inspector_docked = layout.wide
+        && workspace.vm().inspector_open
+        && workspace.vm().inspector_pinned
+        && workspace.vm().view == MainView::Chat;
+    let inspector_overlay =
+        workspace.vm().inspector_open && !inspector_docked && workspace.vm().view == MainView::Chat;
     let theme = cx.theme().clone();
     let ui_font = theme.font_family.clone();
     let bg = skin::ambient(&theme);
@@ -110,12 +110,9 @@ pub fn render_root(
                     this.child(sidebar::render_sidebar(workspace, cx))
                 })
                 .child(main_pane(workspace, window, cx))
-                .when(
-                    layout.inspector
-                        && workspace.vm().view == MainView::Chat
-                        && workspace.vm().active.is_some(),
-                    |this| this.child(context::render_context_panel(workspace, window, cx)),
-                ),
+                .when(inspector_docked, |this| {
+                    this.child(context::render_context_panel(workspace, window, cx))
+                }),
         )
         .when(workspace.vm().project_menu_open, |this| {
             this.child(sidebar::render_project_menu_layer(workspace, cx))
@@ -131,6 +128,9 @@ pub fn render_root(
         .when(workspace.vm().changes_panel_open, |this| {
             this.child(context::render_changes_drawer(workspace, cx))
         })
+        .when(inspector_overlay, |this| {
+            this.child(context::render_inspector_drawer(workspace, cx))
+        })
         .when(workspace.vm().update_dialog_open, |this| {
             this.child(update_dialog::render_update_dialog(workspace, cx))
         })
@@ -138,9 +138,6 @@ pub fn render_root(
             this.child(project_picker::render(workspace, cx))
         })
         .child(render_toasts(workspace, cx))
-        .when(workspace.splash_visible(), |this| {
-            this.child(splash::render_splash(cx))
-        })
 }
 
 /// Chat or settings, faded in when that pane is entered.
@@ -210,7 +207,6 @@ fn render_toasts(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEle
                 .bg(fill)
                 .text_color(ink)
                 .text_xs()
-                .shadow_lg()
                 .child(toast.text.clone())
         }))
 }
@@ -237,18 +233,36 @@ pub(super) fn icon_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
+    icon_button_marked(id, icon, false, on_click, cx)
+}
+
+/// Icon button with an optional quiet selected fill. Resting state is muted;
+/// the light background appears on hover, or while `marked` is set.
+pub(super) fn icon_button_marked(
+    id: impl Into<gpui_kit::ElementId>,
+    icon: IconName,
+    marked: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
     let theme = cx.theme();
+    let hover = theme.secondary_hover;
     div()
         .id(id)
-        .size(px(26.))
-        .rounded(px(3.))
+        .size(px(30.))
+        .rounded(px(10.))
         .flex()
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .text_color(theme.muted_foreground)
-        .hover(|this| this.bg(theme.secondary))
-        .child(Icon::new(icon).with_size(px(14.)))
+        .text_color(if marked {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+        .when(marked, |this| this.bg(theme.accent.opacity(0.55)))
+        .hover(move |this| this.bg(hover))
+        .child(Icon::new(icon).with_size(px(15.)))
         .on_click(on_click)
 }
 
@@ -275,7 +289,7 @@ pub(super) fn hover_delete_button(
         .group_hover(group, |this| this.opacity(1.0))
         .cursor_pointer()
         .text_color(theme.muted_foreground)
-        .hover(|this| this.bg(theme.secondary))
+        .hover(|this| this.bg(theme.secondary_hover))
         .on_click(move |event, window, cx| {
             cx.stop_propagation();
             on_click(event, window, cx);

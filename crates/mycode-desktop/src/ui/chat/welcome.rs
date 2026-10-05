@@ -153,11 +153,7 @@ fn welcome_action(
     emphasized: bool,
     theme: &Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let ink = if emphasized {
-        theme.primary_foreground
-    } else {
-        theme.foreground
-    };
+    let ink = theme.foreground;
     skin::glass_button(id, emphasized, theme)
         .text_color(ink)
         .child(Icon::new(icon).with_size(px(15.)).text_color(ink))

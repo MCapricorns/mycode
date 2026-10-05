@@ -1,6 +1,7 @@
 //! The workspace window view: title bar, sessions sidebar, chat column,
 //! right inspector, and the full-page settings view.
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -18,6 +19,7 @@ mod bridge;
 mod git;
 mod projects;
 mod settings_editor;
+mod stream_frame;
 mod updates_data;
 
 /// Preferred first-window size. The origin is computed from the primary
@@ -134,9 +136,6 @@ pub struct Workspace {
     agent_roles_project: Option<String>,
     /// The Agents section was opened again, or the project changed.
     agent_roles_stale: bool,
-    /// Startup veil. A click, Escape, or the timed fade drops it.
-    /// Reduced motion dismisses it before the first paint.
-    splash: crate::ui::SplashGate,
     /// The next model-step render should clear and focus the search box.
     picker_focus_pending: bool,
     ask_input: Option<Entity<InputState>>,
@@ -184,6 +183,10 @@ pub struct Workspace {
     git_diff: String,
     /// Bumped when the diff target changes so a stale diff is dropped.
     git_diff_generation: u64,
+    /// Tool rows the transcript is showing in full. Empty means one-line summaries.
+    expanded_tools: HashSet<String>,
+    /// Last interface font size applied to the window. Empty until the first frame.
+    applied_font_size: String,
 }
 
 impl Workspace {
@@ -231,7 +234,6 @@ impl Workspace {
             agent_roles: None,
             agent_roles_project: None,
             agent_roles_stale: false,
-            splash: crate::ui::SplashGate::new(),
             picker_focus_pending: false,
             ask_input: None,
             pending_project: None,
@@ -257,6 +259,8 @@ impl Workspace {
             git_diff_path: None,
             git_diff: String::new(),
             git_diff_generation: 0,
+            expanded_tools: HashSet::new(),
+            applied_font_size: String::new(),
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -274,27 +278,57 @@ impl Workspace {
         workspace
     }
 
-    /// Parks until the core sends, then folds that burst into state.
+    /// Parks until the core sends, then paints streaming deltas a frame at a time.
+    ///
+    /// A whole turn can already be queued when this task wakes. Applying it
+    /// before the next await paints only the finished message. Each slice
+    /// stops before `ChatDone` and before the character budget, then waits
+    /// one frame so the bubble can grow.
     fn spawn_event_pump(&self, events: BridgeEventRx, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
+            let mut buffer: VecDeque<mycode_app::BridgeEvent> = VecDeque::new();
+            let mut not_before = Instant::now();
             loop {
-                let event = match events.recv().await {
-                    Ok(event) => event,
-                    Err(_) => return,
-                };
-                if this
-                    .update(cx, |workspace, cx| workspace.apply_event(event, cx))
-                    .is_err()
-                {
-                    return;
+                if buffer.is_empty() {
+                    match events.recv().await {
+                        Ok(event) => buffer.push_back(event),
+                        Err(_) => return,
+                    }
                 }
                 while let Ok(event) = events.try_recv() {
+                    buffer.push_back(event);
+                }
+                if buffer.front().is_some_and(stream_frame::is_stream_delta)
+                    && let Some(wait) = not_before.checked_duration_since(Instant::now())
+                    && !wait.is_zero()
+                {
+                    cx.background_executor().timer(wait).await;
+                    while let Ok(event) = events.try_recv() {
+                        buffer.push_back(event);
+                    }
+                }
+                let (slice, rest) = stream_frame::split_stream_frame(std::mem::take(&mut buffer));
+                buffer = rest;
+                let mut streamed = false;
+                for event in slice {
+                    streamed |= stream_frame::is_stream_delta(&event);
                     if this
                         .update(cx, |workspace, cx| workspace.apply_event(event, cx))
                         .is_err()
                     {
                         return;
                     }
+                }
+                if streamed {
+                    not_before = Instant::now() + stream_frame::STREAM_FRAME;
+                }
+                if !buffer.is_empty() {
+                    let now = Instant::now();
+                    let wait = not_before
+                        .checked_duration_since(now)
+                        .filter(|wait| !wait.is_zero())
+                        .unwrap_or(stream_frame::STREAM_FRAME);
+                    cx.background_executor().timer(wait).await;
                 }
             }
         })
@@ -347,6 +381,10 @@ impl Workspace {
         );
         let previous_error = self.vm.error.clone();
         let previous_project = self.vm.project_dir.clone();
+        // Decide from the scroll position before this update. New text has
+        // not been laid out yet, so the handle still describes the frame the
+        // user is looking at.
+        let follow_tail = grew && self.conversation_follows_tail();
         reduce(&mut self.vm, action);
         if self.vm.project_dir != previous_project {
             self.agent_roles_stale = true;
@@ -358,12 +396,24 @@ impl Workspace {
         {
             self.push_toast(message, ToastKind::Error, cx);
         }
-        // Transcript-growing actions keep the conversation scrolled to the
-        // newest content, the way chat clients behave while streaming.
-        if self.vm.view == MainView::Chat && grew {
+        // Stick to the newest line while the user is already there. A reader
+        // who scrolled up into history keeps that position.
+        if self.vm.view == MainView::Chat && follow_tail {
             self.conversation_scroll.scroll_to_bottom();
         }
         cx.notify();
+    }
+
+    /// True when the conversation column is within a few pixels of the bottom.
+    ///
+    /// The handle stores a positive max extent and a negative live offset, so
+    /// their sum is about zero at the tail and positive after a scroll upward.
+    /// Before the first layout both are zero, which still follows.
+    fn conversation_follows_tail(&self) -> bool {
+        follows_tail(
+            self.conversation_scroll.offset().y,
+            self.conversation_scroll.max_offset().y,
+        )
     }
 
     /// The conversation column's scroll handle.
@@ -420,37 +470,6 @@ impl Workspace {
         self.agent_roles
             .clone()
             .unwrap_or_else(mycode_config::builtin_roles)
-    }
-
-    /// Starts the startup veil on the first frame, unless motion is reduced.
-    ///
-    /// A preference that flips on while the veil is up drops it on the next
-    /// frame, so the fade does not keep covering the desk.
-    pub(crate) fn begin_splash(&mut self, cx: &mut Context<Self>) {
-        let Some(wait) = self.splash.on_frame(cx.reduce_motion()) else {
-            return;
-        };
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(wait).await;
-            let _ = this.update(cx, |workspace, cx| {
-                if workspace.splash.dismiss() {
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
-    /// Drops the startup veil immediately. Click and Escape use this.
-    pub(crate) fn dismiss_splash(&mut self, cx: &mut Context<Self>) {
-        if self.splash.dismiss() {
-            cx.notify();
-        }
-    }
-
-    /// Whether the startup veil is still covering the desk.
-    pub(crate) fn splash_visible(&self) -> bool {
-        self.splash.visible()
     }
 
     /// Switches the Models settings sub-page.
@@ -735,12 +754,68 @@ impl Workspace {
             return;
         }
         crate::ui::desk::apply_palette(Theme::global_mut(cx), palette);
+        self.applied_font_size.clear();
         Theme::sync_base(cx);
         self.apply_action(
             DesktopAction::SettingsPaletteSelected(palette.to_owned()),
             cx,
         );
         self.on_save_settings(cx);
+    }
+
+    /// Applies and persists the interface font size. The next frame paints it.
+    pub(crate) fn on_select_font_size(&mut self, font_size: &str, cx: &mut Context<Self>) {
+        let font_size = crate::ui::desk::normalize_font_size(font_size);
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.font_size == font_size)
+        {
+            return;
+        }
+        self.applied_font_size.clear();
+        self.apply_action(
+            DesktopAction::SettingsFontSizeSelected(font_size.to_owned()),
+            cx,
+        );
+        self.on_save_settings(cx);
+    }
+
+    /// Paints the saved interface font size onto the window, once per change.
+    pub(crate) fn sync_interface_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.font_size.as_str())
+            .unwrap_or("m");
+        let id = crate::ui::desk::normalize_font_size(id);
+        if self.applied_font_size == id {
+            return;
+        }
+        crate::ui::desk::apply_font_size(Theme::global_mut(cx), id);
+        window.set_rem_size(px(crate::ui::desk::interface_rem_px(id)));
+        Theme::sync_base(cx);
+        self.applied_font_size = id.to_owned();
+    }
+
+    /// Opens, closes, or pins the inspector. Does not touch the session.
+    pub(crate) fn on_set_inspector(&mut self, open: bool, pinned: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::InspectorChanged { open, pinned }, cx);
+    }
+
+    /// Whether a tool row is showing its result body.
+    pub(crate) fn tool_row_open(&self, id: &str) -> bool {
+        self.expanded_tools.contains(id)
+    }
+
+    /// Toggles one tool row between a one-line summary and its result body.
+    pub(crate) fn on_toggle_tool_row(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.expanded_tools.remove(id) {
+            self.expanded_tools.insert(id.to_owned());
+        }
+        cx.notify();
     }
 
     /// Applies and persists the UI language. The whole window re-renders on
@@ -929,6 +1004,15 @@ pub(crate) fn parse_env_line(
     Ok(env)
 }
 
+/// Slack around the bottom edge. A reader a few pixels short of the tail
+/// still follows the stream; anything further up is history.
+const TAIL_SLACK: Pixels = px(48.);
+
+fn follows_tail(offset_y: Pixels, max_offset_y: Pixels) -> bool {
+    let gap = offset_y + max_offset_y;
+    gap >= -TAIL_SLACK && gap <= TAIL_SLACK
+}
+
 /// Renders the whole window; split across the `ui` submodule.
 impl Workspace {
     pub(crate) fn render_root(
@@ -947,5 +1031,19 @@ impl gpui_kit::Render for Workspace {
         cx: &mut Context<Self>,
     ) -> impl gpui_kit::IntoElement {
         self.render_root(window, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_follow_stays_at_the_bottom_and_lets_go_when_scrolled_up() {
+        assert!(follows_tail(px(0.), px(0.)));
+        assert!(follows_tail(px(-800.), px(800.)));
+        assert!(follows_tail(px(-780.), px(800.)));
+        assert!(!follows_tail(px(-100.), px(800.)));
+        assert!(!follows_tail(px(0.), px(800.)));
     }
 }

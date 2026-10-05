@@ -1,5 +1,5 @@
 //! Self-update, data export/import, MCP probes, the pending-ask flow, and
-//! the Escape key's dismissal of the startup veil and floating menus.
+//! the Escape key's dismissal of floating menus.
 use std::time::Duration;
 
 use gpui_kit::component::input::InputState;
@@ -204,14 +204,9 @@ impl Workspace {
 
     // ---- escape ----
 
-    /// Escape dismisses the topmost layer. The startup veil comes first;
-    /// then the folder picker and other floating UI. With nothing open it
-    /// leaves the settings view.
+    /// Escape dismisses the topmost layer: the folder picker, then other
+    /// floating UI. With nothing open it leaves the settings view.
     pub(crate) fn on_escape(&mut self, cx: &mut Context<Self>) {
-        if self.splash_visible() {
-            self.dismiss_splash(cx);
-            return;
-        }
         if self.project_picker.is_some() {
             self.project_picker = None;
             cx.notify();
@@ -219,6 +214,16 @@ impl Workspace {
         }
         if self.vm.changes_panel_open {
             self.apply_action(DesktopAction::ChangesPanelToggled(false), cx);
+            return;
+        }
+        if self.vm.inspector_open && !self.vm.inspector_pinned {
+            self.apply_action(
+                DesktopAction::InspectorChanged {
+                    open: false,
+                    pinned: false,
+                },
+                cx,
+            );
             return;
         }
         if self.vm.update_dialog_open {

@@ -45,6 +45,8 @@ pub struct SettingsState {
     pub palette: String,
     /// UI language: `auto`, `en`, or `zh`.
     pub language: String,
+    /// Interface font size: `s`, `m`, `l`, or `xl`.
+    pub font_size: String,
     /// Requested reasoning effort from the selected model's catalog options;
     /// `None` keeps the provider default.
     pub reasoning: Option<String>,
@@ -86,6 +88,7 @@ impl SettingsState {
             theme: settings.effective_theme().to_owned(),
             palette: settings.effective_palette().to_owned(),
             language: settings.appearance.language.clone(),
+            font_size: settings.effective_font_size().to_owned(),
             reasoning: settings.reasoning_effort.clone(),
             providers_with_keys,
             mcp_with_keys: Vec::new(),
@@ -115,6 +118,7 @@ impl SettingsState {
                 theme: self.theme.clone(),
                 palette: self.palette.clone(),
                 language: self.language.clone(),
+                font_size: self.font_size.clone(),
             },
             reasoning_effort: self.reasoning.clone(),
             subagents: self.subagents.clone(),
@@ -362,6 +366,17 @@ mod tests {
         assert_eq!(settings.providers[0].models, vec!["m".to_owned()]);
         assert_eq!(settings.providers_with_keys, vec!["gateway".to_owned()]);
         assert!(settings.to_settings().validate().is_ok());
+    }
+
+    #[test]
+    fn font_size_round_trips_through_the_editor_projection() {
+        let mut document = mycode_config::AppSettings::default();
+        document.appearance.font_size = "xl".to_owned();
+        let state = super::SettingsState::from_settings(&document, 1, Vec::new());
+        assert_eq!(state.font_size, "xl");
+        let stored = state.to_settings();
+        assert_eq!(stored.appearance.font_size, "xl");
+        assert!(stored.validate().is_ok());
     }
 
     #[test]

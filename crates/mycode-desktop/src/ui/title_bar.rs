@@ -65,7 +65,13 @@ pub(super) fn render_title_bar(
         .border_color(skin::glass_border(&theme))
         .bg(skin::glass(&theme))
         .child(drag_region(subtitle, window, cx))
-        .child(title_controls(update_label, window, cx))
+        .child(title_controls(
+            update_label,
+            workspace.vm().view == MainView::Chat,
+            workspace.vm().inspector_open,
+            window,
+            cx,
+        ))
 }
 
 fn title_pad() -> gpui_kit::Pixels {
@@ -160,6 +166,8 @@ impl Render for TitleDrag {
 
 fn title_controls(
     update_label: Option<SharedString>,
+    show_inspector: bool,
+    inspector_open: bool,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
@@ -172,6 +180,19 @@ fn title_controls(
         .flex_shrink_0()
         .gap_2()
         .pr_2()
+        .when(show_inspector, |this| {
+            this.child(super::icon_button_marked(
+                "toggle-inspector",
+                IconName::PanelRight.into(),
+                inspector_open,
+                cx.listener(|workspace, _, _, cx| {
+                    let open = !workspace.vm().inspector_open;
+                    let pinned = workspace.vm().inspector_pinned;
+                    workspace.on_set_inspector(open, pinned, cx);
+                }),
+                cx,
+            ))
+        })
         .when_some(update_label, |this, label| {
             this.child(
                 Button::new("title-update")

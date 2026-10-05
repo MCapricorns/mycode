@@ -38,7 +38,7 @@ pub(super) fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta
         streaming.status = if thinking {
             t("Thinking", "思考中").to_owned()
         } else {
-            t("Writing", "正在输出").to_owned()
+            t("Replying", "正在回复").to_owned()
         };
         let buffer = if thinking {
             &mut streaming.thinking

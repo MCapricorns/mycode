@@ -1,6 +1,6 @@
-//! Dark palettes. Surfaces are solid. The page background is a
-//! two-stop gradient so the chat column shows the falloff; rails and dialogs
-//! stay opaque so text never sits on a washed-out fill.
+//! Dark palettes. Surfaces stay opaque. The page is a near-solid dark base
+//! with only a hint of the palette wash, so the conversation is not sitting
+//! on a loud gradient.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
@@ -60,6 +60,96 @@ pub fn palette_label(palette: &str) -> &'static str {
 #[must_use]
 pub fn palette_swatch(palette: &str) -> Hsla {
     hex(spec_for(normalize_palette(palette)).accent)
+}
+
+/// Interface font-size ids. Must stay identical to `mycode_config::VALID_FONT_SIZES`.
+pub const FONT_SIZES: [&str; 4] = ["s", "m", "l", "xl"];
+
+/// Canonical font-size id. Unknown values fall back to medium.
+#[must_use]
+pub fn normalize_font_size(id: &str) -> &'static str {
+    FONT_SIZES
+        .into_iter()
+        .find(|item| *item == id)
+        .unwrap_or("m")
+}
+
+/// Body size in pixels. `.text_sm()` is 0.875rem, so the window rem is chosen
+/// to land `text_sm` on this value.
+#[must_use]
+pub fn interface_font_px(id: &str) -> f32 {
+    match normalize_font_size(id) {
+        "s" => 12.,
+        "l" => 14.,
+        "xl" => 16.,
+        _ => 13.,
+    }
+}
+
+/// Root rem that makes `.text_sm()` equal [`interface_font_px`].
+#[must_use]
+pub fn interface_rem_px(id: &str) -> f32 {
+    interface_font_px(id) / 0.875
+}
+
+/// Short label for a font-size id.
+#[must_use]
+pub fn font_size_label(id: &str) -> &'static str {
+    match normalize_font_size(id) {
+        "s" => "S",
+        "l" => "L",
+        "xl" => "XL",
+        _ => "M",
+    }
+}
+
+/// Writes the interface scale onto the theme. The caller also sets the window
+/// rem so every `text_sm` / `text_xs` surface follows.
+pub fn apply_font_size(theme: &mut Theme, id: &str) {
+    let rem = interface_rem_px(id);
+    theme.font_size = gpui_kit::px(rem);
+    theme.mono_font_size = gpui_kit::px(interface_font_px(id));
+}
+
+/// A slightly deeper tint for primary hover.
+#[must_use]
+pub(crate) fn deepen(mut color: Hsla) -> Hsla {
+    color.l = (color.l - 0.05).max(0.);
+    color
+}
+
+/// How far a primary fill moves from the quiet tint toward the bright accent.
+///
+/// The tint alone sits almost on the card. A short step toward the accent
+/// keeps the body soft and still lifts it off that surface.
+const PRIMARY_FILL_MIX: f32 = 0.16;
+
+/// Accent-edge alpha on a primary control.
+///
+/// Composited on a dark card, this clears a 3:1 boundary on every palette
+/// without painting a solid accent ring.
+const PRIMARY_EDGE_ALPHA: f32 = 0.66;
+
+/// Primary body. Light ink stays readable; the fill stays a tint.
+#[must_use]
+pub(crate) fn primary_fill(tint: Hsla, accent: Hsla) -> Hsla {
+    soften(tint, accent, PRIMARY_FILL_MIX)
+}
+
+/// Thin accent edge for a primary control.
+#[must_use]
+pub(crate) fn primary_edge(accent: Hsla) -> Hsla {
+    accent.opacity(PRIMARY_EDGE_ALPHA)
+}
+
+/// Moves `from` toward `toward` by `amount` (0 keeps `from`, 1 is `toward`).
+fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
+    Hsla {
+        h: from.h + (toward.h - from.h) * amount,
+        s: from.s + (toward.s - from.s) * amount,
+        l: from.l + (toward.l - from.l) * amount,
+        a: from.a + (toward.a - from.a) * amount,
+    }
 }
 
 struct Spec {
@@ -306,13 +396,13 @@ pub fn apply_palette(theme: &mut Theme, palette: &str) {
 
 fn paint(theme: &mut Theme, spec: &Spec) {
     let bg = hex(spec.bg);
-    let wash = hex(spec.wash);
+    let wash = soften(hex(spec.wash), bg, 0.82);
     let surface = hex(spec.surface);
     let card = hex(spec.card);
     let hover = hex(spec.hover);
     let ink = hex(spec.ink);
     let dim = hex(spec.dim);
-    let line = hex(spec.line);
+    let line = soften(hex(spec.line), bg, 0.32);
     let accent = hex(spec.accent);
     let accent_ink = hex(spec.accent_ink);
     let tint = hex(spec.tint);
@@ -320,9 +410,9 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     let red = hex(spec.red);
     let info = hex(spec.info);
 
-    theme.radius = gpui_kit::px(8.);
+    theme.radius = gpui_kit::px(10.);
     theme.radius_lg = gpui_kit::px(12.);
-    theme.shadow = true;
+    theme.shadow = false;
 
     theme.background = bg;
     theme.foreground = ink;
@@ -407,20 +497,22 @@ fn paint(theme: &mut Theme, spec: &Spec) {
 /// `Theme::change` resets button tokens to the stock theme. Copy the
 /// palette into both the legacy fields and `tokens`.
 fn sync_controls(theme: &mut Theme) {
-    theme.button_primary = theme.primary;
-    theme.button_primary_hover = theme.primary_hover;
-    theme.button_primary_active = theme.primary_active;
-    theme.button_primary_foreground = theme.primary_foreground;
-    theme.tokens.button_primary = theme.primary.into();
-    theme.tokens.button_primary_hover = theme.primary_hover.into();
-    theme.tokens.button_primary_active = theme.primary_active.into();
-    theme.tokens.button_primary_foreground = theme.primary_foreground.into();
+    let primary = primary_fill(theme.accent, theme.primary);
+    let primary_hover = deepen(primary);
+    theme.button_primary = primary;
+    theme.button_primary_hover = primary_hover;
+    theme.button_primary_active = primary_hover;
+    theme.button_primary_foreground = theme.foreground;
+    theme.tokens.button_primary = primary.into();
+    theme.tokens.button_primary_hover = primary_hover.into();
+    theme.tokens.button_primary_active = primary_hover.into();
+    theme.tokens.button_primary_foreground = theme.foreground.into();
 
-    theme.button = theme.secondary;
+    theme.button = theme.transparent;
     theme.button_hover = theme.secondary_hover;
     theme.button_active = theme.secondary_active;
     theme.button_foreground = theme.foreground;
-    theme.tokens.button = theme.secondary.into();
+    theme.tokens.button = theme.transparent.into();
     theme.tokens.button_hover = theme.secondary_hover.into();
     theme.tokens.button_active = theme.secondary_active.into();
     theme.tokens.button_foreground = theme.foreground.into();
@@ -469,5 +561,82 @@ mod tests {
             super::PALETTES.as_slice(),
             mycode_config::VALID_PALETTES.as_slice()
         );
+    }
+
+    #[test]
+    fn font_sizes_match_settings_and_land_on_the_body_scale() {
+        assert_eq!(
+            super::FONT_SIZES.as_slice(),
+            mycode_config::VALID_FONT_SIZES.as_slice()
+        );
+        assert_eq!(super::interface_font_px("s"), 12.);
+        assert_eq!(super::interface_font_px("m"), 13.);
+        assert_eq!(super::interface_font_px("l"), 14.);
+        assert_eq!(super::interface_font_px("xl"), 16.);
+        assert_eq!(super::interface_font_px("nope"), 13.);
+        assert!((super::interface_rem_px("l") - 16.).abs() < f32::EPSILON);
+        assert_eq!(super::normalize_font_size("xl"), "xl");
+        assert_eq!(super::font_size_label("s"), "S");
+    }
+
+    /// Primary controls stay a tint: readable ink, a body that lifts off the
+    /// card, and an edge that still meets a 3:1 boundary.
+    #[test]
+    fn primary_fill_stays_soft_and_readable_on_every_dark_palette() {
+        for id in super::PALETTES {
+            let spec = super::spec_for(id);
+            let tint = super::hex(spec.tint);
+            let accent = super::hex(spec.accent);
+            let ink = super::hex(spec.ink);
+            let card = super::hex(spec.card);
+            let fill = super::primary_fill(tint, accent);
+            let edge = super::primary_edge(accent);
+            let text = contrast(ink, fill);
+            let body = contrast(fill, card);
+            let boundary = contrast(over(edge, card), card);
+            assert!(
+                text >= 4.5,
+                "{id}: ink on the primary fill is {text:.2}, want >= 4.5"
+            );
+            assert!(
+                (1.25..=2.2).contains(&body),
+                "{id}: fill against the card is {body:.2}, want a soft 1.25..=2.2"
+            );
+            assert!(
+                boundary >= 3.0,
+                "{id}: primary edge against the card is {boundary:.2}, want >= 3"
+            );
+        }
+    }
+
+    fn contrast(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> f32 {
+        let lighter = luminance(a).max(luminance(b));
+        let darker = luminance(a).min(luminance(b));
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    fn over(fg: gpui_kit::Hsla, bg: gpui_kit::Hsla) -> gpui_kit::Hsla {
+        let src = fg.to_rgb();
+        let dst = bg.to_rgb();
+        let mix = |src: f32, dst: f32| src * fg.a + dst * (1. - fg.a);
+        gpui_kit::Rgba {
+            r: mix(src.r, dst.r),
+            g: mix(src.g, dst.g),
+            b: mix(src.b, dst.b),
+            a: 1.,
+        }
+        .into()
+    }
+
+    fn luminance(color: gpui_kit::Hsla) -> f32 {
+        let rgb = color.to_rgb();
+        let channel = |value: f32| {
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
     }
 }
