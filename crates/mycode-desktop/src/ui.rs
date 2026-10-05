@@ -10,11 +10,8 @@ pub(crate) mod project_picker;
 mod settings;
 mod sidebar;
 mod skin;
-mod splash;
 mod title_bar;
 mod update_dialog;
-
-pub(crate) use splash::SplashGate;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -61,7 +58,6 @@ pub fn render_root(
     if let Some(prefer) = motion::system_prefers_reduced_motion() {
         cx.set_reduce_motion(prefer);
     }
-    workspace.begin_splash(cx);
     workspace.sync_interface_font(window, cx);
     let layout = DeskLayout::of(window);
     let inspector_docked = layout.wide
@@ -142,9 +138,6 @@ pub fn render_root(
             this.child(project_picker::render(workspace, cx))
         })
         .child(render_toasts(workspace, cx))
-        .when(workspace.splash_visible(), |this| {
-            this.child(splash::render_splash(cx))
-        })
 }
 
 /// Chat or settings, faded in when that pane is entered.
