@@ -106,7 +106,7 @@ pub(super) fn render_sidebar(
                         workspace.on_new_session(cx);
                     }))
                     .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
-                    .child(t("New session", "新建会话")),
+                    .child(t("New chat", "新建对话")),
             ),
         )
         .when_some(filter_input, |this, input| {
@@ -368,7 +368,7 @@ fn displayed_session_title(summary: &SessionSummary, project: Option<&str>) -> S
     } else if let Some(project) = project {
         project_label(project)
     } else {
-        t("New session", "新建会话").to_owned()
+        t("New chat", "新建对话").to_owned()
     }
 }
 
