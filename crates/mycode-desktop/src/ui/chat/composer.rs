@@ -138,9 +138,9 @@ pub(super) fn render_composer(
                             "model",
                             model_label,
                             workspace.vm().model_menu_open,
-                            |workspace, _window, cx| {
+                            |workspace, window, cx| {
                                 let open = !workspace.vm().model_menu_open;
-                                workspace.on_toggle_model_menu(open, cx);
+                                workspace.on_toggle_model_menu(open, window, cx);
                             },
                             cx,
                         ))
@@ -362,9 +362,7 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
 }
 
 fn model_button_label(vm: &WorkspaceState) -> String {
-    vm.selected_model
-        .clone()
-        .unwrap_or_else(|| t("Select model", "选择模型").to_owned())
+    crate::ui::model_picker::selected_model_label(vm)
 }
 
 fn thinking_button_label(vm: &WorkspaceState) -> String {

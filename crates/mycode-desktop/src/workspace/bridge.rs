@@ -460,6 +460,8 @@ impl Workspace {
                         session_workspaces: ui_state.session_workspaces,
                         trusted_projects: ui_state.trusted_projects,
                         active_workspace: ui_state.active_workspace,
+                        recent_models: ui_state.recent_models,
+                        starred_models: ui_state.starred_models,
                     },
                     cx,
                 );

@@ -155,6 +155,7 @@ fn render_web_custom_page(
         .flex_col()
         .gap_3()
         .child(super::subview_header(
+            t("Web search", "网页搜索"),
             t("Add custom backend", "添加自定义后端"),
             Some(t(
                 "Querit-compatible or AnySearch-compatible host",

@@ -178,6 +178,7 @@ fn render_mcp_catalog_page(
         .collect();
     let key_input = workspace.mcp_key_input(window, cx);
     let header = super::subview_header(
+        t("MCP", "MCP"),
         t("Add from catalog", "从目录添加"),
         Some(t(
             "Paste a new key, then Add. A stored key is not shown here.",
@@ -237,6 +238,7 @@ fn render_mcp_json_page(
 ) -> AnyElement {
     let json_input = workspace.mcp_json_input(window, cx);
     let header = super::subview_header(
+        t("MCP", "MCP"),
         t("Import JSON", "导入 JSON"),
         Some(t(
             "Claude Desktop or Cursor mcp.json",
@@ -295,6 +297,7 @@ fn render_mcp_custom_page(
         .flex_col()
         .gap_3()
         .child(super::subview_header(
+            t("MCP", "MCP"),
             t("Add custom server", "添加自定义服务器"),
             Some(t(
                 "stdio command or Streamable HTTP",

@@ -20,7 +20,7 @@
 | `json_recover` | 尾逗号修复 |
 | `settings` | `settings.json`：外观与语言、提供商、shell、网页后端、MCP、子代理路由、User-Agent |
 | `secrets` | `secrets.json`：每个提供商一把密钥，按 id 排序。空字符串表示清除 |
-| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型。坏文件重置为默认，不当作产品配置的真相 |
+| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型，以及模型选择器的最近使用和星标。坏文件重置为默认，不当作产品配置的真相 |
 | `compaction` | `compaction.json`：摘要覆盖到哪条消息、哪个分支头。账本本身不改写 |
 | `subagents` | 内置 scout 与 artisan，再加上家目录和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |
 | `resources` | 发现 `AGENTS.md` / `MYCODE.md` 和 `.agents` 技能，裁剪后交给 system prompt |

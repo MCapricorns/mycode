@@ -6,6 +6,8 @@ mod menus;
 mod transcript;
 mod welcome;
 
+pub(crate) use menus::reasoning_row_label;
+
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -110,7 +112,7 @@ pub(super) fn render_chat(
         // absolutely positioned overlay landed outside the visible window on
         // mis-scaled displays, and a docked panel cannot be clipped away.
         .when(workspace.vm().model_menu_open, |this| {
-            this.child(menus::render_model_menu(workspace, cx))
+            this.child(menus::render_model_menu(workspace, window, cx))
         })
         .when(workspace.vm().reasoning_menu_open, |this| {
             this.child(menus::render_thinking_menu(workspace, cx))

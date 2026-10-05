@@ -1,83 +1,49 @@
-//! The Agents settings page: delegation capacity and one card per subagent
-//! role. Model and thinking are one picker, not three dropdowns.
+//! The Agents settings page: delegation capacity and one card each for
+//! Scout and Artisan. User-added role files stay out of this page.
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, px,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::widgets::{row_header, settings_card, settings_row};
+use super::widgets::{choice_chips, settings_card};
 use crate::i18n::t;
+use crate::ui::model_picker::{ModelPickerTarget, model_display_name, render_model_picker};
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
 /// The settings copy hard-codes this default. Keep it aligned with config.
 const _: () = assert!(mycode_config::DEFAULT_SUBAGENT_CONCURRENCY == 4);
 
-pub(super) fn render_agents_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyElement {
+pub(super) fn render_agents_section(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let Some(settings) = workspace.vm().settings.clone() else {
         return div().into_any_element();
     };
-    let catalog = mycode_config::builtin_roles();
-    let providers: Vec<(String, Vec<String>)> = settings
-        .providers
-        .iter()
-        .filter(|provider| provider.enabled)
-        .map(|provider| (provider.id.clone(), provider.models.clone()))
-        .collect();
     let max_concurrent = settings.subagents.max_concurrent;
-    let role_cards: Vec<AnyElement> = catalog
-        .roles
-        .iter()
-        .map(|role| {
-            let entry = settings.subagents.role(&role.name);
-            let enabled = entry.is_none_or(|item| item.enabled);
-            let thinking = entry
-                .and_then(|item| item.thinking.clone())
-                .unwrap_or_else(|| "inherit".to_owned());
-            let provider = entry
-                .and_then(|item| item.provider.clone())
-                .unwrap_or_else(|| "inherit".to_owned());
-            let model = entry
-                .and_then(|item| item.model.clone())
-                .unwrap_or_else(|| "inherit".to_owned());
-            agent_role_card(
-                workspace,
-                role.name.clone(),
-                role.description.clone(),
-                role.isolation.as_str(),
-                role.origin.as_str(),
-                enabled,
-                thinking,
-                provider,
-                model,
-                providers.clone(),
-                cx,
-            )
-        })
-        .collect();
     let theme = cx.theme();
-    div()
-        .id("agents-section")
-        .flex()
-        .flex_col()
-        .gap_3()
-        .child(settings_card(
+    let mut cards: Vec<AnyElement> = Vec::new();
+    cards.push(
+        settings_card(
             "agents-capacity",
             t("Delegation", "任务委派"),
             Some(t(
-                "The parent model may hand work to these roles. Inherit uses the session \
-                 provider and the role's own thinking level. A limit of 0 uses the default \
-                 of 4 concurrent sub-agents. It does not mean zero agents.",
-                "主模型可以把工作交给这些角色。继承 表示沿用会话的服务商与角色自身的思考档位。\
-                 并发数为 0 时使用默认的 4 个子代理，不是零个。",
+                "The parent model may hand work to Scout and Artisan. A limit of 0 uses the \
+                 default of 4 concurrent sub-agents. It does not mean zero agents, and it is \
+                 not a count of role types.",
+                "主模型可以把工作交给 Scout 和 Artisan。并发数为 0 时使用默认的 4 个同时运行的子代理，\
+                 不是零个，也不是角色种类的数量。",
             )),
             theme,
-            vec![settings_row(
+            vec![super::widgets::settings_row(
                 "agents-concurrent",
                 t("Max concurrent", "最大并发"),
                 Some(t(
@@ -97,267 +63,244 @@ pub(super) fn render_agents_section(workspace: &Workspace, cx: &Context<Workspac
                             return;
                         };
                         let mut next = settings.subagents;
-                        next.max_concurrent =
-                            if next.max_concurrent >= mycode_config::MAX_SUBAGENT_CONCURRENCY {
-                                0
-                            } else {
-                                next.max_concurrent + 1
-                            };
+                        next.max_concurrent = next_concurrency(next.max_concurrent);
                         workspace.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
                     }))
                     .into_any_element(),
             )],
-        ))
-        .child(settings_card(
-            "agents-roles",
-            t("Roles", "角色"),
-            Some(t(
-                "Scout returns a read-only map. Artisan implements in a worktree; you integrate.",
-                "Scout 返回只读地图。Artisan 在 worktree 中实现，由你整合。",
-            )),
-            theme,
-            role_cards,
-        ))
+        )
+        .into_any_element(),
+    );
+    for role in mycode_config::builtin_roles().roles {
+        cards.push(role_card(workspace, window, &role, cx));
+    }
+    div()
+        .id("agents-section")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .children(cards)
         .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn agent_role_card(
-    workspace: &Workspace,
-    name: String,
-    description: String,
-    isolation: &'static str,
-    origin: &'static str,
-    enabled: bool,
-    thinking: String,
-    provider: String,
-    model: String,
-    providers: Vec<(String, Vec<String>)>,
-    cx: &Context<Workspace>,
+fn next_concurrency(current: u32) -> u32 {
+    if current >= mycode_config::MAX_SUBAGENT_CONCURRENCY {
+        0
+    } else {
+        current + 1
+    }
+}
+
+fn role_card(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    role: &mycode_config::SubagentRole,
+    cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let theme: &Theme = cx.theme();
-    let role = name.clone();
-    let thinking_label = thinking.clone();
-    let provider_label = provider.clone();
-    let model_label = model.clone();
-    let thinking_options = {
-        let mut levels = vec!["inherit".to_owned()];
-        levels.extend(crate::view_model::reasoning_levels_for(
-            workspace.vm(),
-            (provider != "inherit").then_some(provider.as_str()),
-            (model != "inherit").then_some(model.as_str()),
-        ));
-        levels
+    let Some(settings) = workspace.vm().settings.clone() else {
+        return div().into_any_element();
     };
-    let open_field = workspace
+    let entry = settings.subagents.role(&role.name);
+    let enabled = entry.is_none_or(|item| item.enabled);
+    let thinking = entry
+        .and_then(|item| item.thinking.clone())
+        .unwrap_or_else(|| "inherit".to_owned());
+    let provider = entry.and_then(|item| item.provider.clone());
+    let model = entry.and_then(|item| item.model.clone());
+    let open = workspace
         .vm()
         .subagent_menu
         .as_ref()
-        .filter(|(open_role, _)| open_role == &name)
-        .map(|(_, field)| field.as_str());
-    div()
-        .id(format!("agent-role-{name}"))
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_3()
-        .rounded(px(3.))
-        .border_1()
-        .border_color(theme.border)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_start()
-                .gap_3()
-                .child(
-                    row_header(&name, description).child(
-                        div()
-                            .text_xs()
-                            .opacity(0.45)
-                            .child(format!("{origin} \u{b7} {isolation}")),
-                    ),
-                )
-                .child(
-                    Switch::new(format!("agent-enabled-{name}"))
-                        .checked(enabled)
-                        .on_click({
-                            let role = role.clone();
-                            cx.listener(move |workspace, checked: &bool, _, cx| {
-                                workspace.on_subagent_role_enabled(&role, *checked, cx);
-                            })
-                        }),
-                ),
-        )
-        .child(agent_route_picker(
-            &role,
-            &format!("{provider_label} \u{b7} {model_label} \u{b7} {thinking_label}"),
-            &thinking_options,
-            &thinking_label,
-            &providers,
-            open_field == Some("route"),
+        .is_some_and(|(open_role, field)| open_role == &role.name && field == "model");
+    let picker = open.then(|| {
+        render_model_picker(
+            workspace,
+            window,
+            ModelPickerTarget::Role(role.name.clone()),
             cx,
-        ))
-        .into_any_element()
-}
-
-/// One route control: thinking chips and model rows in the same panel.
-fn agent_route_picker(
-    role: &str,
-    current: &str,
-    thinking: &[String],
-    thinking_current: &str,
-    providers: &[(String, Vec<String>)],
-    open: bool,
-    cx: &Context<Workspace>,
-) -> AnyElement {
+        )
+    });
+    let route_label = match (provider.as_deref(), model.as_deref()) {
+        (Some(provider), Some(model)) => model_display_name(workspace.vm(), provider, model),
+        _ => t("Session model", "会话模型").to_owned(),
+    };
+    let thinking_options = thinking_options(workspace, provider.as_deref(), model.as_deref());
     let theme = cx.theme();
-    let toggle_role = role.to_owned();
-    div()
-        .id(format!("agent-route-{role}"))
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(
+    let name = role.name.clone();
+    let title = title_case(&role.name);
+    settings_card(
+        &format!("agent-{name}"),
+        &title,
+        Some(&role.description),
+        theme,
+        vec![
             div()
-                .id(format!("agent-route-toggle-{role}"))
+                .id(format!("agent-role-{name}"))
                 .flex()
                 .flex_row()
                 .items_center()
                 .justify_between()
-                .px_2()
-                .h(px(28.))
-                .rounded(px(3.))
-                .border_1()
-                .border_color(theme.border)
-                .cursor_pointer()
-                .hover(|this| this.bg(theme.secondary))
-                .on_click({
-                    let role = toggle_role.clone();
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_toggle_subagent_menu(&role, "route", !open, cx);
-                    })
-                })
-                .child(div().text_sm().truncate().child(current.to_owned()))
-                .child(div().text_xs().opacity(0.5).child(if open {
-                    "\u{25b4}"
-                } else {
-                    "\u{25be}"
-                })),
-        )
-        .when(open, |this| {
-            let role = role.to_owned();
-            this.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_2()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .px_2()
-                            .pt_1()
-                            .child(t("Thinking", "思考")),
-                    )
-                    .children(thinking.iter().map(|level| {
-                        let picked = level.clone();
-                        let role = role.clone();
-                        let on = level == thinking_current;
-                        div()
-                            .id(format!("agent-think-{role}-{level}"))
-                            .h(px(28.))
-                            .px_2()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .rounded(px(6.))
-                            .text_sm()
-                            .cursor_pointer()
-                            .when(on, |row| row.bg(theme.accent))
-                            .hover(|row| row.bg(theme.secondary_hover))
-                            .on_click(cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_set_subagent_thinking(&role, Some(picked.clone()), cx);
-                            }))
-                            .child(level.clone())
-                            .when(on, |row| {
-                                row.child(
-                                    div().text_xs().text_color(theme.primary).child("\u{2713}"),
-                                )
+                .gap_3()
+                .child(capability_chip(role.isolation.as_str(), theme))
+                .child(
+                    Switch::new(format!("agent-enabled-{name}"))
+                        .checked(enabled)
+                        .on_click({
+                            let role = name.clone();
+                            cx.listener(move |workspace, checked: &bool, _, cx| {
+                                workspace.on_subagent_role_enabled(&role, *checked, cx);
                             })
-                    }))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .px_2()
-                            .pt_2()
-                            .child(t("Model", "模型")),
-                    )
-                    .child(agent_model_row(&role, "inherit", None, cx))
-                    .children(providers.iter().flat_map(|(provider, models)| {
-                        let mut rows = vec![
+                        }),
+                )
+                .into_any_element(),
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t("Model", "模型")),
+                )
+                .child(
+                    div()
+                        .id(format!("agent-route-toggle-{name}"))
+                        .h(px(36.))
+                        .px_2()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .rounded(crate::ui::skin::radius_control())
+                        .border_1()
+                        .border_color(crate::ui::skin::glass_border(theme))
+                        .bg(crate::ui::skin::frost(theme))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
+                        .on_click({
+                            let role = name.clone();
+                            cx.listener(move |workspace, _, _, cx| {
+                                let open = workspace.vm().subagent_menu.as_ref().is_some_and(
+                                    |(open_role, field)| open_role == &role && field == "model",
+                                );
+                                workspace.on_toggle_subagent_menu(&role, "model", !open, cx);
+                            })
+                        })
+                        .child(
                             div()
-                                .text_xs()
-                                .opacity(0.5)
-                                .pt_1()
-                                .child(provider.clone())
-                                .into_any_element(),
-                        ];
-                        rows.extend(models.iter().map(|model| {
-                            agent_model_row(&role, model, Some(provider.as_str()), cx)
-                        }));
-                        rows
-                    })),
-            )
-        })
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_sm()
+                                .child(route_label),
+                        )
+                        .child(
+                            Icon::new(IconName::ChevronDown)
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                        ),
+                )
+                .when_some(picker, |this, picker| this.child(picker))
+                .into_any_element(),
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t("Thinking", "思考")),
+                )
+                .child(choice_chips(
+                    &format!("agent-think-{name}"),
+                    &thinking_options,
+                    &thinking,
+                    {
+                        let role = name.clone();
+                        move |workspace, level, cx| {
+                            workspace.on_set_subagent_thinking(&role, Some(level.to_owned()), cx);
+                        }
+                    },
+                    cx,
+                ))
+                .into_any_element(),
+        ],
+    )
+    .into_any_element()
+}
+
+fn thinking_options(
+    workspace: &Workspace,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Vec<(String, String)> {
+    let (provider, model) = match (provider, model) {
+        (Some(provider), Some(model)) => (Some(provider), Some(model)),
+        _ => (
+            workspace.vm().selected_provider.as_deref(),
+            workspace.vm().selected_model.as_deref(),
+        ),
+    };
+    let mut options = vec![(
+        "inherit".to_owned(),
+        t("Role default", "角色默认").to_owned(),
+    )];
+    for level in crate::view_model::reasoning_levels_for(workspace.vm(), provider, model) {
+        if level == "default" || options.iter().any(|(id, _)| id == &level) {
+            continue;
+        }
+        options.push((level.clone(), crate::ui::chat::reasoning_row_label(&level)));
+    }
+    options
+}
+
+fn capability_chip(isolation: &str, theme: &gpui_kit::component::theme::Theme) -> AnyElement {
+    let label = if isolation == "worktree" {
+        t("Worktree", "工作树")
+    } else {
+        t("Read-only", "只读")
+    };
+    div()
+        .h(px(24.))
+        .px_2()
+        .flex()
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(label)
         .into_any_element()
 }
 
-fn agent_model_row(
-    role: &str,
-    model: &str,
-    provider: Option<&str>,
-    cx: &Context<Workspace>,
-) -> AnyElement {
-    let theme = cx.theme();
-    let role = role.to_owned();
-    let model = model.to_owned();
-    let provider = provider.map(str::to_owned);
-    div()
-        .id(format!(
-            "agent-model-{role}-{}-{model}",
-            provider.as_deref().unwrap_or("inherit")
-        ))
-        .h(px(26.))
-        .flex()
-        .items_center()
-        .px_2()
-        .rounded(px(3.))
-        .text_sm()
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary))
-        .on_click({
-            let model = model.clone();
-            cx.listener(move |workspace, _, _, cx| {
-                if model == "inherit" {
-                    workspace.on_set_subagent_route(&role, Some("inherit".to_owned()), None, cx);
-                } else {
-                    workspace.on_set_subagent_route(
-                        &role,
-                        provider.clone(),
-                        Some(model.clone()),
-                        cx,
-                    );
-                }
-            })
-        })
-        .child(model)
-        .into_any_element()
+fn title_case(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_concurrency;
+
+    #[test]
+    fn settings_roles_are_scout_and_artisan() {
+        let roles = mycode_config::builtin_roles();
+        let names: Vec<_> = roles.roles.iter().map(|role| role.name.as_str()).collect();
+        assert_eq!(names, ["scout", "artisan"]);
+    }
+
+    #[test]
+    fn concurrency_cycle_wraps_to_the_default_sentinel() {
+        assert_eq!(next_concurrency(0), 1);
+        assert_eq!(next_concurrency(4), 5);
+        assert_eq!(next_concurrency(mycode_config::MAX_SUBAGENT_CONCURRENCY), 0);
+        assert_eq!(mycode_config::DEFAULT_SUBAGENT_CONCURRENCY, 4);
+    }
 }

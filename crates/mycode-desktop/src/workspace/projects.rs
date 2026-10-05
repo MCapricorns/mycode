@@ -757,6 +757,8 @@ impl Workspace {
             session_workspaces: self.vm.session_workspaces.clone(),
             trusted_projects: self.vm.trusted_projects.clone(),
             active_workspace: self.vm.active_workspace.clone(),
+            recent_models: self.vm.recent_models.clone(),
+            starred_models: self.vm.starred_models.clone(),
         };
         self.dispatch(BridgeCommand::SaveUiState { state }, cx);
     }
