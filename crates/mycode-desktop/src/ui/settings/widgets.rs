@@ -25,7 +25,12 @@ pub(super) fn settings_card(
         .into_iter()
         .enumerate()
         .map(|(index, child)| {
+            // Content height only. A growing section becomes the settings
+            // scrollport and leaves a blank band above the next control.
             div()
+                .w_full()
+                .h_auto()
+                .flex_none()
                 .when(index > 0, |this| {
                     this.mt_3().pt_3().border_t_1().border_color(theme.border)
                 })
@@ -67,8 +72,12 @@ pub(super) fn settings_card(
         .child(
             div()
                 .id(format!("card-{id}-body"))
+                .w_full()
+                .h_auto()
+                .flex_none()
                 .flex()
                 .flex_col()
+                .justify_start()
                 .children(body),
         )
 }
@@ -210,6 +219,9 @@ pub(super) fn dropdown_field(
     let theme = cx.theme();
     div()
         .id(format!("dropdown-{id}"))
+        .w_full()
+        .h_auto()
+        .flex_none()
         .flex()
         .flex_col()
         .gap_1()

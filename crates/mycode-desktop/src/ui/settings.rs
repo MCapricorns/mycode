@@ -154,6 +154,11 @@ pub(super) fn render_settings_view(
                         .min_w_0()
                         .h_full()
                         .overflow_y_scroll()
+                        // A column, like the nav scroller. The page is a flex
+                        // item with no grow, so it stays as tall as its cards
+                        // instead of stretching to this viewport.
+                        .flex()
+                        .flex_col()
                         .child(super::motion::fade_in(
                             format!("settings-page-{}", settings_page_key(workspace)),
                             cx.reduce_motion(),
@@ -162,6 +167,8 @@ pub(super) fn render_settings_view(
                                 .mx_auto()
                                 .max_w(rems(52.))
                                 .w_full()
+                                .h_auto()
+                                .flex_none()
                                 .flex()
                                 .flex_col()
                                 .gap_4()
