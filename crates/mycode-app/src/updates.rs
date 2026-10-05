@@ -513,14 +513,17 @@ set "NAME=%~nx1"
 setlocal EnableDelayedExpansion
 set "HASHRESULT="
 set "NAMEQ=!NAME:%=%%%%!"
-for /f "delims=" %%H in ('certutil -hashfile "!NAMEQ!" SHA256') do call :takehash "%%H"
+rem usebackq: a quoted path inside for /f '...' is not passed to certutil.
+for /f "usebackq delims=" %%H in (`certutil -hashfile "!NAMEQ!" SHA256`) do call :takehash "%%H"
 if not defined HASHRESULT (
+  echo updater: certutil did not return a sha256 1>&2
   popd
   endlocal
   endlocal
   exit /b 1
 )
 if /i not "!HASHRESULT!"=="!EXPECTED!" (
+  echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
   popd
   endlocal
   endlocal
@@ -532,9 +535,14 @@ endlocal
 exit /b 0
 :takehash
 if defined HASHRESULT exit /b 0
+setlocal DisableDelayedExpansion
 set "CANDIDATE=%~1"
 set "CANDIDATE=%CANDIDATE: =%"
-if "%CANDIDATE:~64,1%"=="" if not "%CANDIDATE:~63,1%"=="" set "HASHRESULT=%CANDIDATE%"
+if not "%CANDIDATE:~63,1%"=="" if "%CANDIDATE:~64,1%"=="" (
+  endlocal & set "HASHRESULT=%CANDIDATE%"
+  exit /b 0
+)
+endlocal
 exit /b 0
 "#;
     template
