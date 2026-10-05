@@ -1,4 +1,4 @@
-//! The General settings page: palette, language, and request identity.
+//! The General settings page: palette, typeface, language, and request identity.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
 use gpui_kit::{
@@ -53,6 +53,12 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.font_size.clone())
         .unwrap_or_else(|| "m".to_owned());
+    let font_family = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.font_family.clone())
+        .unwrap_or_else(|| mycode_config::SYSTEM_FONT_FAMILY.to_owned());
     let language = effective_language_id(&configured_language).to_owned();
     let language_label_now = language_label(&language).to_owned();
     let language_options = ["auto", "en", "zh"]
@@ -66,6 +72,7 @@ pub(super) fn render_general_section(
         .map(|settings| settings.effective_user_agent.clone())
         .unwrap_or_default();
     let palette_row = palette_field(&palette, cx);
+    let font_family_row = font_family_field(&font_family, workspace.vm().font_family_menu_open, cx);
     let font_row = font_size_field(&font_size, cx);
     let language_row = dropdown_field(
         "language",
@@ -113,22 +120,25 @@ pub(super) fn render_general_section(
             "appearance",
             t("Appearance", "外观"),
             Some(t(
-                "Palette, language, and type size apply immediately and are saved to settings.",
-                "色板、语言和字号立即生效并随设置保存。",
+                "Palette, typeface, size, and language apply immediately and are saved to settings.",
+                "色板、字体、字号和语言立即生效并写入设置。",
             )),
             theme,
-            vec![palette_row, font_row, language_row, ua_field],
+            vec![
+                palette_row,
+                font_family_row,
+                font_row,
+                language_row,
+                ua_field,
+            ],
         ))
         .into_any_element()
 }
 
-/// Label above a wrapping chip row.
+/// Label above a fixed five-column swatch grid.
 ///
-/// A side-by-side settings row gives the label `flex-basis: 0` and
-/// `min-width: 0`. The chip group's max-content width is the full unwrapped
-/// line, and thirteen names are wider than the settings column, so that label
-/// collapses and its text paints across the chips. Extra palettes only add
-/// wrap rows under the description.
+/// Thirteen palettes fill two rows and leave three on the last. Columns are
+/// equal, so the last row stays left-aligned instead of stretching.
 fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     div()
         .id("row-palette")
@@ -154,6 +164,46 @@ fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
         )
         .child(palette_choices(selected, cx))
         .into_any_element()
+}
+
+fn font_family_field(selected: &str, open: bool, cx: &mut Context<Workspace>) -> AnyElement {
+    let installed = crate::ui::desk::installed_font_names(cx);
+    let options = crate::ui::desk::available_font_family_ids(installed)
+        .into_iter()
+        .map(|id| crate::ui::desk::font_family_label(id).to_owned())
+        .collect::<Vec<_>>();
+    let current = crate::ui::desk::font_family_label(selected).to_owned();
+    dropdown_field(
+        "font-family",
+        t("Interface font", "界面字体"),
+        Some(t(
+            "System uses the operating-system UI font. Other choices are fonts this computer can load.",
+            "系统使用操作系统界面字体。其余选项是本机能够加载的字体。",
+        )),
+        &current,
+        &options,
+        open,
+        |workspace, open, cx| workspace.on_toggle_font_family_menu(open, cx),
+        |workspace, label, cx| {
+            if let Some(id) = font_family_id_for_label(label) {
+                workspace.on_select_font_family(id, cx);
+            }
+            workspace.on_toggle_font_family_menu(false, cx);
+        },
+        cx,
+    )
+}
+
+/// The id a displayed font label maps back to, in either language pack.
+fn font_family_id_for_label(label: &str) -> Option<&'static str> {
+    match label {
+        "System" | "系统" => Some(mycode_config::SYSTEM_FONT_FAMILY),
+        "Inter" => Some("Inter"),
+        "Segoe UI" => Some("Segoe UI"),
+        "PingFang" => Some("PingFang"),
+        "Noto Sans" => Some("Noto Sans"),
+        _ => None,
+    }
 }
 
 fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
@@ -201,46 +251,49 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
 fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme().clone();
     div()
+        .id("palette-grid")
         .w_full()
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .gap_1()
+        .grid()
+        .grid_cols(crate::ui::desk::PALETTE_GRID_COLUMNS)
+        .gap_2()
         .children(crate::ui::desk::PALETTES.into_iter().map(|id| {
             let on = selected == id;
             let swatch = crate::ui::desk::palette_swatch(id);
-            let hover_bg = if on {
-                theme.accent
+            let ring = if on {
+                theme.foreground
             } else {
-                theme.secondary_hover
+                theme.transparent
+            };
+            let hover_ring = if on {
+                theme.foreground
+            } else {
+                theme.muted_foreground
             };
             div()
                 .id(format!("palette-{id}"))
+                .min_w_0()
                 .flex()
-                .flex_row()
-                .flex_shrink_0()
-                .items_center()
+                .flex_col()
                 .gap_1()
-                .h(px(28.))
-                .px_2()
-                .rounded(px(8.))
-                .border_1()
-                .border_color(if on {
-                    theme.primary.opacity(0.55)
-                } else {
-                    theme.border
-                })
-                .bg(if on { theme.accent } else { theme.transparent })
                 .cursor_pointer()
-                .hover(move |this| this.bg(hover_bg))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_select_palette(id, cx);
                 }))
-                .child(div().size(px(10.)).rounded_full().bg(swatch))
+                .child(
+                    div()
+                        .w_full()
+                        .aspect_square()
+                        .p(px(2.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(ring)
+                        .hover(move |this| this.border_color(hover_ring))
+                        .child(div().size_full().rounded(px(6.)).bg(swatch)),
+                )
                 .child(
                     div()
                         .text_xs()
-                        .whitespace_nowrap()
+                        .truncate()
                         .text_color(theme.foreground)
                         .child(crate::ui::desk::palette_label(id)),
                 )

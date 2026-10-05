@@ -222,6 +222,9 @@ pub struct Workspace {
     expanded_tools: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
+    /// Last UI font-family id applied to the theme. Empty until the first frame.
+    /// `"system"` covers both an empty stored value and the explicit system id.
+    applied_font_family: String,
 }
 
 impl Workspace {
@@ -298,6 +301,7 @@ impl Workspace {
             git_diff_generation: 0,
             expanded_tools: HashSet::new(),
             applied_font_size: String::new(),
+            applied_font_family: String::new(),
         });
         workspace.update(cx, |workspace, cx| {
             let filter = cx.new(|cx| {
@@ -830,6 +834,7 @@ impl Workspace {
         }
         crate::ui::desk::apply_palette(Theme::global_mut(cx), palette);
         self.applied_font_size.clear();
+        self.applied_font_family.clear();
         Theme::sync_base(cx);
         self.apply_action(
             DesktopAction::SettingsPaletteSelected(palette.to_owned()),
@@ -857,22 +862,61 @@ impl Workspace {
         self.on_save_settings(cx);
     }
 
-    /// Paints the saved interface font size onto the window, once per change.
+    /// Applies and persists the UI font family. The next frame paints it, and
+    /// the settings save writes `appearance.fontFamily`.
+    pub(crate) fn on_select_font_family(&mut self, font_family: &str, cx: &mut Context<Self>) {
+        let Some(font_family) = crate::ui::desk::normalize_font_family(font_family) else {
+            return;
+        };
+        if self.vm.settings.as_ref().is_some_and(|settings| {
+            crate::ui::desk::normalize_font_family(&settings.font_family) == Some(font_family)
+        }) {
+            return;
+        }
+        self.applied_font_family.clear();
+        self.apply_action(
+            DesktopAction::SettingsFontFamilySelected(font_family.to_owned()),
+            cx,
+        );
+        self.on_save_settings(cx);
+    }
+
+    pub(crate) fn on_toggle_font_family_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::FontFamilyMenuToggled(open), cx);
+    }
+
+    /// Paints the saved interface font size and family onto the window, once
+    /// per change. Both values come from the settings projection, which is
+    /// what gets written to `settings.json`.
     pub(crate) fn sync_interface_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let id = self
+        let size_id = self
             .vm
             .settings
             .as_ref()
             .map(|settings| settings.font_size.as_str())
             .unwrap_or("m");
-        let id = crate::ui::desk::normalize_font_size(id);
-        if self.applied_font_size == id {
+        let family_id = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.font_family.as_str())
+            .unwrap_or(mycode_config::SYSTEM_FONT_FAMILY);
+        let size_id = crate::ui::desk::normalize_font_size(size_id);
+        let family_key = crate::ui::desk::normalize_font_family(family_id)
+            .unwrap_or(mycode_config::SYSTEM_FONT_FAMILY);
+        if self.applied_font_size == size_id && self.applied_font_family == family_key {
             return;
         }
-        crate::ui::desk::apply_font_size(Theme::global_mut(cx), id);
-        window.set_rem_size(px(crate::ui::desk::interface_rem_px(id)));
+        let family = crate::ui::desk::ui_font_family(family_id, cx);
+        {
+            let theme = Theme::global_mut(cx);
+            crate::ui::desk::apply_font_size(theme, size_id);
+            theme.font_family = family;
+        }
+        window.set_rem_size(px(crate::ui::desk::interface_rem_px(size_id)));
         Theme::sync_base(cx);
-        self.applied_font_size = id.to_owned();
+        self.applied_font_size = size_id.to_owned();
+        self.applied_font_family = family_key.to_owned();
     }
 
     /// Opens, closes, or pins the inspector. Does not touch the session.
