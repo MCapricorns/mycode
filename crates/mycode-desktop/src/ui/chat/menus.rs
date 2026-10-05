@@ -32,13 +32,21 @@ pub(super) fn render_model_menu(
         .pb_1()
         .flex()
         .flex_row()
-        .justify_end()
-        .child(crate::ui::model_picker::render_model_picker(
-            workspace,
-            window,
-            crate::ui::model_picker::ModelPickerTarget::Session,
-            cx,
-        ))
+        .justify_center()
+        .child(
+            div()
+                .w_full()
+                .max_w(super::COLUMN_MAX)
+                .flex()
+                .flex_row()
+                .justify_end()
+                .child(crate::ui::model_picker::render_model_picker(
+                    workspace,
+                    window,
+                    crate::ui::model_picker::ModelPickerTarget::Session,
+                    cx,
+                )),
+        )
         .into_any_element()
 }
 
@@ -58,31 +66,39 @@ pub(super) fn render_thinking_menu(
         .pb_1()
         .flex()
         .flex_row()
-        .justify_end()
+        .justify_center()
         .child(
-            popover_panel("thinking-menu", theme)
-                .w(px(220.))
-                .flex_none()
-                .p_1()
+            div()
+                .w_full()
+                .max_w(super::COLUMN_MAX)
                 .flex()
-                .flex_col()
-                .children(levels.iter().map(|level| {
-                    let picked = level.clone();
-                    let weak = weak.clone();
-                    let on = level == &selected;
-                    menu_row(
-                        format!("thinking-row-{level}"),
-                        reasoning_row_label(level),
-                        on,
-                        move |_, _, cx| {
-                            let picked = picked.clone();
-                            let _ = weak.update(cx, |workspace, cx| {
-                                workspace.on_select_reasoning(&picked, cx);
-                            });
-                        },
-                        theme,
-                    )
-                })),
+                .flex_row()
+                .justify_end()
+                .child(
+                    popover_panel("thinking-menu", theme)
+                        .w(px(220.))
+                        .flex_none()
+                        .p_1()
+                        .flex()
+                        .flex_col()
+                        .children(levels.iter().map(|level| {
+                            let picked = level.clone();
+                            let weak = weak.clone();
+                            let on = level == &selected;
+                            menu_row(
+                                format!("thinking-row-{level}"),
+                                reasoning_row_label(level),
+                                on,
+                                move |_, _, cx| {
+                                    let picked = picked.clone();
+                                    let _ = weak.update(cx, |workspace, cx| {
+                                        workspace.on_select_reasoning(&picked, cx);
+                                    });
+                                },
+                                theme,
+                            )
+                        })),
+                ),
         )
         .into_any_element()
 }
@@ -155,36 +171,40 @@ pub(super) fn render_mention_layer(
         .w_full()
         .px_4()
         .pb_1()
+        .flex()
+        .justify_center()
         .child(
-            popover_panel("mention-menu", theme)
-                .w_full()
-                .max_h(px(300.))
-                .overflow_y_scroll()
-                .p_2()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .opacity(0.6)
-                        .px_2()
-                        .pt_1()
-                        .child(heading),
-                )
-                .children(mention.items.into_iter().map(|(insert, display)| {
-                    let row_id = format!("mention-{insert}");
-                    menu_row(
-                        row_id,
-                        display,
-                        false,
-                        cx.listener(move |workspace, _, window, cx| {
-                            workspace.on_accept_mention(insert.clone(), window, cx);
-                        }),
-                        cx.theme(),
+            div().w_full().max_w(super::COLUMN_MAX).child(
+                popover_panel("mention-menu", theme)
+                    .w_full()
+                    .max_h(px(300.))
+                    .overflow_y_scroll()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .opacity(0.6)
+                            .px_2()
+                            .pt_1()
+                            .child(heading),
                     )
-                })),
+                    .children(mention.items.into_iter().map(|(insert, display)| {
+                        let row_id = format!("mention-{insert}");
+                        menu_row(
+                            row_id,
+                            display,
+                            false,
+                            cx.listener(move |workspace, _, window, cx| {
+                                workspace.on_accept_mention(insert.clone(), window, cx);
+                            }),
+                            cx.theme(),
+                        )
+                    })),
+            ),
         )
         .into_any_element()
 }

@@ -66,8 +66,8 @@ use tokio::sync::oneshot;
 // The event channel is unbounded on purpose: `try_send` never blocks, so a
 // slow or stalled UI frame can never freeze the single-threaded core runtime
 // mid-turn. `try_send` wakes the frontend task parked on `recv`. That task
-// applies the event and drains whatever else is already queued, so one wake
-// folds a whole burst.
+// paints streaming text in short frames; it does not apply a whole queued
+// turn before the next frame.
 
 /// A request from the UI to the core thread.
 #[derive(Debug)]

@@ -1,16 +1,23 @@
-# Pull request checks. This workflow contains only the three native
-# release builds, so the Checks list has no skipped jobs and no
-# unexpanded matrix names:
-#   windows-latest  -> x86_64-pc-windows-msvc   (Windows x64)
-#   windows-11-arm  -> aarch64-pc-windows-msvc  (Windows ARM64)
-#   macos-latest    -> aarch64-apple-darwin     (macOS Apple Silicon)
-# Each runner compiles mycode-desktop --release and uploads the same
-# zip and .sha256 sidecar as the main release build. The archive name
-# uses v<workspace version> from the checked-out Cargo.toml.
+# Pull request builds only.
+#
+# This workflow is the only one that runs on pull_request. It compiles and
+# packages mycode-desktop on the three native runners and stops:
+#   windows-latest  -> x86_64-pc-windows-msvc
+#   windows-11-arm  -> aarch64-pc-windows-msvc
+#   macos-latest    -> aarch64-apple-darwin
 # windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-# image; it is not a cross-compile from windows-latest.
-# Publishing, tagging, and the version bump live in release.yml, which
-# runs only on a push to main.
+# image; it is not a cross-compile from windows-latest. There is no
+# Ubuntu product compile. There is no fmt or clippy job.
+#
+# The archive name uses v<workspace version> from the checked-out Cargo.toml.
+# Assets uploaded for the pull request (not published):
+#   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
+#
+# Publishing is not in this file. A push to main runs
+# .github/workflows/release.yml, which builds these same three targets
+# and then tags and creates the GitHub Release.
 
 name: ci
 
@@ -30,11 +37,8 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  pr-release-build:
-    # Same compile and zip steps as the main release build, using the
-    # workspace version already in the checkout. This job cannot bump
-    # Cargo.toml, push a release ref, or create a tag.
-    name: pr-release-build (${{ matrix.target }})
+  release-build:
+    name: release-build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
@@ -112,4 +116,3 @@ jobs:
             *.zip.sha256
           retention-days: 3
           if-no-files-found: error
-

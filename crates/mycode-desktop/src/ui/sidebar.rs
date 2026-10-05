@@ -21,8 +21,8 @@ use crate::i18n::t;
 use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
 
-/// Sidebar width.
-const WIDTH: gpui_kit::Pixels = px(260.);
+/// Sidebar width. Narrow enough that the session list stays primary.
+const WIDTH: gpui_kit::Pixels = px(220.);
 
 pub(super) fn render_sidebar(
     workspace: &mut Workspace,
@@ -85,15 +85,28 @@ pub(super) fn render_sidebar(
         .child(workspace_head(&active_name, session_count, desk.faint, cx))
         .child(
             div().px_2().pt_1().child(
-                Button::new("new-chat")
-                    .icon(IconName::Plus)
-                    .label(t("New session", "新建会话"))
-                    .small()
-                    .outline()
+                div()
+                    .id("new-chat")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
                     .w_full()
+                    .h(px(30.))
+                    .px_2()
+                    .rounded(skin::radius_control())
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .cursor_pointer()
+                    .hover(|this| {
+                        this.bg(skin::frost_hover(theme))
+                            .text_color(theme.foreground)
+                    })
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.on_new_session(cx);
-                    })),
+                    }))
+                    .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
+                    .child(t("New session", "新建会话")),
             ),
         )
         .when_some(filter_input, |this, input| {
@@ -283,7 +296,7 @@ fn root_row(
         .px_2()
         .py(px(6.))
         .rounded(skin::radius_control())
-        .when(is_cwd, |this| this.bg(skin::frost_accent(theme)))
+        .when(is_cwd, |this| this.bg(theme.accent.opacity(0.45)))
         .cursor_pointer()
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click({
@@ -404,7 +417,7 @@ fn session_row(
         .px_2()
         .py(px(6.))
         .rounded(skin::radius_control())
-        .when(is_open, |this| this.bg(skin::frost_accent(theme)))
+        .when(is_open, |this| this.bg(theme.accent.opacity(0.45)))
         .cursor_pointer()
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .text_color(if is_open {
@@ -470,35 +483,20 @@ fn render_sidebar_footer(
         .py_2()
         .border_t_1()
         .border_color(theme.sidebar_border)
-        .child(
-            div()
-                .id("footer-settings")
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_1()
-                .cursor_pointer()
-                .text_color(if view == MainView::Settings {
-                    theme.foreground
+        .child(super::icon_button_marked(
+            "footer-settings",
+            IconName::Settings,
+            view == MainView::Settings,
+            cx.listener(|workspace, _, _, cx| {
+                let next = if workspace.vm().view == MainView::Settings {
+                    MainView::Chat
                 } else {
-                    theme.muted_foreground
-                })
-                .hover(|this| this.text_color(theme.foreground))
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    let next = if workspace.vm().view == MainView::Settings {
-                        MainView::Chat
-                    } else {
-                        MainView::Settings
-                    };
-                    workspace.on_show_main_view(next, cx);
-                }))
-                .child(Icon::new(IconName::Settings).small())
-                .child(div().text_xs().child(if view == MainView::Settings {
-                    t("Back to chat", "返回对话")
-                } else {
-                    t("Settings", "设置")
-                })),
-        )
+                    MainView::Settings
+                };
+                workspace.on_show_main_view(next, cx);
+            }),
+            cx,
+        ))
         .child(
             div().flex().flex_row().items_center().gap_2().child(
                 div()

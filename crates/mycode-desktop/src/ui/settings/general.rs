@@ -6,7 +6,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::widgets::{dropdown_field, settings_card};
+use super::widgets::{choice_chips, dropdown_field, settings_card};
 use crate::i18n::{effective_language_id, t};
 use crate::workspace::Workspace;
 
@@ -47,6 +47,12 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.language.clone())
         .unwrap_or_else(|| "auto".to_owned());
+    let font_size = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.font_size.clone())
+        .unwrap_or_else(|| "m".to_owned());
     let language = effective_language_id(&configured_language).to_owned();
     let language_label_now = language_label(&language).to_owned();
     let language_options = ["auto", "en", "zh"]
@@ -60,6 +66,7 @@ pub(super) fn render_general_section(
         .map(|settings| settings.effective_user_agent.clone())
         .unwrap_or_default();
     let palette_row = palette_field(&palette, cx);
+    let font_row = font_size_field(&font_size, cx);
     let language_row = dropdown_field(
         "language",
         t("Language", "语言"),
@@ -106,11 +113,11 @@ pub(super) fn render_general_section(
             "appearance",
             t("Appearance", "外观"),
             Some(t(
-                "The palette applies immediately and is saved to settings right away.",
-                "色板立即生效并随设置保存。",
+                "Palette, language, and type size apply immediately and are saved to settings.",
+                "色板、语言和字号立即生效并随设置保存。",
             )),
             theme,
-            vec![palette_row, language_row, ua_field],
+            vec![palette_row, font_row, language_row, ua_field],
         ))
         .into_any_element()
 }
@@ -141,11 +148,53 @@ fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
                         .child(t("Palette", "色板")),
                 )
                 .child(div().text_xs().opacity(0.5).whitespace_normal().child(t(
-                    "Solid panels over a page gradient. Pick a hue.",
-                    "页面渐变之上的实色面板。选一个色调。",
+                    "A quiet dark page. Pick a hue.",
+                    "安静的深色页面。选一个色调。",
                 ))),
         )
         .child(palette_choices(selected, cx))
+        .into_any_element()
+}
+
+fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
+    let options = ["s", "m", "l", "xl"]
+        .into_iter()
+        .map(|id| {
+            (
+                id.to_owned(),
+                crate::ui::desk::font_size_label(id).to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    div()
+        .id("row-font-size")
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(
+                    div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .child(t("Interface font size", "界面字号")),
+                )
+                .child(div().text_xs().opacity(0.5).whitespace_normal().child(t(
+                    "S / M / L / XL, about 12 / 13 / 14 / 16 px. Chat, the sidebar, and settings follow it immediately.",
+                    "S / M / L / XL，大约 12 / 13 / 14 / 16 像素。对话、侧栏和设置会立即跟随。",
+                ))),
+        )
+        .child(choice_chips(
+            "font-size",
+            &options,
+            selected,
+            |workspace, value, cx| workspace.on_select_font_size(value, cx),
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -176,8 +225,12 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElem
                 .px_2()
                 .rounded(px(8.))
                 .border_1()
-                .border_color(if on { theme.primary } else { theme.border })
-                .bg(if on { theme.accent } else { theme.secondary })
+                .border_color(if on {
+                    theme.primary.opacity(0.55)
+                } else {
+                    theme.border
+                })
+                .bg(if on { theme.accent } else { theme.transparent })
                 .cursor_pointer()
                 .hover(move |this| this.bg(hover_bg))
                 .on_click(cx.listener(move |workspace, _, _, cx| {

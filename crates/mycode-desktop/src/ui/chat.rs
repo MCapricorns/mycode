@@ -17,9 +17,11 @@ use gpui_kit::{
 };
 
 use crate::i18n::t;
-use crate::ui::skin;
 use crate::view_model::{ConversationEntry, EntryKind};
 use crate::workspace::Workspace;
+
+/// Conversation column. Side whitespace keeps the transcript in a readable measure.
+pub(super) const COLUMN_MAX: gpui_kit::Pixels = px(760.);
 
 pub(super) fn render_chat(
     workspace: &mut Workspace,
@@ -48,7 +50,8 @@ pub(super) fn render_chat(
                     elements.push(transcript::render_user_entry(entry, index > 0, index, cx));
                 }
                 TranscriptItem::Tool { call, result } => {
-                    elements.push(transcript::render_tool_block(call, result, cx.theme()));
+                    let expanded = workspace.tool_row_open(&call.event_id);
+                    elements.push(transcript::render_tool_block(call, result, expanded, cx));
                 }
                 TranscriptItem::Entry(entry) => {
                     elements.push(transcript::render_entry(entry, cx.theme()));
@@ -110,6 +113,8 @@ pub(super) fn render_chat(
                             div()
                                 .id("conversation-inner")
                                 .w_full()
+                                .max_w(COLUMN_MAX)
+                                .mx_auto()
                                 .flex()
                                 .flex_col()
                                 .gap_3()
@@ -223,10 +228,7 @@ fn render_older_chip(loading: bool, cx: &Context<Workspace>) -> impl IntoElement
         .justify_center()
         .gap_2()
         .py(px(8.))
-        .rounded(px(12.))
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .bg(skin::glass(theme))
+        .rounded(px(10.))
         .when(!loading, |this| {
             this.cursor_pointer()
                 .on_click(cx.listener(|workspace, _, _, cx| {

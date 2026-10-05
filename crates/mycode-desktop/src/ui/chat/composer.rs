@@ -1,8 +1,9 @@
-//! The composer card: a Cursor-style prompt row.
+//! The composer bar: a rounded prompt at the bottom of the conversation column.
 //!
-//! While a turn is running the arrow slot is Stop: it ends the whole turn,
-//! including every subagent. Text sent during that turn is a steer to the
-//! main model and does not cancel the children.
+//! Model and reasoning sit as small controls inside the bar. While a turn is
+//! running the arrow slot is Stop: it ends the whole turn, including every
+//! subagent. Text sent during that turn is a steer to the main model and does
+//! not cancel the children.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -74,17 +75,19 @@ pub(super) fn render_composer(
         .map(project_label)
         .unwrap_or_else(|| t("Set folder", "选择目录").to_owned())
         .into();
-    let has_project = session_project.is_some();
 
     div()
         .id("composer")
         .flex()
         .flex_col()
+        .items_center()
         .w_full()
         .px_4()
         .pt_2()
         .pb_4()
-        .when_some(queue_panel, |this, queue| this.child(queue))
+        .when_some(queue_panel, |this, queue| {
+            this.child(div().w_full().max_w(super::COLUMN_MAX).child(queue))
+        })
         .child(
             div()
                 .id("composer-card")
@@ -95,11 +98,11 @@ pub(super) fn render_composer(
                 .pt_2()
                 .pb_2()
                 .w_full()
+                .max_w(super::COLUMN_MAX)
                 .rounded(px(16.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
                 .bg(theme.popover)
-                .shadow_md()
                 .child(
                     div()
                         .id("composer-input")
@@ -108,15 +111,35 @@ pub(super) fn render_composer(
                         .items_center()
                         .w_full()
                         .min_w_0()
-                        .gap_2()
+                        .min_h(px(36.))
+                        .text_sm()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(Textarea::new(&composer).appearance(false).bordered(false)),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("composer-chip-row")
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .w_full()
+                        .min_w_0()
                         .child(
                             div()
                                 .id("composer-plus")
                                 .size(px(28.))
                                 .flex()
+                                .flex_shrink_0()
                                 .items_center()
                                 .justify_center()
-                                .rounded_full()
+                                .rounded(px(10.))
                                 .cursor_pointer()
                                 .text_color(theme.muted_foreground)
                                 .hover(|this| this.bg(theme.secondary_hover))
@@ -125,19 +148,21 @@ pub(super) fn render_composer(
                                 }))
                                 .child(Icon::new(IconName::Plus).small()),
                         )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .min_h(px(36.))
-                                .text_sm()
-                                .child(Textarea::new(&composer).appearance(false).bordered(false)),
-                        )
+                        .child(composer_text_button(
+                            "project",
+                            project_chip_label,
+                            false,
+                            px(140.),
+                            |workspace, _window, cx| {
+                                workspace.on_open_project_dialog(cx);
+                            },
+                            cx,
+                        ))
                         .child(composer_text_button(
                             "model",
                             model_label,
                             workspace.vm().model_menu_open,
+                            px(168.),
                             |workspace, window, cx| {
                                 let open = !workspace.vm().model_menu_open;
                                 workspace.on_toggle_model_menu(open, window, cx);
@@ -149,6 +174,7 @@ pub(super) fn render_composer(
                                 "thinking",
                                 thinking_label,
                                 workspace.vm().reasoning_menu_open,
+                                px(96.),
                                 |workspace, _window, cx| {
                                     let open = !workspace.vm().reasoning_menu_open;
                                     workspace.on_toggle_reasoning_menu(open, cx);
@@ -163,32 +189,6 @@ pub(super) fn render_composer(
                             has_queue,
                             cx,
                         )),
-                )
-                .child(
-                    div()
-                        .id("composer-chip-row")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .pt_1()
-                        .child(composer_text_button(
-                            "project",
-                            project_chip_label,
-                            false,
-                            |workspace, _window, cx| {
-                                workspace.on_open_project_dialog(cx);
-                            },
-                            cx,
-                        ))
-                        .when(!has_project, |this| {
-                            this.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(t("No folder", "未选择目录")),
-                            )
-                        }),
                 ),
         )
 }
@@ -206,26 +206,38 @@ fn composer_round_button(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let can_send = has_session && (has_draft || has_queue);
+    let fill = super::super::desk::primary_fill(theme.accent, theme.primary);
+    let hover = super::super::desk::deepen(fill);
+    let edge = super::super::desk::primary_edge(theme.primary);
     div()
         .id(if sending {
             "composer-stop"
         } else {
             "composer-send"
         })
-        .size(px(28.))
+        .size(px(30.))
         .flex_shrink_0()
-        .rounded_full()
+        .ml_auto()
+        .rounded(px(10.))
+        .border_1()
         .flex()
         .items_center()
         .justify_center()
         .when(sending || can_send, |this| this.cursor_pointer())
         .when(sending, |this| {
-            this.bg(theme.foreground).text_color(theme.background)
+            this.border_color(theme.border).text_color(theme.foreground)
         })
         .when(!sending, |this| {
-            this.bg(theme.primary)
-                .text_color(theme.primary_foreground)
-                .when(!can_send, |this| this.opacity(0.4))
+            this.bg(if can_send { fill } else { theme.transparent })
+                .border_color(if can_send { edge } else { theme.border })
+                .text_color(if can_send {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
+                })
+                .when(can_send, move |this| {
+                    this.hover(move |style| style.bg(hover))
+                })
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
             if sending {
@@ -235,7 +247,7 @@ fn composer_round_button(
             }
         }))
         .when(sending, |this| {
-            this.child(div().size(px(10.)).rounded(px(2.)).bg(theme.background))
+            this.child(div().size(px(10.)).rounded(px(2.)).bg(theme.foreground))
         })
         .when(!sending, |this| {
             this.child(Icon::new(IconName::ArrowUp).small())
@@ -247,6 +259,7 @@ fn composer_text_button(
     id: &str,
     label: SharedString,
     open: bool,
+    max_w: gpui_kit::Pixels,
     on_click: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
@@ -256,10 +269,12 @@ fn composer_text_button(
         .flex()
         .flex_row()
         .items_center()
-        .min_w_0()
+        .flex_shrink_1()
+        .min_w(px(72.))
+        .max_w(max_w)
         .px_2()
         .h(px(28.))
-        .rounded(px(8.))
+        .rounded(px(10.))
         .text_xs()
         .cursor_pointer()
         .text_color(if open {
@@ -267,12 +282,12 @@ fn composer_text_button(
         } else {
             theme.muted_foreground
         })
-        .when(open, |this| this.bg(theme.accent))
+        .when(open, |this| this.bg(theme.accent.opacity(0.65)))
         .hover(|this| this.bg(theme.secondary_hover).text_color(theme.foreground))
         .on_click(cx.listener(move |workspace, _, window, cx| {
             on_click(workspace, window, cx);
         }))
-        .child(div().min_w_0().truncate().child(label))
+        .child(div().flex_1().min_w_0().truncate().child(label))
 }
 
 /// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
@@ -317,7 +332,6 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .rounded(skin::radius_control())
                         .border_1()
                         .border_color(skin::glass_border(theme))
-                        .bg(skin::frost(theme))
                         .text_xs()
                         .text_color(theme.foreground)
                         .cursor_pointer()
