@@ -709,32 +709,26 @@ def _expect_workflow_contract() -> None:
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
         "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
     )
     release_build = _yaml_job(workflow, "release-build")
     _expect("windows-11-arm" in release_build, "Windows ARM64 release runner missing")
+    _expect("os: ubuntu-latest" in release_build, "Linux product compile is not on ubuntu-latest")
     for target in release_targets:
         _expect(target in release_build, f"missing release platform {target}")
         _expect(
             f"mycode-desktop-<tag>-{target}.zip" in workflow,
             f"missing release asset comment {target}",
         )
-    _expect(
-        "x86_64-unknown-linux-gnu" not in release_build,
-        "Linux is still a release target",
-    )
-    _expect("Package (Linux)" not in workflow, "Linux packaging step remains")
-    _expect(
-        "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" not in workflow,
-        "Linux zip is still a release asset",
-    )
-    _expect("linux-gpui-deps" not in workflow, "Linux GPUI action is still wired")
-    _expect(
-        "x86_64-unknown-linux-gnu" not in workflow,
-        "Ubuntu product compile triple remains",
-    )
+    _expect("Package (Linux)" in release_build, "Linux packaging step missing")
+    _expect("sha256sum" in release_build, "Linux archive hash is not sha256sum")
+    _expect("libxkbcommon-dev" in release_build, "Linux GPUI packages missing")
+    _expect("libssl-dev" in release_build, "OpenSSL dev package missing from the Linux build")
+    _expect("libclang-dev" in release_build, "libclang dev package missing from the Linux build")
+    _expect("linux-gpui-deps" not in workflow, "Linux GPUI composite action is wired again")
     _expect(
         workflow.count("runs-on: ubuntu-latest") == 3,
-        "ubuntu-latest should only run release-plan, release-publish, and release-cleanup",
+        "release-plan, release-publish, and release-cleanup should be the only literal ubuntu-latest jobs",
     )
     _expect("cargo-audit" not in workflow, "cargo-audit job remains")
     for job in ("release-plan", "release-publish", "release-cleanup"):
@@ -794,13 +788,22 @@ def _expect_workflow_contract() -> None:
         "advance_main.py --self-test" in plan,
         "advance_main self-test missing from release-plan",
     )
-    _expect("runner.os == 'Linux'" not in workflow, "self-test still waits for Linux")
+    _expect(
+        "runner.os == 'Linux'" not in plan,
+        "release planner self-test still waits for Linux",
+    )
+    _expect(
+        "runner.os == 'Linux'" in release_build,
+        "Linux install and packaging are not gated on the Linux runner",
+    )
     _expect("\n  core:\n" not in workflow, "core quality job is back")
     _expect("\n  desktop:\n" not in workflow, "desktop quality job is back")
     _expect(
         "github.event_name == 'pull_request'" not in _yaml_job(workflow, "release-build"),
         "main release builds still branch on pull_request",
     )
+    # README and CHANGELOG still describe three release platforms. The docs
+    # release updates them after Linux archives exist.
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
     _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
@@ -845,7 +848,7 @@ def _trigger_block(workflow: str) -> str:
 
 
 def _expect_split_workflows(ci: str, release: str) -> None:
-    """Pull requests build three targets. Only a main push publishes."""
+    """Pull requests build four targets. Only a main push publishes."""
 
     names = sorted(path.name for path in (ROOT / ".github/workflows").glob("*.y*ml"))
     _expect(names == ["ci.yml", "release.yml"], f"workflow files are {names}")
@@ -884,17 +887,23 @@ def _expect_split_workflows(ci: str, release: str) -> None:
         not re.search(r"(?m)^    needs:", build),
         "pull request build job depends on another job",
     )
-    _expect("ubuntu-latest" not in build, "pull request release builds run on Ubuntu")
+    _expect("ubuntu-latest" in build, "pull request Linux runner missing")
     _expect("windows-11-arm" in build, "Windows ARM64 pull request runner missing")
     for target in (
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
         "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
     ):
         _expect(target in build, f"missing pull request platform {target}")
+    _expect("Package (Linux)" in build, "Linux packaging step missing from pull requests")
+    _expect("libxkbcommon-dev" in build, "Linux GPUI packages missing from pull requests")
+    _expect(
+        "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" in ci,
+        "Linux zip missing from the pull request workflow",
+    )
     for job in ("release-plan", "release-publish", "release-cleanup", "core", "desktop"):
         _expect(f"\n  {job}:\n" not in ci, f"{job} job is visible to pull requests")
-    _expect("x86_64-unknown-linux-gnu" not in ci, "Linux triple is in the pull request workflow")
 
 
 def build_parser() -> argparse.ArgumentParser:

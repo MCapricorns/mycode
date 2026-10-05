@@ -1,11 +1,11 @@
-# Push to main, build three platforms, then tag and publish.
+# Push to main, build four platforms, then tag and publish.
 #
 # This workflow runs only on a push to main. It does not run for pull
 # requests. release-plan chooses the tag first. The tag is
 # `v<workspace version>` when that tag is free. When the tag already
 # exists, release-plan bumps the patch in Cargo.toml, Cargo.lock, and
 # CHANGELOG.md on a temporary commit and pushes only
-# `ci/release-<version>-<run id>`. The three product builds check out
+# `ci/release-<version>-<run id>`. The four product builds check out
 # that commit, so the version compiled into the binaries is the version
 # that will be tagged.
 #
@@ -13,11 +13,13 @@
 #   windows-latest  -> x86_64-pc-windows-msvc
 #   windows-11-arm  -> aarch64-pc-windows-msvc
 #   macos-latest    -> aarch64-apple-darwin
+#   ubuntu-latest   -> x86_64-unknown-linux-gnu
 # windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-# image; it is not a cross-compile from windows-latest. There is no
-# Ubuntu product compile. There is no fmt or clippy job.
+# image; it is not a cross-compile from windows-latest. The Ubuntu runner
+# installs the GPUI system packages, then compiles the Linux x86_64
+# product. There is no fmt or clippy job.
 #
-# After those three builds succeed, release-publish creates the tag and
+# After those four builds succeed, release-publish creates the tag and
 # uploads the archives from that commit, then advances main. The advance
 # fast-forwards when it can. When main moved during the build, the
 # version bump is replayed onto current main and pushed without force.
@@ -29,10 +31,11 @@
 # release-plan, release-publish, and release-cleanup run on ubuntu-latest.
 # They do not compile the product.
 #
-# Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
+# Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon, Linux x86_64):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
+#   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
 
 name: release
 
@@ -125,7 +128,7 @@ jobs:
               -m "chore(release): bump to ${VERSION}" \
               -m "Record the version published for this qualified main push."
             # Build this commit before main moves. release-publish tags
-            # it after the three platform archives exist, then
+            # it after the four platform archives exist, then
             # fast-forwards main or replays the bump onto current main.
             cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
             git push origin "HEAD:refs/heads/${cleanup_ref}"
@@ -142,7 +145,7 @@ jobs:
             --github-output "${GITHUB_OUTPUT}"
 
   release-build:
-    # The three builds run only after a plan that decided to publish.
+    # The four builds run only after a plan that decided to publish.
     # They check out that planned commit.
     needs: release-plan
     if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true'
@@ -161,6 +164,9 @@ jobs:
             binary: mycode-desktop.exe
           - os: macos-latest
             target: aarch64-apple-darwin
+            binary: mycode-desktop
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             binary: mycode-desktop
     steps:
       - uses: actions/checkout@v5
@@ -182,6 +188,42 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxcb1-dev \
+            libxcb-composite0-dev \
+            libxcb-cursor-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-util-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xkb-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libssl-dev \
+            clang \
+            libclang-dev \
+            zip
 
       - name: Build release binary
         run: cargo build --release --locked -p mycode-desktop --target ${{ matrix.target }}
@@ -215,6 +257,22 @@ jobs:
           zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
           zip -r "$zip" "$stage"
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
+          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tag="${MYCODE_PACKAGE_TAG}"
+          stage="mycode-desktop-$tag-${{ matrix.target }}"
+          mkdir -p "$stage"
+          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE "$stage/" 2>/dev/null || true
+          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
+          zip -r "$zip" "$stage"
+          hash=$(sha256sum "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       - name: Upload assets
