@@ -11,7 +11,8 @@
 #    image; it is not a cross-compile from windows-latest. Linux jobs
 #    install the GPUI/fontconfig/Wayland/XCB packages in
 #    .github/actions/linux-gpui-deps. The Linux core job also runs the
-#    release-plan self-test.
+#    release-plan self-test. Ubuntu jobs compile and check only; they do
+#    not build or upload a release archive.
 #
 # 2. release — a push to main whose quality gates passed publishes a new
 #    GitHub Release. Pull requests do not publish. The tag is
@@ -23,11 +24,10 @@
 #    commit is pushed with GITHUB_TOKEN, which does not start another
 #    workflow run.
 #
-# Assets produced per release:
+# Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
-#   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
 
 name: ci
 
@@ -238,9 +238,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: mycode-desktop
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            binary: mycode-desktop
     steps:
       - uses: actions/checkout@v5
         with:
@@ -250,10 +247,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install Linux GPUI dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/linux-gpui-deps
 
       - name: Build release binary
         run: cargo build --release --locked -p mycode-desktop --target ${{ matrix.target }}
@@ -287,22 +280,6 @@ jobs:
           zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
           zip -r "$zip" "$stage"
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
-          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
-
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          tag="${{ needs.release-plan.outputs.tag }}"
-          stage="mycode-desktop-$tag-${{ matrix.target }}"
-          mkdir -p "$stage"
-          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
-          cp README.md "$stage/" 2>/dev/null || true
-          cp LICENSE "$stage/" 2>/dev/null || true
-          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
-          zip -r "$zip" "$stage"
-          hash=$(sha256sum "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       - name: Upload assets

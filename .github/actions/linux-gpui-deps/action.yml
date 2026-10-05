@@ -1,7 +1,7 @@
 name: Linux GPUI dependencies
 description: >-
   Ubuntu packages GPUI, fontconfig, Wayland, X11/XCB, OpenSSL, and libclang
-  need before clippy or a desktop release build.
+  need before clippy or a desktop compile on Ubuntu.
 
 runs:
   using: composite
@@ -37,5 +37,4 @@ runs:
           libwayland-dev \
           libssl-dev \
           clang \
-          libclang-dev \
-          zip
+          libclang-dev

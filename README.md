@@ -1,6 +1,6 @@
 # mycode
 
-本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。支持 Windows 10/11 x64、Windows 11 ARM64、Linux x86_64（glibc）与 macOS Apple Silicon。
+本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。发布包支持 Windows 10/11 x64、Windows 11 ARM64 与 macOS Apple Silicon。
 
 [许可证](LICENSE) · [文档](docs/README.md) · [发布](https://github.com/MCapricorns/mycode/releases) · [更新日志](CHANGELOG.md)
 
@@ -27,9 +27,8 @@ English notes are [below](#english).
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
-| `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64（glibc） |
 
-每个 zip 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。
+每个 zip 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。0.7.2 至 0.7.4 的发布包含 Linux x86_64 压缩包，之后不再提供。
 
 ## 从源码构建
 
@@ -72,7 +71,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-推送到 `main` 的 pull request 在 Windows x64、Windows ARM64、Linux x86_64 和 macOS Apple Silicon 上跑这三步，不发布。质量门通过的 `main` 推送每次都会新建 GitHub Release：新标签 `v<version>`、四个平台的 zip 和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，再用这个新版本发版。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。
+推送到 `main` 的 pull request 在 Windows x64、Windows ARM64、Linux x86_64 和 macOS Apple Silicon 上跑这三步，不发布。质量门通过的 `main` 推送每次都会新建 GitHub Release：新标签 `v<version>`、三个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，再用这个新版本发版。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。
 
 ## 许可
 
@@ -82,7 +81,7 @@ cargo test -p mycode-tools --lib native_image_launches --locked
 
 ## English
 
-mycode is a local-first desktop coding agent for Windows, Linux, and macOS.
+mycode is a local-first desktop coding agent for Windows and macOS.
 The conversation, the tool calls, and every session stay on your machine.
 You bring the API keys.
 
@@ -120,9 +119,10 @@ a lock in Settings.
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
-| `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 (glibc) |
 
 Each zip has a `.sha256` sidecar. Intel macOS builds stopped after 0.4.0.
+Linux x86_64 archives shipped in 0.7.2 through 0.7.4 and are not part of
+later releases.
 
 ### Build
 
@@ -174,8 +174,9 @@ cargo test -p mycode-tools --lib native_image_launches --locked
 Pull requests into `main` run those gates on Windows x64, Windows ARM64,
 Linux x86_64, and macOS Apple Silicon, and do not publish. A push to
 `main` whose gates pass always publishes a new GitHub Release: a new
-`v<version>` tag, the four platform zips, their `.sha256` sidecars, and
-the matching `CHANGELOG.md` section (not generated commit notes). When
+`v<version>` tag, the three platform zips (Windows x64, Windows ARM64,
+and macOS Apple Silicon), their `.sha256` sidecars, and the matching
+`CHANGELOG.md` section (not generated commit notes). When
 that version already has a tag, release-plan bumps the patch in
 `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`, then publishes the new
 version. Notes under `## [Unreleased]` in `CHANGELOG.md` move into that
