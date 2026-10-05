@@ -449,10 +449,11 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. `for /f` runs a second
-    // batch file: re-entering this file makes cmd lose its place and report
-    // "The batch file cannot be found." The helper's certutil line is a
-    // normal line, so quotes, `)`, and `%` are not parsed by `for /f`.
+    // which does not expand `%VAR%` inside the value. `for /f` runs
+    // `cmd /v:on /c certutil` while delayed expansion is off in this script,
+    // so the `!MYCODE_HASH_TARGET!` text reaches that child and the path is
+    // expanded there. A `)` or `%` in the path never appears on the `for`
+    // line. Calling another batch from `for /f` makes cmd lose this file.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
@@ -509,35 +510,47 @@ rem Same line as the delete: cmd has already read it, so removing this
 rem script does not hide `exit` and turn a good replace into errorlevel 1.
 del "%~f0" & exit /b 0
 :checkhash
+setlocal DisableDelayedExpansion
 set "HASHRESULT="
 set "SEEN="
-rem The for-variable is %%L. A name that starts with that letter, such as
-rem %LINE%, is parsed as the for-variable plus leftover text.
-set "HASHCMD=%~dp0mycode-hash.cmd"
-setlocal DisableDelayedExpansion
-> "%HASHCMD%" echo @echo off
->> "%HASHCMD%" echo setlocal EnableExtensions EnableDelayedExpansion
->> "%HASHCMD%" echo certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256
-endlocal
-if not exist "%HASHCMD%" (
-  echo updater: missing helper !HASHCMD! 1>&2
-  exit /b 1
-)
-for /f "usebackq delims=" %%L in (`call "%HASHCMD%"`) do (
+for /f "usebackq delims=" %%L in (`cmd /v:on /c certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256`) do (
   if not defined SEEN set "SEEN=%%L"
-  set "CANDIDATE=%%L"
-  set "CANDIDATE=!CANDIDATE: =!"
-  if not defined HASHRESULT if "!CANDIDATE:~64,1!"=="" if not "!CANDIDATE:~63,1!"=="" set "HASHRESULT=!CANDIDATE!"
+  set "LINE=%%L"
+  call :hashline
 )
-del "%HASHCMD%" >nul 2>&1
-if not defined HASHRESULT (
-  echo updater: certutil did not return a sha256 [!SEEN!] target [!MYCODE_HASH_TARGET!] 1>&2
-  exit /b 1
+if not defined HASHRESULT goto hashmissing
+if /i "%HASHRESULT%"=="%EXPECTED%" (
+  endlocal
+  exit /b 0
 )
-if /i not "!HASHRESULT!"=="!EXPECTED!" (
-  echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
-  exit /b 1
+setlocal EnableDelayedExpansion
+echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
+endlocal
+endlocal
+exit /b 1
+:hashmissing
+setlocal EnableDelayedExpansion
+echo updater: certutil did not return a sha256 [!SEEN!] target [!MYCODE_HASH_TARGET!] 1>&2
+endlocal
+endlocal
+exit /b 1
+:hashline
+setlocal EnableDelayedExpansion
+set "CANDIDATE=!LINE!"
+set "CANDIDATE=!CANDIDATE: =!"
+if defined HASHRESULT (
+  endlocal
+  exit /b 0
 )
+if not "!CANDIDATE:~64,1!"=="" (
+  endlocal
+  exit /b 0
+)
+if "!CANDIDATE:~63,1!"=="" (
+  endlocal
+  exit /b 0
+)
+endlocal & set "HASHRESULT=%CANDIDATE%"
 exit /b 0
 "#;
     template
@@ -770,12 +783,7 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.contains("set \"HASHCMD=%~dp0mycode-hash.cmd\""),
-            "{script}"
-        );
-        assert!(script.contains("call \"%HASHCMD%\""), "{script}");
-        assert!(
-            script.contains("certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
+            script.contains("cmd /v:on /c certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
             "{script}"
         );
     }
