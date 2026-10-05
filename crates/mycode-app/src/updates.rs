@@ -449,8 +449,9 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. `call` parses percents
-    // again, so the argument is doubled once more before the call.
+    // which does not expand `%VAR%` inside the value. The hash reads that
+    // value from the environment: a `for /f` command line would split on
+    // `)` in `Program Files (x86)`, and `call` would expand percents again.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
@@ -465,6 +466,7 @@ set "PREVIOUS=__PREVIOUS__"
 set "NEW=__NEW__"
 set "EXPECTED=__HASH__"
 setlocal EnableDelayedExpansion
+set "MYCODE_HASH_EXPECTED=!EXPECTED!"
 :retry
 if "!BACKED_UP!"=="0" goto backup
 goto replace
@@ -473,16 +475,16 @@ copy /y "!CURRENT!" "!PREVIOUS!" >nul 2>&1
 if errorlevel 1 goto wait
 set "BACKED_UP=1"
 :replace
-set "ARG=!NEW:%=%%%%!"
-call :checkhash "!ARG!"
+set "MYCODE_HASH_TARGET=!NEW!"
+call :checkhash
 if errorlevel 1 (
   echo updater: staged binary sha256 does not match 1>&2
   exit /b 1
 )
 move /y "!NEW!" "!CURRENT!" >nul 2>&1
 if errorlevel 1 goto wait
-set "ARG=!CURRENT:%=%%%%!"
-call :checkhash "!ARG!"
+set "MYCODE_HASH_TARGET=!CURRENT!"
+call :checkhash
 if errorlevel 1 goto rollback
 goto done
 :wait
@@ -507,40 +509,16 @@ rem Same line as the delete: cmd has already read it, so removing this
 rem script does not hide `exit` and turn a good replace into errorlevel 1.
 del "%~f0" & exit /b 0
 :checkhash
-setlocal DisableDelayedExpansion
-pushd "%~dp1." || ( endlocal & exit /b 1 )
-set "NAME=%~nx1"
-setlocal EnableDelayedExpansion
-set "HASHRESULT="
-set "SEEN="
-rem Percent expansion, not !NAME!. The for /f child does not enable delayed
-rem expansion, so !NAME! would be the literal filename certutil looks up.
-rem usebackq lets the quoted name survive. Spaces in the hash line are
-rem removed when the line runs, not when the block is parsed.
-for /f "usebackq delims=" %%H in (`certutil -hashfile "%NAME%" SHA256`) do (
-  if not defined SEEN set "SEEN=%%H"
-  set "CANDIDATE=%%H"
-  set "CANDIDATE=!CANDIDATE: =!"
-  if not defined HASHRESULT if "!CANDIDATE:~64,1!"=="" if not "!CANDIDATE:~63,1!"=="" set "HASHRESULT=!CANDIDATE!"
-)
-if not defined HASHRESULT (
-  echo updater: certutil did not return a sha256 [!SEEN!] 1>&2
-  popd
-  endlocal
-  endlocal
-  exit /b 1
-)
-if /i not "!HASHRESULT!"=="!EXPECTED!" (
-  echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
-  popd
-  endlocal
-  endlocal
-  exit /b 1
-)
-popd
-endlocal
-endlocal
+rem Inbox Windows PowerShell 5.1. The path stays in MYCODE_HASH_TARGET, so
+rem parentheses and percent signs are not parsed by cmd. -ne ignores case.
+rem The command name is bare `powershell` so a test can place powershell.cmd
+rem ahead of System32 on PATH; powershell.exe would skip that shim.
+powershell -NoProfile -NonInteractive -Command "try { $h = Get-FileHash -LiteralPath $env:MYCODE_HASH_TARGET -Algorithm SHA256 -ErrorAction Stop; if ($h.Hash -ne $env:MYCODE_HASH_EXPECTED) { exit 1 } } catch { exit 1 }"
+if errorlevel 1 goto hashfail
 exit /b 0
+:hashfail
+echo updater: sha256 does not match !MYCODE_HASH_EXPECTED! 1>&2
+exit /b 1
 "#;
     template
         .replace("__PREVIOUS__", &cmd_percent_escape(&previous))
@@ -1184,12 +1162,15 @@ mod tests {
         let dir = scratch("win-mismatch");
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let count = dir.join("certutil-count.txt");
+        let count = dir.join("powershell-count.txt");
+        // PATH finds powershell.cmd before System32's powershell.exe. The
+        // first call hashes for real; the second pretends the replaced
+        // bytes changed. Calling powershell.exe would skip this shim.
         let wrapper = format!(
-            "@echo off\r\nsetlocal EnableExtensions\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 (\r\n  echo SHA256 hash of dummy:\r\n  echo ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\r\n  echo CertUtil: -hashfile command completed successfully.\r\n  exit /b 0\r\n)\r\n\"%SystemRoot%\\System32\\certutil.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+            "@echo off\r\nsetlocal EnableExtensions\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 exit /b 1\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -Command \"try {{ $h = Get-FileHash -LiteralPath $env:MYCODE_HASH_TARGET -Algorithm SHA256 -ErrorAction Stop; if ($h.Hash -ne $env:MYCODE_HASH_EXPECTED) {{ exit 1 }} }} catch {{ exit 1 }}\"\r\nexit /b %ERRORLEVEL%\r\n",
             count = count.display()
         );
-        std::fs::write(bin.join("certutil.cmd"), wrapper).unwrap();
+        std::fs::write(bin.join("powershell.cmd"), wrapper).unwrap();
         let current = dir.join("app.exe");
         let staged = dir.join("next.exe");
         std::fs::write(&current, b"old-bytes").unwrap();
