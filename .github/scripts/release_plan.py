@@ -684,12 +684,13 @@ def _yaml_job(workflow: str, name: str) -> str:
 
 
 def _expect_workflow_contract() -> None:
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     lowered = workflow.lower()
     _expect("gh release view" not in lowered, "asset lookup still decides the plan")
     _expect("already has every" not in lowered, "skip-if-complete wording remains")
     _expect(".assets[].name" not in workflow, "asset name check remains")
-    _expect("release_plan.py" in workflow, "planner is not wired into ci.yml")
+    _expect("release_plan.py" in workflow, "planner is not wired into release.yml")
     _expect(
         "github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow,
         "release is not limited to main pushes",
@@ -796,6 +797,10 @@ def _expect_workflow_contract() -> None:
     _expect("runner.os == 'Linux'" not in workflow, "self-test still waits for Linux")
     _expect("\n  core:\n" not in workflow, "core quality job is back")
     _expect("\n  desktop:\n" not in workflow, "desktop quality job is back")
+    _expect(
+        "github.event_name == 'pull_request'" not in _yaml_job(workflow, "release-build"),
+        "main release builds still branch on pull_request",
+    )
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
     _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
@@ -823,7 +828,7 @@ def _expect_workflow_contract() -> None:
     _expect("三个平台的 zip" in changelog, "changelog policy is not three release platforms")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
     _expect("不提供 Linux" in changelog, "changelog dropped the no-Linux release note")
-    _expect_single_release_workflow(workflow)
+    _expect_split_workflows(ci, workflow)
 
 
 def _trigger_block(workflow: str) -> str:
@@ -839,29 +844,57 @@ def _trigger_block(workflow: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def _expect_single_release_workflow(ci: str) -> None:
-    """One workflow: three release builds, then publish from main."""
+def _expect_split_workflows(ci: str, release: str) -> None:
+    """Pull requests build three targets. Only a main push publishes."""
 
     names = sorted(path.name for path in (ROOT / ".github/workflows").glob("*.y*ml"))
-    _expect(names == ["ci.yml"], f"workflow files are {names}")
+    _expect(names == ["ci.yml", "release.yml"], f"workflow files are {names}")
     _expect(not (ROOT / ".github/workflows/pr.yml").exists(), "pr.yml is still present")
-    trigger = _trigger_block(ci)
-    _expect("push:" in trigger, "ci.yml does not trigger on push")
-    _expect("main" in trigger, "ci.yml does not trigger on main")
-    _expect("pull_request:" in trigger, "ci.yml does not trigger on pull_request")
-    jobs_at = ci.find("\njobs:\n")
-    _expect(jobs_at != -1, "ci.yml is missing jobs:")
-    jobs = re.findall(r"(?m)^  ([a-z0-9-]+):\n", ci[jobs_at:])
+
+    ci_trigger = _trigger_block(ci)
+    _expect("pull_request:" in ci_trigger, "ci.yml does not trigger on pull_request")
+    _expect("push:" not in ci_trigger, "ci.yml also triggers on push")
+    _expect("workflow_dispatch" not in ci_trigger, "ci.yml has an extra trigger")
+
+    release_trigger = _trigger_block(release)
+    _expect("push:" in release_trigger, "release.yml does not trigger on push")
+    _expect("main" in release_trigger, "release.yml does not trigger on main")
+    _expect("pull_request" not in release_trigger, "release.yml triggers on pull_request")
+    _expect("pull_request" not in release, "release.yml lists pull_request")
+    _expect("workflow_dispatch" not in release_trigger, "release.yml has an extra trigger")
+
+    ci_jobs_at = ci.find("\njobs:\n")
+    _expect(ci_jobs_at != -1, "ci.yml is missing jobs:")
+    ci_jobs = re.findall(r"(?m)^  ([a-z0-9-]+):\n", ci[ci_jobs_at:])
+    _expect(ci_jobs == ["release-build"], f"ci.yml jobs are {ci_jobs}")
+
+    release_jobs_at = release.find("\njobs:\n")
+    _expect(release_jobs_at != -1, "release.yml is missing jobs:")
+    release_jobs = re.findall(r"(?m)^  ([a-z0-9-]+):\n", release[release_jobs_at:])
     _expect(
-        jobs == ["release-plan", "release-build", "release-publish", "release-cleanup"],
-        f"ci.yml jobs are {jobs}",
+        release_jobs
+        == ["release-plan", "release-build", "release-publish", "release-cleanup"],
+        f"release.yml jobs are {release_jobs}",
     )
+
     build = _yaml_job(ci, "release-build")
+    _expect("github.event_name" not in build, "pull request build job still has an event if")
+    _expect(not re.search(r"(?m)^    if:", build), "pull request build job has a job-level if")
     _expect(
-        "github.event_name == 'pull_request'" in build,
-        "pull requests skip the release builds",
+        not re.search(r"(?m)^    needs:", build),
+        "pull request build job depends on another job",
     )
-    _expect("ubuntu-latest" not in build, "release builds run on Ubuntu")
+    _expect("ubuntu-latest" not in build, "pull request release builds run on Ubuntu")
+    _expect("windows-11-arm" in build, "Windows ARM64 pull request runner missing")
+    for target in (
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ):
+        _expect(target in build, f"missing pull request platform {target}")
+    for job in ("release-plan", "release-publish", "release-cleanup", "core", "desktop"):
+        _expect(f"\n  {job}:\n" not in ci, f"{job} job is visible to pull requests")
+    _expect("x86_64-unknown-linux-gnu" not in ci, "Linux triple is in the pull request workflow")
 
 
 def build_parser() -> argparse.ArgumentParser:
