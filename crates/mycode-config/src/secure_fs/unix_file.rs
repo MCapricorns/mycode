@@ -145,6 +145,18 @@ fn open_or_create_root(root: &Path) -> Result<File, ConfigError> {
     unix::create_owned_root(root, expected)
 }
 
+/// Opens one existing directory and tightens it when we own it.
+///
+/// Settings startup only reads. A home created outside this crate is often
+/// mode `0o755`. Verifying that mode without `fchmod` surfaces as
+/// `settings error: owned path access control failed` and the page stays
+/// loading. Wrong owners and symlinks are rejected before any mode change.
+fn open_existing_owned_directory(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
+    let directory = unix::open_existing_directory(parent, name)?;
+    unix::enforce_owned_directory(&directory)?;
+    Ok(directory)
+}
+
 fn open_existing_root(root: &Path) -> Result<Option<File>, ConfigError> {
     let Some(parent_path) = root.parent() else {
         return Err(ConfigError::for_path(ConfigErrorKind::InvalidHome, root));
@@ -160,11 +172,7 @@ fn open_existing_root(root: &Path) -> Result<Option<File>, ConfigError> {
         Ok(stat) if rfs::FileType::from_raw_mode(stat.st_mode) == rfs::FileType::Symlink => {
             Err(ConfigError::new(ConfigErrorKind::LinkEscape))
         }
-        Ok(_) => {
-            let root = unix::open_existing_directory(&parent, name)?;
-            unix::verify_owned_directory(&root)?;
-            Ok(Some(root))
-        }
+        Ok(_) => Ok(Some(open_existing_owned_directory(&parent, name)?)),
         Err(Errno::NOENT) => Ok(None),
         Err(error) => Err(unix::map_errno(error, ConfigErrorKind::Io)),
     }
@@ -187,8 +195,7 @@ fn open_existing_parent<'a>(
                 return Err(ConfigError::new(ConfigErrorKind::LinkEscape));
             }
             Ok(_) => {
-                parent = unix::open_existing_directory(&parent, component)?;
-                unix::verify_owned_directory(&parent)?;
+                parent = open_existing_owned_directory(&parent, component)?;
             }
             Err(Errno::NOENT) => return Ok(None),
             Err(error) => return Err(unix::map_errno(error, ConfigErrorKind::Io)),
