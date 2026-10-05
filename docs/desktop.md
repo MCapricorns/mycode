@@ -15,7 +15,7 @@ BridgeCommand → CoreBridge
 再 reduce 一次，元素按新状态重画
 ```
 
-视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口；它编译桌面 crate 并跑 `clippy`。
+视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口；它在三个原生平台上编译发布版桌面二进制。
 
 ## 模块
 

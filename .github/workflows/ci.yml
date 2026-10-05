@@ -1,35 +1,35 @@
-# Quality gate and release for pushes to main.
+# Release builds, then publish from main.
 #
-# Pull request builds live in pr.yml. This file does not run on pull
-# requests, so those checks are not listed beside the three PR release
-# builds. windows-latest is x64. Windows ARM64 uses the native
-# windows-11-arm image; it is not a cross-compile from windows-latest.
+# One workflow. Pull requests and pushes to main both compile and package
+# mycode-desktop on the three native runners:
+#   windows-latest  -> x86_64-pc-windows-msvc
+#   windows-11-arm  -> aarch64-pc-windows-msvc
+#   macos-latest    -> aarch64-apple-darwin
+# windows-latest is x64. Windows ARM64 uses the native windows-11-arm
+# image; it is not a cross-compile from windows-latest. There is no
+# Ubuntu product compile. There is no fmt or clippy job.
 #
-# Push to main — quality gate, then release. rustfmt + clippy -D
-# warnings, then the `native_image_launches` shell program-mode smoke
-# test, on the same three runners. Product gates are rustfmt, clippy,
-# and that shell program-mode smoke test. The macOS core job runs the
-# release-plan and advance-main self-tests. There is no Ubuntu product
-# compile job. release-plan, release-publish, and release-cleanup run
-# on ubuntu-latest. release-plan and release-publish choose the tag
-# and upload the three archives. They do not compile the product.
+# Pull requests upload the zip and .sha256 sidecar and stop. They do not
+# create a tag, a GitHub Release, a Cargo.toml bump, or a ci/release-* ref.
+# The archive name uses v<workspace version> from the checked-out Cargo.toml.
 #
-# A push to main whose quality gates passed publishes a new GitHub
-# Release. Pull requests do not publish. The tag is
-# `v<workspace version>` when that tag is free. When the tag already
-# exists, release-plan bumps the patch in Cargo.toml, Cargo.lock, and
-#    CHANGELOG.md on a temporary commit and pushes only
-#    `ci/release-<version>-<run id>`. The three product builds check out
-#    that commit, so the version compiled into the binaries is the version
-#    that will be tagged. After those builds succeed, release-publish
-#    creates the tag and uploads the archives from that commit, then
-#    advances main. The advance fast-forwards when it can. When main moved
-#    during the build, the version bump is replayed onto current main and
-#    pushed without force. The temporary ref is deleted after success or
-#    failure. The body is the matching CHANGELOG section, not generated
-#    commit notes. Archives already uploaded for the previous tag do not
-#    skip the release. The version ref and the later main update are pushed
-#    with GITHUB_TOKEN, which does not start another workflow run.
+# A push to main plans the release first. The tag is `v<workspace version>`
+# when that tag is free. When the tag already exists, release-plan bumps
+# the patch in Cargo.toml, Cargo.lock, and CHANGELOG.md on a temporary
+# commit and pushes only `ci/release-<version>-<run id>`. The three product
+# builds check out that commit, so the version compiled into the binaries
+# is the version that will be tagged. After those builds succeed,
+# release-publish creates the tag and uploads the archives from that
+# commit, then advances main. The advance fast-forwards when it can. When
+# main moved during the build, the version bump is replayed onto current
+# main and pushed without force. The temporary ref is deleted after
+# success or failure. The body is the matching CHANGELOG section, not
+# generated commit notes. Archives already uploaded for the previous tag
+# do not skip the release. The version ref and the later main update are
+# pushed with GITHUB_TOKEN, which does not start another workflow run.
+# release-plan, release-publish, and release-cleanup run on ubuntu-latest.
+# They do not compile the product. On a pull request those three jobs are
+# skipped; the three release builds still run.
 #
 # Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
@@ -41,12 +41,13 @@ name: ci
 on:
   push:
     branches: [main]
+  pull_request:
 
-# One run per ref. Pushes to main wait, so a release tag and the binaries
-# uploaded for it stay on one commit.
+# One run per ref. Pull requests cancel their previous run. Pushes to main
+# wait, so a release tag and the binaries uploaded for it stay on one commit.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -56,95 +57,8 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  core:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    name: core (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            host: x86_64-pc-windows-msvc
-          - os: windows-11-arm
-            host: aarch64-pc-windows-msvc
-          - os: macos-latest
-            host: aarch64-apple-darwin
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Check release planner
-        if: runner.os == 'macOS'
-        run: |
-          python3 .github/scripts/release_plan.py --self-test
-          python3 .github/scripts/advance_main.py --self-test
-
-      - name: Rust toolchain
-        run: rustup component add rustfmt clippy
-
-      - name: Confirm native host triple
-        shell: bash
-        run: |
-          host=$(rustc -vV | awk '/^host:/{print $2}')
-          echo "rustc host=${host} expected=${{ matrix.host }}"
-          test "${host}" = "${{ matrix.host }}"
-
-      # Formats every workspace member, including mycode-desktop.
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-
-      - name: cargo clippy
-        run: >
-          cargo clippy -p mycode-core -p mycode-config -p mycode-providers
-          -p mycode-tools -p mycode-agent -p mycode-app
-          --all-targets --locked -- -D warnings
-
-      - name: shell program mode launches a program
-        run: cargo test -p mycode-tools --lib native_image_launches --locked -- --nocapture
-
-      # Runs the shipped updater script on this host: /bin/sh on macOS,
-      # update.cmd on Windows. The target file is not the running test binary.
-      # The command is a block scalar: an unquoted `updates::` is `: ` and
-      # GitHub rejects the workflow before any job starts.
-      - name: updater script swaps a quiescent binary
-        run: |
-          cargo test -p mycode-app --lib updates:: --locked -- --nocapture
-
-  desktop:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    name: desktop (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            host: x86_64-pc-windows-msvc
-          - os: windows-11-arm
-            host: aarch64-pc-windows-msvc
-          - os: macos-latest
-            host: aarch64-apple-darwin
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Rust toolchain
-        run: rustup component add clippy
-
-      - name: Confirm native host triple
-        shell: bash
-        run: |
-          host=$(rustc -vV | awk '/^host:/{print $2}')
-          echo "rustc host=${host} expected=${{ matrix.host }}"
-          test "${host}" = "${{ matrix.host }}"
-
-      - name: cargo clippy
-        run: cargo clippy -p mycode-desktop --all-targets --locked -- -D warnings
-
   release-plan:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, desktop]
     name: release-plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -164,6 +78,11 @@ jobs:
         with:
           persist-credentials: true
           fetch-depth: 1
+
+      - name: Check release planner
+        run: |
+          python3 .github/scripts/release_plan.py --self-test
+          python3 .github/scripts/advance_main.py --self-test
 
       - name: Choose a new release tag
         id: plan
@@ -226,8 +145,11 @@ jobs:
             --github-output "${GITHUB_OUTPUT}"
 
   release-build:
+    # Pull requests skip release-plan. This condition still runs the matrix
+    # for them. On main the three builds run only after a plan that decided
+    # to publish, and they check out that planned commit.
     needs: release-plan
-    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true'
+    if: (!cancelled() && (github.event_name == 'pull_request' || (needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true')))
     name: release-build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -247,7 +169,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.release-plan.outputs.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.sha || needs.release-plan.outputs.sha }}
+
+      - name: Resolve package tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(tr -d '\r' < Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "unexpected version ${version}" >&2
+            exit 1
+          fi
+          echo "MYCODE_PACKAGE_TAG=v${version}" >> "${GITHUB_ENV}"
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -261,7 +194,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $tag = "${{ needs.release-plan.outputs.tag }}"
+          $tag = $env:MYCODE_PACKAGE_TAG
           $stage = "mycode-desktop-$tag-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
@@ -276,7 +209,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          tag="${{ needs.release-plan.outputs.tag }}"
+          tag="${MYCODE_PACKAGE_TAG}"
           stage="mycode-desktop-$tag-${{ matrix.target }}"
           mkdir -p "$stage"
           chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"

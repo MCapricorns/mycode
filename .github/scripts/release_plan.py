@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Choose a new GitHub Release tag for one qualified push to main.
 
-A qualified push is a push to main whose fmt and clippy gates already
-passed. Pull requests never call this planner. The tag is ``v<workspace
+A qualified push is a push to main. Pull requests never call this
+planner. The tag is ``v<workspace
 version>`` when that tag is free. When the tag already exists, the patch
 component is incremented until the tag is free, and Cargo.toml,
 Cargo.lock, and CHANGELOG.md are rewritten so the tagged sources match
@@ -33,7 +33,7 @@ WORKSPACE_PACKAGES = (
 )
 # Used only when a patch bump has nowhere else to take notes from.
 # Commit history is intentionally not rendered into the release body.
-DEFAULT_NOTES = "### Changed\n\n- 质量门通过的 `main` 推送自动发布。\n"
+DEFAULT_NOTES = "### Changed\n\n- 三个平台构建通过的 `main` 推送自动发布。\n"
 STABLE_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
@@ -701,7 +701,9 @@ def _expect_workflow_contract() -> None:
         >= 2,
         "a failed plan can still build or publish",
     )
-    _expect("native_image_launches" in workflow, "exec smoke test missing")
+    _expect("native_image_launches" not in workflow, "shell smoke test is back in ci")
+    _expect("cargo fmt" not in workflow, "fmt gate is back in ci")
+    _expect("cargo clippy" not in workflow, "clippy gate is back in ci")
     release_targets = (
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
@@ -783,31 +785,17 @@ def _expect_workflow_contract() -> None:
         "needs.release-plan.outputs.sha" in _yaml_job(workflow, "release-build"),
         "platform builds do not check out the planned commit",
     )
-    gate_hosts = (
-        "windows-latest",
-        "windows-11-arm",
-        "macos-latest",
-    )
-    for job in ("core", "desktop"):
-        body = _yaml_job(workflow, job)
-        for host in gate_hosts:
-            _expect(host in body, f"{job} dropped {host}")
-        _expect("ubuntu-latest" not in body, f"{job} still compiles on Ubuntu")
-    core = _yaml_job(workflow, "core")
     _expect(
-        "release_plan.py --self-test" in core,
-        "release planner self-test missing from core",
+        "release_plan.py --self-test" in plan,
+        "release planner self-test missing from release-plan",
     )
     _expect(
-        "advance_main.py --self-test" in core,
-        "advance_main self-test missing from core",
+        "advance_main.py --self-test" in plan,
+        "advance_main self-test missing from release-plan",
     )
-    _expect("runner.os == 'macOS'" in core, "self-test is not on the macOS core job")
     _expect("runner.os == 'Linux'" not in workflow, "self-test still waits for Linux")
-    _expect(
-        "release_plan.py" not in _yaml_job(workflow, "desktop"),
-        "desktop job picked up the release planner self-test",
-    )
+    _expect("\n  core:\n" not in workflow, "core quality job is back")
+    _expect("\n  desktop:\n" not in workflow, "desktop quality job is back")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
     _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
@@ -835,7 +823,7 @@ def _expect_workflow_contract() -> None:
     _expect("三个平台的 zip" in changelog, "changelog policy is not three release platforms")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
     _expect("不提供 Linux" in changelog, "changelog dropped the no-Linux release note")
-    _expect_split_workflows(workflow)
+    _expect_single_release_workflow(workflow)
 
 
 def _trigger_block(workflow: str) -> str:
@@ -851,50 +839,29 @@ def _trigger_block(workflow: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def _expect_split_workflows(ci: str) -> None:
-    """PRs run only the three release builds; main keeps the release path."""
+def _expect_single_release_workflow(ci: str) -> None:
+    """One workflow: three release builds, then publish from main."""
 
+    names = sorted(path.name for path in (ROOT / ".github/workflows").glob("*.y*ml"))
+    _expect(names == ["ci.yml"], f"workflow files are {names}")
+    _expect(not (ROOT / ".github/workflows/pr.yml").exists(), "pr.yml is still present")
     trigger = _trigger_block(ci)
     _expect("push:" in trigger, "ci.yml does not trigger on push")
     _expect("main" in trigger, "ci.yml does not trigger on main")
-    _expect("pull_request" not in trigger, "ci.yml still runs on pull requests")
+    _expect("pull_request:" in trigger, "ci.yml does not trigger on pull_request")
+    jobs_at = ci.find("\njobs:\n")
+    _expect(jobs_at != -1, "ci.yml is missing jobs:")
+    jobs = re.findall(r"(?m)^  ([a-z0-9-]+):\n", ci[jobs_at:])
     _expect(
-        "\n  pr-release-build:\n" not in ci,
-        "ci.yml still defines the pull-request build job",
+        jobs == ["release-plan", "release-build", "release-publish", "release-cleanup"],
+        f"ci.yml jobs are {jobs}",
     )
-
-    pr_path = ROOT / ".github/workflows/pr.yml"
-    _expect(pr_path.is_file(), "pr.yml is missing")
-    pr = pr_path.read_text(encoding="utf-8")
-    pr_trigger = _trigger_block(pr)
-    _expect("pull_request:" in pr_trigger, "pr.yml does not trigger on pull_request")
-    _expect("push:" not in pr_trigger, "pr.yml still runs on push")
-    jobs_at = pr.find("\njobs:\n")
-    _expect(jobs_at != -1, "pr.yml is missing jobs:")
-    names = re.findall(r"(?m)^  ([a-z0-9-]+):\n", pr[jobs_at:])
+    build = _yaml_job(ci, "release-build")
     _expect(
-        names == ["pr-release-build"],
-        f"pr.yml jobs are {names}",
+        "github.event_name == 'pull_request'" in build,
+        "pull requests skip the release builds",
     )
-    pr_job = _yaml_job(pr, "pr-release-build")
-    _expect("windows-11-arm" in pr_job, "PR Windows ARM64 runner missing")
-    for target in (
-        "x86_64-pc-windows-msvc",
-        "aarch64-pc-windows-msvc",
-        "aarch64-apple-darwin",
-    ):
-        _expect(target in pr_job, f"PR build dropped {target}")
-    _expect("x86_64-unknown-linux-gnu" not in pr, "PR workflow compiles Linux")
-    _expect("ubuntu-latest" not in pr, "PR workflow runs on Ubuntu")
-    for job in (
-        "core",
-        "desktop",
-        "release-plan",
-        "release-build",
-        "release-publish",
-        "release-cleanup",
-    ):
-        _expect(f"\n  {job}:\n" not in pr, f"pr.yml still defines {job}")
+    _expect("ubuntu-latest" not in build, "release builds run on Ubuntu")
 
 
 def build_parser() -> argparse.ArgumentParser:
