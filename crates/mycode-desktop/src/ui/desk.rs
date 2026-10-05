@@ -117,10 +117,21 @@ pub const PALETTE_GRID_COLUMNS: u16 = 5;
 
 /// Side length of one palette swatch, in pixels.
 ///
-/// A fixed square. `width: 100%` plus `aspect_square` resolves each grid row
-/// to the settings-column width, so the font controls sit half a screen
-/// below the palette.
+/// A fixed square. The grid's rows are max-content, not `1fr`: a percentage
+/// width plus an aspect ratio (or a `1fr` row) makes each row as tall as the
+/// settings column and pushes the font controls off the page.
 pub const PALETTE_SWATCH_PX: f32 = 40.;
+
+/// Row tracks for the settings palette grid.
+///
+/// GPUI's `grid_rows` and `grid_rows_min_content` are both
+/// `minmax(..., 1fr)`. Those tracks grow into any definite grid height, including
+/// the settings scrollport. `grid_rows_max_content` is `minmax(0, max-content)`.
+#[must_use]
+pub fn palette_grid_rows() -> u16 {
+    let count = u16::try_from(PALETTES.len()).unwrap_or(u16::MAX);
+    count.div_ceil(PALETTE_GRID_COLUMNS.max(1))
+}
 
 /// GPUI's virtual family for the operating-system UI font.
 pub const SYSTEM_UI_FONT: &str = ".SystemUIFont";
@@ -745,6 +756,7 @@ mod tests {
         let columns = usize::from(super::PALETTE_GRID_COLUMNS);
         assert_eq!(super::PALETTES.len() / columns, 2);
         assert_eq!(super::PALETTES.len() % columns, 3);
+        assert_eq!(super::palette_grid_rows(), 3);
     }
 
     #[test]
