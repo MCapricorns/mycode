@@ -459,8 +459,12 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     // `exit /b` makes cmd look the file up again, print "The batch file
     // cannot be found.", and exit 1. `exit 0` ends this process while the
     // file is still here. A second process deletes it after `ping`.
+    //
+    // PowerShell uses `-WindowStyle Hidden`. Cleanup and relaunch use
+    // `start /b`, so neither step opens a console. The release binary is
+    // the windows subsystem; `/b` starts it without a new window.
     let relaunch_line = if relaunch {
-        "start \"\" \"!CURRENT!\"\n"
+        "start \"\" /b \"!CURRENT!\"\n"
     } else {
         ""
     };
@@ -533,7 +537,7 @@ setlocal DisableDelayedExpansion
 >> "%PS1%" echo [System.IO.File]::WriteAllText^($env:HASHASCII, $match.Value + [char]10^)
 cmd /v:on /c certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256 > "%HASHOUT%"
 endlocal
-call "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -File "%PS1%"
+call "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -File "%PS1%"
 if errorlevel 1 (
   echo updater: could not read certutil output for [!MYCODE_HASH_TARGET!] 1>&2
   del "%HASHOUT%" "%HASHASCII%" "%PS1%" >nul 2>&1
@@ -762,9 +766,10 @@ mod tests {
         let live = super::unix_script(staged, current, "ab", true);
         assert!(live.contains("nohup \"$current\""), "{live}");
         let quiet = super::windows_script(staged, current, "ab", false);
-        assert!(!quiet.contains("start \"\" \"!CURRENT!\""), "{quiet}");
+        assert!(!quiet.contains("start \"\" /b \"!CURRENT!\""), "{quiet}");
         let live = super::windows_script(staged, current, "ab", true);
-        assert!(live.contains("start \"\" \"!CURRENT!\""), "{live}");
+        assert!(live.contains("start \"\" /b \"!CURRENT!\""), "{live}");
+        assert!(!live.contains("start \"\" \"!CURRENT!\""), "{live}");
     }
 
     #[test]
@@ -788,7 +793,10 @@ mod tests {
             script.contains("WindowsPowerShell\\v1.0\\powershell.exe"),
             "{script}"
         );
-        assert!(script.contains("-File \"%PS1%\""), "{script}");
+        assert!(
+            script.contains("-NoProfile -NonInteractive -WindowStyle Hidden -File \"%PS1%\""),
+            "{script}"
+        );
         assert!(
             script.contains(
                 "start \"\" /b cmd /c \"ping -n 3 127.0.0.1 >nul & del /f /q \"\"%~f0\"\"\""
