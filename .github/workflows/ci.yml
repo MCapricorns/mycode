@@ -1,11 +1,11 @@
 # Single workflow for the product:
 #
 # 1. push/PR quality gate — rustfmt + clippy -D warnings, then the
-#    `native_image_launches` exec smoke test, on the native product runners:
+#    `native_image_launches` shell program-mode smoke test, on the native product runners:
 #      windows-latest  -> x86_64-pc-windows-msvc
 #      windows-11-arm  -> aarch64-pc-windows-msvc
 #      macos-latest    -> aarch64-apple-darwin
-#    Product gates are rustfmt, clippy, and that exec smoke test.
+#    Product gates are rustfmt, clippy, and that shell program-mode smoke test.
 #    windows-latest is x64. Windows ARM64 uses the native windows-11-arm
 #    image; it is not a cross-compile from windows-latest. The macOS core
 #    job runs the release-plan self-test. There is no Ubuntu product
@@ -94,7 +94,7 @@ jobs:
           -p mycode-tools -p mycode-agent -p mycode-app
           --all-targets --locked -- -D warnings
 
-      - name: exec launches a program
+      - name: shell program mode launches a program
         run: cargo test -p mycode-tools --lib native_image_launches --locked -- --nocapture
 
       # Runs the shipped updater script on this host: /bin/sh on macOS,

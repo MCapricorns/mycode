@@ -12,8 +12,8 @@ English notes are [below](#english).
 - **对话。** 输入框旁切换模型和思考强度。
 - **改动。** 右侧是当前模型和该文件夹的 git 改动，点文件看 diff。
 - **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
-- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及钉住程序映像的 `exec` 和走 shell 的 `shell`。网页检索、向你提问、子代理和 MCP 走同一张注册表。
-- **子代理。** 内置 scout、artisan、steward、sentinel，也可以在 `agents/` 里加 Markdown 角色。
+- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，`program` 直接启动钉住的程序映像）。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
+- **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。
 - **界面。** 中英双语，深色界面和几套配色。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
@@ -63,7 +63,7 @@ cargo build --release -p mycode-desktop
 
 ## 开发
 
-质量门与 CI 相同：格式、clippy，以及一次 `exec` 启动烟测。除此之外没有测试套件。
+质量门与 CI 相同：格式、clippy，以及一次 `shell` 的 `program` 模式启动烟测。除此之外没有测试套件。
 
 ```text
 cargo fmt --all -- --check
@@ -98,9 +98,10 @@ You bring the API keys.
   `anthropic-messages`, `openai-completions`, or `openai-responses`.
   Copilot, Codex, and xAI can sign in with a device code.
 - **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`.
-  `exec` launches a pinned executable; `shell` uses your shell profile.
-  Web search, questions, subagents, and MCP share one registry.
-- **Subagents.** Built-in scout, artisan, steward, and sentinel roles,
+  `shell` is the only process tool: `mode` `program` launches a pinned
+  executable with no shell, and `mode` `script` uses your shell profile.
+  Web search, questions, the `agent` tool, and MCP share one registry.
+- **Subagents.** Built-in scout and artisan roles,
   or custom Markdown roles under `agents/`.
 - **UI.** English and Chinese, a dark theme, and several palettes.
   Fenced code in the transcript is highlighted with gpui-kit's Tree-sitter
@@ -162,8 +163,8 @@ Module boundaries and the path of one user message:
 
 ### Development
 
-CI is rustfmt, clippy, and one `exec` launch smoke test. There is no
-other test suite.
+CI is rustfmt, clippy, and one `shell` program-mode launch smoke test.
+There is no other test suite.
 
 ```text
 cargo fmt --all -- --check

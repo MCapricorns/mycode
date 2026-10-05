@@ -1,8 +1,8 @@
-//! Subagent role catalog: the delegation roles the `task` tool can dispatch.
+//! Subagent role catalog: the delegation roles the `agent` tool can dispatch.
 //!
 //! A role is a bounded Markdown file with a small frontmatter block — the
 //! same shape the reference pi-subagents extension uses — so a user can add
-//! or replace one without an application build. Four roles ship built in;
+//! or replace one without an application build. Two roles ship built in;
 //! discovery layers the user home and the session workspace over them.
 //!
 //! This module reads role definitions only. Which roles are enabled, which
@@ -19,11 +19,9 @@ pub const MAX_ROLES: usize = 32;
 pub const ROLE_DIR_NAME: &str = "agents";
 
 /// Built-in role definitions, embedded so a fresh install has a full team.
-const BUILTIN_ROLES: [(&str, &str); 4] = [
+const BUILTIN_ROLES: [(&str, &str); 2] = [
     ("scout", include_str!("../agents/scout.md")),
     ("artisan", include_str!("../agents/artisan.md")),
-    ("steward", include_str!("../agents/steward.md")),
-    ("sentinel", include_str!("../agents/sentinel.md")),
 ];
 
 /// Where a role's edits land.
@@ -163,12 +161,12 @@ impl RoleOrigin {
 /// when a project override lists them.
 const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "web_search", "fetch_content"];
 /// Tools that would let a child re-enter the parent or talk to the user.
-const PARENT_ONLY_TOOLS: &[&str] = &["task", "ask_user"];
+const PARENT_ONLY_TOOLS: &[&str] = &["agent", "ask_user"];
 
 /// One resolved delegation role.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentRole {
-    /// Lowercase portable role name; the `agent` argument of the `task` tool.
+    /// Lowercase portable role name; the `agent` argument of the `agent` tool.
     pub name: String,
     /// One-line routing description the parent model reads.
     pub description: String,
@@ -188,7 +186,7 @@ impl SubagentRole {
     /// Tools this role may use, intersected with the parent's live set.
     ///
     /// An omitted allowlist inherits the parent set. Scout is hard
-    /// read-only. Parent-only tools (`task`, `ask_user`) never
+    /// read-only. Parent-only tools (`agent`, `ask_user`) never
     /// reach a child, so depth stays at one.
     #[must_use]
     pub fn resolve_tools(&self, parent_tools: &[String]) -> Vec<String> {
@@ -280,7 +278,7 @@ pub fn builtin_roles() -> RoleCatalog {
 /// Resolves the role catalog for one session workspace.
 ///
 /// Precedence is project over user over built-in on equal `name`, so a
-/// project can replace `artisan` without copying the other three. Only
+/// project can replace `artisan` without copying `scout`. Only
 /// `<name>.md` files directly inside a role directory are read; the file stem
 /// must match the frontmatter `name`, which keeps the on-disk layout and the
 /// routing vocabulary from drifting apart.
@@ -469,4 +467,95 @@ fn split_frontmatter(body: &str) -> Option<(&str, &str)> {
         offset += line.len();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RoleIsolation, RoleOrigin, RoleThinking, SubagentRole};
+
+    fn role(name: &str, tools: Option<Vec<String>>) -> SubagentRole {
+        SubagentRole {
+            name: name.to_owned(),
+            description: "role".into(),
+            isolation: RoleIsolation::Shared,
+            thinking: RoleThinking::Default,
+            tools,
+            prompt: "work".into(),
+            origin: RoleOrigin::Builtin,
+        }
+    }
+
+    #[test]
+    fn builtins_are_only_scout_and_artisan() {
+        let catalog = super::builtin_roles();
+        let names: Vec<_> = catalog.roles.iter().map(|role| role.name.clone()).collect();
+        assert_eq!(names, vec!["scout".to_owned(), "artisan".to_owned()]);
+        assert_eq!(
+            catalog.role("scout").expect("scout").isolation,
+            RoleIsolation::Shared
+        );
+        assert_eq!(
+            catalog.role("artisan").expect("artisan").isolation,
+            RoleIsolation::Worktree
+        );
+        let blob = catalog
+            .roles
+            .into_iter()
+            .map(|role| format!("{}\n{}", role.description, role.prompt))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(blob.contains("then stop"));
+        assert!(blob.contains("Do not stop at a first draft"));
+        assert!(blob.contains("`shell`"));
+        assert!(!blob.contains("steward"));
+        assert!(!blob.contains("sentinel"));
+        assert!(!blob.contains("`exec`"));
+        assert!(!blob.contains("`task`"));
+    }
+
+    #[test]
+    fn children_inherit_shell_and_not_the_agent_tool() {
+        let artisan = role("artisan", None);
+        let tools = artisan.resolve_tools(&[
+            "read".into(),
+            "write".into(),
+            "shell".into(),
+            "agent".into(),
+            "ask_user".into(),
+        ]);
+        assert_eq!(
+            tools,
+            vec!["read".to_owned(), "write".to_owned(), "shell".to_owned()]
+        );
+    }
+
+    #[test]
+    fn declared_exec_is_dropped_when_the_parent_only_has_shell() {
+        let narrow = role(
+            "narrow",
+            Some(vec![
+                "read".into(),
+                "grep".into(),
+                "find".into(),
+                "exec".into(),
+                "shell".into(),
+            ]),
+        );
+        let tools = narrow.resolve_tools(&[
+            "read".into(),
+            "grep".into(),
+            "find".into(),
+            "shell".into(),
+            "agent".into(),
+        ]);
+        assert_eq!(
+            tools,
+            vec![
+                "read".to_owned(),
+                "grep".to_owned(),
+                "find".to_owned(),
+                "shell".to_owned()
+            ]
+        );
+    }
 }

@@ -225,20 +225,23 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
     let joined = match name {
         "read" | "write" | "edit" => text("path"),
         "grep" | "find" => join_target(&text("pattern"), &text("path")),
-        "shell" => text("command"),
-        "exec" => {
-            let args = arguments
-                .get("args")
-                .and_then(serde_json::Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .unwrap_or_default();
-            join_target(&text("program"), &args)
+        "shell" => {
+            if text("mode") == "program" {
+                let args = arguments
+                    .get("args")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default();
+                join_target(&text("program"), &args)
+            } else {
+                text("command")
+            }
         }
         "web_search" => text("query"),
         "fetch_content" => arguments
@@ -250,7 +253,7 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
             .trim()
             .to_owned(),
         "search_tool" | "use_tool" => text("name"),
-        "task" => join_target(&text("agent"), &text("description")),
+        "agent" => join_target(&text("agent"), &text("description")),
         _ => text("path"),
     };
     let flat = joined.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -338,4 +341,26 @@ pub struct BinaryData {
     pub data: String,
     /// MIME type, e.g. `"image/png"`.
     pub mime_type: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_target;
+    use serde_json::json;
+
+    #[test]
+    fn shell_and_agent_targets_ignore_retired_names() {
+        let script = json!({"mode": "script", "command": "echo hi"});
+        assert_eq!(tool_target("shell", &script), "echo hi");
+        let program = json!({
+            "mode": "program",
+            "program": "/bin/echo",
+            "args": ["ok"]
+        });
+        assert_eq!(tool_target("shell", &program), "/bin/echo ok");
+        let delegated = json!({"agent": "scout", "description": "map the crate"});
+        assert_eq!(tool_target("agent", &delegated), "scout map the crate");
+        assert_eq!(tool_target("task", &delegated), "");
+        assert_eq!(tool_target("exec", &program), "");
+    }
 }

@@ -73,7 +73,7 @@ pub(crate) struct WorkspaceState {
     pub resources: Vec<(String, String)>,
     /// Slash-command skills from the project and user `.agents` trees.
     pub skills: Vec<SkillEntry>,
-    /// Live `task` subagent runs for the inspector panel.
+    /// Live `agent` runs for the inspector panel.
     pub live_jobs: Vec<LiveJob>,
     /// Call id of the subagent detail window, when open.
     pub subagent_window: Option<String>,

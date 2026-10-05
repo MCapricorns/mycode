@@ -15,8 +15,11 @@
 //! * A registered, schema-valid call executes directly. Unknown tools,
 //!   invalid arguments, cancellation, and tool errors fail as lifecycle
 //!   errors, not user authorization.
-//! * Trusted builtin tools (read/write/edit/shell/exec/grep/find) provide the
+//! * Trusted builtin tools (read/write/edit/shell/grep/find) provide the
 //!   minimal recovery surface and cannot depend on external search binaries.
+//!   `shell` is the only process-launch tool: `mode` `script` uses the
+//!   platform shell, and `mode` `program` spawns a kernel-loadable image
+//!   with no shell.
 
 pub mod builtin;
 pub mod ctx;
@@ -38,7 +41,7 @@ pub use builtin::shell::{
     DetectedShell, ShellKind, detect_default_shell, detect_shell_kind, set_runtime_shell,
 };
 pub use builtin::{
-    EditTool, ExecTool, FindTool, GrepTool, ReadTool, ShellTool, WriteTool, register_builtins,
+    EditTool, FindTool, GrepTool, ReadTool, ShellTool, WriteTool, register_builtins,
 };
 pub use ctx::ToolCtx;
 pub use registry::ToolRegistry;

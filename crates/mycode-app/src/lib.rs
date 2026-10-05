@@ -25,7 +25,7 @@
 //! model turn, `tool_hosts` bridges the host-backed tools, `oauth` runs the
 //! provider device flows, `settings_io` persists settings and secrets,
 //! `projection` renders display entries, `search` backs the composer's
-//! `@` mention, `mcp_tools` bridges MCP servers, `subagent` hosts the `task`
+//! `@` mention, `mcp_tools` bridges MCP servers, `subagent` hosts the `agent`
 //! tool, and `compaction`, `export`, `updates`, `web_client`, and
 //! `mcp_client` round out the housekeeping and I/O seams.
 
@@ -134,7 +134,7 @@ pub enum BridgeCommand {
     CancelSubagent {
         /// Session identity spelling.
         session_id: String,
-        /// Provider call id of the `task` tool.
+        /// Provider call id of the `agent` tool.
         call_id: String,
     },
     /// List project files matching the composer's `@` fragment.

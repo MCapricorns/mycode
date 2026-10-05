@@ -1,18 +1,19 @@
-//! `exec` — run a kernel-loadable program with an explicit argument vector.
+//! Direct image launch used by `shell` when `mode` is `program`.
 //!
-//! The model supplies `program` plus `args`; MYCode never inserts a shell or
+//! This module is not a tool. The only model-facing name is `shell`. The
+//! caller supplies `program` plus `args`; this path never inserts a shell or
 //! parses shell syntax. Only PE, ELF, and Mach-O images are launched.
-//! Scripts require an explicit interpreter or the shell tool. Execution is
-//! unsandboxed current-user execution with normal file and network access;
-//! environment allowlisting is not isolation. There is no Core permission
-//! prompt: a registered, schema-valid call is dispatched directly.
-//! Same-account hostile processes remain outside the security boundary.
-//! stdout/stderr are captured with the shared 50 KiB truncation cap; a
-//! non-zero exit is an error result, not a tool failure. Timeout and cancel
-//! await terminate-and-reap; dropping the future transfers cleanup ownership.
-//! Launch is Windows x64, Windows ARM64, Linux x86_64 GNU, and macOS Apple
-//! Silicon. Other Unix (musl, Android, BSD) is unsupported. Windows x64 and
-//! Windows ARM64 share the `CreateProcessW` path.
+//! Scripts require an explicit interpreter, or `shell` `mode` `script`.
+//! Execution is unsandboxed current-user execution with normal file and
+//! network access; environment allowlisting is not isolation. There is no
+//! Core permission prompt: a registered, schema-valid `shell` call is
+//! dispatched directly. Same-account hostile processes remain outside the
+//! security boundary. stdout/stderr are captured with the shared 50 KiB
+//! truncation cap; a non-zero exit is an error result, not a tool failure.
+//! Timeout and cancel await terminate-and-reap; dropping the future transfers
+//! cleanup ownership. Launch is Windows x64, Windows ARM64, Linux x86_64 GNU,
+//! and macOS Apple Silicon. Other Unix (musl, Android, BSD) is unsupported.
+//! Windows x64 and Windows ARM64 share the `CreateProcessW` path.
 #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod argv;
 mod env;
@@ -37,9 +38,6 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
-use schemars::JsonSchema;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use tokio::time::Sleep;
@@ -50,8 +48,7 @@ use crate::builtin::process::{
     CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, decode_captured_text,
 };
 use crate::ctx::ToolCtx;
-use crate::stream::ToolStream;
-use crate::tool::{Tool, ToolError, ToolResult};
+use crate::tool::{ToolError, ToolResult};
 
 use prepare::environment_summary;
 use resolve::encode_hex;
@@ -130,9 +127,6 @@ impl std::fmt::Display for ResolveError {
         }
     }
 }
-
-/// Default command timeout (seconds), matching the shell tool.
-pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Maximum argument lengths retained in the redacted result summary.
 ///
@@ -247,222 +241,144 @@ pub(crate) fn apply_execution_details(
     }
 }
 
-/// The `exec` builtin.
-#[derive(Debug)]
-pub struct ExecTool {
-    default_timeout: Duration,
-}
+/// Spawns one kernel-loadable image for `shell` program mode.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] when the image cannot be pinned or the spawn fails.
+/// A non-zero exit is an error [`ToolResult`], not an error return.
+pub(crate) async fn launch_program(
+    program: String,
+    args: Vec<String>,
+    timeout: Duration,
+    ctx: &ToolCtx,
+) -> Result<ToolResult, ToolError> {
+    let started = Instant::now();
+    if ctx.cancel.is_cancelled() {
+        return Err(command_cancelled_error(None));
+    }
+    resolve::validate_request(&program, &args)?;
 
-impl ExecTool {
-    /// An exec tool with the default 120 s timeout.
-    pub fn new() -> Self {
-        Self {
-            default_timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+    let program_arg = program.clone();
+    let argv = args.clone();
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    let lease = tokio::select! {
+        biased;
+        _ = ctx.cancel.cancelled() => return Err(command_cancelled_error(None)),
+        _ = &mut deadline => {
+            return Ok(timed_out_before_spawn_result(
+                &program_arg,
+                &argv,
+                started.elapsed().as_millis() as u64,
+                timeout,
+            ));
         }
-    }
+        lease = acquire_execution_lease() => lease,
+    };
+    let cwd = ctx.cwd.clone();
+    let pin_args = args;
+    let pin_work =
+        run_blocking_supervised("program resolution", &ctx.cancel, move |worker_cancel| {
+            let prepared = PreparedInvocation::prepare(&cwd, &program, &pin_args, &worker_cancel);
+            Ok((prepared?, lease))
+        });
+    tokio::pin!(pin_work);
 
-    /// An exec tool with a custom default timeout; per-call `timeout_secs`
-    /// arguments still take precedence.
-    #[must_use]
-    pub fn with_default_timeout(secs: u64) -> Self {
-        Self {
-            default_timeout: Duration::from_secs(secs),
+    let (prepared, lease) = tokio::select! {
+        biased;
+        _ = ctx.cancel.cancelled() => return Err(command_cancelled_error(None)),
+        _ = &mut deadline => {
+            return Ok(timed_out_before_spawn_result(
+                &program_arg,
+                &argv,
+                started.elapsed().as_millis() as u64,
+                timeout,
+            ));
         }
-    }
-}
-
-impl Default for ExecTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Arguments for [`ExecTool`].
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ExecArgs {
-    /// Executable to run: a bare basename searched only in absolute host PATH
-    /// entries, or a path resolved against the session cwd. Must be a
-    /// kernel-loadable PE, ELF, or Mach-O image.
-    pub program: String,
-    /// Argument vector passed to the program verbatim — no shell parsing,
-    /// quoting, or expansion is applied to these strings.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Timeout in seconds for this run (default: 120).
-    pub timeout_secs: Option<u64>,
-}
-
-#[async_trait]
-impl Tool for ExecTool {
-    type Args = ExecArgs;
-    type Output = ();
-
-    fn name(&self) -> &str {
-        "exec"
+        prepared = &mut pin_work => prepared?,
+    };
+    if ctx.cancel.is_cancelled() {
+        return Err(command_cancelled_error(None));
     }
 
-    fn description(&self) -> &str {
-        "Run a program directly with an explicit argument vector. MYCode does \
-         not insert a shell or parse shell syntax. Only kernel-loadable PE, \
-         ELF, or Mach-O images are launched; shebang scripts, batch files, \
-         and implicit interpreter fallback are rejected. `program` is a bare \
-         name resolved against absolute host PATH entries (never the working \
-         directory) or a path resolved against the session cwd. Execution is \
-         unsandboxed \
-         current-user execution with normal file and network access; it is \
-         not a sandbox. Same-account processes outside this host are outside \
-         the security boundary. Captured stdout/stderr is truncated beyond \
-         50 KiB; a non-zero exit is an error result, not a tool failure. \
-         Default timeout: 120 s. There is no Core permission prompt."
-    }
-
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "exec: run one kernel-loadable program with explicit arguments and \
-             no shell parsing (program, args[], optional timeout_secs).",
-        )
-    }
-
-    async fn execute(
-        &self,
-        args: Self::Args,
-        ctx: &ToolCtx,
-        _out: &mut ToolStream,
-    ) -> Result<ToolResult, ToolError> {
-        let timeout = Duration::from_secs(
-            args.timeout_secs
-                .unwrap_or(self.default_timeout.as_secs())
-                .max(1),
-        );
-        let started = Instant::now();
-        if ctx.cancel.is_cancelled() {
-            return Err(command_cancelled_error(None));
-        }
-        resolve::validate_request(&args.program, &args.args)?;
-
-        let program_arg = args.program.clone();
-        let argv = args.args.clone();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        let lease = tokio::select! {
-            biased;
-            _ = ctx.cancel.cancelled() => return Err(command_cancelled_error(None)),
-            _ = &mut deadline => {
-                return Ok(timed_out_before_spawn_result(
-                    &program_arg,
+    let program = prepared
+        .canonical_path()
+        .to_str()
+        .expect("pin_program validated canonical path Unicode")
+        .to_owned();
+    let digest = encode_hex(prepared.image_digest());
+    let invocation_digest = encode_hex(prepared.invocation_digest());
+    let image_identity = prepared.image_identity().debug_token();
+    let env_summary = environment_summary(prepared.env(), MAX_ARGUMENT_LENGTH_SUMMARY);
+    let image = match prepared.image_kind() {
+        image::ImageKind::Elf => "elf",
+        image::ImageKind::Pe => "pe",
+        image::ImageKind::MachO { fat: true } => "mach-o-fat",
+        image::ImageKind::MachO { fat: false } => "mach-o",
+    };
+    let outcome = spawn::run_pinned(prepared, lease, &ctx.cancel, &mut deadline).await?;
+    let duration_ms = started.elapsed().as_millis() as u64;
+    match outcome {
+        RunOutcome::Done {
+            status,
+            stdout,
+            stderr,
+            metadata,
+        } => {
+            let execution_identity = execution_identity(&invocation_digest, metadata);
+            Ok(with_image_metadata(
+                format_result(
+                    Some(status),
+                    &program,
                     &argv,
-                    started.elapsed().as_millis() as u64,
-                    timeout,
-                ));
-            }
-            lease = acquire_execution_lease() => lease,
-        };
-        let cwd = ctx.cwd.clone();
-        let program = args.program;
-        let pin_args = args.args;
-        let pin_work =
-            run_blocking_supervised("exec resolution", &ctx.cancel, move |worker_cancel| {
-                let prepared =
-                    PreparedInvocation::prepare(&cwd, &program, &pin_args, &worker_cancel);
-                Ok((prepared?, lease))
-            });
-        tokio::pin!(pin_work);
-
-        let (prepared, lease) = tokio::select! {
-            biased;
-            _ = ctx.cancel.cancelled() => return Err(command_cancelled_error(None)),
-            _ = &mut deadline => {
-                return Ok(timed_out_before_spawn_result(
-                    &program_arg,
+                    &execution_identity,
+                    &digest,
+                    stdout,
+                    stderr,
+                    duration_ms,
+                    false,
+                    None,
+                ),
+                image,
+                metadata,
+                &image_identity,
+                &invocation_digest,
+                &env_summary,
+            ))
+        }
+        RunOutcome::CollectFailed { error, teardown } => {
+            Err(collection_error(&error, teardown.err()))
+        }
+        RunOutcome::Timeout {
+            stdout,
+            stderr,
+            teardown,
+            started,
+            metadata,
+        } => {
+            let execution_identity = execution_identity(&invocation_digest, metadata);
+            Ok(with_image_metadata(
+                timed_out_result(
+                    &program,
                     &argv,
-                    started.elapsed().as_millis() as u64,
+                    &execution_identity,
+                    &digest,
+                    stdout,
+                    stderr,
+                    duration_ms,
                     timeout,
-                ));
-            }
-            prepared = &mut pin_work => prepared?,
-        };
-        if ctx.cancel.is_cancelled() {
-            return Err(command_cancelled_error(None));
-        }
-
-        let program = prepared
-            .canonical_path()
-            .to_str()
-            .expect("pin_program validated canonical path Unicode")
-            .to_owned();
-        let digest = encode_hex(prepared.image_digest());
-        let invocation_digest = encode_hex(prepared.invocation_digest());
-        let image_identity = prepared.image_identity().debug_token();
-        let env_summary = environment_summary(prepared.env(), MAX_ARGUMENT_LENGTH_SUMMARY);
-        let image = match prepared.image_kind() {
-            image::ImageKind::Elf => "elf",
-            image::ImageKind::Pe => "pe",
-            image::ImageKind::MachO { fat: true } => "mach-o-fat",
-            image::ImageKind::MachO { fat: false } => "mach-o",
-        };
-        let outcome = spawn::run_pinned(prepared, lease, &ctx.cancel, &mut deadline).await?;
-        let duration_ms = started.elapsed().as_millis() as u64;
-        match outcome {
-            RunOutcome::Done {
-                status,
-                stdout,
-                stderr,
+                    teardown,
+                    started,
+                ),
+                image,
                 metadata,
-            } => {
-                let execution_identity = execution_identity(&invocation_digest, metadata);
-                Ok(with_image_metadata(
-                    format_result(
-                        Some(status),
-                        &program,
-                        &argv,
-                        &execution_identity,
-                        &digest,
-                        stdout,
-                        stderr,
-                        duration_ms,
-                        false,
-                        None,
-                    ),
-                    image,
-                    metadata,
-                    &image_identity,
-                    &invocation_digest,
-                    &env_summary,
-                ))
-            }
-            RunOutcome::CollectFailed { error, teardown } => {
-                Err(collection_error(&error, teardown.err()))
-            }
-            RunOutcome::Timeout {
-                stdout,
-                stderr,
-                teardown,
-                started,
-                metadata,
-            } => {
-                let execution_identity = execution_identity(&invocation_digest, metadata);
-                Ok(with_image_metadata(
-                    timed_out_result(
-                        &program,
-                        &argv,
-                        &execution_identity,
-                        &digest,
-                        stdout,
-                        stderr,
-                        duration_ms,
-                        timeout,
-                        teardown,
-                        started,
-                    ),
-                    image,
-                    metadata,
-                    &image_identity,
-                    &invocation_digest,
-                    &env_summary,
-                ))
-            }
-            RunOutcome::Cancelled { teardown } => Err(command_cancelled_error(teardown.err())),
+                &image_identity,
+                &invocation_digest,
+                &env_summary,
+            ))
         }
+        RunOutcome::Cancelled { teardown } => Err(command_cancelled_error(teardown.err())),
     }
 }
 

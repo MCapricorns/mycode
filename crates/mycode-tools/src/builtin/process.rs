@@ -25,12 +25,12 @@ pub(crate) use output::{CapturedStream, MAX_OUTPUT_BYTES, decode_captured_text};
 #[cfg(windows)]
 pub(crate) use windows::{WindowsJob, current_process_is_in_job, resume_thread_handle};
 
-/// Serializes host-controlled write/edit/shell/exec operations so they cannot
+/// Serializes host-controlled write/edit/shell operations so they cannot
 /// race a retained executable pin. Same-account processes outside this process
 /// are not covered and must not be described as isolated.
 static EXECUTION_LEASE: OnceLock<Mutex<()>> = OnceLock::new();
 
-/// Owned duration of process-wide write/edit/shell/exec serialization.
+/// Owned duration of process-wide write/edit/shell serialization.
 pub(crate) type ExecutionLease = MutexGuard<'static, ()>;
 
 /// Acquires the process-wide execution lease.

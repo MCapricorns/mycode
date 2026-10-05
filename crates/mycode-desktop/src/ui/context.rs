@@ -88,7 +88,7 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
             let call_id = job.call_id.clone();
             let cancel_id = job.call_id.clone();
             let role = if job.role.is_empty() {
-                "task".to_owned()
+                "agent".to_owned()
             } else {
                 job.role.clone()
             };

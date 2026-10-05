@@ -550,7 +550,7 @@ fn file_identity(file: &File) -> Result<FileIdentity, ToolError> {
 #[cfg(not(any(unix, windows)))]
 fn file_identity(_file: &File) -> Result<FileIdentity, ToolError> {
     Err(ToolError::Execution(
-        "exec is not supported on this platform".into(),
+        "direct program launch is not supported on this platform".into(),
     ))
 }
 
@@ -590,7 +590,7 @@ fn canonical_from_handle(file: &File, _request: &Path) -> Result<PathBuf, ToolEr
     {
         let _ = file;
         Err(ToolError::Execution(
-            "exec is not supported on this platform".into(),
+            "direct program launch is not supported on this platform".into(),
         ))
     }
 }
@@ -603,7 +603,7 @@ fn canonical_from_handle(file: &File, _request: &Path) -> Result<PathBuf, ToolEr
 #[cfg(not(any(unix, windows)))]
 fn canonical_from_handle(_file: &File, _request: &Path) -> Result<PathBuf, ToolError> {
     Err(ToolError::Execution(
-        "exec is not supported on this platform".into(),
+        "direct program launch is not supported on this platform".into(),
     ))
 }
 

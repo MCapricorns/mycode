@@ -106,8 +106,8 @@ pub(super) fn render_agents_section(workspace: &Workspace, cx: &Context<Workspac
             "agents-roles",
             t("Roles", "角色"),
             Some(t(
-                "Scout is read-only. Artisan writes in a worktree. Steward cleans up. Sentinel reviews.",
-                "Scout 只读;Artisan 在 worktree 中写入;Steward 收尾;Sentinel 评审。",
+                "Scout returns a read-only map. Artisan implements in a worktree; you integrate.",
+                "Scout 返回只读地图。Artisan 在 worktree 中实现，由你整合。",
             )),
             theme,
             role_cards,

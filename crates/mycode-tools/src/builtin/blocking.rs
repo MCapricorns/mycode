@@ -1,4 +1,4 @@
-//! Blocking-worker runtime shared by search, file IO, shell, and exec.
+//! Blocking-worker runtime shared by search, file IO, and shell.
 //!
 //! Startup first proves a usable interrupt authority. A supervisor owns the
 //! actual worker join and platform authority for the complete lifetime.

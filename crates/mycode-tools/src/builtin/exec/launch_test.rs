@@ -1,7 +1,7 @@
-//! Proves `exec` launches a kernel image on each product target.
+//! Proves `shell` program mode launches a kernel image on each product target.
 //!
 //! The module is empty off those targets. CI runs `native_image_launches`
-//! on Windows x64, Windows ARM64, Linux x86_64 GNU, and macOS Apple Silicon.
+//! on Windows x64, Windows ARM64, and macOS Apple Silicon.
 #![cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
@@ -10,7 +10,7 @@
 
 use mycode_core::message::ContentBlock;
 
-use super::{ExecArgs, ExecTool};
+use crate::builtin::shell::{ShellArgs, ShellMode, ShellTool};
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
 use crate::tool::{Tool, ToolResult};
@@ -18,13 +18,15 @@ use crate::tool::{Tool, ToolResult};
 #[tokio::test]
 async fn native_image_launches() {
     let (program, args, image_prefix, marker) = launch_target();
-    let tool = ExecTool::with_default_timeout(30);
+    let tool = ShellTool::with_default_timeout(30);
     let ctx = ToolCtx::new(std::env::temp_dir());
     let mut out = ToolStream::closed();
     let result = tool
         .execute(
-            ExecArgs {
-                program,
+            ShellArgs {
+                mode: ShellMode::Program,
+                command: None,
+                program: Some(program),
                 args,
                 timeout_secs: Some(30),
             },
@@ -32,10 +34,10 @@ async fn native_image_launches() {
             &mut out,
         )
         .await
-        .expect("exec should spawn the native image");
+        .expect("shell program mode should spawn the native image");
     let text = text_of(&result);
     assert!(!result.is_error, "native image failed: {text}");
-    let details = result.details.expect("exec details");
+    let details = result.details.expect("shell program-mode details");
     let image = details["image"].as_str().expect("image kind");
     assert!(
         image.starts_with(image_prefix),
@@ -75,9 +77,9 @@ fn launch_target() -> (String, Vec<String>, &'static str, Option<&'static str>) 
     };
     (
         "/bin/echo".to_owned(),
-        vec!["mycode-exec-ok".to_owned()],
+        vec!["mycode-shell-ok".to_owned()],
         image,
-        Some("mycode-exec-ok"),
+        Some("mycode-shell-ok"),
     )
 }
 

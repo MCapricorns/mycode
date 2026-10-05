@@ -1,17 +1,24 @@
-//! `shell` — run a platform-native shell command in the session cwd.
+//! `shell` — the only process-launch tool.
 //!
-//! The public name is `shell`. There is no `bash` alias. Windows resolves one
-//! configured or detected shell (`pwsh`, then Git bash). When neither is
-//! available it falls back to `%SystemRoot%\System32\cmd.exe` at runtime
-//! only; that fallback is not written into settings.
-//! POSIX hosts use an explicit POSIX shell candidate list. Launch
-//! always goes through structured exec: one cwd/env/PATH snapshot per call,
-//! allowlisted environment, pinned identity, and contained spawn. Candidate
-//! fallback is allowed only for a typed executable-not-found result. Execution
-//! is unsandboxed current-user file and network authority; environment
-//! filtering is not a sandbox. Valid calls run directly with no Core
-//! permission prompt. Use this tool for pipelines, redirection, expansion,
-//! and scripts; filesystem and search tools stay in-process.
+//! Two modes share one name, one schema, and one prompt entry:
+//!
+//! * `script` runs `command` in the platform shell (pipelines, redirection,
+//!   expansion, compound scripts). Windows resolves one configured or detected
+//!   shell (`pwsh`, then Git bash). When neither is available it falls back
+//!   to `%SystemRoot%\System32\cmd.exe` at runtime only; that fallback is not
+//!   written into settings. POSIX hosts use an explicit POSIX shell candidate
+//!   list. There is no `bash` tool alias.
+//! * `program` spawns `program` with an explicit `args` vector and does not
+//!   start a shell. Only a kernel-loadable PE, ELF, or Mach-O image is
+//!   accepted. Shebang scripts and batch files are rejected.
+//!
+//! Both modes pin the launched image, snapshot cwd/env/PATH once per call,
+//! allowlist the child environment, and use contained spawn. Candidate
+//! fallback is allowed only for a typed executable-not-found result on the
+//! script path. Execution is unsandboxed current-user file and network
+//! authority; environment filtering is not a sandbox. Valid calls run
+//! directly with no Core permission prompt. Filesystem and search tools stay
+//! in-process.
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -153,14 +160,78 @@ impl Default for ShellTool {
     }
 }
 
+/// Which launch path `shell` uses. The tool name stays `shell` either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename_all = "snake_case")]
+pub enum ShellMode {
+    /// Run `command` in the platform shell.
+    Script,
+    /// Spawn `program` with `args` and no shell.
+    Program,
+}
+
 /// Arguments for [`ShellTool`].
+///
+/// `mode` chooses the path. `script` requires `command` and rejects `program`
+/// and `args`. `program` requires `program`, accepts `args`, and rejects
+/// `command`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShellArgs {
-    /// Command to execute with the configurable platform shell (pwsh or Git
-    /// bash on Windows; POSIX shell on macOS/Linux) using the session cwd.
-    pub command: String,
+    /// `script` runs `command` in the platform shell. `program` spawns one
+    /// kernel-loadable image with `program` and `args` and does not start a shell.
+    pub mode: ShellMode,
+    /// Shell script. Required when `mode` is `script`. Omit for `program`.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Executable basename or path. Required when `mode` is `program`. A bare
+    /// name is searched only in absolute host PATH entries. A path is resolved
+    /// against the session cwd. Omit for `script`.
+    #[serde(default)]
+    pub program: Option<String>,
+    /// Argument vector for `program` mode, passed verbatim with no shell parsing.
+    #[serde(default)]
+    pub args: Vec<String>,
     /// Timeout in seconds for this command (default: 120).
     pub timeout_secs: Option<u64>,
+}
+
+fn validate_shell_args(args: &ShellArgs) -> Result<(), ToolError> {
+    match args.mode {
+        ShellMode::Script => {
+            if args.program.is_some() || !args.args.is_empty() {
+                return Err(ToolError::InvalidArgs(
+                    "script mode accepts command only; program and args belong to program mode"
+                        .into(),
+                ));
+            }
+            if args.command.is_none() {
+                return Err(ToolError::InvalidArgs(
+                    "script mode requires command".into(),
+                ));
+            }
+        }
+        ShellMode::Program => {
+            if args.command.is_some() {
+                return Err(ToolError::InvalidArgs(
+                    "program mode accepts program and args only; command belongs to script mode"
+                        .into(),
+                ));
+            }
+            if args
+                .program
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            {
+                return Err(ToolError::InvalidArgs(
+                    "program mode requires program".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 struct PreparedShell {
@@ -179,22 +250,26 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a platform-shell script for pipelines, redirection, expansion, \
-         and shell syntax. Filesystem and search tools stay in-process; do not \
-         use this tool to read, write, edit, grep, or find files. The platform \
-         shell is pwsh or Git bash on Windows; POSIX hosts use a POSIX \
-         shell. Execution is unsandboxed current-user \
-         execution with normal file and network access; environment filtering \
-         is not a sandbox. Same-account processes outside this host are outside \
-         the security boundary. Captured stdout/stderr is truncated beyond \
-         50 KiB; a non-zero exit is an error result, not a tool failure. \
-         Default timeout: 120 s. There is no Core permission prompt."
+        "Run a process in the session cwd. `mode` `script` executes `command` \
+         in the platform shell for pipelines, redirection, expansion, and \
+         shell syntax. `mode` `program` spawns `program` with an explicit \
+         `args` vector and does not start a shell; only a kernel-loadable PE, \
+         ELF, or Mach-O image is accepted. Filesystem and search tools stay \
+         in-process; do not use this tool to read, write, edit, grep, or find \
+         files. The platform shell is pwsh or Git bash on Windows; POSIX hosts \
+         use a POSIX shell. Execution is unsandboxed current-user execution \
+         with normal file and network access; environment filtering is not a \
+         sandbox. Same-account processes outside this host are outside the \
+         security boundary. Captured stdout/stderr is truncated beyond 50 KiB; \
+         a non-zero exit is an error result, not a tool failure. Default \
+         timeout: 120 s. There is no Core permission prompt."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "shell: run a platform shell script (command, optional \
-             timeout_secs).",
+            "shell: mode script runs a platform shell script (command); mode \
+             program runs one kernel-loadable binary with explicit args and no \
+             shell. Optional timeout_secs. Do not use it to read or edit files.",
         )
     }
 
@@ -209,12 +284,16 @@ impl Tool for ShellTool {
                 .unwrap_or(self.default_timeout.as_secs())
                 .max(1),
         );
+        validate_shell_args(&args)?;
+        if args.mode == ShellMode::Program {
+            let program = args.program.unwrap_or_default();
+            return crate::builtin::exec::launch_program(program, args.args, timeout, ctx).await;
+        }
+        let command = args.command.unwrap_or_default();
         let started = Instant::now();
         if ctx.cancel.is_cancelled() {
             return Err(command_cancelled_error(None));
         }
-
-        let command = args.command;
         let identifier = preferred_identifier();
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
@@ -903,4 +982,96 @@ fn command_too_long_with(
          command-line limit (including the terminator): encoded length is {encoded}, maximum \
          for executable {executable_name} is {maximum}"
     ))
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::{ShellArgs, ShellMode, ShellTool, validate_shell_args};
+    use crate::registry::ToolRegistry;
+    use crate::tool::{Tool, ToolDyn, ToolError};
+    use crate::{ToolCtx, ToolStream, register_builtins};
+
+    #[test]
+    fn schema_advertises_one_tool_and_two_modes() {
+        let tool = ShellTool::new();
+        let spec = ToolDyn::spec(&tool);
+        assert_eq!(spec.name, "shell");
+        let schema = spec.params_schema.to_string();
+        assert!(schema.contains("\"script\""), "{schema}");
+        assert!(schema.contains("\"program\""), "{schema}");
+        assert!(!schema.contains("\"exec\""), "{schema}");
+        let snippet = tool.prompt_snippet().expect("snippet");
+        assert!(snippet.contains("script"));
+        assert!(snippet.contains("program"));
+        assert!(!snippet.contains("exec"));
+        assert!(!spec.description.contains("`exec`"));
+    }
+
+    #[test]
+    fn builtins_register_shell_not_exec() {
+        let registry = ToolRegistry::new();
+        register_builtins(&registry);
+        let names = registry.names();
+        assert!(names.iter().any(|name| name == "shell"));
+        assert!(!names.iter().any(|name| name == "exec" || name == "task"));
+    }
+
+    #[test]
+    fn modes_reject_the_other_paths_fields() {
+        let script = ShellArgs {
+            mode: ShellMode::Script,
+            command: Some("echo hi".into()),
+            program: Some("echo".into()),
+            args: Vec::new(),
+            timeout_secs: None,
+        };
+        assert!(matches!(
+            validate_shell_args(&script),
+            Err(ToolError::InvalidArgs(_))
+        ));
+        let program = ShellArgs {
+            mode: ShellMode::Program,
+            command: Some("echo hi".into()),
+            program: Some("echo".into()),
+            args: vec!["ok".into()],
+            timeout_secs: None,
+        };
+        assert!(matches!(
+            validate_shell_args(&program),
+            Err(ToolError::InvalidArgs(_))
+        ));
+        let missing = ShellArgs {
+            mode: ShellMode::Program,
+            command: None,
+            program: None,
+            args: Vec::new(),
+            timeout_secs: None,
+        };
+        assert!(matches!(
+            validate_shell_args(&missing),
+            Err(ToolError::InvalidArgs(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_mode_mix_does_not_spawn() {
+        let tool = ShellTool::new();
+        let ctx = ToolCtx::new(std::env::temp_dir());
+        let mut out = ToolStream::closed();
+        let error = tool
+            .execute(
+                ShellArgs {
+                    mode: ShellMode::Script,
+                    command: Some("echo hi".into()),
+                    program: None,
+                    args: vec!["nope".into()],
+                    timeout_secs: Some(1),
+                },
+                &ctx,
+                &mut out,
+            )
+            .await
+            .expect_err("mixed script arguments");
+        assert!(matches!(error, ToolError::InvalidArgs(_)));
+    }
 }

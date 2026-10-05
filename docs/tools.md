@@ -1,6 +1,6 @@
 # mycode-tools
 
-模型能调用的工具。这里定义 trait、注册表，以及文件、搜索和进程这组内置实现。`ask_user`、`task`、网页和 MCP 的宿主在 `mycode-app`，它们实现同一个 trait，在每个回合注册进去。
+模型能调用的工具。这里定义 trait、注册表，以及文件、搜索和进程这组内置实现。`ask_user`、`agent`、网页和 MCP 的宿主在 `mycode-app`，它们实现同一个 trait，在每个回合注册进去。
 
 ```text
 模型的 tool_call
@@ -29,7 +29,7 @@
 | `ctx` | 一次调用的上下文：取消令牌、会话工作目录、额外根、进度流 |
 | `roots` | 把模型给的路径锚到工作目录，拒绝逃出根的相对路径 |
 | `stream` | 进度事件，然后恰好一个终止事件。多个克隆里只有一个能写下终止 |
-| `builtin` | 下面这七个内置工具 |
+| `builtin` | 下面这六个内置工具 |
 
 ## 内置工具
 
@@ -40,14 +40,13 @@
 | `edit` | 精确字符串替换。小幅漂移用模糊匹配；`ast` 用 gpui-kit 注册的 Tree-sitter 语法对一下 |
 | `find` | 按 glob 找文件，限制在搜索根内 |
 | `grep` | 进程内的内容搜索，支持 include / exclude |
-| `exec` | 显式参数运行一个可加载映像（PE / ELF / Mach-O）。不经过 shell |
-| `shell` | 交给用户的 shell，用于管道、重定向和脚本 |
+| `shell` | 唯一的进程启动工具。`mode` `script` 把 `command` 交给平台 shell（管道、重定向、展开、脚本）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell |
 
-`shell` 与 `exec` 共用启动路径：钉住程序身份、限制参数、截断约 50 KiB 输出、超时和取消时终止并回收整棵进程树。丢掉 future 也会把清理交出去，避免留下孤儿进程。非零退出码是 `is_error` 结果，不是循环故障。
+`shell` 的两条模式共用启动路径：钉住程序身份、限制参数、截断约 50 KiB 输出、超时和取消时终止并回收整棵进程树。丢掉 future 也会把清理交出去，避免留下孤儿进程。非零退出码是 `is_error` 结果，不是循环故障。
 
-Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。shell 侦查顺序是 PowerShell 7（`pwsh`），否则 Git bash，不用 Windows PowerShell 5.1 和 `cmd`。
+Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。脚本模式的 shell 侦查顺序是 PowerShell 7（`pwsh`），否则 Git bash，不用 Windows PowerShell 5.1 和 `cmd`。
 
-`exec` 的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、Linux x86_64 glibc、macOS Apple Silicon），摘要复查和参数组装共用。其它 Unix 目标不支持启动。
+`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、Linux x86_64 glibc、macOS Apple Silicon），摘要复查和参数组装共用。其它 Unix 目标不支持直接启动映像。模型只看见工具名 `shell`。
 
 搜索有独立的预算：扫描字节、截止时间、错误样本条数。到顶就停并说明停因，而不是把目录树读完。
 
@@ -56,7 +55,7 @@ Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。she
 | 工具 | 宿主提供什么 |
 | --- | --- |
 | `ask_user` | 把问题送到界面，等用户答完再继续 |
-| `task` | 按角色再跑一个有白名单的子循环 |
+| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，没有 `task` 别名 |
 | `web_search` / `fetch_content` | 有界 HTTP。没钥匙时调用失败，并提示去设置页粘贴 |
 
 MCP 不把远端工具名注册进这张表。应用层注册 `search_tool` 和 `use_tool`：先取 schema，再按 schema 调用。这样远端工具不会盖住 `read` 或 `shell`。

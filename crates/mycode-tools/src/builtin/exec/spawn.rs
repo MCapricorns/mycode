@@ -162,7 +162,7 @@ pub(super) async fn run_pinned(
     {
         let _ = (prepared, lease, cancel, deadline);
         Err(ToolError::Execution(
-            "exec is not supported on this platform".into(),
+            "direct program launch is not supported on this platform".into(),
         ))
     }
 }
@@ -396,7 +396,7 @@ where
         }
         result = &mut worker => {
             let result = result.map_err(|err| {
-                ToolError::Execution(format!("exec spawn worker failed: {err}"))
+                ToolError::Execution(format!("program spawn worker failed: {err}"))
             })?;
             SpawnWait::Spawned(result.map_err(SpawnFailure::into_tool_error)?)
         }
@@ -418,7 +418,7 @@ async fn cleanup_started_spawn<T: SpawnCleanup>(
         Ok(Ok(spawned)) => spawned.cleanup().await,
         Ok(Err(failure)) => failure.teardown,
         Err(error) => Err(std::io::Error::other(format!(
-            "exec spawn worker failed during cleanup: {error}"
+            "program spawn worker failed during cleanup: {error}"
         ))),
     }
 }
@@ -517,7 +517,7 @@ fn supervise_spawn_cleanup(live: LiveSpawn) {
     let pending = Arc::new(std::sync::Mutex::new(Some(live)));
     let worker_pending = Arc::clone(&pending);
     let thread = std::thread::Builder::new()
-        .name("mycode-exec-cleanup".into())
+        .name("mycode-shell-cleanup".into())
         .spawn(move || {
             let Some(live) = take_pending_cleanup(&worker_pending) else {
                 return;
@@ -726,7 +726,9 @@ impl SpawnedProgram {
                 all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
                 all(target_os = "macos", target_arch = "aarch64")
             )))]
-            Inner::Unsupported => Err(std::io::Error::other("exec is not supported")),
+            Inner::Unsupported => Err(std::io::Error::other(
+                "direct program launch is not supported",
+            )),
         }
     }
 
