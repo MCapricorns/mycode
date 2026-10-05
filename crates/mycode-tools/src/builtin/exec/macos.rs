@@ -563,7 +563,7 @@ fn verify_stopped_child(
     // SAFETY: getpid has no failure value and only reads the calling pid.
     if info.pbsi_ppid != unsafe { libc::getpid() } as u32 {
         return Err(ToolError::Execution(
-            "stopped child parent pid does not match the exec caller".into(),
+            "stopped child parent pid does not match the launching process".into(),
         ));
     }
     if info.pbsi_status != libc::SSTOP {

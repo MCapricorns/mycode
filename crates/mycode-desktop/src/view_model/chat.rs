@@ -12,7 +12,7 @@ pub(crate) struct ComposerMention {
     pub items: Vec<(String, String)>,
 }
 
-/// One running `task` subagent. Finished jobs drop out of the list once
+/// One running `agent` call. Finished jobs drop out of the list once
 /// they complete.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LiveJob {

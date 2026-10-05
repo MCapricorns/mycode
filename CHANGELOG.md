@@ -9,6 +9,14 @@
 
 - 版本号需要递增时，先把版本提交推到 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64 和 macOS Apple Silicon 从这次提交构建。三个构建成功之后才快进 `main` 并创建标签，二进制里的版本与标签一致。
 - 检查点之后新建的文件，回滚时删除，不再把后续内容整份存进快照。已有文件超过 8 MiB 时检查点失败并中止这次工具调用。回滚写入和删除都不跟随符号链接。
+- `shell` 是唯一的进程工具。`mode` `script` 走平台 shell；`mode` `program` 保留原来的无 shell 直接启动（钉住 PE / ELF / Mach-O）。提示词和 JSON Schema 只出现 `shell`。
+- 委派工具从 `task` 硬改名为 `agent`。进度协议前缀改为 `agent|`。不保留旧名字，旧会话里的 `task` 调用不会按新名字重放。
+
+### Removed
+
+- 去掉独立工具 `exec`。没有别名。
+- 内置子代理只保留 `scout` 和 `artisan`。去掉 `steward` 和 `sentinel`。
+- `scout` 与 `artisan` 的提示改成短的何时使用、边界和完成标准。父提示写明何时派发、何时自己做，不为小改动扇出多个子代理。
 
 ## [0.7.5] - 2026-10-05
 

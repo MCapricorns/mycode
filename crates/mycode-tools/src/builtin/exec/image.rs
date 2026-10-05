@@ -56,14 +56,14 @@ pub(super) fn classify_image(
 ) -> Result<ImageKind, ToolError> {
     if header.starts_with(b"#!") {
         return Err(ToolError::InvalidArgs(
-            "program is a shebang script; exec runs kernel-loadable images only \
-             (pass an explicit interpreter, or use the shell tool)"
+            "program is a shebang script; shell program mode runs kernel-loadable \
+             images only (pass an explicit interpreter, or use shell mode script)"
                 .into(),
         ));
     }
     if looks_like_batch(header) {
         return Err(ToolError::InvalidArgs(
-            "program is a batch script; exec never invokes cmd.exe".into(),
+            "program is a batch script; shell program mode never invokes cmd.exe".into(),
         ));
     }
     if header.starts_with(b"\x7fELF") {

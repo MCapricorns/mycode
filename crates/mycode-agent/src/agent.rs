@@ -209,9 +209,9 @@ async fn agent_loop(
             }
             has_tool_calls = true;
         } else {
-            // `task` calls overlap everything else in this response, so a
+            // `agent` calls overlap everything else in this response, so a
             // scout and an MCP lookup requested together actually run
-            // together. Non-task tools stay in order (`search_tool` before
+            // together. Other tools stay in order (`search_tool` before
             // `use_tool`). Results are written back in call order.
             if token.is_cancelled() {
                 for call in &calls {
@@ -239,15 +239,15 @@ async fn agent_loop(
     Ok(TurnOutcome::Completed)
 }
 
-/// `task` calls from one assistant message share a batch. The host
+/// `agent` calls from one assistant message share a batch. The host
 /// semaphore still caps how many children actually run.
-fn is_concurrent_task(call: &ToolCall) -> bool {
-    call.name == "task"
+fn is_agent_call(call: &ToolCall) -> bool {
+    call.name == "agent"
 }
 
 /// Runs one response's tool calls.
 ///
-/// Every `task` starts immediately. The other calls run in their original
+/// Every `agent` call starts immediately. The other calls run in their original
 /// order at the same time, so an MCP lookup is not stuck behind a child.
 /// Each call still gets one result, placed back in the model's call order.
 async fn dispatch_response_calls(
@@ -258,13 +258,13 @@ async fn dispatch_response_calls(
     let task_indexes: Vec<usize> = calls
         .iter()
         .enumerate()
-        .filter(|(_, call)| is_concurrent_task(call))
+        .filter(|(_, call)| is_agent_call(call))
         .map(|(index, _)| index)
         .collect();
     let other_indexes: Vec<usize> = calls
         .iter()
         .enumerate()
-        .filter(|(_, call)| !is_concurrent_task(call))
+        .filter(|(_, call)| !is_agent_call(call))
         .map(|(index, _)| index)
         .collect();
     let tasks = async {

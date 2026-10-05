@@ -253,11 +253,11 @@ async fn run_chat_turn(
             answer: tokio::sync::Mutex::new(Some(answer_rx)),
         });
         registry.register(Arc::new(mycode_tools::builtin::AskTool::new(channel)));
-        // task delegates scoped work to a catalog role; slots, isolation,
+        // `agent` delegates scoped work to a catalog role; slots, isolation,
         // and per-role model routes live in the host.
         if crate::subagent::any_role_enabled(&role_catalog, &settings.subagents) {
-            registry.register(Arc::new(mycode_tools::builtin::TaskTool::new(Arc::new(
-                crate::subagent::BridgeTaskHost::new(
+            registry.register(Arc::new(mycode_tools::builtin::AgentTool::new(Arc::new(
+                crate::subagent::BridgeAgentHost::new(
                     resolved.clone(),
                     home.clone(),
                     cwd.clone(),
@@ -360,7 +360,7 @@ async fn run_chat_turn(
             "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
 call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
 guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
-response as `task`.\n</mcp>",
+response as `agent`.\n</mcp>",
         );
     }
     system_prompt.push_str(
@@ -374,8 +374,8 @@ response as `task`.\n</mcp>",
         }
         system_prompt.push_str(
             "Relative paths stay in the session cwd. For the other folders, pass an \
-absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
-`exec` start in the session cwd.",
+absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` \
+starts in the session cwd for both script and program mode.",
         );
     }
     system_prompt.push_str("\n\n");

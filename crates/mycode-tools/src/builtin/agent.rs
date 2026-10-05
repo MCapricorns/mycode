@@ -1,10 +1,10 @@
-//! The `task` tool: delegate one scoped unit of work to a subagent.
+//! The `agent` tool: delegate one scoped unit of work to a subagent.
 //!
 //! The tool serializes the delegation through the host-supplied
-//! [`TaskHost`], forwards short progress lines onto its own tool stream,
+//! [`AgentHost`], forwards short progress lines onto its own tool stream,
 //! and returns the subagent's final answer as the tool result. The channel
 //! seam keeps the tool free of provider and runtime dependencies; hosts run
-//! the nested agent, tests replay canned answers.
+//! the nested agent, tests replay canned answers. There is no `task` alias.
 
 use std::sync::Arc;
 
@@ -17,9 +17,13 @@ use crate::stream::ToolStream;
 use crate::tool::{Tool, ToolError, ToolResult};
 
 /// Maximum characters accepted for the delegated prompt.
-pub const MAX_TASK_PROMPT_CHARS: usize = 16_000;
+pub const MAX_AGENT_PROMPT_CHARS: usize = 16_000;
 /// Maximum characters of the subagent answer kept in the tool result.
-pub const MAX_TASK_ANSWER_CHARS: usize = 24_000;
+pub const MAX_AGENT_ANSWER_CHARS: usize = 24_000;
+/// First field of live progress lines: `agent|role|phase|detail`.
+///
+/// Readers do not accept the previous `task|` prefix.
+pub const AGENT_PROGRESS_PREFIX: &str = "agent";
 
 /// One delegated unit of work.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,7 +40,7 @@ pub struct SubagentRequest {
 
 /// Host side of the delegation.
 #[async_trait]
-pub trait TaskHost: Send + Sync + 'static {
+pub trait AgentHost: Send + Sync + 'static {
     /// Runs one subagent to completion and returns its final answer.
     ///
     /// Implementations must honor `cancel` and report short status lines
@@ -55,23 +59,23 @@ pub trait TaskHost: Send + Sync + 'static {
     ) -> Result<String, ToolError>;
 }
 
-/// The built-in `task` tool.
-pub struct TaskTool {
-    host: Arc<dyn TaskHost>,
+/// The built-in `agent` tool.
+pub struct AgentTool {
+    host: Arc<dyn AgentHost>,
 }
 
-impl TaskTool {
+impl AgentTool {
     /// Binds one delegation host.
-    pub fn new(host: Arc<dyn TaskHost>) -> Self {
+    pub fn new(host: Arc<dyn AgentHost>) -> Self {
         Self { host }
     }
 }
 
 /// Wire shape of the tool arguments.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct TaskArgs {
-    /// Catalog role to invoke: `scout`, `artisan`, `steward`, `sentinel`,
-    /// or a user/project role from `agents/<name>.md`.
+pub struct AgentArgs {
+    /// Catalog role to invoke: `scout`, `artisan`, or a user/project role
+    /// from `agents/<name>.md`.
     pub agent: String,
     /// Complete, self-contained instructions for the subagent. Include the
     /// goal, relevant paths, and the expected form of the answer.
@@ -87,29 +91,29 @@ pub struct TaskArgs {
 }
 
 #[async_trait]
-impl Tool for TaskTool {
-    type Args = TaskArgs;
+impl Tool for AgentTool {
+    type Args = AgentArgs;
     type Output = ();
 
     fn name(&self) -> &str {
-        "task"
+        "agent"
     }
 
     fn description(&self) -> &str {
-        "Delegate one scoped unit of work to a named subagent role. \
-         Independent `task` calls in the same response run at the same time, \
-         and they overlap `search_tool` / `use_tool` emitted in that same response. \
-         `scout` is read-only reconnaissance; `artisan` makes the primary \
-         change; `steward` does residual cleanup; `sentinel` reviews a \
-         finished diff. Custom roles from agents/*.md are also valid. \
-         The child has no parent conversation and cannot ask the user."
+        "Delegate one scoped unit to a listed role. Prefer one `scout` \
+         (read-only map, then stop) or one `artisan` (bounded change you \
+         integrate) for non-trivial multi-step work. Do a trivial one-file \
+         edit yourself. Do not fan out many agents for one small change, and \
+         do not send `artisan` on a vague brief. Independent calls in the same \
+         response run together and overlap `search_tool` / `use_tool`. Custom \
+         roles from agents/*.md are valid. The child cannot ask the user."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "task: dispatch a listed role with a self-contained brief. \
-             Independent task calls in one response run together, and they \
-             overlap search_tool / use_tool from that same response.",
+            "agent: one scout for a read-only map, or one artisan for a bounded \
+             change you integrate. Skip trivial edits and vague briefs. Optional \
+             description and isolation.",
         )
     }
 
@@ -134,9 +138,9 @@ impl Tool for TaskTool {
         if prompt.is_empty() {
             return Err(ToolError::InvalidArgs("prompt is required".into()));
         }
-        if prompt.chars().count() > MAX_TASK_PROMPT_CHARS {
+        if prompt.chars().count() > MAX_AGENT_PROMPT_CHARS {
             return Err(ToolError::InvalidArgs(format!(
-                "prompt exceeds {MAX_TASK_PROMPT_CHARS} characters"
+                "prompt exceeds {MAX_AGENT_PROMPT_CHARS} characters"
             )));
         }
         let description = args.description.unwrap_or_else(|| brief_label(&prompt));
@@ -152,7 +156,7 @@ impl Tool for TaskTool {
             .await?;
         let answer = answer
             .chars()
-            .take(MAX_TASK_ANSWER_CHARS)
+            .take(MAX_AGENT_ANSWER_CHARS)
             .collect::<String>();
         Ok(ToolResult::text(answer))
     }
@@ -166,5 +170,55 @@ fn brief_label(prompt: &str) -> String {
         first.to_owned()
     } else {
         chars[..60].iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
+    use super::{AgentHost, AgentTool, SubagentRequest};
+    use crate::stream::ToolStream;
+    use crate::tool::{Tool, ToolDyn, ToolError};
+
+    struct EchoHost;
+
+    #[async_trait]
+    impl AgentHost for EchoHost {
+        async fn run_subagent(
+            &self,
+            request: SubagentRequest,
+            _progress: &ToolStream,
+            _cancel: &tokio_util::sync::CancellationToken,
+            _call_id: &str,
+        ) -> Result<String, ToolError> {
+            Ok(request.prompt)
+        }
+    }
+
+    #[test]
+    fn tool_name_is_agent_with_no_task_alias() {
+        let tool = AgentTool::new(Arc::new(EchoHost));
+        assert_eq!(tool.name(), "agent");
+        let spec = ToolDyn::spec(&tool);
+        assert_eq!(spec.name, "agent");
+        let schema = spec.params_schema.to_string();
+        assert!(!schema.contains("\"task\""));
+        let snippet = tool.prompt_snippet().expect("snippet");
+        assert!(snippet.starts_with("agent:"));
+        assert!(snippet.contains("scout"));
+        assert!(snippet.contains("artisan"));
+        assert!(!snippet.contains("task"));
+        assert!(!snippet.contains("steward"));
+        assert!(!snippet.contains("sentinel"));
+        assert!(!snippet.contains("exec"));
+        assert!(spec.description.contains("`scout`"));
+        assert!(spec.description.contains("`artisan`"));
+        assert!(!spec.description.contains("`task`"));
+        assert!(!spec.description.contains("steward"));
+        assert!(!spec.description.contains("sentinel"));
+        assert!(!spec.description.contains("`exec`"));
     }
 }

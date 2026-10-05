@@ -2,10 +2,11 @@
 //! [`crate::tool::Tool`] trait. File discovery and content search stay in-process and never spawn
 //! external `fd` or `rg` executables.
 
+pub mod agent;
 pub mod ask;
 pub(crate) mod blocking;
 pub mod edit;
-pub mod exec;
+pub(crate) mod exec;
 pub mod find;
 pub(crate) mod fs_io;
 pub(crate) mod fs_search;
@@ -15,18 +16,16 @@ pub(crate) mod process;
 pub mod read;
 pub(crate) mod search_report;
 pub mod shell;
-pub mod task;
 pub mod web;
 pub mod write;
 
+pub use agent::{AGENT_PROGRESS_PREFIX, AgentHost, AgentTool, SubagentRequest};
 pub use ask::{AskAnswer, AskChannel, AskQuestion, AskTool, user_dismissed};
 pub use edit::EditTool;
-pub use exec::ExecTool;
 pub use find::FindTool;
 pub use grep::GrepTool;
 pub use read::ReadTool;
 pub use shell::ShellTool;
-pub use task::{SubagentRequest, TaskHost, TaskTool};
 pub use web::{FetchContentTool, WebHit, WebHost, WebPage, WebSearchTool};
 pub use write::WriteTool;
 
@@ -42,7 +41,6 @@ pub(crate) fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
         Arc::new(WriteTool),
         Arc::new(EditTool),
         Arc::new(ShellTool::default()),
-        Arc::new(ExecTool::default()),
         Arc::new(GrepTool),
         Arc::new(FindTool),
     ]

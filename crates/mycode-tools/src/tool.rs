@@ -312,12 +312,6 @@ fn normalize_tool_args(args: Value) -> Value {
     };
     alias_key(map, "timeout", "timeout_secs");
     alias_key(map, "cmd", "command");
-    if !map.contains_key("program")
-        && map.contains_key("args")
-        && let Some(command) = map.get("command").cloned()
-    {
-        map.insert("program".to_owned(), command);
-    }
     args
 }
 

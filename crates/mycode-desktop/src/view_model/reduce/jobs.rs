@@ -1,4 +1,4 @@
-//! Live tool and subagent progress: the `task|role|phase|detail` protocol,
+//! Live tool and subagent progress: the `agent|role|phase|detail` protocol,
 //! the inspector-panel job cards, and the status lines they feed.
 //!
 //! Finished jobs drop out of the list: the panel and the status line only
@@ -6,6 +6,8 @@
 
 use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind, LiveJob, WorkspaceState};
+
+use mycode_tools::builtin::AGENT_PROGRESS_PREFIX;
 
 use super::streaming::{set_streaming_status, tool_call_label};
 
@@ -18,7 +20,7 @@ pub(super) fn tool_started(
 ) {
     let label = tool_call_label(&name, &target);
     set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
-    if name == "task" {
+    if name == AGENT_PROGRESS_PREFIX {
         upsert_live_job(state, &call_id, "", "starting");
     }
     if let Some(conversation) = state.active.as_mut() {
@@ -44,7 +46,7 @@ pub(super) fn tool_progress(
     let running = state.live_jobs.len();
     let status = if running > 1 {
         format!("{running} {}", t("subagents running", "个子代理运行中"))
-    } else if name == "task" || message.starts_with("task|") {
+    } else if is_agent_event(&name, &message) {
         live_job_status(state, &call_id)
     } else if name.is_empty() {
         message
@@ -54,9 +56,16 @@ pub(super) fn tool_progress(
     set_streaming_status(state, &status);
 }
 
-fn parse_task_progress(message: &str) -> Option<(&str, &str, &str)> {
+fn is_agent_event(name: &str, message: &str) -> bool {
+    name == AGENT_PROGRESS_PREFIX
+        || message
+            .split_once('|')
+            .is_some_and(|(prefix, _)| prefix == AGENT_PROGRESS_PREFIX)
+}
+
+fn parse_agent_progress(message: &str) -> Option<(&str, &str, &str)> {
     let mut parts = message.splitn(4, '|');
-    if parts.next()? != "task" {
+    if parts.next()? != AGENT_PROGRESS_PREFIX {
         return None;
     }
     Some((parts.next()?, parts.next()?, parts.next().unwrap_or("")))
@@ -123,10 +132,10 @@ fn push_job_step(job: &mut LiveJob, step: &str) {
 }
 
 fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str, message: &str) {
-    if name != "task" && !message.starts_with("task|") {
+    if !is_agent_event(name, message) {
         return;
     }
-    if let Some((role, phase, detail)) = parse_task_progress(message) {
+    if let Some((role, phase, detail)) = parse_agent_progress(message) {
         match phase {
             "queued" => {
                 upsert_live_job(state, call_id, role, "queued");
@@ -205,4 +214,22 @@ pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) {
 
 pub(super) fn finish_live_job(state: &mut WorkspaceState, call_id: &str) {
     drop_live_job(state, call_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_agent_event, parse_agent_progress};
+    use mycode_tools::builtin::AGENT_PROGRESS_PREFIX;
+
+    #[test]
+    fn progress_protocol_is_agent_only() {
+        assert_eq!(AGENT_PROGRESS_PREFIX, "agent");
+        assert_eq!(
+            parse_agent_progress("agent|scout|queued|look"),
+            Some(("scout", "queued", "look"))
+        );
+        assert!(parse_agent_progress("task|scout|queued|look").is_none());
+        assert!(is_agent_event("agent", "starting"));
+        assert!(!is_agent_event("task", "task|scout|queued|look"));
+    }
 }

@@ -23,7 +23,7 @@
 | `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型。坏文件重置为默认，不当作产品配置的真相 |
 | `compaction` | `compaction.json`：摘要覆盖到哪条消息、哪个分支头。账本本身不改写 |
 | `checkpoints` | `checkpoints/<session>/` 下按 blake3 存文件快照，清单是追加 JSONL。每会话 256 份，单文件 8 MiB。检查点时不存在的路径记为缺失，回滚时删除该路径。超过 8 MiB 返回 `Oversized`，不静默跳过 |
-| `subagents` | 内置四个角色，再加上家目录和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |
+| `subagents` | 内置 scout 与 artisan，再加上家目录和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |
 | `resources` | 发现 `AGENTS.md` / `MYCODE.md` 和 `.agents` 技能，裁剪后交给 system prompt |
 | `mcp_import` | 把粘贴的 MCP JSON 收成服务器行，并把 Authorization 抽成密钥 |
 
@@ -46,10 +46,8 @@
 
 | 角色 | 职责 |
 | --- | --- |
-| scout | 只读检索并带来源。隔离是 `shared`，工具只有读和网页 |
-| artisan | 做成一处能单独核对的改动。隔离是 `worktree`，思考强度高 |
-| steward | 大改动之后同步注释、文档和残留死代码。隔离是 `worktree` |
-| sentinel | 用新的上下文复核已经完成的 diff。隔离是 `shared`，工具是 `read` / `grep` / `find` / `exec` |
+| scout | 只读。返回简明地图或发现后停止。隔离是 `shared`，工具只有读和网页 |
+| artisan | 做到 brief 的结果，检查与改动相称，不把 diff 倒回父级。隔离是 `worktree`，思考强度高 |
 
 同名文件的覆盖顺序是：内置 → `~/.mycode/agents/` → 项目 `.mycode/agents/`。frontmatter 声明隔离方式（`shared` 或 `worktree`）、默认思考强度和工具白名单。启用与否、实际模型在设置里，不写进角色文件。
 
