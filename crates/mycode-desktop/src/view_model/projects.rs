@@ -84,6 +84,23 @@ pub(crate) fn project_of_session<'a>(
         .map(|(_, project)| project.as_str())
 }
 
+/// Whether a folder is open, so a new session has a working directory.
+///
+/// A named workspace with an empty folder list does not count. Fresh launch
+/// always has that workspace and still must not offer a second action.
+#[must_use]
+pub fn has_open_folder(state: &WorkspaceState) -> bool {
+    path_open(state.project_dir.as_deref())
+        || state
+            .workspace_roots
+            .iter()
+            .any(|path| path_open(Some(path.as_str())))
+}
+
+fn path_open(path: Option<&str>) -> bool {
+    path.is_some_and(|path| !path.trim().is_empty())
+}
+
 /// Newest session already bound to `project`. `sessions` is newest-first.
 #[must_use]
 pub(crate) fn newest_session_in_project<'a>(
@@ -95,4 +112,44 @@ pub(crate) fn newest_session_in_project<'a>(
         let bound = project_of_session(bindings, &session.session_id)?;
         same_project_path(bound, project).then_some(session.session_id.as_str())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_open_folder;
+    use crate::view_model::WorkspaceState;
+
+    #[test]
+    fn fresh_workspace_without_a_folder_stays_closed() {
+        let state = WorkspaceState {
+            workspaces: vec![mycode_config::WorkspaceDef {
+                id: "ws".to_owned(),
+                name: "Default".to_owned(),
+                folders: Vec::new(),
+            }],
+            active_workspace: Some("ws".to_owned()),
+            project_dir: Some("   ".to_owned()),
+            workspace_roots: vec![" ".to_owned()],
+            ..WorkspaceState::default()
+        };
+        assert!(!has_open_folder(&state));
+    }
+
+    #[test]
+    fn an_open_project_directory_unlocks_a_new_task() {
+        let state = WorkspaceState {
+            project_dir: Some("/tmp/app".to_owned()),
+            ..WorkspaceState::default()
+        };
+        assert!(has_open_folder(&state));
+    }
+
+    #[test]
+    fn a_workspace_root_unlocks_a_new_task() {
+        let state = WorkspaceState {
+            workspace_roots: vec!["/tmp/app".to_owned()],
+            ..WorkspaceState::default()
+        };
+        assert!(has_open_folder(&state));
+    }
 }

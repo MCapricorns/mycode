@@ -1,4 +1,8 @@
-//! Empty-desk welcome. A title, two outline actions, and recent folders.
+//! Empty-desk welcome. A title, outline actions, and recent folders.
+//!
+//! With no folder open there is one action: Open folder. Once a folder is
+//! open, a second outline action starts a task. Both surfaces share
+//! [`new_task_label`], so a rename is one edit.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::theme::Theme;
@@ -11,7 +15,34 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::{element_id, hover_delete_button, project_label, skin};
+use crate::view_model::has_open_folder;
 use crate::workspace::Workspace;
+
+/// Interim label for a new task: the empty-desk action, the sidebar
+/// control, and an untitled session row. ui/ux may replace this pair
+/// (for example "Ask MYCode").
+const NEW_TASK_LABEL: (&str, &str) = ("New task", "新建任务");
+
+const TAGLINE_NO_FOLDER: (&str, &str) = ("Open a folder to get started.", "打开一个目录即可开始。");
+const TAGLINE_HAS_FOLDER: (&str, &str) = (
+    "Start a task in this workspace.",
+    "在此工作区开始一个任务。",
+);
+
+/// The new-task label. The empty desk, the sidebar control, and untitled
+/// session rows all call this.
+#[must_use]
+pub(crate) fn new_task_label() -> &'static str {
+    t(NEW_TASK_LABEL.0, NEW_TASK_LABEL.1)
+}
+
+fn empty_desk_tagline(has_folder: bool) -> (&'static str, &'static str) {
+    if has_folder {
+        TAGLINE_HAS_FOLDER
+    } else {
+        TAGLINE_NO_FOLDER
+    }
+}
 
 pub(super) fn render_welcome(
     workspace: &mut Workspace,
@@ -19,6 +50,8 @@ pub(super) fn render_welcome(
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
     let recents = workspace.vm().recents.clone();
+    let has_folder = has_open_folder(workspace.vm());
+    let (tagline_en, tagline_zh) = empty_desk_tagline(has_folder);
     div()
         .id("welcome")
         .flex()
@@ -39,10 +72,7 @@ pub(super) fn render_welcome(
                 .id("welcome-tagline")
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child(t(
-                    "Open a folder, or start a chat.",
-                    "打开一个目录,或开始一个对话。",
-                )),
+                .child(t(tagline_en, tagline_zh)),
         )
         .child(
             div()
@@ -63,17 +93,19 @@ pub(super) fn render_welcome(
                         workspace.on_open_project_dialog(cx);
                     })),
                 )
-                .child(
-                    welcome_action(
-                        "welcome-new-chat",
-                        IconName::MessageSquare,
-                        t("New chat", "新建对话"),
-                        theme,
+                .when(has_folder, |actions| {
+                    actions.child(
+                        welcome_action(
+                            "welcome-new-task",
+                            IconName::MessageSquare,
+                            new_task_label(),
+                            theme,
+                        )
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_new_session(cx);
+                        })),
                     )
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_new_session(cx);
-                    })),
-                ),
+                }),
         )
         .when(!recents.is_empty(), |this| {
             this.child(
@@ -156,4 +188,33 @@ fn welcome_action(
         .text_color(ink)
         .child(Icon::new(icon).with_size(px(15.)).text_color(ink))
         .child(label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NEW_TASK_LABEL, TAGLINE_HAS_FOLDER, TAGLINE_NO_FOLDER, empty_desk_tagline};
+
+    fn rejects_chat_wording(text: &str) {
+        assert!(
+            !text.to_ascii_lowercase().contains("chat"),
+            "empty-desk copy must not say chat: {text}"
+        );
+        assert!(
+            !text.contains("对话"),
+            "empty-desk copy must not say chat: {text}"
+        );
+    }
+
+    #[test]
+    fn empty_desk_copy_is_folder_or_task_and_never_chat() {
+        for (english, chinese) in [TAGLINE_NO_FOLDER, TAGLINE_HAS_FOLDER, NEW_TASK_LABEL] {
+            rejects_chat_wording(english);
+            rejects_chat_wording(chinese);
+        }
+        assert_eq!(empty_desk_tagline(false), TAGLINE_NO_FOLDER);
+        assert_eq!(empty_desk_tagline(true), TAGLINE_HAS_FOLDER);
+        assert_eq!(TAGLINE_NO_FOLDER.0, "Open a folder to get started.");
+        assert_eq!(TAGLINE_HAS_FOLDER.0, "Start a task in this workspace.");
+        assert_eq!(NEW_TASK_LABEL.0, "New task");
+    }
 }
