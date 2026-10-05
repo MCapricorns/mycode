@@ -21,11 +21,10 @@ use crate::workspace::Workspace;
 /// Interim label for a new task: the empty-desk action, the sidebar
 /// control, and an untitled session row. ui/ux may replace this pair
 /// (for example "Ask MYCode").
-const NEW_TASK_LABEL: (&'static str, &'static str) = ("New task", "新建任务");
+const NEW_TASK_LABEL: (&str, &str) = ("New task", "新建任务");
 
-const TAGLINE_NO_FOLDER: (&'static str, &'static str) =
-    ("Open a folder to get started.", "打开一个目录即可开始。");
-const TAGLINE_HAS_FOLDER: (&'static str, &'static str) = (
+const TAGLINE_NO_FOLDER: (&str, &str) = ("Open a folder to get started.", "打开一个目录即可开始。");
+const TAGLINE_HAS_FOLDER: (&str, &str) = (
     "Start a task in this workspace.",
     "在此工作区开始一个任务。",
 );
