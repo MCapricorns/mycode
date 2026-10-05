@@ -1,7 +1,7 @@
 //! Session ledger reads and writes: listing summaries, branch projections,
 //! model-facing replay history, message commits, recalls, and deletion.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use mycode_agent::session::{
@@ -239,9 +239,15 @@ pub(crate) async fn ledger_history(
 }
 
 /// Rewinds the branch so everything from the recalled message onward is
-/// gone, then returns the truncated conversation plus the edited text.
+/// gone, and restores workspace files to the image taken before the first
+/// write/edit after `to_event`.
+///
+/// File restore runs first. If it fails, the branch is left unchanged and
+/// the error is returned: a chat-only rewind is not reported as success.
+/// `shell` writes are not in the checkpoint manifest and are not undone.
 pub(crate) async fn recall_message(
     service: &SessionService,
+    home: &HomeLayout,
     session: &SessionId,
     branch: &BranchId,
     expected_head: &HeadStamp,
@@ -263,6 +269,14 @@ pub(crate) async fn recall_message(
     }
     let target = SessionEventId::parse(to_event)
         .ok_or_else(|| "the rewind target is not a valid event id".to_owned())?;
+    let heads_after = event_ids_after(service, session, branch, expected_head, &target).await?;
+    let home = home.clone();
+    let session_id = session.as_str().to_owned();
+    tokio::task::spawn_blocking(move || {
+        crate::rollback::apply_rollback_after(&home, &session_id, &heads_after)
+    })
+    .await
+    .map_err(|error| format!("file restore failed: {error}"))??;
     let reservation = service
         .reserve_branch(
             session,
@@ -279,6 +293,46 @@ pub(crate) async fn recall_message(
     read_branch(service, session, &branched.branch_id, &branched.head)
         .await
         .map_err(render_error)
+}
+
+/// Event ids strictly after `target` on the branch snapshot, in ledger order.
+///
+/// Checkpoint rows are tagged with the head at snapshot time. A recall
+/// restores the earliest row whose tag is in this set.
+async fn event_ids_after(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    snapshot_head: &HeadStamp,
+    target: &SessionEventId,
+) -> Result<HashSet<String>, String> {
+    let mut after: Option<SessionEventId> = None;
+    let mut seen = false;
+    let mut ids = HashSet::new();
+    loop {
+        let page = service
+            .read(session, branch, snapshot_head, after.as_ref(), 256)
+            .await
+            .map_err(render_error)?;
+        if page.items.is_empty() {
+            break;
+        }
+        for event in &page.items {
+            if seen {
+                ids.insert(event.event_id.as_str().to_owned());
+            } else if &event.event_id == target {
+                seen = true;
+            }
+        }
+        match page.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+    if !seen {
+        return Err("the rewind target is not on this branch".to_owned());
+    }
+    Ok(ids)
 }
 
 pub(crate) async fn send_message(
@@ -502,5 +556,153 @@ impl HeadWriter {
         };
         *head = HeadStamp::Event(event_id.clone());
         Ok(event_id.as_str().to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mycode_agent::session::{BranchId, HeadStamp, SessionEventId, SessionId, SessionService};
+    use mycode_config::{CheckpointKind, HomeLayout, checkpoint_file};
+
+    use super::{read_branch, recall_message, send_message};
+
+    struct TwoTurns {
+        root: std::path::PathBuf,
+        home: HomeLayout,
+        service: SessionService,
+        session: SessionId,
+        branch: BranchId,
+        first_id: String,
+        second_id: String,
+        note: std::path::PathBuf,
+        created: std::path::PathBuf,
+    }
+
+    async fn two_turns(label: &str) -> TwoTurns {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-recall-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        let service = SessionService::new(&home);
+        let created_session = service.create().await.unwrap();
+        let session = created_session.session_id;
+        let branch = created_session.branch_id;
+
+        let (first_id, _) = send_message(&service, &session, &branch, &HeadStamp::Empty, "first")
+            .await
+            .unwrap();
+        let note = root.join("note.txt");
+        std::fs::write(&note, b"before-first").unwrap();
+        checkpoint_file(&home, session.as_str(), &note, &first_id)
+            .unwrap()
+            .unwrap();
+        std::fs::write(&note, b"after-first").unwrap();
+
+        let head1 = HeadStamp::Event(SessionEventId::parse(&first_id).unwrap());
+        let (second_id, _) = send_message(&service, &session, &branch, &head1, "second")
+            .await
+            .unwrap();
+        checkpoint_file(&home, session.as_str(), &note, &second_id)
+            .unwrap()
+            .unwrap();
+        std::fs::write(&note, b"after-second").unwrap();
+        let created = root.join("new.txt");
+        let absent = checkpoint_file(&home, session.as_str(), &created, &second_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(absent.kind, CheckpointKind::Absent);
+        std::fs::write(&created, b"brand new").unwrap();
+
+        TwoTurns {
+            root,
+            home,
+            service,
+            session,
+            branch,
+            first_id,
+            second_id,
+            note,
+            created,
+        }
+    }
+
+    #[tokio::test]
+    async fn recall_restores_files_from_before_the_recalled_turn() {
+        let setup = two_turns("ok").await;
+        let head = HeadStamp::Event(SessionEventId::parse(&setup.second_id).unwrap());
+        let conversation = recall_message(
+            &setup.service,
+            &setup.home,
+            &setup.session,
+            &setup.branch,
+            &head,
+            &setup.first_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&setup.note).unwrap(), b"after-first");
+        assert!(!setup.created.exists());
+        assert_eq!(conversation.entries.len(), 1);
+        assert_eq!(&*conversation.entries[0].text, "first");
+        assert_eq!(conversation.head, setup.first_id);
+
+        setup.service.shutdown().await;
+        let _ = std::fs::remove_dir_all(&setup.root);
+    }
+
+    #[tokio::test]
+    async fn recall_leaves_the_branch_when_file_restore_fails() {
+        let setup = two_turns("fail").await;
+        let dir = setup
+            .home
+            .root()
+            .join("checkpoints")
+            .join(setup.session.as_str());
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|ext| ext == "bin") {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        let before = setup.service.open(&setup.session).await.unwrap();
+        assert_eq!(before.heads.len(), 1);
+
+        let head = HeadStamp::Event(SessionEventId::parse(&setup.second_id).unwrap());
+        let error = recall_message(
+            &setup.service,
+            &setup.home,
+            &setup.session,
+            &setup.branch,
+            &head,
+            &setup.first_id,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("checkpoint blob is missing"),
+            "file restore must fail visibly, got {error}"
+        );
+
+        let after = setup.service.open(&setup.session).await.unwrap();
+        assert_eq!(after.heads.len(), 1);
+        assert_eq!(after.heads[0].head, head);
+        let still = read_branch(&setup.service, &setup.session, &setup.branch, &head)
+            .await
+            .unwrap();
+        assert_eq!(still.entries.len(), 2);
+        assert_eq!(&*still.entries[0].text, "first");
+        assert_eq!(&*still.entries[1].text, "second");
+        assert_eq!(std::fs::read(&setup.note).unwrap(), b"after-second");
+        assert_eq!(std::fs::read(&setup.created).unwrap(), b"brand new");
+
+        setup.service.shutdown().await;
+        let _ = std::fs::remove_dir_all(&setup.root);
     }
 }

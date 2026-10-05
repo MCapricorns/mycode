@@ -155,8 +155,9 @@ pub enum BridgeCommand {
         /// Session identity spelling.
         session_id: String,
     },
-    /// Rewind the branch to just before one user message (recall), with an
-    /// optional edited text to re-send.
+    /// Rewind the branch to just before one user message (recall), restore
+    /// workspace files to that point, and optionally carry edited text to
+    /// re-send. `shell` writes are not restored.
     RecallMessage {
         /// Session identity spelling.
         session: SessionId,

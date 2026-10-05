@@ -32,6 +32,7 @@ mod ui_state;
 pub use authority::AuthorityRevision;
 pub use checkpoints::{
     CheckpointEntry, CheckpointKind, RollbackAction, checkpoint_file, plan_rollback,
+    plan_rollback_after,
 };
 #[doc(inline)]
 pub use compaction::{

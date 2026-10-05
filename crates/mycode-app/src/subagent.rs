@@ -499,6 +499,8 @@ impl BridgeTaskHost {
             run_home,
             run_dir_for_hooks,
             run_session,
+            // Side store: these snapshots are not part of the parent recall.
+            String::new(),
         ));
 
         // A parent interrupt stops the child. Leaving it running held the

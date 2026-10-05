@@ -184,6 +184,7 @@ impl Workspace {
     }
 
     /// Rewinds to just before the user message at `index` (撤回).
+    /// The same command restores workspace files to that point.
     pub(crate) fn on_recall_message(&mut self, index: usize, cx: &mut Context<Self>) {
         self.recall_at(index, false, cx);
     }

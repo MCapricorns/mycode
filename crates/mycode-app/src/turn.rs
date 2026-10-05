@@ -114,6 +114,7 @@ pub(crate) fn checkpoint_hook(
     home: HomeLayout,
     cwd: PathBuf,
     session: String,
+    head: String,
 ) -> impl Fn(&str, &serde_json::Value) -> CheckpointFuture + Send + Sync + 'static {
     move |tool, args| {
         let raw_path = matches!(tool, "write" | "edit")
@@ -126,13 +127,14 @@ pub(crate) fn checkpoint_hook(
         let home = home.clone();
         let cwd = cwd.clone();
         let session = session.clone();
+        let head = head.clone();
         Box::pin(async move {
             let Some(raw_path) = raw_path else {
                 return Ok(());
             };
             let path = cwd.join(raw_path);
             match tokio::task::spawn_blocking(move || {
-                mycode_config::checkpoint_file(&home, &session, &path)
+                mycode_config::checkpoint_file(&home, &session, &path, &head)
             })
             .await
             {
@@ -227,6 +229,12 @@ async fn run_chat_turn(
     let usage_provider = provider_id.to_owned();
     let usage_model = model.to_owned();
     let head_stamp_text = head_spelling(&expected_head);
+    // Tag every write/edit snapshot in this turn with the user-message head
+    // so a later recall can select mutations that happened after that message.
+    let checkpoint_head = match &expected_head {
+        HeadStamp::Event(event) => event.as_str().to_owned(),
+        HeadStamp::Empty => String::new(),
+    };
     let writer = HeadWriter::new(
         state.service.clone(),
         session.clone(),
@@ -420,6 +428,7 @@ absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
             home.clone(),
             cwd.clone(),
             session_id.clone(),
+            checkpoint_head,
         ));
     let cancel = CancellationToken::new();
     // Publish the token so an Escape-driven CancelChat can abort this turn;

@@ -359,15 +359,23 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             edit,
         } => {
             let service = state.service.clone();
+            let home = state.home.clone();
             let session = session.clone();
             let branch = branch.clone();
             let expected_head = expected_head.clone();
             let to_event = to_event.clone();
             let edit = edit.clone();
             let task = tokio::spawn(async move {
-                recall_message(&service, &session, &branch, &expected_head, &to_event)
-                    .await
-                    .map(|conversation| (Box::new(conversation), edit))
+                recall_message(
+                    &service,
+                    &home,
+                    &session,
+                    &branch,
+                    &expected_head,
+                    &to_event,
+                )
+                .await
+                .map(|conversation| (Box::new(conversation), edit))
             });
             match task.await {
                 Ok(Ok(payload)) => BridgeReply::Recalled(Ok(payload)),
