@@ -454,6 +454,11 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     // file, and so `%` in the path is expanded only by delayed expansion.
     // Redirected certutil output is UTF-16; the test shim's echo is not.
     // PowerShell keeps the 64 hex digits as ASCII.
+    //
+    // `call :checkhash` returns into this file. Deleting it and then
+    // `exit /b` makes cmd look the file up again, print "The batch file
+    // cannot be found.", and exit 1. `exit 0` ends this process while the
+    // file is still here. A second process deletes it after `ping`.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
@@ -506,9 +511,11 @@ move /y "!PREVIOUS!" "!CURRENT!" >nul 2>&1
 exit /b 1
 :done
 __RELAUNCH__
-rem Same line as the delete: cmd has already read it, so removing this
-rem script does not hide `exit` and turn a good replace into errorlevel 1.
-del "%~f0" & exit /b 0
+rem `exit 0` ends this cmd without returning into the batch. A second
+rem process deletes the script after ping, so this file is still here
+rem while we exit.
+start "" /b cmd /c "ping -n 3 127.0.0.1 >nul & del /f /q ""%~f0"""
+exit 0
 :checkhash
 set "HASHRESULT="
 set "HASHOUT=%~dp0mycode-hash.txt"
@@ -755,7 +762,7 @@ mod tests {
         let live = super::unix_script(staged, current, "ab", true);
         assert!(live.contains("nohup \"$current\""), "{live}");
         let quiet = super::windows_script(staged, current, "ab", false);
-        assert!(!quiet.contains("start \"\""), "{quiet}");
+        assert!(!quiet.contains("start \"\" \"!CURRENT!\""), "{quiet}");
         let live = super::windows_script(staged, current, "ab", true);
         assert!(live.contains("start \"\" \"!CURRENT!\""), "{live}");
     }
@@ -782,6 +789,14 @@ mod tests {
             "{script}"
         );
         assert!(script.contains("-File \"%PS1%\""), "{script}");
+        assert!(
+            script.contains(
+                "start \"\" /b cmd /c \"ping -n 3 127.0.0.1 >nul & del /f /q \"\"%~f0\"\"\""
+            ),
+            "{script}"
+        );
+        assert!(script.contains("\r\nexit 0\r\n"), "{script}");
+        assert!(!script.contains("del \"%~f0\" & exit /b 0"), "{script}");
     }
 
     #[cfg(unix)]
