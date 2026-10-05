@@ -449,11 +449,11 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. `certutil` runs on a
-    // normal line: `for /f` of `certutil.exe` makes cmd lose this batch file.
-    // A redirected certutil file is UTF-16; the echo shim used by tests is
-    // not. PowerShell reads whichever encoding the file has and writes the
-    // 64 hex digits as ASCII.
+    // which does not expand `%VAR%` inside the value. `certutil` runs in a
+    // child `cmd /v:on /c` so a `certutil.cmd` on PATH cannot take over this
+    // file, and so `%` in the path is expanded only by delayed expansion.
+    // Redirected certutil output is UTF-16; the test shim's echo is not.
+    // PowerShell keeps the 64 hex digits as ASCII.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
@@ -513,16 +513,27 @@ del "%~f0" & exit /b 0
 set "HASHRESULT="
 set "HASHOUT=%~dp0mycode-hash.txt"
 set "HASHASCII=%~dp0mycode-hash-ascii.txt"
-del "%HASHOUT%" "%HASHASCII%" >nul 2>&1
-certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256 > "%HASHOUT%"
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -EncodedCommand JABiAHkAdABlAHMAIAA9ACAAWwBTAHkAcwB0AGUAbQAuAEkATwAuAEYAaQBsAGUAXQA6ADoAUgBlAGEAZABBAGwAbABCAHkAdABlAHMAKAAkAGUAbgB2ADoASABBAFMASABPAFUAVAApAAoAJABlAG4AYwBvAGQAaQBuAGcAIAA9ACAAWwBTAHkAcwB0AGUAbQAuAFQAZQB4AHQALgBFAG4AYwBvAGQAaQBuAGcAXQA6ADoAQQBTAEMASQBJAAoAaQBmACAAKAAkAGIAeQB0AGUAcwAuAEwAZQBuAGcAdABoACAALQBnAGUAIAAyACAALQBhAG4AZAAgACQAYgB5AHQAZQBzAFsAMABdACAALQBlAHEAIAAyADUANQAgAC0AYQBuAGQAIAAkAGIAeQB0AGUAcwBbADEAXQAgAC0AZQBxACAAMgA1ADQAKQAgAHsAIAAkAGUAbgBjAG8AZABpAG4AZwAgAD0AIABbAFMAeQBzAHQAZQBtAC4AVABlAHgAdAAuAEUAbgBjAG8AZABpAG4AZwBdADoAOgBVAG4AaQBjAG8AZABlACAAfQAKACQAdABlAHgAdAAgAD0AIAAkAGUAbgBjAG8AZABpAG4AZwAuAEcAZQB0AFMAdAByAGkAbgBnACgAJABiAHkAdABlAHMAKQAKACQAdABlAHgAdAAgAD0AIAAkAHQAZQB4AHQAIAAtAHIAZQBwAGwAYQBjAGUAIAAnAFwAcwAnACwAIAAnACcACgAkAG0AYQB0AGMAaAAgAD0AIABbAHIAZQBnAGUAeABdADoAOgBNAGEAdABjAGgAKAAkAHQAZQB4AHQALAAgACcAWwAwAC0AOQBBAC0ARgBhAC0AZgBdAHsANgA0AH0AJwApAAoAaQBmACAAKAAtAG4AbwB0ACAAJABtAGEAdABjAGgALgBTAHUAYwBjAGUAcwBzACkAIAB7ACAAWwBDAG8AbgBzAG8AbABlAF0AOgA6AEUAcgByAG8AcgAuAFcAcgBpAHQAZQBMAGkAbgBlACgAJwBuAG8AIABzAGgAYQAyADUANgAgAGkAbgAgAGMAZQByAHQAdQB0AGkAbAAgAG8AdQB0AHAAdQB0ACcAKQA7ACAAZQB4AGkAdAAgADEAIAB9AAoAWwBTAHkAcwB0AGUAbQAuAEkATwAuAEYAaQBsAGUAXQA6ADoAVwByAGkAdABlAEEAbABsAFQAZQB4AHQAKAAkAGUAbgB2ADoASABBAFMASABBAFMAQwBJAEkALAAgACQAbQBhAHQAYwBoAC4AVgBhAGwAdQBlACAAKwAgAFsAYwBoAGEAcgBdADEAMAApAAoA
+set "PS1=%~dp0mycode-hash.ps1"
+del "%HASHOUT%" "%HASHASCII%" "%PS1%" >nul 2>&1
+setlocal DisableDelayedExpansion
+> "%PS1%" echo $bytes = [System.IO.File]::ReadAllBytes^($env:HASHOUT^)
+>> "%PS1%" echo $encoding = [System.Text.Encoding]::ASCII
+>> "%PS1%" echo if ^($bytes.Length -ge 2 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254^) { $encoding = [System.Text.Encoding]::Unicode }
+>> "%PS1%" echo $text = $encoding.GetString^($bytes^)
+>> "%PS1%" echo $text = $text -replace '\s', ''
+>> "%PS1%" echo $match = [regex]::Match^($text, '[0-9A-Fa-f]{64}'^)
+>> "%PS1%" echo if ^(-not $match.Success^) { [Console]::Error.WriteLine^('no sha256 in certutil output'^); exit 1 }
+>> "%PS1%" echo [System.IO.File]::WriteAllText^($env:HASHASCII, $match.Value + [char]10^)
+cmd /v:on /c certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256 > "%HASHOUT%"
+endlocal
+call "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -File "%PS1%"
 if errorlevel 1 (
   echo updater: could not read certutil output for [!MYCODE_HASH_TARGET!] 1>&2
-  del "%HASHOUT%" "%HASHASCII%" >nul 2>&1
+  del "%HASHOUT%" "%HASHASCII%" "%PS1%" >nul 2>&1
   exit /b 1
 )
 set /p HASHRESULT=<"%HASHASCII%"
-del "%HASHOUT%" "%HASHASCII%" >nul 2>&1
+del "%HASHOUT%" "%HASHASCII%" "%PS1%" >nul 2>&1
 if not defined HASHRESULT (
   echo updater: certutil did not return a sha256 target [!MYCODE_HASH_TARGET!] 1>&2
   exit /b 1
@@ -763,14 +774,14 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.contains("certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256 > \"%HASHOUT%\""),
+            script.contains("cmd /v:on /c certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
             "{script}"
         );
         assert!(
             script.contains("WindowsPowerShell\\v1.0\\powershell.exe"),
             "{script}"
         );
-        assert!(script.contains("-EncodedCommand"), "{script}");
+        assert!(script.contains("-File \"%PS1%\""), "{script}");
     }
 
     #[cfg(unix)]
