@@ -321,8 +321,9 @@ fn agent_progress(role: &str, phase: &str, detail: &str) -> String {
 /// Parent-prompt dispatch section for the roles that are actually enabled.
 ///
 /// Catalog lines are the short when-to-use descriptions. The bullets are the
-/// decision boundary: one scout or one artisan for non-trivial work, and no
-/// fan-out for a small change. Only behavior this process implements is named.
+/// decision boundary: one scout or one artisan for non-trivial work, no
+/// fan-out for a small change, and one artisan at a time unless the briefs
+/// are independent. Only behavior this process implements is named.
 #[must_use]
 pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSettings) -> String {
     let enabled: Vec<&SubagentRole> = catalog
@@ -342,6 +343,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         "Prefer one `scout` or one `artisan` for non-trivial multi-step work. Do not fan out many agents for one small change.",
         "`scout` when you need a repo, layout, API, or call-site map before deciding or editing; multi-file or unfamiliar exploration; or fact-gathering while you plan. It is read-only and stops after findings.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
+        "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
         "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
         "Send one self-contained brief. The child has no parent conversation and returns once. Independent `agent` calls in one response run together, including with `search_tool` / `use_tool`.",
     ];
@@ -757,6 +759,8 @@ mod tests {
         assert!(text.contains("one small change"));
         assert!(text.contains("vague"));
         assert!(text.contains("not a diff"));
+        assert!(text.contains("one `artisan` at a time"));
+        assert!(text.contains("clearly independent"));
         assert!(!text.contains("steward"));
         assert!(!text.contains("sentinel"));
         assert!(!text.contains("`exec`"));
