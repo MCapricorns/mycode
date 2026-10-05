@@ -1,6 +1,6 @@
 # mycode
 
-本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。发布包支持 Windows 10/11 x64、Windows 11 ARM64 与 macOS Apple Silicon。
+本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。发布包支持 Windows 10/11 x64、Windows 11 ARM64、macOS Apple Silicon 与 Linux x86_64。
 
 [许可证](LICENSE) · [文档](docs/README.md) · [发布](https://github.com/MCapricorns/mycode/releases) · [更新日志](CHANGELOG.md)
 
@@ -18,6 +18,14 @@ English notes are [below](#english).
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
+## 界面
+
+深色主题。主窗口和外观设置的截图在 0.9.5 重拍后补到这两个路径。
+
+![主窗口](docs/images/readme-main.png)
+
+![外观](docs/images/readme-appearance.png)
+
 ## 下载
 
 发布页：[Releases](https://github.com/MCapricorns/mycode/releases)
@@ -27,8 +35,9 @@ English notes are [below](#english).
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
+| `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 |
 
-每个 zip 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。0.7.2 至 0.7.4 的发布包含 Linux x86_64 压缩包，之后不再提供。
+每个 zip 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。
 
 ## 从源码构建
 
@@ -50,7 +59,8 @@ cargo build --release -p mycode-desktop
 ├─ secrets.json           API 密钥
 ├─ ui.json                工作区、文件夹、会话归属
 ├─ catalog-cache.json     模型目录缓存
-├─ sessions/<id>/         账本、压缩检查点
+├─ sessions.db            会话索引（SQLite：标题、分支头、JSONL 偏移）
+├─ sessions/<id>/         `<branch>.jsonl`、载荷与压缩检查点
 └─ scratch/               未绑定文件夹时的工作目录
 ```
 
@@ -72,7 +82,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64 和 macOS Apple Silicon 上构建并打包三个平台的 release 二进制（zip 与 `.sha256`）。pull request 不创建标签、不发 GitHub Release、不改版本、不推 `ci/release-*`。推送到 `main` 并完成三个平台构建后，每次都会新建 GitHub Release：新标签 `v<version>`、三个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64 和 macOS Apple Silicon 都从这次提交构建。三个构建都成功之后，先用该提交创建标签并上传压缩包，再把版本写回 `main`：能快进就快进；若构建期间 `main` 有了新提交，就把版本提交重放到当前 `main` 上再推送（不强制推送；只自动处理 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md` 的冲突，计划中的版本号保留，构建期间写进 `## [Unreleased]` 的新说明也保留）。临时引用会在成功或失败后删除。因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
+pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 上构建并打包四个平台的 release 二进制（zip 与 `.sha256`）。pull request 不创建标签、不发 GitHub Release、不改版本、不推 `ci/release-*`。推送到 `main` 并完成四个平台构建后，每次都会新建 GitHub Release：新标签 `v<version>`、四个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 都从这次提交构建。四个构建都成功之后，先用该提交创建标签并上传压缩包，再把版本写回 `main`：能快进就快进；若构建期间 `main` 有了新提交，就把版本提交重放到当前 `main` 上再推送（不强制推送；只自动处理 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md` 的冲突，计划中的版本号保留，构建期间写进 `## [Unreleased]` 的新说明也保留）。临时引用会在成功或失败后删除。因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
 
 ## 许可
 
@@ -82,7 +92,7 @@ pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64 和 macOS
 
 ## English
 
-mycode is a local-first desktop coding agent for Windows and macOS.
+mycode is a local-first desktop coding agent for Windows, macOS, and Linux x86_64.
 The conversation, the tool calls, and every session stay on your machine.
 You bring the API keys.
 
@@ -119,6 +129,14 @@ A tool line names its target: which file was read, what was searched,
 which command ran. Keys live only in `secrets.json`. Saved keys show as
 a lock in Settings.
 
+### Screenshots
+
+Dark theme. The main window and Appearance screenshots land on these paths after a 0.9.5 recapture.
+
+![Main window](docs/images/readme-main.png)
+
+![Appearance](docs/images/readme-appearance.png)
+
 ### Download
 
 [Releases](https://github.com/MCapricorns/mycode/releases)
@@ -128,10 +146,9 @@ a lock in Settings.
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
+| `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 |
 
 Each zip has a `.sha256` sidecar. Intel macOS builds stopped after 0.4.0.
-Linux x86_64 archives shipped in 0.7.2 through 0.7.4 and are not part of
-later releases.
 
 ### Build
 
@@ -156,12 +173,15 @@ debuginfo stays small.
 ├─ secrets.json
 ├─ ui.json
 ├─ catalog-cache.json
+├─ sessions.db
 ├─ sessions/<id>/
 └─ scratch/
 ```
 
-Older installs may still have `checkpoints/<id>/`. Deleting a session
-removes that directory. New turns do not write file snapshots.
+`sessions.db` is the SQLite index. `sessions/<id>/` holds `<branch>.jsonl`,
+payloads, and compaction checkpoints. Older installs may still have
+`checkpoints/<id>/`. Deleting a session removes that directory. New turns
+do not write file snapshots.
 
 Point `MYCODE_HOME` at a copied tree to move the app. Path resolution
 does not follow symlinks out of that root.
@@ -181,18 +201,18 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-Pull requests and pushes to `main` build and package the three platform
-release binaries on Windows x64, Windows ARM64, and macOS Apple Silicon
-(zip and `.sha256`). Pull requests do not publish, tag, bump the version, or push
+Pull requests and pushes to `main` build and package the four platform
+release binaries on Windows x64, Windows ARM64, macOS Apple Silicon, and
+Linux x86_64 (zip and `.sha256`). Pull requests do not publish, tag, bump the version, or push
 a `ci/release-*` ref. A push to
-`main` publishes a new GitHub Release after those three builds succeed: a new
-`v<version>` tag, the three platform zips (Windows x64, Windows ARM64,
-and macOS Apple Silicon), their `.sha256` sidecars, and the matching
+`main` publishes a new GitHub Release after those four builds succeed: a new
+`v<version>` tag, the four platform zips (Windows x64, Windows ARM64,
+macOS Apple Silicon, and Linux x86_64), their `.sha256` sidecars, and the matching
 `CHANGELOG.md` section (not generated commit notes). When
 that version already has a tag, release-plan bumps the patch in
 `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md` and pushes that commit
-only to `ci/release-<version>-<run id>`. Windows x64, Windows ARM64, and
-macOS Apple Silicon are built from that commit. After those three builds
+only to `ci/release-<version>-<run id>`. Windows x64, Windows ARM64,
+macOS Apple Silicon, and Linux x86_64 are built from that commit. After those four builds
 succeed, the tag and archives are published from that commit, then `main`
 is updated: fast-forward when it still can, otherwise the version bump is
 replayed onto current `main` and pushed without force. A replay resolves
