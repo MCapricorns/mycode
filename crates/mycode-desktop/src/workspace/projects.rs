@@ -420,7 +420,12 @@ impl Workspace {
     }
 
     pub(crate) fn on_new_session(&mut self, cx: &mut Context<Self>) {
-        // New chats inherit the active project so the sidebar grouping and
+        // A session needs a folder. The empty desk and sidebar hide this
+        // action until one is open; the slash command uses the same gate.
+        if !crate::view_model::has_open_folder(&self.vm) {
+            return;
+        }
+        // New sessions inherit the active project so the sidebar grouping and
         // the tool working directory follow the project switcher.
         if self.vm.project_dir.is_some() {
             self.pending_project = self.vm.project_dir.clone();

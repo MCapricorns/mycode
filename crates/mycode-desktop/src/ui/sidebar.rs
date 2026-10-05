@@ -71,6 +71,7 @@ pub(super) fn render_sidebar(
     let filter_input = workspace.session_filter_input();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
+    let has_folder = crate::view_model::has_open_folder(workspace.vm());
 
     div()
         .id("sidebar")
@@ -83,32 +84,34 @@ pub(super) fn render_sidebar(
         .border_r_1()
         .border_color(skin::glass_border(theme))
         .child(workspace_head(&active_name, session_count, desk.faint, cx))
-        .child(
-            div().px_2().pt_1().child(
-                div()
-                    .id("new-chat")
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .h(px(30.))
-                    .px_2()
-                    .rounded(skin::radius_control())
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .cursor_pointer()
-                    .hover(|this| {
-                        this.bg(skin::frost_hover(theme))
-                            .text_color(theme.foreground)
-                    })
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_new_session(cx);
-                    }))
-                    .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
-                    .child(t("New chat", "新建对话")),
-            ),
-        )
+        .when(has_folder, |column| {
+            column.child(
+                div().px_2().pt_1().child(
+                    div()
+                        .id("new-task")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .w_full()
+                        .h(px(30.))
+                        .px_2()
+                        .rounded(skin::radius_control())
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|this| {
+                            this.bg(skin::frost_hover(theme))
+                                .text_color(theme.foreground)
+                        })
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_new_session(cx);
+                        }))
+                        .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
+                        .child(super::chat::new_task_label()),
+                ),
+            )
+        })
         .when_some(filter_input, |this, input| {
             this.child(
                 div()
@@ -368,7 +371,7 @@ fn displayed_session_title(summary: &SessionSummary, project: Option<&str>) -> S
     } else if let Some(project) = project {
         project_label(project)
     } else {
-        t("New chat", "新建对话").to_owned()
+        super::chat::new_task_label().to_owned()
     }
 }
 

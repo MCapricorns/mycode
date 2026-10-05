@@ -8,6 +8,7 @@ mod transcript;
 mod welcome;
 
 pub(crate) use menus::reasoning_row_label;
+pub(crate) use welcome::new_task_label;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
