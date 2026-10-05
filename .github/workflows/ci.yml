@@ -8,10 +8,11 @@
 #    Product gates are rustfmt, clippy, and that shell program-mode smoke test.
 #    windows-latest is x64. Windows ARM64 uses the native windows-11-arm
 #    image; it is not a cross-compile from windows-latest. The macOS core
-#    job runs the release-plan self-test. There is no Ubuntu product
-#    compile job. release-plan and release-publish run on ubuntu-latest.
-#    They choose the tag and upload the three archives. They do not
-#    compile the product.
+#    job runs the release-plan and advance-main self-tests. There is no
+#    Ubuntu product compile job. release-plan, release-publish, and
+#    release-cleanup run on ubuntu-latest. release-plan and
+#    release-publish choose the tag and upload the three archives.
+#    They do not compile the product.
 #
 # 2. release — a push to main whose quality gates passed publishes a new
 #    GitHub Release. Pull requests do not publish. The tag is
@@ -20,12 +21,15 @@
 #    CHANGELOG.md on a temporary commit and pushes only
 #    `ci/release-<version>-<run id>`. The three product builds check out
 #    that commit, so the version compiled into the binaries is the version
-#    that will be tagged. main is fast-forwarded and the tag is created
-#    only after those builds succeed. The body is the matching CHANGELOG
-#    section, not generated commit notes. Archives already uploaded for
-#    the previous tag do not skip the release. The version ref and the
-#    later main update are pushed with GITHUB_TOKEN, which does not start
-#    another workflow run.
+#    that will be tagged. After those builds succeed, release-publish
+#    creates the tag and uploads the archives from that commit, then
+#    advances main. The advance fast-forwards when it can. When main moved
+#    during the build, the version bump is replayed onto current main and
+#    pushed without force. The temporary ref is deleted after success or
+#    failure. The body is the matching CHANGELOG section, not generated
+#    commit notes. Archives already uploaded for the previous tag do not
+#    skip the release. The version ref and the later main update are pushed
+#    with GITHUB_TOKEN, which does not start another workflow run.
 #
 # Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
@@ -72,7 +76,9 @@ jobs:
 
       - name: Check release planner
         if: runner.os == 'macOS'
-        run: python3 .github/scripts/release_plan.py --self-test
+        run: |
+          python3 .github/scripts/release_plan.py --self-test
+          python3 .github/scripts/advance_main.py --self-test
 
       - name: Rust toolchain
         run: rustup component add rustfmt clippy
@@ -201,9 +207,9 @@ jobs:
             git commit \
               -m "chore(release): bump to ${VERSION}" \
               -m "Record the version published for this qualified main push."
-            # Build this commit before main moves. release-publish
-            # fast-forwards main and creates the tag only after the three
-            # platform archives exist.
+            # Build this commit before main moves. release-publish tags
+            # it after the three platform archives exist, then
+            # fast-forwards main or replays the bump onto current main.
             cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
             git push origin "HEAD:refs/heads/${cleanup_ref}"
           fi
@@ -304,7 +310,7 @@ jobs:
         with:
           ref: ${{ needs.release-plan.outputs.sha }}
           persist-credentials: true
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Verify tag matches workspace version
         shell: bash
@@ -314,14 +320,6 @@ jobs:
           echo "tag=${{ needs.release-plan.outputs.tag }} workspace=${version} head=${head}"
           test "${{ needs.release-plan.outputs.tag }}" = "v${version}"
           test "${head}" = "${{ needs.release-plan.outputs.sha }}"
-
-      - name: Advance main to the built commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The three platform jobs already compiled this commit. Move main
-          # to it before the tag exists, and refuse a non-fast-forward.
-          git push origin "HEAD:main"
 
       - name: Download assets
         uses: actions/download-artifact@v4
@@ -341,8 +339,31 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: false
 
+      - name: Advance main to the built commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The tag and archives already point at this commit. Fast-forward
+          # main when it still can. When main moved during the build, replay
+          # the version bump onto current main. Never force-push.
+          python3 .github/scripts/advance_main.py \
+            --built-sha "${{ needs.release-plan.outputs.sha }}"
+
+  release-cleanup:
+    name: release-cleanup
+    needs: [release-plan, release-build, release-publish]
+    if: always() && needs.release-plan.result == 'success' && needs.release-plan.outputs.cleanup_ref != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
       - name: Delete temporary release ref
-        if: needs.release-plan.outputs.cleanup_ref != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -351,4 +372,11 @@ jobs:
             echo "unexpected cleanup ref: ${ref}" >&2
             exit 1
           fi
-          git push origin --delete "${ref}"
+          if git push origin --delete "${ref}"; then
+            echo "deleted ${ref}"
+          elif git ls-remote --exit-code --heads origin "${ref}" >/dev/null; then
+            echo "failed to delete ${ref}" >&2
+            exit 1
+          else
+            echo "temporary ref ${ref} is already gone"
+          fi
