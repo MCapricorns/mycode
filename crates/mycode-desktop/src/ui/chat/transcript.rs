@@ -59,6 +59,7 @@ pub(super) fn render_streaming_entry(
                         "streaming-agent-md".into(),
                         streaming.text.clone().into(),
                         theme,
+                        true,
                     ))
             })
             .when(
@@ -100,6 +101,7 @@ pub(super) fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit
                             format!("agent-md-{}", entry.event_id).into(),
                             SharedString::from(entry.text.trim()),
                             theme,
+                            false,
                         ))
                 })
         })
@@ -213,15 +215,21 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
 /// (`install_text_view_defaults` on `Theme::change` and `Theme::sync_base`).
 /// The id must be unique per entry — `ElementId::CodeLocation` would collide
 /// across blocks since all bubbles render from the same call site.
-fn agent_text(id: SharedString, text: SharedString, _theme: &Theme) -> impl IntoElement {
+fn agent_text(
+    id: SharedString,
+    text: SharedString,
+    _theme: &Theme,
+    stream_fade: bool,
+) -> impl IntoElement {
     // The theme default leaves a full rem between paragraphs, which paints
     // as a tall empty slab when a reply is short or still streaming.
     let style = TextViewStyle::default().paragraph_gap(rems(0.35));
-    div()
-        .w_full()
-        .min_w_0()
-        .text_sm()
-        .child(TextView::markdown(id, text).style(style).selectable(true))
+    div().w_full().min_w_0().text_sm().child(
+        TextView::markdown(id, text)
+            .style(style)
+            .selectable(true)
+            .stream_fade(stream_fade),
+    )
 }
 
 /// Stable short stamp for the gutter: the entry id is a ledger identity, not
@@ -320,7 +328,7 @@ pub(super) fn render_tool_block(
 
 fn tool_status(result: Option<&ConversationEntry>) -> String {
     let Some(result) = result else {
-        return t("running", "进行中").to_owned();
+        return t("in progress", "进行中").to_owned();
     };
     let text = result.text.as_ref();
     if text.starts_with("failed:") {

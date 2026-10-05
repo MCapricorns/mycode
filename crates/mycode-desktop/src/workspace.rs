@@ -1,6 +1,7 @@
 //! The workspace window view: title bar, sessions sidebar, chat column,
 //! right inspector, and the full-page settings view.
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -18,6 +19,7 @@ mod bridge;
 mod git;
 mod projects;
 mod settings_editor;
+mod stream_frame;
 mod updates_data;
 
 /// Preferred first-window size. The origin is computed from the primary
@@ -280,27 +282,57 @@ impl Workspace {
         workspace
     }
 
-    /// Parks until the core sends, then folds that burst into state.
+    /// Parks until the core sends, then paints streaming deltas a frame at a time.
+    ///
+    /// A whole turn can already be queued when this task wakes. Applying it
+    /// before the next await paints only the finished message. Each slice
+    /// stops before `ChatDone` and before the character budget, then waits
+    /// one frame so the bubble can grow.
     fn spawn_event_pump(&self, events: BridgeEventRx, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
+            let mut buffer: VecDeque<mycode_app::BridgeEvent> = VecDeque::new();
+            let mut not_before = Instant::now();
             loop {
-                let event = match events.recv().await {
-                    Ok(event) => event,
-                    Err(_) => return,
-                };
-                if this
-                    .update(cx, |workspace, cx| workspace.apply_event(event, cx))
-                    .is_err()
-                {
-                    return;
+                if buffer.is_empty() {
+                    match events.recv().await {
+                        Ok(event) => buffer.push_back(event),
+                        Err(_) => return,
+                    }
                 }
                 while let Ok(event) = events.try_recv() {
+                    buffer.push_back(event);
+                }
+                if buffer.front().is_some_and(stream_frame::is_stream_delta)
+                    && let Some(wait) = not_before.checked_duration_since(Instant::now())
+                    && !wait.is_zero()
+                {
+                    cx.background_executor().timer(wait).await;
+                    while let Ok(event) = events.try_recv() {
+                        buffer.push_back(event);
+                    }
+                }
+                let (slice, rest) = stream_frame::split_stream_frame(std::mem::take(&mut buffer));
+                buffer = rest;
+                let mut streamed = false;
+                for event in slice {
+                    streamed |= stream_frame::is_stream_delta(&event);
                     if this
                         .update(cx, |workspace, cx| workspace.apply_event(event, cx))
                         .is_err()
                     {
                         return;
                     }
+                }
+                if streamed {
+                    not_before = Instant::now() + stream_frame::STREAM_FRAME;
+                }
+                if !buffer.is_empty() {
+                    let now = Instant::now();
+                    let wait = not_before
+                        .checked_duration_since(now)
+                        .filter(|wait| !wait.is_zero())
+                        .unwrap_or(stream_frame::STREAM_FRAME);
+                    cx.background_executor().timer(wait).await;
                 }
             }
         })
@@ -353,6 +385,10 @@ impl Workspace {
         );
         let previous_error = self.vm.error.clone();
         let previous_project = self.vm.project_dir.clone();
+        // Decide from the scroll position before this update. New text has
+        // not been laid out yet, so the handle still describes the frame the
+        // user is looking at.
+        let follow_tail = grew && self.conversation_follows_tail();
         reduce(&mut self.vm, action);
         if self.vm.project_dir != previous_project {
             self.agent_roles_stale = true;
@@ -364,12 +400,24 @@ impl Workspace {
         {
             self.push_toast(message, ToastKind::Error, cx);
         }
-        // Transcript-growing actions keep the conversation scrolled to the
-        // newest content, the way chat clients behave while streaming.
-        if self.vm.view == MainView::Chat && grew {
+        // Stick to the newest line while the user is already there. A reader
+        // who scrolled up into history keeps that position.
+        if self.vm.view == MainView::Chat && follow_tail {
             self.conversation_scroll.scroll_to_bottom();
         }
         cx.notify();
+    }
+
+    /// True when the conversation column is within a few pixels of the bottom.
+    ///
+    /// The handle stores a positive max extent and a negative live offset, so
+    /// their sum is about zero at the tail and positive after a scroll upward.
+    /// Before the first layout both are zero, which still follows.
+    fn conversation_follows_tail(&self) -> bool {
+        follows_tail(
+            self.conversation_scroll.offset().y,
+            self.conversation_scroll.max_offset().y,
+        )
     }
 
     /// The conversation column's scroll handle.
@@ -991,6 +1039,15 @@ pub(crate) fn parse_env_line(
     Ok(env)
 }
 
+/// Slack around the bottom edge. A reader a few pixels short of the tail
+/// still follows the stream; anything further up is history.
+const TAIL_SLACK: Pixels = px(48.);
+
+fn follows_tail(offset_y: Pixels, max_offset_y: Pixels) -> bool {
+    let gap = offset_y + max_offset_y;
+    gap >= -TAIL_SLACK && gap <= TAIL_SLACK
+}
+
 /// Renders the whole window; split across the `ui` submodule.
 impl Workspace {
     pub(crate) fn render_root(
@@ -1009,5 +1066,19 @@ impl gpui_kit::Render for Workspace {
         cx: &mut Context<Self>,
     ) -> impl gpui_kit::IntoElement {
         self.render_root(window, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_follow_stays_at_the_bottom_and_lets_go_when_scrolled_up() {
+        assert!(follows_tail(px(0.), px(0.)));
+        assert!(follows_tail(px(-800.), px(800.)));
+        assert!(follows_tail(px(-780.), px(800.)));
+        assert!(!follows_tail(px(-100.), px(800.)));
+        assert!(!follows_tail(px(0.), px(800.)));
     }
 }
