@@ -88,6 +88,12 @@ pub(crate) struct Toast {
     pub(crate) kind: ToastKind,
 }
 
+/// Scroll position captured before older entries are prepended.
+struct ScrollHold {
+    offset_y: Pixels,
+    content_height: Pixels,
+}
+
 /// The main workspace view.
 pub struct Workspace {
     vm: WorkspaceState,
@@ -117,6 +123,8 @@ pub struct Workspace {
     model_picker_input: Option<Entity<InputState>>,
     /// Top-bar filter for the settings navigation.
     settings_search_input: Option<Entity<InputState>>,
+    /// Sidebar filter over session titles already loaded from the index.
+    session_filter_input: Option<Entity<InputState>>,
     /// Filter for the add-from-catalog model checklist.
     preset_model_search_input: Option<Entity<InputState>>,
     provider_key_inputs: HashMap<String, Entity<InputState>>,
@@ -169,6 +177,13 @@ pub struct Workspace {
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
     conversation_scroll: gpui_kit::ScrollHandle,
+    /// Captured when older entries are prepended, applied after the next
+    /// layout so the lines under the viewport stay put. gpui's scroll offset
+    /// grows more negative toward the bottom; compensation subtracts the
+    /// content-height growth.
+    scroll_hold: Option<ScrollHold>,
+    /// `on_next_frame` was already scheduled for [`Self::scroll_hold`].
+    scroll_hold_queued: bool,
     /// Latest git status for the open folder.
     git: crate::git_status::GitSnapshot,
     /// Platform watcher for the open folder. Dropping it stops refresh.
@@ -223,6 +238,7 @@ impl Workspace {
             preset_search_input: None,
             model_picker_input: None,
             settings_search_input: None,
+            session_filter_input: None,
             preset_model_search_input: None,
             provider_key_inputs: HashMap::new(),
             provider_key_replace: HashSet::new(),
@@ -249,6 +265,8 @@ impl Workspace {
             next_toast_id: 0,
             project_picker: None,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
+            scroll_hold: None,
+            scroll_hold_queued: false,
             git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
             git_watcher: None,
             git_generation: 0,
@@ -259,6 +277,18 @@ impl Workspace {
             git_diff_generation: 0,
         });
         workspace.update(cx, |workspace, cx| {
+            let filter = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(crate::i18n::t("Search sessions", "搜索会话"))
+            });
+            cx.subscribe_in(&filter, window, |workspace, entity, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    workspace.apply_action(DesktopAction::SessionFilterChanged(text), cx);
+                }
+            })
+            .detach();
+            workspace.session_filter_input = Some(filter);
             let composer = workspace.composer.clone();
             cx.subscribe_in(&composer, window, |workspace, _, event, window, cx| {
                 workspace.on_composer_event(event, window, cx);
@@ -344,6 +374,15 @@ impl Workspace {
                 | DesktopAction::ToolResultAppended(_)
                 | DesktopAction::ChatDone { .. }
                 | DesktopAction::UsageRecorded { .. }
+                | DesktopAction::ConversationOpened(_)
+                | DesktopAction::SessionCreated(_)
+        );
+        let drop_hold = matches!(
+            action,
+            DesktopAction::ConversationOpened(_)
+                | DesktopAction::SessionCreated(_)
+                | DesktopAction::SessionDeleted
+                | DesktopAction::ConversationParked
         );
         let previous_error = self.vm.error.clone();
         let previous_project = self.vm.project_dir.clone();
@@ -358,12 +397,41 @@ impl Workspace {
         {
             self.push_toast(message, ToastKind::Error, cx);
         }
+        if drop_hold {
+            self.scroll_hold = None;
+            self.scroll_hold_queued = false;
+        }
         // Transcript-growing actions keep the conversation scrolled to the
         // newest content, the way chat clients behave while streaming.
+        // Opening a session lands on the tail. Prepending older history is
+        // not in this set: that path compensates the scroll offset instead.
         if self.vm.view == MainView::Chat && grew {
             self.conversation_scroll.scroll_to_bottom();
         }
         cx.notify();
+    }
+
+    /// The sidebar title filter, created with the workspace.
+    pub(crate) fn session_filter_input(&self) -> Option<Entity<InputState>> {
+        self.session_filter_input.clone()
+    }
+
+    /// Schedules the scroll correction for a prepended history page.
+    ///
+    /// Called from render, which has a window. The callback runs before the
+    /// following frame's draw, after this frame has recorded the new content
+    /// height on the scroll handle.
+    pub(crate) fn queue_scroll_hold(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scroll_hold.is_none() || self.scroll_hold_queued {
+            return;
+        }
+        self.scroll_hold_queued = true;
+        cx.on_next_frame(window, |workspace, _, cx| {
+            workspace.scroll_hold_queued = false;
+            if workspace.settle_scroll_hold() {
+                cx.notify();
+            }
+        });
     }
 
     /// The conversation column's scroll handle.
@@ -819,8 +887,96 @@ impl Workspace {
         self.on_save_settings(cx);
     }
 
-    pub(crate) fn on_reveal_transcript(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::TranscriptRevealMore, cx);
+    /// Loads the next older page when the viewport is within a short distance
+    /// of the top. A transcript that still fits does not chain-load.
+    pub(crate) fn on_conversation_scrolled(&mut self, cx: &mut Context<Self>) {
+        if self.vm.history_loading || self.scroll_hold.is_some() || !self.near_history_top() {
+            return;
+        }
+        self.request_older(cx);
+    }
+
+    /// Chip click. Works even when the tail still fits on screen.
+    pub(crate) fn on_load_older(&mut self, cx: &mut Context<Self>) {
+        self.request_older(cx);
+    }
+
+    fn near_history_top(&self) -> bool {
+        let max = self.conversation_scroll.max_offset().y;
+        if max >= px(-1.) {
+            return false;
+        }
+        self.conversation_scroll.offset().y > px(-64.)
+    }
+
+    fn conversation_pinned(&self) -> bool {
+        let offset = self.conversation_scroll.offset().y;
+        let max = self.conversation_scroll.max_offset().y;
+        offset - max < px(24.)
+    }
+
+    fn capture_scroll_hold(&mut self) {
+        let offset = self.conversation_scroll.offset();
+        let height = self
+            .conversation_scroll
+            .bounds_for_item(0)
+            .map(|bounds| bounds.size.height)
+            .unwrap_or(px(0.));
+        self.scroll_hold = Some(ScrollHold {
+            offset_y: offset.y,
+            content_height: height,
+        });
+        self.scroll_hold_queued = false;
+    }
+
+    fn settle_scroll_hold(&mut self) -> bool {
+        let Some(hold) = self.scroll_hold.take() else {
+            return false;
+        };
+        let height = self
+            .conversation_scroll
+            .bounds_for_item(0)
+            .map(|bounds| bounds.size.height)
+            .unwrap_or(hold.content_height);
+        let growth = height - hold.content_height;
+        if growth.abs() <= px(0.5) {
+            return false;
+        }
+        let x = self.conversation_scroll.offset().x;
+        self.conversation_scroll
+            .set_offset(gpui_kit::point(x, hold.offset_y - growth));
+        true
+    }
+
+    fn request_older(&mut self, cx: &mut Context<Self>) {
+        // `scroll_hold` is the frame where a previous page is still being
+        // anchored. Starting another read here would measure the wrong height.
+        if self.vm.history_loading || self.scroll_hold.is_some() {
+            return;
+        }
+        let Some(active) = self.vm.active.clone() else {
+            return;
+        };
+        let Some(before) = active.older_before.clone() else {
+            return;
+        };
+        let Some(session) = mycode_app::SessionId::parse(&active.session_id) else {
+            return;
+        };
+        let Some(branch) = mycode_app::BranchId::parse(&active.branch_id) else {
+            return;
+        };
+        let expected_head = parse_head(&active.head);
+        self.apply_action(DesktopAction::HistoryLoadStarted, cx);
+        self.dispatch(
+            BridgeCommand::LoadOlder {
+                session,
+                branch,
+                expected_head,
+                before,
+            },
+            cx,
+        );
     }
 
     // ---- accessors for the render layer ----

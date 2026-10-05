@@ -10,6 +10,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::dto::{BranchHead, EventKind, EventsResult, HeadStamp, SessionError, SessionEvent};
 use super::ids::{BranchId, SessionCallId, SessionEventId};
 
+/// Half-open index range of one backward history window.
+pub(crate) struct HistoryWindow {
+    /// First included event index.
+    pub(crate) start: usize,
+    /// One past the last included event index.
+    pub(crate) end: usize,
+    /// Oldest returned event when earlier events remain; otherwise `None`.
+    pub(crate) older: Option<SessionEventId>,
+}
+
 /// Half-open index range of one read page, plus the pagination cursor.
 pub(crate) struct PageWindow {
     /// First included event index.
@@ -33,10 +43,12 @@ pub(crate) struct EventMeta {
     pub(crate) kind: EventKind,
     /// Present only for tool kinds.
     pub(crate) call_id: Option<SessionCallId>,
-    /// Byte offset of the record inside the branch log.
+    /// Byte offset of the JSONL line inside the branch log.
     pub(crate) offset: u64,
-    /// Total encoded record length.
+    /// JSONL line length, newline included.
     pub(crate) record_len: u64,
+    /// Payload bytes live beside the log rather than on the line.
+    pub(crate) external: bool,
 }
 
 impl EventMeta {
@@ -99,6 +111,9 @@ pub(crate) struct EventReservationRow {
     pub(crate) kind: EventKind,
     /// The call identity bound at issuance.
     pub(crate) call_id: Option<SessionCallId>,
+    /// Payload bytes held until the append commits them. Reservations do not
+    /// survive process restart, so the bytes stay in the actor.
+    pub(crate) payload: Vec<u8>,
 }
 
 /// A live single-use branch reservation.
@@ -225,6 +240,46 @@ impl SessionLedger {
             Some(branch_state.events[end - 1].event_id.clone())
         };
         Ok(PageWindow { start, end, next })
+    }
+
+    /// The newest `limit` events at or before `before` (or the snapshot head
+    /// when `before` is absent). `older` names the first returned event when
+    /// still-earlier events exist, so the next call can page backward.
+    pub(crate) fn window_before(
+        &self,
+        branch: &BranchId,
+        snapshot_head: &HeadStamp,
+        before: Option<&SessionEventId>,
+        limit: u16,
+    ) -> Result<HistoryWindow, SessionError> {
+        if limit == 0 {
+            return Err(SessionError::Limit);
+        }
+        let branch_state = self.branches.get(branch).ok_or(SessionError::NotFound)?;
+        let boundary = match snapshot_head {
+            HeadStamp::Empty if branch_state.events.is_empty() => 0,
+            HeadStamp::Empty => return Err(SessionError::InvalidArgument),
+            HeadStamp::Event(event) => {
+                Self::index_of(branch_state, event).ok_or(SessionError::InvalidArgument)? + 1
+            }
+        };
+        let end = match before {
+            None => boundary,
+            Some(event) => {
+                let index = Self::index_of(branch_state, event).ok_or(SessionError::NotFound)?;
+                if index >= boundary {
+                    return Err(SessionError::InvalidArgument);
+                }
+                index
+            }
+        };
+        let start = end.saturating_sub(usize::from(limit));
+        let older = if start > 0 {
+            Some(branch_state.events[start].event_id.clone())
+        } else {
+            None
+        };
+        Ok(HistoryWindow { start, end, older })
     }
 
     fn index_of(branch: &BranchLedger, event: &SessionEventId) -> Option<usize> {

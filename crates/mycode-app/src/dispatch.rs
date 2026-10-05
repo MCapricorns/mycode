@@ -6,8 +6,8 @@ use std::sync::Arc;
 use mycode_config::{HomeLayout, read_ui_state, replace_ui_state};
 
 use crate::ledger::{
-    delete_session, forget_session_bindings, inspect_summaries, open_conversation, recall_message,
-    render_error, send_message,
+    delete_session, forget_session_bindings, inspect_summaries, load_older, open_conversation,
+    recall_message, render_error, send_message,
 };
 use crate::mcp_tools::mcp_list_tools;
 use crate::oauth::oauth_sign_in;
@@ -195,6 +195,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::ListSessions => BridgeReply::Sessions(Err(message)),
         BridgeCommand::CreateSession => BridgeReply::Created(Err(message)),
         BridgeCommand::OpenSession(_) => BridgeReply::Conversation(Err(message)),
+        BridgeCommand::LoadOlder { .. } => BridgeReply::Older(Err(message)),
         BridgeCommand::SendMessage { .. } => BridgeReply::Sent(Err(message)),
         BridgeCommand::LoadSettings => BridgeReply::Settings(Err(message)),
         BridgeCommand::SaveSettings { .. } => BridgeReply::SettingsSaved(Err(message)),
@@ -284,6 +285,14 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                 .await
                 .map_err(render_error),
         ),
+        BridgeCommand::LoadOlder {
+            session,
+            branch,
+            expected_head,
+            before,
+        } => BridgeReply::Older(
+            load_older(&state.service, session, branch, expected_head, before).await,
+        ),
         BridgeCommand::SendMessage {
             session,
             branch,
@@ -369,12 +378,10 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::DeleteSession { session_id } => {
             // Stop the session's live work first, then evict the actor's
-            // cached ledger: a turn that survives the directory delete would
-            // recreate `pending/` on its next reservation and then fail
-            // fatally on the missing branch log, taking the whole session
-            // service down with it. The eviction is best-effort — a dead
-            // actor cannot resurrect anything either — so the durable
-            // delete always runs.
+            // cached ledger: a turn that survives the delete would append
+            // into a session the index no longer names. The eviction is
+            // best-effort — a dead actor cannot resurrect anything either —
+            // so the durable delete always runs.
             cancel_session_work(state, session_id);
             if let Some(id) = mycode_agent::session::SessionId::parse(session_id) {
                 let _ = state.service.forget(&id).await;

@@ -1,13 +1,12 @@
 //! First-party built-in Session service.
 //!
-//! Event-sourced branch/resume/rewind over a durable per-session ledger:
-//! strict manifests are published through the hardened owned-file
-//! transaction, branch logs are append-only framed records with payload
-//! digests, and staged payloads make reservations single-use under
-//! expected-head compare-and-swap. The service runs on one session actor
-//! inside a generation fence; recovery is chunked per pull and reports
-//! `recovering` / `replaying` before the requested action runs.
-//! The typed surface is documented in `docs/agent.md`.
+//! Event-sourced branch/resume/rewind over one durable store: a SQLite
+//! index (`sessions.db`) holds titles, branch heads, and JSONL byte
+//! offsets, and `<home>/sessions/<id>/<branch>.jsonl` holds the events.
+//! Reservations are single-use under expected-head compare-and-swap. The
+//! service runs on one session actor inside a generation fence. Opening a
+//! session loads offset rows only. The typed surface is documented in
+//! `docs/agent.md`.
 mod actor;
 mod digest;
 mod dto;
@@ -29,7 +28,7 @@ pub use ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, Sess
 #[doc(inline)]
 pub use service::SessionService;
 #[doc(inline)]
-pub use store::{MAX_MANIFEST_BYTES, MAX_SESSION_TOTAL_BYTES};
+pub use store::MAX_SESSION_TOTAL_BYTES;
 
 /// Read-only branch snapshot for session listing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +46,10 @@ pub struct BranchSnapshot {
 pub struct SessionSnapshot {
     /// Session identity.
     pub session_id: SessionId,
+    /// Sidebar title stored in the index. Empty until the first user message.
+    pub title: String,
+    /// Sum of committed events across branches.
+    pub event_count: u64,
     /// Every branch, ordered by branch-ID bytes.
     pub branches: Vec<BranchSnapshot>,
 }
@@ -56,97 +59,109 @@ pub struct SessionSnapshot {
 pub struct SessionsListing {
     /// Every strictly valid session snapshot, ordered by session ID.
     pub sessions: Vec<SessionSnapshot>,
-    /// Sessions whose directory exists but whose manifest could not be read
-    /// or validated (a torn create, or an interrupted delete). Entries are
-    /// raw directory names: a torn directory may not even spell a valid
-    /// session id. They stay visible so a frontend can offer deletion
-    /// instead of losing the whole listing to one stray directory.
+    /// Index rows marked corrupt, or rows whose identities failed validation.
+    /// They stay visible so a frontend can offer deletion instead of losing
+    /// the whole listing to one bad row.
     pub corrupt: Vec<String>,
 }
 
-/// Lists every stored session by strictly decoding each manifest.
+/// Lists sessions from the SQLite index only.
 ///
-/// The listing performs no recovery and mutates nothing; manifests are the
-/// authority and atomically replaced, so a snapshot is always consistent.
-/// A session directory that is unreadable or fails strict validation is
-/// reported through [`SessionsListing::corrupt`] instead of failing the
-/// listing; only an unreadable sessions directory itself, or an owned-path
-/// violation, fails the call.
+/// A missing database is an empty list. Session directories that are not
+/// indexed are ignored. The list is newest-first. A corrupt row is reported
+/// through [`SessionsListing::corrupt`] instead of failing the listing.
 ///
 /// # Errors
 ///
-/// Returns [`SessionError::Corrupt`] for an unreadable sessions directory
-/// and [`SessionError::Unavailable`] for owned-path violations.
+/// Returns [`SessionError::Unavailable`] when the index cannot be read.
 pub fn inspect_sessions(home: &mycode_config::HomeLayout) -> Result<SessionsListing, SessionError> {
-    let sessions_root = home
-        .owned_join(store::SESSIONS_RELATIVE_DIR)
-        .map_err(|_| SessionError::Unavailable)?;
-    let entries = match std::fs::read_dir(&sessions_root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(SessionsListing::default());
-        }
-        Err(_) => return Err(SessionError::Corrupt),
-    };
+    let listed = store::list_sessions(home).map_err(store_error)?;
     let mut listing = SessionsListing::default();
-    for entry in entries {
-        let entry = entry.map_err(|_| SessionError::Corrupt)?;
-        if !entry
-            .file_type()
-            .map_err(|_| SessionError::Corrupt)?
-            .is_dir()
-        {
+    for row in listed {
+        if row.corrupt {
+            listing.corrupt.push(row.id);
             continue;
         }
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        let Some(session_id) = SessionId::parse(name) else {
-            listing.corrupt.push(name.to_owned());
-            continue;
-        };
-        let snapshot = session_snapshot(home, &session_id);
-        match snapshot {
+        match snapshot_from_row(row) {
             Ok(snapshot) => listing.sessions.push(snapshot),
-            Err(SessionError::Corrupt) | Err(SessionError::Unavailable) => {
-                listing.corrupt.push(name.to_owned());
-            }
-            Err(_) => unreachable!("session_snapshot fails closed on Corrupt or Unavailable"),
+            Err(id) => listing.corrupt.push(id),
         }
     }
-    listing
-        .sessions
-        .sort_by(|a, b| a.session_id.cmp(&b.session_id));
     listing.corrupt.sort();
     Ok(listing)
 }
 
-/// Decodes one session's manifest into a snapshot; fails closed with
-/// `Corrupt` (bad data) or `Unavailable` (substrate) so the caller can
-/// classify the directory.
-fn session_snapshot(
+/// Deletes one session's index rows. A missing database is success.
+///
+/// # Errors
+///
+/// Returns [`SessionError::Unavailable`] when the index cannot be updated.
+pub fn delete_session_index(
     home: &mycode_config::HomeLayout,
-    session_id: &SessionId,
-) -> Result<SessionSnapshot, SessionError> {
-    let paths = store::SessionPaths::new(home, session_id);
-    let manifest_bytes =
-        mycode_config::read_owned_file(home, paths.manifest(), store::MAX_MANIFEST_BYTES)
-            .map_err(|_| SessionError::Unavailable)?
-            .ok_or(SessionError::Corrupt)?
-            .to_vec();
-    let manifest = store::decode_manifest(&manifest_bytes).map_err(|_| SessionError::Corrupt)?;
-    let mut branches = Vec::with_capacity(manifest.branches.len());
-    for row in &manifest.branches {
+    session_id: &str,
+) -> Result<(), SessionError> {
+    store::delete_indexed_session(home, session_id).map_err(store_error)
+}
+
+/// Indexes JSONL logs placed by an import when that session is not already
+/// indexed.
+///
+/// Returns whether a new index row was inserted. Invalid session ids and
+/// sessions already present are left untouched.
+///
+/// # Errors
+///
+/// Returns [`SessionError::Corrupt`] when a log cannot be decoded, and
+/// [`SessionError::Unavailable`] when the index cannot be written.
+pub fn index_imported_session(
+    home: &mycode_config::HomeLayout,
+    session_id: &str,
+) -> Result<bool, SessionError> {
+    store::index_jsonl_session(home, session_id).map_err(store_error)
+}
+
+fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, String> {
+    let id = row.id.clone();
+    let Some(session_id) = SessionId::parse(&row.id) else {
+        return Err(id);
+    };
+    if row.branches.is_empty() {
+        return Err(id);
+    }
+    let mut branches = Vec::with_capacity(row.branches.len());
+    for branch in row.branches {
+        let Some(branch_id) = BranchId::parse(&branch.branch_id) else {
+            return Err(id);
+        };
+        let Some(head) = decode_listed_head(&branch.head) else {
+            return Err(id);
+        };
         branches.push(BranchSnapshot {
-            branch_id: BranchId::parse(&row.branch_id).ok_or(SessionError::Corrupt)?,
-            head: store::decode_head(&row.head).ok_or(SessionError::Corrupt)?,
-            event_count: row.event_count,
+            branch_id,
+            head,
+            event_count: branch.event_count,
         });
     }
-    branches.sort_by(|a, b| a.branch_id.cmp(&b.branch_id));
     Ok(SessionSnapshot {
-        session_id: session_id.clone(),
+        session_id,
+        title: row.title,
+        event_count: row.event_count,
         branches,
     })
+}
+
+fn decode_listed_head(value: &str) -> Option<HeadStamp> {
+    if value == "empty" {
+        return Some(HeadStamp::Empty);
+    }
+    SessionEventId::parse(value).map(HeadStamp::Event)
+}
+
+fn store_error(error: store::StoreError) -> SessionError {
+    match error {
+        store::StoreError::NotFound => SessionError::NotFound,
+        store::StoreError::Corrupt | store::StoreError::Conflict(_) => SessionError::Corrupt,
+        store::StoreError::Limit => SessionError::Limit,
+        store::StoreError::Storage | store::StoreError::Unavailable => SessionError::Unavailable,
+    }
 }

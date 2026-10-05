@@ -13,8 +13,8 @@ mod usage;
 use mycode_app::CHAT_CANCELLED;
 
 use super::{
-    ActiveConversation, DesktopAction, MentionKind, SettingsState, TRANSCRIPT_PAGE, TurnStats,
-    UpdateState, UsageTotal, WorkspaceState,
+    ActiveConversation, DesktopAction, MentionKind, SettingsState, TurnStats, UpdateState,
+    UsageTotal, WorkspaceState,
 };
 
 pub(crate) use self::models::{
@@ -32,7 +32,7 @@ use self::projects::{
     workspace_renamed, workspace_root_added, workspace_root_removed, workspace_switched,
 };
 use self::streaming::{append_streaming, set_streaming_status};
-use self::usage::rebuild_session_usage;
+use self::usage::{include_usage_entries, rebuild_session_usage};
 
 /// Applies one action to the state.
 pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
@@ -64,12 +64,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 branch_id: summary.root_branch_id,
                 head: "empty".to_owned(),
                 entries: Vec::new(),
+                older_before: None,
                 streaming: None,
             });
             state.live_jobs.clear();
             state.subagent_window = None;
             state.changes_panel_open = false;
-            state.transcript_extra = 0;
+            state.history_loading = false;
         }
         DesktopAction::SessionDeleted => {
             state.active = None;
@@ -80,7 +81,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.changes_panel_open = false;
             state.pending_ask = None;
             state.error = None;
-            state.transcript_extra = 0;
+            state.history_loading = false;
         }
         DesktopAction::ConversationParked => {
             state.active = None;
@@ -93,7 +94,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.subagent_window = None;
             state.changes_panel_open = false;
             state.pending_ask = None;
-            state.transcript_extra = 0;
+            state.history_loading = false;
             state.composer_draft.clear();
             state.mention = None;
             state.resources.clear();
@@ -117,7 +118,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.changes_panel_open = false;
                 state.pending_ask = None;
                 state.sending = false;
-                state.transcript_extra = 0;
+                state.history_loading = false;
             }
             let session_id = conversation.session_id.clone();
             state.active = Some(conversation);
@@ -304,8 +305,28 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.pending_ask = None;
             state.ask_answers.clear();
         }
-        DesktopAction::TranscriptRevealMore => {
-            state.transcript_extra = state.transcript_extra.saturating_add(TRANSCRIPT_PAGE);
+        DesktopAction::SessionFilterChanged(query) => state.session_filter = query,
+        DesktopAction::HistoryLoadStarted => state.history_loading = true,
+        DesktopAction::HistoryLoadFinished => state.history_loading = false,
+        DesktopAction::OlderLoaded {
+            session_id,
+            entries,
+            older_before,
+            requested_before,
+        } => {
+            state.history_loading = false;
+            let applicable = state.active.as_ref().is_some_and(|active| {
+                active.session_id == session_id
+                    && active.older_before.as_deref() == Some(requested_before.as_str())
+            });
+            if applicable {
+                include_usage_entries(state, &entries);
+                let active = state.active.as_mut().expect("applicable conversation");
+                let mut older = entries;
+                older.append(&mut active.entries);
+                active.entries = older;
+                active.older_before = older_before;
+            }
         }
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);
@@ -867,4 +888,81 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.language_menu_open = false;
     state.mention = None;
     was_open
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reduce;
+    use crate::view_model::{
+        ActiveConversation, ConversationEntry, DesktopAction, EntryKind, WorkspaceState,
+    };
+
+    fn user(id: &str, text: &str) -> ConversationEntry {
+        ConversationEntry {
+            event_id: id.to_owned(),
+            kind: EntryKind::UserMessage,
+            text: text.into(),
+            call_id: None,
+            thinking: String::new(),
+        }
+    }
+
+    fn open(entries: Vec<ConversationEntry>, older: Option<&str>) -> WorkspaceState {
+        WorkspaceState {
+            history_loading: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt-head".to_owned(),
+                entries,
+                older_before: older.map(str::to_owned),
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        }
+    }
+
+    #[test]
+    fn older_page_prepends_when_the_cursor_still_matches() {
+        let mut state = open(vec![user("e5", "new")], Some("e5"));
+        reduce(
+            &mut state,
+            DesktopAction::OlderLoaded {
+                session_id: "ses".to_owned(),
+                entries: vec![user("e0", "old")],
+                older_before: None,
+                requested_before: "e5".to_owned(),
+            },
+        );
+        let active = state.active.expect("open");
+        assert_eq!(
+            active
+                .entries
+                .iter()
+                .map(|entry| entry.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["e0", "e5"]
+        );
+        assert!(active.older_before.is_none());
+        assert!(!state.history_loading);
+    }
+
+    #[test]
+    fn stale_older_page_is_dropped() {
+        let mut state = open(vec![user("e5", "new")], Some("e5"));
+        reduce(
+            &mut state,
+            DesktopAction::OlderLoaded {
+                session_id: "ses".to_owned(),
+                entries: vec![user("e0", "old")],
+                older_before: None,
+                requested_before: "e9".to_owned(),
+            },
+        );
+        let active = state.active.expect("open");
+        assert_eq!(active.entries.len(), 1);
+        assert_eq!(active.entries[0].event_id, "e5");
+        assert_eq!(active.older_before.as_deref(), Some("e5"));
+        assert!(!state.history_loading);
+    }
 }

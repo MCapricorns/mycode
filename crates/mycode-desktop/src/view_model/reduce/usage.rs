@@ -5,6 +5,43 @@ use std::collections::HashMap;
 
 use crate::view_model::{EntryKind, TurnStats, UsageTotal, WorkspaceState, parse_usage_text};
 
+/// Folds usage rows from a newly loaded page into the running totals.
+///
+/// Does not reset [`WorkspaceState::last_turn`]: paging backward must not
+/// wipe the timing of the turn the user just watched.
+pub(super) fn include_usage_entries(
+    state: &mut WorkspaceState,
+    entries: &[crate::view_model::ConversationEntry],
+) {
+    for entry in entries {
+        if entry.kind != EntryKind::Usage {
+            continue;
+        }
+        let Some((key, input, output, cache)) = parse_usage_text(&entry.text) else {
+            continue;
+        };
+        let cache_value = cache.unwrap_or_default();
+        let row = match state
+            .usage_totals
+            .iter_mut()
+            .find(|row| row.key == key || crate::view_model::usage_key_matches(&row.key, &key))
+        {
+            Some(row) => row,
+            None => {
+                state.usage_totals.push(UsageTotal {
+                    key: key.clone(),
+                    ..UsageTotal::default()
+                });
+                state.usage_totals.last_mut().expect("just pushed")
+            }
+        };
+        row.input = row.input.saturating_add(input);
+        row.output = row.output.saturating_add(output);
+        row.cache = row.cache.saturating_add(cache_value);
+        row.requests = row.requests.saturating_add(1);
+    }
+}
+
 pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
     let Some(entries) = state
         .active

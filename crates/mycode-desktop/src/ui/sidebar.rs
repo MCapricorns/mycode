@@ -55,6 +55,20 @@ pub(super) fn render_sidebar(
         .cloned()
         .collect();
     let session_count = workspace_sessions.len();
+    let filter = workspace.vm().session_filter.clone();
+    let visible_sessions: Vec<SessionSummary> = workspace_sessions
+        .iter()
+        .filter(|summary| {
+            let project = bindings
+                .iter()
+                .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
+            let title = displayed_session_title(summary, project);
+            crate::view_model::session_title_matches(&title, &filter)
+        })
+        .cloned()
+        .collect();
+    let filter_miss = !filter.trim().is_empty() && visible_sessions.is_empty() && session_count > 0;
+    let filter_input = workspace.session_filter_input();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
 
@@ -82,12 +96,23 @@ pub(super) fn render_sidebar(
                     })),
             ),
         )
+        .when_some(filter_input, |this, input| {
+            this.child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .h(px(30.))
+                    .text_sm()
+                    .child(Input::new(&input)),
+            )
+        })
         .child(workspace_roots(
             cx,
             &roots,
-            &workspace_sessions,
+            &visible_sessions,
             &bindings,
             cwd.as_deref(),
+            filter_miss,
         ))
         .child(render_sidebar_footer(workspace, view, cx))
 }
@@ -154,6 +179,7 @@ fn workspace_roots(
     sessions: &[SessionSummary],
     bindings: &[(String, String)],
     cwd: Option<&str>,
+    filter_miss: bool,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
     div()
@@ -185,6 +211,16 @@ fn workspace_roots(
                 .enumerate()
                 .map(|(index, root)| root_row(index, root, cwd, cx)),
         )
+        .when(filter_miss, |this| {
+            this.child(
+                div()
+                    .px_2()
+                    .pt_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t("No matching sessions", "没有匹配的会话")),
+            )
+        })
         .when(!sessions.is_empty(), |this| {
             this.child(
                 div()
@@ -311,6 +347,18 @@ fn root_row(
         )
 }
 
+fn displayed_session_title(summary: &SessionSummary, project: Option<&str>) -> String {
+    if summary.corrupt {
+        t("Unreadable session", "无法读取的会话").to_owned()
+    } else if !summary.title.is_empty() {
+        summary.title.clone()
+    } else if let Some(project) = project {
+        project_label(project)
+    } else {
+        t("New session", "新建会话").to_owned()
+    }
+}
+
 fn session_row(
     summary: &SessionSummary,
     project: Option<&str>,
@@ -320,15 +368,7 @@ fn session_row(
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let is_open = summary.active;
-    let title: SharedString = if summary.corrupt {
-        t("Unreadable session", "无法读取的会话").into()
-    } else if !summary.title.is_empty() {
-        summary.title.clone().into()
-    } else if let Some(project) = project {
-        project_label(project).into()
-    } else {
-        t("New session", "新建会话").into()
-    };
+    let title: SharedString = displayed_session_title(summary, project).into();
     let elsewhere = !summary.corrupt
         && project.is_some_and(|path| {
             cwd.is_none_or(|current| !crate::view_model::same_project_path(current, path))

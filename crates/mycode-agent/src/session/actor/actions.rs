@@ -1,11 +1,9 @@
 //! Terminal actions: the durable effects behind every session operation.
 //!
 //! Each `action_*` method runs after admission and (for unloaded sessions)
-//! recovery, mutates the owned-file store inside the generation fence, and
-//! applies the matching in-memory ledger transition only after the durable
-//! effect succeeded.
-
-use mycode_config::{ConfigError, ensure_owned_directory, locked_update_owned_file};
+//! an index load. It mutates the SQLite index and JSONL log inside the
+//! generation fence, then applies the matching in-memory ledger transition
+//! only after that durable effect succeeded.
 
 use super::super::digest::{
     BranchMutationDigestInput, branch_mutation_digest, format_digest, payload_digest,
@@ -13,18 +11,35 @@ use super::super::digest::{
 use super::super::dto::{
     AppendedResult, BranchMutationKind, BranchReservationView, BranchedResult, ConflictResult,
     CreatedResult, EventKind, EventReservationView, HeadStamp, LoadedEvent, MAX_BRANCHES,
-    OpenedResult, PayloadPage, SessionError, SessionPull, SessionResult,
+    OpenedResult, PayloadPage, PayloadWindow, SessionError, SessionPull, SessionResult,
 };
-use super::super::fs;
-use super::super::ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
-use super::super::ledger::{
-    BranchLedger, BranchReservationRow, EventMeta, EventReservationRow, SessionLedger,
-};
+use super::super::ids::{BranchId, SessionCallId, SessionEventId, SessionId};
+use super::super::ledger::{BranchLedger, EventMeta, SessionLedger};
 use super::super::store::{
-    self, MANIFEST_FORMAT_VERSION, MANIFEST_KIND, MAX_MANIFEST_BYTES, MAX_SESSION_TOTAL_BYTES,
-    ManifestBranchFile, ManifestFile, ParentageFile, SessionPaths,
+    self, AppendRequest, BranchCommitRequest, MAX_SESSION_TOTAL_BYTES, StoredEvent,
 };
 use super::{OpFail, SessionCore};
+
+/// Owned fields of one event append, after the reservation is consumed.
+struct PreparedEvent {
+    event_id: SessionEventId,
+    kind: EventKind,
+    call_id: Option<SessionCallId>,
+    payload: Vec<u8>,
+    digest: String,
+    expected_count: u64,
+    expected_committed: u64,
+}
+
+/// Owned fields of one fork or rewind, after the reservation is consumed.
+struct PreparedBranch {
+    new_branch: BranchId,
+    position: u64,
+    prefix_end: u64,
+    source_count: u64,
+    source_committed: u64,
+    events: Vec<EventMeta>,
+}
 
 impl SessionCore {
     pub(super) fn action_create(
@@ -32,52 +47,15 @@ impl SessionCore {
         session: &SessionId,
         branch: &BranchId,
     ) -> Result<SessionPull, OpFail> {
-        let unavailable = || OpFail::Domain(SessionError::Unavailable);
         let Some(activity) = self.fence.enter() else {
             return Err(OpFail::Domain(SessionError::Unavailable));
         };
-        let paths = SessionPaths::new(&self.home, session);
-        let manifest = ManifestFile {
-            format_version: MANIFEST_FORMAT_VERSION,
-            kind: MANIFEST_KIND.to_owned(),
-            session_id: session.as_str().to_owned(),
-            branches: vec![ManifestBranchFile {
-                branch_id: branch.as_str().to_owned(),
-                parentage: ParentageFile {
-                    kind: "root".to_owned(),
-                    source_branch_id: None,
-                    at_event_id: None,
-                    to_event_id: None,
-                },
-                head: store::encode_head(&HeadStamp::Empty),
-                event_count: 0,
-                committed_bytes: 0,
-            }],
-        };
-        let bytes = store::encode_manifest(&manifest).map_err(|_| unavailable())?;
-        let mut collision = false;
-        let commit = activity.begin_commit().map_err(|_| unavailable())?;
-        let update = locked_update_owned_file(
-            &self.home,
-            paths.manifest(),
-            MAX_MANIFEST_BYTES,
-            |current| match current {
-                None => Ok(bytes),
-                Some(_) => {
-                    collision = true;
-                    Err(ConfigError::authority_rejection())
-                }
-            },
-        );
+        let commit = activity
+            .begin_commit()
+            .map_err(|_| OpFail::Domain(SessionError::Unavailable))?;
+        let created = self.store_mut()?.create_session(session, branch);
         drop(commit);
-        match update {
-            Ok(()) => {}
-            Err(_) if collision => return Err(unavailable()),
-            Err(_) => return Err(OpFail::Storage),
-        }
-        for directory in [paths.branches_dir(), paths.pending_dir()] {
-            ensure_owned_directory(&self.home, directory).map_err(|_| OpFail::Storage)?;
-        }
+        created.map_err(map_store)?;
         let mut ledger = SessionLedger::empty();
         ledger.branches.insert(branch.clone(), BranchLedger::root());
         self.sessions.insert(session.clone(), ledger);
@@ -98,9 +76,9 @@ impl SessionCore {
         })))
     }
 
-    /// Forgets one session's in-memory ledger. Disk is untouched: the host
-    /// owns the deletion this covers. Reservations die with the ledger, so a
-    /// later append can at worst fail `NotFound`, never resurrect the files.
+    /// Forgets one session's in-memory ledger. Disk and the index are
+    /// untouched: the host owns the deletion this covers. Reservations die
+    /// with the ledger, so a later append can at worst fail `NotFound`.
     pub(super) fn action_evict(&mut self, session: &SessionId) -> Result<SessionPull, OpFail> {
         self.sessions.remove(session);
         Ok(SessionPull::Complete(SessionResult::Evicted))
@@ -117,7 +95,6 @@ impl SessionCore {
         let Some(_activity) = self.fence.enter() else {
             return Err(OpFail::Domain(SessionError::Unavailable));
         };
-        let paths = SessionPaths::new(&self.home, session);
         let ledger = self
             .sessions
             .get_mut(session)
@@ -140,11 +117,6 @@ impl SessionCore {
         let event_id =
             SessionEventId::generate().ok_or(OpFail::Domain(SessionError::Unavailable))?;
         let digest_raw = payload_digest(payload);
-        ensure_owned_directory(&self.home, paths.pending_dir()).map_err(|_| OpFail::Storage)?;
-        let pending = paths
-            .absolute(&paths.pending_payload(&event_id))
-            .map_err(|_| OpFail::Storage)?;
-        fs::create_exclusive(&pending, payload).map_err(|_| OpFail::Storage)?;
         let view = EventReservationView {
             payload_digest: format_digest(&digest_raw),
             expected_head: branch_state.head.clone(),
@@ -152,17 +124,17 @@ impl SessionCore {
             event_id: event_id.clone(),
         };
         ledger.event_reservations.insert(
-            event_id.clone(),
-            EventReservationRow {
+            event_id,
+            super::super::ledger::EventReservationRow {
                 view: view.clone(),
                 kind,
                 call_id,
+                payload: payload.to_vec(),
             },
         );
         Ok(SessionPull::Complete(SessionResult::ReservedEvent(view)))
     }
 
-    #[allow(clippy::too_many_lines)]
     pub(super) fn action_append(
         &mut self,
         session: &SessionId,
@@ -173,157 +145,29 @@ impl SessionCore {
         let Some(activity) = self.fence.enter() else {
             return Err(OpFail::Domain(SessionError::Unavailable));
         };
-        let paths = SessionPaths::new(&self.home, session);
-        let ledger = self
-            .sessions
-            .get_mut(session)
-            .ok_or(OpFail::Domain(SessionError::NotFound))?;
-        // Consume the single-use reservation regardless of the commit result.
-        let Some(row) = ledger.event_reservations.remove(&reservation.event_id) else {
-            return Err(OpFail::Domain(SessionError::NotFound));
+        let prepared = self.take_event_reservation(session, branch, expected_head, reservation)?;
+        let request = AppendRequest {
+            session,
+            branch,
+            expected_head,
+            expected_count: prepared.expected_count,
+            expected_committed: prepared.expected_committed,
+            event_id: &prepared.event_id,
+            kind: prepared.kind,
+            call_id: prepared.call_id.as_ref(),
+            payload: &prepared.payload,
+            digest: &prepared.digest,
         };
-        if row.view != *reservation {
-            return Err(OpFail::Domain(SessionError::InvalidArgument));
-        }
-        if &row.view.branch_id != branch {
-            return Err(OpFail::Domain(SessionError::InvalidArgument));
-        }
-        let branch_state = ledger
-            .branches
-            .get_mut(branch)
-            .ok_or(OpFail::Domain(SessionError::NotFound))?;
-        if branch_state.head != *expected_head || row.view.expected_head != *expected_head {
-            return Err(OpFail::Domain(SessionError::Conflict(ConflictResult {
-                actual: branch_state.head.clone(),
-            })));
-        }
-        // The staged payload was created by this actor's exclusive create;
-        // read it back with the same bounded plain-FS primitive.
-        let pending_path = paths
-            .absolute(&paths.pending_payload(&reservation.event_id))
-            .map_err(|_| OpFail::Storage)?;
-        let payload = match fs::file_len(&pending_path) {
-            Ok(length) if length > 0 && length <= row.kind.payload_bound() as u64 => {
-                fs::read_range(&pending_path, 0, length).map_err(|_| OpFail::Storage)?
-            }
-            Ok(_) => return Err(OpFail::Domain(SessionError::Corrupt)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(OpFail::Domain(SessionError::Corrupt));
-            }
-            Err(_) => return Err(OpFail::Storage),
-        };
-        if format_digest(&payload_digest(&payload)) != reservation.payload_digest {
-            return Err(OpFail::Domain(SessionError::Corrupt));
-        }
-        let record = store::encode_record(
-            &reservation.event_id,
-            row.kind,
-            row.call_id.as_ref(),
-            &payload,
-        );
-        let total = ledger
-            .total_bytes
-            .checked_add(record.len() as u64)
-            .ok_or(OpFail::Domain(SessionError::Limit))?;
-        if total > MAX_SESSION_TOTAL_BYTES {
-            return Err(OpFail::Domain(SessionError::Limit));
-        }
-        let log_path = paths
-            .absolute(&paths.branch_events(branch))
-            .map_err(|_| OpFail::Storage)?;
-        // Any bytes beyond the committed prefix are earlier uncommitted
-        // attempts; drop them so this record lands contiguously.
-        match fs::file_len(&log_path) {
-            Ok(length) if length > branch_state.committed_bytes => {
-                fs::truncate(&log_path, branch_state.committed_bytes)
-                    .map_err(|_| OpFail::Storage)?;
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(OpFail::Storage),
-        }
-        fs::append(&log_path, &record).map_err(|_| OpFail::Storage)?;
-
         let commit = activity
             .begin_commit()
             .map_err(|_| OpFail::Domain(SessionError::Unavailable))?;
-        let expected_count = branch_state.events.len() as u64;
-        let expected_committed = branch_state.committed_bytes;
-        let expected_head_encoded = store::encode_head(expected_head);
-        let event_id = reservation.event_id.clone();
-        let mut conflict: Option<HeadStamp> = None;
-        let update = locked_update_owned_file(
-            &self.home,
-            paths.manifest(),
-            MAX_MANIFEST_BYTES,
-            |current| {
-                let mut manifest: ManifestFile =
-                    serde_json::from_slice(current.ok_or_else(ConfigError::authority_rejection)?)
-                        .map_err(|_| ConfigError::authority_rejection())?;
-                let target = manifest
-                    .branches
-                    .iter_mut()
-                    .find(|row| row.branch_id == branch.as_str())
-                    .ok_or_else(ConfigError::authority_rejection)?;
-                if target.head != expected_head_encoded
-                    || target.event_count != expected_count
-                    || target.committed_bytes != expected_committed
-                {
-                    conflict = store::decode_head(&target.head);
-                    return Err(ConfigError::authority_rejection());
-                }
-                target.head = event_id.as_str().to_owned();
-                target.event_count = expected_count + 1;
-                target.committed_bytes = expected_committed + record.len() as u64;
-                store::encode_manifest(&manifest).map_err(|_| ConfigError::authority_rejection())
-            },
-        );
+        let appended = self.store_mut()?.append_event(&request);
         drop(commit);
-        match update {
-            Ok(()) => {}
-            Err(_) => {
-                if let Some(actual) = conflict.take() {
-                    return Err(OpFail::Domain(SessionError::Conflict(ConflictResult {
-                        actual,
-                    })));
-                }
-                return Err(OpFail::Domain(SessionError::Corrupt));
-            }
-        }
-
-        let offset = branch_state.committed_bytes;
-        branch_state.committed_bytes += record.len() as u64;
-        match row.kind {
-            EventKind::ToolCall => {
-                branch_state
-                    .open_calls
-                    .insert(row.call_id.clone().expect("tool call carries an id"));
-            }
-            EventKind::ToolResult => {
-                branch_state
-                    .open_calls
-                    .remove(&row.call_id.clone().expect("tool result carries an id"));
-            }
-            EventKind::Message | EventKind::Usage | EventKind::Task => {}
-        }
-        branch_state.head = HeadStamp::Event(reservation.event_id.clone());
-        branch_state.events.push(EventMeta {
-            digest: reservation.payload_digest.clone(),
-            bytes: payload.len() as u64,
-            event_id: reservation.event_id.clone(),
-            kind: row.kind,
-            call_id: row.call_id.clone(),
-            offset,
-            record_len: record.len() as u64,
-        });
-        ledger.total_bytes = total;
-        if let Ok(pending) = paths.absolute(&paths.pending_payload(&reservation.event_id)) {
-            // Orphan-tolerant: recovery removes anything left behind.
-            fs::remove(&pending);
-        }
+        let location = appended.map_err(map_store)?;
+        self.record_append(session, branch, &prepared, location);
         Ok(SessionPull::Complete(SessionResult::Appended(
             AppendedResult {
-                head: HeadStamp::Event(reservation.event_id.clone()),
+                head: HeadStamp::Event(prepared.event_id),
             },
         )))
     }
@@ -374,8 +218,8 @@ impl SessionCore {
             return Err(OpFail::Domain(SessionError::Limit));
         }
         let new_branch = BranchId::generate().ok_or(OpFail::Domain(SessionError::Unavailable))?;
-        let reservation_id =
-            BranchReservationId::generate().ok_or(OpFail::Domain(SessionError::Unavailable))?;
+        let reservation_id = super::super::ids::BranchReservationId::generate()
+            .ok_or(OpFail::Domain(SessionError::Unavailable))?;
         let digest = branch_mutation_digest(&BranchMutationDigestInput {
             session_id: session.as_str(),
             reservation_id: reservation_id.as_str(),
@@ -395,9 +239,10 @@ impl SessionCore {
             new_branch_id: new_branch,
             mutation_digest: format_digest(&digest),
         };
-        ledger
-            .branch_reservations
-            .insert(reservation_id, BranchReservationRow { view: view.clone() });
+        ledger.branch_reservations.insert(
+            reservation_id,
+            super::super::ledger::BranchReservationRow { view: view.clone() },
+        );
         Ok(SessionPull::Complete(SessionResult::ReservedBranch(view)))
     }
 
@@ -412,12 +257,230 @@ impl SessionCore {
         let Some(activity) = self.fence.enter() else {
             return Err(OpFail::Domain(SessionError::Unavailable));
         };
-        let paths = SessionPaths::new(&self.home, session);
+        let prepared =
+            self.take_branch_reservation(session, kind, source_branch, target_event, reservation)?;
+        let request = BranchCommitRequest {
+            session,
+            source: source_branch,
+            new_branch: &prepared.new_branch,
+            kind,
+            expected_head: &reservation.source_head,
+            expected_count: prepared.source_count,
+            expected_committed: prepared.source_committed,
+            target_event,
+            position: prepared.position,
+            prefix_end: prepared.prefix_end,
+        };
+        let commit = activity
+            .begin_commit()
+            .map_err(|_| OpFail::Domain(SessionError::Unavailable))?;
+        let committed = self.store_mut()?.commit_branch(&request);
+        drop(commit);
+        let charge = committed.map_err(map_store)?;
+        let new_branch = prepared.new_branch.clone();
+        self.record_branch(session, &prepared, charge);
+        Ok(SessionPull::Complete(SessionResult::Branched(
+            BranchedResult {
+                branch_id: new_branch,
+                head: HeadStamp::Event(target_event.clone()),
+            },
+        )))
+    }
+
+    pub(super) fn action_load_event(
+        &mut self,
+        session: &SessionId,
+        branch: &BranchId,
+        event: &SessionEventId,
+    ) -> Result<SessionPull, OpFail> {
+        let meta = {
+            let ledger = self
+                .sessions
+                .get(session)
+                .ok_or(OpFail::Domain(SessionError::NotFound))?;
+            let branch_state = ledger
+                .branches
+                .get(branch)
+                .ok_or(OpFail::Domain(SessionError::NotFound))?;
+            branch_state
+                .events
+                .iter()
+                .find(|row| &row.event_id == event)
+                .cloned()
+                .ok_or(OpFail::Domain(SessionError::NotFound))?
+        };
+        let payload = self.verified_payload(session, branch, &meta)?;
+        Ok(SessionPull::Complete(SessionResult::Loaded(LoadedEvent {
+            event: meta.to_session_event(),
+            payload,
+        })))
+    }
+
+    pub(super) fn action_read_payloads(
+        &mut self,
+        session: &SessionId,
+        branch: &BranchId,
+        snapshot_head: &HeadStamp,
+        after: Option<&SessionEventId>,
+        limit: u16,
+    ) -> Result<SessionPull, OpFail> {
+        let (metas, next) = {
+            let ledger = self
+                .sessions
+                .get(session)
+                .ok_or(OpFail::Domain(SessionError::NotFound))?;
+            let window = ledger
+                .page_window(branch, snapshot_head, after, limit)
+                .map_err(OpFail::Domain)?;
+            let branch_state = ledger
+                .branches
+                .get(branch)
+                .ok_or(OpFail::Domain(SessionError::NotFound))?;
+            let metas = branch_state.events[window.start..window.end].to_vec();
+            (metas, window.next)
+        };
+        let items = self.load_range(session, branch, &metas)?;
+        Ok(SessionPull::Complete(SessionResult::Payloads(
+            PayloadPage { items, next },
+        )))
+    }
+
+    pub(super) fn action_read_window(
+        &mut self,
+        session: &SessionId,
+        branch: &BranchId,
+        snapshot_head: &HeadStamp,
+        before: Option<&SessionEventId>,
+        limit: u16,
+    ) -> Result<SessionPull, OpFail> {
+        let (metas, older) = {
+            let ledger = self
+                .sessions
+                .get(session)
+                .ok_or(OpFail::Domain(SessionError::NotFound))?;
+            let window = ledger
+                .window_before(branch, snapshot_head, before, limit)
+                .map_err(OpFail::Domain)?;
+            let branch_state = ledger
+                .branches
+                .get(branch)
+                .ok_or(OpFail::Domain(SessionError::NotFound))?;
+            let metas = branch_state.events[window.start..window.end].to_vec();
+            (metas, window.older)
+        };
+        let items = self.load_range(session, branch, &metas)?;
+        Ok(SessionPull::Complete(SessionResult::PayloadWindow(
+            PayloadWindow { items, older },
+        )))
+    }
+
+    /// Consumes one event reservation and checks the in-memory head.
+    ///
+    /// The reservation is single-use even when the later compare-and-swap
+    /// loses.
+    fn take_event_reservation(
+        &mut self,
+        session: &SessionId,
+        branch: &BranchId,
+        expected_head: &HeadStamp,
+        reservation: &EventReservationView,
+    ) -> Result<PreparedEvent, OpFail> {
         let ledger = self
             .sessions
             .get_mut(session)
             .ok_or(OpFail::Domain(SessionError::NotFound))?;
-        // Consume the single-use reservation regardless of the result.
+        let Some(row) = ledger.event_reservations.remove(&reservation.event_id) else {
+            return Err(OpFail::Domain(SessionError::NotFound));
+        };
+        if row.view != *reservation || &row.view.branch_id != branch {
+            return Err(OpFail::Domain(SessionError::InvalidArgument));
+        }
+        let branch_state = ledger
+            .branches
+            .get(branch)
+            .ok_or(OpFail::Domain(SessionError::NotFound))?;
+        if branch_state.head != *expected_head || row.view.expected_head != *expected_head {
+            return Err(OpFail::Domain(SessionError::Conflict(ConflictResult {
+                actual: branch_state.head.clone(),
+            })));
+        }
+        if format_digest(&payload_digest(&row.payload)) != reservation.payload_digest {
+            return Err(OpFail::Domain(SessionError::Corrupt));
+        }
+        let upper = store::encoded_record_len(row.call_id.is_some(), row.payload.len())
+            .ok_or(OpFail::Domain(SessionError::Limit))?;
+        let total = ledger
+            .total_bytes
+            .checked_add(upper)
+            .ok_or(OpFail::Domain(SessionError::Limit))?;
+        if total > MAX_SESSION_TOTAL_BYTES {
+            return Err(OpFail::Domain(SessionError::Limit));
+        }
+        Ok(PreparedEvent {
+            expected_count: u64::try_from(branch_state.events.len())
+                .map_err(|_| OpFail::Domain(SessionError::Limit))?,
+            expected_committed: branch_state.committed_bytes,
+            event_id: reservation.event_id.clone(),
+            kind: row.kind,
+            call_id: row.call_id,
+            payload: row.payload,
+            digest: reservation.payload_digest.clone(),
+        })
+    }
+
+    fn record_append(
+        &mut self,
+        session: &SessionId,
+        branch: &BranchId,
+        prepared: &PreparedEvent,
+        location: store::AppendedLocation,
+    ) {
+        let Some(ledger) = self.sessions.get_mut(session) else {
+            return;
+        };
+        let Some(branch_state) = ledger.branches.get_mut(branch) else {
+            return;
+        };
+        match prepared.kind {
+            EventKind::ToolCall => {
+                branch_state
+                    .open_calls
+                    .insert(prepared.call_id.clone().expect("tool call carries an id"));
+            }
+            EventKind::ToolResult => {
+                branch_state
+                    .open_calls
+                    .remove(&prepared.call_id.clone().expect("tool result carries an id"));
+            }
+            EventKind::Message | EventKind::Usage | EventKind::Task => {}
+        }
+        branch_state.head = HeadStamp::Event(prepared.event_id.clone());
+        branch_state.committed_bytes = location.offset.saturating_add(location.record_len);
+        branch_state.events.push(EventMeta {
+            digest: prepared.digest.clone(),
+            bytes: prepared.payload.len() as u64,
+            event_id: prepared.event_id.clone(),
+            kind: prepared.kind,
+            call_id: prepared.call_id.clone(),
+            offset: location.offset,
+            record_len: location.record_len,
+            external: location.external,
+        });
+        ledger.total_bytes = ledger.total_bytes.saturating_add(location.charge);
+    }
+
+    fn take_branch_reservation(
+        &mut self,
+        session: &SessionId,
+        kind: BranchMutationKind,
+        source_branch: &BranchId,
+        target_event: &SessionEventId,
+        reservation: &BranchReservationView,
+    ) -> Result<PreparedBranch, OpFail> {
+        let ledger = self
+            .sessions
+            .get_mut(session)
+            .ok_or(OpFail::Domain(SessionError::NotFound))?;
         let Some(row) = ledger
             .branch_reservations
             .remove(&reservation.reservation_id)
@@ -466,104 +529,42 @@ impl SessionCore {
             .position(|row| &row.event_id == target_event)
             .ok_or(OpFail::Domain(SessionError::NotFound))?;
         let boundary = &branch_state.events[position];
-        let prefix_end = boundary.offset + boundary.record_len;
+        let prefix_end = boundary
+            .offset
+            .checked_add(boundary.record_len)
+            .ok_or(OpFail::Domain(SessionError::Limit))?;
+        let mut charge = 0_u64;
+        for event in &branch_state.events[..=position] {
+            let part = store::charge(event.record_len, event.external, event.bytes)
+                .ok_or(OpFail::Domain(SessionError::Limit))?;
+            charge = charge
+                .checked_add(part)
+                .ok_or(OpFail::Domain(SessionError::Limit))?;
+        }
         let total = ledger
             .total_bytes
-            .checked_add(prefix_end)
+            .checked_add(charge)
             .ok_or(OpFail::Domain(SessionError::Limit))?;
         if total > MAX_SESSION_TOTAL_BYTES {
             return Err(OpFail::Domain(SessionError::Limit));
         }
-        let source_log = paths
-            .absolute(&paths.branch_events(source_branch))
-            .map_err(|_| OpFail::Storage)?;
-        let new_log = paths
-            .absolute(&paths.branch_events(&new_branch))
-            .map_err(|_| OpFail::Storage)?;
-        ensure_owned_directory(&self.home, paths.branches_dir()).map_err(|_| OpFail::Storage)?;
-        fs::copy_prefix(&source_log, &new_log, prefix_end).map_err(|_| OpFail::Storage)?;
+        Ok(PreparedBranch {
+            new_branch,
+            position: u64::try_from(position).map_err(|_| OpFail::Domain(SessionError::Limit))?,
+            prefix_end,
+            source_count: u64::try_from(branch_state.events.len())
+                .map_err(|_| OpFail::Domain(SessionError::Limit))?,
+            source_committed: branch_state.committed_bytes,
+            events: branch_state.events[..=position].to_vec(),
+        })
+    }
 
-        let commit = activity
-            .begin_commit()
-            .map_err(|_| OpFail::Domain(SessionError::Unavailable))?;
-        let expected_head = store::encode_head(&row.view.source_head);
-        let expected_count = branch_state.events.len() as u64;
-        let expected_committed = branch_state.committed_bytes;
-        let mut conflict = false;
-        let parentage = match kind {
-            BranchMutationKind::Fork => ParentageFile {
-                kind: "fork".to_owned(),
-                source_branch_id: Some(source_branch.as_str().to_owned()),
-                at_event_id: Some(target_event.as_str().to_owned()),
-                to_event_id: None,
-            },
-            BranchMutationKind::Rewind => ParentageFile {
-                kind: "rewind".to_owned(),
-                source_branch_id: Some(source_branch.as_str().to_owned()),
-                at_event_id: None,
-                to_event_id: Some(target_event.as_str().to_owned()),
-            },
+    fn record_branch(&mut self, session: &SessionId, prepared: &PreparedBranch, charge: u64) {
+        let Some(ledger) = self.sessions.get_mut(session) else {
+            return;
         };
-        let new_row = ManifestBranchFile {
-            branch_id: new_branch.as_str().to_owned(),
-            parentage,
-            head: target_event.as_str().to_owned(),
-            event_count: (position + 1) as u64,
-            committed_bytes: prefix_end,
-        };
-        let update = locked_update_owned_file(
-            &self.home,
-            paths.manifest(),
-            MAX_MANIFEST_BYTES,
-            |current| {
-                let mut manifest: ManifestFile =
-                    serde_json::from_slice(current.ok_or_else(ConfigError::authority_rejection)?)
-                        .map_err(|_| ConfigError::authority_rejection())?;
-                let source = manifest
-                    .branches
-                    .iter_mut()
-                    .find(|row| row.branch_id == source_branch.as_str())
-                    .ok_or_else(ConfigError::authority_rejection)?;
-                if source.head != expected_head
-                    || source.event_count != expected_count
-                    || source.committed_bytes != expected_committed
-                {
-                    conflict = true;
-                    return Err(ConfigError::authority_rejection());
-                }
-                if manifest
-                    .branches
-                    .iter()
-                    .any(|row| row.branch_id == new_row.branch_id)
-                {
-                    return Err(ConfigError::authority_rejection());
-                }
-                manifest.branches.push(new_row.clone());
-                store::encode_manifest(&manifest).map_err(|_| ConfigError::authority_rejection())
-            },
-        );
-        drop(commit);
-        match update {
-            Ok(()) => {}
-            Err(_) if conflict => {
-                // The copied file is an uncommitted attempt; remove it.
-                fs::remove(&new_log);
-                return Err(OpFail::Domain(SessionError::Conflict(ConflictResult {
-                    actual: ledger
-                        .branches
-                        .get(source_branch)
-                        .map_or(HeadStamp::Empty, |branch| branch.head.clone()),
-                })));
-            }
-            Err(_) => {
-                fs::remove(&new_log);
-                return Err(OpFail::Domain(SessionError::Corrupt));
-            }
-        }
-
-        let cloned = branch_state.events[..=position].to_vec();
         let mut open_calls = std::collections::HashSet::new();
-        for row in &cloned {
+        for row in &prepared.events {
             match row.kind {
                 EventKind::ToolCall => {
                     open_calls.insert(row.call_id.clone().expect("tool call carries an id"));
@@ -574,106 +575,71 @@ impl SessionCore {
                 EventKind::Message | EventKind::Usage | EventKind::Task => {}
             }
         }
-        let new_state = BranchLedger {
-            head: HeadStamp::Event(target_event.clone()),
-            committed_bytes: prefix_end,
-            open_calls,
-            events: cloned,
-        };
-        ledger.branches.insert(new_branch.clone(), new_state);
-        ledger.total_bytes = total;
-        Ok(SessionPull::Complete(SessionResult::Branched(
-            BranchedResult {
-                branch_id: new_branch,
-                head: HeadStamp::Event(target_event.clone()),
-            },
-        )))
-    }
-
-    pub(super) fn action_load_event(
-        &mut self,
-        session: &SessionId,
-        branch: &BranchId,
-        event: &SessionEventId,
-    ) -> Result<SessionPull, OpFail> {
-        let Some(ledger) = self.sessions.get(session) else {
-            return Err(OpFail::Domain(SessionError::NotFound));
-        };
-        let branch_state = ledger
-            .branches
-            .get(branch)
-            .ok_or(OpFail::Domain(SessionError::NotFound))?;
-        let meta = branch_state
+        let head = prepared
             .events
-            .iter()
-            .find(|row| &row.event_id == event)
-            .ok_or(OpFail::Domain(SessionError::NotFound))?;
-        let paths = SessionPaths::new(&self.home, session);
-        let absolute = paths
-            .absolute(&paths.branch_events(branch))
-            .map_err(|_| OpFail::Storage)?;
-        let payload = read_verified_payload(&absolute, meta, event.as_str())?;
-        Ok(SessionPull::Complete(SessionResult::Loaded(LoadedEvent {
-            event: meta.to_session_event(),
-            payload,
-        })))
+            .last()
+            .map(|event| HeadStamp::Event(event.event_id.clone()))
+            .unwrap_or(HeadStamp::Empty);
+        ledger.branches.insert(
+            prepared.new_branch.clone(),
+            BranchLedger {
+                head,
+                committed_bytes: prepared.prefix_end,
+                open_calls,
+                events: prepared.events.clone(),
+            },
+        );
+        ledger.total_bytes = ledger.total_bytes.saturating_add(charge);
     }
 
-    pub(super) fn action_read_payloads(
-        &mut self,
+    fn verified_payload(
+        &self,
         session: &SessionId,
         branch: &BranchId,
-        snapshot_head: &HeadStamp,
-        after: Option<&SessionEventId>,
-        limit: u16,
-    ) -> Result<SessionPull, OpFail> {
-        let Some(ledger) = self.sessions.get(session) else {
-            return Err(OpFail::Domain(SessionError::NotFound));
+        meta: &EventMeta,
+    ) -> Result<Vec<u8>, OpFail> {
+        let stored = StoredEvent {
+            event_id: meta.event_id.clone(),
+            digest: meta.digest.clone(),
+            bytes: meta.bytes,
+            kind: meta.kind,
+            call_id: meta.call_id.clone(),
+            offset: meta.offset,
+            record_len: meta.record_len,
+            external: meta.external,
         };
-        let window = ledger
-            .page_window(branch, snapshot_head, after, limit)
-            .map_err(OpFail::Domain)?;
-        let branch_state = ledger
-            .branches
-            .get(branch)
-            .ok_or(OpFail::Domain(SessionError::NotFound))?;
-        let paths = SessionPaths::new(&self.home, session);
-        let absolute = paths
-            .absolute(&paths.branch_events(branch))
-            .map_err(|_| OpFail::Storage)?;
-        let mut items = Vec::with_capacity(window.end - window.start);
-        for meta in &branch_state.events[window.start..window.end] {
-            let payload = read_verified_payload(&absolute, meta, meta.event_id.as_str())?;
+        self.store_ref()?
+            .read_payload(session, branch, &stored)
+            .map_err(map_store)
+    }
+
+    fn load_range(
+        &self,
+        session: &SessionId,
+        branch: &BranchId,
+        metas: &[EventMeta],
+    ) -> Result<Vec<LoadedEvent>, OpFail> {
+        let mut items = Vec::with_capacity(metas.len());
+        for meta in metas {
+            let payload = self.verified_payload(session, branch, meta)?;
             items.push(LoadedEvent {
                 event: meta.to_session_event(),
                 payload,
             });
         }
-        Ok(SessionPull::Complete(SessionResult::Payloads(
-            PayloadPage {
-                items,
-                next: window.next,
-            },
-        )))
+        Ok(items)
     }
 }
 
-fn read_verified_payload(
-    absolute: &std::path::Path,
-    meta: &EventMeta,
-    event_id: &str,
-) -> Result<Vec<u8>, OpFail> {
-    let bytes =
-        fs::read_range(absolute, meta.offset, meta.record_len).map_err(|_| OpFail::Storage)?;
-    let decoded =
-        store::decode_record(&bytes).map_err(|_| OpFail::Domain(SessionError::Corrupt))?;
-    if decoded.event_id != event_id || decoded.record_len != meta.record_len {
-        return Err(OpFail::Domain(SessionError::Corrupt));
+fn map_store(error: store::StoreError) -> OpFail {
+    match error {
+        store::StoreError::Storage => OpFail::Storage,
+        store::StoreError::Corrupt => OpFail::Domain(SessionError::Corrupt),
+        store::StoreError::NotFound => OpFail::Domain(SessionError::NotFound),
+        store::StoreError::Limit => OpFail::Domain(SessionError::Limit),
+        store::StoreError::Unavailable => OpFail::Domain(SessionError::Unavailable),
+        store::StoreError::Conflict(actual) => {
+            OpFail::Domain(SessionError::Conflict(ConflictResult { actual }))
+        }
     }
-    let start = decoded.payload_offset;
-    let end = start + decoded.payload_len as usize;
-    bytes
-        .get(start..end)
-        .ok_or(OpFail::Domain(SessionError::Corrupt))
-        .map(<[u8]>::to_vec)
 }

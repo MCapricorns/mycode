@@ -9,11 +9,6 @@ use std::fmt::{self, Display, Formatter};
 const RANDOM_BYTES: usize = 16;
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
-/// Spelled byte length of one event identifier.
-pub const EVENT_ID_LEN: usize = "evt1-".len() + RANDOM_BYTES * 2;
-/// Spelled byte length of one call identifier.
-pub const CALL_ID_LEN: usize = "call1-".len() + RANDOM_BYTES * 2;
-
 macro_rules! session_id_type {
     ($name:ident, $prefix:literal, $doc:literal) => {
         #[doc = $doc]

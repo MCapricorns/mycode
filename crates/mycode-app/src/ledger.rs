@@ -13,7 +13,14 @@ use mycode_core::Message;
 use mycode_core::{AssistantMessage, ToolResultMessage, UserMessage};
 
 use crate::projection::project_replayed_entry;
-use crate::protocol::{ActiveConversation, ConversationEntry, EntryKind, SessionSummary};
+use crate::protocol::{
+    ActiveConversation, ConversationEntry, EntryKind, OlderTranscript, SessionSummary,
+};
+
+/// Events loaded for the first paint and for each older page. The model
+/// history still walks the whole branch; this bound is only the transcript
+/// window.
+const VISIBLE_EVENTS: u16 = 40;
 
 /// Rendered wording for a lost expected-head compare-and-swap.
 const HEAD_MOVED_ON: &str = "the session moved on; reopen it";
@@ -35,16 +42,13 @@ pub(crate) fn render_error(error: SessionError) -> String {
     }
 }
 
-/// Lists sessions with display titles: the first user message of each root
-/// branch, first page only. Per-session read failures degrade to an empty
-/// title; the listing itself never fails on one bad session. Directories
-/// whose manifest cannot be read at all surface as `corrupt` rows so the UI
-/// can offer deletion instead of losing the sidebar.
+/// Lists sessions from the SQLite index. Titles are the stored first user
+/// message, so the listing does not open logs or read payloads. A corrupt
+/// index row stays visible so the UI can offer deletion.
 pub(crate) async fn inspect_summaries(
-    service: &SessionService,
+    _service: &SessionService,
     home: HomeLayout,
 ) -> Result<Vec<SessionSummary>, SessionError> {
-    // Directory walk stays off the core runtime thread.
     let listing = tokio::task::spawn_blocking(move || session::inspect_sessions(&home))
         .await
         .map_err(|_| SessionError::Unavailable)??;
@@ -60,56 +64,23 @@ pub(crate) async fn inspect_summaries(
         });
     }
     for snapshot in listing.sessions {
-        let Some(root) = snapshot.branches.first() else {
+        let Some(root) = snapshot
+            .branches
+            .iter()
+            .min_by(|left, right| left.branch_id.cmp(&right.branch_id))
+        else {
             continue;
         };
-        let branch_id = root.branch_id.clone();
-        let snapshot_head = root.head.clone();
-        let title = session_title(service, &snapshot.session_id, &branch_id, &snapshot_head).await;
         summaries.push(SessionSummary {
-            root_branch_id: branch_id.as_str().to_owned(),
-            event_count: snapshot.branches.iter().map(|b| b.event_count).sum(),
+            root_branch_id: root.branch_id.as_str().to_owned(),
+            event_count: snapshot.event_count,
             session_id: snapshot.session_id.as_str().to_owned(),
-            title,
+            title: snapshot.title,
             active: false,
             corrupt: false,
         });
     }
     Ok(summaries)
-}
-
-/// Reads the first user message of a session's root branch for the sidebar
-/// title; empty when the session has no messages yet. Assistant payloads
-/// (typed JSON, discriminated exactly like the replay projections) are
-/// skipped so a title never comes from assistant text. A stale manifest head
-/// (an active turn appended events) degrades to an empty title.
-async fn session_title(
-    service: &SessionService,
-    session: &SessionId,
-    branch: &BranchId,
-    head: &HeadStamp,
-) -> String {
-    let Ok(page) = service.read_payloads(session, branch, head, None, 8).await else {
-        return String::new();
-    };
-    for loaded in &page.items {
-        if loaded.event.kind != EventKind::Message {
-            continue;
-        }
-        // A parse miss means the payload is the user's plain-text
-        // message; assistant messages decode as typed JSON.
-        if serde_json::from_slice::<AssistantMessage>(&loaded.payload).is_ok() {
-            continue;
-        }
-        return title_from_text(&decode_text(&loaded.payload));
-    }
-    String::new()
-}
-
-/// Collapses one message into a one-line sidebar title.
-fn title_from_text(text: &str) -> String {
-    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.chars().take(60).collect()
 }
 
 pub(crate) async fn open_conversation(
@@ -125,28 +96,78 @@ pub(crate) async fn open_conversation(
     read_branch(service, session, &root.branch_id, &root.head).await
 }
 
-/// Reads one branch's committed events into display entries.
+/// Reads the tail of one branch into display entries.
+///
+/// The payload read is the newest [`VISIBLE_EVENTS`] at `snapshot_head`,
+/// sought by the index offsets. Earlier events stay on disk.
 pub(crate) async fn read_branch(
     service: &SessionService,
     session: &SessionId,
     branch: &BranchId,
     snapshot_head: &HeadStamp,
 ) -> Result<ActiveConversation, SessionError> {
-    let mut entries = Vec::new();
-    for_each_event(service, session, branch, snapshot_head, |event, payload| {
-        if let Some(entry) = project_replayed_entry(event, payload) {
-            entries.push(entry);
-        }
-        Ok(())
-    })
-    .await?;
+    let (entries, older_before) =
+        project_window(service, session, branch, snapshot_head, None).await?;
     Ok(ActiveConversation {
         session_id: session.as_str().to_owned(),
         branch_id: branch.as_str().to_owned(),
         head: head_spelling(snapshot_head),
         entries,
+        older_before,
         streaming: None,
     })
+}
+
+/// Loads the page of events strictly before `before`, after checking the
+/// branch head the UI still sees.
+pub(crate) async fn load_older(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    expected_head: &HeadStamp,
+    before: &str,
+) -> Result<OlderTranscript, String> {
+    let opened = service.open(session).await.map_err(render_error)?;
+    let current = opened
+        .heads
+        .iter()
+        .find(|head| &head.branch_id == branch)
+        .ok_or_else(|| render_error(SessionError::NotFound))?;
+    if &current.head != expected_head {
+        return Err(HEAD_MOVED_ON.to_owned());
+    }
+    let cursor = SessionEventId::parse(before)
+        .ok_or_else(|| "the history cursor is not a valid event id".to_owned())?;
+    let (entries, older) = project_window(service, session, branch, expected_head, Some(&cursor))
+        .await
+        .map_err(render_error)?;
+    Ok(OlderTranscript {
+        session_id: session.as_str().to_owned(),
+        branch_id: branch.as_str().to_owned(),
+        entries,
+        older,
+        requested_before: before.to_owned(),
+    })
+}
+
+/// Projects one backward window. `before` absent selects the tail.
+async fn project_window(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    snapshot_head: &HeadStamp,
+    before: Option<&SessionEventId>,
+) -> Result<(Vec<ConversationEntry>, Option<String>), SessionError> {
+    let window = service
+        .read_payload_window(session, branch, snapshot_head, before, VISIBLE_EVENTS)
+        .await?;
+    let mut entries = Vec::with_capacity(window.items.len());
+    for loaded in &window.items {
+        if let Some(entry) = project_replayed_entry(&loaded.event, &loaded.payload) {
+            entries.push(entry);
+        }
+    }
+    Ok((entries, window.older.map(|event| event.as_str().to_owned())))
 }
 
 /// Walks every committed event of one branch snapshot in ledger order,
@@ -327,12 +348,12 @@ pub(crate) async fn send_message(
     ))
 }
 
-/// Deletes one session's durable footprint: the ledger directory and, when
-/// present, the leftover file-snapshot directory from older versions. The
-/// ids are plain names by construction.
+/// Deletes one session's durable footprint: the index row, the session
+/// directory, and, when present, the leftover file-snapshot directory from
+/// older versions. The ids are plain names by construction.
 ///
-/// Only the ledger directory is created for new sessions. An absent snapshot
-/// directory is a successful delete rather than an error.
+/// The index row goes first. An absent snapshot directory is a successful
+/// delete rather than an error.
 pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), String> {
     if session_id.is_empty()
         || session_id.contains(['/', '\\', ':', '\0'])
@@ -341,6 +362,8 @@ pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), 
     {
         return Err("invalid session id".to_owned());
     }
+    session::delete_session_index(home, session_id)
+        .map_err(|_| "session index unavailable".to_owned())?;
     let roots = [
         home.root()
             .join(mycode_config::SESSIONS_DIR)
@@ -506,5 +529,90 @@ impl HeadWriter {
         };
         *head = HeadStamp::Event(event_id.clone());
         Ok(event_id.as_str().to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{VISIBLE_EVENTS, load_older, open_conversation};
+    use mycode_agent::session::{EventKind, HeadStamp, SessionService};
+    use mycode_config::HomeLayout;
+
+    fn scratch() -> (std::path::PathBuf, HomeLayout) {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-ledger-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).expect("scratch");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let home = HomeLayout::from_root(&root).expect("home");
+        (root, home)
+    }
+
+    #[test]
+    fn open_reads_the_tail_and_pages_backward() {
+        let (root, home) = scratch();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let service = SessionService::new(&home);
+            let created = service.create().await.expect("create");
+            let mut head = HeadStamp::Empty;
+            let total = usize::from(VISIBLE_EVENTS) + 5;
+            for index in 0..total {
+                let text = format!("m{index}");
+                let reservation = service
+                    .reserve_event(
+                        &created.session_id,
+                        &created.branch_id,
+                        EventKind::Message,
+                        None,
+                        text.as_bytes(),
+                    )
+                    .await
+                    .expect("reserve");
+                head = service
+                    .append(&created.session_id, &created.branch_id, &head, &reservation)
+                    .await
+                    .expect("append")
+                    .head;
+            }
+            let opened = open_conversation(&service, &created.session_id)
+                .await
+                .expect("open");
+            assert_eq!(opened.entries.len(), usize::from(VISIBLE_EVENTS));
+            assert_eq!(opened.entries.first().expect("tail").text.as_ref(), "m5");
+            assert_eq!(
+                opened.entries.last().expect("tail").text.as_ref(),
+                format!("m{}", total - 1)
+            );
+            let cursor = opened.older_before.clone().expect("older cursor");
+            let page = load_older(
+                &service,
+                &created.session_id,
+                &created.branch_id,
+                &head,
+                &cursor,
+            )
+            .await
+            .expect("older");
+            assert_eq!(page.entries.len(), 5);
+            assert_eq!(page.entries.first().expect("page").text.as_ref(), "m0");
+            assert_eq!(page.entries.last().expect("page").text.as_ref(), "m4");
+            assert!(page.older.is_none());
+            assert_eq!(page.requested_before, cursor);
+            service.shutdown().await;
+        });
+        let _ = std::fs::remove_dir_all(root);
     }
 }

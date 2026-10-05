@@ -262,6 +262,32 @@ impl Workspace {
                 self.dispatch(BridgeCommand::ListResources { session_id }, cx);
                 self.refresh_skills(cx);
             }
+            BridgeReply::Older(Ok(page)) => {
+                let applicable = self.vm.active.as_ref().is_some_and(|active| {
+                    active.session_id == page.session_id
+                        && active.older_before.as_deref() == Some(page.requested_before.as_str())
+                });
+                let pinned = applicable && self.conversation_pinned();
+                if applicable && !pinned {
+                    self.capture_scroll_hold();
+                }
+                self.apply_action(
+                    DesktopAction::OlderLoaded {
+                        session_id: page.session_id,
+                        entries: page.entries,
+                        older_before: page.older,
+                        requested_before: page.requested_before,
+                    },
+                    cx,
+                );
+                if pinned {
+                    self.conversation_scroll.scroll_to_bottom();
+                }
+            }
+            BridgeReply::Older(Err(message)) => {
+                self.apply_action(DesktopAction::HistoryLoadFinished, cx);
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
             BridgeReply::Resources(Ok(files)) => {
                 self.apply_action(DesktopAction::ResourcesLoaded(files), cx);
             }

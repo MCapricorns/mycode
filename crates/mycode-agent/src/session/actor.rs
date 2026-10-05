@@ -2,14 +2,14 @@
 //!
 //! [`SessionActor`] implements [`PackTaskActor`]: every request is admitted
 //! through the Host admission ledger, and durable effects run inside the
-//! generation fence with manifest commits taken under the fence's exclusive
-//! commit window. Recovery runs chunked per pull and reports the frozen
-//! `recovering`/`replaying` progress phases before the bound action runs.
+//! generation fence. The actor owns the only SQLite writer. Opening a
+//! session loads offset rows from the index; JSONL payloads are read by
+//! offset when a caller asks for them.
 //!
 //! The implementation is split by responsibility: this module owns the
 //! actor state machine (admission, staging, pull loop, action dispatch),
-//! [`recovery`] owns log replay verification, and [`actions`] owns the
-//! durable effects of every terminal action.
+//! [`recovery`] loads the offset index, and [`actions`] owns the durable
+//! effects of every terminal action.
 mod actions;
 mod recovery;
 
@@ -25,13 +25,11 @@ use crate::session::runtime::{AdmissionError, PackTaskActor, TaskOperationAdmiss
 use super::digest::is_canonical_digest;
 use super::dto::{
     BranchMutationKind, EventKind, EventReservationView, HeadStamp, MAX_READ_LIMIT, SessionError,
-    SessionProgress, SessionPull, SessionRequest,
+    SessionPull, SessionRequest,
 };
 use super::ids::{BranchId, SessionCallId, SessionEventId, SessionId};
-use super::ledger::{BranchLedger, EventMeta, SessionLedger};
-
-/// Byte budget of replay verification per pull.
-const VERIFY_BUDGET_BYTES: u64 = 1024 * 1024;
+use super::ledger::SessionLedger;
+use super::store::SessionStore;
 
 /// Infrastructure-level actor failures; domain failures travel inside
 /// [`SessionPull::Failed`].
@@ -45,10 +43,12 @@ pub(crate) enum SessionTaskError {
 
 /// Durable session state. Methods run on the blocking pool.
 pub(crate) struct SessionCore {
-    home: HomeLayout,
     fence: Arc<GenerationFence>,
     admission: AdmissionLedger,
     sessions: HashMap<SessionId, SessionLedger>,
+    /// `None` when the index could not be opened. Every durable action then
+    /// fails closed instead of writing beside a missing database.
+    store: Option<SessionStore>,
 }
 
 /// Serialized session owner. Storage work is `spawn_blocking` so the caller
@@ -91,8 +91,6 @@ enum Stage {
     Failed(SessionError),
     /// The operation completed; repeated pulls replay the terminal.
     Terminal(SessionPull),
-    /// Recovery is running before the bound action.
-    Load(LoadState),
     /// The action is ready to run.
     Run(Action),
 }
@@ -153,31 +151,20 @@ enum Action {
         after: Option<SessionEventId>,
         limit: u16,
     },
+    ReadWindow {
+        session: SessionId,
+        branch: BranchId,
+        snapshot_head: HeadStamp,
+        before: Option<SessionEventId>,
+        limit: u16,
+    },
 }
 
-struct BranchPlan {
-    branch: BranchId,
-    committed_bytes: u64,
-    event_count: u64,
-    head: HeadStamp,
-}
-
-struct LoadState {
-    session: SessionId,
-    plan: Vec<BranchPlan>,
-    index: usize,
-    offset: u64,
-    events: Vec<EventMeta>,
-    open_calls: Vec<SessionCallId>,
-    assembled: Vec<(BranchId, BranchLedger)>,
-    recovered: bool,
-    next: Box<Action>,
-}
-
-/// Why a recovery plan could not be built.
-enum PlanError {
+/// Why a session index could not be loaded.
+pub(super) enum PlanError {
     NotFound,
     Corrupt,
+    Storage,
 }
 
 /// Classifies one action-path failure.
@@ -191,10 +178,10 @@ enum OpFail {
 impl SessionCore {
     fn new(home: HomeLayout, fence: Arc<GenerationFence>) -> Self {
         Self {
-            home,
             fence,
             admission: AdmissionLedger::new(),
             sessions: HashMap::new(),
+            store: SessionStore::open(&home).ok(),
         }
     }
 
@@ -225,9 +212,9 @@ impl SessionCore {
                 Action::Heads {
                     session: session.clone(),
                 },
-            ),
-            // Eviction never recovers: a session whose manifest is gone must
-            // still be evictable, and an unknown session is already evicted.
+            )?,
+            // Eviction never loads: a missing index row must still be
+            // evictable, and an unknown session is already evicted.
             SessionRequest::Evict { session } => Stage::Run(Action::Evict {
                 session: session.clone(),
             }),
@@ -258,7 +245,7 @@ impl SessionCore {
                         call_id: call_id.clone(),
                         payload: payload.clone(),
                     },
-                )
+                )?
             }
             SessionRequest::Append {
                 session,
@@ -277,7 +264,7 @@ impl SessionCore {
                         expected_head: expected_head.clone(),
                         reservation: reservation.clone(),
                     },
-                )
+                )?
             }
             SessionRequest::Read {
                 session,
@@ -298,7 +285,7 @@ impl SessionCore {
                         after: after.clone(),
                         limit: *limit,
                     },
-                )
+                )?
             }
             SessionRequest::ReserveBranch {
                 session,
@@ -313,7 +300,7 @@ impl SessionCore {
                     source_branch: source_branch.clone(),
                     target_event: target_event.clone(),
                 },
-            ),
+            )?,
             SessionRequest::Fork {
                 session,
                 from_branch,
@@ -332,7 +319,7 @@ impl SessionCore {
                         target_event: at_event.clone(),
                         reservation: reservation.clone(),
                     },
-                )
+                )?
             }
             SessionRequest::Rewind {
                 session,
@@ -352,7 +339,7 @@ impl SessionCore {
                         target_event: to_event.clone(),
                         reservation: reservation.clone(),
                     },
-                )
+                )?
             }
             SessionRequest::LoadEvent {
                 session,
@@ -365,7 +352,7 @@ impl SessionCore {
                     branch: branch.clone(),
                     event: event.clone(),
                 },
-            ),
+            )?,
             SessionRequest::ReadPayloads {
                 session,
                 branch,
@@ -385,33 +372,44 @@ impl SessionCore {
                         after: after.clone(),
                         limit: *limit,
                     },
-                )
+                )?
+            }
+            SessionRequest::ReadPayloadWindow {
+                session,
+                branch,
+                snapshot_head,
+                before,
+                limit,
+            } => {
+                if *limit == 0 || *limit > MAX_READ_LIMIT {
+                    return failed(admission, SessionError::Limit);
+                }
+                self.stage_for(
+                    session.clone(),
+                    Action::ReadWindow {
+                        session: session.clone(),
+                        branch: branch.clone(),
+                        snapshot_head: snapshot_head.clone(),
+                        before: before.clone(),
+                        limit: *limit,
+                    },
+                )?
             }
         };
         Ok(SessionOperation::new(admission, stage))
     }
 
-    /// Routes an action for a known session: directly when its ledger is
-    /// loaded, through chunked recovery otherwise.
-    fn stage_for(&self, session: SessionId, next: Action) -> Stage {
-        if self.sessions.contains_key(&session) {
-            return Stage::Run(next);
+    /// Routes an action for a known session, loading its offset index first
+    /// when the ledger is not already resident.
+    fn stage_for(&mut self, session: SessionId, next: Action) -> Result<Stage, SessionTaskError> {
+        if let Err(error) = self.ensure_loaded(&session) {
+            return match error {
+                PlanError::NotFound => Ok(Stage::Failed(SessionError::NotFound)),
+                PlanError::Corrupt => Ok(Stage::Failed(SessionError::Corrupt)),
+                PlanError::Storage => Err(SessionTaskError::Storage),
+            };
         }
-        match self.recovery_plan(&session) {
-            Ok(plan) => Stage::Load(LoadState {
-                session,
-                plan,
-                index: 0,
-                offset: 0,
-                events: Vec::new(),
-                open_calls: Vec::new(),
-                assembled: Vec::new(),
-                recovered: false,
-                next: Box::new(next),
-            }),
-            Err(PlanError::NotFound) => Stage::Failed(SessionError::NotFound),
-            Err(PlanError::Corrupt) => Stage::Failed(SessionError::Corrupt),
-        }
+        Ok(Stage::Run(next))
     }
 
     fn pull_sync(
@@ -430,60 +428,6 @@ impl SessionCore {
                     let Stage::Run(action) = stage else {
                         unreachable!("the stage was just replaced from Run");
                     };
-                    let pull = self.execute(action)?;
-                    operation.stage = match &pull {
-                        SessionPull::Complete(_) => Stage::Terminal(pull.clone()),
-                        SessionPull::Failed(error) => Stage::Failed(error.clone()),
-                        _ => unreachable!("execute always returns a terminal"),
-                    };
-                    Ok(pull)
-                }
-                Stage::Load(load) => {
-                    if !load.recovered {
-                        match self.recover_tails(load) {
-                            Ok(()) => {}
-                            Err(OpFail::Domain(error)) => {
-                                operation.stage = Stage::Failed(error.clone());
-                                return Ok(SessionPull::Failed(error));
-                            }
-                            Err(OpFail::Storage) => return Err(SessionTaskError::Storage),
-                        }
-                        load.recovered = true;
-                        return Ok(SessionPull::Progress(SessionProgress::Recovering));
-                    }
-                    match self.verify_budget(load) {
-                        Ok(true) => {}
-                        Ok(false) => return Ok(SessionPull::Progress(SessionProgress::Replaying)),
-                        Err(OpFail::Domain(error)) => {
-                            operation.stage = Stage::Failed(error.clone());
-                            return Ok(SessionPull::Failed(error));
-                        }
-                        Err(OpFail::Storage) => return Err(SessionTaskError::Storage),
-                    }
-                    let stage = std::mem::replace(
-                        &mut operation.stage,
-                        Stage::Failed(SessionError::Unavailable),
-                    );
-                    let Stage::Load(load) = stage else {
-                        unreachable!("the stage was just replaced from Load");
-                    };
-                    let LoadState {
-                        session,
-                        assembled,
-                        next,
-                        ..
-                    } = load;
-                    let action = *next;
-                    let ledger = SessionLedger {
-                        total_bytes: assembled
-                            .iter()
-                            .map(|(_, branch)| branch.committed_bytes)
-                            .sum(),
-                        branches: assembled.into_iter().collect(),
-                        event_reservations: HashMap::new(),
-                        branch_reservations: HashMap::new(),
-                    };
-                    self.sessions.insert(session, ledger);
                     let pull = self.execute(action)?;
                     operation.stage = match &pull {
                         SessionPull::Complete(_) => Stage::Terminal(pull.clone()),
@@ -563,6 +507,13 @@ impl SessionCore {
             } => {
                 self.action_read_payloads(&session, &branch, &snapshot_head, after.as_ref(), limit)
             }
+            Action::ReadWindow {
+                session,
+                branch,
+                snapshot_head,
+                before,
+                limit,
+            } => self.action_read_window(&session, &branch, &snapshot_head, before.as_ref(), limit),
         }
     }
 }

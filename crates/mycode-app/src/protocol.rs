@@ -30,8 +30,8 @@ pub struct SessionSummary {
     /// session; a frontend that tracks open conversations recomputes the
     /// flag itself.
     pub active: bool,
-    /// The session directory exists but its ledger could not be read or
-    /// validated. Such a row cannot be opened; a frontend offers deletion.
+    /// The index row is marked corrupt or failed validation. Such a row
+    /// cannot be opened; a frontend offers deletion.
     pub corrupt: bool,
 }
 
@@ -75,10 +75,30 @@ pub struct ActiveConversation {
     pub branch_id: String,
     /// Current committed head: `empty` or an event identity.
     pub head: String,
-    /// Entries in ledger order.
+    /// Loaded entries in ledger order. This is a tail window, not the
+    /// whole branch: earlier events stay on disk until the UI pages back.
     pub entries: Vec<ConversationEntry>,
+    /// Oldest loaded event when earlier events remain. `None` once the
+    /// branch start is in `entries`.
+    pub older_before: Option<String>,
     /// Live assistant reply while a model turn streams.
     pub streaming: Option<StreamingReply>,
+}
+
+/// One page of transcript older than the cursor the UI already shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OlderTranscript {
+    /// Session identity spelling.
+    pub session_id: String,
+    /// Branch identity spelling.
+    pub branch_id: String,
+    /// Entries in ledger order, strictly before `requested_before`.
+    pub entries: Vec<ConversationEntry>,
+    /// Next backward cursor, or `None` at the start of the branch.
+    pub older: Option<String>,
+    /// Cursor this page was requested with. A reply whose cursor no longer
+    /// matches the open window is stale.
+    pub requested_before: String,
 }
 
 /// Buffered fragments of a streaming reply.

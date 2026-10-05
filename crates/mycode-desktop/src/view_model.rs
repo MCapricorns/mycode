@@ -22,7 +22,7 @@ pub(crate) use mycode_app::{
 };
 
 pub(crate) use self::chat::{
-    COMPOSER_COMMANDS, ComposerMention, LiveJob, MentionKind, TRANSCRIPT_PAGE, transcript_start,
+    COMPOSER_COMMANDS, ComposerMention, LiveJob, MentionKind, session_title_matches,
 };
 pub(crate) use self::models::{rank_model_ids, selected_reasoning_level};
 pub(crate) use self::projects::{

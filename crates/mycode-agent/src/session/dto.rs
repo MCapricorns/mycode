@@ -114,7 +114,7 @@ pub struct BranchHead {
 pub struct EventReservationView {
     /// The reserved event identity.
     pub event_id: SessionEventId,
-    /// Lowercase `sha256:` digest of the durably staged payload.
+    /// Lowercase `sha256:` digest of the reserved payload.
     pub payload_digest: String,
     /// The branch the payload was staged onto.
     pub branch_id: BranchId,
@@ -265,6 +265,22 @@ pub enum SessionRequest {
         /// Page size (`1..=256`).
         limit: u16,
     },
+    /// Reads the newest `limit` events at or before `before`.
+    ///
+    /// `before` absent means the snapshot head. `older` on the result names
+    /// the first returned event when still-earlier events exist.
+    ReadPayloadWindow {
+        /// The session to read.
+        session: SessionId,
+        /// The branch to read.
+        branch: BranchId,
+        /// The snapshot boundary head.
+        snapshot_head: HeadStamp,
+        /// Exclusive end cursor; `None` ends at the snapshot head.
+        before: Option<SessionEventId>,
+        /// Page size (`1..=256`).
+        limit: u16,
+    },
     /// Loads one committed event with its verified payload.
     LoadEvent {
         /// The session to read.
@@ -277,7 +293,11 @@ pub enum SessionRequest {
 }
 
 /// Recovery phase reported while an operation makes progress.
+///
+/// The index load finishes in one pull, so these phases are not emitted.
+/// They stay on the pull protocol for callers that already match them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum SessionProgress {
     /// Discarding torn tails and orphan staged payloads.
     Recovering,
@@ -289,6 +309,10 @@ pub enum SessionProgress {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionPull {
     /// The operation advanced through one recovery phase.
+    ///
+    /// Retained so existing pull loops keep compiling. The actor does not
+    /// emit it.
+    #[allow(dead_code)]
     Progress(SessionProgress),
     /// The operation finished successfully.
     Complete(SessionResult),
@@ -319,6 +343,17 @@ pub enum SessionResult {
     Loaded(LoadedEvent),
     /// `read-payloads` finished (first-party only).
     Payloads(PayloadPage),
+    /// `read-payload-window` finished (first-party only).
+    PayloadWindow(PayloadWindow),
+}
+
+/// One backward page of committed events with their verified payloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PayloadWindow {
+    /// Events in ledger order, newest window last.
+    pub items: Vec<LoadedEvent>,
+    /// Oldest returned event when earlier events remain; otherwise `None`.
+    pub older: Option<SessionEventId>,
 }
 
 /// One page of committed events with their verified payloads.

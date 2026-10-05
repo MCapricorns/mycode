@@ -65,6 +65,7 @@ pub fn render_root(
         cx.set_reduce_motion(prefer);
     }
     workspace.begin_splash(cx);
+    workspace.queue_scroll_hold(window, cx);
     let layout = DeskLayout::of(window);
     let theme = cx.theme().clone();
     let ui_font = theme.font_family.clone();
