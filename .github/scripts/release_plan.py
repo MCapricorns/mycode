@@ -670,7 +670,7 @@ def _expect_output_writer() -> None:
 
 
 def _yaml_job(workflow: str, name: str) -> str:
-    """Return one top-level job body from ci.yml, including its header."""
+    """Return one top-level job body, including its header."""
 
     marker = f"  {name}:\n"
     start = workflow.find(marker)
@@ -683,13 +683,53 @@ def _yaml_job(workflow: str, name: str) -> str:
     return workflow[start : start + len(marker) + nxt.start()]
 
 
-def _expect_workflow_contract() -> None:
+def _expect_pull_request_workflow() -> None:
+    """Pull request checks are only the three native release builds."""
+
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    header, sep, jobs = workflow.partition("\njobs:\n")
+    _expect(bool(sep), "ci.yml has no jobs")
+    _expect("pull_request:" in header, "ci.yml does not run on pull requests")
+    _expect("push:" not in header, "ci.yml still triggers on push")
+    _expect("if: false" not in workflow, "ci.yml uses an if: false stub")
+    names = re.findall(r"(?m)^  [a-z0-9-]+:\n", jobs)
+    _expect(
+        names == ["  pr-release-build:\n"],
+        f"pull request workflow jobs are {names}",
+    )
+    build = _yaml_job(workflow, "pr-release-build")
+    _expect("windows-11-arm" in build, "Windows ARM64 pull request runner missing")
+    for target in (
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ):
+        _expect(target in build, f"missing pull request platform {target}")
+    _expect("ubuntu-latest" not in workflow, "pull request workflow still runs on Ubuntu")
+    _expect("release_plan.py" not in workflow, "pull request workflow still plans a release")
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        if path.name == "ci.yml":
+            continue
+        other = path.read_text(encoding="utf-8").split("\njobs:\n", 1)[0]
+        _expect(
+            "pull_request" not in other,
+            f"{path.name} still triggers on pull requests",
+        )
+
+
+def _expect_workflow_contract() -> None:
+    _expect_pull_request_workflow()
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     lowered = workflow.lower()
     _expect("gh release view" not in lowered, "asset lookup still decides the plan")
     _expect("already has every" not in lowered, "skip-if-complete wording remains")
     _expect(".assets[].name" not in workflow, "asset name check remains")
-    _expect("release_plan.py" in workflow, "planner is not wired into ci.yml")
+    _expect("release_plan.py" in workflow, "planner is not wired into release.yml")
+    release_header = workflow.split("\njobs:\n", 1)[0]
+    _expect(
+        "pull_request" not in release_header,
+        "release.yml still triggers on pull requests",
+    )
     _expect(
         "github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow,
         "release is not limited to main pushes",
