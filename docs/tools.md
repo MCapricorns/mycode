@@ -46,7 +46,7 @@
 
 Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。脚本模式的 shell 侦查顺序是 PowerShell 7（`pwsh`），否则 Git bash，不用 Windows PowerShell 5.1 和 `cmd`。
 
-`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon，以及仅供本地构建的 Linux x86_64 glibc）。发布包没有 Linux。摘要复查和参数组装共用。其它 Unix 目标不支持直接启动映像。模型只看见工具名 `shell`，没有 `exec`。
+`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon、Linux x86_64 glibc）。发布包包含这四个平台。摘要复查和参数组装共用。其它 Unix 目标不支持直接启动映像。模型只看见工具名 `shell`，没有 `exec`。
 
 搜索有独立的预算：扫描字节、截止时间、错误样本条数。到顶就停并说明停因，而不是把目录树读完。
 

@@ -33,7 +33,7 @@ WORKSPACE_PACKAGES = (
 )
 # Used only when a patch bump has nowhere else to take notes from.
 # Commit history is intentionally not rendered into the release body.
-DEFAULT_NOTES = "### Changed\n\n- 三个平台构建通过的 `main` 推送自动发布。\n"
+DEFAULT_NOTES = "### Changed\n\n- 四个平台构建通过的 `main` 推送自动发布。\n"
 STABLE_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
@@ -802,35 +802,37 @@ def _expect_workflow_contract() -> None:
         "github.event_name == 'pull_request'" not in _yaml_job(workflow, "release-build"),
         "main release builds still branch on pull_request",
     )
-    # README and CHANGELOG still describe three release platforms. The docs
-    # release updates them after Linux archives exist.
+    # README and CHANGELOG describe four release platforms, including Linux x86_64.
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
-    _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
-    _expect("四个平台" not in readme, "Chinese docs still claim four release platforms")
+    _expect("四个平台" in readme, "Chinese docs dropped the four release platforms")
+    _expect("三个平台" not in readme, "Chinese docs still claim three release platforms")
     _expect("Windows ARM64" in readme, "Chinese docs dropped Windows ARM64")
     _expect("skips packaging" not in readme, "English skip rule remains")
-    _expect("three platform" in readme, "English docs dropped the three release platforms")
-    _expect("four platform" not in readme, "English docs still claim four release platforms")
+    _expect("four platform" in readme, "English docs dropped the four release platforms")
+    _expect("three platform" not in readme, "English docs still claim three release platforms")
     _expect("Windows ARM64" in readme, "English docs dropped Windows ARM64")
     _expect(
-        "x86_64-unknown-linux-gnu" not in readme,
-        "README still names a Linux release zip",
+        "x86_64-unknown-linux-gnu" in readme,
+        "README omits the Linux release zip",
     )
     _expect(
-        "Linux x86_64 和 macOS" not in readme,
-        "Chinese docs still run PR gates on Linux",
-    )
-    _expect(
-        "Linux x86_64, and macOS" not in readme,
-        "English docs still run PR gates on Linux",
+        "Linux x86_64" in readme,
+        "README omits Linux x86_64 from the release platforms",
     )
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    intro, _, _ = changelog.partition("## [Unreleased]")
     _expect("还没有带齐三个平台压缩包" not in changelog, "three-platform skip rule remains")
     _expect("还没有带齐四个平台压缩包" not in changelog, "four-platform skip rule remains")
-    _expect("三个平台的 zip" in changelog, "changelog policy is not three release platforms")
+    _expect("四个平台的 zip" in intro, "changelog policy is not four release platforms")
+    _expect("三个平台" not in intro, "changelog policy still says three platforms")
+    _expect("Linux x86_64" in intro, "changelog policy omits Linux x86_64")
+    _expect("不提供 Linux" not in intro, "changelog policy still withholds Linux")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
-    _expect("不提供 Linux" in changelog, "changelog dropped the no-Linux release note")
+    _expect(
+        "x86_64-unknown-linux-gnu" in changelog,
+        "Linux archive missing from changelog",
+    )
     _expect_split_workflows(ci, workflow)
 
 

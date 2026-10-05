@@ -1,6 +1,6 @@
 # 架构
 
-mycode 是跑在本机的桌面编码代理（Windows x64、Windows ARM64、macOS Apple Silicon）。对话、工具调用和会话都在你的机器上；模型请求发到你自己的 API。界面不读密钥、不写文件、不发网络请求。发布包只有这三个平台。
+mycode 是跑在本机的桌面编码代理（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）。对话、工具调用和会话都在你的机器上；模型请求发到你自己的 API。界面不读密钥、不写文件、不发网络请求。发布包是这四个平台。
 
 ## 七个 crate
 
@@ -85,7 +85,7 @@ mycode-app         应用核。会话、回合、工具宿主、MCP、网页、�
 
 - 工具在当前用户权限下执行，没有沙箱，也没有每次调用前的许可弹窗。校验过的调用会直接跑。
 - `shell` 会钉住要启动的程序映像并回收进程树。`script` 模式走平台 shell，`program` 模式直接启动可加载映像。环境变量过滤不是隔离。
-- 持续集成在 Windows x64、Windows ARM64 和 macOS Apple Silicon 上构建发布包。pull request 和 `main` 都跑这三个构建；只有 `main` 在构建成功后发布。除此之外没有测试套件。发布包没有 Linux。
+- 持续集成在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 上构建发布包。pull request 和 `main` 都跑这四个构建；只有 `main` 在构建成功后发布。除此之外没有测试套件。
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
 - 生产环境的回合钩子只有请求前压缩。没有工具前观察者，也不再为改文件装快照。
 - `shell` 的 `script` 模式可以改文件：POSIX shell 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`program` 模式不经过 shell。`write` 和 `edit` 仍然可用。
