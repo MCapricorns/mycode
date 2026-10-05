@@ -440,6 +440,19 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 mark_settings_dirty(settings);
             }
         }
+        DesktopAction::SettingsFontFamilySelected(font_family) => {
+            let Some(font_family) = mycode_config::canonical_font_family(&font_family) else {
+                return;
+            };
+            if let Some(settings) = state.settings.as_mut() {
+                if mycode_config::canonical_font_family(&settings.font_family) == Some(font_family)
+                {
+                    return;
+                }
+                settings.font_family = font_family.to_owned();
+                mark_settings_dirty(settings);
+            }
+        }
         DesktopAction::InspectorChanged { open, pinned } => {
             state.inspector_open = open;
             state.inspector_pinned = pinned;
@@ -835,7 +848,18 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
         DesktopAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
         DesktopAction::ShellKindMenuToggled(open) => state.shell_kind_menu_open = open,
-        DesktopAction::LanguageMenuToggled(open) => state.language_menu_open = open,
+        DesktopAction::LanguageMenuToggled(open) => {
+            state.language_menu_open = open;
+            if open {
+                state.font_family_menu_open = false;
+            }
+        }
+        DesktopAction::FontFamilyMenuToggled(open) => {
+            state.font_family_menu_open = open;
+            if open {
+                state.language_menu_open = false;
+            }
+        }
         DesktopAction::UpdateStateChanged(update) => state.update = update,
         DesktopAction::UpdateDialogToggled(open) => state.update_dialog_open = open,
         DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
@@ -885,6 +909,7 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.mcp_transport_menu_open
         || state.shell_kind_menu_open
         || state.language_menu_open
+        || state.font_family_menu_open
         || state.mention.is_some();
     state.project_menu_open = false;
     state.workspace_menu_open = false;
@@ -899,6 +924,7 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.mcp_transport_menu_open = false;
     state.shell_kind_menu_open = false;
     state.language_menu_open = false;
+    state.font_family_menu_open = false;
     state.mention = None;
     was_open
 }

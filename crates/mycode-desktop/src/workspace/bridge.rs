@@ -332,6 +332,7 @@ impl Workspace {
                     }
                     crate::ui::desk::apply_palette(Theme::global_mut(cx), &state.palette);
                     self.applied_font_size.clear();
+                    self.applied_font_family.clear();
                     Theme::sync_base(cx);
                     self.ua_sync_pending = true;
                 }

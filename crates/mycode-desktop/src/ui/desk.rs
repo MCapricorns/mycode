@@ -111,6 +111,157 @@ pub fn apply_font_size(theme: &mut Theme, id: &str) {
     theme.mono_font_size = gpui_kit::px(interface_font_px(id));
 }
 
+/// Columns in the settings palette grid. Thirteen swatches fill two rows and
+/// leave three on the last row.
+pub const PALETTE_GRID_COLUMNS: u16 = 5;
+
+/// GPUI's virtual family for the operating-system UI font.
+pub const SYSTEM_UI_FONT: &str = ".SystemUIFont";
+
+struct FontFace {
+    /// Value stored in `appearance.fontFamily`.
+    id: &'static str,
+    /// Installed family names that satisfy this choice, preferred paint first.
+    faces: &'static [&'static str],
+}
+
+/// Named faces the General page can offer. Ids match
+/// `mycode_config::VALID_FONT_FAMILIES`. A face is shown only when one of
+/// `faces` is installed, so a family this OS cannot load is skipped.
+const FONT_FACES: &[FontFace] = &[
+    FontFace {
+        id: "Inter",
+        faces: &["Inter", "Inter Variable"],
+    },
+    FontFace {
+        id: "Segoe UI",
+        faces: &["Segoe UI", "Segoe UI Variable"],
+    },
+    FontFace {
+        id: "PingFang",
+        faces: &["PingFang SC", "PingFang TC", "PingFang HK", "PingFang"],
+    },
+    FontFace {
+        id: "Noto Sans",
+        faces: &["Noto Sans"],
+    },
+];
+
+/// Canonical stored id. Empty and `"system"` are the OS UI font.
+#[must_use]
+pub fn normalize_font_family(value: &str) -> Option<&'static str> {
+    mycode_config::canonical_font_family(value)
+}
+
+/// Label for a stored font-family id. Font names stay as proper nouns.
+#[must_use]
+pub fn font_family_label(id: &str) -> &'static str {
+    match normalize_font_family(id) {
+        Some("Inter") => "Inter",
+        Some("Segoe UI") => "Segoe UI",
+        Some("PingFang") => "PingFang",
+        Some("Noto Sans") => "Noto Sans",
+        _ => crate::i18n::t("System", "系统"),
+    }
+}
+
+/// Stored ids the dropdown should list: System, then each named face this
+/// machine can resolve, in catalog order.
+#[must_use]
+pub fn available_font_family_ids(installed: &[String]) -> Vec<&'static str> {
+    let mut ids = vec![mycode_config::SYSTEM_FONT_FAMILY];
+    for face in FONT_FACES {
+        if face_installed(face, installed) {
+            ids.push(face.id);
+        }
+    }
+    ids
+}
+
+/// Family name GPUI should paint for a stored id.
+///
+/// `"system"` and an unknown or missing face stay on `.SystemUIFont` so a
+/// settings file from another computer cannot ask for a family that is not
+/// installed. The stored id is left unchanged.
+#[must_use]
+pub fn paint_font_family(stored: &str, installed: &[String]) -> &'static str {
+    let Some(id) = normalize_font_family(stored) else {
+        return SYSTEM_UI_FONT;
+    };
+    if id == mycode_config::SYSTEM_FONT_FAMILY {
+        return SYSTEM_UI_FONT;
+    }
+    FONT_FACES
+        .iter()
+        .find(|face| face.id == id)
+        .and_then(|face| {
+            face.faces
+                .iter()
+                .copied()
+                .find(|name| installed.iter().any(|have| have == name))
+        })
+        .unwrap_or(SYSTEM_UI_FONT)
+}
+
+fn face_installed(face: &FontFace, installed: &[String]) -> bool {
+    face.faces
+        .iter()
+        .any(|name| installed.iter().any(|have| have == name))
+}
+
+/// Families installed on this machine, cached after the first non-empty list.
+///
+/// Enumerating fonts is expensive, and the set does not change while the
+/// process runs. An empty first answer is not cached: the text system may
+/// not have loaded yet.
+pub fn installed_font_names(cx: &gpui_kit::App) -> &'static [String] {
+    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    if let Some(names) = NAMES.get() {
+        return names;
+    }
+    let names = cx.text_system().all_font_names();
+    if names.is_empty() {
+        return &[];
+    }
+    NAMES.get_or_init(|| names)
+}
+
+/// The family the theme should use for UI chrome.
+///
+/// System resolves through GPUI's `.SystemUIFont` and, when that lands on a
+/// concrete installed family, names that family so later text lookups hit the
+/// font cache. The settings document is not rewritten with that concrete name.
+pub fn ui_font_family(stored: &str, cx: &gpui_kit::App) -> gpui_kit::SharedString {
+    let installed = installed_font_names(cx);
+    let paint = paint_font_family(stored, installed);
+    if paint == SYSTEM_UI_FONT
+        && let Some(resolved) = resolved_system_family(cx, installed)
+    {
+        return resolved;
+    }
+    paint.into()
+}
+
+fn resolved_system_family(
+    cx: &gpui_kit::App,
+    installed: &[String],
+) -> Option<gpui_kit::SharedString> {
+    if installed.is_empty() {
+        return None;
+    }
+    let text_system = cx.text_system();
+    let resolved = text_system
+        .get_font_for_id(text_system.resolve_font(&gpui_kit::font(SYSTEM_UI_FONT)))
+        .map(|font| font.family)?;
+    if resolved.as_ref() == SYSTEM_UI_FONT {
+        return None;
+    }
+    installed
+        .iter()
+        .any(|name| name == resolved.as_ref())
+        .then_some(resolved)
+}
+
 /// A slightly deeper tint for primary hover.
 #[must_use]
 pub(crate) fn deepen(mut color: Hsla) -> Hsla {
@@ -577,6 +728,54 @@ mod tests {
         assert!((super::interface_rem_px("l") - 16.).abs() < f32::EPSILON);
         assert_eq!(super::normalize_font_size("xl"), "xl");
         assert_eq!(super::font_size_label("s"), "S");
+    }
+
+    #[test]
+    fn palette_grid_is_five_columns_with_a_short_last_row() {
+        assert_eq!(super::PALETTE_GRID_COLUMNS, 5);
+        assert_eq!(super::PALETTES.len(), 13);
+        let columns = usize::from(super::PALETTE_GRID_COLUMNS);
+        assert_eq!(super::PALETTES.len() / columns, 2);
+        assert_eq!(super::PALETTES.len() % columns, 3);
+    }
+
+    #[test]
+    fn font_family_choices_skip_faces_that_are_not_installed() {
+        let faces: Vec<&str> = super::FONT_FACES.iter().map(|face| face.id).collect();
+        assert_eq!(faces, mycode_config::VALID_FONT_FAMILIES);
+        let installed = [
+            "DejaVu Sans".to_owned(),
+            "Noto Sans".to_owned(),
+            "PingFang SC".to_owned(),
+            "Inter Variable".to_owned(),
+        ];
+        assert_eq!(
+            super::available_font_family_ids(&installed),
+            ["system", "Inter", "PingFang", "Noto Sans"]
+        );
+        assert_eq!(
+            super::paint_font_family("system", &installed),
+            ".SystemUIFont"
+        );
+        assert_eq!(super::paint_font_family("", &installed), ".SystemUIFont");
+        assert_eq!(
+            super::paint_font_family("Inter", &installed),
+            "Inter Variable"
+        );
+        assert_eq!(
+            super::paint_font_family("PingFang", &installed),
+            "PingFang SC"
+        );
+        assert_eq!(
+            super::paint_font_family("Noto Sans", &installed),
+            "Noto Sans"
+        );
+        assert_eq!(
+            super::paint_font_family("Segoe UI", &installed),
+            ".SystemUIFont"
+        );
+        let both = ["Inter".to_owned(), "Inter Variable".to_owned()];
+        assert_eq!(super::paint_font_family("Inter", &both), "Inter");
     }
 
     /// Primary controls stay a tint: readable ink, a body that lifts off the

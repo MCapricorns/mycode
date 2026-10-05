@@ -183,6 +183,8 @@ pub(crate) struct WorkspaceState {
     pub shell_kind_menu_open: bool,
     /// Whether the General page's language dropdown is open.
     pub language_menu_open: bool,
+    /// Whether the General page's font-family dropdown is open.
+    pub font_family_menu_open: bool,
     /// Filter text for the provider preset picker.
     pub preset_search: String,
     /// The catalog provider currently being added, when any.
@@ -237,6 +239,8 @@ pub enum DesktopAction {
     SettingsPaletteSelected(String),
     /// The user picked an interface font size (`s`, `m`, `l`, `xl`).
     SettingsFontSizeSelected(String),
+    /// The user picked a UI font family. Empty or `system` is the OS UI font.
+    SettingsFontFamilySelected(String),
     /// Opens, closes, or pins the right inspector. Layout only.
     InspectorChanged {
         /// Whether the inspector is visible.
@@ -278,6 +282,8 @@ pub enum DesktopAction {
     ShellKindMenuToggled(bool),
     /// The General-page language dropdown opened or closed.
     LanguageMenuToggled(bool),
+    /// The General-page font-family dropdown opened or closed.
+    FontFamilyMenuToggled(bool),
     /// Unbound sessions inherit the active project (repairs the missing bind).
     /// The settings editor toggled durable usage records.
     SettingsUsageToggled(bool),

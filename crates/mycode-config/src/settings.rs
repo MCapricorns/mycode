@@ -87,6 +87,15 @@ pub const VALID_LANGUAGES: [&str; 3] = ["auto", "en", "zh"];
 /// `s` / `m` / `l` / `xl` are about 12 / 13 / 14 / 16 px of body text.
 pub const VALID_FONT_SIZES: [&str; 4] = ["s", "m", "l", "xl"];
 
+/// Named UI font families the settings document accepts.
+///
+/// Empty and `"system"` are not in this list: both mean the operating-system
+/// UI font. A stored id is one of these names, not a free-typed family.
+pub const VALID_FONT_FAMILIES: [&str; 4] = ["Inter", "Segoe UI", "PingFang", "Noto Sans"];
+
+/// Stored id for the operating-system UI font.
+pub const SYSTEM_FONT_FAMILY: &str = "system";
+
 fn default_palette() -> String {
     "slate".to_owned()
 }
@@ -97,6 +106,23 @@ fn default_language() -> String {
 
 fn default_font_size() -> String {
     "m".to_owned()
+}
+
+fn default_font_family() -> String {
+    SYSTEM_FONT_FAMILY.to_owned()
+}
+
+/// Canonical `appearance.fontFamily` value.
+///
+/// Empty and `"system"` are the OS UI font. Named values must be one of
+/// [`VALID_FONT_FAMILIES`]. Anything else is rejected.
+#[must_use]
+pub fn canonical_font_family(value: &str) -> Option<&'static str> {
+    if value.is_empty() || value == SYSTEM_FONT_FAMILY {
+        Some(SYSTEM_FONT_FAMILY)
+    } else {
+        VALID_FONT_FAMILIES.into_iter().find(|id| *id == value)
+    }
 }
 
 /// Appearance settings.
@@ -114,6 +140,10 @@ pub struct AppearanceSettings {
     /// `s`, `m`, `l`, or `xl`. Missing values read as medium.
     #[serde(default = "default_font_size")]
     pub font_size: String,
+    /// UI font family. Missing, empty, and `"system"` are the OS UI font.
+    /// Named values are one of [`VALID_FONT_FAMILIES`].
+    #[serde(default = "default_font_family")]
+    pub font_family: String,
 }
 
 impl Default for AppearanceSettings {
@@ -123,6 +153,7 @@ impl Default for AppearanceSettings {
             palette: default_palette(),
             language: default_language(),
             font_size: default_font_size(),
+            font_family: default_font_family(),
         }
     }
 }
@@ -229,6 +260,16 @@ impl AppSettings {
             .unwrap_or("m")
     }
 
+    /// Returns the effective UI font family.
+    ///
+    /// Missing, empty, and `"system"` are [`SYSTEM_FONT_FAMILY`]. An unknown
+    /// stored value also reads as system here; [`Self::validate`] rejects it
+    /// before a document is published or returned from [`read_app_settings`].
+    #[must_use]
+    pub fn effective_font_family(&self) -> &'static str {
+        canonical_font_family(&self.appearance.font_family).unwrap_or(SYSTEM_FONT_FAMILY)
+    }
+
     /// Validates the complete document.
     ///
     /// Family-specific bounds, grammar, and cross-field rules live in the
@@ -267,6 +308,12 @@ impl AppSettings {
         }
         if !VALID_FONT_SIZES.contains(&self.appearance.font_size.as_str()) {
             return Err(invalid("appearance.fontSize: must be s, m, l, or xl"));
+        }
+        if canonical_font_family(&self.appearance.font_family).is_none() {
+            return Err(invalid(&format!(
+                "appearance.fontFamily: must be empty, system, or one of {}",
+                VALID_FONT_FAMILIES.join(", ")
+            )));
         }
         self.validate_subagent_roles()?;
         self.validate_tools_shell()?;
@@ -444,6 +491,8 @@ mod tests {
         let parsed = decode_settings(bytes).expect("legacy settings");
         assert_eq!(parsed.settings.appearance.font_size, "m");
         assert_eq!(parsed.settings.effective_font_size(), "m");
+        assert_eq!(parsed.settings.appearance.font_family, "system");
+        assert_eq!(parsed.settings.effective_font_family(), "system");
         assert_eq!(parsed.settings.appearance.palette, "ocean");
         assert_eq!(parsed.settings.appearance.language, "zh");
         assert!(!parsed.migrated);
@@ -469,5 +518,104 @@ mod tests {
         settings.appearance.font_size = "huge".to_owned();
         let error = settings.validate().expect_err("unknown size");
         assert!(error.summary().contains("fontSize"), "{}", error.summary());
+    }
+
+    #[test]
+    fn font_family_empty_or_system_means_the_os_ui_font() {
+        let mut settings = AppSettings::default();
+        assert_eq!(settings.appearance.font_family, "system");
+        assert_eq!(settings.effective_font_family(), "system");
+
+        settings.appearance.font_family.clear();
+        assert!(settings.validate().is_ok());
+        assert_eq!(settings.effective_font_family(), "system");
+
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 3,
+            "appearance": {
+                "theme": "dark",
+                "palette": "slate",
+                "language": "auto",
+                "fontSize": "m",
+                "fontFamily": ""
+            }
+        }"#;
+        let parsed = decode_settings(bytes).expect("empty family");
+        assert_eq!(parsed.settings.appearance.font_family, "");
+        assert_eq!(parsed.settings.effective_font_family(), "system");
+        assert!(!parsed.migrated);
+
+        settings.appearance.font_family = "Comic Sans".to_owned();
+        let error = settings.validate().expect_err("unknown family");
+        assert!(
+            error.summary().contains("fontFamily"),
+            "{}",
+            error.summary()
+        );
+    }
+
+    #[test]
+    fn appearance_round_trips_through_read_and_replace() {
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-appearance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&parent).expect("temp parent");
+        let guard = TempDir(parent);
+        let root = guard.0.join("home");
+        std::fs::create_dir(&root).expect("home");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                .expect("private home");
+        }
+        let home = crate::HomeLayout::from_root(&root).expect("layout");
+
+        let mut settings = AppSettings::default();
+        settings.appearance.palette = "aurora".to_owned();
+        settings.appearance.font_size = "l".to_owned();
+        settings.appearance.font_family = "Noto Sans".to_owned();
+        let revision =
+            super::replace_app_settings(&home, crate::AuthorityRevision::ABSENT, &settings)
+                .expect("publish");
+
+        let loaded = super::read_app_settings(&home).expect("read");
+        assert_eq!(loaded.appearance.palette, "aurora");
+        assert_eq!(loaded.appearance.font_size, "l");
+        assert_eq!(loaded.appearance.font_family, "Noto Sans");
+        assert_eq!(loaded.effective_font_family(), "Noto Sans");
+        assert_eq!(loaded.effective_palette(), "aurora");
+        assert_eq!(loaded.effective_font_size(), "l");
+
+        let bytes = std::fs::read(home.root().join("settings.json")).expect("settings.json");
+        let text = String::from_utf8(bytes).expect("utf-8");
+        assert!(text.contains("\"palette\": \"aurora\""), "{text}");
+        assert!(text.contains("\"fontSize\": \"l\""), "{text}");
+        assert!(text.contains("\"fontFamily\": \"Noto Sans\""), "{text}");
+
+        settings.appearance.font_family = "system".to_owned();
+        settings.appearance.palette = "slate".to_owned();
+        settings.appearance.font_size = "m".to_owned();
+        super::replace_app_settings(&home, revision, &settings).expect("publish system");
+        let restored = super::read_app_settings(&home).expect("read system");
+        assert_eq!(restored.appearance.font_family, "system");
+        assert_eq!(restored.effective_font_family(), "system");
+        assert_eq!(restored.appearance.palette, "slate");
+        assert_eq!(restored.appearance.font_size, "m");
+    }
+
+    struct TempDir(std::path::PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
