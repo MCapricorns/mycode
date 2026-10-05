@@ -1,20 +1,28 @@
 # Single workflow for the product:
 #
-# 1. push/PR quality gate — rustfmt + clippy -D warnings, then the
-#    `native_image_launches` shell program-mode smoke test, on the native product runners:
+# 1. pull request — release build and package only, on the native product
+#    runners:
 #      windows-latest  -> x86_64-pc-windows-msvc
 #      windows-11-arm  -> aarch64-pc-windows-msvc
 #      macos-latest    -> aarch64-apple-darwin
-#    Product gates are rustfmt, clippy, and that shell program-mode smoke test.
+#    Each runner compiles mycode-desktop --release and uploads the same
+#    zip and .sha256 sidecar as release-build. The archive name uses
+#    v<workspace version> from the checked-out Cargo.toml. Pull requests
+#    do not run the core or desktop quality jobs. They do not create a
+#    tag, a GitHub Release, a Cargo.toml bump, or a ci/release-* ref.
 #    windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-#    image; it is not a cross-compile from windows-latest. The macOS core
-#    job runs the release-plan self-test. There is no Ubuntu product
-#    compile job. release-plan and release-publish run on ubuntu-latest.
-#    They choose the tag and upload the three archives. They do not
-#    compile the product.
+#    image; it is not a cross-compile from windows-latest.
 #
-# 2. release — a push to main whose quality gates passed publishes a new
-#    GitHub Release. Pull requests do not publish. The tag is
+# 2. push to main — quality gate, then release. rustfmt + clippy -D
+#    warnings, then the `native_image_launches` shell program-mode smoke
+#    test, on the same three runners. Product gates are rustfmt, clippy,
+#    and that shell program-mode smoke test. The macOS core job runs the
+#    release-plan self-test. There is no Ubuntu product compile job.
+#    release-plan and release-publish run on ubuntu-latest. They choose
+#    the tag and upload the three archives. They do not compile the product.
+#
+#    A push to main whose quality gates passed publishes a new GitHub
+#    Release. Pull requests do not publish. The tag is
 #    `v<workspace version>` when that tag is free. When the tag already
 #    exists, release-plan bumps the patch in Cargo.toml, Cargo.lock, and
 #    CHANGELOG.md on a temporary commit and pushes only
@@ -54,6 +62,7 @@ env:
 
 jobs:
   core:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     name: core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -106,6 +115,7 @@ jobs:
           cargo test -p mycode-app --lib updates:: --locked -- --nocapture
 
   desktop:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     name: desktop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -134,6 +144,90 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy -p mycode-desktop --all-targets --locked -- -D warnings
+
+  pr-release-build:
+    # Pull requests only. Same compile and zip steps as release-build, using
+    # the workspace version already in the checkout. No release-plan, so this
+    # job cannot bump Cargo.toml, push a release ref, or create a tag.
+    name: pr-release-build (${{ matrix.target }})
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: mycode-desktop.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary: mycode-desktop.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: mycode-desktop
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve package tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(tr -d '\r' < Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "unexpected version ${version}" >&2
+            exit 1
+          fi
+          echo "MYCODE_PACKAGE_TAG=v${version}" >> "${GITHUB_ENV}"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked -p mycode-desktop --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tag = $env:MYCODE_PACKAGE_TAG
+          $stage = "mycode-desktop-$tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          Copy-Item README.md "$stage/" -ErrorAction SilentlyContinue
+          Copy-Item LICENSE "$stage/" -ErrorAction SilentlyContinue
+          $zip = "mycode-desktop-$tag-${{ matrix.target }}.zip"
+          Compress-Archive -Path $stage -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          tag="${MYCODE_PACKAGE_TAG}"
+          stage="mycode-desktop-$tag-${{ matrix.target }}"
+          mkdir -p "$stage"
+          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE "$stage/" 2>/dev/null || true
+          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
+          zip -r "$zip" "$stage"
+          hash=$(shasum -a 256 "$zip" | awk '{print $1}')
+          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
+
+      - name: Upload assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            *.zip
+            *.zip.sha256
+          retention-days: 3
+          if-no-files-found: error
 
   release-plan:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
