@@ -496,11 +496,18 @@ impl WindowsJob {
 
 #[cfg(windows)]
 fn assign_windows_job(child: &mut Child) -> Result<WindowsJob, McpError> {
-    use std::os::windows::io::AsRawHandle;
     let job = WindowsJob::new().map_err(|error| {
         McpError::transport(format!("failed to create MCP job object: {error}"))
     })?;
-    if let Err(error) = job.assign(child.as_raw_handle()) {
+    // tokio::process::Child does not implement AsRawHandle. `raw_handle`
+    // is None only after the child has already exited.
+    let Some(handle) = child.raw_handle() else {
+        let _ = child.start_kill();
+        return Err(McpError::transport(
+            "MCP process exited before it could be assigned to a job".to_owned(),
+        ));
+    };
+    if let Err(error) = job.assign(handle) {
         let _ = child.start_kill();
         return Err(McpError::transport(format!(
             "failed to assign MCP process to a job: {error}"
@@ -511,7 +518,10 @@ fn assign_windows_job(child: &mut Child) -> Result<WindowsJob, McpError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{StdioChannel, filter_stdio_env};
+    #[cfg(unix)]
+    use super::StdioChannel;
+    use super::filter_stdio_env;
+    #[cfg(unix)]
     use std::time::Duration;
 
     #[test]
