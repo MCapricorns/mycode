@@ -98,16 +98,16 @@ impl SseTransport for ReqwestTransport {
         call: TransportCall,
         cancel: CancellationToken,
     ) -> Result<ByteStream, ProviderError> {
-        let mut headers = call.headers.clone();
+        let mut headers = call.headers;
         headers.push((
             reqwest::header::CONTENT_TYPE.to_string(),
             "application/json".to_owned(),
         ));
         let response = crate::http_pin::send_pinned(crate::http_pin::PinnedRequest {
             method: reqwest::Method::POST,
-            url: call.endpoint.clone(),
+            url: call.endpoint,
             headers,
-            body: Some(crate::http_pin::PinnedBody::Bytes(call.body.clone())),
+            body: Some(crate::http_pin::PinnedBody::Bytes(call.body.into())),
             mode: crate::http_pin::PinMode::CheckRedirect,
             timeout: Some(READ_TIMEOUT),
             user_agent: None,

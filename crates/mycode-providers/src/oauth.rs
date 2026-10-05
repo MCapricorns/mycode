@@ -471,7 +471,7 @@ pub async fn start_codex_device_flow(client: &reqwest::Client) -> Result<CodexDe
         reqwest::Method::POST,
         CODEX_USER_CODE_URL,
         &[("content-type", "application/json")],
-        Some(crate::PinnedBody::Bytes(body)),
+        Some(crate::PinnedBody::Bytes(body.into())),
     )
     .await
     .map_err(|error| format!("Codex device-code request failed: {error}"))?;
@@ -535,7 +535,7 @@ pub async fn poll_codex_device_token(
         reqwest::Method::POST,
         CODEX_DEVICE_TOKEN_URL,
         &[("content-type", "application/json")],
-        Some(crate::PinnedBody::Bytes(body)),
+        Some(crate::PinnedBody::Bytes(body.into())),
     )
     .await
     .map_err(|error| format!("Codex device-token poll failed: {error}"))?;

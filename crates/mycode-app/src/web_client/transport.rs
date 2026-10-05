@@ -52,7 +52,7 @@ impl WebTransport for ReqwestWebTransport {
                 method: reqwest::Method::POST,
                 url: endpoint.to_owned(),
                 headers,
-                body: Some(mycode_providers::PinnedBody::Bytes(body.to_vec())),
+                body: Some(mycode_providers::PinnedBody::Bytes(body.to_vec().into())),
                 mode: mycode_providers::PinMode::PublicHttps,
                 timeout: Some(timeout),
                 user_agent: None,

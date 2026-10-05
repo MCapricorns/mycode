@@ -186,25 +186,27 @@ pub fn plan_rollback(
     let dir = checkpoint_dir(home, session_id);
     let mut seen = HashSet::new();
     let mut actions = Vec::new();
-    for entry in &entries {
+    for entry in entries {
         if !seen.insert(entry.path.clone()) {
             continue;
         }
-        match entry.kind {
-            CheckpointKind::Absent => actions.push(RollbackAction::Delete {
-                path: entry.path.clone(),
-            }),
+        let CheckpointEntry {
+            path,
+            kind,
+            seq,
+            digest,
+            ..
+        } = entry;
+        match kind {
+            CheckpointKind::Absent => actions.push(RollbackAction::Delete { path }),
             CheckpointKind::Snapshot => {
-                let blob_name = format!("{}-{}.bin", entry.seq, entry.digest);
+                let blob_name = format!("{seq}-{digest}.bin");
                 let blob_path = dir.join(&blob_name);
                 let bytes = std::fs::read(&blob_path).map_err(|_| {
                     ConfigError::for_path(ConfigErrorKind::Io, &blob_path)
                         .with_detail("checkpoint blob is missing")
                 })?;
-                actions.push(RollbackAction::Restore {
-                    path: entry.path.clone(),
-                    bytes,
-                });
+                actions.push(RollbackAction::Restore { path, bytes });
             }
         }
     }

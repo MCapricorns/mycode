@@ -102,7 +102,7 @@ impl HttpChannel {
             method: reqwest::Method::POST,
             url: self.endpoint.clone(),
             headers,
-            body: Some(mycode_providers::PinnedBody::Bytes(body)),
+            body: Some(mycode_providers::PinnedBody::Bytes(body.into())),
             mode: mycode_providers::PinMode::CheckRedirect,
             timeout: Some(self.options.timeout),
             user_agent: None,

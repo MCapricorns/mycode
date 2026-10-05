@@ -37,7 +37,8 @@ pub(crate) struct DynamicMcpTool {
     /// reachable through `search_tool`.
     direct: bool,
     /// Directory that stores full text when a tool result is truncated.
-    result_dir: std::path::PathBuf,
+    /// Shared by every tool from one connect, so each tool does not copy the path.
+    result_dir: Arc<std::path::PathBuf>,
 }
 
 impl DynamicMcpTool {
@@ -47,7 +48,7 @@ impl DynamicMcpTool {
         client: Arc<tokio::sync::Mutex<crate::mcp_client::McpClient>>,
         broken: Arc<AtomicBool>,
         direct: bool,
-        result_dir: std::path::PathBuf,
+        result_dir: Arc<std::path::PathBuf>,
     ) -> Self {
         let validator = jsonschema::validator_for(&tool.input_schema).ok();
         let snippet = format!(
@@ -238,7 +239,7 @@ pub(crate) async fn connect_mcp_tools(
     let mut tools = Vec::new();
     let mut connected = 0usize;
     let broken = Arc::new(AtomicBool::new(false));
-    let result_dir = home.root().join("mcp-results");
+    let result_dir = Arc::new(home.root().join("mcp-results"));
     for server in &enabled {
         let api_key = secrets
             .key(&format!("mcp-{}", server.id))
@@ -264,7 +265,7 @@ pub(crate) async fn connect_mcp_tools(
                 client.clone(),
                 Arc::clone(&broken),
                 direct,
-                result_dir.clone(),
+                Arc::clone(&result_dir),
             )));
         }
     }

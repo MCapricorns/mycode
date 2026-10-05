@@ -201,15 +201,13 @@ pub(crate) fn detect_windows_shell_with(env: &WindowsShellEnv) -> Option<Detecte
 
 /// Prefers a regular executable, then a Store execution alias for pwsh.
 #[cfg(windows)]
-fn pick_windows_shell(candidates: Vec<(ShellKind, PathBuf)>) -> Option<DetectedShell> {
-    if let Some((kind, program)) = candidates
+fn pick_windows_shell(mut candidates: Vec<(ShellKind, PathBuf)>) -> Option<DetectedShell> {
+    if let Some(index) = candidates
         .iter()
-        .find(|(_, program)| image_is_regular_executable(program))
+        .position(|(_, program)| image_is_regular_executable(program))
     {
-        return Some(DetectedShell {
-            kind: *kind,
-            program: program.clone(),
-        });
+        let (kind, program) = candidates.swap_remove(index);
+        return Some(DetectedShell { kind, program });
     }
     candidates
         .into_iter()

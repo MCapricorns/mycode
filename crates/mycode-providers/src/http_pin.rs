@@ -10,6 +10,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
+use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
 /// How strictly each hop is checked.
@@ -49,10 +50,13 @@ pub enum RedirectStep {
 }
 
 /// Body carried across a pinned request.
+///
+/// `Bytes` is reference-counted. A redirect that resends the body bumps the
+/// count instead of copying the payload.
 #[derive(Clone, Debug)]
 pub enum PinnedBody {
     /// Raw bytes, sent as the request body.
-    Bytes(Vec<u8>),
+    Bytes(Bytes),
     /// Form fields, encoded by reqwest.
     Form(Vec<(String, String)>),
 }
