@@ -4,15 +4,13 @@
 #    `native_image_launches` exec smoke test, on the native product runners:
 #      windows-latest  -> x86_64-pc-windows-msvc
 #      windows-11-arm  -> aarch64-pc-windows-msvc
-#      ubuntu-latest   -> x86_64-unknown-linux-gnu
 #      macos-latest    -> aarch64-apple-darwin
 #    Product gates are rustfmt, clippy, and that exec smoke test.
 #    windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-#    image; it is not a cross-compile from windows-latest. Linux jobs
-#    install the GPUI/fontconfig/Wayland/XCB packages in
-#    .github/actions/linux-gpui-deps. The Linux core job also runs the
-#    release-plan self-test. Ubuntu jobs compile and check only; they do
-#    not build or upload a release archive.
+#    image; it is not a cross-compile from windows-latest. The macOS core
+#    job runs the release-plan self-test. There is no Ubuntu product
+#    compile job. release-plan and release-publish still run on
+#    ubuntu-latest only to choose the tag and upload the three archives.
 #
 # 2. release — a push to main whose quality gates passed publishes a new
 #    GitHub Release. Pull requests do not publish. The tag is
@@ -64,13 +62,11 @@ jobs:
             host: aarch64-pc-windows-msvc
           - os: macos-latest
             host: aarch64-apple-darwin
-          - os: ubuntu-latest
-            host: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v5
 
       - name: Check release planner
-        if: runner.os == 'Linux'
+        if: runner.os == 'macOS'
         run: python3 .github/scripts/release_plan.py --self-test
 
       - name: Rust toolchain
@@ -82,10 +78,6 @@ jobs:
           host=$(rustc -vV | awk '/^host:/{print $2}')
           echo "rustc host=${host} expected=${{ matrix.host }}"
           test "${host}" = "${{ matrix.host }}"
-
-      - name: Install Linux GPUI dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/linux-gpui-deps
 
       # Formats every workspace member, including mycode-desktop.
       - name: cargo fmt
@@ -114,8 +106,6 @@ jobs:
             host: aarch64-pc-windows-msvc
           - os: macos-latest
             host: aarch64-apple-darwin
-          - os: ubuntu-latest
-            host: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v5
 
@@ -128,10 +118,6 @@ jobs:
           host=$(rustc -vV | awk '/^host:/{print $2}')
           echo "rustc host=${host} expected=${{ matrix.host }}"
           test "${host}" = "${{ matrix.host }}"
-
-      - name: Install Linux GPUI dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/linux-gpui-deps
 
       - name: cargo clippy
         run: cargo clippy -p mycode-desktop --all-targets --locked -- -D warnings

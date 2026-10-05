@@ -1,6 +1,6 @@
 # 架构
 
-mycode 是跑在本机的桌面编码代理（Windows x64、Windows ARM64、macOS Apple Silicon）。对话、工具调用和会话都在你的机器上；模型请求发到你自己的 API。界面不读密钥、不写文件、不发网络请求。发布包只有这三个平台；Ubuntu 仍参与编译检查。
+mycode 是跑在本机的桌面编码代理（Windows x64、Windows ARM64、macOS Apple Silicon）。对话、工具调用和会话都在你的机器上；模型请求发到你自己的 API。界面不读密钥、不写文件、不发网络请求。发布包和质量门都只有这三个平台。
 
 ## 七个 crate
 

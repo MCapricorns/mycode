@@ -7,7 +7,8 @@
 
 ### Removed
 
-- 发布包不再提供 Linux x86_64。GitHub Release 只包含 Windows x64、Windows ARM64（`aarch64-pc-windows-msvc`）和 macOS Apple Silicon（`aarch64-apple-darwin`）。Ubuntu 仍做格式、clippy 和编译检查，不上传发行压缩包。
+- 发布包不再提供 Linux x86_64。GitHub Release 只包含 Windows x64、Windows ARM64（`aarch64-pc-windows-msvc`）和 macOS Apple Silicon（`aarch64-apple-darwin`）。
+- 质量门不再包含 Ubuntu。格式、clippy 和 `exec` 烟测只在 Windows x64、Windows ARM64 与 macOS Apple Silicon 上跑。发布计划自测改在 macOS 的 `core` 作业里。
 
 ## [0.7.4] - 2026-10-04
 

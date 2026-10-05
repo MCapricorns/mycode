@@ -71,7 +71,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-推送到 `main` 的 pull request 在 Windows x64、Windows ARM64、Linux x86_64 和 macOS Apple Silicon 上跑这三步，不发布。质量门通过的 `main` 推送每次都会新建 GitHub Release：新标签 `v<version>`、三个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，再用这个新版本发版。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。
+推送到 `main` 的 pull request 在 Windows x64、Windows ARM64 和 macOS Apple Silicon 上跑这三步，不发布。质量门通过的 `main` 推送每次都会新建 GitHub Release：新标签 `v<version>`、三个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，再用这个新版本发版。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。
 
 ## 许可
 
@@ -172,7 +172,7 @@ cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
 Pull requests into `main` run those gates on Windows x64, Windows ARM64,
-Linux x86_64, and macOS Apple Silicon, and do not publish. A push to
+and macOS Apple Silicon, and do not publish. A push to
 `main` whose gates pass always publishes a new GitHub Release: a new
 `v<version>` tag, the three platform zips (Windows x64, Windows ARM64,
 and macOS Apple Silicon), their `.sha256` sidecars, and the matching

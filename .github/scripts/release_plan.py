@@ -724,18 +724,39 @@ def _expect_workflow_contract() -> None:
         "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" not in workflow,
         "Linux zip is still a release asset",
     )
+    _expect("linux-gpui-deps" not in workflow, "Linux GPUI action is still wired")
     _expect(
-        "linux-gpui-deps" not in release_build,
-        "release build still installs Linux packages",
+        "x86_64-unknown-linux-gnu" not in workflow,
+        "Ubuntu product compile triple remains",
+    )
+    _expect(
+        workflow.count("runs-on: ubuntu-latest") == 2,
+        "ubuntu-latest should only run release-plan and release-publish",
+    )
+    for job in ("release-plan", "release-publish"):
+        body = _yaml_job(workflow, job)
+        _expect("ubuntu-latest" in body, f"{job} left ubuntu-latest")
+    gate_hosts = (
+        "windows-latest",
+        "windows-11-arm",
+        "macos-latest",
     )
     for job in ("core", "desktop"):
         body = _yaml_job(workflow, job)
-        _expect("ubuntu-latest" in body, f"{job} dropped the Ubuntu compile runner")
-        _expect(
-            "x86_64-unknown-linux-gnu" in body,
-            f"{job} dropped the Linux host triple",
-        )
-        _expect("linux-gpui-deps" in body, f"{job} dropped Linux GPUI dependencies")
+        for host in gate_hosts:
+            _expect(host in body, f"{job} dropped {host}")
+        _expect("ubuntu-latest" not in body, f"{job} still compiles on Ubuntu")
+    core = _yaml_job(workflow, "core")
+    _expect(
+        "release_plan.py --self-test" in core,
+        "release planner self-test missing from core",
+    )
+    _expect("runner.os == 'macOS'" in core, "self-test is not on the macOS core job")
+    _expect("runner.os == 'Linux'" not in workflow, "self-test still waits for Linux")
+    _expect(
+        "release_plan.py" not in _yaml_job(workflow, "desktop"),
+        "desktop job picked up the release planner self-test",
+    )
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
     _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
@@ -749,7 +770,14 @@ def _expect_workflow_contract() -> None:
         "x86_64-unknown-linux-gnu" not in readme,
         "README still names a Linux release zip",
     )
-    _expect("Linux x86_64" in readme, "Ubuntu compile notes dropped from the README")
+    _expect(
+        "Linux x86_64 和 macOS" not in readme,
+        "Chinese docs still run PR gates on Linux",
+    )
+    _expect(
+        "Linux x86_64, and macOS" not in readme,
+        "English docs still run PR gates on Linux",
+    )
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     _expect("还没有带齐三个平台压缩包" not in changelog, "three-platform skip rule remains")
     _expect("还没有带齐四个平台压缩包" not in changelog, "four-platform skip rule remains")
