@@ -25,12 +25,9 @@ prompt(用户消息)
 
 取消是调用方令牌的子令牌。触发后，进行中的流以取消结束，半截助手消息丢弃，`prompt` 返回 `Aborted`。工具里的 panic 被接住，变成该次调用的错误结果，不把回合任务冲垮。
 
-`HookRunner` 上生产环境只装两个点：
+`HookRunner` 上生产环境装请求前钩子：改写 `Request`，应用层在这里做自动压缩。工具前观察者还在（参数合法之后、执行之前；观察者可以把自己的阻塞工作放到 `spawn_blocking`；观察者 panic 会让这次工具调用失败），但回合不再用它做文件快照。
 
-- **请求前**：改写 `Request`。应用层在这里做自动压缩。
-- **工具前**：参数已经合法之后、真正执行之前。观察者可以把自己的阻塞工作放到 `spawn_blocking`。观察者自己 panic 会被吃掉。
-
-`build_system_prompt` 用固定的身份说明、工具使用约定，加上注册表里每个工具的一句说明。注册表里没有的名字不会出现在提示里。
+`build_system_prompt` 用固定的身份说明、工具使用约定，加上注册表里每个工具的一句说明。注册表里没有的名字不会出现在提示里。约定里 `write`、`edit` 和 `shell` 都可以改文件。文件编辑走 `shell` 的 `mode` `script`：POSIX shell 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`mode` `program` 不经过 shell，只启动一个可加载映像。编辑或撤回一条对话不会恢复或删除工作区文件。
 
 ## 会话账本
 

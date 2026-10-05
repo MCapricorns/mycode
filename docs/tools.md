@@ -40,7 +40,7 @@
 | `edit` | 精确字符串替换。小幅漂移用模糊匹配；`ast` 用 gpui-kit 注册的 Tree-sitter 语法对一下 |
 | `find` | 按 glob 找文件，限制在搜索根内 |
 | `grep` | 进程内的内容搜索，支持 include / exclude |
-| `shell` | 唯一的进程启动工具。`mode` `script` 把 `command` 交给平台 shell（管道、重定向、展开、脚本）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell |
+| `shell` | 唯一的进程启动工具。`mode` `script` 把 `command` 交给平台 shell（管道、重定向、展开、脚本，以及用 Python heredoc / 短脚本改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell |
 
 `shell` 的两条模式共用启动路径：钉住程序身份、限制参数、截断约 50 KiB 输出、超时和取消时终止并回收整棵进程树。丢掉 future 也会把清理交出去，避免留下孤儿进程。非零退出码是 `is_error` 结果，不是循环故障。
 
@@ -60,9 +60,9 @@ Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。脚
 
 MCP 不把远端工具名注册进这张表。应用层注册 `search_tool` 和 `use_tool`：先取 schema，再按 schema 调用。这样远端工具不会盖住 `read` 或 `shell`。
 
-## 和文件快照的交界
+## 改文件
 
-改文件前由应用层调用 `mycode-config` 的 `checkpoint_file`。当时不存在的文件只记一笔缺失，回滚时删除，不把后来的内容整份存下来。已有文件超过 8 MiB 时检查点失败，工具调用中止，失败会回到界面。回滚走不跟随链接的写入和删除。
+`write` 和 `edit` 仍然可用。`shell` 的 `mode` `script` 也可以改文件：POSIX shell 里用 Python（`python3` 或 `python`）的引号 heredoc 或短脚本，PowerShell 里用 here-string 管道给 `python`。`mode` `program` 不经过 shell，只启动可加载映像。这些路径都不做文件快照。撤回或编辑一条对话不会把工作区文件恢复或删掉。
 
 ## 不放在这里的东西
 

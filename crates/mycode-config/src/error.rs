@@ -12,8 +12,6 @@ use std::path::{Path, PathBuf};
 pub enum ConfigErrorKind {
     /// An owned home path is missing, relative, or lexically unsafe.
     InvalidHome,
-    /// A per-session checkpoint bound was reached.
-    CheckpointLimit,
     /// A requested owned path could escape its frozen hierarchy.
     PathEscape,
     /// A symlink or reparse point could redirect an owned path.
@@ -136,7 +134,6 @@ impl ConfigError {
     pub fn summary(&self) -> String {
         let summary = match self.inner.kind {
             ConfigErrorKind::InvalidHome => "MYCode home path is invalid",
-            ConfigErrorKind::CheckpointLimit => "session checkpoint limit was reached",
             ConfigErrorKind::PathEscape => "owned path component is invalid",
             ConfigErrorKind::LinkEscape => "owned path link traversal was rejected",
             ConfigErrorKind::AccessControl => "owned path access control failed",

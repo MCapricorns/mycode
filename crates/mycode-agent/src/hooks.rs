@@ -1,9 +1,9 @@
 //! `HookRunner` defines the agent loop's hook dispatch points.
 //!
-//! Production installs two of them through
-//! [`HookRunner::with_before_request`] (history compaction immediately
-//! before a provider request) and [`HookRunner::with_before_tool`] (an
-//! observer fired after tool-call admission, right before dispatch).
+//! Production installs [`HookRunner::with_before_request`] (history
+//! compaction immediately before a provider request).
+//! [`HookRunner::with_before_tool`] remains available; the app no longer
+//! installs a file-snapshot observer.
 
 use mycode_core::Request;
 use serde_json::Value;
@@ -19,8 +19,8 @@ use std::sync::Arc;
 /// installed before-tool observer immediately before dispatch. An observer
 /// error or panic fails the tool call instead of letting the mutation run.
 /// The observer clones what it needs while invoked and returns a future;
-/// asynchronous observers may offload blocking work (file snapshots) onto
-/// `spawn_blocking` instead of stalling the calling executor.
+/// asynchronous observers may offload blocking work onto `spawn_blocking`
+/// instead of stalling the calling executor.
 type BeforeToolFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type BeforeToolObserver = Arc<dyn Fn(&str, &Value) -> BeforeToolFuture + Send + Sync>;
 type BeforeRequestFuture = Pin<Box<dyn Future<Output = Request> + Send>>;
@@ -92,14 +92,14 @@ impl HookRunner {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(tool, args))) {
                 Ok(future) => future,
                 Err(_) => {
-                    return Err("checkpoint failed: before_tool observer panicked".to_owned());
+                    return Err("before_tool observer panicked".to_owned());
                 }
             };
         // Polling is isolated through a task so an observer panic unwinds
         // into a JoinError instead of the dispatch path.
         match tokio::spawn(future).await {
             Ok(result) => result,
-            Err(_) => Err("checkpoint failed: before_tool observer panicked".to_owned()),
+            Err(_) => Err("before_tool observer panicked".to_owned()),
         }
     }
 }
@@ -117,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn before_tool_error_is_returned() {
         let hooks = HookRunner::new()
-            .with_before_tool(|_, _| async { Err("checkpoint failed: oversized".to_owned()) });
+            .with_before_tool(|_, _| async { Err("observer refused: oversized".to_owned()) });
         let error = hooks
             .observe_before_tool("write", &serde_json::json!({}))
             .await

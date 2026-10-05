@@ -64,7 +64,7 @@ BridgeCommand → CoreBridge
 
 打开的文件夹由系统文件事件监视（macOS 为 FSEvents，Windows 为 `ReadDirectoryChangesW`）。变化先合并约 300ms，再在工作线程读一次 `git status`。自动检查更新在进程活过大约一天后醒一次。
 
-`SendMessage` 和 `RecallMessage` 带上界面看到的账本头。核心拒绝过期头时，界面保持原对话并提示，不本地假装已经撤回。
+`SendMessage` 和 `RecallMessage` 带上界面看到的账本头。核心拒绝过期头时，界面保持原对话并提示，不本地假装已经撤回。`RecallMessage` 只截断对话；编辑会把原文填回输入框。工作区里的文件不会被恢复或删除。
 
 ## 不放在这里的东西
 

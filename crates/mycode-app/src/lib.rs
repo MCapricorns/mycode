@@ -38,7 +38,6 @@ mod mcp_tools;
 mod oauth;
 mod projection;
 pub mod protocol;
-mod rollback;
 mod search;
 mod settings_io;
 mod state;
@@ -150,13 +149,9 @@ pub enum BridgeCommand {
         /// so the settings form can test a binding before it is saved.
         server: Box<mycode_config::McpServerSettings>,
     },
-    /// Roll every snapshotted file of one session back to its earliest state.
-    RollbackWorkspace {
-        /// Session identity spelling.
-        session_id: String,
-    },
     /// Rewind the branch to just before one user message (recall), with an
-    /// optional edited text to re-send.
+    /// optional edited text to prefill. Workspace files are not restored
+    /// or deleted.
     RecallMessage {
         /// Session identity spelling.
         session: SessionId,
@@ -170,7 +165,8 @@ pub enum BridgeCommand {
         /// Edited text to prefill for re-sending.
         edit: Option<String>,
     },
-    /// Deletes one session's durable data (ledger and checkpoints).
+    /// Deletes one session's durable data (ledger, and any leftover file
+    /// snapshots from older versions).
     DeleteSession {
         /// Session identity spelling.
         session_id: String,
@@ -419,9 +415,8 @@ pub enum BridgeReply {
         /// Listed tool names, or why the probe failed.
         outcome: Result<Vec<String>, String>,
     },
-    /// Rollback outcome: restored absolute paths.
-    RolledBack(Result<Vec<String>, String>),
-    /// Recall result: truncated conversation plus edited text.
+    /// Recall result: truncated conversation plus edited text. Workspace
+    /// files are unchanged.
     Recalled(Result<(Box<ActiveConversation>, Option<String>), String>),
     /// Delete outcome.
     SessionDeleted(Result<(), String>),
