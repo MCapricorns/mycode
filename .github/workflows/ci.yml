@@ -1,22 +1,25 @@
 # Pull request builds only.
 #
 # This workflow is the only one that runs on pull_request. It compiles and
-# packages mycode-desktop on the three native runners and stops:
+# packages mycode-desktop on the four native runners and stops:
 #   windows-latest  -> x86_64-pc-windows-msvc
 #   windows-11-arm  -> aarch64-pc-windows-msvc
 #   macos-latest    -> aarch64-apple-darwin
+#   ubuntu-latest   -> x86_64-unknown-linux-gnu
 # windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-# image; it is not a cross-compile from windows-latest. There is no
-# Ubuntu product compile. There is no fmt or clippy job.
+# image; it is not a cross-compile from windows-latest. The Ubuntu runner
+# installs the GPUI system packages, then compiles the Linux x86_64
+# product. There is no fmt or clippy job.
 #
 # The archive name uses v<workspace version> from the checked-out Cargo.toml.
 # Assets uploaded for the pull request (not published):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
+#   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
 #
 # Publishing is not in this file. A push to main runs
-# .github/workflows/release.yml, which builds these same three targets
+# .github/workflows/release.yml, which builds these same four targets
 # and then tags and creates the GitHub Release.
 
 name: ci
@@ -54,6 +57,9 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: mycode-desktop
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: mycode-desktop
     steps:
       - uses: actions/checkout@v5
 
@@ -72,6 +78,42 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxcb1-dev \
+            libxcb-composite0-dev \
+            libxcb-cursor-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-util-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xkb-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libssl-dev \
+            clang \
+            libclang-dev \
+            zip
 
       - name: Build release binary
         run: cargo build --release --locked -p mycode-desktop --target ${{ matrix.target }}
@@ -105,6 +147,22 @@ jobs:
           zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
           zip -r "$zip" "$stage"
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
+          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tag="${MYCODE_PACKAGE_TAG}"
+          stage="mycode-desktop-$tag-${{ matrix.target }}"
+          mkdir -p "$stage"
+          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE "$stage/" 2>/dev/null || true
+          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
+          zip -r "$zip" "$stage"
+          hash=$(sha256sum "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       - name: Upload assets
