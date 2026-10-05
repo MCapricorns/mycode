@@ -61,15 +61,7 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.effective_user_agent.clone())
         .unwrap_or_default();
-    let palette_row = settings_row(
-        "palette",
-        t("Palette", "色板"),
-        Some(t(
-            "Solid panels over a page gradient. Pick a hue.",
-            "页面渐变之上的实色面板。选一个色调。",
-        )),
-        palette_choices(&palette, cx).into_any_element(),
-    );
+    let palette_row = palette_field(&palette, cx);
     let language_row = dropdown_field(
         "language",
         t("Language", "语言"),
@@ -216,9 +208,44 @@ pub(super) fn render_general_section(
         .into_any_element()
 }
 
+/// Label above a wrapping chip row.
+///
+/// A side-by-side settings row gives the label `flex-basis: 0` and
+/// `min-width: 0`. The chip group's max-content width is the full unwrapped
+/// line, and thirteen names are wider than the settings column, so that label
+/// collapses and its text paints across the chips. Extra palettes only add
+/// wrap rows under the description.
+fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
+    div()
+        .id("row-palette")
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(
+                    div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .child(t("Palette", "色板")),
+                )
+                .child(div().text_xs().opacity(0.5).whitespace_normal().child(t(
+                    "Solid panels over a page gradient. Pick a hue.",
+                    "页面渐变之上的实色面板。选一个色调。",
+                ))),
+        )
+        .child(palette_choices(selected, cx))
+        .into_any_element()
+}
+
 fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme().clone();
     div()
+        .w_full()
         .flex()
         .flex_row()
         .flex_wrap()
@@ -226,10 +253,16 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElem
         .children(crate::ui::desk::PALETTES.into_iter().map(|id| {
             let on = selected == id;
             let swatch = crate::ui::desk::palette_swatch(id);
+            let hover_bg = if on {
+                theme.accent
+            } else {
+                theme.secondary_hover
+            };
             div()
                 .id(format!("palette-{id}"))
                 .flex()
                 .flex_row()
+                .flex_shrink_0()
                 .items_center()
                 .gap_1()
                 .h(px(28.))
@@ -239,7 +272,7 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElem
                 .border_color(if on { theme.primary } else { theme.border })
                 .bg(if on { theme.accent } else { theme.secondary })
                 .cursor_pointer()
-                .hover(|this| this.bg(theme.secondary_hover))
+                .hover(move |this| this.bg(hover_bg))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_select_palette(id, cx);
                 }))
@@ -247,6 +280,7 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElem
                 .child(
                     div()
                         .text_xs()
+                        .whitespace_nowrap()
                         .text_color(theme.foreground)
                         .child(crate::ui::desk::palette_label(id)),
                 )
