@@ -92,13 +92,7 @@ pub(super) fn render_splash(cx: &Context<Workspace>) -> impl IntoElement {
                 .text_color(theme.foreground)
                 .child("MYCode"),
         )
-        .child(div().w(px(36.)).h(px(2.)).rounded_full().bg(theme.primary))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Harness"),
-        );
+        .child(div().w(px(36.)).h(px(2.)).rounded_full().bg(theme.primary));
     let mark: AnyElement = if opacity_fade_plays(reduce_motion) {
         mark.with_animation(
             "startup-splash-mark",
