@@ -2,7 +2,7 @@
 
 0.9.0 是真机验证用的基线。更早的版本记录不再写在这里。日期为发布日（UTC）。
 
-质量门通过的 `main` 推送都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon）。说明用本文件里该版本的条目，不从提交记录生成。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，三个平台都从该提交构建成功后，才快进 `main` 并创建标签。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。压缩包未签名。不提供 Linux 发布包。
+质量门通过的 `main` 推送都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon）。说明用本文件里该版本的条目，不从提交记录生成。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，三个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。压缩包未签名。不提供 Linux 发布包。
 
 ## [Unreleased]
 

@@ -730,11 +730,11 @@ def _expect_workflow_contract() -> None:
         "Ubuntu product compile triple remains",
     )
     _expect(
-        workflow.count("runs-on: ubuntu-latest") == 2,
-        "ubuntu-latest should only run release-plan and release-publish",
+        workflow.count("runs-on: ubuntu-latest") == 3,
+        "ubuntu-latest should only run release-plan, release-publish, and release-cleanup",
     )
     _expect("cargo-audit" not in workflow, "cargo-audit job remains")
-    for job in ("release-plan", "release-publish"):
+    for job in ("release-plan", "release-publish", "release-cleanup"):
         body = _yaml_job(workflow, job)
         _expect("ubuntu-latest" in body, f"{job} left ubuntu-latest")
     plan = _yaml_job(workflow, "release-plan")
@@ -748,9 +748,37 @@ def _expect_workflow_contract() -> None:
     )
     publish = _yaml_job(workflow, "release-publish")
     _expect(
-        'git push origin "HEAD:main"' in publish,
-        "release-publish does not fast-forward main to the built commit",
+        "advance_main.py" in publish,
+        "release-publish does not advance main through advance_main.py",
     )
+    _expect(
+        "--built-sha" in publish,
+        "release-publish does not pass the built commit",
+    )
+    _expect(
+        'git push origin "HEAD:main"' not in publish,
+        "release-publish still requires a fast-forward of the built commit",
+    )
+    attach_at = publish.find("Attach assets to the release")
+    advance_at = publish.find("Advance main to the built commit")
+    _expect(
+        attach_at != -1 and advance_at != -1 and attach_at < advance_at,
+        "tag and assets are still published only after main moves",
+    )
+    cleanup = _yaml_job(workflow, "release-cleanup")
+    _expect("always()" in cleanup, "temporary ref is not deleted when publish fails")
+    _expect(
+        "needs.release-plan.outputs.cleanup_ref" in cleanup,
+        "cleanup job does not receive the temporary ref",
+    )
+    _expect("git push origin --delete" in cleanup, "cleanup job does not delete the ref")
+    _expect(
+        r"ci/release-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+" in cleanup,
+        "cleanup job does not check the temporary ref name",
+    )
+    advance_py = (ROOT / ".github/scripts/advance_main.py").read_text(encoding="utf-8")
+    _expect("--force" not in advance_py, "advance_main.py contains --force")
+    _expect("refs/heads/{branch}" in advance_py, "advance_main.py does not push the branch ref")
     _expect(
         "needs.release-plan.outputs.sha" in _yaml_job(workflow, "release-build"),
         "platform builds do not check out the planned commit",
@@ -769,6 +797,10 @@ def _expect_workflow_contract() -> None:
     _expect(
         "release_plan.py --self-test" in core,
         "release planner self-test missing from core",
+    )
+    _expect(
+        "advance_main.py --self-test" in core,
+        "advance_main self-test missing from core",
     )
     _expect("runner.os == 'macOS'" in core, "self-test is not on the macOS core job")
     _expect("runner.os == 'Linux'" not in workflow, "self-test still waits for Linux")
