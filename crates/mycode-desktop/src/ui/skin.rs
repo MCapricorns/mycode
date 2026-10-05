@@ -72,17 +72,17 @@ pub(super) fn glass_button(
     theme: &Theme,
 ) -> Stateful<Div> {
     let fill = if emphasized {
-        theme.accent
+        super::desk::primary_fill(theme.accent, theme.primary)
     } else {
         theme.transparent
     };
     let hover = if emphasized {
-        super::desk::deepen(theme.accent)
+        super::desk::deepen(fill)
     } else {
         theme.secondary_hover
     };
     let border = if emphasized {
-        theme.primary.opacity(0.45)
+        super::desk::primary_edge(theme.primary)
     } else {
         theme.border
     };

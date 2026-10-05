@@ -118,6 +118,30 @@ pub(crate) fn deepen(mut color: Hsla) -> Hsla {
     color
 }
 
+/// How far a primary fill moves from the quiet tint toward the bright accent.
+///
+/// The tint alone sits almost on the card. A short step toward the accent
+/// keeps the body soft and still lifts it off that surface.
+const PRIMARY_FILL_MIX: f32 = 0.16;
+
+/// Accent-edge alpha on a primary control.
+///
+/// Composited on a dark card, this clears a 3:1 boundary on every palette
+/// without painting a solid accent ring.
+const PRIMARY_EDGE_ALPHA: f32 = 0.66;
+
+/// Primary body. Light ink stays readable; the fill stays a tint.
+#[must_use]
+pub(crate) fn primary_fill(tint: Hsla, accent: Hsla) -> Hsla {
+    soften(tint, accent, PRIMARY_FILL_MIX)
+}
+
+/// Thin accent edge for a primary control.
+#[must_use]
+pub(crate) fn primary_edge(accent: Hsla) -> Hsla {
+    accent.opacity(PRIMARY_EDGE_ALPHA)
+}
+
 /// Moves `from` toward `toward` by `amount` (0 keeps `from`, 1 is `toward`).
 fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
     Hsla {
@@ -473,8 +497,8 @@ fn paint(theme: &mut Theme, spec: &Spec) {
 /// `Theme::change` resets button tokens to the stock theme. Copy the
 /// palette into both the legacy fields and `tokens`.
 fn sync_controls(theme: &mut Theme) {
-    let primary = theme.accent;
-    let primary_hover = deepen(theme.accent);
+    let primary = primary_fill(theme.accent, theme.primary);
+    let primary_hover = deepen(primary);
     theme.button_primary = primary;
     theme.button_primary_hover = primary_hover;
     theme.button_primary_active = primary_hover;
@@ -553,5 +577,66 @@ mod tests {
         assert!((super::interface_rem_px("l") - 16.).abs() < f32::EPSILON);
         assert_eq!(super::normalize_font_size("xl"), "xl");
         assert_eq!(super::font_size_label("s"), "S");
+    }
+
+    /// Primary controls stay a tint: readable ink, a body that lifts off the
+    /// card, and an edge that still meets a 3:1 boundary.
+    #[test]
+    fn primary_fill_stays_soft_and_readable_on_every_dark_palette() {
+        for id in super::PALETTES {
+            let spec = super::spec_for(id);
+            let tint = super::hex(spec.tint);
+            let accent = super::hex(spec.accent);
+            let ink = super::hex(spec.ink);
+            let card = super::hex(spec.card);
+            let fill = super::primary_fill(tint, accent);
+            let edge = super::primary_edge(accent);
+            let text = contrast(ink, fill);
+            let body = contrast(fill, card);
+            let boundary = contrast(over(edge, card), card);
+            assert!(
+                text >= 4.5,
+                "{id}: ink on the primary fill is {text:.2}, want >= 4.5"
+            );
+            assert!(
+                (1.25..=2.2).contains(&body),
+                "{id}: fill against the card is {body:.2}, want a soft 1.25..=2.2"
+            );
+            assert!(
+                boundary >= 3.0,
+                "{id}: primary edge against the card is {boundary:.2}, want >= 3"
+            );
+        }
+    }
+
+    fn contrast(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> f32 {
+        let lighter = luminance(a).max(luminance(b));
+        let darker = luminance(a).min(luminance(b));
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    fn over(fg: gpui_kit::Hsla, bg: gpui_kit::Hsla) -> gpui_kit::Hsla {
+        let src = fg.to_rgb();
+        let dst = bg.to_rgb();
+        let mix = |src: f32, dst: f32| src * fg.a + dst * (1. - fg.a);
+        gpui_kit::Rgba {
+            r: mix(src.r, dst.r),
+            g: mix(src.g, dst.g),
+            b: mix(src.b, dst.b),
+            a: 1.,
+        }
+        .into()
+    }
+
+    fn luminance(color: gpui_kit::Hsla) -> f32 {
+        let rgb = color.to_rgb();
+        let channel = |value: f32| {
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
     }
 }

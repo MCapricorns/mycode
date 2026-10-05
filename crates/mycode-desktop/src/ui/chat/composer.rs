@@ -126,8 +126,10 @@ pub(super) fn render_composer(
                         .id("composer-chip-row")
                         .flex()
                         .flex_row()
+                        .flex_wrap()
                         .items_center()
                         .gap_1()
+                        .w_full()
                         .min_w_0()
                         .child(
                             div()
@@ -150,6 +152,7 @@ pub(super) fn render_composer(
                             "project",
                             project_chip_label,
                             false,
+                            px(140.),
                             |workspace, _window, cx| {
                                 workspace.on_open_project_dialog(cx);
                             },
@@ -159,6 +162,7 @@ pub(super) fn render_composer(
                             "model",
                             model_label,
                             workspace.vm().model_menu_open,
+                            px(168.),
                             |workspace, window, cx| {
                                 let open = !workspace.vm().model_menu_open;
                                 workspace.on_toggle_model_menu(open, window, cx);
@@ -170,6 +174,7 @@ pub(super) fn render_composer(
                                 "thinking",
                                 thinking_label,
                                 workspace.vm().reasoning_menu_open,
+                                px(96.),
                                 |workspace, _window, cx| {
                                     let open = !workspace.vm().reasoning_menu_open;
                                     workspace.on_toggle_reasoning_menu(open, cx);
@@ -177,7 +182,6 @@ pub(super) fn render_composer(
                                 cx,
                             ))
                         })
-                        .child(div().flex_1())
                         .child(composer_round_button(
                             sending,
                             has_session,
@@ -202,7 +206,9 @@ fn composer_round_button(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let can_send = has_session && (has_draft || has_queue);
-    let hover = super::super::desk::deepen(theme.accent);
+    let fill = super::super::desk::primary_fill(theme.accent, theme.primary);
+    let hover = super::super::desk::deepen(fill);
+    let edge = super::super::desk::primary_edge(theme.primary);
     div()
         .id(if sending {
             "composer-stop"
@@ -211,6 +217,7 @@ fn composer_round_button(
         })
         .size(px(30.))
         .flex_shrink_0()
+        .ml_auto()
         .rounded(px(10.))
         .border_1()
         .flex()
@@ -221,24 +228,16 @@ fn composer_round_button(
             this.border_color(theme.border).text_color(theme.foreground)
         })
         .when(!sending, |this| {
-            this.bg(if can_send {
-                theme.accent
-            } else {
-                theme.transparent
-            })
-            .border_color(if can_send {
-                theme.primary.opacity(0.45)
-            } else {
-                theme.border
-            })
-            .text_color(if can_send {
-                theme.foreground
-            } else {
-                theme.muted_foreground
-            })
-            .when(can_send, move |this| {
-                this.hover(move |style| style.bg(hover))
-            })
+            this.bg(if can_send { fill } else { theme.transparent })
+                .border_color(if can_send { edge } else { theme.border })
+                .text_color(if can_send {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
+                })
+                .when(can_send, move |this| {
+                    this.hover(move |style| style.bg(hover))
+                })
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
             if sending {
@@ -260,6 +259,7 @@ fn composer_text_button(
     id: &str,
     label: SharedString,
     open: bool,
+    max_w: gpui_kit::Pixels,
     on_click: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
@@ -269,7 +269,9 @@ fn composer_text_button(
         .flex()
         .flex_row()
         .items_center()
-        .min_w_0()
+        .flex_shrink_1()
+        .min_w(px(72.))
+        .max_w(max_w)
         .px_2()
         .h(px(28.))
         .rounded(px(10.))
@@ -285,7 +287,7 @@ fn composer_text_button(
         .on_click(cx.listener(move |workspace, _, window, cx| {
             on_click(workspace, window, cx);
         }))
-        .child(div().min_w_0().truncate().child(label))
+        .child(div().flex_1().min_w_0().truncate().child(label))
 }
 
 /// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
