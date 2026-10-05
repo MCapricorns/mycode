@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-10-05
+
 ### Removed
 
 - 发布包不再提供 Linux x86_64。GitHub Release 只包含 Windows x64、Windows ARM64（`aarch64-pc-windows-msvc`）和 macOS Apple Silicon（`aarch64-apple-darwin`）。
@@ -122,7 +124,8 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.5
 [0.7.4]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.4
 [0.7.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.3
 [0.7.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.2
