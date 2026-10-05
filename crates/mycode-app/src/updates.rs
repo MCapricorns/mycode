@@ -449,16 +449,16 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. `for /f` only launches
-    // this script again (`hashonly`); certutil itself runs on that normal
-    // line, so quotes, `)`, and `%` are not parsed by `for /f`.
+    // which does not expand `%VAR%` inside the value. `for /f` runs a second
+    // batch file: re-entering this file makes cmd lose its place and report
+    // "The batch file cannot be found." The helper's certutil line is a
+    // normal line, so quotes, `)`, and `%` are not parsed by `for /f`.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
         ""
     };
     let template = r#"@echo off
-if /i "%~1"=="hashonly" goto hashonly
 setlocal EnableExtensions DisableDelayedExpansion
 set "TRIES=0"
 set "BACKED_UP=0"
@@ -511,14 +511,19 @@ del "%~f0" & exit /b 0
 :checkhash
 set "HASHRESULT="
 set "SEEN="
-rem Re-enter this file so certutil runs outside for /f. %~sf0 has no spaces
-rem when 8.3 names exist; quotes cover a long name if they do not.
-for /f "usebackq delims=" %%H in (`call "%~sf0" hashonly`) do (
+set "HELPER=%~dp0mycode-hash.cmd"
+setlocal DisableDelayedExpansion
+> "%HELPER%" echo @echo off
+>> "%HELPER%" echo setlocal EnableExtensions EnableDelayedExpansion
+>> "%HELPER%" echo certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256
+endlocal
+for /f "usebackq delims=" %%H in (`call "%HELPER%"`) do (
   if not defined SEEN set "SEEN=%%H"
   set "CANDIDATE=%%H"
   set "CANDIDATE=!CANDIDATE: =!"
   if not defined HASHRESULT if "!CANDIDATE:~64,1!"=="" if not "!CANDIDATE:~63,1!"=="" set "HASHRESULT=!CANDIDATE!"
 )
+del "%HELPER%" >nul 2>&1
 if not defined HASHRESULT (
   echo updater: certutil did not return a sha256 [!SEEN!] target [!MYCODE_HASH_TARGET!] 1>&2
   exit /b 1
@@ -527,10 +532,6 @@ if /i not "!HASHRESULT!"=="!EXPECTED!" (
   echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
   exit /b 1
 )
-exit /b 0
-:hashonly
-setlocal EnableDelayedExpansion
-certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256
 exit /b 0
 "#;
     template
@@ -762,7 +763,11 @@ mod tests {
             script.contains("set \"MYCODE_HASH_TARGET=!NEW!\""),
             "{script}"
         );
-        assert!(script.contains("call \"%~sf0\" hashonly"), "{script}");
+        assert!(
+            script.contains("set \"HELPER=%~dp0mycode-hash.cmd\""),
+            "{script}"
+        );
+        assert!(script.contains("call \"%HELPER%\""), "{script}");
         assert!(
             script.contains("certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
             "{script}"
@@ -1185,8 +1190,8 @@ mod tests {
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let count = dir.join("certutil-count.txt");
-        // for /f runs `certutil` in a child cmd, which searches PATH and
-        // finds certutil.cmd before System32's certutil.exe. The first call
+        // The helper runs `certutil` with no extension, so PATH finds
+        // certutil.cmd before System32's certutil.exe. The first call
         // hashes for real; the second prints a different hash.
         let wrapper = format!(
             "@echo off\r\nsetlocal EnableExtensions\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 (\r\n  echo SHA256 hash of dummy:\r\n  echo ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\r\n  echo CertUtil: -hashfile command completed successfully.\r\n  exit /b 0\r\n)\r\n\"%SystemRoot%\\System32\\certutil.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n",
