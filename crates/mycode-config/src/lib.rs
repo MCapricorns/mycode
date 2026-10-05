@@ -56,8 +56,8 @@ pub use secure_fs::owned_file::{
 };
 #[doc(inline)]
 pub use settings::{
-    AppSettings, AppearanceSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_MCP_ENV_VARS,
-    MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, MAX_SETTINGS_BYTES,
+    AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, MAX_AUTHORITY_DOCUMENT_BYTES,
+    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS,
     MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES, MAX_WEB_BACKENDS, McpServerSettings,
     ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SETTINGS_PATH, ShellSettings,
     SubagentRoleSettings, SubagentSettings, ToolsSettings, UsageSettings, VALID_LANGUAGES,

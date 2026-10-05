@@ -1,4 +1,4 @@
-//! Minimal child environment for structured exec.
+//! Minimal child environment for the `shell` program launch.
 //!
 //! The block is built from an explicit allowlist of OS runtime, locale, temp,
 //! and reconstructed `PATH` values. Ambient credential-like variables and
@@ -90,7 +90,7 @@ const MAX_TOTAL_ENV_BYTES: usize =
 /// `PATH` is rebuilt from absolute, non-empty host entries only. Relative and
 /// empty entries are dropped so the child cannot inherit a cwd hijack. Entries
 /// are sorted once so spawn and the invocation digest observe the same block.
-/// This is the only structured-exec read of the process environment.
+/// This is the only `shell` launch read of the process environment.
 ///
 /// # Errors
 ///

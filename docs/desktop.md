@@ -36,7 +36,7 @@ BridgeCommand → CoreBridge
 | `git_status` | 只读 `git status`。快照不变就拉长间隔 |
 | `i18n` | `auto` 跟系统语言，否则用设置里的 `en` / `zh` |
 
-视觉是 Desk：深色、毛玻璃、发丝边、暖色强调。调色板来自设置。界面只有深色；旧设置里的 `light` 在读取时改成 `dark` 并写回。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块用 kit 自带的 Tree-sitter 语法高亮（`tree-sitter-languages`），不另引一套 grammar。
+视觉是 Desk：深色实色面板，页面是两段渐变，边是发丝线。色板来自设置，默认石板灰，另外还有海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿和极光。界面只有深色；旧设置里的 `light` 在读取时改成 `dark` 并写回。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块用 kit 自带的 Tree-sitter 语法高亮（`tree-sitter-languages`），不另引一套 grammar。
 
 ## 窗口里有什么
 

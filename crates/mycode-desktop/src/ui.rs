@@ -1,6 +1,6 @@
-//! GPUI rendering for the workspace in the Desk look: frosted glass and ink,
-//! a same-hue honey wash, hairline borders, and signal-color lamps over the
-//! project/sidebar/conversation/settings structure.
+//! GPUI rendering for the workspace in the Desk look: solid panels over a
+//! page gradient, hairline borders, and signal-color lamps over the
+//! project/sidebar/conversation/settings structure. The window is dark.
 mod chat;
 mod context;
 pub(crate) mod desk;

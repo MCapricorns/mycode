@@ -41,7 +41,7 @@ pub struct SettingsState {
     pub mcp_servers: Vec<mycode_config::McpServerSettings>,
     /// Appearance theme. Always `dark`; light mode is not painted.
     pub theme: String,
-    /// Appearance palette: slate, ocean, forest, dusk, sand, rose, ink, or moss.
+    /// Appearance palette. One of `mycode_config::VALID_PALETTES`; slate is the default.
     pub palette: String,
     /// UI language: `auto`, `en`, or `zh`.
     pub language: String,

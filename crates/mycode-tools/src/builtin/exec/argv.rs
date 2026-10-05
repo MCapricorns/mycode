@@ -1,4 +1,4 @@
-//! MSVC-style Windows argv quoting for structured exec.
+//! MSVC-style Windows argv quoting for the `shell` program launch.
 //!
 //! `CreateProcessW` receives a single UTF-16 command line. argv0 is always
 //! quoted. Empty arguments and arguments containing whitespace or `"` are

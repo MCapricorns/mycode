@@ -84,7 +84,7 @@ mycode-app         应用核。会话、回合、工具宿主、MCP、网页、�
 
 - 工具在当前用户权限下执行，没有沙箱，也没有每次调用前的许可弹窗。校验过的调用会直接跑。
 - `shell` 会钉住要启动的程序映像并回收进程树。`script` 模式走平台 shell，`program` 模式直接启动可加载映像。环境变量过滤不是隔离。
-- 持续集成跑 `rustfmt` 和 `clippy -D warnings`，不跑测试套件。
+- 持续集成跑 `rustfmt`、`clippy -D warnings`，以及一次 `shell` `program` 模式的启动烟测。除此之外没有测试套件。发布包和质量门都没有 Linux。
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
-- 生产环境的回合钩子是请求前压缩。工具前观察者还在，但不再为改文件装快照。
+- 生产环境的回合钩子只有请求前压缩。没有工具前观察者，也不再为改文件装快照。
 - `shell` 的 `script` 模式可以改文件：POSIX shell 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`program` 模式不经过 shell。`write` 和 `edit` 仍然可用。

@@ -9,6 +9,10 @@ use crate::ConfigError;
 pub const MAX_SUBAGENT_ROLES: usize = 32;
 /// Upper bound on the explicit subagent concurrency setting.
 pub const MAX_SUBAGENT_CONCURRENCY: u32 = 6;
+/// Slot count used when `max_concurrent` is `0`.
+///
+/// Zero selects this default. It does not mean "run no subagents".
+pub const DEFAULT_SUBAGENT_CONCURRENCY: u32 = 4;
 
 /// One role's model route and reasoning override.
 ///
@@ -41,7 +45,10 @@ pub struct SubagentSettings {
     /// and fully inherited, so a fresh install has a working team.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<SubagentRoleSettings>,
-    /// Simultaneous subagent limit; `0` keeps the automatic capacity.
+    /// Simultaneous subagent limit.
+    ///
+    /// `0` uses [`DEFAULT_SUBAGENT_CONCURRENCY`]. It does not disable
+    /// delegation or mean zero running agents.
     #[serde(default)]
     pub max_concurrent: u32,
 }
@@ -59,6 +66,18 @@ impl SubagentSettings {
     #[must_use]
     pub fn is_enabled(&self, name: &str) -> bool {
         self.role(name).is_none_or(|entry| entry.enabled)
+    }
+
+    /// How many subagents may run at once.
+    ///
+    /// A stored `0` resolves to [`DEFAULT_SUBAGENT_CONCURRENCY`].
+    #[must_use]
+    pub fn effective_concurrency(&self) -> u32 {
+        if self.max_concurrent == 0 {
+            DEFAULT_SUBAGENT_CONCURRENCY
+        } else {
+            self.max_concurrent
+        }
     }
 
     /// Returns the mutable entry for one role, inserting an inherited default.
@@ -90,7 +109,7 @@ impl AppSettings {
             |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
         if self.subagents.max_concurrent > MAX_SUBAGENT_CONCURRENCY {
             return Err(invalid(&format!(
-                "subagents.maxConcurrent: must be 0 (automatic) through {MAX_SUBAGENT_CONCURRENCY}"
+                "subagents.maxConcurrent: must be 0 (the default of {DEFAULT_SUBAGENT_CONCURRENCY}, not zero agents) through {MAX_SUBAGENT_CONCURRENCY}"
             )));
         }
         if self.subagents.roles.len() > MAX_SUBAGENT_ROLES {

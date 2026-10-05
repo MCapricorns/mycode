@@ -17,7 +17,7 @@ MYCode 的 home 布局与严格配置文档。会话与压缩检查点都在 `se
 └─ scratch/
 ```
 
-- `settings.json`：providers、web backends、MCP、agents、appearance。无密钥。
+- `settings.json`：providers、web backends、MCP、agents、appearance。无密钥。`subagents.maxConcurrent` 为 `0` 时使用默认的 4 个并发子代理，不是零个。色板见 `appearance.palette`。
 - `secrets.json`：`provider-id`、`web-<id>`、`mcp-<id>`。
 - `ui.json`：最近项目、会话→项目路径、选中模型。
 - `agents/`：用户级 subagent 角色；项目级角色在 `<project>/.mycode/agents/`。

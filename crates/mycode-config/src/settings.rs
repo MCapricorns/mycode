@@ -24,7 +24,8 @@ pub use providers::{
     MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings, VALID_PROVIDER_KINDS,
 };
 pub use subagent_roles::{
-    MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES, SubagentRoleSettings, SubagentSettings,
+    DEFAULT_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES,
+    SubagentRoleSettings, SubagentSettings,
 };
 pub use tools_shell::{ShellSettings, ToolsSettings, VALID_SHELL_KINDS};
 pub use user_agent::default_user_agent;
@@ -49,9 +50,6 @@ pub const SETTINGS_PATH: &str = "settings.json";
 /// The cap is domain-neutral on purpose: compaction and export authorities
 /// bound their documents with the same limit.
 pub const MAX_AUTHORITY_DOCUMENT_BYTES: usize = 256 * 1024;
-/// Back-compat alias of [`MAX_AUTHORITY_DOCUMENT_BYTES`] under the previous
-/// settings-scoped name, kept so existing cross-crate callers keep compiling.
-pub const MAX_SETTINGS_BYTES: usize = MAX_AUTHORITY_DOCUMENT_BYTES;
 /// Settings format version.
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 /// Settings kind tag.
@@ -76,8 +74,9 @@ impl Default for UsageSettings {
 }
 
 /// Palette ids the desktop can paint. Slate is the default.
-pub const VALID_PALETTES: [&str; 8] = [
-    "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss",
+pub const VALID_PALETTES: [&str; 13] = [
+    "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss", "ember", "glacier", "plum",
+    "copper", "aurora",
 ];
 
 /// UI language ids: follow the system, English, or Simplified Chinese.
@@ -97,7 +96,7 @@ fn default_language() -> String {
 pub struct AppearanceSettings {
     /// Always `dark`. A stored `light` is rewritten on read.
     pub theme: String,
-    /// `slate`, `ocean`, `forest`, `dusk`, `sand`, `rose`, `ink`, or `moss`.
+    /// One of [`VALID_PALETTES`]. Slate is the default.
     #[serde(default = "default_palette")]
     pub palette: String,
     /// `auto`, `en`, or `zh`.
@@ -236,9 +235,10 @@ impl AppSettings {
             return Err(invalid("appearance.theme: must be dark"));
         }
         if !VALID_PALETTES.contains(&self.appearance.palette.as_str()) {
-            return Err(invalid(
-                "appearance.palette: must be slate, ocean, forest, dusk, sand, rose, ink, or moss",
-            ));
+            return Err(invalid(&format!(
+                "appearance.palette: must be one of {}",
+                VALID_PALETTES.join(", ")
+            )));
         }
         if !VALID_LANGUAGES.contains(&self.appearance.language.as_str()) {
             return Err(invalid("appearance.language: must be auto, en, or zh"));

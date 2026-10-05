@@ -15,6 +15,9 @@ use crate::i18n::t;
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
+/// The settings copy hard-codes this default. Keep it aligned with config.
+const _: () = assert!(mycode_config::DEFAULT_SUBAGENT_CONCURRENCY == 4);
+
 pub(super) fn render_agents_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyElement {
     let Some(settings) = workspace.vm().settings.clone() else {
         return div().into_any_element();
@@ -68,19 +71,22 @@ pub(super) fn render_agents_section(workspace: &Workspace, cx: &Context<Workspac
             t("Delegation", "任务委派"),
             Some(t(
                 "The parent model may hand work to these roles. Inherit uses the session \
-                 provider and the role's own thinking level. 0 concurrent slots means \
-                 automatic capacity.",
+                 provider and the role's own thinking level. A limit of 0 uses the default \
+                 of 4 concurrent sub-agents. It does not mean zero agents.",
                 "主模型可以把工作交给这些角色。继承 表示沿用会话的服务商与角色自身的思考档位。\
-                 并发数为 0 表示自动分配。",
+                 并发数为 0 时使用默认的 4 个子代理，不是零个。",
             )),
             theme,
             vec![settings_row(
                 "agents-concurrent",
                 t("Max concurrent", "最大并发"),
-                Some(t("0 = automatic", "0 = 自动")),
+                Some(t(
+                    "0 = default (4), not zero agents",
+                    "0 = 默认 (4)，不是零个",
+                )),
                 Button::new("agents-concurrent-cycle")
                     .label(if max_concurrent == 0 {
-                        t("auto", "自动").to_owned()
+                        t("default (4)", "默认 (4)").to_owned()
                     } else {
                         max_concurrent.to_string()
                     })

@@ -548,14 +548,14 @@ def _expect_changelog() -> None:
     updated, notes = rewrite_changelog(sample, version, "2026-10-04")
     _expect("planner promotes this section" in notes, notes)
     _expect(heading in updated, "missing heading")
-    _expect("## [0.7.3] - 2026-10-04" in updated, "dropped 0.7.3")
-    _expect("Windows ARM64" in updated, "dropped 0.7.3 notes")
+    _expect("## [0.9.0] - 2026-10-05" in updated, "dropped 0.9.0")
+    _expect("Windows ARM64" in updated, "dropped platform notes")
     _expect("aarch64-pc-windows-msvc" in updated, "dropped ARM64 archive name")
     _expect(compare in updated, "compare link")
     _expect(version_link in updated, "version link")
     _expect(
-        "[0.7.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.3" in updated,
-        "old link dropped",
+        "[0.9.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.0" in updated,
+        "0.9.0 link dropped",
     )
     unreleased_body = section_body_unreleased(updated)
     _expect("planner promotes" not in unreleased_body, unreleased_body)
@@ -587,8 +587,8 @@ def _expect_changelog() -> None:
     )
     # Pretend the human already wrote the target section.
     kept = kept.replace(
-        "## [0.7.3] - 2026-10-04\n",
-        f"{heading}\n\n### Added\n\n- hand written\n\n## [0.7.3] - 2026-10-04\n",
+        "## [0.9.0] - 2026-10-05\n",
+        f"{heading}\n\n### Added\n\n- hand written\n\n## [0.9.0] - 2026-10-05\n",
         1,
     )
     preserved, preserved_notes = rewrite_changelog(kept, version, "2026-10-04")
@@ -802,10 +802,7 @@ def _expect_workflow_contract() -> None:
     _expect("还没有带齐四个平台压缩包" not in changelog, "four-platform skip rule remains")
     _expect("三个平台的 zip" in changelog, "changelog policy is not three release platforms")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
-    _expect(
-        "x86_64-unknown-linux-gnu" in changelog,
-        "0.7.2 Linux release history was erased",
-    )
+    _expect("不提供 Linux" in changelog, "changelog dropped the no-Linux release note")
 
 
 def build_parser() -> argparse.ArgumentParser:

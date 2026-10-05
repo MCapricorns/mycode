@@ -1,4 +1,4 @@
-//! Fail-closed executable resolution and identity pinning for structured exec.
+//! Fail-closed executable resolution and identity pinning for the `shell` program launch.
 //!
 //! Basename lookup searches only absolute host `PATH` entries. A program that
 //! contains a separator is resolved against the session cwd and must be

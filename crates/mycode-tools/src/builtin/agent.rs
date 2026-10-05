@@ -48,8 +48,8 @@ pub trait AgentHost: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`ToolError::Execution`] when the subagent failed, timed out,
-    /// or was cancelled.
+    /// Returns [`ToolError::Execution`] when the subagent failed or was
+    /// cancelled. A nested run has no wall-clock timeout.
     async fn run_subagent(
         &self,
         request: SubagentRequest,
