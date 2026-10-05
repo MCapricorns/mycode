@@ -763,9 +763,7 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.contains(
-                "certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256 > \"%HASHOUT%\""
-            ),
+            script.contains("certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256 > \"%HASHOUT%\""),
             "{script}"
         );
         assert!(
