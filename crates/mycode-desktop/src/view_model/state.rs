@@ -173,7 +173,7 @@ pub(crate) struct WorkspaceState {
     /// Open Agents-page model picker: (role name, field). The field is
     /// `model`.
     pub subagent_menu: Option<(String, String)>,
-    /// Whether the General page's shell-kind dropdown is open.
+    /// Whether the Shell page's shell-kind dropdown is open.
     pub shell_kind_menu_open: bool,
     /// Whether the General page's language dropdown is open.
     pub language_menu_open: bool,
@@ -234,6 +234,15 @@ pub enum DesktopAction {
     SettingsUserAgentChanged(String),
     /// The settings editor toggled a provider row's enabled flag.
     SettingsProviderToggled(usize, bool),
+    /// The settings editor replaced one provider endpoint.
+    ///
+    /// The value is the trimmed base URL. API keys are not part of this edit.
+    SettingsProviderBaseUrlChanged {
+        /// Provider id whose endpoint changed.
+        id: String,
+        /// New base URL, already accepted by settings validation.
+        base_url: String,
+    },
     /// The settings editor added a provider row.
     SettingsProviderAdded(mycode_config::ProviderSettings),
     /// The settings editor removed a provider row.
@@ -250,7 +259,7 @@ pub enum DesktopAction {
     SettingsToolsChanged(mycode_config::ToolsSettings),
     /// The Agents-page provider/model/thinking dropdown opened or closed.
     SubagentMenuToggled(Option<(String, String)>),
-    /// The General-page shell-kind dropdown opened or closed.
+    /// The Shell-page shell-kind dropdown opened or closed.
     ShellKindMenuToggled(bool),
     /// The General-page language dropdown opened or closed.
     LanguageMenuToggled(bool),

@@ -1,5 +1,7 @@
-//! The Agents settings page: delegation capacity and one card each for
-//! Scout and Artisan. User-added role files stay out of this page.
+//! The Agents settings page: delegation capacity, Scout and Artisan, then
+//! any further roles `discover_roles` found. Stored steward and sentinel
+//! entries stay on disk and are not product defaults; they appear only when
+//! a role file actually defines them.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::Button;
@@ -29,20 +31,22 @@ pub(super) fn render_agents_section(
         return div().into_any_element();
     };
     let max_concurrent = settings.subagents.max_concurrent;
-    let theme = cx.theme();
+    let theme = cx.theme().clone();
+    let catalog = workspace.agent_roles();
+    let (primary, additional) = group_settings_roles(&catalog);
     let mut cards: Vec<AnyElement> = Vec::new();
     cards.push(
         settings_card(
             "agents-capacity",
             t("Delegation", "任务委派"),
             Some(t(
-                "The parent model may hand work to Scout and Artisan. A limit of 0 uses the \
-                 default of 4 concurrent sub-agents. It does not mean zero agents, and it is \
-                 not a count of role types.",
-                "主模型可以把工作交给 Scout 和 Artisan。并发数为 0 时使用默认的 4 个同时运行的子代理，\
+                "The parent model may hand work to Scout and Artisan, and to any roles you add. \
+                 A limit of 0 uses the default of 4 concurrent sub-agents. It does not mean zero \
+                 agents, and it is not a count of role types.",
+                "主模型可以把工作交给 Scout、Artisan，以及你添加的角色。并发数为 0 时使用默认的 4 个同时运行的子代理，\
                  不是零个，也不是角色种类的数量。",
             )),
-            theme,
+            &theme,
             vec![super::widgets::settings_row(
                 "agents-concurrent",
                 t("Max concurrent", "最大并发"),
@@ -71,8 +75,39 @@ pub(super) fn render_agents_section(
         )
         .into_any_element(),
     );
-    for role in mycode_config::builtin_roles().roles {
-        cards.push(role_card(workspace, window, &role, cx));
+    for role in primary {
+        cards.push(role_card(workspace, window, role, cx));
+    }
+    if !additional.is_empty() {
+        cards.push(
+            div()
+                .id("agents-additional")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pt_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(t("Additional roles", "其他角色")),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .whitespace_normal()
+                        .child(t(
+                            "From your MYCode home agents directory, or this project's .mycode/agents. \
+                             Enable, model, and thinking work the same way.",
+                            "来自 MYCode 主目录下的 agents，或当前项目的 .mycode/agents。启用、模型和思考与上面相同。",
+                        )),
+                )
+                .into_any_element(),
+        );
+        for role in additional {
+            cards.push(role_card(workspace, window, role, cx));
+        }
     }
     div()
         .id("agents-section")
@@ -141,7 +176,17 @@ fn role_card(
                 .items_center()
                 .justify_between()
                 .gap_3()
-                .child(capability_chip(role.isolation.as_str(), theme))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(capability_chip(role.isolation.as_str(), theme))
+                        .when(role.origin != mycode_config::RoleOrigin::Builtin, |this| {
+                            this.child(origin_chip(role.origin, theme))
+                        }),
+                )
                 .child(
                     Switch::new(format!("agent-enabled-{name}"))
                         .checked(enabled)
@@ -257,6 +302,29 @@ fn thinking_options(
     options
 }
 
+fn origin_chip(
+    origin: mycode_config::RoleOrigin,
+    theme: &gpui_kit::component::theme::Theme,
+) -> AnyElement {
+    let label = match origin {
+        mycode_config::RoleOrigin::User => t("User", "用户"),
+        mycode_config::RoleOrigin::Project => t("Project", "项目"),
+        mycode_config::RoleOrigin::Builtin => t("Built-in", "内置"),
+    };
+    div()
+        .h(px(24.))
+        .px_2()
+        .flex()
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(label)
+        .into_any_element()
+}
+
 fn capability_chip(isolation: &str, theme: &gpui_kit::component::theme::Theme) -> AnyElement {
     let label = if isolation == "worktree" {
         t("Worktree", "工作树")
@@ -277,6 +345,27 @@ fn capability_chip(isolation: &str, theme: &gpui_kit::component::theme::Theme) -
         .into_any_element()
 }
 
+/// Scout and Artisan stay the two leading cards, in that order. Every other
+/// discovered role is listed after them. Retired names are not inserted.
+fn group_settings_roles(
+    catalog: &mycode_config::RoleCatalog,
+) -> (
+    Vec<&mycode_config::SubagentRole>,
+    Vec<&mycode_config::SubagentRole>,
+) {
+    const PRIMARY: [&str; 2] = ["scout", "artisan"];
+    let primary = PRIMARY
+        .into_iter()
+        .filter_map(|name| catalog.role(name))
+        .collect();
+    let additional = catalog
+        .roles
+        .iter()
+        .filter(|role| !PRIMARY.contains(&role.name.as_str()))
+        .collect();
+    (primary, additional)
+}
+
 fn title_case(name: &str) -> String {
     let mut chars = name.chars();
     match chars.next() {
@@ -294,6 +383,62 @@ mod tests {
         let roles = mycode_config::builtin_roles();
         let names: Vec<_> = roles.roles.iter().map(|role| role.name.as_str()).collect();
         assert_eq!(names, ["scout", "artisan"]);
+        let (primary, additional) = super::group_settings_roles(&roles);
+        assert_eq!(
+            primary
+                .iter()
+                .map(|role| role.name.as_str())
+                .collect::<Vec<_>>(),
+            ["scout", "artisan"]
+        );
+        assert!(additional.is_empty());
+    }
+
+    #[test]
+    fn discovered_roles_follow_the_builtin_cards() {
+        let mut catalog = mycode_config::builtin_roles();
+        catalog
+            .roles
+            .push(sample_role("reviewer", mycode_config::RoleOrigin::User));
+        catalog
+            .roles
+            .push(sample_role("steward", mycode_config::RoleOrigin::Project));
+        catalog
+            .roles
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        let (primary, additional) = super::group_settings_roles(&catalog);
+        assert_eq!(
+            primary
+                .iter()
+                .map(|role| role.name.as_str())
+                .collect::<Vec<_>>(),
+            ["scout", "artisan"]
+        );
+        assert_eq!(
+            additional
+                .iter()
+                .map(|role| role.name.as_str())
+                .collect::<Vec<_>>(),
+            ["reviewer", "steward"]
+        );
+        assert!(
+            !mycode_config::builtin_roles()
+                .names()
+                .iter()
+                .any(|name| name == "steward" || name == "sentinel")
+        );
+    }
+
+    fn sample_role(name: &str, origin: mycode_config::RoleOrigin) -> mycode_config::SubagentRole {
+        mycode_config::SubagentRole {
+            name: name.to_owned(),
+            description: "role".into(),
+            isolation: mycode_config::RoleIsolation::Shared,
+            thinking: mycode_config::RoleThinking::Default,
+            tools: None,
+            prompt: "work".into(),
+            origin,
+        }
     }
 
     #[test]

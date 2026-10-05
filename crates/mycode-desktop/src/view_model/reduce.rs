@@ -424,6 +424,22 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 })
             });
         }
+        DesktopAction::SettingsProviderBaseUrlChanged { id, base_url } => {
+            edit_settings(state, |settings| {
+                settings
+                    .providers
+                    .iter_mut()
+                    .find(|provider| provider.id == id)
+                    .is_some_and(|provider| {
+                        if provider.base_url == base_url {
+                            false
+                        } else {
+                            provider.base_url = base_url;
+                            true
+                        }
+                    })
+            });
+        }
         DesktopAction::SettingsProviderAdded(provider) => {
             edit_settings(state, |settings| {
                 if settings.providers.len() < mycode_config::MAX_PROVIDERS {
@@ -593,6 +609,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ShowSettingsSection(section) => {
             if section != super::SettingsSection::Models {
                 state.provider_detail = None;
+            }
+            if section != super::SettingsSection::Shell {
+                state.shell_kind_menu_open = false;
             }
             state.model_menu_open = false;
             state.model_menu_browse = None;

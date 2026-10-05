@@ -5,12 +5,16 @@ mod chat;
 mod context;
 pub(crate) mod desk;
 pub(crate) mod model_picker;
+mod motion;
 pub(crate) mod project_picker;
 mod settings;
 mod sidebar;
 mod skin;
+mod splash;
 mod title_bar;
 mod update_dialog;
+
+pub(crate) use splash::splash_total;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -57,6 +61,7 @@ pub fn render_root(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
+    workspace.begin_splash(cx);
     let layout = DeskLayout::of(window);
     let theme = cx.theme().clone();
     let ui_font = theme.font_family.clone();
@@ -101,12 +106,7 @@ pub fn render_root(
                 .when(workspace.vm().view == MainView::Chat, |this| {
                     this.child(sidebar::render_sidebar(workspace, cx))
                 })
-                .child(match workspace.vm().view {
-                    MainView::Chat => chat::render_chat(workspace, window, cx).into_any_element(),
-                    MainView::Settings => {
-                        settings::render_settings_view(workspace, window, cx).into_any_element()
-                    }
-                })
+                .child(main_pane(workspace, window, cx))
                 .when(
                     layout.inspector
                         && workspace.vm().view == MainView::Chat
@@ -135,6 +135,39 @@ pub fn render_root(
             this.child(project_picker::render(workspace, cx))
         })
         .child(render_toasts(workspace, cx))
+        .when(workspace.splash_visible(), |this| {
+            this.child(splash::render_splash(cx))
+        })
+}
+
+/// Chat or settings, faded in when that pane is entered.
+fn main_pane(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+    let pane_key = match workspace.vm().view {
+        MainView::Chat => "chat",
+        MainView::Settings => "settings",
+    };
+    let pane = match workspace.vm().view {
+        MainView::Chat => chat::render_chat(workspace, window, cx).into_any_element(),
+        MainView::Settings => {
+            settings::render_settings_view(workspace, window, cx).into_any_element()
+        }
+    };
+    motion::fade_in(
+        format!("main-pane-{pane_key}"),
+        div()
+            .id("main-pane")
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(pane),
+    )
 }
 
 fn render_toasts(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {

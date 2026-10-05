@@ -1,11 +1,12 @@
-//! One configured provider: endpoint, key replacement, and device-code
-//! sign-in. The endpoint is shown, not edited.
+//! One configured provider: endpoint edit, key replacement, and device-code
+//! sign-in. The endpoint uses the settings document's validation. A stored
+//! API key is never written into the endpoint field.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
@@ -57,6 +58,9 @@ pub(super) fn render_provider_detail(
         .is_none_or(|entry| entry.auth != mycode_providers::catalog::AUTH_DEVICE_CODE);
     let key_input = (show_key && (!keyed || replacing))
         .then(|| workspace.provider_key_input(&provider.id, window, cx));
+    let endpoint_input =
+        workspace.provider_endpoint_input(&provider.id, &provider.base_url, window, cx);
+    let endpoint_pending = endpoint_input.read(cx).value().trim() != provider.base_url;
     let name = workspace
         .vm()
         .catalog
@@ -110,24 +114,7 @@ pub(super) fn render_provider_detail(
                                 })),
                         )
                         .into_any_element(),
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(t("Endpoint", "端点")),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_family(theme.mono_font_family.clone())
-                                .whitespace_normal()
-                                .child(provider.base_url.clone()),
-                        )
-                        .into_any_element(),
+                    endpoint_block(&id, endpoint_input, endpoint_pending, &theme, cx),
                     key_block(&id, keyed, replacing, show_key, key_input, &theme, cx),
                     if oauth {
                         oauth_block(&id, &provider.id, sign_in, error, &theme, cx)
@@ -153,6 +140,55 @@ fn missing_provider(cx: &mut Context<Workspace>) -> AnyElement {
             |workspace, cx| workspace.on_close_provider_detail(cx),
             cx,
         ))
+        .into_any_element()
+}
+
+fn endpoint_block(
+    id: &str,
+    input: gpui_kit::Entity<gpui_kit::component::input::InputState>,
+    pending: bool,
+    theme: &gpui_kit::component::theme::Theme,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let id = id.to_owned();
+    div()
+        .id("provider-endpoint")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(t("Endpoint", "端点")),
+        )
+        .child(
+            div()
+                .h(px(32.))
+                .text_sm()
+                .font_family(theme.mono_font_family.clone())
+                .child(Input::new(&input)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .whitespace_normal()
+                .child(t(
+                    "https:// only. This edits the endpoint, not the key. Save settings to keep it.",
+                    "只能是 https://。这里改的是端点，不是密钥。保存设置后才会写入。",
+                )),
+        )
+        .child(
+            Button::new(format!("provider-endpoint-save-{id}"))
+                .label(t("Save endpoint", "保存端点"))
+                .small()
+                .primary()
+                .disabled(!pending)
+                .on_click(cx.listener(move |workspace, _, window, cx| {
+                    workspace.on_apply_provider_endpoint(&id, window, cx);
+                })),
+        )
         .into_any_element()
 }
 
