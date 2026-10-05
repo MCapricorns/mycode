@@ -449,16 +449,16 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. certutil receives that
-    // expanded path: `for /f` has already parsed parentheses, so `)` in
-    // `Program Files (x86)` does not close the command. `%` is doubled again
-    // because the `for /f` child cmd expands percents a second time.
+    // which does not expand `%VAR%` inside the value. `for /f` only launches
+    // this script again (`hashonly`); certutil itself runs on that normal
+    // line, so quotes, `)`, and `%` are not parsed by `for /f`.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
         ""
     };
     let template = r#"@echo off
+if /i "%~1"=="hashonly" goto hashonly
 setlocal EnableExtensions DisableDelayedExpansion
 set "TRIES=0"
 set "BACKED_UP=0"
@@ -475,7 +475,7 @@ copy /y "!CURRENT!" "!PREVIOUS!" >nul 2>&1
 if errorlevel 1 goto wait
 set "BACKED_UP=1"
 :replace
-set "MYCODE_HASH_TARGET=!NEW:%%=%%%%!"
+set "MYCODE_HASH_TARGET=!NEW!"
 call :checkhash
 if errorlevel 1 (
   echo updater: staged binary sha256 does not match 1>&2
@@ -483,7 +483,7 @@ if errorlevel 1 (
 )
 move /y "!NEW!" "!CURRENT!" >nul 2>&1
 if errorlevel 1 goto wait
-set "MYCODE_HASH_TARGET=!CURRENT:%%=%%%%!"
+set "MYCODE_HASH_TARGET=!CURRENT!"
 call :checkhash
 if errorlevel 1 goto rollback
 goto done
@@ -511,22 +511,26 @@ del "%~f0" & exit /b 0
 :checkhash
 set "HASHRESULT="
 set "SEEN="
-rem Delayed expansion inserts the path after for /f parses parentheses.
-rem The child cmd expands percents, so the value already stores %% as %.
-for /f "usebackq delims=" %%H in (`certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256`) do (
+rem Re-enter this file so certutil runs outside for /f. %~sf0 has no spaces
+rem when 8.3 names exist; quotes cover a long name if they do not.
+for /f "usebackq delims=" %%H in (`call "%~sf0" hashonly`) do (
   if not defined SEEN set "SEEN=%%H"
   set "CANDIDATE=%%H"
   set "CANDIDATE=!CANDIDATE: =!"
   if not defined HASHRESULT if "!CANDIDATE:~64,1!"=="" if not "!CANDIDATE:~63,1!"=="" set "HASHRESULT=!CANDIDATE!"
 )
 if not defined HASHRESULT (
-  echo updater: certutil did not return a sha256 [!SEEN!] 1>&2
+  echo updater: certutil did not return a sha256 [!SEEN!] target [!MYCODE_HASH_TARGET!] 1>&2
   exit /b 1
 )
 if /i not "!HASHRESULT!"=="!EXPECTED!" (
   echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
   exit /b 1
 )
+exit /b 0
+:hashonly
+setlocal EnableDelayedExpansion
+certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256
 exit /b 0
 "#;
     template
@@ -755,9 +759,10 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.contains("set \"MYCODE_HASH_TARGET=!NEW:%%=%%%%!\""),
+            script.contains("set \"MYCODE_HASH_TARGET=!NEW!\""),
             "{script}"
         );
+        assert!(script.contains("call \"%~sf0\" hashonly"), "{script}");
         assert!(
             script.contains("certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
             "{script}"
