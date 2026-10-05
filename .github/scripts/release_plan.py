@@ -670,7 +670,7 @@ def _expect_output_writer() -> None:
 
 
 def _yaml_job(workflow: str, name: str) -> str:
-    """Return one top-level job body from ci.yml, including its header."""
+    """Return one top-level job body from a workflow file, including its header."""
 
     marker = f"  {name}:\n"
     start = workflow.find(marker)
@@ -835,6 +835,66 @@ def _expect_workflow_contract() -> None:
     _expect("三个平台的 zip" in changelog, "changelog policy is not three release platforms")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
     _expect("不提供 Linux" in changelog, "changelog dropped the no-Linux release note")
+    _expect_split_workflows(workflow)
+
+
+def _trigger_block(workflow: str) -> str:
+    """Return the top-level ``on:`` block, through the last indented line."""
+
+    lines = workflow.splitlines()
+    start = next((index for index, line in enumerate(lines) if line == "on:"), None)
+    if start is None:
+        raise SystemExit("self-test failed: missing on: block")
+    end = start + 1
+    while end < len(lines) and (lines[end].startswith((" ", "\t")) or lines[end] == ""):
+        end += 1
+    return "\n".join(lines[start:end])
+
+
+def _expect_split_workflows(ci: str) -> None:
+    """PRs run only the three release builds; main keeps the release path."""
+
+    trigger = _trigger_block(ci)
+    _expect("push:" in trigger, "ci.yml does not trigger on push")
+    _expect("main" in trigger, "ci.yml does not trigger on main")
+    _expect("pull_request" not in trigger, "ci.yml still runs on pull requests")
+    _expect(
+        "\n  pr-release-build:\n" not in ci,
+        "ci.yml still defines the pull-request build job",
+    )
+
+    pr_path = ROOT / ".github/workflows/pr.yml"
+    _expect(pr_path.is_file(), "pr.yml is missing")
+    pr = pr_path.read_text(encoding="utf-8")
+    pr_trigger = _trigger_block(pr)
+    _expect("pull_request:" in pr_trigger, "pr.yml does not trigger on pull_request")
+    _expect("push:" not in pr_trigger, "pr.yml still runs on push")
+    jobs_at = pr.find("\njobs:\n")
+    _expect(jobs_at != -1, "pr.yml is missing jobs:")
+    names = re.findall(r"(?m)^  ([a-z0-9-]+):\n", pr[jobs_at:])
+    _expect(
+        names == ["pr-release-build"],
+        f"pr.yml jobs are {names}",
+    )
+    pr_job = _yaml_job(pr, "pr-release-build")
+    _expect("windows-11-arm" in pr_job, "PR Windows ARM64 runner missing")
+    for target in (
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ):
+        _expect(target in pr_job, f"PR build dropped {target}")
+    _expect("x86_64-unknown-linux-gnu" not in pr, "PR workflow compiles Linux")
+    _expect("ubuntu-latest" not in pr, "PR workflow runs on Ubuntu")
+    for job in (
+        "core",
+        "desktop",
+        "release-plan",
+        "release-build",
+        "release-publish",
+        "release-cleanup",
+    ):
+        _expect(f"\n  {job}:\n" not in pr, f"pr.yml still defines {job}")
 
 
 def build_parser() -> argparse.ArgumentParser:
