@@ -1,4 +1,4 @@
-//! Empty-session welcome. A title, two actions, and recent folders.
+//! Empty-desk welcome. A title, two outline actions, and recent folders.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::theme::Theme;
@@ -40,8 +40,8 @@ pub(super) fn render_welcome(
                 .text_sm()
                 .text_color(theme.muted_foreground)
                 .child(t(
-                    "Open a folder, or start a session.",
-                    "打开一个目录,或开始一个会话。",
+                    "Open a folder, or start a chat.",
+                    "打开一个目录,或开始一个对话。",
                 )),
         )
         .child(
@@ -57,7 +57,6 @@ pub(super) fn render_welcome(
                         "welcome-open-project",
                         IconName::FolderOpen,
                         t("Open folder", "打开目录"),
-                        true,
                         theme,
                     )
                     .on_click(cx.listener(|workspace, _, _, cx| {
@@ -68,8 +67,7 @@ pub(super) fn render_welcome(
                     welcome_action(
                         "welcome-new-chat",
                         IconName::MessageSquare,
-                        t("New session", "新建会话"),
-                        false,
+                        t("New chat", "新建对话"),
                         theme,
                     )
                     .on_click(cx.listener(|workspace, _, _, cx| {
@@ -150,11 +148,11 @@ fn welcome_action(
     id: &'static str,
     icon: IconName,
     label: &'static str,
-    emphasized: bool,
     theme: &Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     let ink = theme.foreground;
-    skin::glass_button(id, emphasized, theme)
+    // Outline only: neither action takes an accent fill.
+    skin::glass_button(id, false, theme)
         .text_color(ink)
         .child(Icon::new(icon).with_size(px(15.)).text_color(ink))
         .child(label)
