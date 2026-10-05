@@ -511,19 +511,25 @@ del "%~f0" & exit /b 0
 :checkhash
 set "HASHRESULT="
 set "SEEN="
-set "HELPER=%~dp0mycode-hash.cmd"
+rem The for-variable is %%L. A name that starts with that letter, such as
+rem %LINE%, is parsed as the for-variable plus leftover text.
+set "HASHCMD=%~dp0mycode-hash.cmd"
 setlocal DisableDelayedExpansion
-> "%HELPER%" echo @echo off
->> "%HELPER%" echo setlocal EnableExtensions EnableDelayedExpansion
->> "%HELPER%" echo certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256
+> "%HASHCMD%" echo @echo off
+>> "%HASHCMD%" echo setlocal EnableExtensions EnableDelayedExpansion
+>> "%HASHCMD%" echo certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256
 endlocal
-for /f "usebackq delims=" %%H in (`call "%HELPER%"`) do (
-  if not defined SEEN set "SEEN=%%H"
-  set "CANDIDATE=%%H"
+if not exist "%HASHCMD%" (
+  echo updater: missing helper !HASHCMD! 1>&2
+  exit /b 1
+)
+for /f "usebackq delims=" %%L in (`call "%HASHCMD%"`) do (
+  if not defined SEEN set "SEEN=%%L"
+  set "CANDIDATE=%%L"
   set "CANDIDATE=!CANDIDATE: =!"
   if not defined HASHRESULT if "!CANDIDATE:~64,1!"=="" if not "!CANDIDATE:~63,1!"=="" set "HASHRESULT=!CANDIDATE!"
 )
-del "%HELPER%" >nul 2>&1
+del "%HASHCMD%" >nul 2>&1
 if not defined HASHRESULT (
   echo updater: certutil did not return a sha256 [!SEEN!] target [!MYCODE_HASH_TARGET!] 1>&2
   exit /b 1
@@ -764,10 +770,10 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.contains("set \"HELPER=%~dp0mycode-hash.cmd\""),
+            script.contains("set \"HASHCMD=%~dp0mycode-hash.cmd\""),
             "{script}"
         );
-        assert!(script.contains("call \"%HELPER%\""), "{script}");
+        assert!(script.contains("call \"%HASHCMD%\""), "{script}");
         assert!(
             script.contains("certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
             "{script}"
