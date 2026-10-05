@@ -8,7 +8,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, px,
+    StatefulInteractiveElement, Styled, TestSupportExt as _, div, px,
 };
 
 use crate::workspace::Workspace;
@@ -39,17 +39,27 @@ pub(super) fn settings_card(
         .collect::<Vec<_>>();
     div()
         .id(format!("card-{id}"))
+        // Content height. A card that grows into the settings scrollport
+        // leaves a blank band between the sections inside it.
+        .w_full()
+        .h_auto()
+        .flex_none()
         .flex()
         .flex_col()
+        .justify_start()
         .gap_3()
         .p(px(20.))
         .rounded(crate::ui::skin::radius_card())
         .border_1()
         .border_color(crate::ui::skin::glass_border(theme))
         .bg(crate::ui::skin::frost_card(theme))
+        .test_support()
         .child(
             div()
                 .id(format!("card-{id}-header"))
+                .w_full()
+                .h_auto()
+                .flex_none()
                 .flex()
                 .flex_col()
                 .gap_1()
