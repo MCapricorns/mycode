@@ -3,6 +3,7 @@
 mod ask;
 mod composer;
 mod menus;
+mod scroll_hold;
 mod transcript;
 mod welcome;
 
@@ -75,6 +76,9 @@ pub(super) fn render_chat(
         (show_welcome, has_older, elements, streaming_element)
     };
     let scroll_handle = workspace.conversation_scroll_handle().clone();
+    let anchor =
+        scroll_hold::ScrollAnchor::new(scroll_handle.clone(), workspace.take_scroll_anchor());
+    let probe = anchor.probe();
     div()
         .id("chat")
         .flex_1()
@@ -83,41 +87,47 @@ pub(super) fn render_chat(
         .flex()
         .flex_col()
         .child(
-            div()
-                .id("conversation")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&scroll_handle)
-                .on_scroll_wheel(cx.listener(|workspace, _, _, cx| {
-                    workspace.on_conversation_scrolled(cx);
-                }))
-                .on_mouse_up(
-                    gpui_kit::MouseButton::Left,
-                    cx.listener(|workspace, _, _, cx| {
+            anchor.child(
+                div()
+                    .id("conversation")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll_handle)
+                    .on_scroll_wheel(cx.listener(|workspace, _, _, cx| {
                         workspace.on_conversation_scrolled(cx);
-                    }),
-                )
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .id("conversation-inner")
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .py_4()
-                        .px_4()
-                        .when(show_welcome, |this| {
-                            this.child(welcome::render_welcome(workspace, cx))
-                        })
-                        .when(has_older || loading_older, |this| {
-                            this.child(render_older_chip(loading_older, cx))
-                        })
-                        .children(entry_elements)
-                        .when_some(streaming_element, |this, streaming| this.child(streaming)),
-                ),
+                    }))
+                    .on_mouse_up(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|workspace, _, _, cx| {
+                            workspace.on_conversation_scrolled(cx);
+                        }),
+                    )
+                    .flex()
+                    .flex_col()
+                    .child(
+                        probe.child(
+                            div()
+                                .id("conversation-inner")
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .py_4()
+                                .px_4()
+                                .when(show_welcome, |this| {
+                                    this.child(welcome::render_welcome(workspace, cx))
+                                })
+                                .when(has_older || loading_older, |this| {
+                                    this.child(render_older_chip(loading_older, cx))
+                                })
+                                .children(entry_elements)
+                                .when_some(streaming_element, |this, streaming| {
+                                    this.child(streaming)
+                                }),
+                        ),
+                    ),
+            ),
         )
         // The model menu docks in-flow right above the composer: an
         // absolutely positioned overlay landed outside the visible window on

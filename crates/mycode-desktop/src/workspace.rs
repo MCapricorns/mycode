@@ -177,13 +177,11 @@ pub struct Workspace {
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
     conversation_scroll: gpui_kit::ScrollHandle,
-    /// Captured when older entries are prepended, applied after the next
-    /// layout so the lines under the viewport stay put. gpui's scroll offset
-    /// grows more negative toward the bottom; compensation subtracts the
-    /// content-height growth.
+    /// Captured when older entries are prepended. The chat column applies it
+    /// in the same frame, after layout and before the scroller positions its
+    /// children. gpui's offset grows more negative toward the bottom, so the
+    /// correction subtracts the content-height growth.
     scroll_hold: Option<ScrollHold>,
-    /// `on_next_frame` was already scheduled for [`Self::scroll_hold`].
-    scroll_hold_queued: bool,
     /// Latest git status for the open folder.
     git: crate::git_status::GitSnapshot,
     /// Platform watcher for the open folder. Dropping it stops refresh.
@@ -266,7 +264,6 @@ impl Workspace {
             project_picker: None,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
             scroll_hold: None,
-            scroll_hold_queued: false,
             git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
             git_watcher: None,
             git_generation: 0,
@@ -399,7 +396,6 @@ impl Workspace {
         }
         if drop_hold {
             self.scroll_hold = None;
-            self.scroll_hold_queued = false;
         }
         // Transcript-growing actions keep the conversation scrolled to the
         // newest content, the way chat clients behave while streaming.
@@ -416,22 +412,12 @@ impl Workspace {
         self.session_filter_input.clone()
     }
 
-    /// Schedules the scroll correction for a prepended history page.
-    ///
-    /// Called from render, which has a window. The callback runs before the
-    /// following frame's draw, after this frame has recorded the new content
-    /// height on the scroll handle.
-    pub(crate) fn queue_scroll_hold(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.scroll_hold.is_none() || self.scroll_hold_queued {
-            return;
-        }
-        self.scroll_hold_queued = true;
-        cx.on_next_frame(window, |workspace, _, cx| {
-            workspace.scroll_hold_queued = false;
-            if workspace.settle_scroll_hold() {
-                cx.notify();
-            }
-        });
+    /// Previous offset and content height for one prepend, consumed by the
+    /// chat column on the frame that paints the new rows.
+    pub(crate) fn take_scroll_anchor(&mut self) -> Option<(Pixels, Pixels)> {
+        self.scroll_hold
+            .take()
+            .map(|hold| (hold.offset_y, hold.content_height))
     }
 
     /// The conversation column's scroll handle.
@@ -926,26 +912,6 @@ impl Workspace {
             offset_y: offset.y,
             content_height: height,
         });
-        self.scroll_hold_queued = false;
-    }
-
-    fn settle_scroll_hold(&mut self) -> bool {
-        let Some(hold) = self.scroll_hold.take() else {
-            return false;
-        };
-        let height = self
-            .conversation_scroll
-            .bounds_for_item(0)
-            .map(|bounds| bounds.size.height)
-            .unwrap_or(hold.content_height);
-        let growth = height - hold.content_height;
-        if growth.abs() <= px(0.5) {
-            return false;
-        }
-        let x = self.conversation_scroll.offset().x;
-        self.conversation_scroll
-            .set_offset(gpui_kit::point(x, hold.offset_y - growth));
-        true
     }
 
     fn request_older(&mut self, cx: &mut Context<Self>) {
