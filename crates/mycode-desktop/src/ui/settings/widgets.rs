@@ -27,10 +27,17 @@ pub(super) fn settings_card(
         .map(|(index, child)| {
             // Content height only. A growing section becomes the settings
             // scrollport and leaves a blank band above the next control.
+            // Flex column, not a block. A block section whose height is
+            // already known skips measuring its children and can keep the
+            // scrollport height while the controls paint nothing.
             div()
                 .w_full()
+                .min_w_0()
                 .h_auto()
                 .flex_none()
+                .flex()
+                .flex_col()
+                .justify_start()
                 .when(index > 0, |this| {
                     this.mt_3().pt_3().border_t_1().border_color(theme.border)
                 })
@@ -140,9 +147,15 @@ pub(super) fn choice_chips(
     let theme = cx.theme();
     div()
         .id(format!("chips-{id_prefix}"))
+        .w_full()
+        .h_auto()
+        .flex_none()
         .flex()
         .flex_row()
         .flex_wrap()
+        .items_start()
+        .content_start()
+        .justify_start()
         .gap_1()
         .children(options.iter().map(|(value, label)| {
             let value = value.clone();
@@ -152,6 +165,8 @@ pub(super) fn choice_chips(
                 .id(format!("{id_prefix}-{value}"))
                 .h(px(28.))
                 .px_2()
+                .flex_none()
+                .self_start()
                 .flex()
                 .items_center()
                 .rounded(px(8.))
@@ -236,7 +251,17 @@ pub(super) fn dropdown_field(
         .flex_col()
         .gap_1()
         .child(
+            // The row must be as wide as the card and only as tall as its
+            // text. A shrinkable row with no width lets the label measure at
+            // width 0 inside the settings scroller: `white-space: normal`
+            // then stacks one glyph per line (a tall blank band) and
+            // `truncate` (`overflow_hidden` + `flex_1`) collapses that text
+            // to zero width on real windows, so the controls never paint.
             div()
+                .w_full()
+                .min_w_0()
+                .h_auto()
+                .flex_none()
                 .flex()
                 .flex_row()
                 .items_center()
@@ -244,20 +269,29 @@ pub(super) fn dropdown_field(
                 .gap_4()
                 .child(
                     div()
+                        .flex_1()
+                        .min_w(px(120.))
+                        .h_auto()
                         .flex()
                         .flex_col()
                         .gap_0p5()
-                        .min_w_0()
-                        .child(div().text_sm().child(label.to_owned()))
+                        .child(div().text_sm().whitespace_normal().child(label.to_owned()))
                         .when_some(description, |this, description| {
-                            this.child(div().text_xs().opacity(0.5).child(description.to_owned()))
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .opacity(0.5)
+                                    .whitespace_normal()
+                                    .child(description.to_owned()),
+                            )
                         }),
                 )
                 .child(
                     div()
                         .id(format!("dropdown-button-{id}"))
                         .h(px(32.))
-                        .min_w(px(140.))
+                        .w(px(200.))
+                        .flex_none()
                         .px_2()
                         .flex()
                         .flex_row()
@@ -274,10 +308,12 @@ pub(super) fn dropdown_field(
                             on_toggle(workspace, !open, cx);
                         }))
                         .child(
+                            // No `truncate`: overflow hidden on a `flex_1`
+                            // child inside this scroller is what collapses
+                            // the value (and then the row) on real windows.
                             div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
+                                .flex_none()
+                                .whitespace_nowrap()
                                 .text_sm()
                                 .child(current.to_owned()),
                         )
@@ -292,12 +328,14 @@ pub(super) fn dropdown_field(
             this.child(
                 div()
                     .id(format!("dropdown-list-{id}"))
+                    .w_full()
+                    .h_auto()
+                    .flex_none()
                     .flex()
                     .flex_col()
+                    .justify_start()
                     .gap_0p5()
                     .p_1()
-                    .max_h(px(220.))
-                    .overflow_y_scroll()
                     .rounded(crate::ui::skin::radius_control())
                     .border_1()
                     .border_color(crate::ui::skin::glass_border(theme))
@@ -309,12 +347,14 @@ pub(super) fn dropdown_field(
                         let pick = on_pick.clone();
                         div()
                             .id(format!("dropdown-{id}-{option}"))
+                            .w_full()
+                            .h(px(28.))
+                            .flex_none()
                             .flex()
                             .flex_row()
                             .items_center()
                             .justify_between()
                             .px_2()
-                            .h(px(28.))
                             .rounded_md()
                             .text_sm()
                             .cursor_pointer()

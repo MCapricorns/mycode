@@ -152,6 +152,7 @@ pub(super) fn render_settings_view(
                         .id("settings-content")
                         .flex_1()
                         .min_w_0()
+                        .min_h_0()
                         .h_full()
                         .overflow_y_scroll()
                         // The scrollport fills the pane. Its page is a flex
