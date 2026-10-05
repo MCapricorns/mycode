@@ -153,8 +153,9 @@ impl StdioChannel {
         let _ = child.kill().await;
     }
 
-    /// Reads one stdout line. Tests use this to observe a grandchild pid.
-    #[cfg(test)]
+    /// Reads one stdout line. The Unix shutdown test uses this to observe a
+    /// grandchild pid. Windows tests do not call it.
+    #[cfg(all(test, unix))]
     async fn read_stdout_line(&self) -> Result<String, McpError> {
         let mut raw = String::new();
         self.stdout
