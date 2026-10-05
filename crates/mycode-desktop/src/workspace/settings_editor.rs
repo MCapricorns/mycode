@@ -262,6 +262,88 @@ impl Workspace {
         );
     }
 
+    /// Endpoint field for one provider. The stored base URL is the only
+    /// value ever written into it.
+    pub(crate) fn provider_endpoint_input(
+        &mut self,
+        id: &str,
+        base_url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if !self.provider_endpoint_inputs.contains_key(id) {
+            let seeded = base_url.to_owned();
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("https://"));
+            input.update(cx, |state, cx| state.set_value(seeded.clone(), window, cx));
+            self.provider_endpoint_inputs.insert(id.to_owned(), input);
+            self.provider_endpoint_seed.insert(id.to_owned(), seeded);
+        }
+        let input = self
+            .provider_endpoint_inputs
+            .get(id)
+            .cloned()
+            .expect("endpoint input");
+        let seed = self
+            .provider_endpoint_seed
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+        let current = input.read(cx).value().to_string();
+        if current == seed && seed != base_url {
+            let next = base_url.to_owned();
+            input.update(cx, |state, cx| state.set_value(next.clone(), window, cx));
+            self.provider_endpoint_seed.insert(id.to_owned(), next);
+        }
+        input
+    }
+
+    /// Stages an endpoint edit after the same document validation the settings
+    /// save runs. The key vault is not read or written.
+    pub(crate) fn on_apply_provider_endpoint(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.provider_endpoint_inputs.get(id).cloned() else {
+            return;
+        };
+        let typed = input.read(cx).value().to_string();
+        let Some(settings) = self.vm.settings.clone() else {
+            return;
+        };
+        let Some(current) = settings
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .map(|provider| provider.base_url.clone())
+        else {
+            return;
+        };
+        if typed.trim() == current {
+            return;
+        }
+        match settings.preview_provider_base_url(id, &typed) {
+            Ok(base_url) => {
+                input.update(cx, |state, cx| {
+                    state.set_value(base_url.clone(), window, cx)
+                });
+                self.provider_endpoint_seed
+                    .insert(id.to_owned(), base_url.clone());
+                self.apply_action(
+                    DesktopAction::SettingsProviderBaseUrlChanged {
+                        id: id.to_owned(),
+                        base_url,
+                    },
+                    cx,
+                );
+            }
+            Err(message) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+        }
+    }
+
     /// Device-code sign-in for a provider that is already configured.
     ///
     /// Does not open the add-from-catalog form.

@@ -486,6 +486,65 @@ mod tests {
     }
 
     #[test]
+    fn discover_roles_adds_user_and_project_files_without_inventing_retired_ones() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-role-discover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let _cleanup = RemoveDir(&root);
+        let agents = root.join("agents");
+        std::fs::create_dir_all(&agents).expect("agents dir");
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews a diff.\nisolation: shared\nthinking: low\n---\n\nLook, then stop.\n",
+        )
+        .expect("user role");
+        std::fs::write(
+            agents.join("mismatch.md"),
+            "---\nname: other\ndescription: Name does not match the file.\n---\n\nSkip me.\n",
+        )
+        .expect("mismatched role");
+        let project = root.join("project");
+        let project_agents = project.join(crate::MYCODE_DIR_NAME).join("agents");
+        std::fs::create_dir_all(&project_agents).expect("project agents");
+        std::fs::write(
+            project_agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Project review.\n---\n\nProject body.\n",
+        )
+        .expect("project role");
+        let home = crate::HomeLayout::from_root(root.clone()).expect("home");
+        let catalog = super::discover_roles(&home, Some(project.as_path()));
+        let names = catalog.names();
+        assert!(names.iter().any(|name| name == "scout"));
+        assert!(names.iter().any(|name| name == "artisan"));
+        assert!(names.iter().any(|name| name == "reviewer"));
+        assert!(!names.iter().any(|name| name == "other"));
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == "steward" || name == "sentinel")
+        );
+        let reviewer = catalog.role("reviewer").expect("reviewer");
+        assert_eq!(reviewer.origin, RoleOrigin::Project);
+        assert_eq!(reviewer.description, "Project review.");
+        assert_eq!(
+            catalog.role("scout").expect("scout").origin,
+            RoleOrigin::Builtin
+        );
+    }
+
+    struct RemoveDir<'a>(&'a std::path::Path);
+    impl Drop for RemoveDir<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.0);
+        }
+    }
+
+    #[test]
     fn builtins_are_only_scout_and_artisan() {
         let catalog = super::builtin_roles();
         let names: Vec<_> = catalog.roles.iter().map(|role| role.name.clone()).collect();

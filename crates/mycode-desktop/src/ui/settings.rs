@@ -11,6 +11,7 @@ mod general;
 mod mcp;
 mod models;
 mod provider_detail;
+mod shell;
 mod skills;
 mod web;
 mod widgets;
@@ -40,6 +41,7 @@ pub(super) fn render_settings_view(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    workspace.ensure_agent_roles();
     let search = workspace.settings_search_input(window, cx);
     let section = workspace.vm().settings_section;
     let query = workspace.vm().settings_query.clone();
@@ -165,7 +167,8 @@ pub(super) fn render_settings_view(
                         .min_w_0()
                         .h_full()
                         .overflow_y_scroll()
-                        .child(
+                        .child(super::motion::fade_in(
+                            format!("settings-page-{}", settings_page_key(workspace)),
                             div()
                                 .id("settings-content-inner")
                                 .mx_auto()
@@ -217,6 +220,9 @@ pub(super) fn render_settings_view(
                                         SettingsSection::Skills => {
                                             skills::render_skills_section(workspace, cx)
                                         }
+                                        SettingsSection::Shell => {
+                                            shell::render_shell_section(workspace, window, cx)
+                                        }
                                         SettingsSection::Mcp => {
                                             mcp::render_mcp_section(workspace, window, cx)
                                         }
@@ -231,10 +237,37 @@ pub(super) fn render_settings_view(
                                         }
                                     })
                                 }),
-                        ),
+                        )),
                 ),
         )
         .into_any_element()
+}
+
+/// Identity of the settings page that should fade in. Menus are left out so
+/// opening a dropdown does not replay the fade.
+fn settings_page_key(workspace: &Workspace) -> String {
+    let vm = workspace.vm();
+    match vm.settings_section {
+        SettingsSection::Models => match vm.models_subview {
+            crate::view_model::ModelsSubview::List => format!(
+                "models-list-{}",
+                vm.provider_detail.as_deref().unwrap_or("all")
+            ),
+            crate::view_model::ModelsSubview::Catalog => "models-catalog".to_owned(),
+            crate::view_model::ModelsSubview::Custom => "models-custom".to_owned(),
+        },
+        SettingsSection::Web => match vm.web_subview {
+            crate::view_model::WebSubview::List => "web-list".to_owned(),
+            crate::view_model::WebSubview::Custom => "web-custom".to_owned(),
+        },
+        SettingsSection::Mcp => match vm.mcp_subview {
+            crate::view_model::McpSubview::List => "mcp-list".to_owned(),
+            crate::view_model::McpSubview::Catalog => "mcp-catalog".to_owned(),
+            crate::view_model::McpSubview::Json => "mcp-json".to_owned(),
+            crate::view_model::McpSubview::Custom => "mcp-custom".to_owned(),
+        },
+        other => other.id().to_owned(),
+    }
 }
 
 /// What the nav shows beside each section: a count or a status lamp.
@@ -278,7 +311,8 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
             SettingsSection::Agents,
             NavBadge {
                 count: settings.map(|s| {
-                    mycode_config::builtin_roles()
+                    workspace
+                        .agent_roles()
                         .roles
                         .iter()
                         .filter(|role| s.subagents.is_enabled(&role.name))
@@ -294,6 +328,7 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
                 lamp: None,
             },
         ),
+        (SettingsSection::Shell, NavBadge::default()),
         (
             SettingsSection::Mcp,
             NavBadge {
@@ -327,6 +362,7 @@ fn render_settings_nav(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let badges = nav_badges(workspace, cx);
+    let role_names = workspace.agent_roles().names();
     let dirty = workspace.vm().settings.as_ref().is_some_and(|s| s.dirty);
     let theme = cx.theme();
     let desk = crate::ui::desk::Desk::of(theme);
@@ -334,7 +370,7 @@ fn render_settings_nav(
     for (group, members) in SettingsSection::GROUPS {
         let mut rows: Vec<AnyElement> = Vec::new();
         for candidate in members.iter().copied() {
-            if !section_matches(candidate, query) {
+            if !section_matches(candidate, query, &role_names) {
                 continue;
             }
             let badge = badges
@@ -417,7 +453,7 @@ fn render_settings_nav(
         )
 }
 
-fn section_matches(section: SettingsSection, query: &str) -> bool {
+fn section_matches(section: SettingsSection, query: &str, role_names: &[String]) -> bool {
     let query = query.trim();
     if query.is_empty() {
         return true;
@@ -425,6 +461,10 @@ fn section_matches(section: SettingsSection, query: &str) -> bool {
     let query = query.to_lowercase();
     section.label().to_lowercase().contains(&query)
         || section.hint().to_lowercase().contains(&query)
+        || (section == SettingsSection::Agents
+            && role_names
+                .iter()
+                .any(|name| name.to_lowercase().contains(&query)))
 }
 
 /// One nav row: icon, label, and the badge column.

@@ -121,6 +121,29 @@ impl SettingsState {
             tools: self.tools.clone(),
         }
     }
+
+    /// Checks a replacement provider base URL with [`mycode_config::AppSettings::validate`].
+    ///
+    /// Returns the trimmed URL. Does not mutate this projection: the editor
+    /// applies the change only after this succeeds, then the existing settings
+    /// save persists it. The document has no secrets, and the validation
+    /// detail names the rule rather than the typed value.
+    pub fn preview_provider_base_url(&self, id: &str, base_url: &str) -> Result<String, String> {
+        let base_url = base_url.trim().to_owned();
+        let mut document = self.to_settings();
+        let Some(provider) = document
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == id)
+        else {
+            return Err("that provider is no longer in settings".to_owned());
+        };
+        provider.base_url = base_url.clone();
+        document
+            .validate()
+            .map_err(|error| format!("invalid settings: {}", error.summary()))?;
+        Ok(base_url)
+    }
 }
 
 /// Built-in Querit / AnySearch rows always appear; user backends append.
@@ -187,6 +210,8 @@ pub enum SettingsSection {
     Agents,
     /// Slash-command skills from `.agents`.
     Skills,
+    /// Platform shell used by tool scripts.
+    Shell,
     /// MCP servers.
     Mcp,
     /// Web search backends.
@@ -205,6 +230,7 @@ impl SettingsSection {
             Self::Models => "models",
             Self::Agents => "agents",
             Self::Skills => "skills",
+            Self::Shell => "shell",
             Self::Mcp => "mcp",
             Self::Web => "web",
             Self::Data => "data",
@@ -219,6 +245,7 @@ impl SettingsSection {
             Self::Models => t("Models", "模型"),
             Self::Agents => t("Agents", "子代理"),
             Self::Skills => t("Skills", "技能"),
+            Self::Shell => t("Shell", "Shell"),
             Self::Mcp => "MCP",
             Self::Web => t("Web search", "网页搜索"),
             Self::Data => t("Data", "数据"),
@@ -234,6 +261,7 @@ impl SettingsSection {
             Self::Models => IconName::Bot,
             Self::Agents => IconName::Sparkles,
             Self::Skills => IconName::Terminal,
+            Self::Shell => IconName::SquareTerminal,
             Self::Mcp => IconName::PlugZap,
             Self::Web => IconName::Globe,
             Self::Data => IconName::Database,
@@ -244,13 +272,14 @@ impl SettingsSection {
     /// One-line description shown in the page header and matched by nav search.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::General => t(
-                "Appearance, language, identity, and shell",
-                "外观、语言、身份与 Shell",
-            ),
+            Self::General => t("Appearance, language, and identity", "外观、语言与身份"),
             Self::Models => t("Default model and providers", "默认模型与服务商"),
-            Self::Agents => t("Scout and Artisan", "Scout 与 Artisan"),
+            Self::Agents => t(
+                "Scout, Artisan, and roles you add",
+                "Scout、Artisan，以及你添加的角色",
+            ),
             Self::Skills => t("Slash commands", "斜杠命令"),
+            Self::Shell => t("pwsh or Git bash", "pwsh 或 Git bash"),
             Self::Mcp => t("Tool servers", "工具服务器"),
             Self::Web => t("Search backends", "搜索后端"),
             Self::Data => t("Usage, export", "用量、导出"),
@@ -274,7 +303,7 @@ impl SettingsSection {
         ("Appearance", &[Self::General]),
         ("Models", &[Self::Models]),
         ("Agents", &[Self::Agents]),
-        ("Tools", &[Self::Skills, Self::Mcp, Self::Web]),
+        ("Tools", &[Self::Skills, Self::Shell, Self::Mcp, Self::Web]),
         ("Data", &[Self::Data, Self::About]),
     ];
 }
@@ -282,6 +311,58 @@ impl SettingsSection {
 #[cfg(test)]
 mod tests {
     use super::SettingsSection;
+
+    #[test]
+    fn provider_endpoint_edit_reuses_settings_validation() {
+        let mut document = mycode_config::AppSettings::default();
+        document.providers.push(mycode_config::ProviderSettings {
+            id: "gateway".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://api.example.com/v1".to_owned(),
+            models: vec!["m".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+        });
+        let state = super::SettingsState::from_settings(&document, 3, vec!["gateway".to_owned()]);
+        let rejected = state
+            .preview_provider_base_url("gateway", "http://api.example.com/v1")
+            .expect_err("http endpoints are rejected");
+        assert!(rejected.contains("https://"), "{rejected}");
+        assert!(!rejected.contains("http://api.example.com"));
+        let accepted = state
+            .preview_provider_base_url("gateway", " https://gateway.example/v1 ")
+            .expect("https endpoint");
+        assert_eq!(accepted, "https://gateway.example/v1");
+        assert_eq!(state.providers[0].base_url, "https://api.example.com/v1");
+        assert_eq!(state.providers_with_keys, vec!["gateway".to_owned()]);
+
+        let mut vm = super::super::WorkspaceState {
+            settings: Some(state),
+            ..super::super::WorkspaceState::default()
+        };
+        super::super::reduce(
+            &mut vm,
+            super::super::DesktopAction::SettingsProviderBaseUrlChanged {
+                id: "missing".to_owned(),
+                base_url: "https://other.example/v1".to_owned(),
+            },
+        );
+        assert!(!vm.settings.as_ref().expect("settings").dirty);
+        super::super::reduce(
+            &mut vm,
+            super::super::DesktopAction::SettingsProviderBaseUrlChanged {
+                id: "gateway".to_owned(),
+                base_url: accepted,
+            },
+        );
+        let settings = vm.settings.expect("settings");
+        assert!(settings.dirty);
+        assert_eq!(settings.providers[0].base_url, "https://gateway.example/v1");
+        assert_eq!(settings.providers[0].models, vec!["m".to_owned()]);
+        assert_eq!(settings.providers_with_keys, vec!["gateway".to_owned()]);
+        assert!(settings.to_settings().validate().is_ok());
+    }
 
     #[test]
     fn nav_groups_match_the_settings_shell() {
@@ -298,6 +379,7 @@ mod tests {
                 SettingsSection::Models,
                 SettingsSection::Agents,
                 SettingsSection::Skills,
+                SettingsSection::Shell,
                 SettingsSection::Mcp,
                 SettingsSection::Web,
                 SettingsSection::Data,

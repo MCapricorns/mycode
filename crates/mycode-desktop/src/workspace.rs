@@ -51,7 +51,7 @@ fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
 /// Panics when the window cannot open; the process has no useful headless
 /// fallback by design.
 pub fn open_window(home: HomeLayout, cx: &mut App) {
-    let (bridge, events) = CoreBridge::start(home);
+    let (bridge, events) = CoreBridge::start(home.clone());
     // The custom titlebar owns dragging and window controls, so the system
     // titlebar is hidden (`appears_transparent`).
     let mut options = gpui_kit::component::TitleBar::window_options();
@@ -69,7 +69,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         Theme::change(ThemeMode::Dark, Some(window), cx);
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);
-        let workspace = Workspace::new(bridge, events, window, cx);
+        let workspace = Workspace::new(home, bridge, events, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
     })
     .expect("open the MYCode window");
@@ -91,6 +91,8 @@ pub(crate) struct Toast {
 /// The main workspace view.
 pub struct Workspace {
     vm: WorkspaceState,
+    /// Owned home the process opened with. Role discovery reads `agents/` here.
+    home: HomeLayout,
     bridge: CoreBridge,
     /// Root focus so key events (Escape) reach the workspace node even when
     /// no input holds focus.
@@ -120,6 +122,22 @@ pub struct Workspace {
     provider_key_inputs: HashMap<String, Entity<InputState>>,
     /// Provider ids whose empty replace-key field is open.
     provider_key_replace: HashSet<String>,
+    /// Endpoint fields for provider detail. Seeded from the base URL only;
+    /// a stored API key is never written here.
+    provider_endpoint_inputs: HashMap<String, Entity<InputState>>,
+    /// Last base URL copied into each endpoint field from settings.
+    provider_endpoint_seed: HashMap<String, String>,
+    /// Roles resolved from built-ins, the home `agents` directory, and the
+    /// open project's `.mycode/agents`. `None` until settings asks for them.
+    agent_roles: Option<mycode_config::RoleCatalog>,
+    /// Project directory the cached role catalog was built for.
+    agent_roles_project: Option<String>,
+    /// The Agents section was opened again, or the project changed.
+    agent_roles_stale: bool,
+    /// When the startup veil began. `None` until the first frame.
+    splash_started: Option<std::time::Instant>,
+    /// The startup veil has finished, or reduced motion skipped it.
+    splash_dismissed: bool,
     /// The next model-step render should clear and focus the search box.
     picker_focus_pending: bool,
     ask_input: Option<Entity<InputState>>,
@@ -172,6 +190,7 @@ pub struct Workspace {
 impl Workspace {
     /// Builds the workspace and issues the initial core loads.
     pub fn new(
+        home: HomeLayout,
         bridge: CoreBridge,
         events: BridgeEventRx,
         window: &mut Window,
@@ -187,6 +206,7 @@ impl Workspace {
         focus_handle.focus(window, cx);
         let workspace = cx.new(|_| Self {
             vm: WorkspaceState::default(),
+            home,
             bridge,
             focus_handle,
             composer,
@@ -207,6 +227,13 @@ impl Workspace {
             preset_model_search_input: None,
             provider_key_inputs: HashMap::new(),
             provider_key_replace: HashSet::new(),
+            provider_endpoint_inputs: HashMap::new(),
+            provider_endpoint_seed: HashMap::new(),
+            agent_roles: None,
+            agent_roles_project: None,
+            agent_roles_stale: false,
+            splash_started: None,
+            splash_dismissed: false,
             picker_focus_pending: false,
             ask_input: None,
             pending_project: None,
@@ -324,6 +351,7 @@ impl Workspace {
         let previous_project = self.vm.project_dir.clone();
         reduce(&mut self.vm, action);
         if self.vm.project_dir != previous_project {
+            self.agent_roles_stale = true;
             self.rewatch_git(cx);
         }
         if self.vm.error.is_some()
@@ -365,6 +393,61 @@ impl Workspace {
         if section == crate::view_model::SettingsSection::Skills {
             self.refresh_skills(cx);
         }
+        if section == crate::view_model::SettingsSection::Agents {
+            self.agent_roles_stale = true;
+        }
+    }
+
+    /// Resolves delegation roles when settings is showing them.
+    ///
+    /// Disk is read only when the cache is empty, the open project changed,
+    /// or the Agents section was opened again.
+    pub(crate) fn ensure_agent_roles(&mut self) {
+        let project = self.vm.project_dir.clone();
+        if !self.agent_roles_stale
+            && self.agent_roles.is_some()
+            && self.agent_roles_project == project
+        {
+            return;
+        }
+        let root = project.as_deref().map(std::path::Path::new);
+        self.agent_roles = Some(mycode_config::discover_roles(&self.home, root));
+        self.agent_roles_project = project;
+        self.agent_roles_stale = false;
+    }
+
+    /// Role catalog last resolved for settings. Built-ins only before the
+    /// first settings paint.
+    pub(crate) fn agent_roles(&self) -> mycode_config::RoleCatalog {
+        self.agent_roles
+            .clone()
+            .unwrap_or_else(mycode_config::builtin_roles)
+    }
+
+    /// Starts the startup veil on the first frame, unless motion is reduced.
+    pub(crate) fn begin_splash(&mut self, cx: &mut Context<Self>) {
+        if self.splash_dismissed || self.splash_started.is_some() {
+            return;
+        }
+        if cx.reduce_motion() {
+            self.splash_dismissed = true;
+            return;
+        }
+        self.splash_started = Some(std::time::Instant::now());
+        let wait = crate::ui::splash_total() + std::time::Duration::from_millis(40);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.splash_dismissed = true;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Whether the startup veil is still covering the desk.
+    pub(crate) fn splash_visible(&self) -> bool {
+        !self.splash_dismissed
     }
 
     /// Switches the Models settings sub-page.
