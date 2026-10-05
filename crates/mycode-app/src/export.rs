@@ -84,10 +84,10 @@ fn plain_name(name: &str) -> bool {
         && !name.chars().any(char::is_control)
 }
 
-/// Session file names are top-level, or `branches/<id>.events`.
+/// Session file names are top-level, or `payloads/<id>.bin`.
 fn session_file_name(name: &str) -> bool {
-    if let Some(rest) = name.strip_prefix("branches/") {
-        return rest.ends_with(".events")
+    if let Some(rest) = name.strip_prefix("payloads/") {
+        return rest.ends_with(".bin")
             && !rest.contains('/')
             && !rest.contains('\\')
             && plain_name(rest);
@@ -119,34 +119,48 @@ fn push_session_file(
 fn collect_session_files(dir: &Path) -> Vec<(String, String)> {
     let mut files = Vec::new();
     let mut budget = MAX_SESSION_BYTES;
-    let branches = dir.join("branches");
-    if let Ok(entries) = std::fs::read_dir(&branches) {
-        let mut listed: Vec<_> = entries.flatten().collect();
+    let mut listed = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        listed = entries.flatten().collect();
         listed.sort_by_key(|entry| entry.file_name());
-        for entry in listed {
+    }
+    // JSONL logs win the file cap: they are the event source of truth.
+    for entry in &listed {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !name.ends_with(".jsonl") {
+            continue;
+        }
+        push_session_file(&mut files, &mut budget, &entry.path(), name);
+    }
+    let payloads = dir.join("payloads");
+    if let Ok(entries) = std::fs::read_dir(&payloads) {
+        let mut bins: Vec<_> = entries.flatten().collect();
+        bins.sort_by_key(|entry| entry.file_name());
+        for entry in bins {
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            if !name.ends_with(".events") {
+            if !name.ends_with(".bin") {
                 continue;
             }
             push_session_file(
                 &mut files,
                 &mut budget,
                 &entry.path(),
-                format!("branches/{name}"),
+                format!("payloads/{name}"),
             );
         }
     }
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        let mut listed: Vec<_> = entries.flatten().collect();
-        listed.sort_by_key(|entry| entry.file_name());
-        for entry in listed {
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            push_session_file(&mut files, &mut budget, &entry.path(), name);
+    for entry in &listed {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if name.ends_with(".jsonl") {
+            continue;
         }
+        push_session_file(&mut files, &mut budget, &entry.path(), name);
     }
     files
 }
@@ -306,7 +320,12 @@ pub fn import_from_file_with(
             }
         }
         if written {
-            sessions_applied += 1;
+            match mycode_agent::session::index_imported_session(home, &session.session_id) {
+                Ok(_) => sessions_applied += 1,
+                Err(_) => {
+                    let _ = std::fs::remove_dir_all(&dir);
+                }
+            }
         } else {
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -320,13 +339,13 @@ pub fn import_from_file_with(
 }
 
 fn write_session_file(dir: &Path, name: &str, body: &str) -> Result<(), String> {
-    if let Some(rest) = name.strip_prefix("branches/") {
-        if !rest.ends_with(".events") || rest.contains("..") || !plain_name(rest) {
+    if let Some(rest) = name.strip_prefix("payloads/") {
+        if !rest.ends_with(".bin") || rest.contains("..") || !plain_name(rest) {
             return Err(format!("unsafe session file name: {name}"));
         }
-        let branch_dir = dir.join("branches");
-        std::fs::create_dir_all(&branch_dir).map_err(|error| error.to_string())?;
-        return std::fs::write(branch_dir.join(rest), body).map_err(|error| error.to_string());
+        let payloads = dir.join("payloads");
+        std::fs::create_dir_all(&payloads).map_err(|error| error.to_string())?;
+        return std::fs::write(payloads.join(rest), body).map_err(|error| error.to_string());
     }
     if !plain_name(name) {
         return Err(format!("unsafe session file name: {name}"));
@@ -397,21 +416,21 @@ mod tests {
     }
 
     #[test]
-    fn export_includes_branch_events_ahead_of_the_file_cap() {
+    fn export_includes_jsonl_ahead_of_the_file_cap() {
         let (root, home) = scratch("events");
         let session = root.join("sessions").join("sess");
-        std::fs::create_dir_all(session.join("branches")).unwrap();
+        std::fs::create_dir_all(&session).unwrap();
         for index in 0..16 {
             std::fs::write(session.join(format!("file-{index}.txt")), "x").unwrap();
         }
-        std::fs::write(session.join("branches").join("main.events"), "event-body").unwrap();
+        std::fs::write(session.join("main.jsonl"), "event-body").unwrap();
         let bundle = build_bundle(&home).unwrap();
         let files = &bundle.sessions[0].files;
         assert!(
             files
                 .iter()
-                .any(|(name, body)| { name == "branches/main.events" && body == "event-body" }),
-            "branch events missing from {files:?}"
+                .any(|(name, body)| { name == "main.jsonl" && body == "event-body" }),
+            "branch log missing from {files:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -464,19 +483,15 @@ mod tests {
             ui_state: mycode_config::UiState::default(),
             sessions: vec![super::ExportedSession {
                 session_id: "sess".to_owned(),
-                files: vec![("branches/foo.events".to_owned(), "line\n".to_owned())],
+                files: vec![("foo.jsonl".to_owned(), "line\n".to_owned())],
             }],
             _todos: Vec::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let summary = import_from_file(&home, &bundle_path).unwrap();
         assert!(summary.settings);
-        let events = root
-            .join("sessions")
-            .join("sess")
-            .join("branches")
-            .join("foo.events");
-        assert_eq!(std::fs::read_to_string(&events).unwrap(), "line\n");
+        let log = root.join("sessions").join("sess").join("foo.jsonl");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "line\n");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

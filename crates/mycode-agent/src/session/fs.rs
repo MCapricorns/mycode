@@ -102,21 +102,6 @@ pub(crate) fn remove(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
-/// Lists regular file names directly inside one directory.
-pub(crate) fn list_files(path: &Path) -> io::Result<Vec<String>> {
-    let mut names = Vec::new();
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file()
-            && let Some(name) = entry.file_name().into_string().ok()
-        {
-            names.push(name);
-        }
-    }
-    names.sort();
-    Ok(names)
-}
-
 /// Fsyncs a directory entry where the platform supports it.
 pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
     #[cfg(unix)]

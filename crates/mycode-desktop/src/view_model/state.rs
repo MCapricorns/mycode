@@ -59,6 +59,10 @@ pub(crate) struct WorkspaceState {
     pub sessions: Vec<SessionSummary>,
     /// Open conversation, when any.
     pub active: Option<ActiveConversation>,
+    /// Case-insensitive filter over the titles already in the session list.
+    pub session_filter: String,
+    /// An older transcript page is in flight for the open conversation.
+    pub history_loading: bool,
     /// Composer draft text.
     pub composer_draft: String,
     /// Follow-ups waiting for the in-flight turn to finish.
@@ -87,8 +91,6 @@ pub(crate) struct WorkspaceState {
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// Draft answers aligned with [`Self::pending_ask`].
     pub ask_answers: Vec<String>,
-    /// Extra folded transcript blocks the user asked to mount above the tail.
-    pub transcript_extra: usize,
     /// Cumulative usage per provider/model, in first-seen order.
     pub usage_totals: Vec<UsageTotal>,
     /// Most recent committed turn's timing and token metrics.
@@ -343,8 +345,24 @@ pub enum DesktopAction {
     AskChoicePicked { index: usize, answer: String },
     /// The user submitted answers locally; clear the pending panel.
     AskAnswered,
-    /// Mount another page of folded transcript blocks.
-    TranscriptRevealMore,
+    /// The sidebar session-title filter changed.
+    SessionFilterChanged(String),
+    /// An older-page read started.
+    HistoryLoadStarted,
+    /// An older-page read finished without changing the transcript.
+    HistoryLoadFinished,
+    /// An older page arrived. Applied only when `requested_before` is still
+    /// the open window's cursor.
+    OlderLoaded {
+        /// Session the page belongs to.
+        session_id: String,
+        /// Entries in ledger order, strictly before the cursor.
+        entries: Vec<ConversationEntry>,
+        /// Next backward cursor, or `None` at the branch start.
+        older_before: Option<String>,
+        /// Cursor the UI asked for.
+        requested_before: String,
+    },
     /// Settings were persisted under CAS.
     ///
     /// `edit_epoch` is the epoch captured when the save was dispatched. The

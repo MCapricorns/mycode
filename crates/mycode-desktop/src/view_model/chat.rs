@@ -1,5 +1,6 @@
-//! Composer and transcript vocabulary: mention autocomplete, live subagent
-//! cards, and the folded-transcript window constants.
+//! Composer and transcript vocabulary: mention autocomplete and live
+//! subagent cards. The transcript window itself lives on disk; this module
+//! only names the composer triggers.
 
 /// Composer mention autocomplete: `@` files or `/` commands.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,13 +45,25 @@ pub(crate) enum MentionKind {
 /// Built-in slash commands offered by the composer menu.
 pub(crate) const COMPOSER_COMMANDS: &[(&str, &str)] =
     &[("/new", "new chat"), ("/settings", "settings")];
-/// Recent transcript blocks that stay mounted. Older ones fold.
-pub(super) const TRANSCRIPT_TAIL: usize = 24;
-/// How many folded blocks one reveal click mounts.
-pub(crate) const TRANSCRIPT_PAGE: usize = 24;
 
-/// First visible display-block index for a folded transcript.
+/// Whether `title` matches a sidebar filter. An empty filter matches every
+/// title. The comparison is case-insensitive and does not touch disk.
 #[must_use]
-pub(crate) fn transcript_start(block_count: usize, extra: usize) -> usize {
-    block_count.saturating_sub(TRANSCRIPT_TAIL.saturating_add(extra))
+pub(crate) fn session_title_matches(title: &str, filter: &str) -> bool {
+    let filter = filter.trim();
+    filter.is_empty() || title.to_lowercase().contains(&filter.to_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_title_matches;
+
+    #[test]
+    fn title_filter_is_case_insensitive_and_blank_matches_all() {
+        assert!(session_title_matches("Hello Title", ""));
+        assert!(session_title_matches("Hello Title", "  hello  "));
+        assert!(!session_title_matches("Hello Title", "other"));
+        assert!(session_title_matches("", ""));
+        assert!(!session_title_matches("", "x"));
+    }
 }

@@ -125,8 +125,8 @@ impl SessionService {
         }
     }
 
-    /// Validates one event, durably stages its payload, and issues the
-    /// single-use reservation.
+    /// Validates one event, holds its payload with the reservation, and
+    /// issues the single-use reservation.
     ///
     /// # Errors
     ///
@@ -351,6 +351,40 @@ impl SessionService {
         }
     }
 
+    /// Reads the newest `limit` events at or before `before`.
+    ///
+    /// `before` absent selects the tail ending at `snapshot_head`. The
+    /// returned `older` cursor is the oldest loaded event when earlier
+    /// events remain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::NotFound`] for an unknown session, branch, or
+    /// cursor, [`SessionError::Limit`] when `limit` is `0` or above
+    /// [`super::dto::MAX_READ_LIMIT`], and the actor's terminal error otherwise.
+    pub async fn read_payload_window(
+        &self,
+        session: &SessionId,
+        branch: &BranchId,
+        snapshot_head: &HeadStamp,
+        before: Option<&SessionEventId>,
+        limit: u16,
+    ) -> Result<super::dto::PayloadWindow, SessionError> {
+        match self
+            .run(SessionRequest::ReadPayloadWindow {
+                session: session.clone(),
+                branch: branch.clone(),
+                snapshot_head: snapshot_head.clone(),
+                before: before.cloned(),
+                limit,
+            })
+            .await?
+        {
+            SessionResult::PayloadWindow(window) => Ok(window),
+            _ => Err(SessionError::Unavailable),
+        }
+    }
+
     /// Retires the publication, closes live operations, and awaits drain.
     ///
     /// After this call the service rejects every further operation; other
@@ -371,10 +405,8 @@ impl SessionService {
             .await
             .map_err(map_task_error)?;
         loop {
-            // Refresh the deadline per pull: recovery replays in 1 MiB
-            // chunks, so a large session needs many sequential pulls and
-            // each one gets its own full window instead of sharing the
-            // invoke's budget.
+            // Each pull gets a fresh deadline. The actor returns a terminal
+            // result in one pull; a progress observation, if any, is ignored.
             let deadline = Instant::now() + DEFAULT_DEADLINE;
             match self.client().pull(operation, deadline).await {
                 Ok(pull) => match pull {

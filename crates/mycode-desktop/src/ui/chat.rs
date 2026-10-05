@@ -3,6 +3,7 @@
 mod ask;
 mod composer;
 mod menus;
+mod scroll_hold;
 mod transcript;
 mod welcome;
 
@@ -15,7 +16,8 @@ use gpui_kit::{
     Window, div, px,
 };
 
-use crate::view_model::{ConversationEntry, EntryKind, transcript_start};
+use crate::i18n::t;
+use crate::view_model::{ConversationEntry, EntryKind};
 use crate::workspace::Workspace;
 
 /// Conversation column. Side whitespace keeps the transcript in a readable measure.
@@ -31,19 +33,18 @@ pub(super) fn render_chat(
     // message text again. The borrow is scoped so the welcome and composer
     // builders can still take `&mut Workspace`.
     let sending = workspace.vm().sending;
-    let extra = workspace.vm().transcript_extra;
-    let (show_welcome, hidden, entry_elements, streaming_element) = {
+    let loading_older = workspace.vm().history_loading;
+    let (show_welcome, has_older, entry_elements, streaming_element) = {
         let active = workspace.vm().active.as_ref();
         let entries: &[ConversationEntry] = active
             .map(|conversation| conversation.entries.as_slice())
             .unwrap_or_default();
         let streaming = active.and_then(|c| c.streaming.as_ref());
         let show_welcome = entries.is_empty() && streaming.is_none() && !sending;
+        let has_older = active.is_some_and(|conversation| conversation.older_before.is_some());
         let items = collect_transcript_items(entries);
-        let start = transcript_start(items.len(), extra);
-        let hidden = start;
-        let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(items.len() - start);
-        for item in items.into_iter().skip(start) {
+        let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(items.len());
+        for item in items {
             match item {
                 TranscriptItem::User { entry, index } => {
                     elements.push(transcript::render_user_entry(entry, index > 0, index, cx));
@@ -75,9 +76,12 @@ pub(super) fn render_chat(
                     .into_any_element()
                 })
             });
-        (show_welcome, hidden, elements, streaming_element)
+        (show_welcome, has_older, elements, streaming_element)
     };
     let scroll_handle = workspace.conversation_scroll_handle().clone();
+    let anchor =
+        scroll_hold::ScrollAnchor::new(scroll_handle.clone(), workspace.take_scroll_anchor());
+    let probe = anchor.probe();
     div()
         .id("chat")
         .flex_1()
@@ -86,32 +90,49 @@ pub(super) fn render_chat(
         .flex()
         .flex_col()
         .child(
-            div()
-                .id("conversation")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&scroll_handle)
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .id("conversation-inner")
-                        .w_full()
-                        .max_w(COLUMN_MAX)
-                        .mx_auto()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .py_4()
-                        .px_4()
-                        .when(show_welcome, |this| {
-                            this.child(welcome::render_welcome(workspace, cx))
-                        })
-                        .when(hidden > 0, |this| this.child(render_fold_chip(hidden, cx)))
-                        .children(entry_elements)
-                        .when_some(streaming_element, |this, streaming| this.child(streaming)),
-                ),
+            anchor.child(
+                div()
+                    .id("conversation")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll_handle)
+                    .on_scroll_wheel(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_conversation_scrolled(cx);
+                    }))
+                    .on_mouse_up(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|workspace, _, _, cx| {
+                            workspace.on_conversation_scrolled(cx);
+                        }),
+                    )
+                    .flex()
+                    .flex_col()
+                    .child(
+                        probe.child(
+                            div()
+                                .id("conversation-inner")
+                                .w_full()
+                                .max_w(COLUMN_MAX)
+                                .mx_auto()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .py_4()
+                                .px_4()
+                                .when(show_welcome, |this| {
+                                    this.child(welcome::render_welcome(workspace, cx))
+                                })
+                                .when(has_older || loading_older, |this| {
+                                    this.child(render_older_chip(loading_older, cx))
+                                })
+                                .children(entry_elements)
+                                .when_some(streaming_element, |this, streaming| {
+                                    this.child(streaming)
+                                }),
+                        ),
+                    ),
+            ),
         )
         // The model menu docks in-flow right above the composer: an
         // absolutely positioned overlay landed outside the visible window on
@@ -189,14 +210,18 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
     items
 }
 
-/// The reveal control above a folded transcript. `hidden` counts folded
-/// display blocks — user rows, tool blocks, and bare entries — not chat
-/// messages, so it is spelled "entries".
-fn render_fold_chip(hidden: usize, cx: &Context<Workspace>) -> impl IntoElement {
+/// The control above a tail window. The count of remaining events is not
+/// known without reading them, so the label stays generic.
+fn render_older_chip(loading: bool, cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let desk = crate::ui::desk::Desk::of(theme);
+    let label = if loading {
+        t("Loading earlier messages…", "正在加载更早的消息…")
+    } else {
+        t("Earlier messages", "更早的消息")
+    };
     div()
-        .id("transcript-fold")
+        .id("transcript-older")
         .flex()
         .flex_row()
         .items_center()
@@ -204,16 +229,17 @@ fn render_fold_chip(hidden: usize, cx: &Context<Workspace>) -> impl IntoElement 
         .gap_2()
         .py(px(8.))
         .rounded(px(10.))
-        .cursor_pointer()
-        .on_click(cx.listener(|workspace, _, _, cx| {
-            workspace.on_reveal_transcript(cx);
-        }))
+        .when(!loading, |this| {
+            this.cursor_pointer()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_load_older(cx);
+                }))
+        })
         .child(crate::ui::lamp(desk.violet))
-        .child(div().text_xs().text_color(theme.muted_foreground).child(
-            if crate::i18n::is_chinese() {
-                format!("{hidden} 条更早的记录")
-            } else {
-                format!("{hidden} earlier entries")
-            },
-        ))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(label),
+        )
 }

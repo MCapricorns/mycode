@@ -49,7 +49,8 @@ mod web_client;
 
 pub use protocol::{
     ActiveConversation, BranchId, CHAT_CANCELLED, ConversationEntry, EntryKind, HeadStamp,
-    MAX_STREAMING_CHARS, SessionEventId, SessionId, SessionSummary, StreamingReply,
+    MAX_STREAMING_CHARS, OlderTranscript, SessionEventId, SessionId, SessionSummary,
+    StreamingReply,
 };
 pub use updates::{PreparedUpdate, UpdateOffer};
 pub use updates::{apply_and_restart, brief_error, cleanup_stale_stages, current_version};
@@ -148,6 +149,21 @@ pub enum BridgeCommand {
         /// The server row to probe. The whole row travels, not just its id,
         /// so the settings form can test a binding before it is saved.
         server: Box<mycode_config::McpServerSettings>,
+    },
+    /// Load one page of committed events older than `before`.
+    ///
+    /// `before` is the oldest event the UI already shows. The head must
+    /// still match; a moved branch fails closed instead of splicing a page
+    /// from a different snapshot.
+    LoadOlder {
+        /// Session identity spelling.
+        session: SessionId,
+        /// Branch identity spelling.
+        branch: BranchId,
+        /// Head the UI observed.
+        expected_head: HeadStamp,
+        /// Oldest event already on screen.
+        before: String,
     },
     /// Rewind the branch to just before one user message (recall), with an
     /// optional edited text to prefill. Workspace files are not restored
@@ -381,6 +397,8 @@ pub enum BridgeReply {
     Created(Result<SessionSummary, String>),
     /// Open result (conversation projection).
     Conversation(Result<ActiveConversation, String>),
+    /// One older page of the open branch.
+    Older(Result<OlderTranscript, String>),
     /// Send result (new head plus committed entry).
     Sent(Result<(String, ConversationEntry), String>),
     /// Settings load result: document, revision, provider ids with keys.

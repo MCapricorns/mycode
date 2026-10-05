@@ -13,7 +13,8 @@ MYCode 的 home 布局与严格配置文档。会话与压缩检查点都在 `se
 ├─ ui.json
 ├─ catalog-cache.json
 ├─ agents/<role>.md
-├─ sessions/<ses1-id>/{manifest.json,compaction.json,…}
+├─ sessions.db
+├─ sessions/<ses1-id>/{<br1-id>.jsonl,payloads/,compaction.json,…}
 └─ scratch/
 ```
 
