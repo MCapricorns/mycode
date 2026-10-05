@@ -115,6 +115,13 @@ pub fn apply_font_size(theme: &mut Theme, id: &str) {
 /// leave three on the last row.
 pub const PALETTE_GRID_COLUMNS: u16 = 5;
 
+/// Side length of one palette swatch, in pixels.
+///
+/// A fixed square. `width: 100%` plus `aspect_square` resolves each grid row
+/// to the settings-column width, so the font controls sit half a screen
+/// below the palette.
+pub const PALETTE_SWATCH_PX: f32 = 40.;
+
 /// GPUI's virtual family for the operating-system UI font.
 pub const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 
@@ -733,6 +740,7 @@ mod tests {
     #[test]
     fn palette_grid_is_five_columns_with_a_short_last_row() {
         assert_eq!(super::PALETTE_GRID_COLUMNS, 5);
+        assert!((36.0..=40.0).contains(&super::PALETTE_SWATCH_PX));
         assert_eq!(super::PALETTES.len(), 13);
         let columns = usize::from(super::PALETTE_GRID_COLUMNS);
         assert_eq!(super::PALETTES.len() / columns, 2);

@@ -138,7 +138,9 @@ pub(super) fn render_general_section(
 /// Label above a fixed five-column swatch grid.
 ///
 /// Thirteen palettes fill two rows and leave three on the last. Columns are
-/// equal, so the last row stays left-aligned instead of stretching.
+/// equal, so the last row stays left-aligned instead of stretching. Each
+/// swatch is a fixed square; a full-width square aspect ratio would make
+/// every row as tall as the column is wide.
 fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     div()
         .id("row-palette")
@@ -250,12 +252,17 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
 
 fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let swatch_px = px(crate::ui::desk::PALETTE_SWATCH_PX);
     div()
         .id("palette-grid")
         .w_full()
         .grid()
         .grid_cols(crate::ui::desk::PALETTE_GRID_COLUMNS)
         .gap_2()
+        // Rows stay content-sized. Stretch would turn the fixed squares back
+        // into the tall empty bands that pushed the font controls off screen.
+        .items_start()
+        .content_start()
         .children(crate::ui::desk::PALETTES.into_iter().map(|id| {
             let on = selected == id;
             let swatch = crate::ui::desk::palette_swatch(id);
@@ -271,9 +278,13 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElem
             };
             div()
                 .id(format!("palette-{id}"))
+                .w_full()
                 .min_w_0()
+                .self_start()
                 .flex()
                 .flex_col()
+                .flex_grow_0()
+                .items_center()
                 .gap_1()
                 .cursor_pointer()
                 .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -281,8 +292,9 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElem
                 }))
                 .child(
                     div()
-                        .w_full()
-                        .aspect_square()
+                        .size(swatch_px)
+                        .flex_grow_0()
+                        .flex_shrink_0()
                         .p(px(2.))
                         .rounded(px(8.))
                         .border_1()
@@ -292,6 +304,8 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> impl IntoElem
                 )
                 .child(
                     div()
+                        .w_full()
+                        .text_center()
                         .text_xs()
                         .truncate()
                         .text_color(theme.foreground)
