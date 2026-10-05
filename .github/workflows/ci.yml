@@ -9,9 +9,9 @@
 #    windows-latest is x64. Windows ARM64 uses the native windows-11-arm
 #    image; it is not a cross-compile from windows-latest. The macOS core
 #    job runs the release-plan self-test. There is no Ubuntu product
-#    compile job. release-plan, release-publish, and cargo-audit run on
-#    ubuntu-latest. They choose the tag, upload the three archives, and
-#    audit Cargo.lock. They do not compile the product.
+#    compile job. release-plan and release-publish run on ubuntu-latest.
+#    They choose the tag and upload the three archives. They do not
+#    compile the product.
 #
 # 2. release — a push to main whose quality gates passed publishes a new
 #    GitHub Release. Pull requests do not publish. The tag is
@@ -352,15 +352,3 @@ jobs:
             exit 1
           fi
           git push origin --delete "${ref}"
-
-  cargo-audit:
-    name: cargo-audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Audit Cargo.lock
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}

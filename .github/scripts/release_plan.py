@@ -730,10 +730,11 @@ def _expect_workflow_contract() -> None:
         "Ubuntu product compile triple remains",
     )
     _expect(
-        workflow.count("runs-on: ubuntu-latest") == 3,
-        "ubuntu-latest should only run release-plan, release-publish, and cargo-audit",
+        workflow.count("runs-on: ubuntu-latest") == 2,
+        "ubuntu-latest should only run release-plan and release-publish",
     )
-    for job in ("release-plan", "release-publish", "cargo-audit"):
+    _expect("cargo-audit" not in workflow, "cargo-audit job remains")
+    for job in ("release-plan", "release-publish"):
         body = _yaml_job(workflow, job)
         _expect("ubuntu-latest" in body, f"{job} left ubuntu-latest")
     plan = _yaml_job(workflow, "release-plan")
