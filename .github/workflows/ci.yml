@@ -99,8 +99,11 @@ jobs:
 
       # Runs the shipped updater script on this host: /bin/sh on macOS,
       # update.cmd on Windows. The target file is not the running test binary.
+      # The command is a block scalar: an unquoted `updates::` is `: ` and
+      # GitHub rejects the workflow before any job starts.
       - name: updater script swaps a quiescent binary
-        run: cargo test -p mycode-app --lib updates:: --locked -- --nocapture
+        run: |
+          cargo test -p mycode-app --lib updates:: --locked -- --nocapture
 
   desktop:
     name: desktop (${{ matrix.os }})
