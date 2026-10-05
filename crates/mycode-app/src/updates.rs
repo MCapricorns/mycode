@@ -449,10 +449,10 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. The hash command is
-    // `powershell -EncodedCommand`: the path stays in the environment, so
-    // the batch line has no parentheses or quotes for cmd to split. `call`
-    // is required so a `powershell.cmd` shim (the mismatch test) returns.
+    // which does not expand `%VAR%` inside the value. certutil receives that
+    // expanded path: `for /f` has already parsed parentheses, so `)` in
+    // `Program Files (x86)` does not close the command. `%` is doubled again
+    // because the `for /f` child cmd expands percents a second time.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
@@ -467,7 +467,6 @@ set "PREVIOUS=__PREVIOUS__"
 set "NEW=__NEW__"
 set "EXPECTED=__HASH__"
 setlocal EnableDelayedExpansion
-set "MYCODE_HASH_EXPECTED=!EXPECTED!"
 :retry
 if "!BACKED_UP!"=="0" goto backup
 goto replace
@@ -476,7 +475,7 @@ copy /y "!CURRENT!" "!PREVIOUS!" >nul 2>&1
 if errorlevel 1 goto wait
 set "BACKED_UP=1"
 :replace
-set "MYCODE_HASH_TARGET=!NEW!"
+set "MYCODE_HASH_TARGET=!NEW:%%=%%%%!"
 call :checkhash
 if errorlevel 1 (
   echo updater: staged binary sha256 does not match 1>&2
@@ -484,7 +483,7 @@ if errorlevel 1 (
 )
 move /y "!NEW!" "!CURRENT!" >nul 2>&1
 if errorlevel 1 goto wait
-set "MYCODE_HASH_TARGET=!CURRENT!"
+set "MYCODE_HASH_TARGET=!CURRENT:%%=%%%%!"
 call :checkhash
 if errorlevel 1 goto rollback
 goto done
@@ -510,86 +509,33 @@ rem Same line as the delete: cmd has already read it, so removing this
 rem script does not hide `exit` and turn a good replace into errorlevel 1.
 del "%~f0" & exit /b 0
 :checkhash
-rem UTF-16LE base64. Inbox PowerShell compares MYCODE_HASH_TARGET to
-rem MYCODE_HASH_EXPECTED. Bare `powershell` lets a test shim intercept it.
-call powershell -NoProfile -NonInteractive -EncodedCommand __PS__
-if errorlevel 1 goto hashfail
+set "HASHRESULT="
+set "SEEN="
+rem Delayed expansion inserts the path after for /f parses parentheses.
+rem The child cmd expands percents, so the value already stores %% as %.
+for /f "usebackq delims=" %%H in (`certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256`) do (
+  if not defined SEEN set "SEEN=%%H"
+  set "CANDIDATE=%%H"
+  set "CANDIDATE=!CANDIDATE: =!"
+  if not defined HASHRESULT if "!CANDIDATE:~64,1!"=="" if not "!CANDIDATE:~63,1!"=="" set "HASHRESULT=!CANDIDATE!"
+)
+if not defined HASHRESULT (
+  echo updater: certutil did not return a sha256 [!SEEN!] 1>&2
+  exit /b 1
+)
+if /i not "!HASHRESULT!"=="!EXPECTED!" (
+  echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
+  exit /b 1
+)
 exit /b 0
-:hashfail
-echo updater: sha256 does not match !MYCODE_HASH_EXPECTED! 1>&2
-exit /b 1
 "#;
-    let encoded = powershell_encoded_command(WINDOWS_HASH_SCRIPT);
     template
         .replace("__PREVIOUS__", &cmd_percent_escape(&previous))
         .replace("__CURRENT__", &cmd_percent_escape(&current))
         .replace("__NEW__", &cmd_percent_escape(&new_binary))
         .replace("__HASH__", &cmd_percent_escape(sha256))
-        .replace("__PS__", &encoded)
         .replace("__RELAUNCH__", relaunch_line)
         .replace('\n', "\r\n")
-}
-
-/// PowerShell `-EncodedCommand` payload: base64 of UTF-16LE, without a BOM.
-///
-/// The script hashes `MYCODE_HASH_TARGET` and exits 1 unless it matches
-/// `MYCODE_HASH_EXPECTED` (case-insensitive, which is what `-ne` does).
-/// A mismatch writes the actual hash to stderr. Any failure exits 1.
-const WINDOWS_HASH_SCRIPT: &str = "\
-$ErrorActionPreference = 'Stop'\n\
-try {\n\
-  $h = Get-FileHash -LiteralPath $env:MYCODE_HASH_TARGET -Algorithm SHA256\n\
-  if ($h.Hash -ne $env:MYCODE_HASH_EXPECTED) {\n\
-    [Console]::Error.WriteLine($h.Hash)\n\
-    exit 1\n\
-  }\n\
-  exit 0\n\
-} catch {\n\
-  [Console]::Error.WriteLine($_.Exception.Message)\n\
-  exit 1\n\
-}\n\
-";
-
-fn powershell_encoded_command(script: &str) -> String {
-    let mut utf16 = Vec::with_capacity(script.len() * 2);
-    for unit in script.encode_utf16() {
-        utf16.extend_from_slice(&unit.to_le_bytes());
-    }
-    base64_encode(&utf16)
-}
-
-fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    let mut index = 0;
-    while index + 3 <= bytes.len() {
-        let chunk = (u32::from(bytes[index]) << 16)
-            | (u32::from(bytes[index + 1]) << 8)
-            | u32::from(bytes[index + 2]);
-        out.push(TABLE[((chunk >> 18) & 0x3f) as usize] as char);
-        out.push(TABLE[((chunk >> 12) & 0x3f) as usize] as char);
-        out.push(TABLE[((chunk >> 6) & 0x3f) as usize] as char);
-        out.push(TABLE[(chunk & 0x3f) as usize] as char);
-        index += 3;
-    }
-    match bytes.len() - index {
-        1 => {
-            let chunk = u32::from(bytes[index]) << 16;
-            out.push(TABLE[((chunk >> 18) & 0x3f) as usize] as char);
-            out.push(TABLE[((chunk >> 12) & 0x3f) as usize] as char);
-            out.push('=');
-            out.push('=');
-        }
-        2 => {
-            let chunk = (u32::from(bytes[index]) << 16) | (u32::from(bytes[index + 1]) << 8);
-            out.push(TABLE[((chunk >> 18) & 0x3f) as usize] as char);
-            out.push(TABLE[((chunk >> 12) & 0x3f) as usize] as char);
-            out.push(TABLE[((chunk >> 6) & 0x3f) as usize] as char);
-            out.push('=');
-        }
-        _ => {}
-    }
-    out
 }
 
 fn unix_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: bool) -> String {
@@ -806,6 +752,14 @@ mod tests {
         let script = super::windows_script(staged, current, "abc", false);
         assert!(
             script.contains("set \"CURRENT=C:\\updates\\%%SystemRoot%%\\app.exe\""),
+            "{script}"
+        );
+        assert!(
+            script.contains("set \"MYCODE_HASH_TARGET=!NEW:%%=%%%%!\""),
+            "{script}"
+        );
+        assert!(
+            script.contains("certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
             "{script}"
         );
     }
@@ -1225,30 +1179,21 @@ mod tests {
         let dir = scratch("win-mismatch");
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let count = dir.join("powershell-count.txt");
+        let count = dir.join("certutil-count.txt");
+        // for /f runs `certutil` in a child cmd, which searches PATH and
+        // finds certutil.cmd before System32's certutil.exe. The first call
+        // hashes for real; the second prints a different hash.
+        let wrapper = format!(
+            "@echo off\r\nsetlocal EnableExtensions\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 (\r\n  echo SHA256 hash of dummy:\r\n  echo ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\r\n  echo CertUtil: -hashfile command completed successfully.\r\n  exit /b 0\r\n)\r\n\"%SystemRoot%\\System32\\certutil.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+            count = count.display()
+        );
+        std::fs::write(bin.join("certutil.cmd"), wrapper).unwrap();
         let current = dir.join("app.exe");
         let staged = dir.join("next.exe");
         std::fs::write(&current, b"old-bytes").unwrap();
         std::fs::write(&staged, b"new-bytes").unwrap();
         let script =
             super::windows_script(&staged, &current, &super::sha256_hex(b"new-bytes"), false);
-        let encoded = script
-            .lines()
-            .find_map(|line| {
-                line.trim()
-                    .strip_prefix("call powershell -NoProfile -NonInteractive -EncodedCommand ")
-            })
-            .expect("encoded hash command");
-        // PATH finds powershell.cmd before System32's powershell.exe when
-        // the command is bare `powershell`. The updater `call`s it so this
-        // shim returns. The first call hashes for real; the second fails.
-        // No setlocal: `exit /b` would restore the errorlevel from before it.
-        let wrapper = format!(
-            "@echo off\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 exit /b 1\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -EncodedCommand {encoded}\r\nexit /b %ERRORLEVEL%\r\n",
-            count = count.display(),
-            encoded = encoded
-        );
-        std::fs::write(bin.join("powershell.cmd"), wrapper).unwrap();
         let path = dir.join("update.cmd");
         std::fs::write(&path, script).unwrap();
         let path_text = path.to_string_lossy().into_owned();
@@ -1267,30 +1212,6 @@ mod tests {
         assert!(text.contains("restor"), "rollback must be visible: {text}");
         assert_eq!(std::fs::read(&current).unwrap(), b"old-bytes");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn powershell_encoded_command_is_utf16le_base64() {
-        assert_eq!(super::base64_encode(b"a"), "YQ==");
-        assert_eq!(super::base64_encode(b"ab"), "YWI=");
-        assert_eq!(super::base64_encode(b"abc"), "YWJj");
-        let encoded = super::powershell_encoded_command("A");
-        // UTF-16LE 'A' is 0x41 0x00, which is base64 "QQA=".
-        assert_eq!(encoded, "QQA=");
-        let script = super::windows_script(
-            std::path::Path::new(r"C:\Program Files (x86)\next.exe"),
-            std::path::Path::new(r"C:\Program Files (x86)\app.exe"),
-            "ab",
-            false,
-        );
-        assert!(
-            script.contains("call powershell -NoProfile -NonInteractive -EncodedCommand "),
-            "{script}"
-        );
-        assert!(
-            !script.contains("Get-FileHash"),
-            "the hash script must stay inside EncodedCommand: {script}"
-        );
     }
 
     #[test]
