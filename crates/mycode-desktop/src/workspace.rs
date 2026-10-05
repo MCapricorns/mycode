@@ -134,10 +134,9 @@ pub struct Workspace {
     agent_roles_project: Option<String>,
     /// The Agents section was opened again, or the project changed.
     agent_roles_stale: bool,
-    /// When the startup veil began. `None` until the first frame.
-    splash_started: Option<std::time::Instant>,
-    /// The startup veil has finished, or reduced motion skipped it.
-    splash_dismissed: bool,
+    /// Startup veil. A click, Escape, or the timed fade drops it.
+    /// Reduced motion dismisses it before the first paint.
+    splash: crate::ui::SplashGate,
     /// The next model-step render should clear and focus the search box.
     picker_focus_pending: bool,
     ask_input: Option<Entity<InputState>>,
@@ -232,8 +231,7 @@ impl Workspace {
             agent_roles: None,
             agent_roles_project: None,
             agent_roles_stale: false,
-            splash_started: None,
-            splash_dismissed: false,
+            splash: crate::ui::SplashGate::new(),
             picker_focus_pending: false,
             ask_input: None,
             pending_project: None,
@@ -425,29 +423,34 @@ impl Workspace {
     }
 
     /// Starts the startup veil on the first frame, unless motion is reduced.
+    ///
+    /// A preference that flips on while the veil is up drops it on the next
+    /// frame, so the fade does not keep covering the desk.
     pub(crate) fn begin_splash(&mut self, cx: &mut Context<Self>) {
-        if self.splash_dismissed || self.splash_started.is_some() {
+        let Some(wait) = self.splash.on_frame(cx.reduce_motion()) else {
             return;
-        }
-        if cx.reduce_motion() {
-            self.splash_dismissed = true;
-            return;
-        }
-        self.splash_started = Some(std::time::Instant::now());
-        let wait = crate::ui::splash_total() + std::time::Duration::from_millis(40);
+        };
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
             let _ = this.update(cx, |workspace, cx| {
-                workspace.splash_dismissed = true;
-                cx.notify();
+                if workspace.splash.dismiss() {
+                    cx.notify();
+                }
             });
         })
         .detach();
     }
 
+    /// Drops the startup veil immediately. Click and Escape use this.
+    pub(crate) fn dismiss_splash(&mut self, cx: &mut Context<Self>) {
+        if self.splash.dismiss() {
+            cx.notify();
+        }
+    }
+
     /// Whether the startup veil is still covering the desk.
     pub(crate) fn splash_visible(&self) -> bool {
-        !self.splash_dismissed
+        self.splash.visible()
     }
 
     /// Switches the Models settings sub-page.

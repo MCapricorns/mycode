@@ -14,7 +14,7 @@ mod splash;
 mod title_bar;
 mod update_dialog;
 
-pub(crate) use splash::splash_total;
+pub(crate) use splash::SplashGate;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -61,6 +61,9 @@ pub fn render_root(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
+    if let Some(prefer) = motion::system_prefers_reduced_motion() {
+        cx.set_reduce_motion(prefer);
+    }
     workspace.begin_splash(cx);
     let layout = DeskLayout::of(window);
     let theme = cx.theme().clone();
@@ -158,6 +161,7 @@ fn main_pane(
     };
     motion::fade_in(
         format!("main-pane-{pane_key}"),
+        cx.reduce_motion(),
         div()
             .id("main-pane")
             .flex_1()
