@@ -1,9 +1,12 @@
 //! Structured questions, docked above the composer.
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{Context, InteractiveElement, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui_kit::{
+    Context, InteractiveElement, IntoElement, ParentElement, Stateful, StatefulInteractiveElement,
+    Styled, Window, div, px,
+};
 
 use crate::i18n::t;
 use crate::ui::{desk::Desk, lamp, short_id, skin};
@@ -77,19 +80,21 @@ pub(crate) fn render_ask_panel(
                                             .flex()
                                             .flex_row()
                                             .flex_wrap()
+                                            .items_center()
                                             .gap_2()
                                             .children(choices.iter().enumerate().map(
                                                 |(choice_index, choice)| {
                                                     let answer = choice.clone();
                                                     let selected = picked == *choice;
-                                                    Button::new(format!(
-                                                        "ask-{index}-{choice_index}-{}",
-                                                        short_id(choice)
-                                                    ))
-                                                    .label(choice.clone())
-                                                    .small()
-                                                    .when(selected, |this| this.primary())
-                                                    .when(!selected, |this| this.outline())
+                                                    ask_choice_chip(
+                                                        format!(
+                                                            "ask-{index}-{choice_index}-{}",
+                                                            short_id(choice)
+                                                        ),
+                                                        choice.clone(),
+                                                        selected,
+                                                        theme,
+                                                    )
                                                     .on_click(cx.listener(
                                                         move |workspace, _, _, cx| {
                                                             workspace.on_pick_ask_choice(
@@ -116,8 +121,10 @@ pub(crate) fn render_ask_panel(
                         .id("ask-free-row")
                         .flex()
                         .flex_row()
+                        .flex_nowrap()
                         .items_center()
                         .gap_2()
+                        .w_full()
                         .child(
                             div()
                                 .id("ask-free-input")
@@ -128,15 +135,60 @@ pub(crate) fn render_ask_panel(
                                 .child(Input::new(&ask_input)),
                         )
                         .child(
-                            Button::new("ask-submit")
-                                .label(t("Answer", "回答"))
-                                .small()
-                                .primary()
+                            skin::glass_button("ask-submit", true, theme)
+                                .flex_shrink_0()
+                                .whitespace_nowrap()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.on_submit_free_ask(cx);
-                                })),
+                                }))
+                                .child(t("Answer", "回答")),
                         ),
                 ),
         )
         .into_any_element()
+}
+
+/// One ask-user choice. The label stays on one line; a narrow row wraps
+/// whole chips. Selected uses the same soft accent fill as a primary button.
+fn ask_choice_chip(
+    id: impl Into<gpui_kit::ElementId>,
+    label: String,
+    selected: bool,
+    theme: &Theme,
+) -> Stateful<gpui_kit::Div> {
+    let fill = if selected {
+        crate::ui::desk::primary_fill(theme.accent, theme.primary)
+    } else {
+        theme.transparent
+    };
+    let hover = if selected {
+        crate::ui::desk::deepen(fill)
+    } else {
+        theme.secondary_hover
+    };
+    let border = if selected {
+        crate::ui::desk::primary_edge(theme.primary)
+    } else {
+        theme.border
+    };
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .h(px(32.))
+        .min_w(px(96.))
+        .px(px(12.))
+        .rounded(px(11.))
+        .border_1()
+        .border_color(border)
+        .bg(fill)
+        .text_color(theme.foreground)
+        .text_sm()
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover).border_color(border))
+        .child(label)
 }
