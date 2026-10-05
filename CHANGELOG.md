@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-05
+
 ### 产品
 
 - 桌面更安静：侧栏更窄，对话居中，详情默认收起，宽窗口可以钉在旁边。设置里的界面字号（S / M / L / XL）立即生效并写入 settings.json。
@@ -29,6 +31,7 @@ mycode 是跑在本机的桌面编码代理。对话、工具和会话都在你�
 - 子代理没有墙钟超时，长任务不会在大约 10 分钟时被杀掉。取消仍然会停掉子代理。并发默认 4 个。设置里的 `0` 表示使用这个默认值，不是零个子代理。
 - 界面为深色。设置里可选色板：石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.2
 [0.9.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.1
 [0.9.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.0
