@@ -1,9 +1,14 @@
 # Changelog
 
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
-质量门通过的 `main` 推送都会发布新的 GitHub Release 和新标签（四个平台的 zip 与 `.sha256`）。说明用本文件里该版本的条目，不从提交记录生成。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。
+质量门通过的 `main` 推送都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon）。说明用本文件里该版本的条目，不从提交记录生成。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。
 
 ## [Unreleased]
+
+### Removed
+
+- 发布包不再提供 Linux x86_64。GitHub Release 只包含 Windows x64、Windows ARM64（`aarch64-pc-windows-msvc`）和 macOS Apple Silicon（`aarch64-apple-darwin`）。
+- 质量门不再包含 Ubuntu。格式、clippy 和 `exec` 烟测只在 Windows x64、Windows ARM64 与 macOS Apple Silicon 上跑。发布计划自测改在 macOS 的 `core` 作业里。
 
 ## [0.7.4] - 2026-10-04
 

@@ -517,27 +517,42 @@ def _expect_choice() -> None:
         raise SystemExit("self-test failed: pre-release version was accepted")
 
 
+def _unpublished_version(text: str) -> str:
+    """A stable version this changelog does not already head.
+
+    The release bump publishes whatever patch was the fixture last time.
+    Pinning ``0.7.4`` made the promotion checks read the existing section
+    instead of the unreleased notes.
+    """
+
+    parts = (0, 7, 5)
+    for _ in range(1000):
+        version = format_version(parts)
+        if f"## [{version}]" not in text:
+            return version
+        parts = bump_patch(parts)
+    raise SystemExit("self-test failed: no free changelog fixture version")
+
+
 def _expect_changelog() -> None:
     original = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    version = _unpublished_version(original)
+    heading = f"## [{version}] - 2026-10-04"
+    compare = f"[Unreleased]: {REPO_URL}/compare/v{version}...HEAD"
+    version_link = f"[{version}]: {REPO_URL}/releases/tag/v{version}"
     sample = original.replace(
         "## [Unreleased]\n",
         "## [Unreleased]\n\n### Changed\n\n- planner promotes this section\n",
         1,
     )
-    updated, notes = rewrite_changelog(sample, "0.7.4", "2026-10-04")
+    updated, notes = rewrite_changelog(sample, version, "2026-10-04")
     _expect("planner promotes this section" in notes, notes)
-    _expect("## [0.7.4] - 2026-10-04" in updated, "missing heading")
+    _expect(heading in updated, "missing heading")
     _expect("## [0.7.3] - 2026-10-04" in updated, "dropped 0.7.3")
     _expect("Windows ARM64" in updated, "dropped 0.7.3 notes")
     _expect("aarch64-pc-windows-msvc" in updated, "dropped ARM64 archive name")
-    _expect(
-        "[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.4...HEAD" in updated,
-        "compare link",
-    )
-    _expect(
-        "[0.7.4]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.4" in updated,
-        "version link",
-    )
+    _expect(compare in updated, "compare link")
+    _expect(version_link in updated, "version link")
     _expect(
         "[0.7.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.7.3" in updated,
         "old link dropped",
@@ -551,14 +566,19 @@ def _expect_changelog() -> None:
         original,
         count=1,
     )
-    empty_notes = rewrite_changelog(emptied, "0.7.4", "2026-10-04")[1]
+    empty_notes = rewrite_changelog(emptied, version, "2026-10-04")[1]
     _expect("自动发布" in empty_notes, empty_notes)
-    live_notes = rewrite_changelog(original, "0.7.4", "2026-10-04")[1]
-    _expect("补丁号加一" in live_notes, live_notes)
-    _expect("自动发布" not in live_notes, live_notes)
-    again, again_notes = rewrite_changelog(updated, "0.7.4", "2026-10-05")
+    live_body = section_body_unreleased(original)
+    live_notes = rewrite_changelog(original, version, "2026-10-04")[1]
+    if live_body:
+        _expect(live_body in live_notes, live_notes)
+        if "自动发布" not in live_body:
+            _expect("自动发布" not in live_notes, live_notes)
+    else:
+        _expect("自动发布" in live_notes, live_notes)
+    again, again_notes = rewrite_changelog(updated, version, "2026-10-05")
     _expect(again_notes == notes, "existing section was rewritten")
-    _expect(again.count("## [0.7.4]") == 1, "duplicate heading")
+    _expect(again.count(f"## [{version}]") == 1, "duplicate heading")
 
     kept = original.replace(
         "## [Unreleased]\n",
@@ -568,18 +588,14 @@ def _expect_changelog() -> None:
     # Pretend the human already wrote the target section.
     kept = kept.replace(
         "## [0.7.3] - 2026-10-04\n",
-        "## [0.7.4] - 2026-10-04\n\n### Added\n\n- hand written\n\n## [0.7.3] - 2026-10-04\n",
+        f"{heading}\n\n### Added\n\n- hand written\n\n## [0.7.3] - 2026-10-04\n",
         1,
     )
-    preserved, preserved_notes = rewrite_changelog(kept, "0.7.4", "2026-10-04")
+    preserved, preserved_notes = rewrite_changelog(kept, version, "2026-10-04")
     _expect(preserved_notes == "### Added\n\n- hand written", preserved_notes)
     _expect("leave me here" in preserved, "unreleased notes were consumed")
     _expect("Windows ARM64" in preserved, "ARM64 notes were dropped")
-    _expect(
-        "[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.7.4...HEAD"
-        in preserved,
-        "compare link was not moved",
-    )
+    _expect(compare in preserved, "compare link was not moved")
 
 
 def section_body_unreleased(text: str) -> str:
@@ -653,6 +669,20 @@ def _expect_output_writer() -> None:
         raise SystemExit("self-test failed: bad cleanup ref was accepted")
 
 
+def _yaml_job(workflow: str, name: str) -> str:
+    """Return one top-level job body from ci.yml, including its header."""
+
+    marker = f"  {name}:\n"
+    start = workflow.find(marker)
+    if start < 0:
+        raise SystemExit(f"self-test failed: missing job {name}")
+    rest = workflow[start + len(marker) :]
+    nxt = re.search(r"(?m)^  [a-z0-9-]+:\n", rest)
+    if nxt is None:
+        return workflow[start:]
+    return workflow[start : start + len(marker) + nxt.start()]
+
+
 def _expect_workflow_contract() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     lowered = workflow.lower()
@@ -671,26 +701,92 @@ def _expect_workflow_contract() -> None:
         >= 2,
         "a failed plan can still build or publish",
     )
-    _expect("windows-11-arm" in workflow, "Windows ARM64 runner missing")
     _expect("native_image_launches" in workflow, "exec smoke test missing")
-    for target in (
+    release_targets = (
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
         "aarch64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
-    ):
-        _expect(target in workflow, f"missing platform {target}")
+    )
+    release_build = _yaml_job(workflow, "release-build")
+    _expect("windows-11-arm" in release_build, "Windows ARM64 release runner missing")
+    for target in release_targets:
+        _expect(target in release_build, f"missing release platform {target}")
+        _expect(
+            f"mycode-desktop-<tag>-{target}.zip" in workflow,
+            f"missing release asset comment {target}",
+        )
+    _expect(
+        "x86_64-unknown-linux-gnu" not in release_build,
+        "Linux is still a release target",
+    )
+    _expect("Package (Linux)" not in workflow, "Linux packaging step remains")
+    _expect(
+        "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" not in workflow,
+        "Linux zip is still a release asset",
+    )
+    _expect("linux-gpui-deps" not in workflow, "Linux GPUI action is still wired")
+    _expect(
+        "x86_64-unknown-linux-gnu" not in workflow,
+        "Ubuntu product compile triple remains",
+    )
+    _expect(
+        workflow.count("runs-on: ubuntu-latest") == 2,
+        "ubuntu-latest should only run release-plan and release-publish",
+    )
+    for job in ("release-plan", "release-publish"):
+        body = _yaml_job(workflow, job)
+        _expect("ubuntu-latest" in body, f"{job} left ubuntu-latest")
+    gate_hosts = (
+        "windows-latest",
+        "windows-11-arm",
+        "macos-latest",
+    )
+    for job in ("core", "desktop"):
+        body = _yaml_job(workflow, job)
+        for host in gate_hosts:
+            _expect(host in body, f"{job} dropped {host}")
+        _expect("ubuntu-latest" not in body, f"{job} still compiles on Ubuntu")
+    core = _yaml_job(workflow, "core")
+    _expect(
+        "release_plan.py --self-test" in core,
+        "release planner self-test missing from core",
+    )
+    _expect("runner.os == 'macOS'" in core, "self-test is not on the macOS core job")
+    _expect("runner.os == 'Linux'" not in workflow, "self-test still waits for Linux")
+    _expect(
+        "release_plan.py" not in _yaml_job(workflow, "desktop"),
+        "desktop job picked up the release planner self-test",
+    )
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
-    _expect("四个平台" in readme, "Chinese docs dropped the fourth platform")
+    _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
+    _expect("四个平台" not in readme, "Chinese docs still claim four release platforms")
     _expect("Windows ARM64" in readme, "Chinese docs dropped Windows ARM64")
     _expect("skips packaging" not in readme, "English skip rule remains")
-    _expect("four platform" in readme, "English docs dropped the fourth platform")
+    _expect("three platform" in readme, "English docs dropped the three release platforms")
+    _expect("four platform" not in readme, "English docs still claim four release platforms")
     _expect("Windows ARM64" in readme, "English docs dropped Windows ARM64")
+    _expect(
+        "x86_64-unknown-linux-gnu" not in readme,
+        "README still names a Linux release zip",
+    )
+    _expect(
+        "Linux x86_64 和 macOS" not in readme,
+        "Chinese docs still run PR gates on Linux",
+    )
+    _expect(
+        "Linux x86_64, and macOS" not in readme,
+        "English docs still run PR gates on Linux",
+    )
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     _expect("还没有带齐三个平台压缩包" not in changelog, "three-platform skip rule remains")
     _expect("还没有带齐四个平台压缩包" not in changelog, "four-platform skip rule remains")
+    _expect("三个平台的 zip" in changelog, "changelog policy is not three release platforms")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
+    _expect(
+        "x86_64-unknown-linux-gnu" in changelog,
+        "0.7.2 Linux release history was erased",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
