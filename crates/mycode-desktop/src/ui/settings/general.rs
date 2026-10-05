@@ -106,7 +106,18 @@ pub(super) fn render_general_section(
                 .text_sm()
                 .child(t("HTTP User-Agent", "HTTP User-Agent")),
         )
-        .child(div().h(px(30.)).text_sm().child(Input::new(&ua_input)))
+        .child(
+            // Fixed height. `Input` is `size_full`; without a definite box
+            // its percentage height resolves against the scrollport.
+            div()
+                .w_full()
+                .h(px(30.))
+                .min_h(px(30.))
+                .max_h(px(30.))
+                .flex_none()
+                .text_sm()
+                .child(Input::new(&ua_input)),
+        )
         .child(
             div()
                 .text_xs()
@@ -238,6 +249,10 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
         .gap_2()
         .child(
             div()
+                .w_full()
+                .min_w_0()
+                .h_auto()
+                .flex_none()
                 .flex()
                 .flex_col()
                 .gap_0p5()
@@ -376,7 +391,8 @@ mod appearance_layout {
     use gpui_kit::test::{TestSupportExt as _, TestWindowExt};
     use gpui_kit::{
         AppContext as _, Context, InteractiveElement, IntoElement, ParentElement, Render,
-        StatefulInteractiveElement, Styled, TestAppContext, Window, div, px, rems, size,
+        ScrollDelta, StatefulInteractiveElement, Styled, TestAppContext, Window, div, point, px,
+        rems, size,
     };
 
     use super::super::widgets::settings_card;
@@ -399,9 +415,20 @@ mod appearance_layout {
                     })
                     .collect(),
             );
-            let font = labeled_block("dropdown-font-family", "Interface font", px(32.));
-            let size_row = labeled_block("row-font-size", "Interface font size", px(28.));
-            let agent = labeled_block("row-user-agent", "HTTP User-Agent", px(30.));
+            let font = probe_dropdown(
+                "font-family",
+                "Interface font",
+                "System uses the operating-system UI font. Other choices are fonts this computer can load.",
+                "System",
+            );
+            let size_row = probe_font_size();
+            let language = probe_dropdown(
+                "language",
+                "Language",
+                "Interface language. English and Simplified Chinese are built in.",
+                "English",
+            );
+            let agent = probe_user_agent();
             div()
                 .size_full()
                 .flex()
@@ -420,6 +447,7 @@ mod appearance_layout {
                                 .id("settings-content")
                                 .flex_1()
                                 .min_w_0()
+                                .min_h_0()
                                 .h_full()
                                 .overflow_y_scroll()
                                 .flex()
@@ -459,6 +487,7 @@ mod appearance_layout {
                                                     .into_any_element(),
                                                 font,
                                                 size_row,
+                                                language,
                                                 agent,
                                             ],
                                         )),
@@ -469,17 +498,157 @@ mod appearance_layout {
         }
     }
 
-    fn labeled_block(id: &str, label: &str, control_h: gpui_kit::Pixels) -> gpui_kit::AnyElement {
+    /// Mirrors `dropdown_field` so the layout test measures the real row, not a
+    /// short stand-in. Clicks are no-ops; only the box tree matters here.
+    fn probe_dropdown(
+        id: &str,
+        label: &str,
+        description: &str,
+        current: &str,
+    ) -> gpui_kit::AnyElement {
         div()
-            .id(id.to_owned())
+            .id(format!("dropdown-{id}"))
             .w_full()
             .h_auto()
             .flex_none()
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_sm().child(label.to_owned()))
-            .child(div().h(control_h).w(px(160.)).child(label.to_owned()))
+            .child(
+                div()
+                    .id(format!("dropdown-row-{id}"))
+                    .w_full()
+                    .min_w_0()
+                    .h_auto()
+                    .flex_none()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .test_support()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(120.))
+                            .h_auto()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().text_sm().whitespace_normal().child(label.to_owned()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .opacity(0.5)
+                                    .whitespace_normal()
+                                    .child(description.to_owned()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(format!("dropdown-button-{id}"))
+                            .h(px(32.))
+                            .w(px(200.))
+                            .flex_none()
+                            .px_2()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .test_support()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .whitespace_nowrap()
+                                    .text_sm()
+                                    .child(current.to_owned()),
+                            )
+                            .child(div().size(px(14.)).flex_none()),
+                    ),
+            )
+            .test_support()
+            .into_any_element()
+    }
+
+    /// Mirrors `font_size_field` plus `choice_chips`.
+    fn probe_font_size() -> gpui_kit::AnyElement {
+        div()
+            .id("row-font-size")
+            .w_full()
+            .h_auto()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .h_auto()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(div().text_sm().whitespace_normal().child("Interface font size"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .whitespace_normal()
+                            .child("S / M / L / XL, about 12 / 13 / 14 / 16 px. Chat, the sidebar, and settings follow it immediately."),
+                    ),
+            )
+            .child(
+                div()
+                    .id("chips-font-size")
+                    .w_full()
+                    .h_auto()
+                    .flex_none()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_start()
+                    .content_start()
+                    .justify_start()
+                    .gap_1()
+                    .children(["s", "m", "l", "xl"].into_iter().map(|value| {
+                        div()
+                            .id(format!("font-size-{value}"))
+                            .h(px(28.))
+                            .px_2()
+                            .flex_none()
+                            .self_start()
+                            .flex()
+                            .items_center()
+                            .child(value.to_uppercase())
+                            .test_support()
+                    })),
+            )
+            .test_support()
+            .into_any_element()
+    }
+
+    fn probe_user_agent() -> gpui_kit::AnyElement {
+        div()
+            .id("row-user-agent")
+            .w_full()
+            .h_auto()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_sm().child("HTTP User-Agent"))
+            .child(
+                div()
+                    .w_full()
+                    .h(px(30.))
+                    .min_h(px(30.))
+                    .max_h(px(30.))
+                    .flex_none()
+                    .text_sm()
+                    .child("pi"),
+            )
             .test_support()
             .into_any_element()
     }
@@ -488,7 +657,7 @@ mod appearance_layout {
     fn appearance_card_keeps_font_controls_under_the_palette(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(|cx| cx.set_reduce_motion(true));
-        let handle = cx.open_window(size(px(1280.), px(800.)), |_, _| AppearanceProbe);
+        let handle = cx.open_window(size(px(1280.), px(480.)), |_, _| AppearanceProbe);
         cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
             let swatches = window.find("palette-swatches").bounds();
@@ -499,8 +668,12 @@ mod appearance_layout {
             let plum = window.find("palette-plum").bounds();
             let aurora = window.find("palette-aurora").bounds();
             let font = window.find("dropdown-font-family").bounds();
+            let font_row = window.find("dropdown-row-font-family").bounds();
+            let font_button = window.find("dropdown-button-font-family").bounds();
             let size_row = window.find("row-font-size").bounds();
+            let language = window.find("dropdown-language").bounds();
             let agent = window.find("row-user-agent").bounds();
+            let chip = window.find("font-size-s").bounds();
             let card = window.find("card-appearance").bounds();
             let content = window.find("settings-content").bounds();
 
@@ -531,17 +704,25 @@ mod appearance_layout {
                 "last row stays left-aligned: plum {plum:?} aurora {aurora:?}"
             );
             assert!(
-                font.size.height < px(120.) && size_row.size.height < px(120.),
-                "font controls should not stretch, font {font:?} size {size_row:?}"
+                font.size.height < px(120.)
+                    && size_row.size.height < px(120.)
+                    && (font.size.height - font_row.size.height).abs() <= px(2.),
+                "font controls should be the row, not a stretched section: font {font:?} row {font_row:?} size {size_row:?}"
             );
             assert!(
-                card.size.height + px(80.) < content.size.height,
-                "appearance card should not fill the scrollport, card {card:?} content {content:?}"
+                (font_button.size.width - px(200.)).abs() <= px(2.)
+                    && (font_button.size.height - px(32.)).abs() <= px(2.),
+                "interface font button should paint at its fixed size, got {font_button:?}"
+            );
+            assert!(
+                card.size.height > content.size.height && card.size.height < px(920.),
+                "appearance card should scroll inside the pane instead of growing a blank band, card {card:?} content {content:?}"
             );
 
             let font_gap = font.origin.y - swatches.bottom();
             let size_gap = size_row.origin.y - font.bottom();
-            let agent_gap = agent.origin.y - size_row.bottom();
+            let language_gap = language.origin.y - size_row.bottom();
+            let agent_gap = agent.origin.y - language.bottom();
             assert!(
                 font_gap >= px(0.) && font_gap < px(80.),
                 "gap between palette and interface font is {font_gap:?}, swatches {swatches:?} font {font:?}"
@@ -551,12 +732,46 @@ mod appearance_layout {
                 "gap between interface font and S–XL is {size_gap:?}"
             );
             assert!(
-                agent_gap >= px(0.) && agent_gap < px(80.),
-                "gap between S–XL and user-agent is {agent_gap:?}"
+                language_gap >= px(0.) && language_gap < px(80.),
+                "gap between S–XL and language is {language_gap:?}"
             );
             assert!(
-                agent.bottom() < px(760.),
-                "palette, font, and size should share the first screen, ua {agent:?}"
+                agent_gap >= px(0.) && agent_gap < px(80.),
+                "gap between language and user-agent is {agent_gap:?}"
+            );
+            assert!(
+                chip.size.height > px(16.) && chip.size.height < px(48.),
+                "S chip should paint at content height, got {chip:?}"
+            );
+            assert!(
+                agent.bottom() < px(920.),
+                "palette through user-agent should stay one short page, ua {agent:?}"
+            );
+
+            // Scrolling the settings pane must not panic, and the same
+            // sections have to stay content-sized after the offset changes.
+            window.scroll(
+                "settings-content",
+                ScrollDelta::Pixels(point(px(0.), px(-240.))),
+                cx,
+            );
+            let font_after = window.find("dropdown-font-family").bounds();
+            let size_after = window.find("row-font-size").bounds();
+            let language_after = window.find("dropdown-language").bounds();
+            let agent_after = window.find("row-user-agent").bounds();
+            let scrolled_gap = size_after.origin.y - font_after.bottom();
+            let scrolled_language = language_after.origin.y - size_after.bottom();
+            let scrolled_agent = agent_after.origin.y - language_after.bottom();
+            assert!(
+                font_after.size.height < px(120.)
+                    && size_after.size.height < px(120.)
+                    && scrolled_gap >= px(0.)
+                    && scrolled_gap < px(80.)
+                    && scrolled_language >= px(0.)
+                    && scrolled_language < px(80.)
+                    && scrolled_agent >= px(0.)
+                    && scrolled_agent < px(80.),
+                "scroll should keep font, size, language, and user-agent packed: font {font_after:?} size {size_after:?} language {language_after:?} ua {agent_after:?}"
             );
         })
         .unwrap();
