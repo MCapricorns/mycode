@@ -449,9 +449,10 @@ fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: boo
     //
     // Paths are stored while delayed expansion is off, with `%` doubled so
     // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. The hash reads that
-    // value from the environment: a `for /f` command line would split on
-    // `)` in `Program Files (x86)`, and `call` would expand percents again.
+    // which does not expand `%VAR%` inside the value. The hash command is
+    // `powershell -EncodedCommand`: the path stays in the environment, so
+    // the batch line has no parentheses or quotes for cmd to split. `call`
+    // is required so a `powershell.cmd` shim (the mismatch test) returns.
     let relaunch_line = if relaunch {
         "start \"\" \"!CURRENT!\"\n"
     } else {
@@ -509,24 +510,86 @@ rem Same line as the delete: cmd has already read it, so removing this
 rem script does not hide `exit` and turn a good replace into errorlevel 1.
 del "%~f0" & exit /b 0
 :checkhash
-rem Inbox Windows PowerShell 5.1. The path stays in MYCODE_HASH_TARGET, so
-rem parentheses and percent signs are not parsed by cmd. -ne ignores case.
-rem The command name is bare `powershell` so a test can place powershell.cmd
-rem ahead of System32 on PATH; powershell.exe would skip that shim.
-powershell -NoProfile -NonInteractive -Command "try { $h = Get-FileHash -LiteralPath $env:MYCODE_HASH_TARGET -Algorithm SHA256 -ErrorAction Stop; if ($h.Hash -ne $env:MYCODE_HASH_EXPECTED) { exit 1 } } catch { exit 1 }"
+rem UTF-16LE base64. Inbox PowerShell compares MYCODE_HASH_TARGET to
+rem MYCODE_HASH_EXPECTED. Bare `powershell` lets a test shim intercept it.
+call powershell -NoProfile -NonInteractive -EncodedCommand __PS__
 if errorlevel 1 goto hashfail
 exit /b 0
 :hashfail
 echo updater: sha256 does not match !MYCODE_HASH_EXPECTED! 1>&2
 exit /b 1
 "#;
+    let encoded = powershell_encoded_command(WINDOWS_HASH_SCRIPT);
     template
         .replace("__PREVIOUS__", &cmd_percent_escape(&previous))
         .replace("__CURRENT__", &cmd_percent_escape(&current))
         .replace("__NEW__", &cmd_percent_escape(&new_binary))
         .replace("__HASH__", &cmd_percent_escape(sha256))
+        .replace("__PS__", &encoded)
         .replace("__RELAUNCH__", relaunch_line)
         .replace('\n', "\r\n")
+}
+
+/// PowerShell `-EncodedCommand` payload: base64 of UTF-16LE, without a BOM.
+///
+/// The script hashes `MYCODE_HASH_TARGET` and exits 1 unless it matches
+/// `MYCODE_HASH_EXPECTED` (case-insensitive, which is what `-ne` does).
+/// A mismatch writes the actual hash to stderr. Any failure exits 1.
+const WINDOWS_HASH_SCRIPT: &str = "\
+$ErrorActionPreference = 'Stop'\n\
+try {\n\
+  $h = Get-FileHash -LiteralPath $env:MYCODE_HASH_TARGET -Algorithm SHA256\n\
+  if ($h.Hash -ne $env:MYCODE_HASH_EXPECTED) {\n\
+    [Console]::Error.WriteLine($h.Hash)\n\
+    exit 1\n\
+  }\n\
+  exit 0\n\
+} catch {\n\
+  [Console]::Error.WriteLine($_.Exception.Message)\n\
+  exit 1\n\
+}\n\
+";
+
+fn powershell_encoded_command(script: &str) -> String {
+    let mut utf16 = Vec::with_capacity(script.len() * 2);
+    for unit in script.encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    base64_encode(&utf16)
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let mut index = 0;
+    while index + 3 <= bytes.len() {
+        let chunk = (u32::from(bytes[index]) << 16)
+            | (u32::from(bytes[index + 1]) << 8)
+            | u32::from(bytes[index + 2]);
+        out.push(TABLE[((chunk >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((chunk >> 12) & 0x3f) as usize] as char);
+        out.push(TABLE[((chunk >> 6) & 0x3f) as usize] as char);
+        out.push(TABLE[(chunk & 0x3f) as usize] as char);
+        index += 3;
+    }
+    match bytes.len() - index {
+        1 => {
+            let chunk = u32::from(bytes[index]) << 16;
+            out.push(TABLE[((chunk >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((chunk >> 12) & 0x3f) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        2 => {
+            let chunk = (u32::from(bytes[index]) << 16) | (u32::from(bytes[index + 1]) << 8);
+            out.push(TABLE[((chunk >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((chunk >> 12) & 0x3f) as usize] as char);
+            out.push(TABLE[((chunk >> 6) & 0x3f) as usize] as char);
+            out.push('=');
+        }
+        _ => {}
+    }
+    out
 }
 
 fn unix_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: bool) -> String {
@@ -1163,20 +1226,29 @@ mod tests {
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let count = dir.join("powershell-count.txt");
-        // PATH finds powershell.cmd before System32's powershell.exe. The
-        // first call hashes for real; the second pretends the replaced
-        // bytes changed. Calling powershell.exe would skip this shim.
-        let wrapper = format!(
-            "@echo off\r\nsetlocal EnableExtensions\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 exit /b 1\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -Command \"try {{ $h = Get-FileHash -LiteralPath $env:MYCODE_HASH_TARGET -Algorithm SHA256 -ErrorAction Stop; if ($h.Hash -ne $env:MYCODE_HASH_EXPECTED) {{ exit 1 }} }} catch {{ exit 1 }}\"\r\nexit /b %ERRORLEVEL%\r\n",
-            count = count.display()
-        );
-        std::fs::write(bin.join("powershell.cmd"), wrapper).unwrap();
         let current = dir.join("app.exe");
         let staged = dir.join("next.exe");
         std::fs::write(&current, b"old-bytes").unwrap();
         std::fs::write(&staged, b"new-bytes").unwrap();
         let script =
             super::windows_script(&staged, &current, &super::sha256_hex(b"new-bytes"), false);
+        let encoded = script
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("call powershell -NoProfile -NonInteractive -EncodedCommand ")
+            })
+            .expect("encoded hash command");
+        // PATH finds powershell.cmd before System32's powershell.exe when
+        // the command is bare `powershell`. The updater `call`s it so this
+        // shim returns. The first call hashes for real; the second fails.
+        // No setlocal: `exit /b` would restore the errorlevel from before it.
+        let wrapper = format!(
+            "@echo off\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 exit /b 1\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -EncodedCommand {encoded}\r\nexit /b %ERRORLEVEL%\r\n",
+            count = count.display(),
+            encoded = encoded
+        );
+        std::fs::write(bin.join("powershell.cmd"), wrapper).unwrap();
         let path = dir.join("update.cmd");
         std::fs::write(&path, script).unwrap();
         let path_text = path.to_string_lossy().into_owned();
@@ -1195,6 +1267,30 @@ mod tests {
         assert!(text.contains("restor"), "rollback must be visible: {text}");
         assert_eq!(std::fs::read(&current).unwrap(), b"old-bytes");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn powershell_encoded_command_is_utf16le_base64() {
+        assert_eq!(super::base64_encode(b"a"), "YQ==");
+        assert_eq!(super::base64_encode(b"ab"), "YWI=");
+        assert_eq!(super::base64_encode(b"abc"), "YWJj");
+        let encoded = super::powershell_encoded_command("A");
+        // UTF-16LE 'A' is 0x41 0x00, which is base64 "QQA=".
+        assert_eq!(encoded, "QQA=");
+        let script = super::windows_script(
+            std::path::Path::new(r"C:\Program Files (x86)\next.exe"),
+            std::path::Path::new(r"C:\Program Files (x86)\app.exe"),
+            "ab",
+            false,
+        );
+        assert!(
+            script.contains("call powershell -NoProfile -NonInteractive -EncodedCommand "),
+            "{script}"
+        );
+        assert!(
+            !script.contains("Get-FileHash"),
+            "the hash script must stay inside EncodedCommand: {script}"
+        );
     }
 
     #[test]
