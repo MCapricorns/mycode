@@ -247,9 +247,13 @@ pub(crate) async fn dispatch_tool_call(
     };
 
     let args = call.arguments.clone();
-    env.hooks
+    if let Err(message) = env
+        .hooks
         .observe_before_tool(&call.name, &call.arguments)
-        .await;
+        .await
+    {
+        return completed_error(env, &call_id, call, message);
+    }
     let prepared = match bind_prepared(env, token, tool.as_ref(), &args).await {
         Ok(bound) => bound,
         Err(message) => return completed_error(env, &call_id, call, message),

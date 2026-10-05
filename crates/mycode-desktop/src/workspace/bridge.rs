@@ -466,6 +466,7 @@ impl Workspace {
                         session_projects: ui_state.session_projects,
                         workspaces: ui_state.workspaces,
                         session_workspaces: ui_state.session_workspaces,
+                        trusted_projects: ui_state.trusted_projects,
                         active_workspace: ui_state.active_workspace,
                     },
                     cx,

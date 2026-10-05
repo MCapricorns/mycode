@@ -31,14 +31,6 @@ impl KeyHeader {
             _ => Self::Bearer,
         }
     }
-
-    fn apply(self, request: reqwest::RequestBuilder, key: &str) -> reqwest::RequestBuilder {
-        let key = super::strip_bearer_prefix(key);
-        match self {
-            Self::Bearer => request.header("Authorization", format!("Bearer {key}")),
-            Self::XApiKey => request.header("x-api-key", key),
-        }
-    }
 }
 
 /// Options for one HTTP channel.
@@ -54,7 +46,6 @@ pub struct HttpChannelOptions {
 
 /// One HTTP MCP session bound to an endpoint.
 pub struct HttpChannel {
-    client: reqwest::Client,
     endpoint: String,
     options: HttpChannelOptions,
     session_id: RwLock<Option<String>>,
@@ -67,11 +58,11 @@ impl HttpChannel {
     ///
     /// Returns [`McpError::Transport`] when the HTTP client cannot build.
     pub fn new(endpoint: &str, options: HttpChannelOptions) -> Result<Self, McpError> {
-        let client = reqwest::Client::builder()
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| McpError::transport(format!("HTTP client unavailable: {error}")))?;
         Ok(Self {
-            client,
             endpoint: endpoint.to_owned(),
             options,
             session_id: RwLock::new(None),
@@ -84,22 +75,42 @@ impl HttpChannel {
         if body.len() > MAX_MESSAGE_BYTES {
             return Err(McpError::Oversized);
         }
-        let mut request = self
-            .client
-            .post(&self.endpoint)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .header("MCP-Protocol-Version", super::PROTOCOL_VERSION)
-            .timeout(self.options.timeout)
-            .body(body);
+        let mut headers = vec![
+            ("Content-Type".to_owned(), "application/json".to_owned()),
+            (
+                "Accept".to_owned(),
+                "application/json, text/event-stream".to_owned(),
+            ),
+            (
+                "MCP-Protocol-Version".to_owned(),
+                super::PROTOCOL_VERSION.to_owned(),
+            ),
+        ];
         if let Some(session) = self.session_id.read().await.as_deref() {
-            request = request.header("Mcp-Session-Id", session);
+            headers.push(("Mcp-Session-Id".to_owned(), session.to_owned()));
         }
         if let Some(key) = &self.options.api_key {
-            request = self.options.key_header.apply(request, key);
+            let key = super::strip_bearer_prefix(key);
+            match self.options.key_header {
+                KeyHeader::Bearer => {
+                    headers.push(("Authorization".to_owned(), format!("Bearer {key}")));
+                }
+                KeyHeader::XApiKey => headers.push(("x-api-key".to_owned(), key.to_owned())),
+            }
         }
-        let response = request.send().await.map_err(|error| {
-            if error.is_timeout() {
+        let response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
+            method: reqwest::Method::POST,
+            url: self.endpoint.clone(),
+            headers,
+            body: Some(mycode_providers::PinnedBody::Bytes(body.into())),
+            mode: mycode_providers::PinMode::CheckRedirect,
+            timeout: Some(self.options.timeout),
+            user_agent: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        })
+        .await
+        .map_err(|error| {
+            if error.contains("timed out") || error.contains("timeout") {
                 McpError::Timeout
             } else {
                 McpError::transport(format!("request to {} failed: {error}", self.endpoint))

@@ -65,6 +65,36 @@ pub fn builtin_mcp_servers() -> Vec<McpServerSettings> {
     }]
 }
 
+/// Whether `command` is one executable, not a shell string.
+///
+/// A single token is accepted. A path that contains spaces is accepted when
+/// it includes `/` or `\` and none of its tokens is a flag. Shell
+/// metacharacters, pipelines, and `program -flag` strings are rejected.
+/// Arguments belong in the `args` list.
+#[must_use]
+pub fn is_mcp_executable(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty() || command.chars().any(char::is_control) {
+        return false;
+    }
+    if command.chars().any(|ch| {
+        matches!(
+            ch,
+            '|' | '&' | ';' | '$' | '`' | '<' | '>' | '(' | ')' | '*' | '?' | '!'
+        )
+    }) {
+        return false;
+    }
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    if parts.is_empty() || parts.iter().any(|part| part.starts_with('-')) {
+        return false;
+    }
+    if parts.len() == 1 {
+        return true;
+    }
+    command.contains('/') || command.contains('\\')
+}
+
 /// Splits one command line into the program and its arguments.
 ///
 /// Whitespace separates words; single or double quotes group a word. Inside
@@ -151,6 +181,11 @@ impl AppSettings {
                     }
                     bounded_text(command, MAX_FIELD_BYTES)
                         .map_err(|_| invalid(&format!("{field}.command: too long")))?;
+                    if !is_mcp_executable(command) {
+                        return Err(invalid(&format!(
+                            "{field}.command: must be an executable path, not a shell string"
+                        )));
+                    }
                     if server.env.len() > MAX_MCP_ENV_VARS {
                         return Err(invalid(&format!("{field}.env: too many entries")));
                     }
@@ -210,5 +245,21 @@ impl AppSettings {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_mcp_executable;
+
+    #[test]
+    fn command_is_an_executable_not_a_shell_string() {
+        assert!(is_mcp_executable("npx"));
+        assert!(is_mcp_executable(r"C:\Program Files\npx.cmd"));
+        assert!(is_mcp_executable("/usr/local/bin/my tool"));
+        assert!(!is_mcp_executable("npx -y foo"));
+        assert!(!is_mcp_executable("echo hello"));
+        assert!(!is_mcp_executable("cat file | head"));
+        assert!(!is_mcp_executable(""));
     }
 }

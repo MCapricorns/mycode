@@ -191,7 +191,7 @@ pub(crate) fn write_file(
     prepared: Option<&PreparedFile>,
     cwd: &Path,
     path: &str,
-    content: &str,
+    content: &[u8],
     expected_revision: Option<&str>,
     overwrite: bool,
     cancel: &CancellationToken,
@@ -256,7 +256,7 @@ fn write_existing(
     name: OsString,
     prepared_meta: FileMeta,
     key: String,
-    content: &str,
+    content: &[u8],
     expected_revision: Option<&str>,
     overwrite: bool,
     cancel: &CancellationToken,
@@ -317,8 +317,8 @@ fn write_existing(
     let mut existing = Some(existing);
     let result = (|| {
         let temp_identity = created.meta.identity;
-        let expected_hash = content_hash(content.as_bytes());
-        let temp_file = write_temp(created.file, content.as_bytes(), cancel)?;
+        let expected_hash = content_hash(content);
+        let temp_file = write_temp(created.file, content, cancel)?;
         // Windows copies the source DACL and attributes (including a possible
         // read-only bit) onto the temp before publish so cleanup mirrors the
         // source; Unix keeps the payload private through the rename and
@@ -370,7 +370,7 @@ fn write_missing(
     remaining: Vec<OsString>,
     key: String,
     parent_identity: FileIdentity,
-    content: &str,
+    content: &[u8],
     cancel: &CancellationToken,
 ) -> Result<FileWrite, ToolError> {
     let live_parent = sys::current_meta(&parent).map_err(|error| {
@@ -405,7 +405,7 @@ fn write_missing(
     let (created, mut temp) = create_temp_in(&parent, cancel)?;
     let result = (|| {
         let temp_identity = created.meta.identity;
-        let expected_hash = content_hash(content.as_bytes());
+        let expected_hash = content_hash(content);
         // The payload inode stays private from creation through the rename; a
         // separate never-written probe learns the umask/default-ACL effective
         // mode and is unlinked by the guard on every path.
@@ -415,7 +415,7 @@ fn write_missing(
         attach_security_probe(&parent, &mut temp, cancel)?;
         // The deterministic test observer opens every inode visible to a
         // foreign reader before the payload receives any content.
-        let temp_file = write_temp(created.file, content.as_bytes(), cancel)?;
+        let temp_file = write_temp(created.file, content, cancel)?;
         // All pre-publish work is complete; the final cancel gate runs
         // immediately before the irreversible publish rename.
         check_cancel(cancel).map_err(|error| {
@@ -746,11 +746,114 @@ pub(crate) async fn write_file_with_lease(
             prepared.as_deref(),
             &cwd,
             &path,
-            &content,
+            content.as_bytes(),
             expected_revision.as_deref(),
             overwrite,
             &worker_cancel,
         )
     })
     .await
+}
+
+/// Restores bytes at one file name under `parent` without following links.
+///
+/// `parent` is the directory that already contains (or will contain) `name`.
+/// The write goes through the same no-follow kernel as the file tools.
+/// A symlink leaf is rejected and its target is left unchanged.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] when the name is unsafe, the leaf is not a regular
+/// file, or the publish fails.
+pub fn restore_file_nofollow(parent: &Path, name: &str, bytes: &[u8]) -> Result<(), ToolError> {
+    let cancel = CancellationToken::new();
+    write_file(None, parent, name, bytes, None, true, &cancel).map(|_| ())
+}
+
+/// Removes one file name under `parent` without following links.
+///
+/// A missing name is success. A directory is refused. A symlink is unlinked
+/// as a directory entry, so the target is not removed.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] when the parent cannot be opened no-follow, the
+/// name is unsafe, the entry is a directory, or the unlink fails.
+pub fn remove_file_nofollow(parent: &Path, name: &str) -> Result<(), ToolError> {
+    let name_os = OsStr::new(name);
+    validate_component_name(name_os).map_err(|error| ToolError::InvalidArgs(error.to_string()))?;
+    let parent_file =
+        crate::builtin::fs_search::open_directory_nofollow(parent).map_err(|error| {
+            ToolError::Execution(format!("failed to open {}: {error}", parent.display()))
+        })?;
+    match sys::open_child(&parent_file, name_os, ChildOpen::Probe) {
+        Ok(opened) if opened.meta.kind == FileKind::Directory => {
+            return Err(ToolError::Execution(format!(
+                "refusing to delete directory {name}"
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.to_string().contains("symlink") => {}
+        Err(error) => {
+            return Err(ToolError::Execution(format!(
+                "failed to inspect {name}: {error}"
+            )));
+        }
+    }
+    sys::unlink_child(&parent_file, name_os)
+        .map_err(|error| ToolError::Execution(format!("failed to delete {name}: {error}")))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_file_nofollow;
+    use super::restore_file_nofollow;
+
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mycode-write-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn remove_missing_file_is_success() {
+        let dir = scratch("missing");
+        remove_file_nofollow(&dir, "absent.txt").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_and_remove_round_trip() {
+        let dir = scratch("round");
+        restore_file_nofollow(&dir, "note.txt", b"hello").unwrap();
+        assert_eq!(std::fs::read(dir.join("note.txt")).unwrap(), b"hello");
+        remove_file_nofollow(&dir, "note.txt").unwrap();
+        assert!(!dir.join("note.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_does_not_follow_symlink() {
+        let dir = scratch("link");
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"safe").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join("link.txt")).unwrap();
+        let error = restore_file_nofollow(&dir, "link.txt", b"pwned").unwrap_err();
+        assert!(
+            error.to_string().contains("link"),
+            "expected a visible link failure, got {error}"
+        );
+        assert_eq!(std::fs::read(&victim).unwrap(), b"safe");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

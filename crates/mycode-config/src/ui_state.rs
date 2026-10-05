@@ -30,6 +30,8 @@ pub const MAX_WORKSPACES: usize = 16;
 pub const MAX_WORKSPACE_NAME_CHARS: usize = 64;
 /// Maximum remembered session-to-workspace bindings.
 pub const MAX_SESSION_WORKSPACES: usize = 512;
+/// Maximum projects explicitly trusted for project MCP config.
+pub const MAX_TRUSTED_PROJECTS: usize = 64;
 /// Maximum length of one remembered session id.
 const MAX_SESSION_ID_BYTES: usize = 64;
 /// Maximum length of one remembered project path.
@@ -95,6 +97,10 @@ pub struct UiState {
     /// The workspace the sidebar shows.
     #[serde(default)]
     pub active_workspace: Option<String>,
+    /// Absolute project paths allowed to contribute `.mycode/mcp.json`.
+    /// Opening a folder does not add it here.
+    #[serde(default)]
+    pub trusted_projects: Vec<String>,
 }
 
 impl Default for UiState {
@@ -110,6 +116,7 @@ impl Default for UiState {
             workspaces: Vec::new(),
             session_workspaces: Vec::new(),
             active_workspace: None,
+            trusted_projects: Vec::new(),
         }
     }
 }
@@ -127,6 +134,19 @@ impl UiState {
         self.recent_projects.insert(0, project.clone());
         self.recent_projects.truncate(MAX_RECENT_PROJECTS);
         self.last_project = Some(project);
+    }
+
+    /// Records that `project` may contribute project MCP configuration.
+    ///
+    /// This is not called from project open. Trust stays explicit.
+    pub fn trust_project(&mut self, project: &str) {
+        let Some(project) = valid_project_path(project) else {
+            return;
+        };
+        self.trusted_projects
+            .retain(|existing| existing != &project);
+        self.trusted_projects.insert(0, project);
+        self.trusted_projects.truncate(MAX_TRUSTED_PROJECTS);
     }
 
     /// Binds one session to a project directory (upsert, most recent first).
@@ -276,6 +296,14 @@ impl UiState {
                 .any(|workspace| &workspace.id == active)
         {
             return Err(invalid());
+        }
+        if self.trusted_projects.len() > MAX_TRUSTED_PROJECTS {
+            return Err(invalid());
+        }
+        for project in &self.trusted_projects {
+            if valid_project_path(project).is_none() {
+                return Err(invalid());
+            }
         }
         if self.session_workspaces.len() > MAX_SESSION_WORKSPACES {
             return Err(invalid());

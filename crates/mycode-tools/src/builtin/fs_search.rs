@@ -229,6 +229,8 @@ mod error_map;
 mod limiter;
 mod path_util;
 mod root;
+
+pub(crate) use root::open_directory_nofollow;
 mod target;
 #[cfg(unix)]
 mod unix;

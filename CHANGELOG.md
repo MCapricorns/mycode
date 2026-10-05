@@ -1,9 +1,14 @@
 # Changelog
 
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
-质量门通过的 `main` 推送都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon）。说明用本文件里该版本的条目，不从提交记录生成。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。
+质量门通过的 `main` 推送都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon）。说明用本文件里该版本的条目，不从提交记录生成。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，三个平台都从该提交构建成功后，才快进 `main` 并创建标签。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。压缩包未签名。
 
 ## [Unreleased]
+
+### Changed
+
+- 版本号需要递增时，先把版本提交推到 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64 和 macOS Apple Silicon 从这次提交构建。三个构建成功之后才快进 `main` 并创建标签，二进制里的版本与标签一致。
+- 检查点之后新建的文件，回滚时删除，不再把后续内容整份存进快照。已有文件超过 8 MiB 时检查点失败并中止这次工具调用。回滚写入和删除都不跟随符号链接。
 
 ## [0.7.5] - 2026-10-05
 

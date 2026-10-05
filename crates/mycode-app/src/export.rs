@@ -84,6 +84,82 @@ fn plain_name(name: &str) -> bool {
         && !name.chars().any(char::is_control)
 }
 
+/// Session file names are top-level, or `branches/<id>.events`.
+fn session_file_name(name: &str) -> bool {
+    if let Some(rest) = name.strip_prefix("branches/") {
+        return rest.ends_with(".events")
+            && !rest.contains('/')
+            && !rest.contains('\\')
+            && plain_name(rest);
+    }
+    plain_name(name)
+}
+
+fn push_session_file(
+    files: &mut Vec<(String, String)>,
+    budget: &mut usize,
+    path: &Path,
+    name: String,
+) {
+    if files.len() >= MAX_SESSION_FILES || *budget == 0 || !session_file_name(&name) {
+        return;
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if !meta.is_file() || meta.len() > *budget as u64 {
+        return;
+    }
+    if let Ok(body) = std::fs::read_to_string(path) {
+        *budget -= body.len();
+        files.push((name, body));
+    }
+}
+
+fn collect_session_files(dir: &Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    let mut budget = MAX_SESSION_BYTES;
+    let branches = dir.join("branches");
+    if let Ok(entries) = std::fs::read_dir(&branches) {
+        let mut listed: Vec<_> = entries.flatten().collect();
+        listed.sort_by_key(|entry| entry.file_name());
+        for entry in listed {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !name.ends_with(".events") {
+                continue;
+            }
+            push_session_file(
+                &mut files,
+                &mut budget,
+                &entry.path(),
+                format!("branches/{name}"),
+            );
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut listed: Vec<_> = entries.flatten().collect();
+        listed.sort_by_key(|entry| entry.file_name());
+        for entry in listed {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            push_session_file(&mut files, &mut budget, &entry.path(), name);
+        }
+    }
+    files
+}
+
+fn settings_have_mcp_command(settings: &AppSettings) -> bool {
+    settings.mcp_servers.iter().any(|server| {
+        server
+            .command
+            .as_deref()
+            .is_some_and(|command| !command.trim().is_empty())
+    })
+}
+
 /// Collects the product data into one bundle.
 ///
 /// # Errors
@@ -109,29 +185,7 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
             if !dir.is_dir() {
                 continue;
             }
-            let mut files = Vec::new();
-            let mut budget = MAX_SESSION_BYTES;
-            if let Ok(dir_entries) = std::fs::read_dir(&dir) {
-                for file in dir_entries.flatten() {
-                    if files.len() >= MAX_SESSION_FILES || budget == 0 {
-                        break;
-                    }
-                    let path = file.path();
-                    let Some(name) = file.file_name().to_str().map(str::to_owned) else {
-                        continue;
-                    };
-                    if !plain_name(&name) || !path.is_file() {
-                        continue;
-                    }
-                    if let Ok(meta) = file.metadata()
-                        && meta.len() <= budget as u64
-                        && let Ok(body) = std::fs::read_to_string(&path)
-                    {
-                        budget -= body.len();
-                        files.push((name, body));
-                    }
-                }
-            }
+            let files = collect_session_files(&dir);
             if !files.is_empty() {
                 sessions.push(ExportedSession { session_id, files });
             }
@@ -176,10 +230,29 @@ pub fn export_to_file(home: &HomeLayout, path: &Path) -> Result<ExportSummary, S
 /// Applies one bundle: settings and UI state replace local values; sessions
 /// only fill gaps, never overwrite.
 ///
+/// Refuses the whole import when local settings contain an MCP command and
+/// `confirm_mcp_commands` is false. The desktop import path leaves that flag
+/// false; there is no separate confirm dialog.
+///
 /// # Errors
 ///
-/// Returns a rendered message for a malformed bundle or a failed write.
+/// Returns a rendered message for a malformed bundle, a refused MCP-command
+/// replacement, or a failed write.
 pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary, String> {
+    import_from_file_with(home, path, false)
+}
+
+/// Same as [`import_from_file`] with an explicit MCP-command confirm flag.
+///
+/// # Errors
+///
+/// Returns a rendered message for a malformed bundle, a refused MCP-command
+/// replacement, or a failed write.
+pub fn import_from_file_with(
+    home: &HomeLayout,
+    path: &Path,
+    confirm_mcp_commands: bool,
+) -> Result<ImportSummary, String> {
     let meta = std::fs::metadata(path).map_err(|error| format!("read: {error}"))?;
     if meta.len() > MAX_BUNDLE_BYTES {
         return Err("bundle exceeds the size limit".to_owned());
@@ -195,6 +268,13 @@ pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary,
         .settings
         .validate()
         .map_err(|error| format!("settings: {error}"))?;
+    let current_settings = read_app_settings(home).map_err(|error| format!("settings: {error}"))?;
+    if settings_have_mcp_command(&current_settings) && !confirm_mcp_commands {
+        return Err(
+            "import refused: this settings file contains MCP commands; confirm before replacing them"
+                .to_owned(),
+        );
+    }
 
     // Settings replace under CAS against the current revision.
     let current = read_current_revision(home)?;
@@ -216,9 +296,9 @@ pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary,
         if std::fs::create_dir_all(&dir).is_ok() {
             written = true;
             for (name, body) in session.files.iter().take(MAX_SESSION_FILES) {
-                if !plain_name(name)
+                if !session_file_name(name)
                     || body.len() > MAX_SESSION_BYTES
-                    || std::fs::write(dir.join(name), body).is_err()
+                    || write_session_file(&dir, name, body).is_err()
                 {
                     written = false;
                     break;
@@ -237,6 +317,21 @@ pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary,
         ui_state: true,
         sessions: sessions_applied,
     })
+}
+
+fn write_session_file(dir: &Path, name: &str, body: &str) -> Result<(), String> {
+    if let Some(rest) = name.strip_prefix("branches/") {
+        if !rest.ends_with(".events") || rest.contains("..") || !plain_name(rest) {
+            return Err(format!("unsafe session file name: {name}"));
+        }
+        let branch_dir = dir.join("branches");
+        std::fs::create_dir_all(&branch_dir).map_err(|error| error.to_string())?;
+        return std::fs::write(branch_dir.join(rest), body).map_err(|error| error.to_string());
+    }
+    if !plain_name(name) {
+        return Err(format!("unsafe session file name: {name}"));
+    }
+    std::fs::write(dir.join(name), body).map_err(|error| error.to_string())
 }
 
 /// Reads the current settings revision for the import's CAS write.
@@ -258,5 +353,130 @@ fn read_current_revision(home: &HomeLayout) -> Result<AuthorityRevision, String>
         Err(crate::settings_io::RevisionHeaderError::BadRevision) => {
             Err("settings: bad revision".to_owned())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_bundle, import_from_file, import_from_file_with};
+    use mycode_config::{
+        AppSettings, AuthorityRevision, HomeLayout, McpServerSettings, replace_app_settings,
+    };
+    use std::collections::BTreeMap;
+
+    fn scratch(label: &str) -> (std::path::PathBuf, HomeLayout) {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-export-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let home = HomeLayout::from_root(&root).unwrap();
+        (root, home)
+    }
+
+    fn stdio_server(command: &str) -> McpServerSettings {
+        McpServerSettings {
+            id: "local".to_owned(),
+            enabled: true,
+            transport: "stdio".to_owned(),
+            command: Some(command.to_owned()),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            endpoint: None,
+            key_header: None,
+        }
+    }
+
+    #[test]
+    fn export_includes_branch_events_ahead_of_the_file_cap() {
+        let (root, home) = scratch("events");
+        let session = root.join("sessions").join("sess");
+        std::fs::create_dir_all(session.join("branches")).unwrap();
+        for index in 0..16 {
+            std::fs::write(session.join(format!("file-{index}.txt")), "x").unwrap();
+        }
+        std::fs::write(session.join("branches").join("main.events"), "event-body").unwrap();
+        let bundle = build_bundle(&home).unwrap();
+        let files = &bundle.sessions[0].files;
+        assert!(
+            files
+                .iter()
+                .any(|(name, body)| { name == "branches/main.events" && body == "event-body" }),
+            "branch events missing from {files:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_refuses_to_replace_mcp_commands_without_confirm() {
+        let (root, home) = scratch("mcp");
+        let current = AppSettings {
+            mcp_servers: vec![stdio_server("local-tool")],
+            ..AppSettings::default()
+        };
+        replace_app_settings(&home, AuthorityRevision::ABSENT, &current).unwrap();
+        let incoming = AppSettings {
+            mcp_servers: vec![stdio_server("replaced-tool")],
+            ..AppSettings::default()
+        };
+        let bundle_path = root.join("bundle.json");
+        let bundle = super::ExportBundle {
+            format_version: super::EXPORT_FORMAT_VERSION,
+            kind: super::EXPORT_KIND.to_owned(),
+            exported_at_unix: 0,
+            settings: incoming,
+            ui_state: mycode_config::UiState::default(),
+            sessions: Vec::new(),
+            _todos: Vec::new(),
+        };
+        std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let refused = import_from_file(&home, &bundle_path).unwrap_err();
+        assert!(refused.contains("confirm before replacing"), "{refused}");
+        let kept = mycode_config::read_app_settings(&home).unwrap();
+        assert_eq!(kept.mcp_servers[0].command.as_deref(), Some("local-tool"));
+        import_from_file_with(&home, &bundle_path, true).unwrap();
+        let replaced = mycode_config::read_app_settings(&home).unwrap();
+        assert_eq!(
+            replaced.mcp_servers[0].command.as_deref(),
+            Some("replaced-tool")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_without_mcp_commands_still_applies() {
+        let (root, home) = scratch("plain");
+        let bundle_path = root.join("bundle.json");
+        let bundle = super::ExportBundle {
+            format_version: super::EXPORT_FORMAT_VERSION,
+            kind: super::EXPORT_KIND.to_owned(),
+            exported_at_unix: 0,
+            settings: AppSettings::default(),
+            ui_state: mycode_config::UiState::default(),
+            sessions: vec![super::ExportedSession {
+                session_id: "sess".to_owned(),
+                files: vec![("branches/foo.events".to_owned(), "line\n".to_owned())],
+            }],
+            _todos: Vec::new(),
+        };
+        std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let summary = import_from_file(&home, &bundle_path).unwrap();
+        assert!(summary.settings);
+        let events = root
+            .join("sessions")
+            .join("sess")
+            .join("branches")
+            .join("foo.events");
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), "line\n");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

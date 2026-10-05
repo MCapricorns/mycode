@@ -20,7 +20,7 @@ const HEAD_MOVED_ON: &str = "the session moved on; reopen it";
 
 /// Session checkpoint directory under the home root. Private inside
 /// `mycode-config` (`checkpoints::checkpoint_dir`), so the layout is spelled
-/// here once; `checkpoint_file` and `rollback_session` write beneath it.
+/// here once; `checkpoint_file` records beneath it and rollback applies the plan.
 const CHECKPOINTS_DIR: &str = "checkpoints";
 
 pub(crate) fn render_error(error: SessionError) -> String {

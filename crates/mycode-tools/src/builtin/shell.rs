@@ -1,7 +1,9 @@
 //! `shell` — run a platform-native shell command in the session cwd.
 //!
 //! The public name is `shell`. There is no `bash` alias. Windows resolves one
-//! configured or detected shell (`pwsh`, with Git bash as the fallback).
+//! configured or detected shell (`pwsh`, then Git bash). When neither is
+//! available it falls back to `%SystemRoot%\System32\cmd.exe` at runtime
+//! only; that fallback is not written into settings.
 //! POSIX hosts use an explicit POSIX shell candidate list. Launch
 //! always goes through structured exec: one cwd/env/PATH snapshot per call,
 //! allowlisted environment, pinned identity, and contained spawn. Candidate
@@ -344,9 +346,11 @@ async fn prepare_windows_shell(
     let command = command.to_owned();
     let pin_cwd = cwd.to_path_buf();
     let pin_work = run_blocking_supervised("shell resolution", cancel, move |worker_cancel| {
-        let detected = runtime_shell()
-            .or_else(detect_default_shell)
-            .ok_or_else(no_usable_shell_error)?;
+        let detected = detect::select_windows_shell(
+            runtime_shell().or_else(detect_default_shell),
+            windows_system_cmd(),
+        )
+        .ok_or_else(no_usable_shell_error)?;
         let identifier = shell_file_name(&detected.program);
         let args = windows_shell_args(&detected, &command)?;
         let program = detected.program.to_str().ok_or_else(|| {
@@ -382,7 +386,17 @@ fn windows_shell_args(detected: &DetectedShell, command: &str) -> Result<Vec<Str
             Ok(powershell_args(encoded))
         }
         ShellKind::Bash => Ok(vec!["-c".to_owned(), command.to_owned()]),
+        ShellKind::Cmd => Ok(detect::cmd_fallback_args(command)),
     }
+}
+
+#[cfg(windows)]
+fn windows_system_cmd() -> Option<std::path::PathBuf> {
+    let root = std::env::var_os("SystemRoot")?;
+    let path = std::path::PathBuf::from(root)
+        .join("System32")
+        .join("cmd.exe");
+    path.is_file().then_some(path)
 }
 
 #[cfg(not(windows))]

@@ -11,7 +11,7 @@ use mycode_config::{
 };
 use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
-use mycode_tools::ToolRegistry;
+use mycode_tools::{ToolDyn, ToolRegistry};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -169,6 +169,117 @@ impl WorktreeLease {
     }
 }
 
+/// Captured diff cap handed back with a subagent result.
+const MAX_WORKTREE_DIFF_BYTES: usize = 256 * 1024;
+
+/// Reads the worktree diff while the checkout still exists.
+pub(crate) fn capture_worktree_diff(path: &Path) -> String {
+    let mut out = String::new();
+    match git_command()
+        .arg("-C")
+        .arg(path)
+        .args(["diff", "--binary", "--no-ext-diff", "HEAD"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            out.push_str(&String::from_utf8_lossy(&output.stdout));
+        }
+        Ok(output) => {
+            out.push_str("worktree diff failed: ");
+            out.push_str(String::from_utf8_lossy(&output.stderr).trim());
+            out.push('\n');
+        }
+        Err(error) => {
+            out.push_str(&format!("worktree diff failed: {error}\n"));
+        }
+    }
+    match git_command()
+        .arg("-C")
+        .arg(path)
+        .args(["status", "--porcelain", "-uall"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let Some(name) = line.strip_prefix("?? ") else {
+                    continue;
+                };
+                let name = name.trim();
+                if name.is_empty() || name.contains("..") {
+                    continue;
+                }
+                let file = path.join(name);
+                out.push_str(&format!("diff --git a/{name} b/{name}\n"));
+                match std::fs::read_to_string(&file) {
+                    Ok(body) => {
+                        out.push_str("new file\n--- /dev/null\n+++ b/");
+                        out.push_str(name);
+                        out.push('\n');
+                        out.push_str(&body);
+                        if !body.ends_with('\n') {
+                            out.push('\n');
+                        }
+                    }
+                    Err(error) => {
+                        out.push_str(&format!("new file unreadable: {error}\n"));
+                    }
+                }
+            }
+        }
+        Ok(output) => {
+            out.push_str("worktree status failed: ");
+            out.push_str(String::from_utf8_lossy(&output.stderr).trim());
+            out.push('\n');
+        }
+        Err(error) => {
+            out.push_str(&format!("worktree status failed: {error}\n"));
+        }
+    }
+    cap_diff(out)
+}
+
+fn cap_diff(mut text: String) -> String {
+    if text.len() <= MAX_WORKTREE_DIFF_BYTES {
+        return text;
+    }
+    let mut end = MAX_WORKTREE_DIFF_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push_str("\n... diff truncated\n");
+    text
+}
+
+/// Joins a subagent answer with the diff captured from its worktree.
+#[must_use]
+pub(crate) fn format_subagent_handoff(result: &str, diff: &str) -> String {
+    if diff.trim().is_empty() {
+        return result.to_owned();
+    }
+    format!("{result}\n\n<worktree-diff>\n{diff}</worktree-diff>")
+}
+
+/// Captures the diff, then releases the worktree.
+///
+/// The diff is part of both the success string and the error string. The
+/// checkout is removed only after that string is built.
+pub(crate) fn handoff_worktree(
+    lease: WorktreeLease,
+    result: Result<String, mycode_tools::ToolError>,
+) -> Result<String, mycode_tools::ToolError> {
+    let diff = capture_worktree_diff(&lease.path);
+    let outcome = match result {
+        Ok(text) => Ok(format_subagent_handoff(&text, &diff)),
+        Err(error) => Err(mycode_tools::ToolError::Execution(format_subagent_handoff(
+            &error.to_string(),
+            &diff,
+        ))),
+    };
+    lease.release();
+    outcome
+}
+
 /// Removes leases left behind by a crashed process. Best-effort: a lease
 /// whose repo is gone is simply deleted from disk.
 pub(crate) fn recover_task_worktrees(home: &HomeLayout) {
@@ -317,9 +428,14 @@ impl mycode_tools::builtin::TaskHost for BridgeTaskHost {
         let result = self
             .drive_subagent(&request, &role, progress, cancel, call_id, lease.as_ref())
             .await;
-        if let Some(lease) = lease {
-            let _ = tokio::task::spawn_blocking(move || lease.release()).await;
-        }
+        let result = if let Some(lease) = lease {
+            match tokio::task::spawn_blocking(move || handoff_worktree(lease, result)).await {
+                Ok(outcome) => outcome,
+                Err(error) => Err(fail(format!("worktree handoff failed: {error}"))),
+            }
+        } else {
+            result
+        };
         drop(permit);
         result
     }
@@ -350,11 +466,23 @@ impl BridgeTaskHost {
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>(),
         );
-        let mcp_tools =
-            crate::mcp_tools::connect_mcp_tools(&self.home, &self.settings, &self.mcp_pool).await;
+        let (mcp_tools, mcp_warning) = crate::mcp_tools::connect_mcp_tools(
+            &self.home,
+            &self.settings,
+            &self.mcp_pool,
+            Some(&self.cwd),
+        )
+        .await;
         let registry = Arc::new({
             let registry = child_registry(&self.home, &allowed);
-            if let Some(catalog) = crate::mcp_tools::McpCatalog::from_tools(mcp_tools) {
+            if let Some(catalog) =
+                crate::mcp_tools::McpCatalog::from_tools_with_warning(mcp_tools, mcp_warning)
+            {
+                for tool in catalog.direct_tools() {
+                    if registry.get(tool.spec().name.as_str()).is_none() {
+                        registry.register(tool);
+                    }
+                }
                 registry.register(Arc::new(crate::mcp_tools::SearchTool::new(Arc::clone(
                     &catalog,
                 ))));
@@ -565,4 +693,64 @@ fn child_registry(home: &HomeLayout, allowed: &[String]) -> ToolRegistry {
         }
     }
     registry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorktreeLease, format_subagent_handoff, handoff_worktree};
+    use mycode_config::HomeLayout;
+
+    fn git(repo: &std::path::Path, args: &[&str]) {
+        let output = super::git_command()
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "mycode")
+            .env("GIT_AUTHOR_EMAIL", "mycode@example.com")
+            .env("GIT_COMMITTER_NAME", "mycode")
+            .env("GIT_COMMITTER_EMAIL", "mycode@example.com")
+            .output()
+            .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn handoff_includes_diff_before_the_worktree_is_removed() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-wt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let repo = root.join("repo");
+        let home_root = root.join("home");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&home_root).unwrap();
+        git(&repo, &["init"]);
+        std::fs::write(repo.join("tracked.txt"), "old\n").unwrap();
+        git(&repo, &["add", "tracked.txt"]);
+        git(&repo, &["commit", "-m", "init"]);
+        let home = HomeLayout::from_root(&home_root).unwrap();
+        let lease = WorktreeLease::acquire(&home, &repo).unwrap();
+        let path = lease.path.clone();
+        std::fs::write(path.join("tracked.txt"), "new\n").unwrap();
+        std::fs::write(path.join("created.txt"), "created-body\n").unwrap();
+        let text = handoff_worktree(lease, Ok("answer".to_owned())).unwrap();
+        assert!(text.contains("answer"), "{text}");
+        assert!(text.contains("created-body"), "{text}");
+        assert!(text.contains("new"), "{text}");
+        assert!(
+            !path.exists(),
+            "worktree was removed before the diff was captured"
+        );
+        let error = format_subagent_handoff("subagent failed", "diff-body");
+        assert!(error.contains("subagent failed") && error.contains("diff-body"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

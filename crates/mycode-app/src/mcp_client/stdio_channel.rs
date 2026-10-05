@@ -40,6 +40,12 @@ pub struct StdioChannel {
     stdout: Mutex<BufReader<tokio::process::ChildStdout>>,
     stderr_tail: Arc<StdMutex<VecDeque<String>>>,
     timeout: Duration,
+    /// Process-group id captured at spawn. Shutdown signals the group.
+    #[cfg(unix)]
+    group_id: Option<i32>,
+    /// Kill-on-close job that owns the child and its descendants.
+    #[cfg(windows)]
+    job: Option<WindowsJob>,
 }
 
 impl StdioChannel {
@@ -55,6 +61,11 @@ impl StdioChannel {
         env: &[(String, String)],
         timeout: Duration,
     ) -> Result<Self, McpError> {
+        if !mycode_config::is_mcp_executable(command) {
+            return Err(McpError::transport(
+                "MCP command must be an executable path, not a shell string".to_owned(),
+            ));
+        }
         let program = resolve_program(command).ok_or_else(|| {
             McpError::transport(format!(
                 "command not found on PATH: {command} (install it or use an absolute path)"
@@ -63,7 +74,8 @@ impl StdioChannel {
         let mut builder = tokio::process::Command::new(&program);
         builder
             .args(args)
-            .envs(env.iter().map(|(key, value)| (key, value)))
+            .env_clear()
+            .envs(stdio_child_env(env))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -72,6 +84,10 @@ impl StdioChannel {
         let mut child = builder.spawn().map_err(|error| {
             McpError::transport(format!("failed to start {}: {error}", program.display()))
         })?;
+        #[cfg(unix)]
+        let group_id = child.id().map(|pid| pid as i32);
+        #[cfg(windows)]
+        let job = assign_windows_job(&mut child)?;
         let stdin = child
             .stdin
             .take()
@@ -105,6 +121,10 @@ impl StdioChannel {
             stdout: Mutex::new(BufReader::new(stdout)),
             stderr_tail,
             timeout,
+            #[cfg(unix)]
+            group_id,
+            #[cfg(windows)]
+            job: Some(job),
         })
     }
 
@@ -116,12 +136,35 @@ impl StdioChannel {
     pub async fn shutdown(&self) {
         self.stdin.lock().await.take();
         let mut child = self.child.lock().await;
-        if tokio::time::timeout(SHUTDOWN_GRACE, child.wait())
-            .await
-            .is_err()
-        {
-            let _ = child.kill().await;
+        let _ = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
+        #[cfg(unix)]
+        if let Some(group_id) = self.group_id {
+            // SAFETY: `group_id` is the child's pid, and `configure_command`
+            // placed that pid in its own process group. `killpg` signals
+            // every member, including grandchildren the parent spawned.
+            unsafe {
+                libc::killpg(group_id, libc::SIGKILL);
+            }
         }
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            let _ = job.terminate();
+        }
+        let _ = child.kill().await;
+    }
+
+    /// Reads one stdout line. The Unix shutdown test uses this to observe a
+    /// grandchild pid. Windows tests do not call it.
+    #[cfg(all(test, unix))]
+    async fn read_stdout_line(&self) -> Result<String, McpError> {
+        let mut raw = String::new();
+        self.stdout
+            .lock()
+            .await
+            .read_line(&mut raw)
+            .await
+            .map_err(|error| McpError::transport(error.to_string()))?;
+        Ok(raw)
     }
 
     /// Renders the retained stderr tail for an error message.
@@ -313,15 +356,227 @@ fn resolve_on_path_windows(command: &str) -> Option<PathBuf> {
     None
 }
 
-/// Platform launch flags: no console window on Windows.
+/// Environment variables a stdio MCP child may inherit.
+const STDIO_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "SYSTEMDRIVE",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+];
+
+/// Allowlisted process environment, then the server's own map.
+fn stdio_child_env(extra: &[(String, String)]) -> Vec<(String, String)> {
+    filter_stdio_env(&std::env::vars().collect::<Vec<_>>(), extra)
+}
+
+fn filter_stdio_env(
+    process: &[(String, String)],
+    extra: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for key in STDIO_ENV_ALLOWLIST {
+        if let Some((name, value)) = process
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+        {
+            out.push((name.clone(), value.clone()));
+        }
+    }
+    for (key, value) in extra {
+        if let Some(slot) = out
+            .iter_mut()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+        {
+            slot.1.clone_from(value);
+        } else {
+            out.push((key.clone(), value.clone()));
+        }
+    }
+    out
+}
+
+/// Platform launch flags: own process group on Unix, no console on Windows.
 fn configure_command(builder: &mut tokio::process::Command) {
+    #[cfg(unix)]
+    {
+        builder.process_group(0);
+    }
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         builder.creation_flags(CREATE_NO_WINDOW);
     }
-    #[cfg(not(windows))]
-    {
-        let _ = builder;
+}
+
+#[cfg(windows)]
+struct WindowsJob {
+    handle: std::os::windows::io::OwnedHandle,
+}
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn new() -> std::io::Result<Self> {
+        use std::mem::size_of;
+        use std::os::windows::io::{FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+
+        // SAFETY: both pointers are null, requesting an unnamed job. A
+        // non-null result is uniquely owned.
+        let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if raw_job.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: CreateJobObjectW returned a fresh owned HANDLE.
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw_job) };
+        let job = Self { handle };
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let info_len = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+            .expect("job limit structure fits u32");
+        // SAFETY: the job handle is live and `info` matches the documented type.
+        let configured = unsafe {
+            SetInformationJobObject(
+                job.raw(),
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&info).cast(),
+                info_len,
+            )
+        };
+        if configured == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    fn assign(&self, process: windows_sys::Win32::Foundation::HANDLE) -> std::io::Result<()> {
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        // SAFETY: both handles are live for this call.
+        if unsafe { AssignProcessToJobObject(self.raw(), process) } != 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    fn terminate(&self) -> std::io::Result<()> {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        // SAFETY: the owned job handle remains live for this call.
+        if unsafe { TerminateJobObject(self.raw(), 1) } != 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    fn raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        use std::os::windows::io::AsRawHandle;
+        self.handle.as_raw_handle()
+    }
+}
+
+#[cfg(windows)]
+fn assign_windows_job(child: &mut Child) -> Result<WindowsJob, McpError> {
+    let job = WindowsJob::new().map_err(|error| {
+        McpError::transport(format!("failed to create MCP job object: {error}"))
+    })?;
+    // tokio::process::Child does not implement AsRawHandle. `raw_handle`
+    // is None only after the child has already exited.
+    let Some(handle) = child.raw_handle() else {
+        let _ = child.start_kill();
+        return Err(McpError::transport(
+            "MCP process exited before it could be assigned to a job".to_owned(),
+        ));
+    };
+    if let Err(error) = job.assign(handle) {
+        let _ = child.start_kill();
+        return Err(McpError::transport(format!(
+            "failed to assign MCP process to a job: {error}"
+        )));
+    }
+    Ok(job)
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use super::StdioChannel;
+    use super::filter_stdio_env;
+    #[cfg(unix)]
+    use std::time::Duration;
+
+    #[test]
+    fn stdio_env_keeps_path_and_drops_secrets() {
+        let process = vec![
+            ("PATH".to_owned(), "/usr/bin".to_owned()),
+            ("SECRET".to_owned(), "leak".to_owned()),
+            ("Path".to_owned(), "unused".to_owned()),
+        ];
+        let filtered = filter_stdio_env(&process, &[("TOKEN".to_owned(), "ok".to_owned())]);
+        assert!(
+            filtered
+                .iter()
+                .any(|(key, value)| key == "PATH" && value == "/usr/bin")
+        );
+        assert!(
+            filtered
+                .iter()
+                .all(|(key, _)| !key.eq_ignore_ascii_case("SECRET"))
+        );
+        assert!(
+            filtered
+                .iter()
+                .any(|(key, value)| key == "TOKEN" && value == "ok")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_kills_the_process_group() {
+        let channel = StdioChannel::spawn(
+            "/bin/sh",
+            &[
+                "-c".to_owned(),
+                "sleep 120 & echo $!; exec sleep 120".to_owned(),
+            ],
+            &[],
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        let line = channel.read_stdout_line().await.unwrap();
+        let grandchild: i32 = line.trim().parse().unwrap();
+        channel.shutdown().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if let Ok(status) = std::fs::read_to_string(format!("/proc/{grandchild}/status")) {
+            let state = status
+                .lines()
+                .find(|line| line.starts_with("State:"))
+                .unwrap_or("");
+            assert!(
+                state.contains('Z'),
+                "grandchild {grandchild} still running: {state}"
+            );
+        }
     }
 }

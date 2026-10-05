@@ -733,9 +733,28 @@ def _expect_workflow_contract() -> None:
         workflow.count("runs-on: ubuntu-latest") == 2,
         "ubuntu-latest should only run release-plan and release-publish",
     )
+    _expect("cargo-audit" not in workflow, "cargo-audit job remains")
     for job in ("release-plan", "release-publish"):
         body = _yaml_job(workflow, job)
         _expect("ubuntu-latest" in body, f"{job} left ubuntu-latest")
+    plan = _yaml_job(workflow, "release-plan")
+    _expect(
+        "HEAD:main" not in plan,
+        "release-plan still advances main before the platform builds",
+    )
+    _expect(
+        "refs/heads/${cleanup_ref}" in plan,
+        "version bump is not pushed to the temporary release ref",
+    )
+    publish = _yaml_job(workflow, "release-publish")
+    _expect(
+        'git push origin "HEAD:main"' in publish,
+        "release-publish does not fast-forward main to the built commit",
+    )
+    _expect(
+        "needs.release-plan.outputs.sha" in _yaml_job(workflow, "release-build"),
+        "platform builds do not check out the planned commit",
+    )
     gate_hosts = (
         "windows-latest",
         "windows-11-arm",

@@ -180,7 +180,7 @@ async fn store_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), Str
 /// whatever catalog it already had.
 pub async fn refresh(
     home: &HomeLayout,
-    client: &reqwest::Client,
+    user_agent: &str,
     force: bool,
     max_age_secs: u64,
 ) -> RefreshOutcome {
@@ -190,13 +190,22 @@ pub async fn refresh(
         return RefreshOutcome::Fresh(existing);
     }
 
-    let mut request = client
-        .get(MODELS_DEV_API_URL)
-        .header("accept", "application/json");
+    let mut headers = vec![("accept".to_owned(), "application/json".to_owned())];
     if let Some(etag) = existing.etag.clone() {
-        request = request.header("if-none-match", etag);
+        headers.push(("if-none-match".to_owned(), etag));
     }
-    let response = match request.send().await {
+    let response = match crate::send_pinned(crate::PinnedRequest {
+        method: reqwest::Method::GET,
+        url: MODELS_DEV_API_URL.to_owned(),
+        headers,
+        body: None,
+        mode: crate::PinMode::CheckRedirect,
+        timeout: Some(std::time::Duration::from_secs(30)),
+        user_agent: Some(user_agent.to_owned()),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    })
+    .await
+    {
         Ok(response) => response,
         Err(error) => return RefreshOutcome::Unavailable(format!("catalog fetch failed: {error}")),
     };
@@ -258,6 +267,7 @@ pub async fn refresh(
 /// Returns the reqwest build error message.
 pub fn http_client(user_agent: &str) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(user_agent.to_owned())
         .timeout(std::time::Duration::from_secs(30))
         .build()
