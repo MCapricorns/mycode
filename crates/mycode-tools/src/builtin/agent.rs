@@ -100,20 +100,21 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate one scoped unit to a listed role. Prefer one `scout` \
-         (read-only map, then stop) or one `artisan` (bounded change you \
-         integrate) for non-trivial multi-step work. Do a trivial one-file \
-         edit yourself. Do not fan out many agents for one small change, and \
-         do not send `artisan` on a vague brief. Independent calls in the same \
-         response run together and overlap `search_tool` / `use_tool`. Custom \
-         roles from agents/*.md are valid. The child cannot ask the user."
+        "Delegate one scoped unit to a listed role. Use `agent` only when \
+         the work can run independently in parallel, the brief has clear \
+         boundaries, and it will cut cost or improve completion quality. \
+         `scout` returns a read-only map and stops. `artisan` implements a \
+         bounded change you integrate, one at a time unless the briefs are \
+         independent. Skip trivial edits and vague briefs. Independent calls \
+         overlap `search_tool` / `use_tool`. Custom roles from agents/*.md \
+         are valid. The child cannot ask the user."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "agent: one scout for a read-only map, or one artisan for a bounded \
-             change you integrate. Skip trivial edits and vague briefs. Optional \
-             description and isolation.",
+            "agent: only for independent parallel work with a clear brief that \
+             cuts cost or improves quality. One scout (read-only map) or one \
+             artisan (bounded change you integrate). Skip trivial edits.",
         )
     }
 

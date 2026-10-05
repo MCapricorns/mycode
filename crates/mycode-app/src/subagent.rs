@@ -321,8 +321,8 @@ fn agent_progress(role: &str, phase: &str, detail: &str) -> String {
 /// Parent-prompt dispatch section for the roles that are actually enabled.
 ///
 /// Catalog lines are the short when-to-use descriptions. The bullets are the
-/// decision boundary: one scout or one artisan for non-trivial work, no
-/// fan-out for a small change, and one artisan at a time unless the briefs
+/// decision boundary: dispatch only for independent, bounded work that cuts
+/// cost or improves quality, and run one artisan at a time unless the briefs
 /// are independent. Only behavior this process implements is named.
 #[must_use]
 pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSettings) -> String {
@@ -340,7 +340,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .collect::<Vec<_>>()
         .join("\n");
     let dispatch = [
-        "Prefer one `scout` or one `artisan` for non-trivial multi-step work. Do not fan out many agents for one small change.",
+        "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
         "`scout` when you need a repo, layout, API, or call-site map before deciding or editing; multi-file or unfamiliar exploration; or fact-gathering while you plan. It is read-only and stops after findings.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
         "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
@@ -756,7 +756,9 @@ mod tests {
         let text = super::delegation_directive(&builtin_roles(), &SubagentSettings::default());
         assert!(text.contains("`scout`"));
         assert!(text.contains("`artisan`"));
-        assert!(text.contains("one small change"));
+        assert!(text.contains("independently in parallel"));
+        assert!(text.contains("clear boundaries"));
+        assert!(text.contains("cut cost or improve completion quality"));
         assert!(text.contains("vague"));
         assert!(text.contains("not a diff"));
         assert!(text.contains("one `artisan` at a time"));

@@ -55,7 +55,7 @@ Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。脚
 | 工具 | 宿主提供什么 |
 | --- | --- |
 | `ask_user` | 把问题送到界面，等用户答完再继续 |
-| `agent` | 按角色再跑一个有白名单的子循环。非平凡的多步工作派一个 `scout` 或一个 `artisan`；小改自己做。工具名是 `agent`，没有 `task` 别名 |
+| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，没有 `task` 别名 |
 | `web_search` / `fetch_content` | 有界 HTTP。没钥匙时调用失败，并提示去设置页粘贴 |
 
 MCP 不把远端工具名注册进这张表。应用层注册 `search_tool` 和 `use_tool`：先取 schema，再按 schema 调用。这样远端工具不会盖住 `read` 或 `shell`。
