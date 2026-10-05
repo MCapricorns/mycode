@@ -54,7 +54,7 @@ grep-matcher = "0.1"
 regex = "1"
 aho-corasick = "1"
 memchr = "2"
-jsonschema = { version = "0.52", default-features = false }
+jsonschema = { version = "0.58", default-features = false }
 blake3 = "1"
 libc = "0.2"
 rustix = "1"
