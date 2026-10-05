@@ -74,7 +74,7 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       cleanup_ref: ${{ steps.plan.outputs.cleanup_ref }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: true
           fetch-depth: 1
@@ -169,7 +169,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary: mycode-desktop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-plan.outputs.sha }}
 
@@ -294,7 +294,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-plan.outputs.sha }}
           persist-credentials: true
@@ -346,7 +346,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: true
           fetch-depth: 1
