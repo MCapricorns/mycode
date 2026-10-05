@@ -276,7 +276,7 @@ jobs:
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       - name: Upload assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: |
