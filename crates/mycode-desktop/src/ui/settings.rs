@@ -156,6 +156,7 @@ pub(super) fn render_settings_view(
                         .overflow_y_scroll()
                         .child(super::motion::fade_in(
                             format!("settings-page-{}", settings_page_key(workspace)),
+                            cx.reduce_motion(),
                             div()
                                 .id("settings-content-inner")
                                 .mx_auto()

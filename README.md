@@ -64,7 +64,7 @@ cargo build --release -p mycode-desktop
 
 ## 开发
 
-质量门与 CI 相同：格式、clippy，以及一次 `shell` 的 `program` 模式启动烟测。除此之外没有测试套件。
+推送到 `main` 的质量门是格式、clippy，以及一次 `shell` 的 `program` 模式启动烟测。除此之外没有测试套件。pull request 不跑这道质量门。
 
 ```text
 cargo fmt --all -- --check
@@ -72,7 +72,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-推送到 `main` 的 pull request 在 Windows x64、Windows ARM64 和 macOS Apple Silicon 上跑这三步，不发布。质量门通过的 `main` 推送每次都会新建 GitHub Release：新标签 `v<version>`、三个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64 和 macOS Apple Silicon 都从这次提交构建。三个构建都成功之后，才把 `main` 快进到该提交并创建标签，因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
+pull request 只在 Windows x64、Windows ARM64 和 macOS Apple Silicon 上构建并打包三个平台的 release 二进制（zip 与 `.sha256`），不创建标签、不发 GitHub Release、不改版本、不推 `ci/release-*`。质量门通过的 `main` 推送每次都会新建 GitHub Release：新标签 `v<version>`、三个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64 和 macOS Apple Silicon 都从这次提交构建。三个构建都成功之后，先用该提交创建标签并上传压缩包，再把版本写回 `main`：能快进就快进；若构建期间 `main` 有了新提交，就把版本提交重放到当前 `main` 上再推送（不强制推送；只自动处理 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md` 的冲突，计划中的版本号保留，构建期间写进 `## [Unreleased]` 的新说明也保留）。临时引用会在成功或失败后删除。因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
 
 ## 许可
 
@@ -173,8 +173,8 @@ Module boundaries and the path of one user message:
 
 ### Development
 
-CI is rustfmt, clippy, and one `shell` program-mode launch smoke test.
-There is no other test suite.
+A push to `main` is gated by rustfmt, clippy, and one `shell` program-mode launch smoke test.
+There is no other test suite. Pull requests do not run that gate.
 
 ```text
 cargo fmt --all -- --check
@@ -182,8 +182,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-Pull requests into `main` run those gates on Windows x64, Windows ARM64,
-and macOS Apple Silicon, and do not publish. A push to
+Pull requests into `main` only build and package the three platform
+release binaries on Windows x64, Windows ARM64, and macOS Apple Silicon
+(zip and `.sha256`). They do not publish, tag, bump the version, or push
+a `ci/release-*` ref. A push to
 `main` whose gates pass always publishes a new GitHub Release: a new
 `v<version>` tag, the three platform zips (Windows x64, Windows ARM64,
 and macOS Apple Silicon), their `.sha256` sidecars, and the matching
@@ -191,9 +193,14 @@ and macOS Apple Silicon), their `.sha256` sidecars, and the matching
 that version already has a tag, release-plan bumps the patch in
 `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md` and pushes that commit
 only to `ci/release-<version>-<run id>`. Windows x64, Windows ARM64, and
-macOS Apple Silicon are built from that commit. `main` is fast-forwarded
-and the tag is created only after those three builds succeed, so the
-version compiled into the binaries matches the tag. Notes under
+macOS Apple Silicon are built from that commit. After those three builds
+succeed, the tag and archives are published from that commit, then `main`
+is updated: fast-forward when it still can, otherwise the version bump is
+replayed onto current `main` and pushed without force. A replay resolves
+conflicts only in `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`, keeping
+the planned version and any `## [Unreleased]` notes that landed on `main`
+during the build. The temporary ref is deleted after success or failure.
+The version compiled into the binaries matches the tag. Notes under
 `## [Unreleased]` in `CHANGELOG.md` move into that version; an empty
 section gets one fixed sentence. Archives already uploaded for an older
 tag do not skip the release. A hand-bumped version that has no tag yet
