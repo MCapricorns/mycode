@@ -512,11 +512,19 @@ pushd "%~dp1." || ( endlocal & exit /b 1 )
 set "NAME=%~nx1"
 setlocal EnableDelayedExpansion
 set "HASHRESULT="
-set "NAMEQ=!NAME:%=%%%%!"
-rem usebackq: a quoted path inside for /f '...' is not passed to certutil.
-for /f "usebackq delims=" %%H in (`certutil -hashfile "!NAMEQ!" SHA256`) do call :takehash "%%H"
+set "SEEN="
+rem Percent expansion, not !NAME!. The for /f child does not enable delayed
+rem expansion, so !NAME! would be the literal filename certutil looks up.
+rem usebackq lets the quoted name survive. Spaces in the hash line are
+rem removed when the line runs, not when the block is parsed.
+for /f "usebackq delims=" %%H in (`certutil -hashfile "%NAME%" SHA256`) do (
+  if not defined SEEN set "SEEN=%%H"
+  set "CANDIDATE=%%H"
+  set "CANDIDATE=!CANDIDATE: =!"
+  if not defined HASHRESULT if "!CANDIDATE:~64,1!"=="" if not "!CANDIDATE:~63,1!"=="" set "HASHRESULT=!CANDIDATE!"
+)
 if not defined HASHRESULT (
-  echo updater: certutil did not return a sha256 1>&2
+  echo updater: certutil did not return a sha256 [!SEEN!] 1>&2
   popd
   endlocal
   endlocal
@@ -531,17 +539,6 @@ if /i not "!HASHRESULT!"=="!EXPECTED!" (
 )
 popd
 endlocal
-endlocal
-exit /b 0
-:takehash
-if defined HASHRESULT exit /b 0
-setlocal DisableDelayedExpansion
-set "CANDIDATE=%~1"
-set "CANDIDATE=%CANDIDATE: =%"
-if not "%CANDIDATE:~63,1%"=="" if "%CANDIDATE:~64,1%"=="" (
-  endlocal & set "HASHRESULT=%CANDIDATE%"
-  exit /b 0
-)
 endlocal
 exit /b 0
 "#;
