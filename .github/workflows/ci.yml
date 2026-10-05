@@ -97,6 +97,11 @@ jobs:
       - name: exec launches a program
         run: cargo test -p mycode-tools --lib native_image_launches --locked -- --nocapture
 
+      # Runs the shipped updater script on this host: /bin/sh on macOS,
+      # update.cmd on Windows. The target file is not the running test binary.
+      - name: updater script swaps a quiescent binary
+        run: cargo test -p mycode-app --lib updates:: --locked -- --nocapture
+
   desktop:
     name: desktop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

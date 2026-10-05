@@ -429,24 +429,159 @@ pub fn cleanup_stale_stages() {
 
 fn windows_script(new_binary: &Path, current: &Path, sha256: &str) -> String {
     let previous = format!("{}.mycode-previous", current.display());
-    format!(
-        "@echo off\r\nset /a TRIES=0\r\n:retry\r\ntimeout /t 1 /nobreak >nul\r\ncopy /y \"{current}\" \"{previous}\" >nul 2>&1\r\nif errorlevel 1 goto waitmore\r\ncertutil -hashfile \"{new_binary}\" SHA256 | findstr /i \"{sha256}\" >nul\r\nif errorlevel 1 exit /b 1\r\nmove /y \"{new_binary}\" \"{current}\" >nul 2>&1\r\nif errorlevel 1 (\r\n  move /y \"{previous}\" \"{current}\" >nul\r\n  exit /b 1\r\n)\r\ncertutil -hashfile \"{current}\" SHA256 | findstr /i \"{sha256}\" >nul\r\nif errorlevel 1 (\r\n  move /y \"{previous}\" \"{current}\" >nul\r\n  exit /b 1\r\n)\r\ngoto done\r\n:waitmore\r\nset /a TRIES+=1\r\nif %TRIES% GEQ 30 exit /b 1\r\ngoto retry\r\n:done\r\nstart \"\" \"{current}\"\r\ndel \"%~f0\"\r\n",
-        current = current.display(),
-        previous = previous,
-        new_binary = new_binary.display(),
-        sha256 = sha256,
-    )
+    // `timeout` returns immediately when cmd has no console. The updater is
+    // spawned detached, so the wait is `ping`, which still sleeps about a
+    // second. The retry covers the replace, not only the backup copy: a
+    // running image can be copied and still refuse to be renamed.
+    let template = r#"@echo off
+setlocal EnableExtensions
+set TRIES=0
+set BACKED_UP=0
+:retry
+if "%BACKED_UP%"=="0" goto backup
+goto replace
+:backup
+copy /y __CURRENT__ __PREVIOUS__ >nul 2>&1
+if errorlevel 1 goto wait
+set BACKED_UP=1
+:replace
+call :checkhash __NEW__ "__HASH__"
+if errorlevel 1 (
+  echo updater: staged binary sha256 does not match 1>&2
+  exit /b 1
+)
+move /y __NEW__ __CURRENT__ >nul 2>&1
+if errorlevel 1 goto wait
+call :checkhash __CURRENT__ "__HASH__"
+if errorlevel 1 goto rollback
+goto done
+:wait
+set /a TRIES+=1
+if %TRIES% GEQ 30 (
+  if "%BACKED_UP%"=="0" (
+    echo updater: could not back up the current binary 1>&2
+  ) else (
+    echo updater: could not replace the current binary before the retry limit 1>&2
+  )
+  exit /b 1
+)
+ping -n 2 127.0.0.1 >nul
+goto retry
+:rollback
+echo updater: replaced binary sha256 does not match; restoring backup 1>&2
+move /y __PREVIOUS__ __CURRENT__ >nul 2>&1
+exit /b 1
+:done
+start "" __CURRENT__
+rem Same line as the delete: cmd has already read it, so removing this
+rem script does not hide `exit` and turn a good replace into errorlevel 1.
+del "%~f0" & exit /b 0
+:checkhash
+rem Hash via `for /f` so certutil's pipe text is used. Redirecting certutil
+rem to a file writes UTF-16, which `for /f` then parses as the wrong hash.
+rem `pushd` to the file's directory keeps `Program Files (x86)` out of the
+rem `for /f` command, where `)` would end the command early.
+set "HASHRESULT="
+set "HASHDIR=%~dp1."
+pushd "%HASHDIR%" || exit /b 1
+for /f "delims=" %%H in ('certutil -hashfile "%~nx1" SHA256') do call :takehash "%%H"
+popd
+if not defined HASHRESULT exit /b 1
+if /i not "%HASHRESULT%"=="%~2" exit /b 1
+exit /b 0
+:takehash
+if defined HASHRESULT exit /b 0
+set "CANDIDATE=%~1"
+set "CANDIDATE=%CANDIDATE: =%"
+if "%CANDIDATE:~64,1%"=="" if not "%CANDIDATE:~63,1%"=="" set "HASHRESULT=%CANDIDATE%"
+exit /b 0
+"#;
+    template
+        .replace("__PREVIOUS__", &cmd_quote(&previous))
+        .replace("__CURRENT__", &cmd_quote_path(current))
+        .replace("__NEW__", &cmd_quote_path(new_binary))
+        .replace("__HASH__", sha256)
+        .replace('\n', "\r\n")
 }
 
 fn unix_script(new_binary: &Path, current: &Path, sha256: &str) -> String {
     let previous = format!("{}.mycode-previous", current.display());
-    format!(
-        "#!/bin/sh\nset -e\ni=0\nprev=\"{previous}\"\nwhile [ \"$i\" -lt 30 ]; do\n  if cp -f \"{current}\" \"$prev\" 2>/dev/null; then break; fi\n  sleep 1\n  i=$((i+1))\ndone\nactual=$(sha256sum \"{new_binary}\" | awk '{{print $1}}')\nif [ \"$actual\" != \"{sha256}\" ]; then exit 1; fi\nif ! mv -f \"{new_binary}\" \"{current}\"; then\n  mv -f \"$prev\" \"{current}\"\n  exit 1\nfi\nactual=$(sha256sum \"{current}\" | awk '{{print $1}}')\nif [ \"$actual\" != \"{sha256}\" ]; then\n  mv -f \"$prev\" \"{current}\"\n  exit 1\nfi\nchmod +x \"{current}\" 2>/dev/null\nnohup \"{current}\" >/dev/null 2>&1 &\nrm -f \"$0\"\n",
-        previous = previous,
-        current = current.display(),
-        new_binary = new_binary.display(),
-        sha256 = sha256,
-    )
+    // `shasum -a 256` is the hasher stock macOS ships. `sha256sum` is the
+    // fallback for other Unix hosts. A failed backup stops the script; the
+    // replace is not attempted without `.mycode-previous`.
+    let template = r#"#!/bin/sh
+set -e
+prev=__PREVIOUS__
+current=__CURRENT__
+new=__NEW__
+expected="__HASH__"
+hash_file() {
+  _file=$1
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$_file" | awk '{print $1}'
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$_file" | awk '{print $1}'
+    return 0
+  fi
+  echo "updater: neither shasum nor sha256sum is available" >&2
+  exit 1
+}
+i=0
+copied=0
+while [ "$i" -lt 30 ]; do
+  if cp -f "$current" "$prev" 2>/dev/null; then
+    copied=1
+    break
+  fi
+  sleep 1
+  i=$((i+1))
+done
+if [ "$copied" -ne 1 ]; then
+  echo "updater: could not back up the current binary" >&2
+  exit 1
+fi
+actual=$(hash_file "$new")
+if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+  echo "updater: staged binary sha256 does not match" >&2
+  exit 1
+fi
+if ! mv -f "$new" "$current"; then
+  echo "updater: could not replace the current binary" >&2
+  exit 1
+fi
+actual=$(hash_file "$current")
+if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+  mv -f "$prev" "$current"
+  echo "updater: replaced binary sha256 does not match; restored backup" >&2
+  exit 1
+fi
+chmod +x "$current" 2>/dev/null || true
+nohup "$current" >/dev/null 2>&1 &
+rm -f "$0"
+"#;
+    template
+        .replace("__PREVIOUS__", &shell_single_quote(&previous))
+        .replace("__CURRENT__", &shell_single_quote_path(current))
+        .replace("__NEW__", &shell_single_quote_path(new_binary))
+        .replace("__HASH__", sha256)
+}
+
+fn shell_single_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+fn shell_single_quote_path(path: &Path) -> String {
+    shell_single_quote(&path.to_string_lossy())
+}
+
+fn cmd_quote(text: &str) -> String {
+    format!("\"{}\"", text.replace('%', "%%"))
+}
+
+fn cmd_quote_path(path: &Path) -> String {
+    cmd_quote(&path.to_string_lossy())
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {
@@ -517,23 +652,180 @@ mod tests {
         );
     }
 
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mycode-update-script-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn output_text(output: &std::process::Output) -> String {
+        format!(
+            "status {:?}\nstdout {}\nstderr {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn script_checks_hash_and_backup_before_replace() {
-        let new_binary = std::path::Path::new("/tmp/new");
-        let current = std::path::Path::new("/tmp/current");
-        let unix = super::unix_script(new_binary, current, "abc123");
-        let backup = unix.find("mycode-previous").unwrap();
-        let hash = unix.find("sha256sum").unwrap();
-        let publish = unix.find("mv -f").unwrap();
-        assert!(backup < publish && hash < publish, "{unix}");
-        let windows = super::windows_script(new_binary, current, "abc123");
-        let win_backup = windows.find("mycode-previous").unwrap();
-        let win_hash = windows.find("certutil").unwrap();
-        let win_publish = windows.find("move /y").unwrap();
+    fn unix_script_good_hash_replaces_and_keeps_backup() {
+        let dir = scratch("unix-good");
+        let current = dir.join("app");
+        let staged = dir.join("next");
+        let old = b"old-bytes";
+        // A real executable so the script's relaunch exits instead of hanging.
+        let new = b"#!/bin/sh\nexit 0\n";
+        std::fs::write(&current, old).unwrap();
+        std::fs::write(&staged, new).unwrap();
+        let hash = super::sha256_hex(new);
+        let script = super::unix_script(&staged, &current, &hash);
         assert!(
-            win_backup < win_publish && win_hash < win_publish,
-            "{windows}"
+            script.contains("shasum -a 256"),
+            "macOS hasher missing from shipped script: {script}"
         );
+        let path = dir.join("update.sh");
+        std::fs::write(&path, &script).unwrap();
+        let output = std::process::Command::new("/bin/sh")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "good hash should replace: {}",
+            output_text(&output)
+        );
+        assert_eq!(std::fs::read(&current).unwrap(), new);
+        let backup = std::path::PathBuf::from(format!("{}.mycode-previous", current.display()));
+        assert_eq!(std::fs::read(&backup).unwrap(), old);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_script_bad_hash_leaves_current_untouched() {
+        let dir = scratch("unix-bad");
+        let current = dir.join("app");
+        let staged = dir.join("next");
+        std::fs::write(&current, b"old-bytes").unwrap();
+        std::fs::write(&staged, b"new-bytes").unwrap();
+        let script = super::unix_script(
+            &staged,
+            &current,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
+        let path = dir.join("update.sh");
+        std::fs::write(&path, script).unwrap();
+        let output = std::process::Command::new("/bin/sh")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let text = output_text(&output);
+        assert!(!output.status.success(), "bad hash must fail: {text}");
+        assert!(
+            text.contains("sha256"),
+            "hash failure must be visible: {text}"
+        );
+        assert_eq!(std::fs::read(&current).unwrap(), b"old-bytes");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"new-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_script_stops_when_backup_cannot_be_created() {
+        let dir = scratch("unix-nobackup");
+        let current = dir.join("missing");
+        let staged = dir.join("next");
+        std::fs::write(&staged, b"new-bytes").unwrap();
+        let script = super::unix_script(&staged, &current, &super::sha256_hex(b"new-bytes"));
+        let path = dir.join("update.sh");
+        std::fs::write(&path, script).unwrap();
+        let output = std::process::Command::new("/bin/sh")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let text = output_text(&output);
+        assert!(!output.status.success(), "missing backup must fail: {text}");
+        assert!(
+            text.contains("back up"),
+            "backup failure must be visible: {text}"
+        );
+        assert!(!current.exists(), "script replaced without a backup");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"new-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    fn run_cmd(script: &std::path::Path) -> std::process::Output {
+        let script = script.to_string_lossy().into_owned();
+        std::process::Command::new("cmd")
+            .args(["/d", "/c", script.as_str()])
+            .output()
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_good_hash_replaces_when_target_is_not_running() {
+        let dir = scratch("win-good");
+        let current = dir.join("app.exe");
+        let staged = dir.join("next.exe");
+        let system = std::env::var("SystemRoot").unwrap();
+        let donor = std::path::PathBuf::from(system)
+            .join("System32")
+            .join("hostname.exe");
+        std::fs::write(&current, b"old-bytes").unwrap();
+        std::fs::copy(&donor, &staged).unwrap();
+        let new = std::fs::read(&staged).unwrap();
+        let hash = super::sha256_hex(&new);
+        let script = super::windows_script(&staged, &current, &hash);
+        let path = dir.join("update.cmd");
+        std::fs::write(&path, script).unwrap();
+        let output = run_cmd(&path);
+        assert!(
+            output.status.success(),
+            "good hash should replace: {}",
+            output_text(&output)
+        );
+        assert_eq!(std::fs::read(&current).unwrap(), new);
+        let backup = std::path::PathBuf::from(format!("{}.mycode-previous", current.display()));
+        assert_eq!(std::fs::read(&backup).unwrap(), b"old-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_bad_hash_leaves_current_untouched() {
+        let dir = scratch("win-bad");
+        let current = dir.join("app.exe");
+        let staged = dir.join("next.exe");
+        std::fs::write(&current, b"old-bytes").unwrap();
+        std::fs::write(&staged, b"new-bytes").unwrap();
+        let script = super::windows_script(
+            &staged,
+            &current,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
+        let path = dir.join("update.cmd");
+        std::fs::write(&path, script).unwrap();
+        let output = run_cmd(&path);
+        let text = output_text(&output);
+        assert!(!output.status.success(), "bad hash must fail: {text}");
+        assert!(
+            text.contains("sha256"),
+            "hash failure must be visible: {text}"
+        );
+        assert_eq!(std::fs::read(&current).unwrap(), b"old-bytes");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"new-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
