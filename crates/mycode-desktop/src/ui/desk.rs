@@ -19,8 +19,11 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
 }
 
 /// Palette ids the settings page offers, in display order.
-pub const PALETTES: [&str; 8] = [
-    "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss",
+///
+/// Must stay identical to `mycode_config::VALID_PALETTES`.
+pub const PALETTES: [&str; 13] = [
+    "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss", "ember", "glacier", "plum",
+    "copper", "aurora",
 ];
 
 /// Canonical palette id. Unknown values fall back to slate.
@@ -44,6 +47,11 @@ pub fn palette_label(palette: &str) -> &'static str {
         "rose" => t("Rose", "玫瑰"),
         "ink" => t("Ink", "墨色"),
         "moss" => t("Moss", "苔原"),
+        "ember" => t("Ember", "余烬"),
+        "glacier" => t("Glacier", "冰川"),
+        "plum" => t("Plum", "梅紫"),
+        "copper" => t("Copper", "铜绿"),
+        "aurora" => t("Aurora", "极光"),
         _ => t("Slate", "石板灰"),
     }
 }
@@ -184,6 +192,86 @@ fn spec_for(palette: &str) -> Spec {
             green: 0x8FBF9F,
             red: 0xE08B7A,
             info: 0x8FB4C4,
+        },
+        "ember" => Spec {
+            bg: 0x1A1410,
+            wash: 0x3A2418,
+            surface: 0x241C16,
+            card: 0x2E241C,
+            hover: 0x3C3024,
+            ink: 0xF6EDE4,
+            dim: 0xC4B0A0,
+            line: 0x4A382C,
+            accent: 0xE08A4A,
+            accent_ink: 0x1C1008,
+            tint: 0x3A2818,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0xC4A888,
+        },
+        "glacier" => Spec {
+            bg: 0x14181C,
+            wash: 0x1C2C38,
+            surface: 0x1A2228,
+            card: 0x222C34,
+            hover: 0x2C3844,
+            ink: 0xE8F2F6,
+            dim: 0xA8BCC8,
+            line: 0x344450,
+            accent: 0x7EC8E0,
+            accent_ink: 0x0C1820,
+            tint: 0x1C3440,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0x9EC4D4,
+        },
+        "plum" => Spec {
+            bg: 0x18141A,
+            wash: 0x321C30,
+            surface: 0x221824,
+            card: 0x2C2030,
+            hover: 0x3A2840,
+            ink: 0xF4E8F2,
+            dim: 0xC0A8BC,
+            line: 0x4A3448,
+            accent: 0xD4A0C8,
+            accent_ink: 0x1C1018,
+            tint: 0x3A2438,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0xC4A8C8,
+        },
+        "copper" => Spec {
+            bg: 0x161412,
+            wash: 0x243028,
+            surface: 0x1E1C18,
+            card: 0x282420,
+            hover: 0x36302A,
+            ink: 0xF0EBE4,
+            dim: 0xB8B0A4,
+            line: 0x3E3A34,
+            accent: 0x6FBFB0,
+            accent_ink: 0x0E1816,
+            tint: 0x243430,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0xA8C4BC,
+        },
+        "aurora" => Spec {
+            bg: 0x101418,
+            wash: 0x142830,
+            surface: 0x161C22,
+            card: 0x1E262C,
+            hover: 0x28343A,
+            ink: 0xE6F4F0,
+            dim: 0x9CB4B0,
+            line: 0x2C4044,
+            accent: 0x5ED4A0,
+            accent_ink: 0x081410,
+            tint: 0x143028,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0x8EC8B4,
         },
         _ => Spec {
             bg: 0x171A20,
@@ -370,5 +458,16 @@ impl Desk {
             screen: theme.background,
             screen_dim: theme.muted_foreground,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn palette_ids_match_settings() {
+        assert_eq!(
+            super::PALETTES.as_slice(),
+            mycode_config::VALID_PALETTES.as_slice()
+        );
     }
 }

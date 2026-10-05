@@ -13,8 +13,8 @@ English notes are [below](#english).
 - **改动。** 右侧是当前模型和该文件夹的 git 改动，点文件看 diff。
 - **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
 - **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，可以用 Python heredoc 或短脚本改文件；`program` 直接启动钉住的程序映像）。这些改动都没有文件撤销。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
-- **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。
-- **界面。** 中英双语，深色界面和几套配色。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。
+- **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。委派工具是 `agent`。并发默认 4 个；设置里的 `0` 表示这个默认值，不是零个子代理。子代理没有墙钟超时。
+- **界面。** 中英双语，深色界面。设置里可选色板：石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
@@ -105,10 +105,15 @@ You bring the API keys.
   are not undone.
   Web search, questions, the `agent` tool, and MCP share one registry.
 - **Subagents.** Built-in scout and artisan roles,
-  or custom Markdown roles under `agents/`.
-- **UI.** English and Chinese, a dark theme, and several palettes.
-  Fenced code in the transcript is highlighted with gpui-kit's Tree-sitter
-  grammars. Updates download and verify, then wait for a restart confirmation.
+  or custom Markdown roles under `agents/`. The delegation tool is
+  `agent`. Concurrent sub-agents default to 4; a setting of `0` uses
+  that default and does not mean zero agents. A sub-agent has no
+  wall-clock timeout.
+- **UI.** English and Chinese, a dark theme, and palettes: slate, ocean,
+  forest, dusk, sand, rose, ink, moss, ember, glacier, plum, copper,
+  and aurora. Fenced code in the transcript is highlighted with
+  gpui-kit's Tree-sitter grammars. Updates download and verify, then
+  wait for a restart confirmation.
 
 A tool line names its target: which file was read, what was searched,
 which command ran. Keys live only in `secrets.json`. Saved keys show as

@@ -1,4 +1,4 @@
-//! Contained spawn, output collection, and teardown for structured exec.
+//! Contained spawn, output collection, and teardown for the `shell` program launch.
 use std::future::Future;
 use std::pin::Pin;
 use std::process::ExitStatus;

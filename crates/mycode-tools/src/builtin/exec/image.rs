@@ -1,4 +1,4 @@
-//! Kernel-loadable image classification for structured exec.
+//! Kernel-loadable image classification for the `shell` program launch.
 //!
 //! Only PE, ELF, and Mach-O / fat Mach-O images are accepted. Shebang
 //! scripts, batch files, and any implicit interpreter fallback are rejected

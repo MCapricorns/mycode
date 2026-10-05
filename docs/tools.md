@@ -46,7 +46,7 @@
 
 Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。脚本模式的 shell 侦查顺序是 PowerShell 7（`pwsh`），否则 Git bash，不用 Windows PowerShell 5.1 和 `cmd`。
 
-`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、Linux x86_64 glibc、macOS Apple Silicon），摘要复查和参数组装共用。其它 Unix 目标不支持直接启动映像。模型只看见工具名 `shell`。
+`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon，以及仅供本地构建的 Linux x86_64 glibc）。发布包没有 Linux。摘要复查和参数组装共用。其它 Unix 目标不支持直接启动映像。模型只看见工具名 `shell`，没有 `exec`。
 
 搜索有独立的预算：扫描字节、截止时间、错误样本条数。到顶就停并说明停因，而不是把目录树读完。
 
@@ -55,7 +55,7 @@ Windows 上 PATH 搜索会跳过打不开或 0 字节的商店执行别名。脚
 | 工具 | 宿主提供什么 |
 | --- | --- |
 | `ask_user` | 把问题送到界面，等用户答完再继续 |
-| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，没有 `task` 别名 |
+| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，没有 `task` 别名。内置角色只有 scout 和 artisan。子代理没有墙钟超时。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
 | `web_search` / `fetch_content` | 有界 HTTP。没钥匙时调用失败，并提示去设置页粘贴 |
 
 MCP 不把远端工具名注册进这张表。应用层注册 `search_tool` 和 `use_tool`：先取 schema，再按 schema 调用。这样远端工具不会盖住 `read` 或 `shell`。

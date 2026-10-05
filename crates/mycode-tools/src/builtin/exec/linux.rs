@@ -1,8 +1,9 @@
 //! Linux x86_64 GNU spawn: `execveat(AT_EMPTY_PATH)` from a retained fd.
 //!
-//! Product launch is Linux x86_64 GNU only; musl, Android, and BSD stay
-//! unsupported. The child is forked with `process_group(0)` and a `pre_exec`
-//! hook that fail-closed marks every fd ≥ 3 `FD_CLOEXEC` via raw
+//! This path is Linux x86_64 GNU only; musl, Android, and BSD stay
+//! unsupported. Release packages do not include Linux. The child is forked
+//! with `process_group(0)` and a `pre_exec` hook that fail-closed marks
+//! every fd ≥ 3 `FD_CLOEXEC` via raw
 //! `close_range`, then launches the already-opened descriptor. There is no
 //! verify-then-path reopen and no `execvp`/`ENOEXEC` shell fallback.
 //! Re-hashing happens in the parent immediately before `spawn`. A same-uid

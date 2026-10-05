@@ -15,11 +15,6 @@ use mycode_tools::{ToolDyn, ToolRegistry};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-/// Automatic slot count when settings leave concurrency at `0`.
-const DEFAULT_CONCURRENT_SUBAGENTS: usize = 4;
-/// Wall budget for one nested run.
-const SUBAGENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-
 /// Subagent system brief: one-shot work, no user channel.
 const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MYCode subagent. Finish the brief with the \
 tools you have. You cannot ask the user; reversible choices in the brief are authorized. \
@@ -61,12 +56,7 @@ impl BridgeAgentHost {
         cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     ) -> Self {
-        let slots = settings.subagents.max_concurrent as usize;
-        let slots = if slots == 0 {
-            DEFAULT_CONCURRENT_SUBAGENTS
-        } else {
-            slots
-        };
+        let slots = settings.subagents.effective_concurrency() as usize;
         Self {
             resolved,
             home,
@@ -116,8 +106,8 @@ impl WorktreeLease {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis())
             .unwrap_or_default();
-        let id = format!("task-{}-{stamp}", std::process::id());
-        let leases = home.root().join("task-worktrees");
+        let id = format!("agent-{}-{stamp}", std::process::id());
+        let leases = home.root().join(WORKTREE_LEASE_DIR);
         std::fs::create_dir_all(&leases).map_err(|error| format!("lease dir: {error}"))?;
         let path = leases.join(&id);
         let output = git_command()
@@ -279,10 +269,23 @@ pub(crate) fn handoff_worktree(
     outcome
 }
 
+/// Directory for worktree leases created by this build.
+const WORKTREE_LEASE_DIR: &str = "agent-worktrees";
+/// Lease directory written when the delegation tool was still named `task`.
+const LEGACY_WORKTREE_LEASE_DIR: &str = "task-worktrees";
+
 /// Removes leases left behind by a crashed process. Best-effort: a lease
 /// whose repo is gone is simply deleted from disk.
-pub(crate) fn recover_task_worktrees(home: &HomeLayout) {
-    let leases = home.root().join("task-worktrees");
+///
+/// Older builds stored leases under [`LEGACY_WORKTREE_LEASE_DIR`]. Both
+/// directories are reclaimed so a rename does not orphan a checkout.
+pub(crate) fn recover_agent_worktrees(home: &HomeLayout) {
+    recover_worktree_lease_dir(home, WORKTREE_LEASE_DIR);
+    recover_worktree_lease_dir(home, LEGACY_WORKTREE_LEASE_DIR);
+}
+
+fn recover_worktree_lease_dir(home: &HomeLayout, directory: &str) {
+    let leases = home.root().join(directory);
     let Ok(entries) = std::fs::read_dir(&leases) else {
         return;
     };
@@ -439,7 +442,10 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
 }
 
 impl BridgeAgentHost {
-    /// Runs the nested agent to completion under the wall budget.
+    /// Runs the nested agent until it finishes or the parent cancels.
+    ///
+    /// There is no wall-clock timeout. A long artisan or scout run stays
+    /// alive until the model stops or the caller cancels.
     async fn drive_subagent(
         &self,
         request: &mycode_tools::builtin::SubagentRequest,
@@ -556,20 +562,15 @@ impl BridgeAgentHost {
         let role_name = role.name.clone();
         let run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
-                .with_cancel(run_cancel.clone())
+                .with_cancel(run_cancel)
                 .with_events(event_tx)
                 .with_cwd(run_dir)
                 .with_extra_roots(extra_roots);
-            let outcome = tokio::time::timeout(SUBAGENT_TIMEOUT, agent.prompt(prompt, &env)).await;
+            let outcome = agent.prompt(prompt, &env).await;
             forwarder.abort();
-            match outcome {
-                Ok(Ok(_)) => (),
-                Ok(Err(error)) => return Err(fail(format!("subagent failed: {error}"))),
-                Err(_) => {
-                    run_cancel.cancel();
-                    return Err(fail("subagent timed out".to_owned()));
-                }
-            };
+            if let Err(error) = outcome {
+                return Err(fail(format!("subagent failed: {error}")));
+            }
             let answer = agent
                 .state()
                 .messages()
@@ -758,5 +759,19 @@ mod tests {
         assert!(!text.contains("sentinel"));
         assert!(!text.contains("`exec`"));
         assert!(!text.contains("`task`"));
+    }
+
+    #[test]
+    fn zero_max_concurrent_uses_the_default() {
+        let settings = SubagentSettings::default();
+        assert_eq!(settings.max_concurrent, 0);
+        assert_eq!(
+            settings.effective_concurrency(),
+            mycode_config::DEFAULT_SUBAGENT_CONCURRENCY
+        );
+        assert_ne!(settings.effective_concurrency(), 0);
+        let mut explicit = settings;
+        explicit.max_concurrent = 2;
+        assert_eq!(explicit.effective_concurrency(), 2);
     }
 }

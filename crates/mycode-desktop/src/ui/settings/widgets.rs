@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use crate::workspace::Workspace;
 
-/// One settings card: hairline glass, a frosted fill, and a mono caption.
+/// One settings card: a hairline border, a solid fill, and a mono caption.
 pub(super) fn settings_card(
     id: &str,
     title: &str,

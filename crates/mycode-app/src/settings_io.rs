@@ -2,7 +2,7 @@
 //! saves, key storage, and the shell the runtime tools use.
 
 use mycode_config::{
-    AppSettings, AuthorityRevision, HomeLayout, MAX_SECRETS_BYTES, MAX_SETTINGS_BYTES,
+    AppSettings, AuthorityRevision, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_SECRETS_BYTES,
     SECRETS_FORMAT_VERSION, SECRETS_PATH, SETTINGS_FORMAT_VERSION, SETTINGS_PATH,
     read_app_settings, read_owned_file, read_provider_secrets, replace_app_settings,
     replace_provider_secrets,
@@ -63,7 +63,7 @@ pub(crate) fn load_settings(
     let mut revision = stored_revision(
         home,
         SETTINGS_PATH,
-        MAX_SETTINGS_BYTES,
+        MAX_AUTHORITY_DOCUMENT_BYTES,
         SETTINGS_FORMAT_VERSION,
         "settings",
     )?;

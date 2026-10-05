@@ -205,7 +205,7 @@ fn image_kind_label(kind: image::ImageKind) -> &'static str {
     }
 }
 
-/// Spawns a prepared invocation through the structured-exec broker.
+/// Spawns a prepared invocation for `shell` mode `program`.
 ///
 /// # Errors
 ///

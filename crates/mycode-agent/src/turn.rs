@@ -215,17 +215,16 @@ fn canonical_tool_name(name: &str) -> &str {
 /// Dispatch one registered, schema-valid tool call and return the
 /// resulting [`ToolResultMessage`].
 ///
-/// Lookup, hook gating, search/file capability binding, argument validation,
+/// Lookup, search/file capability binding, argument validation,
 /// cancellation, and tool errors are lifecycle failures: they
 /// return **as an `is_error` tool result** so the loop continues and the
 /// model can react. See `docs/agent.md`. Nothing here waits for a
-/// Core permission prompt.
+/// Core permission prompt. Turns do not snapshot files before a tool runs.
 ///
-/// The hook gate runs before capability binding. Tools that declare
-/// `search_access` / `file_access` resolve the final arguments once on a
-/// cancellable worker; the retained capability is passed to execution and
-/// never re-resolved. Same-name plugin overrides remain unbound unless they
-/// explicitly declare a search or file access mode.
+/// Tools that declare `search_access` / `file_access` resolve the final
+/// arguments once on a cancellable worker; the retained capability is passed
+/// to execution and never re-resolved. Same-name plugin overrides remain
+/// unbound unless they explicitly declare a search or file access mode.
 pub(crate) async fn dispatch_tool_call(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
@@ -247,13 +246,6 @@ pub(crate) async fn dispatch_tool_call(
     };
 
     let args = call.arguments.clone();
-    if let Err(message) = env
-        .hooks
-        .observe_before_tool(&call.name, &call.arguments)
-        .await
-    {
-        return completed_error(env, &call_id, call, message);
-    }
     let prepared = match bind_prepared(env, token, tool.as_ref(), &args).await {
         Ok(bound) => bound,
         Err(message) => return completed_error(env, &call_id, call, message),

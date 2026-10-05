@@ -50,7 +50,7 @@ pub(crate) fn run_core(
         // so they run off the core thread.
         let recovery_home = home.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            crate::subagent::recover_task_worktrees(&recovery_home)
+            crate::subagent::recover_agent_worktrees(&recovery_home)
         })
         .await;
         // The catalog cache is a multi-megabyte document; parse it off the

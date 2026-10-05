@@ -1,4 +1,4 @@
-//! Immutable launch snapshot for structured exec.
+//! Immutable cwd, environment, and argv snapshot for the `shell` program launch.
 //!
 //! One preparation captures cwd, the sorted allowlisted environment (including
 //! reconstructed PATH), argv, and the pinned executable. Every platform spawn

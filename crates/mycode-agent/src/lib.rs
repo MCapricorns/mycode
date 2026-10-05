@@ -24,9 +24,8 @@
 //! * [`TurnEnv`] injects everything ambient — provider, tool registry,
 //!   hooks, cancellation, and the event bus. Registered schema-valid
 //!   tools execute directly; no permission callback is required.
-//! * [`HookRunner`] owns the loop's hook points. Production installs a
-//!   before-request rewrite (history compaction). The before-tool observer
-//!   is not used for file snapshots.
+//! * [`HookRunner`] owns the before-request rewrite (history compaction).
+//!   There is no before-tool observer and no file snapshot.
 
 pub mod agent;
 pub mod env;

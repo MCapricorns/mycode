@@ -30,12 +30,12 @@
 
 `AppSettings` 是设置页的唯一文档。
 
-- **外观**：`appearance.theme` 只接受 `dark`（读到 `light` 会改成 `dark` 并写回）、调色板、`appearance.language`（`auto` / `en` / `zh`）
+- **外观**：`appearance.theme` 只接受 `dark`（读到 `light` 会改成 `dark` 并写回）。`appearance.palette` 是深色色板：`slate`、`ocean`、`forest`、`dusk`、`sand`、`rose`、`ink`、`moss`、`ember`、`glacier`、`plum`、`copper`、`aurora`，默认 `slate`。`appearance.language` 是 `auto` / `en` / `zh`
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、base URL、模型 id 列表、上下文窗口。密钥不在此列
 - **Shell**：Windows 只接受 `pwsh` 和 `bash`。存过的 `powershell` / `cmd` 在加载时丢掉，重新侦查
 - **网页**：Querit、AnySearch 或自定义后端。密钥放在 `secrets.json` 的 `web-<id>`，或环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`
 - **MCP**：stdio 命令或 https 端点，每服务器最多 32 个额外环境变量。密钥用 `mcp-<id>`
-- **子代理**：哪些角色启用、模型路由、思考强度、并发。`0` 表示应用层用默认的 4
+- **子代理**：哪些角色启用、模型路由、思考强度、并发。`subagents.maxConcurrent` 为 `0` 时使用默认的 4 个并发子代理，不是关闭委派，也不是零个名额。显式上限最高 6
 
 数量上限写在常量上：提供商、每提供商模型数、MCP 服务器、网页后端、角色、工作区、每个工作区的文件夹。
 
