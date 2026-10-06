@@ -184,6 +184,11 @@ pub struct Workspace {
     pending_composer_prefill: Option<String>,
     /// Settings edit epoch captured when the in-flight save was dispatched.
     settings_save_epoch: u64,
+    /// Bumped when a text-field save is scheduled or flushed, so a stale
+    /// debounce timer does not write an older draft.
+    settings_text_save_generation: u64,
+    /// A User-Agent (or similar) debounce is waiting to write `settings.json`.
+    settings_text_save_pending: bool,
     /// Last `@` fragment already searched, to dedupe bridge dispatches.
     mention_query: Option<String>,
     /// Bumped on each composer edit so a stale mention timer does not search.
@@ -282,6 +287,8 @@ impl Workspace {
             suppress_open: false,
             pending_composer_prefill: None,
             settings_save_epoch: 0,
+            settings_text_save_generation: 0,
+            settings_text_save_pending: false,
             mention_query: None,
             mention_generation: 0,
             pending_catalog_refresh: false,
@@ -447,6 +454,17 @@ impl Workspace {
         // not been laid out yet, so the handle still describes the frame the
         // user is looking at.
         let follow_tail = grew && self.conversation_follows_tail();
+        let text_edit = matches!(action, DesktopAction::SettingsUserAgentChanged(_));
+        let epoch_before = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.edit_epoch);
+        if matches!(action, DesktopAction::ShowMainView(view) if view != MainView::Settings)
+            && self.vm.view == MainView::Settings
+        {
+            self.flush_settings_text_save(cx);
+        }
         reduce(&mut self.vm, action);
         if self.vm.project_dir != previous_project {
             self.agent_roles_stale = true;
@@ -466,6 +484,24 @@ impl Workspace {
         // history is not in this set: that path compensates the scroll offset.
         if self.vm.view == MainView::Chat && follow_tail {
             self.conversation_scroll.scroll_to_bottom();
+        }
+        let epoch_after = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.edit_epoch);
+        let edited = match (epoch_before, epoch_after) {
+            // A reload replaces the projection with epoch 0. That is not a
+            // local edit. The first real edit moves the epoch off 0.
+            (Some(before), Some(after)) => after != before && after != 0,
+            _ => false,
+        };
+        if edited {
+            if text_edit {
+                self.schedule_settings_text_save(cx);
+            } else {
+                self.on_save_settings(cx);
+            }
         }
         cx.notify();
     }

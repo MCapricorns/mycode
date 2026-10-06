@@ -459,6 +459,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsUserAgentChanged(user_agent) => {
             edit_settings(state, |settings| {
+                if settings.user_agent == user_agent {
+                    return false;
+                }
                 settings.user_agent = user_agent;
                 true
             });

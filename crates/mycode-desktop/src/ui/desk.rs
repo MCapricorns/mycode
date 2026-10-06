@@ -56,10 +56,25 @@ pub fn palette_label(palette: &str) -> &'static str {
     }
 }
 
-/// Accent swatch for the settings picker.
+/// Page base and accent for one settings swatch.
+///
+/// Both colors come from the same [`Spec`] [`apply_palette`] paints. The
+/// base is the page background; the accent is the corner chip and the
+/// selected ring.
+#[derive(Clone, Copy, Debug)]
+pub struct PaletteSwatch {
+    pub base: Hsla,
+    pub accent: Hsla,
+}
+
+/// Preview colors for one palette id. Unknown ids use the slate spec.
 #[must_use]
-pub fn palette_swatch(palette: &str) -> Hsla {
-    hex(spec_for(normalize_palette(palette)).accent)
+pub fn palette_swatch_colors(palette: &str) -> PaletteSwatch {
+    let spec = spec_for(normalize_palette(palette));
+    PaletteSwatch {
+        base: hex(spec.bg),
+        accent: hex(spec.accent),
+    }
 }
 
 /// Interface font-size ids. Must stay identical to `mycode_config::VALID_FONT_SIZES`.
@@ -120,14 +135,14 @@ pub const PALETTE_COLUMNS: u16 = 5;
 /// The cell is a flex item, not a grid track. A percentage width or a grid
 /// row (including max-content tracks) still grew into the settings scrollport
 /// and left a void under the swatches.
-pub const PALETTE_CELL_PX: f32 = 72.;
+pub const PALETTE_CELL_PX: f32 = 52.;
 
 /// Gap between palette cells, in pixels. Fixed so a font-size change cannot
 /// push the fifth cell onto the next line.
-pub const PALETTE_GAP_PX: f32 = 8.;
+pub const PALETTE_GAP_PX: f32 = 6.;
 
 /// Side length of the color square inside a palette cell, in pixels.
-pub const PALETTE_SWATCH_PX: f32 = 40.;
+pub const PALETTE_SWATCH_PX: f32 = 28.;
 
 /// Width of one full palette row: five fixed cells and the gaps between them.
 ///
@@ -757,8 +772,9 @@ mod tests {
     #[test]
     fn palette_wraps_to_five_fixed_cells_with_a_short_last_row() {
         assert_eq!(super::PALETTE_COLUMNS, 5);
-        assert!((36.0..=40.0).contains(&super::PALETTE_SWATCH_PX));
-        assert!((68.0..=80.0).contains(&super::PALETTE_CELL_PX));
+        assert_eq!(super::PALETTE_SWATCH_PX, 28.);
+        assert_eq!(super::PALETTE_CELL_PX, 52.);
+        assert_eq!(super::PALETTE_GAP_PX, 6.);
         assert!(super::PALETTE_CELL_PX > super::PALETTE_SWATCH_PX);
         assert_eq!(super::PALETTES.len(), 13);
         let columns = usize::from(super::PALETTE_COLUMNS);
@@ -769,6 +785,23 @@ mod tests {
         let six = super::PALETTE_CELL_PX * 6. + super::PALETTE_GAP_PX * 5.;
         assert!((row - five).abs() < f32::EPSILON);
         assert!(six > row);
+    }
+
+    /// The swatch must preview the page, not a solid accent chip. The colors
+    /// are the same spec `apply_palette` writes onto the theme.
+    #[test]
+    fn palette_swatch_uses_the_same_spec_as_apply_palette() {
+        for id in super::PALETTES {
+            let spec = super::spec_for(id);
+            let preview = super::palette_swatch_colors(id);
+            assert_eq!(preview.base, super::hex(spec.bg));
+            assert_eq!(preview.accent, super::hex(spec.accent));
+            assert_ne!(spec.bg, spec.accent, "{id} base and accent must differ");
+        }
+        let slate = super::palette_swatch_colors("nope");
+        let spec = super::spec_for("slate");
+        assert_eq!(slate.base, super::hex(spec.bg));
+        assert_eq!(slate.accent, super::hex(spec.accent));
     }
 
     #[test]

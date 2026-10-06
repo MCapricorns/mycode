@@ -375,6 +375,33 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_user_agent_does_not_mark_settings_dirty() {
+        let document = mycode_config::AppSettings::default();
+        let state = super::SettingsState::from_settings(&document, 1, Vec::new());
+        let mut vm = super::super::WorkspaceState {
+            settings: Some(state),
+            ..super::super::WorkspaceState::default()
+        };
+        let current = vm.settings.as_ref().expect("settings").user_agent.clone();
+        let epoch = vm.settings.as_ref().expect("settings").edit_epoch;
+        super::super::reduce(
+            &mut vm,
+            super::super::DesktopAction::SettingsUserAgentChanged(current.clone()),
+        );
+        let settings = vm.settings.as_ref().expect("settings");
+        assert!(!settings.dirty);
+        assert_eq!(settings.edit_epoch, epoch);
+        super::super::reduce(
+            &mut vm,
+            super::super::DesktopAction::SettingsUserAgentChanged(format!("{current} extra")),
+        );
+        let settings = vm.settings.as_ref().expect("settings");
+        assert!(settings.dirty);
+        assert_ne!(settings.edit_epoch, epoch);
+        assert!(settings.user_agent.ends_with(" extra"));
+    }
+
+    #[test]
     fn font_size_round_trips_through_the_editor_projection() {
         let mut document = mycode_config::AppSettings::default();
         document.appearance.font_size = "xl".to_owned();
