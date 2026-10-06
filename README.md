@@ -20,9 +20,9 @@ English notes are [below](#english).
 
 ## 界面
 
-v0.9.10。标题栏由客户端绘制。没有打开工作区时，空工作台只有「打开目录」。
+v0.9.11。标题栏由客户端绘制。没有打开工作区时，空工作台只有「打开目录」。
 
-![主窗口：v0.9.10，CSD 标题栏，空工作台只有打开目录](docs/images/readme-main.png)
+![主窗口：v0.9.11，CSD 标题栏，空工作台只有打开目录](docs/images/readme-main.png)
 
 外观页：色板、界面字体、界面字号 S–XL。
 
@@ -138,9 +138,9 @@ a lock in Settings.
 
 ### Screenshots
 
-v0.9.10. The title bar is client-side (CSD). With no workspace open, the empty desk offers Open folder.
+v0.9.11. The title bar is client-side (CSD). With no workspace open, the empty desk offers Open folder.
 
-![Main window: v0.9.10, CSD title bar, empty desk with Open folder](docs/images/readme-main.png)
+![Main window: v0.9.11, CSD title bar, empty desk with Open folder](docs/images/readme-main.png)
 
 Appearance: palette, Interface font, and S–XL.
 
