@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-10-06
+
+### 产品
+
+- 设置顶栏去掉重复的「设置 / Settings」标题，高度改为 44px。左侧只保留返回和 Esc，右侧保留搜索。整个设置页不再提供「保存更改」。
+- 外观字段顺序为语言、色板、界面字体、字号、User-Agent。语言在第一屏。色块 28px，格子 52px，间距 6px，仍是 5 列。色块底色用同一份 Spec 的页面背景，角上是强调色，选中环也用强调色。
+- 选择色板、语言、字体或字号后立即写入 `settings.json`。User-Agent 在失焦或停止输入约 400ms 后写入。
+
 ## [0.9.10] - 2026-10-05
 
 第一次公开发布。安装包状态栏为 v0.9.10。
@@ -86,7 +94,8 @@ mycode 是跑在本机的桌面编码代理。对话、工具和会话都在你�
 - 子代理没有墙钟超时，长任务不会在大约 10 分钟时被杀掉。取消仍然会停掉子代理。并发默认 4 个。设置里的 `0` 表示使用这个默认值，不是零个子代理。
 - 界面为深色。设置里可选色板：石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.10...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.11...HEAD
+[0.9.11]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.11
 [0.9.10]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.10
 [0.9.9]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.9
 [0.9.8]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.8

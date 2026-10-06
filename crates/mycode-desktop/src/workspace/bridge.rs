@@ -398,6 +398,10 @@ impl Workspace {
                     },
                     cx,
                 );
+                // An edit that landed while this write was in flight stays
+                // dirty. Persist it unless a text-field debounce is already
+                // waiting to write the latest draft.
+                self.continue_settings_save(cx);
             }
             BridgeReply::ProviderKeySaved(Ok((provider_keys, mcp_keys))) => {
                 // Refresh the key markers in place: reloading settings here

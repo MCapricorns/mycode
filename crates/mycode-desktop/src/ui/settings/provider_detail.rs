@@ -175,8 +175,8 @@ fn endpoint_block(
                 .text_color(theme.muted_foreground)
                 .whitespace_normal()
                 .child(t(
-                    "https:// only. This edits the endpoint, not the key. Save settings to keep it.",
-                    "只能是 https://。这里改的是端点，不是密钥。保存设置后才会写入。",
+                    "https:// only. This edits the endpoint, not the key. Leaving the field writes it to settings.",
+                    "只能是 https://。这里改的是端点，不是密钥。离开输入框后写入设置。",
                 )),
         )
         .child(

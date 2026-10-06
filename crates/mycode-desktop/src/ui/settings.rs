@@ -22,10 +22,9 @@ pub(crate) use web::BackendForm;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::theme::Theme;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
@@ -46,7 +45,6 @@ pub(super) fn render_settings_view(
     let section = workspace.vm().settings_section;
     let query = workspace.vm().settings_query.clone();
     let settings_ready = workspace.vm().settings.is_some();
-    let header_meta = workspace.vm().settings.clone().map(|s| (s.dirty, s.saving));
     let nav = render_settings_nav(workspace, section, &query, cx).into_any_element();
     let theme = cx.theme();
     let border = crate::ui::skin::glass_border(theme);
@@ -58,9 +56,11 @@ pub(super) fn render_settings_view(
         .flex()
         .flex_col()
         .child(
+            // The window title already says Settings. This row is only the
+            // back control and the search field.
             div()
                 .id("settings-header")
-                .h(px(56.))
+                .h(px(44.))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -72,71 +72,49 @@ pub(super) fn render_settings_view(
                 .bg(crate::ui::skin::glass(theme))
                 .child(
                     div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_3()
-                        .min_w_0()
-                        .child(
-                            crate::ui::skin::glass_button("settings-back", false, theme)
-                                .flex_shrink_0()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_show_main_view(MainView::Chat, cx);
-                                }))
-                                .child(Icon::new(IconName::ArrowLeft).with_size(px(16.)))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui_kit::FontWeight::MEDIUM)
-                                        .child(t("Back to desk", "返回工作台")),
-                                )
-                                .child(
-                                    div()
-                                        .px(px(6.))
-                                        .h(px(18.))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(4.))
-                                        .border_1()
-                                        .border_color(theme.border)
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child("Esc"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_lg()
-                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                .child(t("Settings", "设置")),
-                        ),
-                )
-                .child(
-                    div()
+                        .id("settings-back")
+                        .flex_shrink_0()
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap_2()
+                        .h(px(28.))
+                        .px(px(6.))
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .text_color(theme.foreground)
+                        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_show_main_view(MainView::Chat, cx);
+                        }))
+                        .child(Icon::new(IconName::ArrowLeft).with_size(px(16.)))
                         .child(
                             div()
-                                .w(px(220.))
-                                .h(px(32.))
                                 .text_sm()
-                                .child(Input::new(&search)),
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                .child(t("Back to desk", "返回工作台")),
                         )
-                        .when_some(header_meta, |this, (dirty, saving)| {
-                            this.child(
-                                Button::new("settings-save")
-                                    .icon(IconName::Check)
-                                    .label(t("Save changes", "保存更改"))
-                                    .small()
-                                    .primary()
-                                    .disabled(!dirty || saving)
-                                    .on_click(cx.listener(|workspace, _, _, cx| {
-                                        workspace.on_save_settings(cx);
-                                    })),
-                            )
-                        }),
+                        .child(
+                            div()
+                                .px(px(6.))
+                                .h(px(18.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(theme.border)
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child("Esc"),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(220.))
+                        .h(px(32.))
+                        .flex_shrink_0()
+                        .text_sm()
+                        .child(Input::new(&search)),
                 ),
         )
         .child(
@@ -365,6 +343,7 @@ fn render_settings_nav(
     let badges = nav_badges(workspace, cx);
     let role_names = workspace.agent_roles().names();
     let dirty = workspace.vm().settings.as_ref().is_some_and(|s| s.dirty);
+    let saving = workspace.vm().settings.as_ref().is_some_and(|s| s.saving);
     let theme = cx.theme();
     let desk = crate::ui::desk::Desk::of(theme);
     let mut groups: Vec<AnyElement> = Vec::new();
@@ -439,16 +418,11 @@ fn render_settings_nav(
                 .text_xs()
                 .text_color(desk.faint)
                 .child(format!("v{}", env!("CARGO_PKG_VERSION")))
-                .when(dirty, |this| {
+                .when(dirty || saving, |this| {
                     this.child(
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1()
-                            .text_color(desk.amber)
-                            .child(crate::ui::lamp(desk.amber))
-                            .child(t("UNSAVED", "未保存")),
+                            .text_color(desk.faint)
+                            .child(t("writing\u{2026}", "写入中\u{2026}")),
                     )
                 }),
         )

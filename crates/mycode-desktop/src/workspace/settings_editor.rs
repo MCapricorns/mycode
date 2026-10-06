@@ -20,12 +20,18 @@ impl Workspace {
             let input = cx.new(|cx| {
                 InputState::new(window, cx).placeholder(mycode_config::default_user_agent())
             });
-            cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let text = entity.read(cx).value().to_string();
-                    workspace.apply_action(DesktopAction::SettingsUserAgentChanged(text), cx);
-                }
-            })
+            cx.subscribe_in(
+                &input,
+                window,
+                |workspace, entity, event, _, cx| match event {
+                    InputEvent::Change => {
+                        let text = entity.read(cx).value().to_string();
+                        workspace.apply_action(DesktopAction::SettingsUserAgentChanged(text), cx);
+                    }
+                    InputEvent::Blur => workspace.flush_settings_text_save(cx),
+                    InputEvent::Focus | InputEvent::PressEnter { .. } => {}
+                },
+            )
             .detach();
             self.ua_input = Some(input);
         }
@@ -275,6 +281,13 @@ impl Workspace {
             let seeded = base_url.to_owned();
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("https://"));
             input.update(cx, |state, cx| state.set_value(seeded.clone(), window, cx));
+            let provider_id = id.to_owned();
+            cx.subscribe_in(&input, window, move |workspace, _, event, window, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    workspace.on_apply_provider_endpoint(&provider_id, window, cx);
+                }
+            })
+            .detach();
             self.provider_endpoint_inputs.insert(id.to_owned(), input);
             self.provider_endpoint_seed.insert(id.to_owned(), seeded);
         }
@@ -297,8 +310,8 @@ impl Workspace {
         input
     }
 
-    /// Stages an endpoint edit after the same document validation the settings
-    /// save runs. The key vault is not read or written.
+    /// Commits an endpoint edit after the same document validation the settings
+    /// save runs, then writes `settings.json`. The key vault is not touched.
     pub(crate) fn on_apply_provider_endpoint(
         &mut self,
         id: &str,
@@ -997,6 +1010,51 @@ impl Workspace {
                 cx,
             );
         }
+    }
+
+    /// Waits out the text-field debounce, then writes `settings.json`.
+    const SETTINGS_TEXT_SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+
+    /// Writes a text field such as User-Agent about 400ms after the last
+    /// keystroke. A newer edit or a blur supersedes this timer.
+    pub(crate) fn schedule_settings_text_save(&mut self, cx: &mut Context<Self>) {
+        self.settings_text_save_generation = self.settings_text_save_generation.wrapping_add(1);
+        self.settings_text_save_pending = true;
+        let generation = self.settings_text_save_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Self::SETTINGS_TEXT_SAVE_DEBOUNCE)
+                .await;
+            let _ = this.update(cx, |workspace, cx| {
+                if workspace.settings_text_save_generation != generation {
+                    return;
+                }
+                workspace.settings_text_save_pending = false;
+                workspace.on_save_settings(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Writes a pending text-field edit immediately. Blur and leaving
+    /// Settings use this so the draft is not waiting on the debounce.
+    pub(crate) fn flush_settings_text_save(&mut self, cx: &mut Context<Self>) {
+        if !self.settings_text_save_pending {
+            return;
+        }
+        self.settings_text_save_generation = self.settings_text_save_generation.wrapping_add(1);
+        self.settings_text_save_pending = false;
+        self.on_save_settings(cx);
+    }
+
+    /// Writes a settings edit that arrived while a save was in flight.
+    /// A pending text debounce keeps its timer so a half-typed User-Agent
+    /// is not flushed early.
+    pub(crate) fn continue_settings_save(&mut self, cx: &mut Context<Self>) {
+        if self.settings_text_save_pending {
+            return;
+        }
+        self.on_save_settings(cx);
     }
 
     /// Persists the settings document under CAS when local edits exist.

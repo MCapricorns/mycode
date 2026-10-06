@@ -148,6 +148,7 @@ pub(super) fn choice_chips(
     div()
         .id(format!("chips-{id_prefix}"))
         .w_full()
+        .min_w_0()
         .h_auto()
         .flex_none()
         .flex()
@@ -251,13 +252,14 @@ pub(super) fn dropdown_field(
         .flex_col()
         .gap_1()
         .child(
-            // The row must be as wide as the card and only as tall as its
-            // text. A shrinkable row with no width lets the label measure at
-            // width 0 inside the settings scroller: `white-space: normal`
-            // then stacks one glyph per line (a tall blank band) and
-            // `truncate` (`overflow_hidden` + `flex_1`) collapses that text
-            // to zero width on real windows, so the controls never paint.
+            // The row is as wide as the card. The label column is `min_w_0`
+            // so a long helper wraps inside the card instead of stretching
+            // the row and pushing the control past the right edge. The row
+            // itself stays `w_full`: a shrinkable row with no width lets the
+            // label measure at width 0 inside the settings scroller, and
+            // `white-space: normal` then stacks one glyph per line.
             div()
+                .id(format!("dropdown-row-{id}"))
                 .w_full()
                 .min_w_0()
                 .h_auto()
@@ -270,15 +272,25 @@ pub(super) fn dropdown_field(
                 .child(
                     div()
                         .flex_1()
-                        .min_w(px(120.))
+                        .min_w_0()
                         .h_auto()
                         .flex()
                         .flex_col()
                         .gap_0p5()
-                        .child(div().text_sm().whitespace_normal().child(label.to_owned()))
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .text_sm()
+                                .whitespace_normal()
+                                .child(label.to_owned()),
+                        )
                         .when_some(description, |this, description| {
                             this.child(
                                 div()
+                                    .id(format!("dropdown-hint-{id}"))
+                                    .w_full()
+                                    .min_w_0()
                                     .text_xs()
                                     .opacity(0.5)
                                     .whitespace_normal()
@@ -291,7 +303,9 @@ pub(super) fn dropdown_field(
                         .id(format!("dropdown-button-{id}"))
                         .h(px(32.))
                         .w(px(200.))
+                        .max_w(px(200.))
                         .flex_none()
+                        .flex_shrink_0()
                         .px_2()
                         .flex()
                         .flex_row()

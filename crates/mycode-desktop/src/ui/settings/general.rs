@@ -1,4 +1,4 @@
-//! The General settings page: palette, typeface, language, and request identity.
+//! The General settings page: language, palette, typeface, size, and request identity.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::theme::Theme;
@@ -143,10 +143,10 @@ pub(super) fn render_general_section(
             )),
             theme,
             vec![
+                language_row,
                 palette_row,
                 font_family_row,
                 font_row,
-                language_row,
                 ua_field,
             ],
         ))
@@ -262,10 +262,18 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
                         .whitespace_normal()
                         .child(t("Interface font size", "界面字号")),
                 )
-                .child(div().text_xs().opacity(0.5).whitespace_normal().child(t(
-                    "S / M / L / XL, about 12 / 13 / 14 / 16 px. Chat, the sidebar, and settings follow it immediately.",
-                    "S / M / L / XL，大约 12 / 13 / 14 / 16 像素。对话、侧栏和设置会立即跟随。",
-                ))),
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_xs()
+                        .opacity(0.5)
+                        .whitespace_normal()
+                        .child(t(
+                            "S / M / L / XL, about 12 / 13 / 14 / 16 px. Chat, the sidebar, and settings follow it immediately.",
+                            "S / M / L / XL，大约 12 / 13 / 14 / 16 像素。对话、侧栏和设置会立即跟随。",
+                        )),
+                ),
         )
         .child(choice_chips(
             "font-size",
@@ -317,10 +325,13 @@ fn palette_swatches(children: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-/// One palette cell: a fixed 72px column with a 40px swatch and a one-line label.
+/// One palette cell: a fixed 52px column with a 28px swatch and a one-line label.
 ///
-/// Width and the color fill are absolute pixels. A percentage size is
-/// resolved against the settings scrollport and stretches the row.
+/// The swatch paints the same spec as `apply_palette`: page background as
+/// the base, accent as the inner corner, and the accent again as the
+/// selected ring. Width and the color fill are absolute pixels. A
+/// percentage size is resolved against the settings scrollport and
+/// stretches the row.
 fn palette_cell(
     id: &'static str,
     selected: &str,
@@ -329,17 +340,9 @@ fn palette_cell(
     let cell_px = px(crate::ui::desk::PALETTE_CELL_PX);
     let swatch_px = px(crate::ui::desk::PALETTE_SWATCH_PX);
     let on = selected == id;
-    let swatch = crate::ui::desk::palette_swatch(id);
-    let ring = if on {
-        theme.foreground
-    } else {
-        theme.transparent
-    };
-    let hover_ring = if on {
-        theme.foreground
-    } else {
-        theme.muted_foreground
-    };
+    let colors = crate::ui::desk::palette_swatch_colors(id);
+    let ring = if on { colors.accent } else { theme.border };
+    let hover_ring = colors.accent;
     div()
         .id(format!("palette-{id}"))
         .w(cell_px)
@@ -358,19 +361,24 @@ fn palette_cell(
                 .size(swatch_px)
                 .flex_none()
                 .flex_shrink_0()
-                .rounded(px(8.))
+                .rounded(px(6.))
                 .border_1()
                 .border_color(ring)
                 .hover(move |this| this.border_color(hover_ring))
+                .bg(colors.base)
+                .overflow_hidden()
+                .p(px(3.))
                 .flex()
-                .items_center()
-                .justify_center()
+                .items_end()
+                .justify_end()
                 .child(
                     div()
-                        .size(px(crate::ui::desk::PALETTE_SWATCH_PX - 8.))
+                        .id(format!("swatch-accent-{id}"))
+                        .size(px(12.))
                         .flex_none()
-                        .rounded(px(6.))
-                        .bg(swatch),
+                        .rounded(px(3.))
+                        .bg(colors.accent)
+                        .test_support(),
                 )
                 .test_support(),
         )
@@ -433,7 +441,7 @@ mod appearance_layout {
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(div().h(px(56.)).flex_none().child("Settings"))
+                .child(div().h(px(44.)).flex_none())
                 .child(
                     div()
                         .id("settings-body")
@@ -465,14 +473,30 @@ mod appearance_layout {
                                         .flex()
                                         .flex_col()
                                         .justify_start()
+                                        .gap_4()
                                         .px_6()
                                         .py_4()
+                                        .child(
+                                            div()
+                                                .id("settings-page-header")
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .pb_1()
+                                                .child(div().text_lg().child("General"))
+                                                .child(
+                                                    div().text_sm().child(
+                                                        "Appearance, language, and identity",
+                                                    ),
+                                                ),
+                                        )
                                         .child(settings_card(
                                             "appearance",
                                             "Appearance",
                                             Some("Palette, typeface, size, and language."),
                                             &theme,
                                             vec![
+                                                language,
                                                 div()
                                                     .id("row-palette")
                                                     .w_full()
@@ -487,7 +511,6 @@ mod appearance_layout {
                                                     .into_any_element(),
                                                 font,
                                                 size_row,
-                                                language,
                                                 agent,
                                             ],
                                         )),
@@ -530,18 +553,29 @@ mod appearance_layout {
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(120.))
+                            .min_w_0()
                             .h_auto()
                             .flex()
                             .flex_col()
                             .gap_0p5()
-                            .child(div().text_sm().whitespace_normal().child(label.to_owned()))
                             .child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .whitespace_normal()
+                                    .child(label.to_owned()),
+                            )
+                            .child(
+                                div()
+                                    .id(format!("dropdown-hint-{id}"))
+                                    .w_full()
+                                    .min_w_0()
                                     .text_xs()
                                     .opacity(0.5)
                                     .whitespace_normal()
-                                    .child(description.to_owned()),
+                                    .child(description.to_owned())
+                                    .test_support(),
                             ),
                     )
                     .child(
@@ -549,7 +583,9 @@ mod appearance_layout {
                             .id(format!("dropdown-button-{id}"))
                             .h(px(32.))
                             .w(px(200.))
+                            .max_w(px(200.))
                             .flex_none()
+                            .flex_shrink_0()
                             .px_2()
                             .flex()
                             .flex_row()
@@ -593,6 +629,8 @@ mod appearance_layout {
                     .child(div().text_sm().whitespace_normal().child("Interface font size"))
                     .child(
                         div()
+                            .w_full()
+                            .min_w_0()
                             .text_xs()
                             .opacity(0.5)
                             .whitespace_normal()
@@ -603,6 +641,7 @@ mod appearance_layout {
                 div()
                     .id("chips-font-size")
                     .w_full()
+                    .min_w_0()
                     .h_auto()
                     .flex_none()
                     .flex()
@@ -654,7 +693,7 @@ mod appearance_layout {
     }
 
     #[gpui_kit::test]
-    fn appearance_card_keeps_font_controls_under_the_palette(cx: &mut TestAppContext) {
+    fn appearance_card_shows_language_then_palette_on_the_first_screen(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(|cx| cx.set_reduce_motion(true));
         let handle = cx.open_window(size(px(1280.), px(480.)), |_, _| AppearanceProbe);
@@ -662,6 +701,7 @@ mod appearance_layout {
             window.render_frame(cx);
             let swatches = window.find("palette-swatches").bounds();
             let swatch = window.find("swatch-slate").bounds();
+            let accent = window.find("swatch-accent-slate").bounds();
             let slate = window.find("palette-slate").bounds();
             let sand = window.find("palette-sand").bounds();
             let rose = window.find("palette-rose").bounds();
@@ -670,17 +710,34 @@ mod appearance_layout {
             let font = window.find("dropdown-font-family").bounds();
             let font_row = window.find("dropdown-row-font-family").bounds();
             let font_button = window.find("dropdown-button-font-family").bounds();
+            let font_hint = window.find("dropdown-hint-font-family").bounds();
             let size_row = window.find("row-font-size").bounds();
             let language = window.find("dropdown-language").bounds();
             let agent = window.find("row-user-agent").bounds();
             let chip = window.find("font-size-s").bounds();
+            let chip_xl = window.find("font-size-xl").bounds();
             let card = window.find("card-appearance").bounds();
             let content = window.find("settings-content").bounds();
 
             assert!(
-                (swatch.size.width - px(40.)).abs() <= px(2.)
-                    && (swatch.size.height - px(40.)).abs() <= px(2.),
-                "swatch should stay a 40px square, got {swatch:?}"
+                language.origin.y >= content.origin.y
+                    && language.bottom() <= content.bottom()
+                    && language.origin.y < swatches.origin.y,
+                "language should be on the first screen, above the palette: language {language:?} swatches {swatches:?} content {content:?}"
+            );
+            assert!(
+                (swatch.size.width - px(28.)).abs() <= px(2.)
+                    && (swatch.size.height - px(28.)).abs() <= px(2.),
+                "swatch should stay a 28px square, got {swatch:?}"
+            );
+            assert!(
+                accent.size.width < swatch.size.width
+                    && accent.size.height < swatch.size.height
+                    && accent.origin.x > swatch.origin.x
+                    && accent.origin.y > swatch.origin.y
+                    && accent.right() <= swatch.right() + px(1.)
+                    && accent.bottom() <= swatch.bottom() + px(1.),
+                "accent should be an inner corner, not the whole swatch: accent {accent:?} swatch {swatch:?}"
             );
             assert!(
                 (slate.size.width - px(crate::ui::desk::PALETTE_CELL_PX)).abs() <= px(2.),
@@ -711,18 +768,27 @@ mod appearance_layout {
             );
             assert!(
                 (font_button.size.width - px(200.)).abs() <= px(2.)
-                    && (font_button.size.height - px(32.)).abs() <= px(2.),
-                "interface font button should paint at its fixed size, got {font_button:?}"
+                    && (font_button.size.height - px(32.)).abs() <= px(2.)
+                    && font_button.right() <= card.right() + px(1.)
+                    && font_hint.right() <= font_button.left() + px(4.)
+                    && font_hint.size.height >= px(12.)
+                    && font_hint.size.height < px(80.)
+                    && chip_xl.right() <= card.right() + px(1.),
+                "font helper should wrap beside a dropdown that stays inside the card: hint {font_hint:?} button {font_button:?} card {card:?} chip {chip_xl:?}"
             );
             assert!(
                 card.size.height > content.size.height && card.size.height < px(920.),
                 "appearance card should scroll inside the pane instead of growing a blank band, card {card:?} content {content:?}"
             );
 
+            let palette_gap = swatches.origin.y - language.bottom();
             let font_gap = font.origin.y - swatches.bottom();
             let size_gap = size_row.origin.y - font.bottom();
-            let language_gap = language.origin.y - size_row.bottom();
-            let agent_gap = agent.origin.y - language.bottom();
+            let agent_gap = agent.origin.y - size_row.bottom();
+            assert!(
+                palette_gap >= px(0.) && palette_gap < px(160.),
+                "gap between language and palette is {palette_gap:?}, language {language:?} swatches {swatches:?}"
+            );
             assert!(
                 font_gap >= px(0.) && font_gap < px(80.),
                 "gap between palette and interface font is {font_gap:?}, swatches {swatches:?} font {font:?}"
@@ -732,12 +798,8 @@ mod appearance_layout {
                 "gap between interface font and S–XL is {size_gap:?}"
             );
             assert!(
-                language_gap >= px(0.) && language_gap < px(80.),
-                "gap between S–XL and language is {language_gap:?}"
-            );
-            assert!(
                 agent_gap >= px(0.) && agent_gap < px(80.),
-                "gap between language and user-agent is {agent_gap:?}"
+                "gap between S–XL and user-agent is {agent_gap:?}"
             );
             assert!(
                 chip.size.height > px(16.) && chip.size.height < px(48.),
@@ -758,20 +820,55 @@ mod appearance_layout {
             let font_after = window.find("dropdown-font-family").bounds();
             let size_after = window.find("row-font-size").bounds();
             let language_after = window.find("dropdown-language").bounds();
+            let swatches_after = window.find("palette-swatches").bounds();
             let agent_after = window.find("row-user-agent").bounds();
+            let scrolled_palette = swatches_after.origin.y - language_after.bottom();
             let scrolled_gap = size_after.origin.y - font_after.bottom();
-            let scrolled_language = language_after.origin.y - size_after.bottom();
-            let scrolled_agent = agent_after.origin.y - language_after.bottom();
+            let scrolled_agent = agent_after.origin.y - size_after.bottom();
             assert!(
-                font_after.size.height < px(120.)
+                language_after.origin.y < swatches_after.origin.y
+                    && font_after.size.height < px(120.)
                     && size_after.size.height < px(120.)
+                    && scrolled_palette >= px(0.)
+                    && scrolled_palette < px(160.)
                     && scrolled_gap >= px(0.)
                     && scrolled_gap < px(80.)
-                    && scrolled_language >= px(0.)
-                    && scrolled_language < px(80.)
                     && scrolled_agent >= px(0.)
                     && scrolled_agent < px(80.),
-                "scroll should keep font, size, language, and user-agent packed: font {font_after:?} size {size_after:?} language {language_after:?} ua {agent_after:?}"
+                "scroll should keep language, palette, font, size, and user-agent packed: language {language_after:?} swatches {swatches_after:?} font {font_after:?} size {size_after:?} ua {agent_after:?}"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn font_helper_wraps_inside_a_narrow_appearance_card(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let handle = cx.open_window(size(px(1024.), px(720.)), |_, _| AppearanceProbe);
+        cx.update_window(handle.into(), |_, window, _cx| {
+            window.render_frame(_cx);
+            let hint = window.find("dropdown-hint-font-family").bounds();
+            let button = window.find("dropdown-button-font-family").bounds();
+            let card = window.find("card-appearance").bounds();
+            let language = window.find("dropdown-language").bounds();
+            let content = window.find("settings-content").bounds();
+            let chip = window.find("font-size-xl").bounds();
+            assert!(
+                language.bottom() <= content.bottom(),
+                "language should stay on the first screen, language {language:?} content {content:?}"
+            );
+            assert!(
+                button.right() <= card.right() + px(1.) && hint.right() <= button.left() + px(4.),
+                "dropdown and helper should stay inside the card: hint {hint:?} button {button:?} card {card:?}"
+            );
+            assert!(
+                hint.size.height > px(22.) && hint.size.height < px(80.),
+                "font helper should wrap onto more than one line, got {hint:?}"
+            );
+            assert!(
+                chip.right() <= card.right() + px(1.),
+                "size chips should stay inside the card, chip {chip:?} card {card:?}"
             );
         })
         .unwrap();
