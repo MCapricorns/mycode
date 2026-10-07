@@ -70,6 +70,7 @@ pub(super) fn render_inspector_drawer(
                 .id("inspector-backdrop")
                 .absolute()
                 .size_full()
+                .bg(super::skin::menu_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     cx.stop_propagation();
                     workspace.on_set_inspector(false, workspace.vm().inspector_pinned, cx);
@@ -417,6 +418,7 @@ pub(super) fn render_changes_drawer(
                 .id("changes-drawer-backdrop")
                 .absolute()
                 .size_full()
+                .bg(super::skin::menu_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_toggle_changes_panel(false, cx);
                 })),
@@ -434,7 +436,7 @@ pub(super) fn render_changes_drawer(
                 .rounded(px(12.))
                 .border_1()
                 .border_color(super::skin::glass_border(theme))
-                .bg(theme.popover)
+                .bg(super::skin::popover(theme))
                 .overflow_hidden()
                 .child(
                     div()
@@ -820,7 +822,7 @@ pub(super) fn render_subagent_window(
         .rounded(px(12.))
         .border_1()
         .border_color(super::skin::glass_border(theme))
-        .bg(theme.popover)
+        .bg(super::skin::popover(theme))
         .overflow_hidden()
         .child(
             div()

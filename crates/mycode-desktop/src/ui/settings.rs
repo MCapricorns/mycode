@@ -47,7 +47,6 @@ pub(super) fn render_settings_view(
     let settings_ready = workspace.vm().settings.is_some();
     let nav = render_settings_nav(workspace, section, &query, cx).into_any_element();
     let theme = cx.theme();
-    let border = crate::ui::skin::glass_border(theme);
     div()
         .id("settings-view")
         .flex_1()
@@ -68,7 +67,7 @@ pub(super) fn render_settings_view(
                 .px_4()
                 .gap_3()
                 .border_b_1()
-                .border_color(border)
+                .border_color(crate::ui::skin::glass_border(theme))
                 .bg(crate::ui::skin::glass(theme))
                 .child(
                     div()
@@ -133,6 +132,7 @@ pub(super) fn render_settings_view(
                         .min_h_0()
                         .h_full()
                         .overflow_y_scroll()
+                        .bg(crate::ui::skin::ambient(theme))
                         // The scrollport fills the pane. Its page is a flex
                         // item with no grow, so the cards stay as tall as
                         // their content instead of stretching to this viewport.

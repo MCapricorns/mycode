@@ -7,6 +7,7 @@ mod scroll_hold;
 mod transcript;
 mod welcome;
 
+pub(crate) use composer::composer_placeholder;
 pub(crate) use menus::reasoning_row_label;
 pub(crate) use welcome::new_task_label;
 
@@ -83,6 +84,7 @@ pub(super) fn render_chat(
     let anchor =
         scroll_hold::ScrollAnchor::new(scroll_handle.clone(), workspace.take_scroll_anchor());
     let probe = anchor.probe();
+    let theme = cx.theme();
     div()
         .id("chat")
         .flex_1()
@@ -90,6 +92,7 @@ pub(super) fn render_chat(
         .h_full()
         .flex()
         .flex_col()
+        .bg(super::skin::ambient(theme))
         .child(
             anchor.child(
                 div()

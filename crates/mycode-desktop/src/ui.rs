@@ -1,4 +1,4 @@
-//! GPUI rendering for the workspace: a quiet sidebar, a centered conversation,
+//! GPUI rendering for the workspace: a frosted sidebar, a centered conversation,
 //! and an inspector that stays out of the way until it is opened. The window
 //! is dark.
 mod chat;
@@ -25,6 +25,7 @@ use gpui_kit::{
 use crate::view_model::MainView;
 use crate::workspace::{ToastKind, Workspace};
 
+pub(crate) use chat::composer_placeholder;
 pub(crate) use settings::{BackendForm, McpForm, ProviderForm, build_mcp_server};
 
 /// How much of the desk chrome fits the current window width.
@@ -69,7 +70,6 @@ pub fn render_root(
         workspace.vm().inspector_open && !inspector_docked && workspace.vm().view == MainView::Chat;
     let theme = cx.theme().clone();
     let ui_font = theme.font_family.clone();
-    let bg = skin::ambient(&theme);
     let fg = theme.foreground;
     let focus_handle = workspace.focus_handle().clone();
     div()
@@ -78,12 +78,13 @@ pub fn render_root(
         .flex()
         .flex_col()
         .size_full()
-        .bg(bg)
         .text_color(fg)
         // Root focus plus the key listener below keep Escape alive even when
         // no input holds focus: bubbled key events reach this node from any
         // focused descendant, and from itself via the startup focus.
         .track_focus(&focus_handle)
+        // No opaque page here. Rails and the reading column paint their own
+        // fills so the window blur shows through the chrome.
         .can_drop(|value, _, _| value.is::<gpui_kit::ExternalPaths>())
         .on_drop(
             cx.listener(|workspace, paths: &gpui_kit::ExternalPaths, _, cx| {
@@ -104,7 +105,6 @@ pub fn render_root(
                 .min_h_0()
                 .min_w_0()
                 .overflow_hidden()
-                .bg(bg)
                 .flex()
                 .flex_row()
                 .when(workspace.vm().view == MainView::Chat, |this| {
