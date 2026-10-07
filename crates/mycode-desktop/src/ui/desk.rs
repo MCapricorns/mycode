@@ -129,9 +129,9 @@ pub fn apply_font_size(theme: &mut Theme, id: &str) {
 /// Swatches on one full row of the settings palette.
 ///
 /// Thirteen colors do not fit a normal settings card on one line (the window
-/// can be as narrow as 960px, with a 236px nav beside the card). Five columns
-/// wrap the rest, and the last row stays left-aligned.
-pub const PALETTE_COLUMNS: u16 = 5;
+/// can be as narrow as 960px, with a 236px nav beside the card). Seven
+/// columns stay near 400px, wrap the rest, and leave the last row left-aligned.
+pub const PALETTE_COLUMNS: u16 = 7;
 
 /// Fixed width of one palette cell, in pixels.
 ///
@@ -141,16 +141,16 @@ pub const PALETTE_COLUMNS: u16 = 5;
 pub const PALETTE_CELL_PX: f32 = 52.;
 
 /// Gap between palette cells, in pixels. Fixed so a font-size change cannot
-/// push the fifth cell onto the next line.
+/// push the seventh cell onto the next line.
 pub const PALETTE_GAP_PX: f32 = 6.;
 
 /// Side length of the color square inside a palette cell, in pixels.
 pub const PALETTE_SWATCH_PX: f32 = 28.;
 
-/// Width of one full palette row: five fixed cells and the gaps between them.
+/// Width of one full palette row: seven fixed cells and the gaps between them.
 ///
 /// The wrapping row uses this as its max width, so a normal settings card
-/// shows five columns and the last three stay on the left. A single row of
+/// shows seven columns and the last six stay on the left. A single row of
 /// all thirteen swatches is wider than that card.
 #[must_use]
 pub fn palette_row_max_px() -> f32 {
@@ -774,21 +774,22 @@ mod tests {
     }
 
     #[test]
-    fn palette_wraps_to_five_fixed_cells_with_a_short_last_row() {
-        assert_eq!(super::PALETTE_COLUMNS, 5);
+    fn palette_wraps_to_seven_fixed_cells_with_a_short_last_row() {
+        assert_eq!(super::PALETTE_COLUMNS, 7);
         assert_eq!(super::PALETTE_SWATCH_PX, 28.);
         assert_eq!(super::PALETTE_CELL_PX, 52.);
         assert_eq!(super::PALETTE_GAP_PX, 6.);
         assert!(super::PALETTE_CELL_PX > super::PALETTE_SWATCH_PX);
         assert_eq!(super::PALETTES.len(), 13);
         let columns = usize::from(super::PALETTE_COLUMNS);
-        assert_eq!(super::PALETTES.len() / columns, 2);
-        assert_eq!(super::PALETTES.len() % columns, 3);
+        assert_eq!(super::PALETTES.len() / columns, 1);
+        assert_eq!(super::PALETTES.len() % columns, 6);
         let row = super::palette_row_max_px();
-        let five = super::PALETTE_CELL_PX * 5. + super::PALETTE_GAP_PX * 4.;
-        let six = super::PALETTE_CELL_PX * 6. + super::PALETTE_GAP_PX * 5.;
-        assert!((row - five).abs() < f32::EPSILON);
-        assert!(six > row);
+        let seven = super::PALETTE_CELL_PX * 7. + super::PALETTE_GAP_PX * 6.;
+        let eight = super::PALETTE_CELL_PX * 8. + super::PALETTE_GAP_PX * 7.;
+        assert!((row - seven).abs() < f32::EPSILON);
+        assert!((row - 400.).abs() < f32::EPSILON);
+        assert!(eight > row);
     }
 
     /// The swatch must preview the page, not a solid accent chip. The colors
