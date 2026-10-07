@@ -4,21 +4,20 @@ use std::fs::File;
 use std::io;
 use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
-    SE_FILE_OBJECT, SetSecurityInfo,
+    SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce,
-    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-    GetTokenInformation, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_DESCRIPTOR_CONTROL, TOKEN_QUERY, TOKEN_USER,
-    TokenUser,
+    GetSecurityDescriptorControl, GetTokenInformation, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+    SECURITY_DESCRIPTOR_CONTROL, SetKernelObjectSecurity, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
@@ -142,7 +141,6 @@ pub(super) fn secure_existing_object(file: &File) -> Result<(), ConfigError> {
     let owner_current_user = existing.owner_current_user;
 
     let descriptor = protected_descriptor()?;
-    let (owner, dacl) = descriptor_owner_and_dacl(&descriptor)?;
     let reopened;
     let target = if owner_current_user {
         file
@@ -159,25 +157,22 @@ pub(super) fn secure_existing_object(file: &File) -> Result<(), ConfigError> {
         } else {
             OWNER_SECURITY_INFORMATION
         };
+    // `SetSecurityInfo` also walks children and rewrites inherited ACEs.
+    // The session index creates and holds `sessions.db` in this directory
+    // before the first settings read, so that walk can fail the call or
+    // strip the database's access. This object's descriptor is the only
+    // one the owned-path check enforces.
     // SAFETY: `target` is live with WRITE_DAC and, when replacing a SYSTEM
-    // owner, WRITE_OWNER. Descriptor pointers remain live for this call.
-    let status = unsafe {
-        SetSecurityInfo(
+    // owner, WRITE_OWNER. `descriptor` stays live for this synchronous call.
+    let updated = unsafe {
+        SetKernelObjectSecurity(
             target.as_raw_handle(),
-            SE_FILE_OBJECT,
             security_information,
-            if owner_current_user {
-                null_mut()
-            } else {
-                owner
-            },
-            null_mut(),
-            dacl,
-            null(),
+            descriptor.as_ptr(),
         )
     };
-    if status != ERROR_SUCCESS {
-        let error = io::Error::from_raw_os_error(status as i32);
+    if updated == 0 {
+        let error = io::Error::last_os_error();
         return Err(ConfigError::new(ConfigErrorKind::AccessControl).with_io_kind(error.kind()));
     }
     verify_fixed_descriptor(target)
@@ -356,38 +351,6 @@ fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
         ace_count,
         extra_aces,
     }
-}
-
-fn descriptor_owner_and_dacl(
-    descriptor: &SecurityDescriptor,
-) -> Result<(*mut core::ffi::c_void, *mut ACL), ConfigError> {
-    let mut owner = null_mut();
-    let mut owner_defaulted = 0;
-    // SAFETY: `descriptor` owns a valid security descriptor.
-    let owner_queried =
-        unsafe { GetSecurityDescriptorOwner(descriptor.0, &mut owner, &mut owner_defaulted) };
-    if owner_queried == 0 {
-        let error = io::Error::last_os_error();
-        return Err(ConfigError::new(ConfigErrorKind::AccessControl).with_io_kind(error.kind()));
-    }
-    if owner.is_null() {
-        return Err(ConfigError::new(ConfigErrorKind::AccessControl));
-    }
-    let mut present = 0;
-    let mut dacl_defaulted = 0;
-    let mut dacl = null_mut();
-    // SAFETY: `descriptor` owns a valid security descriptor.
-    let dacl_queried = unsafe {
-        GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut dacl_defaulted)
-    };
-    if dacl_queried == 0 {
-        let error = io::Error::last_os_error();
-        return Err(ConfigError::new(ConfigErrorKind::AccessControl).with_io_kind(error.kind()));
-    }
-    if present == 0 || dacl.is_null() {
-        return Err(ConfigError::new(ConfigErrorKind::AccessControl));
-    }
-    Ok((owner, dacl))
 }
 
 pub(super) fn current_user_sid_string() -> Result<String, ConfigError> {
