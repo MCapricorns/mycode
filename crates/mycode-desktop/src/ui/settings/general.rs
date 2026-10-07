@@ -155,14 +155,15 @@ pub(super) fn render_general_section(
 
 /// Label above a wrapping row of fixed-width swatches.
 ///
-/// Thirteen palettes share one row in a normal settings card. Cells share
-/// one width, so a wrap on a narrow card stays on the left. The row is a
+/// Thirteen palettes fill two rows of five and leave three on the last.
+/// Cells share one width, so the last row stays on the left. The row is a
 /// flex wrap, not a grid: grid row tracks still grew into the settings
 /// scrollport and hid the font controls in that gap.
 fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     div()
         .id("row-palette")
         .w_full()
+        .min_w_0()
         .h_auto()
         .flex_none()
         .flex()
@@ -170,6 +171,8 @@ fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
         .gap_2()
         .child(
             div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap_0p5()
@@ -302,14 +305,17 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     palette_swatches(cells)
 }
 
-/// Fixed cells on a wrapping row. A normal card fits all thirteen.
+/// Fixed cells on a wrapping row. Five fit the row; the rest wrap left.
 ///
 /// No grid. GPUI row tracks, including max-content, still absorbed the
 /// settings scrollport and pushed the font controls off the first screen.
+/// `min_w_0` lets the row shrink to the card instead of keeping a one-line
+/// minimum of every swatch, which overflowed the settings pane.
 fn palette_swatches(children: Vec<AnyElement>) -> AnyElement {
     div()
         .id("palette-swatches")
         .w_full()
+        .min_w_0()
         .max_w(px(crate::ui::desk::palette_row_max_px()))
         .h_auto()
         .flex_none()
@@ -325,7 +331,7 @@ fn palette_swatches(children: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-/// One palette cell: a fixed 44px column with a 28px swatch and a one-line label.
+/// One palette cell: a fixed 52px column with a 28px swatch and a one-line label.
 ///
 /// The swatch paints the same spec as `apply_palette`: page background as
 /// the base, accent as the inner corner, and the accent again as the
@@ -750,14 +756,18 @@ mod appearance_layout {
             );
             assert!(
                 (sand.origin.y - slate.origin.y).abs() <= px(2.)
-                    && (rose.origin.y - slate.origin.y).abs() <= px(2.)
-                    && (plum.origin.y - slate.origin.y).abs() <= px(2.)
-                    && (aurora.origin.y - slate.origin.y).abs() <= px(2.)
+                    && rose.origin.y > slate.bottom()
+                    && rose.origin.y - slate.bottom() < px(24.),
+                "five cells on the first row, sixth wraps under it: slate {slate:?} sand {sand:?} rose {rose:?}"
+            );
+            assert!(
+                (plum.origin.x - slate.origin.x).abs() <= px(2.)
                     && aurora.origin.x > plum.origin.x
-                    && plum.origin.x > rose.origin.x
-                    && aurora.right()
-                        <= slate.origin.x + px(crate::ui::desk::palette_row_max_px()) + px(2.),
-                "all thirteen swatches share one row: slate {slate:?} sand {sand:?} rose {rose:?} plum {plum:?} aurora {aurora:?}"
+                    && aurora.right() < slate.origin.x + px(crate::ui::desk::palette_row_max_px())
+                    && swatches.right() <= card.right() + px(1.)
+                    && swatches.size.width
+                        <= px(crate::ui::desk::palette_row_max_px()) + px(2.),
+                "last row stays inside the card: plum {plum:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
             );
             assert!(
                 font.size.height < px(120.)
@@ -853,9 +863,21 @@ mod appearance_layout {
             let language = window.find("dropdown-language").bounds();
             let content = window.find("settings-content").bounds();
             let chip = window.find("font-size-xl").bounds();
+            let swatches = window.find("palette-swatches").bounds();
+            let slate = window.find("palette-slate").bounds();
+            let rose = window.find("palette-rose").bounds();
+            let aurora = window.find("palette-aurora").bounds();
             assert!(
                 language.bottom() <= content.bottom(),
                 "language should stay on the first screen, language {language:?} content {content:?}"
+            );
+            assert!(
+                rose.origin.y > slate.bottom()
+                    && aurora.origin.y > slate.bottom()
+                    && swatches.right() <= card.right() + px(1.)
+                    && swatches.size.width
+                        <= px(crate::ui::desk::palette_row_max_px()) + px(2.),
+                "palette should wrap inside the card, not one row of every swatch: slate {slate:?} rose {rose:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
             );
             assert!(
                 button.right() <= card.right() + px(1.) && hint.right() <= button.left() + px(4.),
