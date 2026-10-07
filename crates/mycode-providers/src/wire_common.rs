@@ -51,15 +51,37 @@ pub(crate) fn charge_stream(used: &mut usize, extra: usize) -> bool {
     }
 }
 
+/// MiniMax (including minimaxi.com) rejects `thinking.type = "enabled"`.
+///
+/// Model ids such as `MiniMax-M2.5` and hosts such as `api.minimax.cn` /
+/// `api.minimaxi.com` select this vendor. Other providers keep `enabled`.
+pub(crate) fn minimax_target(model: &str, endpoint: &str) -> bool {
+    model.to_ascii_lowercase().contains("minimax")
+        || endpoint.to_ascii_lowercase().contains("minimax")
+}
+
 /// Applies the requested reasoning effort to an OpenAI-style body.
-pub(crate) fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {
+///
+/// Thinking On is `thinking.type = "enabled"` except on MiniMax, where the
+/// accepted on-value is `"adaptive"`. Off stays `"disabled"` for every vendor.
+pub(crate) fn apply_reasoning_effort(
+    body: &mut Value,
+    model: &str,
+    endpoint: &str,
+    level: ReasoningLevel,
+) {
     match level {
         ReasoningLevel::Off => {
             body["reasoning_effort"] = json!("none");
             body["thinking"] = json!({ "type": "disabled" });
         }
         ReasoningLevel::On => {
-            body["thinking"] = json!({ "type": "enabled" });
+            let thinking_type = if minimax_target(model, endpoint) {
+                "adaptive"
+            } else {
+                "enabled"
+            };
+            body["thinking"] = json!({ "type": thinking_type });
         }
         other => {
             if let Some(token) = other.effort_token() {
@@ -175,4 +197,88 @@ pub(crate) fn assemble_blocks<'a>(
         blocks.push(ContentBlock::ToolCall(ToolCall::new(id, name, arguments)));
     }
     blocks
+}
+
+#[cfg(test)]
+mod tests {
+    use mycode_core::{ReasoningLevel, Request};
+
+    use super::{apply_reasoning_effort, minimax_target};
+
+    #[test]
+    fn minimax_thinking_on_is_adaptive_not_enabled() {
+        let mut by_model = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut by_model,
+            "MiniMax-M2.5",
+            "https://api.example.com/v1/chat/completions",
+            ReasoningLevel::On,
+        );
+        assert_eq!(by_model["thinking"]["type"], "adaptive");
+        assert_ne!(by_model["thinking"]["type"], "enabled");
+
+        let mut by_host = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut by_host,
+            "M2.5",
+            "https://api.minimaxi.com/v1/chat/completions",
+            ReasoningLevel::On,
+        );
+        assert_eq!(by_host["thinking"]["type"], "adaptive");
+        assert!(minimax_target(
+            "M2.5",
+            "https://api.minimax.cn/anthropic/v1/messages"
+        ));
+    }
+
+    #[test]
+    fn other_providers_keep_thinking_on_enabled() {
+        let mut body = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut body,
+            "gpt-5",
+            "https://api.openai.com/v1/chat/completions",
+            ReasoningLevel::On,
+        );
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(!minimax_target(
+            "deepseek-reasoner",
+            "https://api.deepseek.com/v1/chat/completions"
+        ));
+    }
+
+    #[test]
+    fn completions_and_messages_bodies_use_the_minimax_on_mapping() {
+        let on = Request::new().with_reasoning(ReasoningLevel::On);
+        let completions = crate::openai_completions::build_body(
+            "MiniMax-M2.5",
+            "https://api.minimaxi.com/v1/chat/completions",
+            &on,
+        );
+        assert_eq!(completions["thinking"]["type"], "adaptive");
+        assert_ne!(completions["thinking"]["type"], "enabled");
+
+        let responses = crate::openai_responses::build_body(
+            "minimax/minimax-m2",
+            "https://api.example.com/responses",
+            &on,
+        );
+        assert_eq!(responses["thinking"]["type"], "adaptive");
+
+        let minimax_messages = crate::anthropic_messages::build_body(
+            "MiniMax-M2.5",
+            "https://api.minimax.cn/anthropic/v1/messages",
+            &on,
+        );
+        assert_eq!(minimax_messages["thinking"]["type"], "adaptive");
+        assert!(minimax_messages["thinking"].get("budget_tokens").is_none());
+
+        let claude = crate::anthropic_messages::build_body(
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com/v1/messages",
+            &on,
+        );
+        assert_eq!(claude["thinking"]["type"], "enabled");
+        assert!(claude["thinking"]["budget_tokens"].as_u64().unwrap_or(0) > 0);
+    }
 }

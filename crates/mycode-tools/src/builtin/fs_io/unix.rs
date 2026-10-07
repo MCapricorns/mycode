@@ -1,10 +1,13 @@
 //! Unix handle-relative file operations for the host file kernel.
 //!
 //! Linux uses rustix `openat2` with `BENEATH | NO_XDEV | NO_SYMLINKS`.
-//! macOS uses rustix `openat` with `O_NOFOLLOW` (and `O_DIRECTORY` for
-//! directories) plus `fstat`/`statat` device and type checks. Android shares
-//! a compile-time branch but is not a product target. Hardlinks are allowed;
-//! callers detach them by publishing a new inode.
+//! After that open, Linux proves the mount with `STATX_MNT_ID`: an overlay
+//! directory and a file created in it may differ in `st_dev` (upper layer
+//! versus the overlay device) while staying on one mount. macOS uses rustix
+//! `openat` with `O_NOFOLLOW` (and `O_DIRECTORY` for directories) plus
+//! `fstat`/`statat` device and type checks. Android shares a compile-time
+//! branch but is not a product target. Hardlinks are allowed; callers detach
+//! them by publishing a new inode.
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -174,16 +177,92 @@ fn meta_from_stat(stat: &rfs::Stat) -> io::Result<FileMeta> {
     })
 }
 
-fn enforce_same_device(parent: &File, child: &File) -> io::Result<()> {
-    let parent_stat = rfs::fstat(parent.as_fd()).map_err(map_errno)?;
-    let child_stat = rfs::fstat(child.as_fd()).map_err(map_errno)?;
-    if parent_stat.st_dev != child_stat.st_dev {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "mount traversal is not permitted",
-        ));
+/// `st_dev` plus Linux `STATX_MNT_ID` when the kernel filled that field.
+///
+/// `mount_id` is `None` on macOS and when `statx` cannot report a mount id.
+/// Callers must not treat a missing id as proof of the same mount.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MountToken {
+    device: u64,
+    mount_id: Option<u64>,
+}
+
+/// Same mount when both ids are known and equal, even if `st_dev` differs.
+///
+/// Overlay (xino off, layers on different filesystems) reports the overlay
+/// device for directories and the upper/lower device for regular files.
+/// Those `st_dev` values differ (parent 39 and a new file 40 is the
+/// observed shape) while `STATX_MNT_ID` stays the same. A bind mount or
+/// other real mount cross has a different mount id even when `st_dev`
+/// matches. Without mount ids, `st_dev` equality remains the proof.
+fn same_mount(parent: MountToken, child: MountToken) -> bool {
+    match (parent.mount_id, child.mount_id) {
+        (Some(parent_id), Some(child_id)) => parent_id == child_id,
+        _ => parent.device == child.device,
     }
-    Ok(())
+}
+
+fn mount_traversal_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "mount traversal is not permitted",
+    )
+}
+
+fn reject_mount_cross(parent: MountToken, child: MountToken) -> io::Result<()> {
+    if same_mount(parent, child) {
+        Ok(())
+    } else {
+        Err(mount_traversal_error())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn linux_mount_id(dirfd: impl AsFd, path: &OsStr, flags: AtFlags) -> Option<u64> {
+    let stat = rfs::statx(dirfd, path, flags, rfs::StatxFlags::MNT_ID).ok()?;
+    rfs::StatxFlags::from_bits_truncate(stat.stx_mask)
+        .contains(rfs::StatxFlags::MNT_ID)
+        .then_some(stat.stx_mnt_id)
+}
+
+fn file_mount_id(file: &File) -> Option<u64> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        linux_mount_id(file.as_fd(), OsStr::new(""), AtFlags::EMPTY_PATH)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = file;
+        None
+    }
+}
+
+fn named_mount_id(parent: &File, name: &OsStr) -> Option<u64> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        linux_mount_id(parent.as_fd(), name, AtFlags::SYMLINK_NOFOLLOW)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = (parent, name);
+        None
+    }
+}
+
+fn mount_token(file: &File) -> io::Result<MountToken> {
+    let stat = rfs::fstat(file.as_fd()).map_err(map_errno)?;
+    Ok(MountToken {
+        device: unix_device_identity(stat.st_dev)?,
+        mount_id: file_mount_id(file),
+    })
+}
+
+/// Rejects a child that sits on a different mount from `parent`.
+///
+/// Shared by temp-file creation and by the post-open check in [`open_child`].
+/// Linux uses mount id, so an overlay `st_dev` split is not traversal.
+fn enforce_same_mount(parent: &File, child: &File) -> io::Result<()> {
+    reject_mount_cross(mount_token(parent)?, mount_token(child)?)
 }
 
 fn into_file(fd: std::os::fd::OwnedFd) -> File {
@@ -268,7 +347,8 @@ pub(super) fn open_allowed_root(path: &std::path::Path) -> io::Result<File> {
 /// A `statat(AT_SYMLINK_NOFOLLOW)` runs first so FIFO/device/socket/symlink
 /// names are rejected without a blocking open. Directories are then opened
 /// with `O_NOFOLLOW | O_DIRECTORY`. The opened fd is re-checked with `fstat`
-/// for type, identity, and `st_dev` against the parent.
+/// for type and identity, and for mount identity against the parent
+/// (`STATX_MNT_ID` on Linux, `st_dev` where mount ids are unavailable).
 ///
 /// # Errors
 ///
@@ -286,14 +366,13 @@ pub(super) fn open_child(parent: &File, name: &OsStr, how: ChildOpen) -> io::Res
         }
         Err(err) => return Err(map_not_found(map_errno(err))),
     };
-    let parent_stat = rfs::fstat(parent.as_fd()).map_err(map_errno)?;
-    let parent_device = unix_device_identity(parent_stat.st_dev)?;
-    if parent_device != named.identity.device {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "mount traversal is not permitted",
-        ));
-    }
+    reject_mount_cross(
+        mount_token(parent)?,
+        MountToken {
+            device: named.identity.device,
+            mount_id: named_mount_id(parent, name),
+        },
+    )?;
     match how {
         ChildOpen::Directory if named.kind != FileKind::Directory => {
             return Err(io::Error::new(
@@ -317,7 +396,7 @@ pub(super) fn open_child(parent: &File, name: &OsStr, how: ChildOpen) -> io::Res
         Ok(fd) => into_file(fd),
         Err(error) => return Err(map_not_found(error)),
     };
-    enforce_same_device(parent, &file)?;
+    enforce_same_mount(parent, &file)?;
     let meta = stat_meta(&file)?;
     if meta.identity != named.identity || meta.kind != named.kind {
         return Err(io::Error::new(
@@ -454,14 +533,14 @@ where
 ///
 /// # Errors
 ///
-/// Returns an I/O error when exclusive create, the type check, privacy
-/// `fchmod`, or mandatory cleanup fails.
+/// Returns an I/O error when exclusive create, the mount check, the type
+/// check, privacy `fchmod`, or mandatory cleanup fails.
 pub(super) fn create_temp(parent: &File, name: &OsStr) -> io::Result<OpenedChild> {
     create_temp_with(
         parent,
         name,
         |file| {
-            enforce_same_device(parent, file)?;
+            enforce_same_mount(parent, file)?;
             stat_meta(file)
         },
         |file| {
@@ -729,4 +808,281 @@ pub(super) fn sync_file(file: &File) -> io::Result<()> {
 
 pub(super) fn sync_parent(dir: &File) -> io::Result<()> {
     sync_file(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::fs;
+    use std::io;
+    use std::os::fd::AsFd;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Output};
+
+    use super::{
+        ChildOpen, FileKind, MountToken, create_mode_probe, create_temp, ensure_directory,
+        open_allowed_root, open_child, same_mount,
+    };
+
+    fn token(device: u64, mount_id: Option<u64>) -> MountToken {
+        MountToken { device, mount_id }
+    }
+
+    #[test]
+    fn overlay_st_dev_split_with_shared_mount_id_is_not_traversal() {
+        // QA shape: parent directory st_dev 39, newly created file st_dev 40,
+        // both still on the overlay mount.
+        let parent = token(39, Some(7));
+        let child = token(40, Some(7));
+        assert!(same_mount(parent, child));
+    }
+
+    #[test]
+    fn different_mount_id_is_traversal_even_when_st_dev_matches() {
+        let parent = token(39, Some(7));
+        let child = token(39, Some(8));
+        assert!(!same_mount(parent, child));
+    }
+
+    #[test]
+    fn missing_mount_id_keeps_the_st_dev_proof() {
+        let parent = token(39, None);
+        assert!(
+            !same_mount(parent, token(40, None)),
+            "st_dev split without mount ids stays a cross"
+        );
+        assert!(
+            same_mount(parent, token(39, None)),
+            "equal st_dev without mount ids stays one mount"
+        );
+        assert!(
+            same_mount(parent, token(39, Some(7))),
+            "a one-sided mount id is not comparable and falls back to st_dev"
+        );
+        assert!(
+            !same_mount(parent, token(40, Some(7))),
+            "a one-sided mount id must not authorize a different st_dev"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    struct OverlayFixture {
+        base: PathBuf,
+        merged: PathBuf,
+        mounts: Vec<PathBuf>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for OverlayFixture {
+        fn drop(&mut self) {
+            for mount in self.mounts.iter().rev() {
+                let _ = run_as_root("umount", &[mount]);
+                let _ = run_as_root("umount", &[Path::new("-l"), mount]);
+            }
+            let _ = fs::remove_dir_all(&self.base);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn root_command(program: &str) -> Command {
+        // SAFETY: `geteuid` only reads the process credential.
+        let root = unsafe { libc::geteuid() } == 0;
+        if root {
+            Command::new(program)
+        } else {
+            let mut command = Command::new("sudo");
+            command.arg("-n").arg(program);
+            command
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_as_root(program: &str, args: &[&Path]) -> io::Result<Output> {
+        root_command(program).args(args).output()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn mount_environmental(output: &Output) -> bool {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+        stderr.contains("password")
+            || stderr.contains("not permitted")
+            || stderr.contains("superuser")
+            || stderr.contains("must be root")
+            || stderr.contains("unknown filesystem type")
+            || output.status.code() == Some(127)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn mount_or_skip(args: &[&Path], target: &Path, fixture: &mut OverlayFixture) -> bool {
+        let output = run_as_root("mount", args).unwrap_or_else(|error| {
+            panic!("failed to spawn mount: {error}");
+        });
+        if output.status.success() {
+            fixture.mounts.push(target.to_path_buf());
+            return true;
+        }
+        if mount_environmental(&output) {
+            eprintln!(
+                "skip overlay mount regression: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return false;
+        }
+        panic!(
+            "mount {:?} failed: {}",
+            args.iter().map(|path| path.display()).collect::<Vec<_>>(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Parent `st_dev` and a newly created sibling differ on this overlay, and
+    /// the shared mount check must still allow create, open, and directory
+    /// descent. A bind mount inside the same directory must still fail.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn overlay_sibling_create_allows_st_dev_mismatch_and_bind_mount_stays_blocked() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&base).expect("base dir");
+        let lower_mnt = base.join("lower-mnt");
+        let upper_mnt = base.join("upper-mnt");
+        let merged = base.join("merged");
+        let bind_src = base.join("bind-src");
+        for path in [&lower_mnt, &upper_mnt, &merged, &bind_src] {
+            fs::create_dir(path).expect("fixture dir");
+        }
+        fs::write(bind_src.join("marker"), b"bound").expect("bind source");
+        let mut fixture = OverlayFixture {
+            base,
+            merged: merged.clone(),
+            mounts: Vec::new(),
+        };
+        let tmpfs = Path::new("tmpfs");
+        if !mount_or_skip(
+            &[Path::new("-t"), tmpfs, tmpfs, lower_mnt.as_path()],
+            &lower_mnt,
+            &mut fixture,
+        ) {
+            return;
+        }
+        if !mount_or_skip(
+            &[Path::new("-t"), tmpfs, tmpfs, upper_mnt.as_path()],
+            &upper_mnt,
+            &mut fixture,
+        ) {
+            return;
+        }
+        let lower = lower_mnt.join("lower");
+        let upper = upper_mnt.join("upper");
+        let work = upper_mnt.join("work");
+        fs::create_dir_all(&lower).expect("lowerdir");
+        fs::create_dir_all(&upper).expect("upperdir");
+        fs::create_dir_all(&work).expect("workdir");
+        fs::write(lower.join("from-lower"), b"lower").expect("lower file");
+        let options = format!(
+            "lowerdir={},upperdir={},workdir={},xino=off",
+            lower.display(),
+            upper.display(),
+            work.display()
+        );
+        let output = root_command("mount")
+            .args([
+                "-t",
+                "overlay",
+                "overlay",
+                "-o",
+                options.as_str(),
+                merged.to_str().expect("utf-8 merged path"),
+            ])
+            .output()
+            .expect("spawn overlay mount");
+        if !output.status.success() {
+            if mount_environmental(&output) {
+                eprintln!(
+                    "skip overlay mount regression: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return;
+            }
+            panic!(
+                "overlay mount failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        fixture.mounts.push(merged.clone());
+
+        let parent = open_allowed_root(&fixture.merged).expect("open overlay root");
+        let created =
+            create_temp(&parent, OsStr::new("index.html")).expect("create sibling temp on overlay");
+        let parent_dev = rustix::fs::fstat(parent.as_fd())
+            .expect("stat parent")
+            .st_dev;
+        let child_dev = rustix::fs::fstat(created.file.as_fd())
+            .expect("stat temp")
+            .st_dev;
+        assert_ne!(
+            parent_dev, child_dev,
+            "fixture must reproduce an overlay st_dev split"
+        );
+        assert_eq!(created.meta.kind, FileKind::File);
+
+        let existing = open_child(&parent, OsStr::new("index.html"), ChildOpen::ExistingFile)
+            .expect("reopen overlay file whose st_dev differs from the parent");
+        assert_eq!(existing.meta.kind, FileKind::File);
+        let lower_file = open_child(&parent, OsStr::new("from-lower"), ChildOpen::ExistingFile)
+            .expect("open lower-layer file");
+        assert_ne!(
+            parent_dev,
+            rustix::fs::fstat(lower_file.file.as_fd())
+                .expect("stat lower")
+                .st_dev
+        );
+
+        let made = ensure_directory(&parent, OsStr::new("made")).expect("create directory");
+        let nested = create_temp(&made.file, OsStr::new("nested.html"))
+            .expect("create nested temp on overlay");
+        assert_ne!(
+            rustix::fs::fstat(made.file.as_fd())
+                .expect("stat made")
+                .st_dev,
+            rustix::fs::fstat(nested.file.as_fd())
+                .expect("stat nested")
+                .st_dev
+        );
+        let _mode = create_mode_probe(&parent, OsStr::new("mode-probe")).expect("mode probe");
+
+        fs::create_dir(fixture.merged.join("bound")).expect("bind point");
+        let bound = fixture.merged.join("bound");
+        let bind_output = root_command("mount")
+            .args([
+                "--bind",
+                bind_src.to_str().expect("utf-8 bind source"),
+                bound.to_str().expect("utf-8 bind target"),
+            ])
+            .output()
+            .expect("spawn bind mount");
+        assert!(
+            bind_output.status.success(),
+            "bind mount failed: {}",
+            String::from_utf8_lossy(&bind_output.stderr)
+        );
+        fixture.mounts.push(bound);
+        let error = match open_child(&parent, OsStr::new("bound"), ChildOpen::Directory) {
+            Ok(_) => panic!("bind mount must stay blocked"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            error
+                .to_string()
+                .contains("mount traversal is not permitted"),
+            "{error}"
+        );
+    }
 }

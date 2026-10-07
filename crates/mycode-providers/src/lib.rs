@@ -158,10 +158,12 @@ impl WireProvider {
     }
 
     fn call_for(&self, request: &Request) -> TransportCall {
+        let model = self.resolved.model.as_str();
+        let endpoint = self.resolved.endpoint.as_str();
         let body = match self.resolved.kind.as_str() {
-            "anthropic-messages" => anthropic_messages::build_body(&self.resolved.model, request),
-            "openai-responses" => openai_responses::build_body(&self.resolved.model, request),
-            _ => openai_completions::build_body(&self.resolved.model, request),
+            "anthropic-messages" => anthropic_messages::build_body(model, endpoint, request),
+            "openai-responses" => openai_responses::build_body(model, endpoint, request),
+            _ => openai_completions::build_body(model, endpoint, request),
         };
         TransportCall {
             endpoint: self.resolved.endpoint.clone(),

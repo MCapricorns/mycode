@@ -868,7 +868,7 @@ impl Workspace {
         self.apply_action(DesktopAction::ReasoningMenuToggled(open), cx);
     }
 
-    /// Applies and persists a palette. Light and dark stay independent.
+    /// Applies and persists a palette. The window stays dark.
     pub(crate) fn on_select_palette(&mut self, palette: &str, cx: &mut Context<Self>) {
         let palette = crate::ui::desk::normalize_palette(palette);
         if self
