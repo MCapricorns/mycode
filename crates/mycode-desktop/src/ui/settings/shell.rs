@@ -37,6 +37,11 @@ pub(super) fn render_shell_section(
             }
         })
         .unwrap_or_else(|| "auto".to_owned());
+    let source_label = match shell_source.as_str() {
+        "auto" => t("auto", "自动"),
+        "user" => t("user", "用户"),
+        other => other,
+    };
     let shell_status = if shell_program.is_empty() {
         t(
             "No shell found. Detect one or browse to pwsh or Git bash.",
@@ -44,7 +49,7 @@ pub(super) fn render_shell_section(
         )
         .to_owned()
     } else {
-        format!("{shell_kind} · {shell_program} ({shell_source})")
+        format!("{shell_kind} · {shell_program} ({source_label})")
     };
     let shell_kind_open = workspace.vm().shell_kind_menu_open;
     let shell_options = ["pwsh", "bash"]

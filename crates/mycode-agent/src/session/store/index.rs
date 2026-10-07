@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mycode_config::HomeLayout;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use super::super::digest::{format_digest, payload_digest};
 use super::super::dto::{BranchMutationKind, EventKind, HeadStamp};
@@ -768,7 +768,10 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let conn = open_connection(&path, false)?;
+    // Read-only. The writer connection already holds the index; opening a
+    // second connection and flipping `journal_mode` takes an exclusive lock
+    // and surfaces as "the session service is unavailable" while a turn runs.
+    let conn = open_reader(&path)?;
     if !table_ready(&conn)? {
         return Ok(Vec::new());
     }
@@ -1041,6 +1044,17 @@ fn scan_jsonl(path: &Path) -> Result<Vec<ScannedEvent>, StoreError> {
         offset = end;
     }
     Ok(events)
+}
+
+fn open_reader(path: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| StoreError::Storage)?;
+    conn.busy_timeout(std::time::Duration::from_secs(3))
+        .map_err(|_| StoreError::Storage)?;
+    Ok(conn)
 }
 
 fn open_connection(path: &Path, create_schema: bool) -> Result<Connection, StoreError> {

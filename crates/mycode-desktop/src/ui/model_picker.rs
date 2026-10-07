@@ -586,22 +586,28 @@ fn pin_row(
         .any(|item| item.provider == provider && item.model == model);
     div()
         .id(format!("model-pin-{provider}-{model}"))
-        .h(px(MODEL_ROW_HEIGHT))
+        // Two lines (model name and provider). A 32px catalog row clips the
+        // second line into the next "Recent" row.
+        .min_h(px(44.))
+        .h_auto()
+        .py(px(4.))
         .px_1()
         .flex()
         .flex_row()
         .items_center()
-        .gap_1()
+        .gap_2()
         .rounded(skin::radius_control())
+        .overflow_hidden()
         .child(
             div()
                 .id(format!("model-pin-open-{provider}-{model}"))
                 .min_w_0()
                 .flex_1()
-                .h_full()
+                .h_auto()
                 .flex()
                 .flex_col()
                 .justify_center()
+                .gap(px(1.))
                 .px_1()
                 .cursor_pointer()
                 .on_click({

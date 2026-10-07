@@ -146,12 +146,20 @@ impl SettingsState {
             .iter_mut()
             .find(|provider| provider.id == id)
         else {
-            return Err("that provider is no longer in settings".to_owned());
+            return Err(t(
+                "that provider is no longer in settings",
+                "设置里已经没有该服务商",
+            )
+            .to_owned());
         };
         provider.base_url = base_url.clone();
-        document
-            .validate()
-            .map_err(|error| format!("invalid settings: {}", error.summary()))?;
+        document.validate().map_err(|error| {
+            format!(
+                "{} {}",
+                t("invalid settings:", "设置无效:"),
+                error.summary()
+            )
+        })?;
         Ok(base_url)
     }
 }

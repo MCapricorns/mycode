@@ -149,8 +149,10 @@ impl Workspace {
         self.ask_input
             .get_or_insert_with(|| {
                 cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("Type a free-text answer for every question (separate with |)")
+                    InputState::new(window, cx).placeholder(crate::i18n::t(
+                        "Type a free-text answer for every question (separate with |)",
+                        "为每个问题输入自由文本（用 | 分隔）",
+                    ))
                 })
             })
             .clone()
@@ -317,7 +319,9 @@ impl Workspace {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose a MYCode export bundle".into()),
+            prompt: Some(
+                crate::i18n::t("Choose a MYCode export bundle", "选择 MYCode 导出文件").into(),
+            ),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = receiver.await else {

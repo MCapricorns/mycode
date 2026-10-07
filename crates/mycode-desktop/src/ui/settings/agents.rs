@@ -44,7 +44,7 @@ pub(super) fn render_agents_section(
                  A limit of 0 uses the default of 4 concurrent sub-agents. It does not mean zero \
                  agents, and it is not a count of role types.",
                 "主模型可以把工作交给 Scout、Artisan，以及你添加的角色。并发数为 0 时使用默认的 4 个同时运行的子代理，\
-                 不是零个，也不是角色种类的数量。",
+                 不是零个代理，也不是角色种类的数量。",
             )),
             &theme,
             vec![super::widgets::settings_row(
@@ -52,7 +52,7 @@ pub(super) fn render_agents_section(
                 t("Max concurrent", "最大并发"),
                 Some(t(
                     "0 = default (4), not zero agents",
-                    "0 = 默认 (4)，不是零个",
+                    "0 = 默认 (4)，不是零个代理",
                 )),
                 Button::new("agents-concurrent-cycle")
                     .label(if max_concurrent == 0 {

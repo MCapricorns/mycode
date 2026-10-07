@@ -20,6 +20,9 @@ impl SessionCore {
         if self.sessions.contains_key(session) {
             return Ok(());
         }
+        if self.store.is_none() {
+            self.store = super::super::store::SessionStore::open(&self.home).ok();
+        }
         let store = self.store.as_ref().ok_or(PlanError::Storage)?;
         let loaded = store.load_session(session).map_err(plan_error)?;
         let mut total = 0_u64;
@@ -89,11 +92,18 @@ impl SessionCore {
     }
 
     pub(super) fn store_mut(&mut self) -> Result<&mut super::super::store::SessionStore, OpFail> {
-        self.store.as_mut().ok_or(OpFail::Storage)
+        if self.store.is_none() {
+            self.store = super::super::store::SessionStore::open(&self.home).ok();
+        }
+        self.store
+            .as_mut()
+            .ok_or(OpFail::Domain(super::super::dto::SessionError::Unavailable))
     }
 
     pub(super) fn store_ref(&self) -> Result<&super::super::store::SessionStore, OpFail> {
-        self.store.as_ref().ok_or(OpFail::Storage)
+        self.store
+            .as_ref()
+            .ok_or(OpFail::Domain(super::super::dto::SessionError::Unavailable))
     }
 }
 

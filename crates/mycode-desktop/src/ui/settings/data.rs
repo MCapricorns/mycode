@@ -25,7 +25,7 @@ pub(super) fn render_data_section(
         t("Durable usage records", "持久化用量记录"),
         Some(t(
             "Write a Usage event per completed turn, aggregated in the Model panel.",
-            "每轮对话结束后写入一条用量记录,并在模型面板中汇总。",
+            "每完成一轮后写入一条用量记录,并在模型面板中汇总。",
         )),
         Switch::new("settings-usage-toggle")
             .checked(usage_enabled)

@@ -57,7 +57,7 @@ pub(super) fn render_update_dialog(
             "校验通过后会弹出安装提示。",
         ),
         UpdateState::Ready { .. } => t(
-            "Restarting closes every chat. Uncommitted work stays on disk.",
+            "Restarting closes every session. Uncommitted work stays on disk.",
             "重启会关闭所有会话。未提交的工作保留在磁盘上。",
         ),
         _ => "",

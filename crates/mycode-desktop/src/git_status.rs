@@ -106,7 +106,7 @@ pub(crate) fn read_diff(root: &Path, path: &str) -> String {
         .args(["diff", "--", path])
         .output();
     let Ok(output) = output else {
-        return "git is not installed".to_owned();
+        return t("git is not installed", "未安装 git").to_owned();
     };
     let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if text.is_empty() {

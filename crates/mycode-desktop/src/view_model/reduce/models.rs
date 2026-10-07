@@ -2,6 +2,7 @@
 //! that exists, clamping the stored thinking pick to the catalog, and the
 //! preset form's pre-checked model list.
 
+use crate::i18n::t;
 use crate::view_model::{WorkspaceState, rank_model_ids};
 
 /// The `ProviderSelected` transition: the model picker selected a provider.
@@ -56,9 +57,13 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
         // leave a selection the next turn silently drops, so refuse
         // the pick and say why.
         state.error = Some(format!(
-            "this provider is at its {}-model limit \u{2014} remove one in \
-             Settings \u{2192} Models before switching to an unlisted model",
-            mycode_config::MAX_MODELS_PER_PROVIDER
+            "{}{}{}",
+            t("this provider is at its ", "该服务商已达到 "),
+            mycode_config::MAX_MODELS_PER_PROVIDER,
+            t(
+                "-model limit \u{2014} remove one in Settings \u{2192} Models before switching to an unlisted model",
+                " 个模型的上限 \u{2014} 请先在设置 \u{2192} 模型中移除一个，再切换到未列出的模型",
+            ),
         ));
         return;
     }

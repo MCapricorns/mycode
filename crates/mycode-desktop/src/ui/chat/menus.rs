@@ -12,7 +12,9 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::skin::{self, popover_panel};
-use crate::view_model::{MentionKind, selected_reasoning_level};
+use crate::view_model::{
+    MentionGroup, MentionKind, preferred_slash_index, selected_reasoning_level,
+};
 use crate::workspace::Workspace;
 
 /// Fixed row height that keeps the menu rows visually uniform.
@@ -122,6 +124,7 @@ fn menu_row(
         .rounded(skin::radius_control())
         .text_sm()
         .cursor_pointer()
+        .when(selected, |this| this.bg(skin::frost_accent(theme)))
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)
         .child(div().min_w_0().truncate().child(label))
@@ -163,9 +166,37 @@ pub(super) fn render_mention_layer(
         .clone()
         .expect("caller checks the menu is open");
     let heading = match mention.kind {
-        MentionKind::File => t("FILES", "文件"),
-        MentionKind::Command => t("COMMANDS", "命令"),
+        MentionKind::File => Some(t("FILES", "文件")),
+        MentionKind::Command => None,
     };
+    let preferred = if mention.kind == MentionKind::Command {
+        preferred_slash_index(&mention.fragment, &mention.items)
+    } else {
+        0
+    };
+    let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
+    let mut previous: Option<MentionGroup> = None;
+    for (index, item) in mention.items.iter().enumerate() {
+        if mention.kind == MentionKind::Command && previous != Some(item.group) {
+            previous = Some(item.group);
+            rows.push(slash_heading(item.group, theme));
+        }
+        let insert = item.insert.clone();
+        let label = mention_label(item);
+        let row_id = format!("mention-{insert}");
+        rows.push(
+            menu_row(
+                row_id,
+                label,
+                index == preferred,
+                cx.listener(move |workspace, _, window, cx| {
+                    workspace.on_accept_mention(insert.clone(), window, cx);
+                }),
+                theme,
+            )
+            .into_any_element(),
+        );
+    }
     div()
         .id("mention-layer")
         .w_full()
@@ -183,28 +214,66 @@ pub(super) fn render_mention_layer(
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                            .opacity(0.6)
-                            .px_2()
-                            .pt_1()
-                            .child(heading),
-                    )
-                    .children(mention.items.into_iter().map(|(insert, display)| {
-                        let row_id = format!("mention-{insert}");
-                        menu_row(
-                            row_id,
-                            display,
-                            false,
-                            cx.listener(move |workspace, _, window, cx| {
-                                workspace.on_accept_mention(insert.clone(), window, cx);
-                            }),
-                            cx.theme(),
+                    .when_some(heading, |this, heading| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .opacity(0.6)
+                                .px_2()
+                                .pt_1()
+                                .child(heading),
                         )
-                    })),
+                    })
+                    .children(rows),
             ),
         )
         .into_any_element()
+}
+
+fn slash_heading(group: MentionGroup, theme: &Theme) -> gpui_kit::AnyElement {
+    let label = match group {
+        MentionGroup::Command => t("Commands", "命令"),
+        MentionGroup::Skill => t("Skills", "技能"),
+        MentionGroup::Mcp => t("MCP", "MCP"),
+        MentionGroup::File => t("Files", "文件"),
+    };
+    div()
+        .id(match group {
+            MentionGroup::Command => "mention-heading-commands",
+            MentionGroup::Skill => "mention-heading-skills",
+            MentionGroup::Mcp => "mention-heading-mcp",
+            MentionGroup::File => "mention-heading-files",
+        })
+        .text_xs()
+        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+        .text_color(theme.muted_foreground)
+        .px_2()
+        .pt_1()
+        .child(label)
+        .into_any_element()
+}
+
+fn mention_label(item: &crate::view_model::MentionItem) -> String {
+    match item.group {
+        MentionGroup::Command => match item.insert.as_str() {
+            "/new" => format!("/new · {}", t("new chat", "新对话")),
+            "/settings" => format!("/settings · {}", t("settings", "设置")),
+            _ => format!("{} · {}", item.insert, item.label),
+        },
+        MentionGroup::Skill => format!("{} · {}", item.insert, item.label),
+        MentionGroup::Mcp => {
+            if let Some((server, tool)) = item
+                .insert
+                .strip_prefix("mcp:")
+                .and_then(|rest| rest.split_once('/'))
+            {
+                format!("/{server}/{tool} · {}", t("MCP tool", "MCP 工具"))
+            } else {
+                let server = item.insert.strip_prefix("mcp:").unwrap_or(&item.label);
+                format!("/{server} · {}", t("MCP server", "MCP 服务"))
+            }
+        }
+        MentionGroup::File => item.label.clone(),
+    }
 }

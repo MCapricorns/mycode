@@ -357,8 +357,13 @@ impl Workspace {
                 if summary.sessions > 0 {
                     self.apply_action(
                         DesktopAction::Failed(format!(
-                            "imported {} new session(s); restart to see restored history",
-                            summary.sessions
+                            "{}{}{}",
+                            crate::i18n::t("imported ", "已导入 "),
+                            summary.sessions,
+                            crate::i18n::t(
+                                " new session(s); restart to see restored history",
+                                " 个新会话；重启后可看到恢复的历史",
+                            )
                         )),
                         cx,
                     );
@@ -447,7 +452,7 @@ impl Workspace {
                 );
                 if refreshed {
                     self.push_toast(
-                        crate::i18n::t("Models refreshed", "模型目录已刷新").to_owned(),
+                        crate::i18n::t("Provider catalog refreshed", "服务商目录已刷新").to_owned(),
                         crate::workspace::ToastKind::Info,
                         cx,
                     );

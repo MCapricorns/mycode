@@ -661,7 +661,7 @@ fn render_preset_form(
                                     .items_center()
                                     .text_sm()
                                     .text_color(theme.muted_foreground)
-                                    .child(t("No matches", "没有匹配的模型")),
+                                    .child(t("No matching models", "没有匹配的模型")),
                             )
                         })
                         .when(!empty, |this| {
@@ -733,7 +733,7 @@ fn render_preset_form(
                                         "{} {} {}",
                                         t("Open", "打开"),
                                         sign_in.verification_uri,
-                                        t("and enter this code:", "并输入此验证码:")
+                                        t("and enter this code:", "并输入此验证码：")
                                     )))
                                     .child(
                                         div()
@@ -777,7 +777,7 @@ fn render_preset_form(
                         .gap_1()
                         .child(div().text_xs().opacity(0.6).child(t(
                             "API key (stored in the secret vault)",
-                            "API 密钥(保存在凭据库中)",
+                            "API 密钥（保存在凭据库中）",
                         )))
                         .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
                 )
@@ -836,12 +836,12 @@ impl ProviderForm {
         let mut make = |placeholder: &'static str| {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
-        let id = make("id, e.g. openai-main");
+        let id = make(t("id, e.g. openai-main", "标识，例如 openai-main"));
         let base_url = make("https://api.example.com/v1");
-        let model = make("model id");
-        let context_limit = make("optional, e.g. 200000");
-        let max_output = make("optional, e.g. 8192");
-        let api_key = make("api key (leave empty to skip)");
+        let model = make(t("model id", "模型 id"));
+        let context_limit = make(t("optional, e.g. 200000", "可选，例如 200000"));
+        let max_output = make(t("optional, e.g. 8192", "可选，例如 8192"));
+        let api_key = make(t("api key (leave empty to skip)", "API 密钥（留空则跳过）"));
         cx.new(|_| Self {
             id,
             kind: "openai-completions".to_owned(),
@@ -886,10 +886,7 @@ fn render_custom_provider_page(
     let kind_field = dropdown_field(
         "provider-kind",
         t("Protocol", "协议"),
-        Some(t(
-            "Wire protocol the endpoint speaks.",
-            "端点使用的传输协议。",
-        )),
+        Some(t("Wire protocol the endpoint speaks.", "端点采用的协议。")),
         &kind,
         &kind_options,
         kind_menu_open,
@@ -922,7 +919,7 @@ fn render_custom_provider_page(
                 t("Endpoint", "端点"),
                 Some(t(
                     "The provider appears in the model picker as soon as it is added.",
-                    "添加后该服务商立即出现在模型菜单中。",
+                    "添加后该服务商立即出现在模型选择器中。",
                 )),
                 theme,
                 vec![
@@ -933,7 +930,7 @@ fn render_custom_provider_page(
                         .text_sm()
                         .child(labeled_field(t("id", "标识"), id_input))
                         .child(kind_field)
-                        .child(labeled_field(t("base URL", "Base URL"), base_url_input))
+                        .child(labeled_field(t("base URL", "基础 URL"), base_url_input))
                         .child(labeled_field(t("default model", "默认模型"), model_input))
                         .into_any_element(),
                     div()

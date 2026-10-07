@@ -126,28 +126,29 @@ pub fn apply_font_size(theme: &mut Theme, id: &str) {
     theme.mono_font_size = gpui_kit::px(interface_font_px(id));
 }
 
-/// Swatches on one full row of the settings palette. Thirteen colors fill
-/// two rows and leave three on the last.
-pub const PALETTE_COLUMNS: u16 = 5;
+/// Swatches on one full row. All thirteen colors sit on that row in a normal
+/// settings card; a narrower card wraps the rest to the left.
+pub const PALETTE_COLUMNS: u16 = 13;
 
 /// Fixed width of one palette cell, in pixels.
 ///
 /// The cell is a flex item, not a grid track. A percentage width or a grid
 /// row (including max-content tracks) still grew into the settings scrollport
-/// and left a void under the swatches.
-pub const PALETTE_CELL_PX: f32 = 52.;
+/// and left a void under the swatches. The cell is only a little wider than
+/// the swatch so the row can hold every palette.
+pub const PALETTE_CELL_PX: f32 = 44.;
 
 /// Gap between palette cells, in pixels. Fixed so a font-size change cannot
-/// push the fifth cell onto the next line.
-pub const PALETTE_GAP_PX: f32 = 6.;
+/// push the last cell onto the next line in a normal settings card.
+pub const PALETTE_GAP_PX: f32 = 4.;
 
 /// Side length of the color square inside a palette cell, in pixels.
 pub const PALETTE_SWATCH_PX: f32 = 28.;
 
-/// Width of one full palette row: five fixed cells and the gaps between them.
+/// Width of one full palette row: thirteen fixed cells and the gaps between them.
 ///
 /// The wrapping row uses this as its max width, so a normal settings card
-/// shows five columns and the last three stay on the left.
+/// shows every swatch on one line.
 #[must_use]
 pub fn palette_row_max_px() -> f32 {
     let columns = f32::from(PALETTE_COLUMNS.max(1));

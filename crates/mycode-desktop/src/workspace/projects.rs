@@ -25,7 +25,9 @@ impl Workspace {
         }
         self.mention_query = Some(fragment.clone());
         if kind == crate::view_model::MentionKind::Command {
-            self.merge_skill_commands(&fragment, cx);
+            // Reload skills so `/` lists them even before Settings was opened.
+            // The reducer rebuilds the menu, including enabled MCP servers.
+            self.refresh_skills(cx);
             return;
         }
         if kind != crate::view_model::MentionKind::File {
@@ -94,28 +96,28 @@ impl Workspace {
         self.apply_action(DesktopAction::SkillsLoaded(skills), cx);
     }
 
-    fn merge_skill_commands(&mut self, fragment: &str, cx: &mut Context<Self>) {
-        let (workspace, user_home) = self.skill_roots();
-        let skills = mycode_config::discover_skills(&workspace, user_home.as_deref());
-        if let Some(mention) = self.vm.mention.as_mut() {
-            for skill in skills {
-                if !skill.slug.starts_with(fragment) {
-                    continue;
-                }
-                let insert = format!("/{}", skill.slug);
-                if mention
-                    .items
-                    .iter()
-                    .any(|(existing, _)| existing == &insert)
-                {
-                    continue;
-                }
-                mention
-                    .items
-                    .push((insert, format!("/{} · {}", skill.slug, skill.title)));
-            }
+    /// Enter accepts the highlighted `/` row instead of sending it as chat.
+    ///
+    /// Returns whether the key was consumed. A slash menu with no rows still
+    /// sends, so an unknown token can be a normal message.
+    pub(super) fn accept_open_slash(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(mention) = self.vm.mention.clone() else {
+            return false;
+        };
+        if mention.kind != crate::view_model::MentionKind::Command || mention.items.is_empty() {
+            return false;
         }
-        cx.notify();
+        let index = crate::view_model::preferred_slash_index(&mention.fragment, &mention.items);
+        let Some(item) = mention.items.get(index) else {
+            return false;
+        };
+        let insert = item.insert.clone();
+        self.on_accept_mention(insert, window, cx);
+        true
     }
 
     /// Accepts one mention row: rewrites the draft (files) or runs the
@@ -141,12 +143,30 @@ impl Workspace {
             }
             crate::view_model::MentionKind::Command => {
                 if insert == "/new" {
-                    self.on_new_session(cx);
+                    if !crate::view_model::has_open_folder(&self.vm) {
+                        self.push_toast(
+                            crate::i18n::t(
+                                "Open a folder to get started.",
+                                "打开一个目录即可开始。",
+                            ),
+                            crate::workspace::ToastKind::Info,
+                            cx,
+                        );
+                    } else {
+                        self.on_new_session(cx);
+                    }
                 } else if insert == "/settings" {
                     self.on_show_main_view(crate::view_model::MainView::Settings, cx);
+                } else if let Some(spec) = insert.strip_prefix("mcp:") {
+                    self.insert_mcp_draft(spec, cx);
                 } else if let Some(slug) = insert.strip_prefix('/') {
                     self.insert_skill_draft(slug, cx);
                 }
+                if self.pending_composer_prefill.is_none() {
+                    self.pending_composer_prefill = Some(String::new());
+                }
+                let draft = self.pending_composer_prefill.clone().unwrap_or_default();
+                self.apply_action(DesktopAction::ComposerChanged(draft), cx);
             }
         }
     }
@@ -169,10 +189,33 @@ impl Workspace {
             return;
         };
         let path = skill.path.display();
-        self.pending_composer_prefill = Some(format!(
-            "/{slug}\n\nFollow the `{title}` skill. Read `{path}` and apply it before continuing.\n",
-            title = skill.title
-        ));
+        let title = skill.title;
+        let text = if crate::i18n::is_chinese() {
+            format!("/{slug}\n\n遵循「{title}」技能。先阅读 `{path}`，再继续。\n")
+        } else {
+            format!(
+                "/{slug}\n\nFollow the `{title}` skill. Read `{path}` and apply it before continuing.\n"
+            )
+        };
+        self.pending_composer_prefill = Some(text);
+        cx.notify();
+    }
+
+    /// Prefills an explicit request to use one MCP server or one of its tools.
+    fn insert_mcp_draft(&mut self, spec: &str, cx: &mut Context<Self>) {
+        let (server, tool) = spec
+            .split_once('/')
+            .map(|(server, tool)| (server, Some(tool)))
+            .unwrap_or((spec, None));
+        let text = match tool {
+            Some(tool) if crate::i18n::is_chinese() => {
+                format!("使用 MCP 服务 `{server}` 上的工具 `{tool}`。\n")
+            }
+            Some(tool) => format!("Use the MCP tool `{tool}` on server `{server}`.\n"),
+            None if crate::i18n::is_chinese() => format!("使用 MCP 服务 `{server}`。\n"),
+            None => format!("Use the MCP server `{server}`.\n"),
+        };
+        self.pending_composer_prefill = Some(text);
         cx.notify();
     }
 
@@ -263,7 +306,7 @@ impl Workspace {
         // distinguishable in the switcher.
         let mut serial = self.vm.workspaces.len() + 1;
         let name = loop {
-            let candidate = format!("{} {serial}", crate::i18n::t("Workspace", "工区"));
+            let candidate = format!("{} {serial}", crate::i18n::t("Workspace", "工作区"));
             if self
                 .vm
                 .workspaces
@@ -328,7 +371,7 @@ impl Workspace {
     pub(crate) fn on_delete_workspace(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.vm.workspaces.len() < 2 {
             self.push_toast(
-                crate::i18n::t("Keep at least one workspace", "至少保留一个工区"),
+                crate::i18n::t("Keep at least one workspace", "至少保留一个工作区"),
                 crate::workspace::ToastKind::Info,
                 cx,
             );

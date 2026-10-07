@@ -363,7 +363,7 @@ impl BackendForm {
         let mut make = |placeholder: &'static str| {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
-        let id = make("id, e.g. querit-main");
+        let id = make(t("id, e.g. querit-main", "标识，例如 querit-main"));
         let kind = make("querit | anysearch | custom");
         let endpoint = make("https://search.example.com");
         cx.new(|_| Self { id, kind, endpoint })
@@ -397,9 +397,12 @@ fn render_backend_form(
                 .flex_col()
                 .gap_2()
                 .text_sm()
-                .child(labeled_field("id", form.read(cx).id.clone()))
-                .child(labeled_field("kind", form.read(cx).kind.clone()))
-                .child(labeled_field("endpoint", form.read(cx).endpoint.clone())),
+                .child(labeled_field(t("id", "标识"), form.read(cx).id.clone()))
+                .child(labeled_field(t("kind", "类型"), form.read(cx).kind.clone()))
+                .child(labeled_field(
+                    t("endpoint", "端点"),
+                    form.read(cx).endpoint.clone(),
+                )),
         )
         .child(
             Button::new("backend-add")

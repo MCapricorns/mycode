@@ -230,6 +230,9 @@ pub struct Workspace {
     /// Last UI font-family id applied to the theme. Empty until the first frame.
     /// `"system"` covers both an empty stored value and the explicit system id.
     applied_font_family: String,
+    /// Language last written into input placeholders. `u8::MAX` until the
+    /// first frame, so a settings load that flips the language refreshes them.
+    applied_language: u8,
 }
 
 impl Workspace {
@@ -243,7 +246,7 @@ impl Workspace {
     ) -> Entity<Self> {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Message MYCode")
+                .placeholder(crate::i18n::t("Message MYCode", "给 MYCode 发消息"))
                 .auto_grow(1, 10)
                 .submit_on_enter(true)
         });
@@ -309,6 +312,7 @@ impl Workspace {
             expanded_tools: HashSet::new(),
             applied_font_size: String::new(),
             applied_font_family: String::new(),
+            applied_language: u8::MAX,
         });
         workspace.update(cx, |workspace, cx| {
             let filter = cx.new(|cx| {
@@ -420,6 +424,13 @@ impl Workspace {
                 self.refresh_mention_search(cx);
             }
             InputEvent::PressEnter { shift: false, .. } => {
+                let draft = self.composer.read(cx).value().to_string();
+                if draft != self.vm.composer_draft {
+                    self.apply_action(DesktopAction::ComposerChanged(draft), cx);
+                }
+                if self.accept_open_slash(window, cx) {
+                    return;
+                }
                 self.on_send(window, cx);
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
@@ -953,6 +964,59 @@ impl Workspace {
         Theme::sync_base(cx);
         self.applied_font_size = size_id.to_owned();
         self.applied_font_family = family_key.to_owned();
+    }
+
+    /// Rewrites placeholders that were captured when the input was created.
+    ///
+    /// `t()` is live, but `InputState` stores the placeholder string. Switching
+    /// to English left "搜索设置" in the settings search box.
+    pub(crate) fn sync_localized_placeholders(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lang = u8::from(crate::i18n::is_chinese());
+        if self.applied_language == lang {
+            return;
+        }
+        self.applied_language = lang;
+        let composer_placeholder = if self.vm.sending {
+            crate::i18n::t("Steer without interrupting", "追加引导,不打断当前任务")
+        } else {
+            crate::i18n::t("Message MYCode", "给 MYCode 发消息")
+        };
+        self.composer.update(cx, |state, cx| {
+            state.set_placeholder(composer_placeholder, window, cx);
+        });
+        let pairs: [(&Option<Entity<InputState>>, &str); 5] = [
+            (
+                &self.session_filter_input,
+                crate::i18n::t("Search sessions", "搜索会话"),
+            ),
+            (
+                &self.settings_search_input,
+                crate::i18n::t("Search settings", "搜索设置"),
+            ),
+            (
+                &self.model_picker_input,
+                crate::i18n::t("Filter by name or id", "按名称或 id 筛选"),
+            ),
+            (
+                &self.preset_model_search_input,
+                crate::i18n::t("Filter models", "筛选模型"),
+            ),
+            (
+                &self.preset_search_input,
+                crate::i18n::t("Filter providers…", "筛选服务商…"),
+            ),
+        ];
+        for (input, placeholder) in pairs {
+            if let Some(input) = input {
+                input.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx);
+                });
+            }
+        }
     }
 
     /// Opens, closes, or pins the inspector. Does not touch the session.

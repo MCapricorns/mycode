@@ -156,7 +156,12 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
                 }
             }
             "done" => drop_live_job(state, call_id),
-            "tool" => upsert_live_job(state, call_id, role, &format!("running {detail}")),
+            "tool" => upsert_live_job(
+                state,
+                call_id,
+                role,
+                &format!("{} {detail}", t("running", "正在运行")),
+            ),
             "step" => upsert_live_job(state, call_id, role, detail),
             other => upsert_live_job(state, call_id, role, other),
         }

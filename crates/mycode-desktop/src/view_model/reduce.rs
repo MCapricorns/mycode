@@ -21,7 +21,8 @@ pub(crate) use self::models::{
     reasoning_levels_for, selected_model_supports_reasoning, selected_reasoning_levels,
 };
 
-use self::composer::parse_mention;
+pub(crate) use self::composer::preferred_slash_index;
+use self::composer::{parse_mention, slash_items};
 use self::jobs::{finish_live_job, tool_progress, tool_started};
 use self::models::{
     active_preset_changed, ensure_model_selection, model_selected, provider_selected,
@@ -148,9 +149,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             {
                 mention.items = files
                     .into_iter()
-                    .map(|path| {
-                        let display = path.clone();
-                        (path, display)
+                    .map(|path| crate::view_model::MentionItem {
+                        insert: path.clone(),
+                        label: path,
+                        group: crate::view_model::MentionGroup::File,
                     })
                     .collect();
             }
@@ -879,6 +881,26 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
     }
     if touches_providers {
         ensure_model_selection(state);
+    }
+    fill_open_slash(state);
+}
+
+/// Rebuilds the open `/` menu from the catalogs this action may have changed.
+fn fill_open_slash(state: &mut WorkspaceState) {
+    let Some(fragment) = state.mention.as_ref().and_then(|mention| {
+        (mention.kind == MentionKind::Command).then(|| mention.fragment.clone())
+    }) else {
+        return;
+    };
+    let skills = state.skills.clone();
+    let servers = state
+        .settings
+        .as_ref()
+        .map(|settings| settings.mcp_servers.clone())
+        .unwrap_or_default();
+    let tools = state.mcp_tools.clone();
+    if let Some(mention) = state.mention.as_mut() {
+        mention.items = slash_items(&fragment, &skills, &servers, &tools);
     }
 }
 

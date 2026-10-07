@@ -391,7 +391,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         if self.preset_search_input.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter providers…"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(crate::i18n::t("Filter providers…", "筛选服务商…"))
+            });
             cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = entity.read(cx).value().to_string();
