@@ -25,7 +25,7 @@ use crate::i18n::t;
 use crate::view_model::{MainView, UpdateState};
 use crate::workspace::Workspace;
 
-const BAR_HEIGHT: f32 = 34.;
+pub(super) const BAR_HEIGHT: f32 = 34.;
 /// Caption hit target. The bar is taller than this; each button is at least
 /// this wide and fills the bar vertically.
 const CONTROL_HIT: f32 = 28.;
@@ -87,7 +87,7 @@ pub(super) fn render_title_bar(
             .project_dir
             .as_deref()
             .map(super::project_label)
-            .unwrap_or_else(|| t("no project", "未打开目录").to_owned())
+            .unwrap_or_else(|| t("No folder", "未打开目录").to_owned())
             .into(),
         MainView::Settings => t("Settings", "设置").into(),
     };
@@ -101,7 +101,7 @@ pub(super) fn render_title_bar(
             Some(format!("v{version} {}", t("downloading…", "下载中…")).into())
         }
         UpdateState::Ready { version } => {
-            Some(format!("v{version} {}", t("ready", "待安装")).into())
+            Some(format!("v{version} {}", t("ready", "已就绪")).into())
         }
         _ => None,
     };

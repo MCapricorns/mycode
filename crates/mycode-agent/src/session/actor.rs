@@ -37,17 +37,20 @@ use super::store::SessionStore;
 pub(crate) enum SessionTaskError {
     /// The Host admission ledger is saturated.
     Admission,
-    /// The storage substrate failed; the actor is permanently unavailable.
+    /// The storage substrate failed for this operation. The actor stays up
+    /// so the next call can retry; a dead worker is what the UI reports as
+    /// "the session service is unavailable" forever.
     Storage,
 }
 
 /// Durable session state. Methods run on the blocking pool.
 pub(crate) struct SessionCore {
+    home: HomeLayout,
     fence: Arc<GenerationFence>,
     admission: AdmissionLedger,
     sessions: HashMap<SessionId, SessionLedger>,
-    /// `None` when the index could not be opened. Every durable action then
-    /// fails closed instead of writing beside a missing database.
+    /// `None` when the index could not be opened. The next durable action
+    /// tries again instead of retiring the worker.
     store: Option<SessionStore>,
 }
 
@@ -177,11 +180,13 @@ enum OpFail {
 
 impl SessionCore {
     fn new(home: HomeLayout, fence: Arc<GenerationFence>) -> Self {
+        let store = SessionStore::open(&home).ok();
         Self {
+            home,
             fence,
             admission: AdmissionLedger::new(),
             sessions: HashMap::new(),
-            store: SessionStore::open(&home).ok(),
+            store,
         }
     }
 
@@ -536,8 +541,11 @@ impl PackTaskActor for SessionActor {
         true
     }
 
-    fn is_fatal(error: Self::Error) -> bool {
-        matches!(error, SessionTaskError::Storage)
+    fn is_fatal(_error: Self::Error) -> bool {
+        // A locked or missing index fails that call. Retiring the worker
+        // turned every later create, open, and send into "the session
+        // service is unavailable" until the process restarted.
+        false
     }
 
     async fn invoke(&mut self, request: &Self::Request) -> Result<Self::Operation, Self::Error> {

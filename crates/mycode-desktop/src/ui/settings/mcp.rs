@@ -541,11 +541,14 @@ impl McpForm {
         let mut make = |placeholder: &'static str| {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
-        let id = make("id, e.g. my-mcp");
+        let id = make(t("id, e.g. my-mcp", "标识，例如 my-mcp"));
         let endpoint = make("https://mcp.example.com/mcp");
         let command = make("npx -y @modelcontextprotocol/server-filesystem C:\\projects");
-        let env = make("KEY=value, OTHER=value (optional)");
-        let api_key = make("api key (leave empty to skip)");
+        let env = make(t(
+            "KEY=value, OTHER=value (optional)",
+            "KEY=value, OTHER=value（可选）",
+        ));
+        let api_key = make(t("api key (leave empty to skip)", "API 密钥（留空则跳过）"));
         cx.new(|_| Self {
             id,
             transport: "http".to_owned(),
@@ -570,7 +573,7 @@ pub(crate) fn build_mcp_server(
     match transport {
         "http" => {
             if endpoint.is_empty() {
-                return Err("http servers need an endpoint".to_owned());
+                return Err(t("http servers need an endpoint", "HTTP 服务器需要端点").to_owned());
             }
             Ok(mycode_config::McpServerSettings {
                 id: id.to_owned(),
@@ -589,7 +592,7 @@ pub(crate) fn build_mcp_server(
             // child gets a program plus argv, not one giant program name.
             let mut words = mycode_config::split_command_line(command).into_iter();
             let Some(program) = words.next().filter(|word| !word.is_empty()) else {
-                return Err("stdio servers need a command".to_owned());
+                return Err(t("stdio servers need a command", "stdio 服务器需要命令").to_owned());
             };
             let env = crate::workspace::parse_env_line(env_line)?;
             Ok(mycode_config::McpServerSettings {
@@ -603,7 +606,11 @@ pub(crate) fn build_mcp_server(
                 key_header: None,
             })
         }
-        _ => Err("transport must be http or stdio".to_owned()),
+        _ => Err(t(
+            "transport must be http or stdio",
+            "传输方式必须是 http 或 stdio",
+        )
+        .to_owned()),
     }
 }
 

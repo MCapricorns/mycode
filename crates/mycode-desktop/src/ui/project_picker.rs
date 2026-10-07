@@ -416,7 +416,7 @@ pub(crate) fn browse(path: Option<PathBuf>) -> ProjectPicker {
             status: truncated.then(|| {
                 format!(
                     "{}{MAX_ENTRIES} {}",
-                    crate::i18n::t("Showing the first ", "仅显示前 "),
+                    crate::i18n::t("Showing the first ", "显示前 "),
                     crate::i18n::t("entries.", "条。")
                 )
             }),

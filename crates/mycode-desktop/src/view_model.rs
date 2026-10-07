@@ -22,7 +22,8 @@ pub(crate) use mycode_app::{
 };
 
 pub(crate) use self::chat::{
-    COMPOSER_COMMANDS, ComposerMention, LiveJob, MentionKind, session_title_matches,
+    COMPOSER_COMMANDS, ComposerMention, LiveJob, MentionGroup, MentionItem, MentionKind,
+    session_title_matches,
 };
 pub(crate) use self::models::{rank_model_ids, selected_reasoning_level};
 pub(crate) use self::projects::{
@@ -30,8 +31,8 @@ pub(crate) use self::projects::{
     same_project_path, task_surface_visible, workspace_of_session,
 };
 pub(crate) use self::reduce::{
-    close_floating_menus, reasoning_levels_for, reduce, selected_model_supports_reasoning,
-    selected_reasoning_levels,
+    close_floating_menus, preferred_slash_index, reasoning_levels_for, reduce,
+    selected_model_supports_reasoning, selected_reasoning_levels,
 };
 pub(crate) use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
 pub(crate) use self::usage::{

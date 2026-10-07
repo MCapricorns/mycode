@@ -185,7 +185,7 @@ pub(super) fn render_about_section(
             .unwrap_or_else(|| div().into_any_element()),
         settings_row(
             "catalog",
-            t("Provider catalog", "模型目录"),
+            t("Provider catalog", "服务商目录"),
             None,
             div()
                 .flex()

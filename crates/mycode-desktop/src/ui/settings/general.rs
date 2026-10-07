@@ -155,8 +155,8 @@ pub(super) fn render_general_section(
 
 /// Label above a wrapping row of fixed-width swatches.
 ///
-/// Thirteen palettes fill two rows of five and leave three on the last.
-/// Cells share one width, so the last row stays on the left. The row is a
+/// Thirteen palettes share one row in a normal settings card. Cells share
+/// one width, so a wrap on a narrow card stays on the left. The row is a
 /// flex wrap, not a grid: grid row tracks still grew into the settings
 /// scrollport and hid the font controls in that gap.
 fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
@@ -302,7 +302,7 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     palette_swatches(cells)
 }
 
-/// Fixed cells on a wrapping row. Five fit the row; the rest wrap left.
+/// Fixed cells on a wrapping row. A normal card fits all thirteen.
 ///
 /// No grid. GPUI row tracks, including max-content, still absorbed the
 /// settings scrollport and pushed the font controls off the first screen.
@@ -325,7 +325,7 @@ fn palette_swatches(children: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-/// One palette cell: a fixed 52px column with a 28px swatch and a one-line label.
+/// One palette cell: a fixed 44px column with a 28px swatch and a one-line label.
 ///
 /// The swatch paints the same spec as `apply_palette`: page background as
 /// the base, accent as the inner corner, and the accent again as the
@@ -750,15 +750,14 @@ mod appearance_layout {
             );
             assert!(
                 (sand.origin.y - slate.origin.y).abs() <= px(2.)
-                    && rose.origin.y > slate.bottom()
-                    && rose.origin.y - slate.bottom() < px(24.),
-                "five cells on the first row, sixth wraps under it: slate {slate:?} sand {sand:?} rose {rose:?}"
-            );
-            assert!(
-                (plum.origin.x - slate.origin.x).abs() <= px(2.)
+                    && (rose.origin.y - slate.origin.y).abs() <= px(2.)
+                    && (plum.origin.y - slate.origin.y).abs() <= px(2.)
+                    && (aurora.origin.y - slate.origin.y).abs() <= px(2.)
                     && aurora.origin.x > plum.origin.x
-                    && aurora.right() < slate.origin.x + px(crate::ui::desk::palette_row_max_px()),
-                "last row stays left-aligned: plum {plum:?} aurora {aurora:?}"
+                    && plum.origin.x > rose.origin.x
+                    && aurora.right()
+                        <= slate.origin.x + px(crate::ui::desk::palette_row_max_px()) + px(2.),
+                "all thirteen swatches share one row: slate {slate:?} sand {sand:?} rose {rose:?} plum {plum:?} aurora {aurora:?}"
             );
             assert!(
                 font.size.height < px(120.)

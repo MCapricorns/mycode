@@ -2,15 +2,39 @@
 //! subagent cards. The transcript window itself lives on disk; this module
 //! only names the composer triggers.
 
-/// Composer mention autocomplete: `@` files or `/` commands.
+/// Composer mention autocomplete: `@` files or `/` commands, skills, and MCP.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ComposerMention {
     /// Trigger kind active in the draft.
     pub kind: MentionKind,
     /// Typed text after the trigger character.
     pub fragment: String,
-    /// (insert, display) rows, bounded.
-    pub items: Vec<(String, String)>,
+    /// Rows the menu can accept. Order is the keyboard order.
+    pub items: Vec<MentionItem>,
+}
+
+/// One autocomplete row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MentionItem {
+    /// Token passed to accept: `/new`, `/slug`, `mcp:<server>`, or a file path.
+    pub insert: String,
+    /// Secondary label. Command labels are English ids resolved at render.
+    pub label: String,
+    /// Which section the row belongs to.
+    pub group: MentionGroup,
+}
+
+/// Section of a composer autocomplete row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MentionGroup {
+    /// `@` file path.
+    File,
+    /// Built-in composer command.
+    Command,
+    /// Discovered `.agents` skill.
+    Skill,
+    /// Enabled MCP server, or one of its listed tools.
+    Mcp,
 }
 
 /// One running `agent` call. Finished jobs drop out of the list once

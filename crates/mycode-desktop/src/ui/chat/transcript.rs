@@ -28,12 +28,12 @@ pub(super) fn render_streaming_entry(
     let _ = cx;
     let desk = Desk::of(theme);
     let status = if streaming.status.is_empty() {
-        t("Working", "处理中").to_owned()
+        t("Working", "工作中").to_owned()
     } else {
         streaming.status.clone()
     };
     desk_shell(
-        "live".to_owned(),
+        t("live", "实时").to_owned(),
         theme,
         div()
             .flex_1()
@@ -42,7 +42,7 @@ pub(super) fn render_streaming_entry(
             .flex_col()
             .gap_2()
             .child(status_line(
-                &format!("{} · {status}", t("WORKING", "进行中")),
+                &format!("{} · {status}", t("WORKING", "工作中")),
                 desk.amber,
                 theme,
             ))
@@ -54,7 +54,7 @@ pub(super) fn render_streaming_entry(
                 ))
             })
             .when(!streaming.text.trim().is_empty(), |this| {
-                this.child(status_line("AGENT", desk.green, theme))
+                this.child(status_line(t("AGENT", "代理"), desk.green, theme))
                     .child(agent_text(
                         "streaming-agent-md".into(),
                         streaming.text.clone().into(),
@@ -96,7 +96,7 @@ pub(super) fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit
                     ))
                 })
                 .when(!entry.text.trim().is_empty(), |this| {
-                    this.child(status_line("AGENT", desk.green, theme))
+                    this.child(status_line(t("AGENT", "代理"), desk.green, theme))
                         .child(agent_text(
                             format!("agent-md-{}", entry.event_id).into(),
                             SharedString::from(entry.text.trim()),
@@ -198,7 +198,7 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
         .flex()
         .flex_col()
         .gap_1()
-        .child(status_line("REASONING", desk.amber, theme))
+        .child(status_line(t("REASONING", "推理"), desk.amber, theme))
         .child(
             div()
                 .text_sm()
@@ -415,7 +415,7 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
         .text_xs()
         .font_family(theme.mono_font_family.clone())
         .child(preview_caption(
-            &format!("DIFF  +{added}  -{removed}"),
+            &format!("{}  +{added}  -{removed}", t("DIFF", "差异")),
             desk.green,
             theme,
         ))
@@ -444,7 +444,11 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
 
 fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
     let hits = lines.iter().filter(|line| !line.starts_with('[')).count();
-    let label = if tool == "find" { "PATHS" } else { "MATCHES" };
+    let label = if tool == "find" {
+        t("PATHS", "路径")
+    } else {
+        t("MATCHES", "匹配")
+    };
     let shown = lines.len().min(40);
     div()
         .flex()
@@ -513,7 +517,7 @@ pub(super) fn render_user_entry(
         .flex()
         .flex_col()
         .gap_1()
-        .child(status_line("YOU", desk.cyan, theme))
+        .child(status_line(t("YOU", "你"), desk.cyan, theme))
         .child(
             div()
                 .flex()

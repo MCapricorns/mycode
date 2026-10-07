@@ -216,7 +216,7 @@ fn workspace_roots(
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(t(
-                        "Add the folders this workspace should see. Chats can use all of them.",
+                        "Add the folders this workspace should see. Sessions can use all of them.",
                         "添加工作区要包含的目录。会话可以使用全部目录。",
                     )),
             )
@@ -645,7 +645,7 @@ pub(super) fn render_workspace_menu_layer(
                     .pb(px(2.))
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(t("Workspace name", "工区名称")),
+                    .child(t("Workspace name", "工作区名称")),
             )
             .child(div().h(px(30.)).px_1().text_sm().child(Input::new(&input)))
             .child(
@@ -717,7 +717,7 @@ pub(super) fn render_workspace_menu_layer(
             .child(div().mx_2().my(px(2.)).h(px(1.)).bg(theme.border))
             .child(menu_row(
                 "workspace-menu-create",
-                t("New workspace", "新建工区"),
+                t("New workspace", "新建工作区"),
                 cx.listener(|workspace, _, _, cx| {
                     workspace.on_create_workspace(cx);
                 }),
@@ -735,7 +735,7 @@ pub(super) fn render_workspace_menu_layer(
             ))
             .child(menu_row(
                 "workspace-menu-delete",
-                t("Delete workspace", "删除工区"),
+                t("Delete workspace", "删除工作区"),
                 cx.listener(move |workspace, _, _, cx| {
                     let id = active_id.clone().unwrap_or_default();
                     workspace.on_delete_workspace(&id, cx);

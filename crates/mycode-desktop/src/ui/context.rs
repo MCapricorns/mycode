@@ -25,18 +25,31 @@ pub(super) fn render_context_panel(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    // Inset card. A full-bleed column sat under the caption buttons and a
+    // double-click there both pinned the panel and zoomed the window.
     div()
         .id("context-panel")
-        .w(px(300.))
+        .w(px(316.))
         .h_full()
         .flex()
         .flex_col()
         .flex_shrink_0()
-        .border_l_1()
-        .border_color(super::skin::glass_border(theme))
-        .bg(super::skin::glass_sidebar(theme))
-        .child(inspector_bar(true, cx))
-        .child(inspector_body(workspace, cx))
+        .p(px(8.))
+        .child(
+            div()
+                .id("context-panel-card")
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .rounded(px(12.))
+                .border_1()
+                .border_color(super::skin::glass_border(theme))
+                .bg(super::skin::glass_sidebar(theme))
+                .child(inspector_bar(true, cx))
+                .child(inspector_body(workspace, cx)),
+        )
 }
 
 /// Inspector as a right-hand drawer. The conversation keeps the full column.
@@ -48,13 +61,17 @@ pub(super) fn render_inspector_drawer(
     div()
         .id("inspector-layer")
         .absolute()
-        .inset_0()
+        .top(px(super::title_bar::BAR_HEIGHT))
+        .left_0()
+        .right_0()
+        .bottom_0()
         .child(
             div()
                 .id("inspector-backdrop")
                 .absolute()
                 .size_full()
                 .on_click(cx.listener(|workspace, _, _, cx| {
+                    cx.stop_propagation();
                     workspace.on_set_inspector(false, workspace.vm().inspector_pinned, cx);
                 })),
         )

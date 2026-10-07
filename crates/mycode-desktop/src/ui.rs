@@ -59,6 +59,7 @@ pub fn render_root(
         cx.set_reduce_motion(prefer);
     }
     workspace.sync_interface_font(window, cx);
+    workspace.sync_localized_placeholders(window, cx);
     let layout = DeskLayout::of(window);
     let inspector_docked = layout.wide
         && workspace.vm().inspector_open
