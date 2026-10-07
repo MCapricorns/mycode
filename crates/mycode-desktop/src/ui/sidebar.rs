@@ -1,13 +1,15 @@
-//! Workspace sidebar: named workspaces, their folders, and their sessions.
+//! Workspace sidebar: a switcher, an action strip, folders, then sessions.
 //!
-//! The header switches, creates, renames, and deletes workspaces. Each
-//! workspace holds several folders, the way projects sit in a solution;
-//! chats belong to exactly one workspace. The selected folder is the working
-//! directory; the others stay visible to tools as absolute paths.
+//! The header switches, creates, renames, and deletes workspaces. New task
+//! and session search stay in the strip under that header. Folders are their
+//! own block; sessions scroll in the block below them. Each workspace holds
+//! several folders, the way projects sit in a solution; sessions belong to
+//! exactly one workspace. The selected folder is the working directory; the
+//! others stay visible to tools as absolute paths.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -23,6 +25,49 @@ use crate::workspace::Workspace;
 
 /// Sidebar width. Narrow enough that the session list stays primary.
 const WIDTH: gpui_kit::Pixels = px(220.);
+/// Workspace switcher row. The window-level menu sits just under this.
+const WORKSPACE_HEAD_H: f32 = 40.;
+/// Matches [`super::skin::glass_button`].
+const NEW_TASK_H: f32 = 32.;
+const SEARCH_H: f32 = 30.;
+const ACTION_PAD_Y: f32 = 8.;
+const ACTION_GAP: f32 = 6.;
+/// Folders label row. Add folder lives here, not in the session list.
+const FOLDERS_HEAD_H: f32 = 28.;
+/// Cap the folder block so a long list cannot push sessions off screen.
+const FOLDERS_BODY_MAX_H: f32 = 148.;
+
+fn action_strip_h(has_folder: bool, has_search: bool) -> f32 {
+    let mut fields = 0.;
+    let mut rows = 0.;
+    if has_folder {
+        fields += NEW_TASK_H;
+        rows += 1.;
+    }
+    if has_search {
+        fields += SEARCH_H;
+        rows += 1.;
+    }
+    let gaps = if rows > 1. {
+        ACTION_GAP * (rows - 1.)
+    } else {
+        0.
+    };
+    ACTION_PAD_Y + fields + gaps + ACTION_PAD_Y
+}
+
+/// Project menu top, measured from the window origin (title bar included).
+fn project_menu_top(has_folder: bool, has_search: bool) -> gpui_kit::Pixels {
+    px(super::title_bar::BAR_HEIGHT
+        + WORKSPACE_HEAD_H
+        + action_strip_h(has_folder, has_search)
+        + FOLDERS_HEAD_H
+        + 4.)
+}
+
+fn workspace_menu_top() -> gpui_kit::Pixels {
+    px(super::title_bar::BAR_HEIGHT + WORKSPACE_HEAD_H)
+}
 
 pub(super) fn render_sidebar(
     workspace: &mut Workspace,
@@ -83,64 +128,24 @@ pub(super) fn render_sidebar(
         .bg(skin::glass_sidebar(theme))
         .border_r_1()
         .border_color(skin::glass_border(theme))
-        .child(workspace_head(&active_name, session_count, desk.faint, cx))
-        .when(has_folder, |column| {
-            column.child(
-                div().px_2().pt_1().child(
-                    div()
-                        .id("new-task")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .w_full()
-                        .h(px(30.))
-                        .px_2()
-                        .rounded(skin::radius_control())
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(skin::frost_hover(theme))
-                                .text_color(theme.foreground)
-                        })
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_new_session(cx);
-                        }))
-                        .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
-                        .child(super::chat::new_task_label()),
-                ),
-            )
-        })
-        .when_some(filter_input, |this, input| {
-            this.child(
-                div()
-                    .px_2()
-                    .pt_1()
-                    .h(px(30.))
-                    .text_sm()
-                    .child(Input::new(&input)),
-            )
-        })
-        .child(workspace_roots(
+        .child(workspace_head(&active_name, cx))
+        .child(action_strip(has_folder, filter_input, cx))
+        .child(folders_section(cx, &roots, cwd.as_deref()))
+        .child(sessions_section(
             cx,
-            &roots,
             &visible_sessions,
             &bindings,
             cwd.as_deref(),
+            session_count,
             filter_miss,
+            desk.faint,
         ))
         .child(render_sidebar_footer(workspace, view, cx))
 }
 
-/// The sidebar header: the active workspace's name, its session count, and
-/// the switcher menu toggle.
-fn workspace_head(
-    name: &str,
-    session_count: usize,
-    faint: gpui_kit::Hsla,
-    cx: &Context<Workspace>,
-) -> impl IntoElement + use<> {
+/// The sidebar header: the active workspace's name and the switcher toggle.
+/// Session count lives on the sessions section, not in this row.
+fn workspace_head(name: &str, cx: &Context<Workspace>) -> impl IntoElement + use<> {
     let theme = cx.theme();
     div()
         .id("workspace-switcher")
@@ -148,11 +153,11 @@ fn workspace_head(
         .flex_row()
         .items_center()
         .gap_2()
+        .h(px(WORKSPACE_HEAD_H))
         .px_3()
-        .pt(px(10.))
-        .pb(px(8.))
+        .flex_shrink_0()
         .border_b_1()
-        .border_color(theme.border)
+        .border_color(skin::glass_border(theme))
         .cursor_pointer()
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(cx.listener(|workspace, _, _, cx| {
@@ -175,13 +180,6 @@ fn workspace_head(
                 .child(name.to_owned()),
         )
         .child(
-            div()
-                .text_xs()
-                .flex_shrink_0()
-                .text_color(faint)
-                .child(session_count.to_string()),
-        )
-        .child(
             Icon::new(IconName::ChevronDown)
                 .xsmall()
                 .flex_shrink_0()
@@ -189,93 +187,215 @@ fn workspace_head(
         )
 }
 
-fn workspace_roots(
+/// New task and session search. A strip, not rows in the session list.
+fn action_strip(
+    has_folder: bool,
+    filter_input: Option<gpui_kit::Entity<InputState>>,
     cx: &mut Context<Workspace>,
-    roots: &[String],
-    sessions: &[SessionSummary],
-    bindings: &[(String, String)],
-    cwd: Option<&str>,
-    filter_miss: bool,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
     div()
-        .id("workspace-roots")
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
+        .id("sidebar-actions")
+        .flex_shrink_0()
         .flex()
         .flex_col()
-        .gap(px(2.))
+        .gap(px(ACTION_GAP))
         .px_2()
-        .py_2()
-        .when(roots.is_empty(), |this| {
-            this.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(t(
-                        "Add the folders this workspace should see. Sessions can use all of them.",
-                        "添加工作区要包含的目录。会话可以使用全部目录。",
-                    )),
+        .py(px(ACTION_PAD_Y))
+        .border_b_1()
+        .border_color(skin::glass_border(theme))
+        .when(has_folder, |strip| {
+            strip.child(
+                skin::glass_button("new-task", false, theme)
+                    .w_full()
+                    .h(px(NEW_TASK_H))
+                    .justify_start()
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_new_session(cx);
+                    }))
+                    .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
+                    .child(super::chat::new_task_label()),
             )
         })
-        .children(
-            roots
-                .iter()
-                .enumerate()
-                .map(|(index, root)| root_row(index, root, cwd, cx)),
-        )
-        .when(filter_miss, |this| {
-            this.child(
+        .when_some(filter_input, |strip, input| {
+            strip.child(
                 div()
-                    .px_2()
-                    .pt_2()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(t("No matching sessions", "没有匹配的会话")),
+                    .id("sidebar-search")
+                    .h(px(SEARCH_H))
+                    .text_sm()
+                    .child(Input::new(&input)),
             )
         })
-        .when(!sessions.is_empty(), |this| {
-            this.child(
-                div()
-                    .px_2()
-                    .pt_2()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(t("Sessions", "会话")),
-            )
-            .children(sessions.iter().map(|summary| {
-                let project = bindings
-                    .iter()
-                    .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
-                session_row(summary, project, cwd, cx)
-            }))
-        })
+}
+
+fn section_label(text: &str, theme: &Theme) -> impl IntoElement {
+    div()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(text.to_owned())
+}
+
+/// Folders for the workspace the sidebar shows. Add folder stays in the
+/// heading so it is not a session row.
+fn folders_section(
+    cx: &mut Context<Workspace>,
+    roots: &[String],
+    cwd: Option<&str>,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    let empty = roots.is_empty();
+    div()
+        .id("sidebar-folders")
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
         .child(
             div()
-                .id("workspace-add")
+                .id("sidebar-folders-head")
+                .h(px(FOLDERS_HEAD_H))
+                .px_2()
                 .flex()
                 .flex_row()
                 .items_center()
+                .justify_between()
                 .gap_2()
+                .child(section_label(t("Folders", "目录"), theme))
+                .child(
+                    div()
+                        .id("workspace-add")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .h(px(22.))
+                        .px_1()
+                        .flex_shrink_0()
+                        .rounded(skin::radius_control())
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|this| {
+                            this.bg(skin::frost_hover(theme))
+                                .text_color(theme.foreground)
+                        })
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            let open = !workspace.vm().project_menu_open;
+                            workspace.on_toggle_project_menu(open, cx);
+                        }))
+                        .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
+                        .child(t("Add folder", "添加目录")),
+                ),
+        )
+        .child(
+            div()
+                .id("workspace-roots")
+                .flex()
+                .flex_col()
+                .gap(px(2.))
                 .px_2()
-                .h(px(28.))
-                .rounded(skin::radius_control())
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .cursor_pointer()
-                .hover(|this| {
-                    this.bg(skin::frost_hover(theme))
-                        .text_color(theme.foreground)
+                .pb_2()
+                .when(!empty, |list| {
+                    list.max_h(px(FOLDERS_BODY_MAX_H)).overflow_y_scroll()
                 })
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    let open = !workspace.vm().project_menu_open;
-                    workspace.on_toggle_project_menu(open, cx);
-                }))
-                .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
-                .child(t("Add folder", "添加目录")),
+                .when(empty, |list| {
+                    list.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .whitespace_normal()
+                            .text_color(theme.muted_foreground)
+                            .child(t(
+                                "Add the folders this workspace should see. Sessions can use all of them.",
+                                "添加工作区要包含的目录。会话可以使用全部目录。",
+                            )),
+                    )
+                })
+                .children(
+                    roots
+                        .iter()
+                        .enumerate()
+                        .map(|(index, root)| root_row(index, root, cwd, cx)),
+                ),
+        )
+}
+
+/// Sessions of the workspace the sidebar shows. Separate from folders.
+fn sessions_section(
+    cx: &mut Context<Workspace>,
+    sessions: &[SessionSummary],
+    bindings: &[(String, String)],
+    cwd: Option<&str>,
+    session_count: usize,
+    filter_miss: bool,
+    faint: gpui_kit::Hsla,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    div()
+        .id("sidebar-sessions")
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .border_t_1()
+        .border_color(skin::glass_border(theme))
+        .child(
+            div()
+                .id("sidebar-sessions-head")
+                .h(px(FOLDERS_HEAD_H))
+                .px_3()
+                .flex_shrink_0()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(section_label(t("Sessions", "会话"), theme))
+                .child(
+                    div()
+                        .text_xs()
+                        .flex_shrink_0()
+                        .text_color(faint)
+                        .child(session_count.to_string()),
+                ),
+        )
+        .child(
+            div()
+                .id("sidebar-session-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .px_2()
+                .pb_2()
+                .when(filter_miss, |list| {
+                    list.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(t("No matching sessions", "没有匹配的会话")),
+                    )
+                })
+                .when(sessions.is_empty() && !filter_miss, |list| {
+                    list.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(t("No sessions yet", "还没有会话")),
+                    )
+                })
+                .children(sessions.iter().map(|summary| {
+                    let project = bindings.iter().find_map(|(id, path)| {
+                        (id == &summary.session_id).then_some(path.as_str())
+                    });
+                    session_row(summary, project, cwd, cx)
+                })),
         )
 }
 
@@ -299,7 +419,7 @@ fn root_row(
         .px_2()
         .py(px(6.))
         .rounded(skin::radius_control())
-        .when(is_cwd, |this| this.bg(theme.accent.opacity(0.45)))
+        .when(is_cwd, |this| this.bg(skin::frost_accent(theme)))
         .cursor_pointer()
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click({
@@ -420,7 +540,7 @@ fn session_row(
         .px_2()
         .py(px(6.))
         .rounded(skin::radius_control())
-        .when(is_open, |this| this.bg(theme.accent.opacity(0.45)))
+        .when(is_open, |this| this.bg(skin::frost_accent(theme)))
         .cursor_pointer()
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .text_color(if is_open {
@@ -430,6 +550,19 @@ fn session_row(
         })
         .when(summary.corrupt, |this| this.on_click(corrupt_listener))
         .when(!summary.corrupt, |this| this.on_click(open_listener))
+        .child(
+            div()
+                .flex_shrink_0()
+                .child(
+                    Icon::new(IconName::MessageSquare)
+                        .xsmall()
+                        .text_color(if is_open {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground
+                        }),
+                ),
+        )
         .child(
             div()
                 .flex_1()
@@ -485,7 +618,7 @@ fn render_sidebar_footer(
         .px_3()
         .py_2()
         .border_t_1()
-        .border_color(theme.sidebar_border)
+        .border_color(skin::glass_border(theme))
         .child(super::icon_button_marked(
             "footer-settings",
             IconName::Settings,
@@ -527,6 +660,7 @@ pub(super) fn render_project_menu_layer(
                 .id("project-menu-backdrop")
                 .absolute()
                 .size_full()
+                .bg(skin::menu_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_toggle_project_menu(false, cx);
                 })),
@@ -534,7 +668,10 @@ pub(super) fn render_project_menu_layer(
         .child(
             skin::popover_panel("project-menu", theme)
                 .absolute()
-                .top(px(78.))
+                .top(project_menu_top(
+                    crate::view_model::has_open_folder(workspace.vm()),
+                    workspace.session_filter_input().is_some(),
+                ))
                 .left(px(8.))
                 .w(px(244.))
                 .max_h(px(360.))
@@ -627,7 +764,7 @@ pub(super) fn render_workspace_menu_layer(
     };
     let mut panel = skin::popover_panel("workspace-menu", theme)
         .absolute()
-        .top(px(44.))
+        .top(workspace_menu_top())
         .left(px(8.))
         .w(px(244.))
         .max_h(px(360.))
@@ -753,6 +890,7 @@ pub(super) fn render_workspace_menu_layer(
                 .id("workspace-menu-backdrop")
                 .absolute()
                 .size_full()
+                .bg(skin::menu_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_toggle_workspace_menu(false, cx);
                 })),

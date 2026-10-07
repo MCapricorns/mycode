@@ -1,6 +1,7 @@
-//! Dark palettes. Surfaces stay opaque. The page is a near-solid dark base
-//! with only a hint of the palette wash, so the conversation is not sitting
-//! on a loud gradient.
+//! Dark palettes. Spec colors stay opaque; chrome applies its own alpha in
+//! `ui/skin` over the window blur. The page is a near-solid dark base with
+//! only a hint of the palette wash, so the conversation is not sitting on
+//! a loud gradient.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.

@@ -1,32 +1,54 @@
-//! Quiet panels over a near-solid page.
+//! Frosted chrome over the platform window blur.
 //!
-//! The window background is a very slight wash. Rails, dialogs, and the
-//! composer stay opaque enough that a label never disappears, without
-//! stacking a new color block for every control.
+//! GPUI in this tree has no per-element backdrop filter. The blur is the
+//! window material (`WindowBackgroundAppearance::Blurred`: macOS visual
+//! effect, Windows DWM blur, Wayland KDE blur). These fills are the
+//! translucent half: low enough that the material shows, high enough that
+//! ink stays readable when a platform cannot blur and a light desktop
+//! shows through. The reading column stays closer to solid than the rails.
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{
     Background, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, linear_color_stop,
     linear_gradient, px,
 };
 
-/// Page wash. The end stop is already pulled toward the base in the palette,
-/// so the column reads as one dark surface.
+/// Sidebar, title bar, settings nav, inspector. Translucent over the blur.
+const RAIL_ALPHA: f32 = 0.84;
+/// Conversation and settings page. Near-solid so body text keeps contrast.
+const PAGE_ALPHA: f32 = 0.94;
+/// Menus, dialogs, and the composer. High enough that type behind them
+/// does not show through; still short of an opaque slab.
+const OVERLAY_ALPHA: f32 = 0.92;
+/// Form cards on the reading page. A small lift plus translucency, so a
+/// card is not the same color as the page under it.
+const CARD_ALPHA: f32 = 0.88;
+
+const _: () = {
+    assert!(RAIL_ALPHA < PAGE_ALPHA);
+    assert!(PAGE_ALPHA < 1.);
+    assert!(OVERLAY_ALPHA < 1.);
+    assert!(CARD_ALPHA < 1.);
+    assert!(RAIL_ALPHA >= 0.75);
+};
+
+/// Reading-column wash. Stops stay translucent so a hint of the window
+/// material remains; the palette wash is already pulled toward the base.
 pub(super) fn ambient(theme: &Theme) -> Background {
     linear_gradient(
         180.,
-        linear_color_stop(theme.background, 0.),
-        linear_color_stop(theme.status_bar, 1.),
+        linear_color_stop(with_alpha(theme.background, PAGE_ALPHA), 0.),
+        linear_color_stop(with_alpha(theme.status_bar, PAGE_ALPHA), 1.),
     )
 }
 
-/// Title bar and composer strip.
+/// Title bar.
 pub(super) fn glass(theme: &Theme) -> Hsla {
-    theme.title_bar
+    with_alpha(theme.title_bar, RAIL_ALPHA)
 }
 
-/// Sidebar and inspector.
+/// Sidebar, settings nav, and inspector.
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
-    theme.sidebar
+    with_alpha(theme.sidebar, RAIL_ALPHA)
 }
 
 /// Quiet control fill. Nearly transparent so a border can carry the edge.
@@ -34,14 +56,14 @@ pub(super) fn frost(theme: &Theme) -> Hsla {
     theme.secondary.opacity(0.28)
 }
 
-/// Dialog and form card fill.
+/// Dialog and form card fill. Lifted off the page so the card edge reads.
 pub(super) fn frost_card(theme: &Theme) -> Hsla {
-    theme.popover
+    lifted(theme.popover, 0.04, CARD_ALPHA)
 }
 
-/// Toast fill. Opaque so one line of ink stays readable.
+/// Toast fill. Same glass as other overlays; the border carries the edge.
 pub(super) fn toast_fill(theme: &Theme) -> Hsla {
-    theme.popover
+    lifted(theme.popover, 0.03, OVERLAY_ALPHA)
 }
 
 /// Hover fill.
@@ -84,7 +106,7 @@ pub(super) fn glass_button(
     let border = if emphasized {
         super::desk::primary_edge(theme.primary)
     } else {
-        theme.border
+        glass_border(theme)
     };
     div()
         .id(id)
@@ -105,14 +127,21 @@ pub(super) fn glass_button(
         .hover(move |style| style.bg(hover).border_color(border))
 }
 
-/// Hairline border.
+/// Panel edge. Stronger than the palette hairline, which sits only a few
+/// steps off the page and disappears once a fill is translucent.
 pub(super) fn glass_border(theme: &Theme) -> Hsla {
-    theme.border
+    theme.muted_foreground.opacity(0.42)
 }
 
-/// Menu fill. Opaque.
+/// Menu and overlay fill.
 pub(super) fn popover(theme: &Theme) -> Hsla {
-    theme.popover
+    lifted(theme.popover, 0.03, OVERLAY_ALPHA)
+}
+
+/// Light dimmer behind a menu. The panel is a sibling painted after this,
+/// so the scrim does not grey out the menu itself.
+pub(super) fn menu_scrim(theme: &Theme) -> Hsla {
+    theme.overlay.opacity(0.55)
 }
 
 /// Scrim drawn over the app behind an open menu layer.
@@ -129,4 +158,15 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .border_color(glass_border(theme))
         .bg(popover(theme))
         .text_color(theme.popover_foreground)
+}
+
+fn with_alpha(mut color: Hsla, alpha: f32) -> Hsla {
+    color.a = alpha.clamp(0., 1.);
+    color
+}
+
+fn lifted(mut color: Hsla, lightness: f32, alpha: f32) -> Hsla {
+    color.l = (color.l + lightness).clamp(0., 1.);
+    color.a = alpha.clamp(0., 1.);
+    color
 }

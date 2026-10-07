@@ -121,8 +121,7 @@ pub(super) fn render_update_dialog(
                 .rounded(px(12.))
                 .border_1()
                 .border_color(super::skin::glass_border(theme))
-                .bg(theme.popover)
-                .shadow_lg()
+                .bg(super::skin::popover(theme))
                 .child(
                     div()
                         .flex()

@@ -88,6 +88,10 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     // (DPI edge cases accepted); the user can maximize manually.
     let options = client_window_options(startup_bounds(cx));
     cx.open_window(options, |window, cx| {
+        // Platform blur behind translucent chrome. GPUI has no per-element
+        // backdrop filter; macOS, Windows, and KDE Wayland implement this
+        // appearance, and other sessions simply composite the translucent fills.
+        window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Blurred);
         // `init` installs the stock light theme. The product paints dark only,
         // then pushes that theme (and its code-block highlighter) into Base.
         Theme::change(ThemeMode::Dark, Some(window), cx);
@@ -246,7 +250,7 @@ impl Workspace {
     ) -> Entity<Self> {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder(crate::i18n::t("Message MYCode", "给 MYCode 发消息"))
+                .placeholder(crate::ui::composer_placeholder(false))
                 .auto_grow(1, 10)
                 .submit_on_enter(true)
         });
@@ -980,11 +984,7 @@ impl Workspace {
             return;
         }
         self.applied_language = lang;
-        let composer_placeholder = if self.vm.sending {
-            crate::i18n::t("Steer without interrupting", "追加引导,不打断当前任务")
-        } else {
-            crate::i18n::t("Message MYCode", "给 MYCode 发消息")
-        };
+        let composer_placeholder = crate::ui::composer_placeholder(self.vm.sending);
         self.composer.update(cx, |state, cx| {
             state.set_placeholder(composer_placeholder, window, cx);
         });

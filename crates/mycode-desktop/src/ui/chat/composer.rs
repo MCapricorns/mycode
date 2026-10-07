@@ -16,6 +16,22 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::{desk::Desk, ellipsis, project_label, skin};
+
+/// Resting composer hint. The product name does not belong in the field.
+const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
+const STEER_PLACEHOLDER: (&str, &str) = ("Steer without interrupting", "追加引导,不打断当前任务");
+
+/// Placeholder for the composer. While a turn is running, typed text steers
+/// the current task instead of starting another one.
+#[must_use]
+pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
+    let (english, chinese) = if sending {
+        STEER_PLACEHOLDER
+    } else {
+        COMPOSER_PLACEHOLDER
+    };
+    t(english, chinese)
+}
 use crate::view_model::WorkspaceState;
 use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
 use crate::workspace::Workspace;
@@ -47,11 +63,7 @@ pub(super) fn render_composer(
     };
     if workspace.composer_steer != sending {
         workspace.composer_steer = sending;
-        let placeholder = if sending {
-            t("Steer without interrupting", "追加引导,不打断当前任务")
-        } else {
-            t("Message MYCode", "给 MYCode 发消息")
-        };
+        let placeholder = composer_placeholder(sending);
         composer.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
         });
@@ -102,7 +114,7 @@ pub(super) fn render_composer(
                 .rounded(px(16.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
-                .bg(theme.popover)
+                .bg(skin::popover(theme))
                 .child(
                     div()
                         .id("composer-input")
@@ -391,5 +403,22 @@ fn thinking_button_label(vm: &WorkspaceState) -> String {
         "xhigh" => t("Extra high", "超高").to_owned(),
         "max" => t("Max", "最高").to_owned(),
         other => other.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COMPOSER_PLACEHOLDER, STEER_PLACEHOLDER};
+
+    #[test]
+    fn composer_placeholder_asks_the_agent_without_a_product_name() {
+        assert_eq!(COMPOSER_PLACEHOLDER.0, "Ask the agent");
+        assert_eq!(COMPOSER_PLACEHOLDER.1, "向代理提问");
+        assert!(!COMPOSER_PLACEHOLDER.0.contains("MYCode"));
+        assert!(!COMPOSER_PLACEHOLDER.1.contains("MYCode"));
+        assert!(!COMPOSER_PLACEHOLDER.0.to_ascii_lowercase().contains("chat"));
+        assert!(!COMPOSER_PLACEHOLDER.1.contains("对话"));
+        assert_eq!(STEER_PLACEHOLDER.0, "Steer without interrupting");
+        assert_eq!(STEER_PLACEHOLDER.1, "追加引导,不打断当前任务");
     }
 }

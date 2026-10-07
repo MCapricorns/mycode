@@ -100,10 +100,9 @@ pub(crate) fn render(
                         .flex_col()
                         .rounded(skin::radius_card())
                         .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.popover)
+                        .border_color(skin::glass_border(&theme))
+                        .bg(skin::popover(&theme))
                         .text_color(theme.foreground)
-                        .shadow_lg()
                         .overflow_hidden()
                         .on_click(|_, _, cx| {
                             cx.stop_propagation();
