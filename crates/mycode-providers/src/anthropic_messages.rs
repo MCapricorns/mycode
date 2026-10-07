@@ -23,7 +23,7 @@ pub const MAX_TOKENS_DEFAULT: u64 = 4096;
 
 /// Converts one provider-neutral request into a Messages body.
 #[must_use]
-pub(crate) fn build_body(model: &str, request: &Request) -> Value {
+pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Value {
     let mut messages = Vec::new();
     for message in &request.messages {
         convert_message(message, &mut messages);
@@ -45,6 +45,11 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
         match level {
             ReasoningLevel::Off => {
                 body["thinking"] = json!({ "type": "disabled" });
+            }
+            // MiniMax's Anthropic-compatible API uses the same on-value as
+            // its OpenAI body: `adaptive`, not `enabled`.
+            ReasoningLevel::On if crate::wire_common::minimax_target(model, endpoint) => {
+                body["thinking"] = json!({ "type": "adaptive" });
             }
             level => {
                 // Thinking budget must stay below max_tokens; raise the cap

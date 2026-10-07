@@ -20,7 +20,7 @@ const SYSTEM_JOIN: &str = "\n\n";
 
 /// Converts one provider-neutral request into a completions body.
 #[must_use]
-pub(crate) fn build_body(model: &str, request: &Request) -> Value {
+pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Value {
     let mut messages = Vec::new();
     if !request.system_prompt.is_empty() {
         messages.push(json!({
@@ -42,7 +42,7 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        apply_reasoning_effort(&mut body, level);
+        apply_reasoning_effort(&mut body, model, endpoint, level);
     }
     body
 }

@@ -18,7 +18,7 @@ use crate::wire_common::{
 
 /// Converts one provider-neutral request into a Responses body.
 #[must_use]
-pub(crate) fn build_body(model: &str, request: &Request) -> Value {
+pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Value {
     let mut input = Vec::new();
     for message in &request.messages {
         convert_message(message, &mut input);
@@ -36,7 +36,7 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        apply_reasoning_effort(&mut body, level);
+        apply_reasoning_effort(&mut body, model, endpoint, level);
     }
     body
 }
