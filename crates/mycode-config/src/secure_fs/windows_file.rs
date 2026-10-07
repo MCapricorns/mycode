@@ -171,20 +171,7 @@ fn open_existing_root(root: &Path) -> Result<Option<File>, ConfigError> {
     };
     let parent =
         windows_open::open_path_directory_follow(parent_path, windows_open::DIRECTORY_READ_ACCESS)?;
-    reject_wrong_case(&parent, name)?;
-    if windows_open::child_attributes(&parent, name)?.is_none() {
-        return Ok(None);
-    }
-    let opened = windows_open::open_relative_directory(
-        &parent,
-        name,
-        windows_open::DIRECTORY_READ_ACCESS,
-        windows_open::OPEN_EXISTING_DISPOSITION,
-        None,
-    )?;
-    windows_acl::verify_fixed_descriptor(&opened.file)?;
-    reject_wrong_case(&parent, name)?;
-    Ok(Some(opened.file))
+    open_existing_owned_directory(&parent, name)
 }
 
 fn open_existing_parent<'a>(
@@ -198,23 +185,39 @@ fn open_existing_parent<'a>(
         return Ok(None);
     };
     for component in directories {
-        reject_wrong_case(&parent, component)?;
-        if windows_open::child_attributes(&parent, component)?.is_none() {
+        let Some(next) = open_existing_owned_directory(&parent, component)? else {
             return Ok(None);
-        }
-        let opened = windows_open::open_relative_directory(
-            &parent,
-            component,
-            windows_open::DIRECTORY_READ_ACCESS,
-            windows_open::OPEN_EXISTING_DISPOSITION,
-            None,
-        )?;
-        windows_acl::verify_fixed_descriptor(&opened.file)?;
-        reject_wrong_case(&parent, component)?;
-        parent = opened.file;
+        };
+        parent = next;
     }
     reject_wrong_case(&parent, name)?;
     Ok(Some((parent, name)))
+}
+
+/// Opens one existing directory and tightens it when the current user owns it.
+///
+/// The session index creates the home with `std::fs::create_dir_all` before
+/// settings are read. That directory inherits the profile DACL. Verifying
+/// the protected descriptor without installing it surfaces as
+/// `settings error: owned path access control failed` and the desktop never
+/// leaves its error state. A wrong owner or a reparse point is rejected
+/// before any DACL change. A missing child is `Ok(None)`.
+fn open_existing_owned_directory(parent: &File, name: &OsStr) -> Result<Option<File>, ConfigError> {
+    reject_wrong_case(parent, name)?;
+    if windows_open::child_attributes(parent, name)?.is_none() {
+        return Ok(None);
+    }
+    let opened = windows_open::open_relative_directory(
+        parent,
+        name,
+        windows_open::DIRECTORY_DACL_ACCESS,
+        windows_open::OPEN_EXISTING_DISPOSITION,
+        None,
+    )?;
+    windows_acl::secure_existing_object(&opened.file)?;
+    windows_acl::verify_fixed_descriptor(&opened.file)?;
+    reject_wrong_case(parent, name)?;
+    Ok(Some(opened.file))
 }
 
 fn open_or_create_directory(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
@@ -274,10 +277,14 @@ fn open_lock(parent: &File, name: &OsStr) -> Result<(File, bool), ConfigError> {
     windows_acl::require_current_owner(&opened.file)?;
     // A widened existing lock is tightened here, and the pre-tightening
     // evidence is reported to callers that must fail closed instead.
+    // A lock created by this call has no previous holder. `NtCreateFile`
+    // can still attach inherited ACEs until the protected DACL is installed,
+    // so that pre-repair check is not evidence another principal held it.
+    let created = opened.created;
     let was_private = windows_acl::verify_fixed_descriptor(&opened.file).is_ok();
     windows_acl::secure_existing_object(&opened.file)?;
     windows_acl::verify_fixed_descriptor(&opened.file)?;
-    Ok((opened.file, was_private))
+    Ok((opened.file, was_private || created))
 }
 
 fn create_temporary(parent: &File, destination: &OsStr) -> Result<TemporaryFile, ConfigError> {
@@ -297,7 +304,9 @@ fn create_temporary(parent: &File, destination: &OsStr) -> Result<TemporaryFile,
                         .with_io_kind(io::ErrorKind::AlreadyExists));
                 }
                 let mut temporary = TemporaryFile::new(opened.file);
-                if let Err(error) = windows_acl::verify_fixed_descriptor(temporary.file()) {
+                // This file was created by this call. Install the protected
+                // DACL before publication when creation still inherited ACEs.
+                if let Err(error) = windows_acl::secure_existing_object(temporary.file()) {
                     temporary.remove()?;
                     return Err(error);
                 }
@@ -513,4 +522,75 @@ pub(super) fn set_delete(file: &File) -> Result<(), ConfigError> {
         return Err(windows_open::map_ntstatus(status));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::{
+        AppSettings, AuthorityRevision, HomeLayout, read_app_settings, replace_app_settings,
+    };
+
+    struct TempTree {
+        path: PathBuf,
+    }
+
+    impl TempTree {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "mycode-secure-fs-{label}-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("temp directory");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn missing_home_read_does_not_create_it() {
+        let tree = TempTree::new("missing");
+        let root = tree.path.join("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+
+        let loaded = read_app_settings(&home).expect("defaults");
+
+        assert_eq!(loaded, AppSettings::default());
+        assert!(!root.exists());
+    }
+
+    /// A home created the way the session index does (`create_dir_all`)
+    /// inherits the parent DACL. Reading it must install the protected
+    /// descriptor instead of failing the process closed, and the first
+    /// settings publish must then succeed.
+    #[test]
+    fn inherited_home_reads_defaults_and_publishes_settings() {
+        let tree = TempTree::new("inherited");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).expect("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+
+        let loaded = read_app_settings(&home).expect("defaults");
+        assert_eq!(loaded, AppSettings::default());
+        assert!(!root.join("settings.json").exists());
+
+        let mut settings = AppSettings::default();
+        settings.appearance.palette = "ocean".to_owned();
+        replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("publish");
+
+        let loaded = read_app_settings(&home).expect("reread");
+        assert_eq!(loaded.appearance.palette, "ocean");
+    }
 }
