@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.9.16] - 2026-10-07
+
 ### 产品
 
 - 左侧栏分成四块：工作区切换器、操作条（新建任务、搜索会话）、目录、会话。目录和会话不再跟操作按钮挤在同一条列表里。
@@ -129,7 +131,8 @@ mycode 是跑在本机的桌面编码代理。对话、工具和会话都在你�
 - 子代理没有墙钟超时，长任务不会在大约 10 分钟时被杀掉。取消仍然会停掉子代理。并发默认 4 个。设置里的 `0` 表示使用这个默认值，不是零个子代理。
 - 界面为深色。设置里可选色板：石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.15...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.16...HEAD
+[0.9.16]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.16
 [0.9.15]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.15
 [0.9.14]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.14
 [0.9.13]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.13
