@@ -61,7 +61,7 @@ pub(crate) fn read_status(root: &Path) -> GitSnapshot {
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain=v1", "-b"])
+        .args(["status", "--porcelain=v1", "-b", "--untracked-files=all"])
         .output();
     let output = match output {
         Ok(output) => output,
@@ -206,5 +206,42 @@ mod diff_tests {
         let diff = added_lines("f.txt", "one\r\ntwo\r\n");
         assert!(diff.contains("+one\n"), "{diff}");
         assert!(!diff.contains("+one\r"), "{diff}");
+    }
+
+    #[test]
+    fn an_untracked_directory_lists_each_file() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-untracked-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/note.txt"), "hello\n").unwrap();
+        let init = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["init", "-q"])
+            .status()
+            .expect("git");
+        assert!(init.success(), "git init");
+        let snapshot = super::read_status(&root);
+        assert!(
+            snapshot
+                .files
+                .iter()
+                .any(|file| file.path == "nested/note.txt"),
+            "expected the file inside the directory, got {:?}",
+            snapshot.files
+        );
+        assert!(
+            snapshot.files.iter().all(|file| file.path != "nested/"),
+            "{:?}",
+            snapshot.files
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

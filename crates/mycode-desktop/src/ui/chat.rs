@@ -36,6 +36,9 @@ pub(super) fn render_chat(
     // builders can still take `&mut Workspace`.
     let sending = workspace.vm().sending;
     let loading_older = workspace.vm().history_loading;
+    // Off means the user asked not to see a reasoning trace. The blocks stay
+    // in the ledger; only the REASONING row is hidden while that pick is set.
+    let show_reasoning = crate::view_model::selected_reasoning_level(workspace.vm()) != "off";
     let (show_welcome, has_older, entry_elements, streaming_element) = {
         let active = workspace.vm().active.as_ref();
         let entries: &[ConversationEntry] = active
@@ -56,13 +59,14 @@ pub(super) fn render_chat(
                     elements.push(transcript::render_tool_block(call, result, expanded, cx));
                 }
                 TranscriptItem::Entry(entry) => {
-                    elements.push(transcript::render_entry(entry, cx.theme()));
+                    elements.push(transcript::render_entry(entry, cx.theme(), show_reasoning));
                 }
             }
         }
         let streaming_element = streaming
             .map(|streaming| {
-                transcript::render_streaming_entry(streaming, cx.theme(), cx).into_any_element()
+                transcript::render_streaming_entry(streaming, cx.theme(), show_reasoning, cx)
+                    .into_any_element()
             })
             .or_else(|| {
                 sending.then(|| {
@@ -73,6 +77,7 @@ pub(super) fn render_chat(
                             ..crate::view_model::StreamingReply::default()
                         },
                         cx.theme(),
+                        show_reasoning,
                         cx,
                     )
                     .into_any_element()

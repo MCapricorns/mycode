@@ -31,15 +31,19 @@ pub(super) fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta
     if delta.is_empty() {
         return;
     }
+    let show_reasoning = super::super::selected_reasoning_level(state) != "off";
     if let Some(conversation) = state.active.as_mut() {
         let streaming = conversation
             .streaming
             .get_or_insert_with(StreamingReply::default);
-        streaming.status = if thinking {
+        streaming.status = if thinking && show_reasoning {
             t("Thinking", "思考中").to_owned()
         } else {
             t("Replying", "正在回复").to_owned()
         };
+        if thinking && !show_reasoning {
+            return;
+        }
         let buffer = if thinking {
             &mut streaming.thinking
         } else {

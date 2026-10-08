@@ -23,6 +23,7 @@ use crate::workspace::Workspace;
 pub(super) fn render_streaming_entry(
     streaming: &StreamingReply,
     theme: &Theme,
+    show_reasoning: bool,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let _ = cx;
@@ -46,7 +47,7 @@ pub(super) fn render_streaming_entry(
                 desk.amber,
                 theme,
             ))
-            .when(!streaming.thinking.is_empty(), |this| {
+            .when(show_reasoning && !streaming.thinking.is_empty(), |this| {
                 this.child(thinking_box(
                     "streaming-thinking".into(),
                     &streaming.thinking,
@@ -80,7 +81,11 @@ pub(super) fn render_streaming_entry(
 /// plus a ledger row per entry. Assistant text is bare (`.msg-agent`); user
 /// rows and tool blocks arrive pre-routed by the caller's transcript
 /// collection and render through their own builders.
-pub(super) fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit::AnyElement {
+pub(super) fn render_entry(
+    entry: &ConversationEntry,
+    theme: &Theme,
+    show_reasoning: bool,
+) -> gpui_kit::AnyElement {
     match entry.kind {
         EntryKind::AssistantMessage => desk_block(entry, theme, {
             let desk = Desk::of(theme);
@@ -88,7 +93,7 @@ pub(super) fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit
                 .flex()
                 .flex_col()
                 .gap_2()
-                .when(!entry.thinking.is_empty(), |this| {
+                .when(show_reasoning && !entry.thinking.is_empty(), |this| {
                     this.child(thinking_box(
                         format!("thinking-{}", entry.event_id).into(),
                         &entry.thinking,
