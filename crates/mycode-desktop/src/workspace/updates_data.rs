@@ -165,6 +165,14 @@ impl Workspace {
         submit: bool,
         cx: &mut Context<Self>,
     ) {
+        let current = self.vm.ask_answers.get(index).cloned().unwrap_or_default();
+        let multiple = self
+            .vm
+            .pending_ask
+            .as_ref()
+            .and_then(|rows| rows.get(index))
+            .is_some_and(|row| row.multiple);
+        let answer = mycode_tools::builtin::toggle_ask_choice(&current, &answer, multiple);
         self.apply_action(DesktopAction::AskChoicePicked { index, answer }, cx);
         if submit {
             self.on_answer_ask(self.vm.ask_answers.clone(), cx);

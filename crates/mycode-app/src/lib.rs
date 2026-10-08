@@ -48,8 +48,8 @@ mod updates;
 mod web_client;
 
 pub use protocol::{
-    ActiveConversation, BranchId, CHAT_CANCELLED, ConversationEntry, EntryKind, HeadStamp,
-    MAX_STREAMING_CHARS, OlderTranscript, SessionEventId, SessionId, SessionSummary,
+    ActiveConversation, AskPrompt, BranchId, CHAT_CANCELLED, ConversationEntry, EntryKind,
+    HeadStamp, MAX_STREAMING_CHARS, OlderTranscript, SessionEventId, SessionId, SessionSummary,
     StreamingReply,
 };
 pub use updates::{PreparedUpdate, UpdateOffer};
@@ -328,8 +328,8 @@ pub enum BridgeEvent {
     AskRequested {
         /// Session identity spelling.
         session_id: String,
-        /// (question, choices, optional) rows.
-        questions: Vec<(String, Vec<String>, bool)>,
+        /// Questions the user should answer, including multi-select.
+        questions: Vec<crate::protocol::AskPrompt>,
     },
     /// A tool call started executing.
     ToolStarted {

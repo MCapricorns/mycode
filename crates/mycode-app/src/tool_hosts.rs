@@ -77,12 +77,11 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
     ) -> Result<Vec<mycode_tools::builtin::AskAnswer>, mycode_tools::ToolError> {
         let rows = questions
             .iter()
-            .map(|question| {
-                (
-                    question.question.clone(),
-                    question.choices.clone(),
-                    question.optional,
-                )
+            .map(|question| crate::protocol::AskPrompt {
+                question: question.question.clone(),
+                choices: question.choices.clone(),
+                optional: question.optional,
+                multiple: question.multiple,
             })
             .collect();
         let _ = self.events.try_send(BridgeEvent::AskRequested {

@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use mycode_app::{ActiveConversation, ConversationEntry, PreparedUpdate, SessionSummary};
+use mycode_app::{
+    ActiveConversation, AskPrompt, ConversationEntry, PreparedUpdate, SessionSummary,
+};
 
 use super::chat::{ComposerMention, LiveJob};
 use super::settings::{
@@ -88,7 +90,7 @@ pub(crate) struct WorkspaceState {
     /// Whether a wide window docks the inspector instead of covering the chat.
     pub inspector_pinned: bool,
     /// Pending ask rows awaiting user answers.
-    pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
+    pub pending_ask: Option<Vec<AskPrompt>>,
     /// Draft answers aligned with [`Self::pending_ask`].
     pub ask_answers: Vec<String>,
     /// Cumulative usage per provider/model, in first-seen order.
@@ -346,7 +348,7 @@ pub enum DesktopAction {
         entry: ConversationEntry,
     },
     /// The agent asked the user structured questions.
-    AskRequested(Vec<(String, Vec<String>, bool)>),
+    AskRequested(Vec<AskPrompt>),
     /// The user picked one choice on a pending ask question.
     AskChoicePicked { index: usize, answer: String },
     /// The user submitted answers locally; clear the pending panel.

@@ -116,5 +116,18 @@ pub struct StreamingReply {
 /// Upper bound kept for one streamed reply before further deltas are dropped.
 pub const MAX_STREAMING_CHARS: usize = 256 * 1024;
 
+/// One `ask_user` question presented to the user.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AskPrompt {
+    /// Question headline.
+    pub question: String,
+    /// Candidate answers. Empty means free text only.
+    pub choices: Vec<String>,
+    /// Whether the user may skip this question.
+    pub optional: bool,
+    /// Whether more than one choice may be selected.
+    pub multiple: bool,
+}
+
 /// Failure-message sentinel marking a user-initiated turn cancel.
 pub const CHAT_CANCELLED: &str = "cancelled";
