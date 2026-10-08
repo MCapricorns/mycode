@@ -1,0 +1,351 @@
+//! Auto-compaction: Codex-style checkpoint summaries before each provider request.
+//!
+//! Trigger is 90% of the usable context window (95% of the model window, same
+//! safety margin as Codex). The tail keeps the last ~20k tokens of messages
+//! without splitting a tool-call pair. The head is summarized with a handoff
+//! prompt (goals, files, decisions, errors, next steps). The session ledger
+//! is never rewritten; only the in-memory request history shrinks.
+
+use std::sync::Arc;
+
+use mycode_core::{Message, Provider as _, Request, StreamEvent};
+use mycode_providers::WireProvider;
+use tokio_util::sync::CancellationToken;
+
+/// Fallback trigger when the catalog/settings have no context window.
+const DEFAULT_THRESHOLD_TOKENS: usize = 48_000;
+/// Codex keeps roughly this many recent tokens after the summary.
+const TAIL_TOKEN_BUDGET: usize = 20_000;
+/// Usable window as a percent of the raw model context (Codex 95%).
+const USABLE_WINDOW_PERCENT: u64 = 95;
+/// Auto-compact trigger as a percent of the usable window (Codex 90%).
+const TRIGGER_PERCENT: u64 = 90;
+const SUMMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+const TRANSCRIPT_CAP_CHARS: usize = 300_000;
+const EXCERPT_CHARS: usize = 4_000;
+const SUMMARY_PREFIX: &str = "COMPACTION SUMMARY";
+
+/// Tokens that fire auto-compaction for this model window.
+#[must_use]
+pub(crate) fn compaction_threshold(context_window: u64) -> usize {
+    if context_window == 0 {
+        return DEFAULT_THRESHOLD_TOKENS;
+    }
+    let usable = context_window.saturating_mul(USABLE_WINDOW_PERCENT) / 100;
+    (usable.saturating_mul(TRIGGER_PERCENT) / 100) as usize
+}
+
+/// Inputs that stay constant for one turn's compaction attempts.
+pub(crate) struct CompactScope<'a> {
+    pub home: &'a mycode_config::HomeLayout,
+    pub wire: &'a WireProvider,
+    pub model: &'a str,
+    pub session_id: &'a str,
+    pub branch_id: &'a str,
+    pub head: &'a str,
+    pub context_window: u64,
+}
+
+/// Compacts history before a provider request. Failures degrade to the
+/// original history so a turn never dies on housekeeping.
+pub(crate) async fn compact_history(
+    scope: &CompactScope<'_>,
+    history: Vec<Arc<Message>>,
+) -> Vec<Arc<Message>> {
+    let threshold = compaction_threshold(scope.context_window);
+    let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
+        return history;
+    };
+    let prior = mycode_config::read_compaction(scope.home, scope.session_id)
+        .ok()
+        .flatten()
+        .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
+    // `covered_messages` indexes a ledger replay, which has no summary
+    // prefix. Once a summary has replaced that prefix, the same index
+    // points into the tail and would drop messages that must stay.
+    let already_summarized = history
+        .first()
+        .is_some_and(|message| is_summary_message(message));
+    if !already_summarized
+        && let Some(checkpoint) = prior.as_ref()
+        && checkpoint.covered_head == scope.head
+        && checkpoint.covered_messages > 0
+        && checkpoint.covered_messages < history.len()
+        && !is_tool_result(&history[checkpoint.covered_messages])
+    {
+        return with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
+    }
+    let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
+    let transcript = compaction_transcript(prior_summary, &history[..head_end]);
+    let summarized = tokio::time::timeout(
+        SUMMARY_TIMEOUT,
+        summarize_transcript(scope.wire, &transcript),
+    )
+    .await;
+    let summary = match summarized {
+        Ok(Ok(summary)) => summary,
+        Ok(Err(message)) => {
+            eprintln!("[mycode-compaction] skipped: {message}");
+            return history;
+        }
+        Err(_) => {
+            eprintln!("[mycode-compaction] skipped: summary timed out");
+            return history;
+        }
+    };
+    let compacted = with_summary(&summary, &history[head_end..]);
+    // A history that already starts with a summary is not the ledger
+    // replay. Persisting `head_end` would store an index into that shorter
+    // vector, and the next open of this head would slice the ledger with it.
+    if already_summarized {
+        eprintln!(
+            "[mycode-compaction] shrunk an already summarized history in memory ({} remain)",
+            compacted.len()
+        );
+        return compacted;
+    }
+    let checkpoint = mycode_config::CompactionCheckpoint {
+        format_version: mycode_config::COMPACTION_FORMAT_VERSION,
+        kind: mycode_config::COMPACTION_KIND.to_owned(),
+        session_id: scope.session_id.to_owned(),
+        branch_id: scope.branch_id.to_owned(),
+        covered_head: scope.head.to_owned(),
+        covered_messages: head_end,
+        summary,
+        model: scope.model.to_owned(),
+        created_at_unix: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default(),
+    };
+    if let Err(error) = mycode_config::write_compaction(scope.home, scope.session_id, &checkpoint) {
+        eprintln!("[mycode-compaction] checkpoint write failed: {error:?}");
+        return history;
+    }
+    eprintln!(
+        "[mycode-compaction] replaced {head_end} messages with a checkpoint ({} remain)",
+        compacted.len()
+    );
+    compacted
+}
+
+fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {
+    let mut compacted = Vec::with_capacity(tail.len() + 1);
+    compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
+        format!("{SUMMARY_PREFIX}\n\n{summary}"),
+    ))));
+    compacted.extend(tail.iter().cloned());
+    compacted
+}
+
+fn message_tokens(message: &Message) -> usize {
+    mycode_config::estimate_token_count(message_chars(message))
+}
+
+fn message_chars(message: &Message) -> usize {
+    match message {
+        Message::User(user) => blocks_chars(&user.content),
+        Message::Assistant(assistant) => blocks_chars(&assistant.blocks),
+        Message::ToolResult(result) => {
+            // `tool_result {id} {body}`
+            "tool_result ".chars().count()
+                + result.tool_call_id.chars().count()
+                + 1
+                + blocks_chars(&result.content)
+        }
+        Message::Custom(custom) => "custom ".chars().count() + custom.kind.chars().count(),
+    }
+}
+
+fn blocks_chars(blocks: &[mycode_core::ContentBlock]) -> usize {
+    let mut chars = 0usize;
+    let mut parts = 0usize;
+    for block in blocks {
+        match block {
+            mycode_core::ContentBlock::Text(text) => {
+                chars += text.text.chars().count();
+                parts += 1;
+            }
+            mycode_core::ContentBlock::ToolCall(call) => {
+                // `tool_call {name} {arguments}`
+                chars += "tool_call ".chars().count()
+                    + call.name.chars().count()
+                    + 1
+                    + json_chars(&call.arguments);
+                parts += 1;
+            }
+            mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {}
+        }
+    }
+    chars + parts.saturating_sub(1)
+}
+
+fn json_chars(value: &serde_json::Value) -> usize {
+    // Same length as `Display` for JSON, without allocating when the value
+    // is a string.
+    match value {
+        serde_json::Value::String(text) => json_string_chars(text),
+        other => other.to_string().chars().count(),
+    }
+}
+
+fn json_string_chars(text: &str) -> usize {
+    let mut count = 2;
+    for ch in text.chars() {
+        count += match ch {
+            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
+            control if (control as u32) < 0x20 => 6,
+            _ => 1,
+        };
+    }
+    count
+}
+
+fn message_text(message: &Message) -> String {
+    match message {
+        Message::User(user) => blocks_text(&user.content),
+        Message::Assistant(assistant) => blocks_text(&assistant.blocks),
+        Message::ToolResult(result) => {
+            let body = blocks_text(&result.content);
+            format!("tool_result {} {body}", result.tool_call_id)
+        }
+        Message::Custom(custom) => format!("custom {}", custom.kind),
+    }
+}
+
+fn blocks_text(blocks: &[mycode_core::ContentBlock]) -> String {
+    let mut parts = Vec::new();
+    for block in blocks {
+        match block {
+            mycode_core::ContentBlock::Text(text) => parts.push(text.text.clone()),
+            mycode_core::ContentBlock::ToolCall(call) => {
+                parts.push(format!("tool_call {} {}", call.name, call.arguments));
+            }
+            mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {}
+        }
+    }
+    parts.join("\n")
+}
+
+fn is_tool_result(message: &Message) -> bool {
+    matches!(message, Message::ToolResult(_))
+}
+
+fn is_summary_message(message: &Message) -> bool {
+    matches!(message, Message::User(user) if blocks_text(&user.content).starts_with(SUMMARY_PREFIX))
+}
+
+/// Returns the split index when compaction is due: everything before it is
+/// summarized, everything from it on stays verbatim.
+fn compaction_split(
+    history: &[Arc<Message>],
+    threshold: usize,
+    tail_budget: usize,
+) -> Option<usize> {
+    if history.len() < 2 {
+        return None;
+    }
+    let estimate: usize = history.iter().map(|message| message_tokens(message)).sum();
+    if estimate <= threshold {
+        return None;
+    }
+    let mut used = 0usize;
+    let mut tail_start = history.len();
+    while tail_start > 0 {
+        let tokens = message_tokens(&history[tail_start - 1]);
+        if used > 0 && used.saturating_add(tokens) > tail_budget {
+            break;
+        }
+        used = used.saturating_add(tokens);
+        tail_start -= 1;
+    }
+    while tail_start > 0 && is_tool_result(&history[tail_start]) {
+        tail_start -= 1;
+    }
+    if tail_start == 0 || (tail_start == 1 && is_summary_message(&history[0])) {
+        return None;
+    }
+    Some(tail_start)
+}
+
+fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> String {
+    let mut transcript = String::new();
+    if let Some(summary) = prior_summary {
+        transcript.push_str("Previous checkpoint:\n");
+        transcript.push_str(summary);
+        transcript.push_str("\n\n");
+    }
+    for message in head {
+        if is_summary_message(message) {
+            continue;
+        }
+        let role = match message.as_ref() {
+            Message::User(_) => "user",
+            Message::Assistant(_) => "assistant",
+            Message::ToolResult(_) => "tool",
+            Message::Custom(_) => "custom",
+        };
+        let text = message_text(message);
+        let cut = text
+            .char_indices()
+            .nth(EXCERPT_CHARS)
+            .map(|(index, _)| index)
+            .unwrap_or(text.len());
+        transcript.push_str(&format!("[{role}] {}\n\n", &text[..cut]));
+    }
+    let count = transcript.chars().count();
+    if count > TRANSCRIPT_CAP_CHARS {
+        let skip = transcript
+            .char_indices()
+            .nth(count - TRANSCRIPT_CAP_CHARS)
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        format!("...earlier content elided...\n{}", &transcript[skip..])
+    } else {
+        transcript
+    }
+}
+
+async fn summarize_transcript(wire: &WireProvider, transcript: &str) -> Result<String, String> {
+    let request = Request::new()
+        .with_system_prompt(
+            "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a \
+handoff summary for another coding-agent model that will resume the task.\n\
+Write dense factual prose, no preamble. Cover:\n\
+- User goals and constraints\n\
+- Decisions made, and why\n\
+- Files and paths touched (created, edited, read)\n\
+- Commands run and their outcomes\n\
+- Current work, open tasks, and unresolved errors\n\
+- Clear next steps\n\
+Preserve names, paths, and error text. Do not invent work that did not happen.",
+        )
+        .with_message(Message::User(mycode_core::UserMessage::text(format!(
+            "Summarize the following conversation for continuation:\n\n{transcript}"
+        ))));
+    let cancel = CancellationToken::new();
+    let mut stream = wire
+        .stream(&request, cancel)
+        .await
+        .map_err(|error| format!("summary request failed: {error:?}"))?;
+    let mut summary = String::new();
+    loop {
+        let Some(event) = stream.next().await else {
+            return Err("summary stream ended without completion".to_owned());
+        };
+        match event {
+            StreamEvent::TextDelta(delta) => summary.push_str(&delta),
+            StreamEvent::Done { .. } => break,
+            StreamEvent::Error(error) => return Err(format!("summary stream failed: {error:?}")),
+            _ => {}
+        }
+    }
+    let chars: Vec<char> = summary.chars().collect();
+    if chars.len() > mycode_config::MAX_SUMMARY_CHARS {
+        summary = chars[..mycode_config::MAX_SUMMARY_CHARS].iter().collect();
+    }
+    if summary.trim().is_empty() {
+        return Err("summary was empty".to_owned());
+    }
+    Ok(summary)
+}

@@ -1,0 +1,357 @@
+//! Cloud-synced provider and model catalog.
+//!
+//! The catalog mirrors pi's model-data strategy: a normalized snapshot
+//! generated from models.dev is vendored into the binary as the offline
+//! baseline, a cached copy lives in the owned home, and a background
+//! refresh re-downloads the cloud document with conditional requests.
+//! Provider presets and model discovery in the desktop UI read this
+//! catalog, so new vendors and models appear without an app update.
+use serde::{Deserialize, Serialize};
+
+pub mod modelsdev;
+pub mod store;
+
+pub use store::{
+    CachedCatalog, DEFAULT_MAX_AGE_SECS, RefreshOutcome, bundled, current, current_with_repair,
+    http_client, load_cache, refresh,
+};
+
+/// Wire protocol: Anthropic Messages.
+pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
+/// Wire protocol: OpenAI Chat Completions.
+pub const KIND_OPENAI_COMPLETIONS: &str = "openai-completions";
+/// Wire protocol: OpenAI Responses.
+pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
+
+/// Auth: an OAuth device-code sign-in (GitHub Copilot / Codex).
+pub const AUTH_DEVICE_CODE: &str = "device-code";
+/// Auth: subscription OAuth plus an optional pasted API key (xAI).
+pub const AUTH_OAUTH: &str = "oauth";
+
+/// Whether the settings preset should offer a device-flow sign-in button.
+#[must_use]
+pub fn uses_oauth_login(auth: &str) -> bool {
+    auth == AUTH_DEVICE_CODE || auth == AUTH_OAUTH
+}
+
+/// Upper bound for provider entries in one catalog.
+pub const MAX_PROVIDERS: usize = 1024;
+/// Upper bound for model entries in one provider.
+pub const MAX_MODELS_PER_PROVIDER: usize = 512;
+/// Upper bound for one catalog string field.
+pub const MAX_STRING_BYTES: usize = 8 * 1024;
+
+/// One model preset in the catalog.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CatalogModel {
+    /// Model id as sent to the provider.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Supports reasoning output.
+    pub reasoning: bool,
+    /// models.dev `reasoning_options` includes a toggle (on/off).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reasoning_toggle: bool,
+    /// models.dev effort values, already lowercased.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<String>,
+    /// Supports tool calling.
+    pub tool_call: bool,
+    /// Supports image attachments.
+    pub attachment: bool,
+    /// Advertised context window in tokens; 0 when unknown.
+    pub context: u64,
+    /// Advertised output limit in tokens; 0 when unknown.
+    pub output: u64,
+    /// Input cost per million tokens, when published.
+    pub cost_in: Option<f64>,
+    /// Output cost per million tokens, when published.
+    pub cost_out: Option<f64>,
+}
+
+impl CatalogModel {
+    /// Thinking choices advertised for this model.
+    ///
+    /// An explicit models.dev effort list is kept as published. A toggle-only
+    /// row or a bare `reasoning: true` also offers the standard effort ladder.
+    /// GLM rows always add Off, On, and Max beside that list: the wire sends
+    /// `thinking.type` for the switch and `reasoning_effort` for a named rung,
+    /// and a published `low`/`high`/`max` list otherwise hides Off.
+    #[must_use]
+    pub fn reasoning_levels(&self) -> Vec<String> {
+        if !self.reasoning {
+            return Vec::new();
+        }
+        let levels = if self.reasoning_efforts.is_empty() {
+            standard_reasoning_levels()
+        } else {
+            let mut levels = vec!["default".to_owned()];
+            if self.reasoning_toggle {
+                levels.push("off".to_owned());
+            }
+            for effort in &self.reasoning_efforts {
+                let key = match effort.as_str() {
+                    "none" => "off",
+                    "default" => continue,
+                    other => other,
+                };
+                if !levels.iter().any(|level| level == key) {
+                    levels.push(key.to_owned());
+                }
+            }
+            levels
+        };
+        if self.id.to_ascii_lowercase().contains("glm") {
+            glm_reasoning_levels(levels)
+        } else {
+            levels
+        }
+    }
+}
+
+/// Puts Off and On next to Default, then keeps the published rungs, and
+/// makes sure Low, High, and Max are selectable.
+fn glm_reasoning_levels(levels: Vec<String>) -> Vec<String> {
+    let mut next = Vec::new();
+    if levels.iter().any(|level| level == "default") {
+        next.push("default".to_owned());
+    }
+    for token in ["off", "on"] {
+        next.push((*token).to_owned());
+    }
+    for level in levels {
+        if !next.iter().any(|existing| existing == &level) {
+            next.push(level);
+        }
+    }
+    for token in ["low", "high", "max"] {
+        if !next.iter().any(|existing| existing == token) {
+            next.push((*token).to_owned());
+        }
+    }
+    next
+}
+
+/// Effort ladder used when a model supports reasoning but publishes no list.
+#[must_use]
+pub fn standard_reasoning_levels() -> Vec<String> {
+    [
+        "default", "off", "on", "minimal", "low", "medium", "high", "xhigh", "max",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+/// One provider preset: endpoint data plus its model list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CatalogProvider {
+    /// Stable provider id (models.dev spelling).
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// MYCode wire protocol for this endpoint.
+    pub kind: String,
+    /// API base URL.
+    pub base_url: String,
+    /// Documentation URL, when published.
+    pub doc: Option<String>,
+    /// Credential mode: `""` (default) pastes an API key; `device-code`
+    /// signs in with an OAuth device flow.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub auth: String,
+    /// Model presets, sorted by id.
+    pub models: Vec<CatalogModel>,
+}
+
+impl Default for CatalogProvider {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            kind: KIND_OPENAI_COMPLETIONS.to_owned(),
+            base_url: String::new(),
+            doc: None,
+            auth: String::new(),
+            models: Vec::new(),
+        }
+    }
+}
+
+/// The complete provider catalog.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CatalogDocument {
+    /// Providers, sorted by id.
+    #[serde(default)]
+    pub providers: Vec<CatalogProvider>,
+}
+
+impl CatalogDocument {
+    /// Looks one provider up by id.
+    #[must_use]
+    pub fn provider(&self, id: &str) -> Option<&CatalogProvider> {
+        self.providers.iter().find(|provider| provider.id == id)
+    }
+
+    /// Looks one model up by provider and model id.
+    #[must_use]
+    pub fn model(&self, provider_id: &str, model_id: &str) -> Option<&CatalogModel> {
+        self.provider(provider_id)?
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+    }
+
+    /// Returns a display name for a provider id, even when absent.
+    #[must_use]
+    pub fn display_name(&self, id: &str) -> String {
+        self.provider(id)
+            .map(|provider| provider.name.clone())
+            .unwrap_or_else(|| id.to_owned())
+    }
+}
+
+/// Validates one catalog string field: bounded UTF-8 without control noise.
+pub(crate) fn clean_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > MAX_STRING_BYTES
+        || trimmed.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+/// Accepts a provider id when it is a lowercase portable spelling.
+pub(crate) fn valid_provider_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+/// Normalizes a parsed catalog: drops invalid entries, bounds model lists,
+/// and sorts providers and models by id.
+pub(crate) fn normalize(mut providers: Vec<CatalogProvider>) -> CatalogDocument {
+    providers.retain(|provider| {
+        valid_provider_id(&provider.id)
+            && clean_text(&provider.name).is_some()
+            && clean_text(&provider.base_url).is_some()
+            && matches!(
+                provider.kind.as_str(),
+                KIND_ANTHROPIC_MESSAGES | KIND_OPENAI_COMPLETIONS | KIND_OPENAI_RESPONSES
+            )
+            && !provider.models.is_empty()
+    });
+    for provider in &mut providers {
+        if provider.models.len() > MAX_MODELS_PER_PROVIDER {
+            provider.models.truncate(MAX_MODELS_PER_PROVIDER);
+        }
+        for model in &mut provider.models {
+            if clean_text(&model.name).is_none() {
+                model.name = model.id.clone();
+            }
+        }
+        provider.models.sort_by(|a, b| a.id.cmp(&b.id));
+        provider.models.dedup_by(|a, b| a.id == b.id);
+    }
+    providers.sort_by(|a, b| a.id.cmp(&b.id));
+    providers.dedup_by(|a, b| a.id == b.id);
+    CatalogDocument { providers }
+}
+
+/// Parses the vendored normalized snapshot into a catalog document.
+///
+/// The snapshot is generated by `scripts/generate_catalog.py` from models.dev
+/// and compiled into the binary; a decode failure yields an empty catalog
+/// rather than a panic, and the unit tests keep that failure impossible.
+pub fn parse_snapshot(bytes: &[u8]) -> CatalogDocument {
+    serde_json::from_slice::<CatalogDocument>(bytes)
+        .map(|document| attach_subscription_presets(normalize(document.providers)))
+        .unwrap_or_default()
+}
+
+pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> CatalogDocument {
+    if let Some(xai) = document
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == "xai")
+    {
+        xai.auth = AUTH_OAUTH.to_owned();
+    }
+    if document.provider("openai-codex").is_none() {
+        document.providers.push(openai_codex_preset());
+        document.providers.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    document
+}
+
+fn openai_codex_preset() -> CatalogProvider {
+    CatalogProvider {
+        id: "openai-codex".to_owned(),
+        name: "OpenAI Codex".to_owned(),
+        kind: KIND_OPENAI_RESPONSES.to_owned(),
+        base_url: "https://chatgpt.com/backend-api/codex".to_owned(),
+        doc: Some("https://developers.openai.com/codex".to_owned()),
+        auth: AUTH_DEVICE_CODE.to_owned(),
+        models: [
+            ("o3-pro", "o3-pro"),
+            ("o3", "o3"),
+            ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
+            ("gpt-5.5", "GPT-5.5"),
+            ("gpt-5.6-luna", "GPT-5.6 Luna"),
+            ("gpt-5.6-sol", "GPT-5.6 Sol"),
+            ("gpt-5.6-terra", "GPT-5.6 Terra"),
+            ("gpt-6-astra", "GPT-6 Astra"),
+        ]
+        .into_iter()
+        .map(|(id, name)| CatalogModel {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            reasoning: true,
+            tool_call: true,
+            ..CatalogModel::default()
+        })
+        .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CatalogModel;
+
+    #[test]
+    fn glm_published_efforts_still_offer_off_on_and_max() {
+        let model = CatalogModel {
+            id: "glm-5.3-flash".to_owned(),
+            reasoning: true,
+            reasoning_efforts: vec!["low".to_owned(), "high".to_owned(), "max".to_owned()],
+            ..CatalogModel::default()
+        };
+        let levels = model.reasoning_levels();
+        assert_eq!(levels.first().map(String::as_str), Some("default"));
+        for level in ["off", "on", "low", "high", "max"] {
+            assert!(levels.iter().any(|item| item == level), "{level}");
+        }
+    }
+
+    #[test]
+    fn a_non_glm_effort_list_stays_as_published() {
+        let model = CatalogModel {
+            id: "gpt-5".to_owned(),
+            reasoning: true,
+            reasoning_efforts: vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()],
+            ..CatalogModel::default()
+        };
+        let levels = model.reasoning_levels();
+        assert!(!levels.iter().any(|level| level == "off"));
+        assert!(!levels.iter().any(|level| level == "on"));
+        assert!(!levels.iter().any(|level| level == "max"));
+        assert!(levels.iter().any(|level| level == "high"));
+    }
+}

@@ -1,0 +1,40 @@
+[package]
+name = "mycode-app"
+description = "MYCode application core: sessions, turns, tool hosts, MCP, search, and updates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mycode-core = { path = "../mycode-core" }
+mycode-config = { path = "../mycode-config" }
+mycode-providers = { path = "../mycode-providers" }
+mycode-tools = { path = "../mycode-tools" }
+mycode-agent = { path = "../mycode-agent" }
+async-trait.workspace = true
+async-channel.workspace = true
+# `json` is required directly by updates.rs `.json()`; do not rely on
+# feature unification through mycode-providers.
+reqwest = { workspace = true, features = ["json"] }
+semver.workspace = true
+jsonschema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "rt", "time", "macros", "sync"] }
+tokio-util.workspace = true
+zip.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true
