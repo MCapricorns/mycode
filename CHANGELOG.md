@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.9.19] - 2026-10-08
+
 ### 修复
 
 - Windows 自更新改为带参数的助手进程。界面把当前程序复制出去，退出后由那份副本等待本进程结束，在安装目录里校验并替换二进制，再启动新版本。不再用脱离的 `cmd` 脚本，避免只留下 `.mycode-previous`、新程序换不上去。macOS 与 Linux 仍用原来的 `update.sh`。
@@ -157,7 +159,8 @@ mycode 是跑在本机的桌面编码代理。对话、工具和会话都在你�
 - 子代理没有墙钟超时，长任务不会在大约 10 分钟时被杀掉。取消仍然会停掉子代理。并发默认 4 个。设置里的 `0` 表示使用这个默认值，不是零个子代理。
 - 界面为深色。设置里可选色板：石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.18...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.19...HEAD
+[0.9.19]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.19
 [0.9.18]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.18
 [0.9.17]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.17
 [0.9.16]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.16
