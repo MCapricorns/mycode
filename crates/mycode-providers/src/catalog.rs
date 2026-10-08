@@ -162,6 +162,51 @@ impl CatalogDocument {
             .find(|model| model.id == model_id)
     }
 
+    /// Resolves a model for a configured endpoint.
+    ///
+    /// The catalog provider id wins, then an exact base URL. When neither
+    /// names a catalog provider, the model id is matched across the whole
+    /// catalog. Providers are sorted by id. A row that publishes a reasoning
+    /// toggle or effort list wins over an earlier row that only repeats the
+    /// id, so a custom GLM gateway still picks up Off/On and the output cap.
+    /// A catalog provider that simply does not list the model does not borrow
+    /// another vendor's row.
+    #[must_use]
+    pub fn model_for_endpoint(
+        &self,
+        provider_id: &str,
+        base_url: Option<&str>,
+        model_id: &str,
+    ) -> Option<&CatalogModel> {
+        if let Some(provider) = self.provider(provider_id).or_else(|| {
+            let base_url = base_url.filter(|url| !url.is_empty())?;
+            self.providers.iter().find(|item| item.base_url == base_url)
+        }) {
+            return provider.models.iter().find(|model| model.id == model_id);
+        }
+        self.model_by_id(model_id)
+    }
+
+    fn model_by_id(&self, model_id: &str) -> Option<&CatalogModel> {
+        let mut with_output = None;
+        let mut any = None;
+        for provider in &self.providers {
+            let Some(model) = provider.models.iter().find(|model| model.id == model_id) else {
+                continue;
+            };
+            if model.reasoning_toggle || !model.reasoning_efforts.is_empty() {
+                return Some(model);
+            }
+            if with_output.is_none() && model.output > 0 {
+                with_output = Some(model);
+            }
+            if any.is_none() {
+                any = Some(model);
+            }
+        }
+        with_output.or(any)
+    }
+
     /// Returns a display name for a provider id, even when absent.
     #[must_use]
     pub fn display_name(&self, id: &str) -> String {
@@ -313,6 +358,30 @@ mod tests {
         assert_eq!(
             model.reasoning_levels(),
             vec!["default".to_owned(), "off".to_owned(), "on".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_custom_glm_provider_borrows_limits_and_reasoning_levels() {
+        let document = super::parse_snapshot(include_bytes!("catalog/snapshot.json"));
+        let model = document
+            .model_for_endpoint("my-glm", Some("https://glm.example/v1"), "glm-4.7")
+            .expect("catalog row");
+        assert!(model.reasoning_toggle);
+        assert!(model.output > 0);
+        assert!(model.context > 0);
+        let levels = model.reasoning_levels();
+        assert!(
+            levels.iter().any(|level| level == "off"),
+            "glm-4.7 toggle should offer Off, got {levels:?}"
+        );
+        assert!(levels.iter().any(|level| level == "on"), "{levels:?}");
+        assert!(levels.iter().any(|level| level == "default"), "{levels:?}");
+        assert!(
+            document
+                .model_for_endpoint("302ai", None, "not-a-real-model")
+                .is_none(),
+            "a known provider does not borrow another vendor's model"
         );
     }
 

@@ -218,14 +218,7 @@ pub(crate) fn model_context_window(
     };
     let document = &catalog.document;
     document
-        .provider(&provider.id)
-        .or_else(|| {
-            document
-                .providers
-                .iter()
-                .find(|item| item.base_url == provider.base_url)
-        })
-        .and_then(|item| item.models.iter().find(|entry| entry.id == model))
+        .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
         .map(|entry| entry.context)
         .filter(|context| *context > 0)
         .unwrap_or(0)
@@ -243,14 +236,7 @@ pub(crate) fn model_output_limit(
     };
     let document = &catalog.document;
     document
-        .provider(&provider.id)
-        .or_else(|| {
-            document
-                .providers
-                .iter()
-                .find(|item| item.base_url == provider.base_url)
-        })
-        .and_then(|item| item.models.iter().find(|entry| entry.id == model))
+        .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
         .map(|entry| entry.output)
         .filter(|output| *output > 0)
 }

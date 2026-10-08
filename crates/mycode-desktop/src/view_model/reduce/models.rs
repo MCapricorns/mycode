@@ -142,25 +142,33 @@ pub(super) fn ensure_model_selection(state: &mut WorkspaceState) {
 /// not locked out; the menu itself is built from `reasoning_options`.
 #[must_use]
 pub(crate) fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool {
+    let Some(provider_id) = state.selected_provider.as_deref() else {
+        return true;
+    };
+    let base_url = endpoint_base_url(state, provider_id).map(str::to_owned);
     let Some(catalog) = state.catalog.as_ref() else {
         return true;
     };
-    let Some(provider) = state
-        .selected_provider
-        .as_deref()
-        .and_then(|id| catalog.provider(id))
-    else {
-        return true;
-    };
     match state.selected_model.as_deref() {
-        Some(model_id) => provider
-            .models
-            .iter()
-            .find(|model| model.id == model_id)
+        Some(model_id) => catalog
+            .model_for_endpoint(provider_id, base_url.as_deref(), model_id)
             .map(|model| model.reasoning)
             .unwrap_or(true),
-        None => provider.models.iter().any(|model| model.reasoning),
+        None => catalog
+            .provider(provider_id)
+            .map(|provider| provider.models.iter().any(|model| model.reasoning))
+            .unwrap_or(true),
     }
+}
+
+fn endpoint_base_url<'a>(state: &'a WorkspaceState, provider_id: &str) -> Option<&'a str> {
+    state.settings.as_ref().and_then(|settings| {
+        settings
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .map(|provider| provider.base_url.as_str())
+    })
 }
 
 /// Thinking choices advertised for one catalog model.
@@ -174,13 +182,14 @@ pub(crate) fn reasoning_levels_for(
     provider_id: Option<&str>,
     model_id: Option<&str>,
 ) -> Vec<String> {
-    let Some(catalog) = state.catalog.as_ref() else {
-        return unpublished_reasoning_levels(state);
-    };
     let (Some(provider_id), Some(model_id)) = (provider_id, model_id) else {
         return unpublished_reasoning_levels(state);
     };
-    match catalog.model(provider_id, model_id) {
+    let base_url = endpoint_base_url(state, provider_id).map(str::to_owned);
+    let Some(catalog) = state.catalog.as_ref() else {
+        return unpublished_reasoning_levels(state);
+    };
+    match catalog.model_for_endpoint(provider_id, base_url.as_deref(), model_id) {
         Some(model) => model.reasoning_levels(),
         None => unpublished_reasoning_levels(state),
     }
@@ -360,8 +369,37 @@ mod tests {
         );
 
         state.selected_provider = Some("my-gateway".to_owned());
-        state.selected_model = Some("glm-5.3-flash".to_owned());
+        state.selected_model = Some("glm-not-in-catalog".to_owned());
         let custom = super::selected_reasoning_levels(&state);
         assert_eq!(custom, vec!["default".to_owned()]);
+
+        state.selected_model = Some("glm-4.7".to_owned());
+        state.catalog = Some(Arc::new(CatalogDocument {
+            providers: vec![CatalogProvider {
+                id: "zai".to_owned(),
+                models: vec![CatalogModel {
+                    id: "glm-4.7".to_owned(),
+                    reasoning: true,
+                    reasoning_toggle: true,
+                    output: 131_072,
+                    context: 204_800,
+                    ..CatalogModel::default()
+                }],
+                ..CatalogProvider::default()
+            }],
+        }));
+        let borrowed = super::selected_reasoning_levels(&state);
+        assert_eq!(
+            borrowed,
+            vec!["default".to_owned(), "off".to_owned(), "on".to_owned()]
+        );
+        let row = state
+            .catalog
+            .as_ref()
+            .unwrap()
+            .model_for_endpoint("my-gateway", Some("https://glm.example/v1"), "glm-4.7")
+            .expect("fallback");
+        assert_eq!(row.output, 131_072);
+        assert_eq!(row.context, 204_800);
     }
 }
