@@ -36,16 +36,11 @@ pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Release asset suffix for the running platform, empty when unsupported.
+/// Release asset suffix for one target, empty when that target is unpublished.
 ///
 /// Published archives are Windows x64, Windows ARM64, macOS Apple Silicon,
 /// and Linux x86_64. Intel macOS, Windows x86, and every other target
 /// resolve no asset and stay on their installed version.
-#[must_use]
-pub fn asset_suffix() -> &'static str {
-    asset_suffix_for(std::env::consts::OS, std::env::consts::ARCH)
-}
-
 fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
     match (os, arch) {
         ("windows", "x86_64") => "-x86_64-pc-windows-msvc.zip",
