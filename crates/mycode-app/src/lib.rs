@@ -52,6 +52,7 @@ pub use protocol::{
     HeadStamp, MAX_STREAMING_CHARS, OlderTranscript, SessionEventId, SessionId, SessionSummary,
     StreamingReply,
 };
+pub use updates::apply::{parse_apply_update_args, run_apply_update_helper};
 pub use updates::{PreparedUpdate, UpdateOffer};
 pub use updates::{apply_and_restart, brief_error, cleanup_stale_stages, current_version};
 
@@ -388,6 +389,21 @@ pub enum BridgeEvent {
     },
 }
 
+/// Settings the UI can edit, plus documents reset while they were loaded.
+#[derive(Debug)]
+pub struct SettingsSnapshot {
+    /// The settings document.
+    pub settings: mycode_config::AppSettings,
+    /// Revision to send back with the next save.
+    pub revision: mycode_config::AuthorityRevision,
+    /// Provider ids that already have a stored key.
+    pub provider_keys: Vec<String>,
+    /// MCP server ids that already have a stored key.
+    pub mcp_keys: Vec<String>,
+    /// Product documents backed up and replaced with defaults on this load.
+    pub repairs: Vec<mycode_config::DocumentRepair>,
+}
+
 /// A reply from the core thread, already projected for the view-model.
 #[derive(Debug)]
 pub enum BridgeReply {
@@ -401,18 +417,8 @@ pub enum BridgeReply {
     Older(Result<OlderTranscript, String>),
     /// Send result (new head plus committed entry).
     Sent(Result<(String, ConversationEntry), String>),
-    /// Settings load result: document, revision, provider ids with keys.
-    Settings(
-        Result<
-            (
-                mycode_config::AppSettings,
-                mycode_config::AuthorityRevision,
-                Vec<String>,
-                Vec<String>,
-            ),
-            String,
-        >,
-    ),
+    /// Settings load result.
+    Settings(Result<SettingsSnapshot, String>),
     /// Settings save result: the new revision.
     SettingsSaved(Result<mycode_config::AuthorityRevision, String>),
     /// Provider key save result: refreshed key-id lists (providers, MCP).
@@ -448,8 +454,8 @@ pub enum BridgeReply {
     AskAnswered(Result<(), String>),
     /// Provider catalog snapshot with its freshness metadata.
     Catalog(Result<CatalogInfo, String>),
-    /// Durable UI state load result.
-    UiState(Result<UiState, String>),
+    /// Durable UI state load result, plus documents reset earlier in startup.
+    UiState(Result<(UiState, Vec<mycode_config::DocumentRepair>), String>),
     /// UI state persist result.
     UiStateSaved(Result<(), String>),
     /// Project directory bind result.

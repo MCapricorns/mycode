@@ -313,10 +313,12 @@ impl Workspace {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
                 self.begin_chat_turn(cx);
             }
-            BridgeReply::Settings(Ok((settings, revision, provider_keys, mcp_keys))) => {
-                let revision = revision.get();
-                let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
-                state.mcp_with_keys = mcp_keys;
+            BridgeReply::Settings(Ok(loaded)) => {
+                self.note_config_repairs(&loaded.repairs, cx);
+                let revision = loaded.revision.get();
+                let mut state =
+                    SettingsState::from_settings(&loaded.settings, revision, loaded.provider_keys);
+                state.mcp_with_keys = loaded.mcp_keys;
                 // A dirty or in-flight editor keeps its palette and
                 // user-agent field. Applying the disk copy here would undo
                 // unsaved appearance edits before the reducer can refuse the
@@ -464,7 +466,8 @@ impl Workspace {
                     self.apply_action(DesktopAction::Failed(message), cx);
                 }
             }
-            BridgeReply::UiState(Ok(mut ui_state)) => {
+            BridgeReply::UiState(Ok((mut ui_state, repairs))) => {
+                self.note_config_repairs(&repairs, cx);
                 // One-time upgrade: the legacy anonymous folder list becomes
                 // the first named workspace, and every session that predates
                 // workspaces belongs to it (unbound sessions resolve to the

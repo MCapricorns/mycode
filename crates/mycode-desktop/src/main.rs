@@ -26,7 +26,27 @@ impl gpui_kit::AssetSource for BrandAssets {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match mycode_app::parse_apply_update_args(&args) {
+        Ok(Some(request)) => {
+            let code = match mycode_app::run_apply_update_helper(&request) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("updater: {error}");
+                    1
+                }
+            };
+            std::process::exit(code);
+        }
+        Err(error) => {
+            eprintln!("updater: {error}");
+            std::process::exit(1);
+        }
+        Ok(None) => {}
+    }
     // Remove staging directories left behind by earlier self-updates.
+    // The apply helper returns before this, so it does not delete the
+    // staged binary it is installing.
     mycode_app::cleanup_stale_stages();
     let home = match HomeLayout::from_env(HomeEnv::from_process()) {
         Ok(home) => home,

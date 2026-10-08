@@ -10,6 +10,8 @@
 
 所有请求都带配置的 User-Agent（未设置时用 pi agent 的默认值）。HTTP 客户端走操作系统 TLS 和系统代理，不启用会再编一套加密库的 rustls 特性。
 
+出站请求先解析域名，再只连接检查过的地址。`PublicHttps`（网页检索、更新下载）要求 https、443 端口，并且解析结果全部是公网地址。GitHub 发布用的 `api.github.com`、`github.com`、`www.github.com`、`codeload.github.com`、`uploads.github.com` 和 `*.githubusercontent.com` 是例外：DNS 里夹了私网、ULA 或链路本地地址时，丢掉这些地址，只连接剩下的公网地址；一个公网地址都没有则拒绝。其他主机的混合解析、字面私网地址、回环和链路本地仍然拒绝。`CheckRedirect` 的第一跳可以整段是公网或整段是私网（本机模型），之后的跳转必须全是公网。
+
 端点拼接避免把路径写两遍：base 已经以 `/v1/messages` 或 `/chat/completions` 结尾时原样使用。
 
 ## 模块
@@ -31,7 +33,7 @@
 
 `catalog` 放在这里是因为刷新是一次 HTTP。`mycode-config` 保持无网络。
 
-离线基线是生成好的 `snapshot.json`。家目录的 `catalog-cache.json` 盖在上面。后台刷新用条件请求；失败时继续用已有缓存或内置快照。设置页的预设、上下文窗口、思考档位、工具调用和价格都从这份目录来。界面因此能在不发版的情况下看到新模型。
+离线基线是生成好的 `snapshot.json`。家目录的 `catalog-cache.json` 盖在上面。后台刷新用条件请求；失败时继续用已有缓存或内置快照。缓存文件本身解析失败时，原字节备份为 `catalog-cache.json.broken-*`，再写入内置快照，下次启动不会反复提示。读不出来则不动原文件，内存里用内置快照。设置页的预设、上下文窗口、思考档位、工具调用和价格都从这份目录来。界面因此能在不发版的情况下看到新模型。
 
 单份目录最多 1024 个提供商、每个提供商 512 个模型，字符串字段有字节上限。
 

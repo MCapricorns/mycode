@@ -85,31 +85,81 @@ fn unix_now() -> u64 {
 /// Reads the cached catalog from the owned home, when present and valid.
 ///
 /// An older copy of the same kind is replaced with the bundled snapshot so
-/// newly added option fields are present, then refresh can update it.
+/// newly added option fields are present, then refresh can update it. A
+/// document that cannot be parsed is backed up and replaced; see
+/// [`load_cache_with_repair`].
 #[must_use]
 pub fn load_cache(home: &HomeLayout) -> Option<CachedCatalog> {
-    let bytes = read_owned_file(home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES).ok()??;
-    let header: CacheHeader = serde_json::from_slice(bytes.as_slice()).ok()?;
+    load_cache_with_repair(home).0
+}
+
+/// Reads the catalog cache and reports a quarantine when the file was damaged.
+///
+/// A missing file is `(None, None)`. A readable but unusable file is copied
+/// aside, replaced with the bundled snapshot, and returned with that snapshot
+/// so the next launch does not quarantine it again. I/O failures leave the
+/// file alone and report no repair.
+#[must_use]
+pub fn load_cache_with_repair(
+    home: &HomeLayout,
+) -> (Option<CachedCatalog>, Option<mycode_config::DocumentRepair>) {
+    let bytes = match read_owned_file(home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) | Err(_) => return (None, None),
+    };
+    match parse_cache(bytes.as_slice()) {
+        CacheParse::Ready(cache) => (Some(cache), None),
+        CacheParse::Migrate => {
+            let migrated = bundled_cache();
+            let _ = write_cache(home, &migrated);
+            (Some(migrated), None)
+        }
+        CacheParse::Damaged => {
+            let repair =
+                mycode_config::quarantine_owned_bytes(home, CATALOG_CACHE_PATH, bytes.as_slice())
+                    .ok();
+            if repair.is_some() {
+                let _ = write_cache(home, &bundled_cache());
+            }
+            (repair.as_ref().map(|_| bundled_cache()), repair)
+        }
+    }
+}
+
+enum CacheParse {
+    Ready(CachedCatalog),
+    Migrate,
+    Damaged,
+}
+
+fn bundled_cache() -> CachedCatalog {
+    CachedCatalog {
+        document: bundled().clone(),
+        fetched_at: 0,
+        etag: None,
+    }
+}
+
+fn parse_cache(bytes: &[u8]) -> CacheParse {
+    let Ok(header) = serde_json::from_slice::<CacheHeader>(bytes) else {
+        return CacheParse::Damaged;
+    };
     if header.kind != CACHE_KIND {
-        return None;
+        return CacheParse::Damaged;
     }
     if header.format_version > 0 && header.format_version < CACHE_FORMAT_VERSION {
-        let migrated = CachedCatalog {
-            document: bundled().clone(),
-            fetched_at: 0,
-            etag: None,
-        };
-        let _ = write_cache(home, &migrated);
-        return Some(migrated);
+        return CacheParse::Migrate;
     }
-    let document: CacheDocument = serde_json::from_slice(bytes.as_slice()).ok()?;
+    let Ok(document) = serde_json::from_slice::<CacheDocument>(bytes) else {
+        return CacheParse::Damaged;
+    };
     if document.format_version != CACHE_FORMAT_VERSION {
-        return None;
+        return CacheParse::Damaged;
     }
     if document.etag.as_ref().is_some_and(|etag| etag.len() > 256) {
-        return None;
+        return CacheParse::Damaged;
     }
-    Some(CachedCatalog {
+    CacheParse::Ready(CachedCatalog {
         document: document.document,
         fetched_at: document.fetched_at,
         etag: document.etag,
@@ -119,11 +169,20 @@ pub fn load_cache(home: &HomeLayout) -> Option<CachedCatalog> {
 /// Resolves the current catalog: cache when valid, else the vendored snapshot.
 #[must_use]
 pub fn current(home: &HomeLayout) -> CachedCatalog {
-    load_cache(home).unwrap_or_else(|| CachedCatalog {
-        document: bundled().clone(),
-        fetched_at: 0,
-        etag: None,
-    })
+    current_with_repair(home).0
+}
+
+/// Resolves the catalog and reports when a damaged cache was reset.
+///
+/// The in-memory catalog is always usable. Session data is not touched.
+#[must_use]
+pub fn current_with_repair(
+    home: &HomeLayout,
+) -> (CachedCatalog, Option<mycode_config::DocumentRepair>) {
+    match load_cache_with_repair(home) {
+        (Some(cache), repair) => (cache, repair),
+        (None, repair) => (bundled_cache(), repair),
+    }
 }
 
 fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {

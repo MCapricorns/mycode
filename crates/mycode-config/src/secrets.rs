@@ -8,7 +8,7 @@
 use serde::Deserialize;
 
 use crate::authority::AuthorityRevision;
-use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
+use crate::secure_fs::owned_file::locked_update_owned_file;
 use crate::{ConfigError, ConfigErrorKind, HomeLayout};
 
 /// Exact secrets document path.
@@ -93,22 +93,58 @@ impl std::fmt::Debug for ProviderSecrets {
 /// Reads `secrets.json`; a missing document yields an empty store.
 ///
 /// A recoverable older copy (trailing commas) is rewritten in canonical form.
-/// A rewrite failure does not hide a document that already validated.
+/// A document that cannot be parsed or validated is backed up and replaced
+/// with an empty store so startup can continue. The backup keeps the old
+/// bytes; this function never logs them.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] for owned-path security, size, or validation
-/// failures that recovery cannot repair.
+/// Returns [`ConfigError`] for owned-path security or when a damaged document
+/// cannot be copied aside.
 pub fn read_provider_secrets(home: &HomeLayout) -> Result<ProviderSecrets, ConfigError> {
-    let bytes = read_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES)?;
-    let Some(bytes) = bytes else {
-        return Ok(ProviderSecrets::new());
-    };
-    let parsed = decode_secrets(bytes.as_slice())?;
-    if parsed.migrated {
-        let _ = replace_provider_secrets(home, parsed.revision, &parsed.secrets);
-    }
-    Ok(parsed.secrets)
+    Ok(read_provider_secrets_with_repair(home)?.0)
+}
+
+/// Reads `secrets.json`, repairing a damaged document.
+///
+/// The second value is set when the previous bytes were copied aside and the
+/// store was reset to empty.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] for owned-path security or when the backup or the
+/// replacement cannot be published.
+pub fn read_provider_secrets_with_repair(
+    home: &HomeLayout,
+) -> Result<(ProviderSecrets, Option<crate::DocumentRepair>), ConfigError> {
+    let loaded = crate::document_repair::load_or_reset(
+        home,
+        SECRETS_PATH,
+        MAX_SECRETS_BYTES,
+        |bytes| {
+            let parsed = decode_secrets(bytes)?;
+            if parsed.migrated {
+                let _ = replace_provider_secrets(home, parsed.revision, &parsed.secrets);
+            }
+            Ok(parsed.secrets)
+        },
+        ProviderSecrets::new,
+        || publish_default_secrets(home),
+    )?;
+    Ok((loaded.value, loaded.repair))
+}
+
+fn publish_default_secrets(home: &HomeLayout) -> Result<(), ConfigError> {
+    let revision = AuthorityRevision::ABSENT.checked_next()?;
+    let mut document = serde_json::Map::new();
+    document.insert("formatVersion".into(), SECRETS_FORMAT_VERSION.into());
+    document.insert("kind".into(), SECRETS_KIND.into());
+    document.insert("revision".into(), revision.get().into());
+    document.insert("providerKeys".into(), serde_json::Map::new().into());
+    let mut bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
+    bytes.push(b'\n');
+    locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |_| Ok(bytes))
 }
 
 /// Replaces `secrets.json` under revision compare-and-swap.

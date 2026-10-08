@@ -8,7 +8,6 @@ use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div};
 
 use super::widgets::{settings_card, settings_row};
 use crate::i18n::t;
-use crate::ui::ellipsis;
 use crate::view_model::UpdateState;
 use crate::workspace::Workspace;
 
@@ -79,19 +78,14 @@ pub(super) fn render_about_section(
                     .into_any_element(),
             ),
         ),
-        UpdateState::Failed(message) => (
-            // The one-line status carries the headline only; transport error
-            // chains from GitHub/reqwest can run for paragraphs.
-            t("Last update attempt failed.", "上次更新失败。").to_owned(),
-            Some(
-                div()
-                    .text_xs()
-                    .whitespace_normal()
-                    .text_color(cx.theme().danger)
-                    .child(ellipsis(message, 160))
-                    .into_any_element(),
-            ),
-        ),
+        UpdateState::Failed(_) => {
+            // The failure text is the bottom-right toast. A red dump of the
+            // transport error overflows this row.
+            (
+                t("Last update attempt failed.", "上次更新失败。").to_owned(),
+                None,
+            )
+        }
     };
     let rows = vec![
         settings_row(

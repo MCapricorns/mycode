@@ -2,11 +2,20 @@
 //! saves, key storage, and the shell the runtime tools use.
 
 use mycode_config::{
-    AppSettings, AuthorityRevision, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_SECRETS_BYTES,
-    SECRETS_FORMAT_VERSION, SECRETS_PATH, SETTINGS_FORMAT_VERSION, SETTINGS_PATH,
-    read_app_settings, read_owned_file, read_provider_secrets, replace_app_settings,
-    replace_provider_secrets,
+    AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES,
+    MAX_SECRETS_BYTES, SECRETS_FORMAT_VERSION, SECRETS_PATH, SETTINGS_FORMAT_VERSION,
+    SETTINGS_PATH, read_app_settings_with_repair, read_owned_file,
+    read_provider_secrets_with_repair, replace_app_settings, replace_provider_secrets,
 };
+
+/// Settings loaded for the UI, including any documents reset on this read.
+pub(crate) struct LoadedSettings {
+    pub settings: AppSettings,
+    pub revision: AuthorityRevision,
+    pub provider_keys: Vec<String>,
+    pub mcp_keys: Vec<String>,
+    pub repairs: Vec<DocumentRepair>,
+}
 
 /// Why a stored revision header could not be decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,10 +65,13 @@ fn stored_revision(
         .map(|revision| revision.unwrap_or(AuthorityRevision::ABSENT))
 }
 
-pub(crate) fn load_settings(
-    home: &HomeLayout,
-) -> Result<(AppSettings, AuthorityRevision, Vec<String>, Vec<String>), String> {
-    let mut settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
+pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String> {
+    let mut repairs = Vec::new();
+    let (mut settings, settings_repair) =
+        read_app_settings_with_repair(home).map_err(|error| render_config_error(&error))?;
+    if let Some(repair) = settings_repair {
+        repairs.push(repair);
+    }
     let mut revision = stored_revision(
         home,
         SETTINGS_PATH,
@@ -78,9 +90,19 @@ pub(crate) fn load_settings(
         revision = next;
     }
     apply_runtime_shell(&settings);
-    let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
+    let (secrets, secrets_repair) =
+        read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
+    if let Some(repair) = secrets_repair {
+        repairs.push(repair);
+    }
     let (provider_keys, mcp_keys) = split_key_ids(&secrets);
-    Ok((settings, revision, provider_keys, mcp_keys))
+    Ok(LoadedSettings {
+        settings,
+        revision,
+        provider_keys,
+        mcp_keys,
+        repairs,
+    })
 }
 
 pub(crate) fn save_settings(
@@ -158,7 +180,9 @@ pub(crate) fn save_provider_key(
     provider_id: &str,
     api_key: &str,
 ) -> Result<(Vec<String>, Vec<String>), String> {
-    let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
+    let secrets = read_provider_secrets_with_repair(home)
+        .map(|(secrets, _repair)| secrets)
+        .map_err(|error| render_config_error(&error))?;
     let expected = stored_revision(
         home,
         SECRETS_PATH,

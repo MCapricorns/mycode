@@ -9,7 +9,10 @@ use std::sync::RwLock;
 
 use mycode_agent::session::SessionId;
 use mycode_agent::session::SessionService;
-use mycode_config::{HomeLayout, ProviderSettings, read_app_settings, read_ui_state};
+use mycode_config::{
+    DocumentRepair, HomeLayout, ProviderSettings, read_app_settings, read_ui_state,
+    read_ui_state_with_repair,
+};
 use mycode_providers::catalog::{CachedCatalog, RefreshOutcome};
 use tokio_util::sync::CancellationToken;
 
@@ -35,15 +38,25 @@ pub(crate) struct CoreState {
     pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Live MCP clients, reused until settings change or a connection dies.
     pub(crate) mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
+    /// Documents reset before the UI asked for settings or UI state.
+    startup_repairs: Mutex<Vec<DocumentRepair>>,
 }
 
 impl CoreState {
-    pub(crate) fn new(home: HomeLayout, cached: CachedCatalog) -> Self {
+    pub(crate) fn new(
+        home: HomeLayout,
+        cached: CachedCatalog,
+        mut startup_repairs: Vec<DocumentRepair>,
+    ) -> Self {
         // Session→project bindings survive restarts through the durable UI
         // state; seed the in-memory map so tool working directories resolve
-        // before the desktop re-binds anything.
+        // before the desktop re-binds anything. A damaged `ui.json` is reset
+        // here, and the notice is kept for the first UI load.
         let mut projects = HashMap::new();
-        if let Ok(ui_state) = read_ui_state(&home) {
+        if let Ok((ui_state, repair)) = read_ui_state_with_repair(&home) {
+            if let Some(repair) = repair {
+                startup_repairs.push(repair);
+            }
             for (session_id, project) in &ui_state.session_projects {
                 if let Some(session) = SessionId::parse(session_id) {
                     projects.insert(session.as_str().to_owned(), PathBuf::from(project));
@@ -62,7 +75,16 @@ impl CoreState {
             turn_cancels: Arc::new(Mutex::new(HashMap::new())),
             subagent_cancels: Arc::new(Mutex::new(HashMap::new())),
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),
+            startup_repairs: Mutex::new(startup_repairs),
         }
+    }
+
+    /// Copies startup repair notices. Later loads still need the same list.
+    pub(crate) fn startup_repairs_snapshot(&self) -> Vec<DocumentRepair> {
+        self.startup_repairs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// The tool working directory for one session.

@@ -55,19 +55,28 @@ pub(crate) fn run_core(
         .await;
         // The catalog cache is a multi-megabyte document; parse it off the
         // core thread so startup does not stall the command loop.
-        let cached = tokio::task::spawn_blocking({
+        let (cached, catalog_repair) = tokio::task::spawn_blocking({
             let home = home.clone();
-            move || mycode_providers::catalog::current(&home)
+            move || mycode_providers::catalog::current_with_repair(&home)
         })
         .await
-        .unwrap_or_else(|_| mycode_providers::catalog::CachedCatalog {
-            document: mycode_providers::catalog::bundled().clone(),
-            fetched_at: 0,
-            etag: None,
+        .unwrap_or_else(|_| {
+            (
+                mycode_providers::catalog::CachedCatalog {
+                    document: mycode_providers::catalog::bundled().clone(),
+                    fetched_at: 0,
+                    etag: None,
+                },
+                None,
+            )
         });
+        let mut startup_repairs = Vec::new();
+        if let Some(repair) = catalog_repair {
+            startup_repairs.push(repair);
+        }
         // `SessionService::new` spawns the actor on this runtime. Calling it
         // from `spawn_blocking` has no reactor and cannot start the worker.
-        let state = CoreState::new(home.clone(), cached);
+        let state = CoreState::new(home.clone(), cached, startup_repairs);
         let state = Arc::new(state);
         spawn_catalog_refresh(state.clone(), events.clone());
         spawn_update_check(state.clone(), events.clone());
@@ -305,7 +314,29 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         ),
         BridgeCommand::LoadSettings => {
             let home = state.home.clone();
-            BridgeReply::Settings(blocking(move || load_settings(&home)).await)
+            let pending = state.startup_repairs_snapshot();
+            BridgeReply::Settings(
+                blocking(move || load_settings(&home))
+                    .await
+                    .map(|mut loaded| {
+                        for repair in pending {
+                            if !loaded
+                                .repairs
+                                .iter()
+                                .any(|existing| existing.path == repair.path)
+                            {
+                                loaded.repairs.push(repair);
+                            }
+                        }
+                        crate::SettingsSnapshot {
+                            settings: loaded.settings,
+                            revision: loaded.revision,
+                            provider_keys: loaded.provider_keys,
+                            mcp_keys: loaded.mcp_keys,
+                            repairs: loaded.repairs,
+                        }
+                    }),
+            )
         }
         BridgeCommand::SaveSettings {
             expected_revision,
@@ -469,9 +500,20 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             }))),
         BridgeCommand::LoadUiState => {
             let home = state.home.clone();
+            let pending = state.startup_repairs_snapshot();
             BridgeReply::UiState(
-                blocking(move || read_ui_state(&home).map_err(|error| render_config_error(&error)))
-                    .await,
+                blocking(move || {
+                    let (ui_state, repair) = mycode_config::read_ui_state_with_repair(&home)
+                        .map_err(|error| render_config_error(&error))?;
+                    let mut repairs = pending;
+                    if let Some(repair) = repair
+                        && !repairs.iter().any(|existing| existing.path == repair.path)
+                    {
+                        repairs.push(repair);
+                    }
+                    Ok((ui_state, repairs))
+                })
+                .await,
             )
         }
         BridgeCommand::SaveUiState { state: ui_state } => {

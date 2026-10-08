@@ -35,7 +35,7 @@ use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Reque
 
 pub use http_pin::{
     AddressClass, PinMode, PinnedBody, PinnedRequest, RedirectStep, classify_addresses,
-    decide_redirect, send_pinned, validate_hop,
+    connection_addresses, decide_redirect, send_pinned, validate_hop,
 };
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,

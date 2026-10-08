@@ -12,8 +12,8 @@ pub mod modelsdev;
 pub mod store;
 
 pub use store::{
-    CachedCatalog, DEFAULT_MAX_AGE_SECS, RefreshOutcome, bundled, current, http_client, load_cache,
-    refresh,
+    CachedCatalog, DEFAULT_MAX_AGE_SECS, RefreshOutcome, bundled, current, current_with_repair,
+    http_client, load_cache, refresh,
 };
 
 /// Wire protocol: Anthropic Messages.
