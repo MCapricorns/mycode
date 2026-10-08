@@ -455,6 +455,38 @@ mod tests {
     }
 
     #[test]
+    fn minimax_xml_ask_user_arrives_as_a_typed_tool_call() {
+        let mut reducer = CompletionsReducer::new();
+        let xml = concat!(
+            "<minimax:tool_call>",
+            "<invoke name=\"ask_user\">",
+            "<parameter name=\"questions\">",
+            r#"[{"question":"Which?","choices":["red","blue"],"multiple":true}]"#,
+            "</parameter>",
+            "</invoke>",
+            "</minimax:tool_call>",
+        );
+        let chunk = serde_json::json!({
+            "choices": [{"delta": {"content": xml}, "finish_reason": "stop"}]
+        });
+        reducer.feed(&chunk.to_string());
+        let message = take_done(reducer.feed("[DONE]"));
+        let call = message.blocks.iter().find_map(|block| match block {
+            ContentBlock::ToolCall(call) => Some(call),
+            _ => None,
+        });
+        let call = call.expect("xml ask_user becomes a tool call");
+        assert_eq!(call.name, "ask_user");
+        assert_eq!(
+            call.arguments["questions"][0]["choices"],
+            serde_json::json!(["red", "blue"])
+        );
+        assert_eq!(call.arguments["questions"][0]["multiple"], true);
+        assert_eq!(message.stop_reason, StopReason::ToolUse);
+        assert!(text_of(&message).is_empty(), "{}", text_of(&message));
+    }
+
+    #[test]
     fn glm_error_finish_keeps_thinking() {
         let mut reducer = CompletionsReducer::new();
         let deltas = reducer.feed(

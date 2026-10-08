@@ -136,6 +136,15 @@ pub trait Tool: Send + Sync + 'static {
         self.file_access().is_some()
     }
 
+    /// Rewrites model-emitted arguments into the schema shape before validation.
+    ///
+    /// The default leaves arguments unchanged. `ask_user` uses this so XML
+    /// tool-call shapes (stringified JSON, choice lists, and `multiple`
+    /// aliases) pass the same schema as a native JSON call.
+    fn prepare_args(&self, args: Value) -> Value {
+        args
+    }
+
     /// Execute the tool. Tools may stream progress through `out`; the returned
     /// result is the terminal outcome claimed by the dispatcher.
     async fn execute(
@@ -295,7 +304,7 @@ impl<T: Tool> ToolDyn for T {
         ctx: &ToolCtx,
         out: &mut ToolStream,
     ) -> Result<ToolResult, ToolError> {
-        let args = normalize_tool_args(args);
+        let args = self.prepare_args(normalize_tool_args(args));
         validate_args::<T::Args>(&args)?;
         let typed =
             serde_json::from_value(args).map_err(|err| ToolError::InvalidArgs(err.to_string()))?;
@@ -305,7 +314,7 @@ impl<T: Tool> ToolDyn for T {
 
 /// Accepts camelCase and a few common aliases so model-emitted tool
 /// arguments match the snake_case schemas without failing validation.
-fn normalize_tool_args(args: Value) -> Value {
+pub(crate) fn normalize_tool_args(args: Value) -> Value {
     let mut args = fold_camel_keys(args);
     let Value::Object(map) = &mut args else {
         return args;
