@@ -29,7 +29,7 @@
 | `settings_io` | 设置 CAS 和单把密钥的写入 |
 | `search` | 作曲栏 `@` 提到的项目文件 |
 | `export` | 产品数据的导出与导入包 |
-| `updates` | 检查、下载、校验、准备重启安装。错误收成一行 |
+| `updates` | 检查、下载、校验、准备重启安装。错误收成一行。macOS / Linux 用 `update.sh`；Windows 复制当前程序，带 `--mycode-apply-update` 等参数替换安装文件。Linux x86_64 安装包是 `mycode-desktop-*-x86_64-unknown-linux-gnu.zip`。已发布平台缺这个包时报错，不当成已是最新。启动检查失败会送到界面提示 |
 
 ## 回合装配
 

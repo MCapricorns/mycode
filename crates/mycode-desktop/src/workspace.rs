@@ -1,7 +1,7 @@
 //! The workspace window view: title bar, sessions sidebar, chat column,
 //! right inspector, and the full-page settings view.
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -200,6 +200,10 @@ pub struct Workspace {
     pending_catalog_refresh: bool,
     /// The in-flight check was started from About, so its result may toast.
     manual_update_check: bool,
+    /// Config files reset during this launch. Their names are toasted once.
+    repaired_configs: Vec<String>,
+    /// A single toast for [`Self::repaired_configs`] is already scheduled.
+    repair_toast_armed: bool,
     toasts: Vec<Toast>,
     next_toast_id: u64,
     /// In-app folder browser. `None` while the native dialog is not used.
@@ -300,6 +304,8 @@ impl Workspace {
             mention_generation: 0,
             pending_catalog_refresh: false,
             manual_update_check: false,
+            repaired_configs: Vec::new(),
+            repair_toast_armed: false,
             toasts: Vec::new(),
             next_toast_id: 0,
             project_picker: None,
@@ -1193,6 +1199,52 @@ impl Workspace {
 
     pub(crate) fn toasts(&self) -> &[Toast] {
         &self.toasts
+    }
+
+    /// Records documents reset at startup and shows one notice after the
+    /// settings and UI replies have both had a chance to arrive.
+    pub(crate) fn note_config_repairs(
+        &mut self,
+        repairs: &[mycode_config::DocumentRepair],
+        cx: &mut Context<Self>,
+    ) {
+        let mut added = false;
+        for repair in repairs {
+            if self
+                .repaired_configs
+                .iter()
+                .any(|existing| existing == repair.path)
+            {
+                continue;
+            }
+            self.repaired_configs.push(repair.path.to_owned());
+            added = true;
+        }
+        if !added || self.repair_toast_armed {
+            return;
+        }
+        self.repair_toast_armed = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            let _ = this.update(cx, |workspace, cx| {
+                let names = workspace.repaired_configs.join(", ");
+                workspace.push_toast(
+                    format!(
+                        "{} {names}. {}",
+                        crate::i18n::t("Reset unreadable config:", "已重置无法读取的配置:"),
+                        crate::i18n::t(
+                            "The previous files were kept beside them.",
+                            "原文件已留在旁边。",
+                        ),
+                    ),
+                    ToastKind::Info,
+                    cx,
+                );
+            });
+        })
+        .detach();
     }
 
     /// Shows a notice for three seconds. A full stack drops the oldest.

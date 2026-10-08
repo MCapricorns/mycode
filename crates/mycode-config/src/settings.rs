@@ -6,8 +6,9 @@
 //! Secrets never live here; credentials stay in the Host vault.
 //!
 //! A trailing comma from an earlier writer is repaired and the canonical
-//! document is rewritten. Missing fields take their defaults. Unknown fields
-//! and a wrong kind still fail closed.
+//! document is rewritten. Missing fields take their defaults. A document that
+//! cannot be parsed or validated is copied aside and replaced with defaults
+//! so startup can continue. Session ledgers are not part of this document.
 
 mod mcp;
 mod providers;
@@ -41,7 +42,7 @@ use tools_shell::{retire_unsupported_shell, tools_are_default};
 use crate::ConfigError;
 use crate::authority::AuthorityRevision;
 use crate::error::ConfigErrorKind;
-use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
+use crate::secure_fs::owned_file::locked_update_owned_file;
 
 /// Settings document path below the owned home.
 pub const SETTINGS_PATH: &str = "settings.json";
@@ -321,25 +322,66 @@ impl AppSettings {
     }
 }
 
-/// Reads and validates `settings.json` without creating filesystem objects.
+/// Reads and validates `settings.json`.
 ///
-/// A missing document yields the defaults; present documents must validate
-/// strictly.
+/// A missing document yields the defaults. A trailing comma is rewritten in
+/// place. A document that cannot be parsed or validated is backed up and
+/// replaced with defaults; see [`read_app_settings_with_repair`].
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] for owned-path security, oversized content, or
-/// strict validation failures.
+/// Returns [`ConfigError`] for owned-path security or when a damaged document
+/// cannot be copied aside.
 pub fn read_app_settings(home: &crate::HomeLayout) -> Result<AppSettings, ConfigError> {
-    let bytes = read_owned_file(home, SETTINGS_PATH, MAX_AUTHORITY_DOCUMENT_BYTES)?;
-    let Some(bytes) = bytes else {
-        return Ok(AppSettings::default());
+    Ok(read_app_settings_with_repair(home)?.0)
+}
+
+/// Reads `settings.json`, repairing a damaged document.
+///
+/// The second value is set when the previous bytes were copied to a
+/// `settings.json.broken-*` file and the original path was replaced with
+/// defaults. A valid document does not report a repair.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] for owned-path security or when the backup or the
+/// replacement cannot be published.
+pub fn read_app_settings_with_repair(
+    home: &crate::HomeLayout,
+) -> Result<(AppSettings, Option<crate::DocumentRepair>), ConfigError> {
+    let loaded = crate::document_repair::load_or_reset(
+        home,
+        SETTINGS_PATH,
+        MAX_AUTHORITY_DOCUMENT_BYTES,
+        |bytes| {
+            let parsed = decode_settings(bytes)?;
+            if parsed.migrated {
+                let _ = replace_app_settings(home, parsed.revision, &parsed.settings);
+            }
+            Ok(parsed.settings)
+        },
+        AppSettings::default,
+        || publish_default_settings(home),
+    )?;
+    Ok((loaded.value, loaded.repair))
+}
+
+fn publish_default_settings(home: &crate::HomeLayout) -> Result<(), ConfigError> {
+    let settings = AppSettings::default();
+    settings.validate()?;
+    let revision = AuthorityRevision::ABSENT.checked_next()?;
+    let document = SerializedSettings {
+        format_version: SETTINGS_FORMAT_VERSION,
+        kind: SETTINGS_KIND,
+        revision: revision.get(),
+        settings: &settings,
     };
-    let parsed = decode_settings(bytes.as_slice())?;
-    if parsed.migrated {
-        let _ = replace_app_settings(home, parsed.revision, &parsed.settings);
-    }
-    Ok(parsed.settings)
+    let mut bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
+    bytes.push(b'\n');
+    locked_update_owned_file(home, SETTINGS_PATH, MAX_AUTHORITY_DOCUMENT_BYTES, |_| {
+        Ok(bytes)
+    })
 }
 
 /// Replaces `settings.json` under revision compare-and-swap.

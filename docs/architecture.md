@@ -23,7 +23,7 @@ mycode-app         应用核。会话、回合、工具宿主、MCP、网页、�
 | Crate | 干什么 | 设计思路 |
 | --- | --- | --- |
 | `mycode-core` | 共享词汇 | 叶子 crate。类型能序列化，能原样穿过事件和请求。没有协议、没有磁盘、没有策略 |
-| `mycode-config` | 拥有的文件 | 路径只在词法上拼接，不跟随符号链接。文档有版本、种类、大小上限和 revision CAS |
+| `mycode-config` | 拥有的文件 | 路径只在词法上拼接，不跟随符号链接。文档有版本、种类、大小上限和 revision CAS。损坏的 `settings.json`、`secrets.json`、`ui.json` 会备份后回到默认；会话账本不重置 |
 | `mycode-providers` | 模型出口 | 厂商差异是 `settings.json` 里的数据。密钥由调用方传入，不进设置 |
 | `mycode-tools` | 工具实现 | 一份 JSON Schema 同时给模型和运行时。搜索和读文件在进程内完成 |
 | `mycode-agent` | 循环和账本 | 循环可以没有磁盘。账本是另一层，用期望头把一次写入做成可恢复的提交 |

@@ -2,7 +2,13 @@
 //! those addresses. Redirects are followed manually and checked again.
 //!
 //! [`PinMode::PublicHttps`] is for web search and update downloads. Every hop
-//! must be https on port 443 with only public addresses.
+//! must be https on port 443. A normal host must resolve to public addresses
+//! only. GitHub release hosts (`api.github.com`, `github.com`,
+//! `*.githubusercontent.com`) may also return a non-public extra (DNS64, a
+//! ULA, or a link-local address beside the real A/AAAA record). Those hops
+//! connect only to the public addresses. An answer that is entirely the
+//! benchmarking range `198.18.0.0/15` (local fake-ip DNS) may connect to
+//! those addresses. Loopback, RFC1918, link-local, and ULA are still refused.
 //! [`PinMode::CheckRedirect`] allows a first hop that is entirely public or
 //! entirely private (local models and localhost MCP). Later hops must resolve
 //! to public addresses, including a different host.
@@ -16,7 +22,9 @@ use tokio_util::sync::CancellationToken;
 /// How strictly each hop is checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinMode {
-    /// https, port 443, public host, all resolved addresses public.
+    /// https, port 443, public host. The whole answer must be public,
+    /// except GitHub release hosts, which may drop non-public extras or
+    /// connect to a pure `198.18.0.0/15` fake-ip answer.
     PublicHttps,
     /// First hop all-public or all-private. Redirects must be all-public.
     CheckRedirect,
@@ -106,6 +114,25 @@ pub fn classify_addresses(addrs: &[IpAddr]) -> AddressClass {
 ///
 /// Returns a visible reason when the URL or addresses violate `mode`.
 pub fn validate_hop(mode: PinMode, hop: u32, url: &str, addrs: &[IpAddr]) -> Result<(), String> {
+    connection_addresses(mode, hop, url, addrs).map(|_| ())
+}
+
+/// Addresses this hop may connect to.
+///
+/// GitHub release hosts drop non-public extras and keep the public ones.
+/// If none are public, a fake-ip (`198.18.0.0/15`) answer may still connect.
+/// Every other public hop still requires the whole answer to be public.
+/// Private and link-local addresses are never returned.
+///
+/// # Errors
+///
+/// Returns a visible reason when the URL or addresses violate `mode`.
+pub fn connection_addresses(
+    mode: PinMode,
+    hop: u32,
+    url: &str,
+    addrs: &[IpAddr],
+) -> Result<Vec<IpAddr>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| format!("url is invalid: {url}"))?;
     let class = classify_addresses(addrs);
     match mode {
@@ -120,9 +147,28 @@ pub fn validate_hop(mode: PinMode, hop: u32, url: &str, addrs: &[IpAddr]) -> Res
             if !public_host(host) {
                 return Err(format!("host is not public: {host}"));
             }
-            if class != AddressClass::AllPublic {
-                return Err("resolved addresses are not all public".to_owned());
+            if class == AddressClass::AllPublic {
+                return Ok(addrs.to_vec());
             }
+            if github_release_host(host) {
+                let public: Vec<IpAddr> = addrs
+                    .iter()
+                    .copied()
+                    .filter(|ip| is_public_ip(*ip))
+                    .collect();
+                if !public.is_empty() {
+                    return Ok(public);
+                }
+                // Local fake-ip resolvers answer only from 198.18.0.0/15.
+                // That is not a routable private LAN. Loopback, RFC1918, and
+                // link-local still fail closed below.
+                let fake: Vec<IpAddr> =
+                    addrs.iter().copied().filter(|ip| is_fake_ip(*ip)).collect();
+                if !fake.is_empty() && fake.len() == addrs.len() {
+                    return Ok(fake);
+                }
+            }
+            Err("resolved addresses are not all public".to_owned())
         }
         PinMode::CheckRedirect => {
             if hop == 0 {
@@ -132,9 +178,24 @@ pub fn validate_hop(mode: PinMode, hop: u32, url: &str, addrs: &[IpAddr]) -> Res
             } else if class != AddressClass::AllPublic {
                 return Err("redirect resolved to a non-public address".to_owned());
             }
+            Ok(addrs.to_vec())
         }
     }
-    Ok(())
+}
+
+/// Hosts that publish MYCode release bytes. A mixed DNS answer for one of
+/// these still connects, but only to addresses [`is_public_ip`] accepts.
+/// An answer that is entirely `198.18.0.0/15` may connect to those addresses.
+fn github_release_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "github.com"
+            | "www.github.com"
+            | "api.github.com"
+            | "codeload.github.com"
+            | "uploads.github.com"
+    ) || host.ends_with(".githubusercontent.com")
 }
 
 /// Decides whether a response is a redirect and what the next request is.
@@ -177,8 +238,8 @@ pub async fn send_pinned(request: PinnedRequest) -> Result<reqwest::Response, St
         if request.cancel.is_cancelled() {
             return Err("request cancelled".to_owned());
         }
-        let addrs = lookup_addresses(&url).await?;
-        validate_hop(request.mode, hop, &url, &addrs)?;
+        let looked_up = lookup_addresses(&url).await?;
+        let addrs = connection_addresses(request.mode, hop, &url, &looked_up)?;
         let response = tokio::select! {
             biased;
             () = request.cancel.cancelled() => return Err("request cancelled".to_owned()),
@@ -295,6 +356,17 @@ fn public_host(host: &str) -> bool {
     true
 }
 
+/// `198.18.0.0/15`, the benchmarking range local fake-ip DNS uses.
+fn is_fake_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            octets[0] == 198 && (octets[1] & 0xfe) == 18
+        }
+        IpAddr::V6(_) => false,
+    }
+}
+
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_ipv4(ip),
@@ -321,22 +393,39 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
 }
 
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() {
+    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
         return false;
     }
     let segments = ip.segments();
     if let Some(v4) = ip.to_ipv4_mapped() {
         return is_public_ipv4(v4);
     }
+    // 6to4 embeds an IPv4 address. A private embedded address is not a
+    // public target, even when the IPv6 prefix looks global.
+    if segments[0] == 0x2002 {
+        let embedded = Ipv4Addr::new(
+            (segments[1] >> 8) as u8,
+            (segments[1] & 0xff) as u8,
+            (segments[2] >> 8) as u8,
+            (segments[2] & 0xff) as u8,
+        );
+        return is_public_ipv4(embedded);
+    }
+    // Unique-local fc00::/7, link-local fe80::/10, site-local fec0::/10,
+    // discard 100::/8, documentation 2001:db8::/32, and Teredo 2001::/32.
     !(segments[0] & 0xfe00 == 0xfc00
         || segments[0] & 0xffc0 == 0xfe80
-        || segments[0] == 0x2001 && segments[1] == 0xdb8)
+        || segments[0] & 0xffc0 == 0xfec0
+        || segments[0] == 0x100
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+        || (segments[0] == 0x2001 && segments[1] == 0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AddressClass, PinMode, RedirectStep, classify_addresses, decide_redirect, validate_hop,
+        AddressClass, PinMode, RedirectStep, classify_addresses, connection_addresses,
+        decide_redirect, validate_hop,
     };
     use std::net::IpAddr;
 
@@ -424,6 +513,187 @@ mod tests {
             &[ip([127, 0, 0, 1])],
         )
         .unwrap();
+    }
+
+    fn v6(value: &str) -> IpAddr {
+        value.parse().unwrap()
+    }
+
+    #[test]
+    fn github_release_hosts_keep_public_addresses_from_a_mixed_answer() {
+        let mixed = [
+            ip([140, 82, 113, 5]),
+            v6("2606:50c0:8000::154"),
+            v6("fd00::1"),
+            v6("fe80::1"),
+            ip([10, 0, 0, 1]),
+        ];
+        for url in [
+            "https://api.github.com/repos/MCapricorns/mycode/releases/latest",
+            "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/app.zip",
+            "https://objects.githubusercontent.com/github-production-release-asset/app.zip",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/app.zip",
+            "https://github-releases.githubusercontent.com/app.zip",
+            "https://codeload.github.com/MCapricorns/mycode/legacy.tar.gz/refs/tags/v0.9.18",
+            "https://uploads.github.com/asset",
+            "https://www.github.com/MCapricorns/mycode/releases",
+        ] {
+            let selected = connection_addresses(PinMode::PublicHttps, 0, url, &mixed).unwrap();
+            assert_eq!(
+                selected,
+                vec![ip([140, 82, 113, 5]), v6("2606:50c0:8000::154")],
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn github_release_host_with_only_private_addresses_is_rejected() {
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://api.github.com/repos/MCapricorns/mycode/releases/latest",
+            &[ip([10, 1, 2, 3]), v6("fe80::1"), ip([127, 0, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+        let error = validate_hop(
+            PinMode::PublicHttps,
+            0,
+            "https://objects.githubusercontent.com/asset",
+            &[ip([192, 168, 1, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://github-releases.githubusercontent.com/app.zip",
+            &[ip([100, 64, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+    }
+
+    #[test]
+    fn github_filter_drops_ula_link_local_teredo_and_private_six_to_four() {
+        let mixed = [
+            ip([185, 199, 108, 133]),
+            v6("2606:50c0:8001::154"),
+            v6("fd7a:115c:a1e0::53"),
+            v6("fe80::1"),
+            v6("fec0::1"),
+            v6("100::1"),
+            v6("2001:db8::1"),
+            v6("2001::1"),
+            v6("ff02::1"),
+            v6("2002:0a00:0001::"),
+            v6("::ffff:10.1.2.3"),
+            ip([198, 18, 0, 1]),
+        ];
+        let selected = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://objects.githubusercontent.com/github-production-release-asset/app.zip",
+            &mixed,
+        )
+        .unwrap();
+        assert_eq!(
+            selected,
+            vec![ip([185, 199, 108, 133]), v6("2606:50c0:8001::154")]
+        );
+        assert_eq!(
+            classify_addresses(&[v6("2002:0808:0808::")]),
+            AddressClass::AllPublic
+        );
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://api.github.com/repos/MCapricorns/mycode/releases/latest",
+            &[v6("2002:0a00:0001::"), v6("fe80::1")],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+    }
+
+    #[test]
+    fn github_fake_ip_answer_can_connect_and_private_still_cannot() {
+        let selected = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://api.github.com/repos/MCapricorns/mycode/releases/latest",
+            &[ip([198, 18, 0, 7]), ip([198, 19, 1, 2])],
+        )
+        .unwrap();
+        assert_eq!(selected, vec![ip([198, 18, 0, 7]), ip([198, 19, 1, 2])]);
+        let selected = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://release-assets.githubusercontent.com/app.zip",
+            &[ip([140, 82, 113, 5]), ip([198, 18, 4, 4]), v6("fe80::1")],
+        )
+        .unwrap();
+        assert_eq!(selected, vec![ip([140, 82, 113, 5])]);
+        assert_eq!(
+            classify_addresses(&[v6("2a0a:a440::1"), ip([143, 55, 64, 1])]),
+            AddressClass::AllPublic
+        );
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://objects.githubusercontent.com/asset",
+            &[ip([198, 18, 0, 1]), ip([10, 0, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://example.com/search",
+            &[ip([198, 18, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+    }
+
+    #[test]
+    fn non_github_mixed_answer_stays_rejected() {
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://example.com/search",
+            &[ip([1, 1, 1, 1]), ip([10, 0, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+        let error = validate_hop(
+            PinMode::PublicHttps,
+            0,
+            "https://evil.githubusercontent.com.example/asset",
+            &[ip([1, 1, 1, 1]), ip([10, 0, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public"), "{error}");
+    }
+
+    #[test]
+    fn private_literal_and_link_local_are_not_public_targets() {
+        let error = validate_hop(
+            PinMode::PublicHttps,
+            0,
+            "https://10.0.0.1/secret",
+            &[ip([10, 0, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not public"), "{error}");
+        assert_eq!(
+            classify_addresses(&[v6("2606:50c0:8003::154"), ip([185, 199, 108, 133])]),
+            AddressClass::AllPublic
+        );
+        assert_eq!(
+            classify_addresses(&[v6("fd7a:115c:a1e0::1"), ip([169, 254, 1, 1])]),
+            AddressClass::AllPrivate
+        );
     }
 
     #[test]

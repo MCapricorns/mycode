@@ -205,6 +205,24 @@ impl Workspace {
                 self.on_download_update(cx);
                 return;
             }
+            BridgeEvent::UpdateCheckFailed { message } => {
+                // Startup (and any later automatic check that reports here)
+                // used to drop the error. Toast it. About keeps the short
+                // status line and does not paint this string in red.
+                if matches!(
+                    self.vm.update,
+                    UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+                ) {
+                    return;
+                }
+                let brief = mycode_app::brief_error(&message);
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
+                    cx,
+                );
+                self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
+                return;
+            }
         };
         self.apply_action(action, cx);
     }
@@ -313,10 +331,12 @@ impl Workspace {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
                 self.begin_chat_turn(cx);
             }
-            BridgeReply::Settings(Ok((settings, revision, provider_keys, mcp_keys))) => {
-                let revision = revision.get();
-                let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
-                state.mcp_with_keys = mcp_keys;
+            BridgeReply::Settings(Ok(loaded)) => {
+                self.note_config_repairs(&loaded.repairs, cx);
+                let revision = loaded.revision.get();
+                let mut state =
+                    SettingsState::from_settings(&loaded.settings, revision, loaded.provider_keys);
+                state.mcp_with_keys = loaded.mcp_keys;
                 // A dirty or in-flight editor keeps its palette and
                 // user-agent field. Applying the disk copy here would undo
                 // unsaved appearance edits before the reducer can refuse the
@@ -464,7 +484,8 @@ impl Workspace {
                     self.apply_action(DesktopAction::Failed(message), cx);
                 }
             }
-            BridgeReply::UiState(Ok(mut ui_state)) => {
+            BridgeReply::UiState(Ok((mut ui_state, repairs))) => {
+                self.note_config_repairs(&repairs, cx);
                 // One-time upgrade: the legacy anonymous folder list becomes
                 // the first named workspace, and every session that predates
                 // workspaces belongs to it (unbound sessions resolve to the
@@ -552,9 +573,10 @@ impl Workspace {
                     DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
                     cx,
                 );
-                if self.take_manual_update_check() {
-                    self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
-                }
+                // Manual and automatic checks both toast. The About row does
+                // not render `brief`.
+                let _ = self.take_manual_update_check();
+                self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
             }
             BridgeReply::UpdateDownloaded(Ok(prepared)) => {
                 let version = self

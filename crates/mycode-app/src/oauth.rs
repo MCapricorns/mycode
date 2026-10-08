@@ -327,7 +327,9 @@ fn upsert_catalog_provider(
     if bound.is_empty() {
         return Err(format!("no {provider_id} models were selected"));
     }
-    let (mut settings, revision, _, _) = load_settings(&state.home)?;
+    let loaded = load_settings(&state.home)?;
+    let mut settings = loaded.settings;
+    let revision = loaded.revision;
     match settings
         .providers
         .iter_mut()

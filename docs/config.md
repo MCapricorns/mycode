@@ -6,7 +6,7 @@
 
 家目录是可整体搬走的一棵树。`HomeLayout` 只做词法拼接：`MYCODE_HOME` 替换整棵根，否则是用户主目录下的 `.mycode`。不 `canonicalize`，不跟随符号链接，不看进程的当前目录。相对路径里出现 `..`、绝对分量或空字节会拒绝。
 
-文档是严格 JSON。每份权威文件有 `formatVersion`、`kind`、字节上限，以及 revision。写入用文件锁加上比较交换：编辑器带上读到的 revision，过期就失败，避免两个保存互相覆盖。读入时修掉旧写法留下的尾逗号，缺字段补默认值，然后把规范化结果写回去。未知字段和错误的 `kind` 直接失败。
+文档是严格 JSON。每份权威文件有 `formatVersion`、`kind`、字节上限，以及 revision。写入用文件锁加上比较交换：编辑器带上读到的 revision，过期就失败，避免两个保存互相覆盖。读入时修掉旧写法留下的尾逗号，缺字段补默认值，然后把规范化结果写回去。`settings.json`、`secrets.json`、`ui.json` 如果解析失败、校验失败（未知字段、错误的 `kind`、非法色板等）或不是合法 UTF-8，会把原字节复制到旁边的 `{文件名}.broken-<时间>`，再写入该文档的默认内容，启动继续。密钥备份里仍是原来的字节，恢复过程不把它们写进日志。会话账本和 `sessions.db` 不走这套恢复。文件读不出来、权限不够，或备份写不进去时，原文件保持不动并返回错误。
 
 密钥和设置分开。`settings.json` 可以进导出包；`secrets.json` 单独存，`Debug` 输出脱敏。读文件的缓冲区用 `zeroize`，避免密钥在临时缓冲里多停一轮。
 
@@ -17,9 +17,10 @@
 | `home` | 解析根、`sessions/`、`scratch/`，以及会话内相对路径 |
 | `secure_fs` | 有界读取、持久锁、相对句柄的原子替换。Unix 与 Windows 各有一套不跟随链接的打开方式。本模块不含文档 schema |
 | `authority` | 文档 revision，供比较交换 |
-| `json_recover` | 尾逗号修复 |
-| `settings` | `settings.json`：外观与语言、提供商、shell、网页后端、MCP、子代理路由、User-Agent |
-| `secrets` | `secrets.json`：每个提供商一把密钥，按 id 排序。空字符串表示清除 |
+| `json_recover` | 尾逗号修复。就地改写，不另存备份 |
+| `document_repair` | 把无法解析或无法校验的产品文档复制到 `.broken-*`，再发布默认内容 |
+| `settings` | `settings.json`：外观与语言、提供商、shell、网页后端、MCP、子代理路由、User-Agent。损坏时备份后回到默认外观和空提供商列表 |
+| `secrets` | `secrets.json`：每个提供商一把密钥，按 id 排序。空字符串表示清除。损坏时备份后变成空存储，钥匙只留在备份里 |
 | `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型，以及模型选择器的最近使用和星标。坏文件重置为默认，不当作产品配置的真相 |
 | `compaction` | `compaction.json`：摘要覆盖到哪条消息、哪个分支头。账本本身不改写 |
 | `subagents` | 内置 scout 与 artisan，再加上家目录和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |

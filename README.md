@@ -2,7 +2,7 @@
 
 本地优先的桌面编码代理。对话、工具调用和会话都在你自己的电脑上；你填 API 密钥，应用负责回合、工具和界面。发布包支持 Windows 10/11 x64、Windows 11 ARM64、macOS Apple Silicon 与 Linux x86_64。
 
-[许可证](LICENSE) · [文档](docs/README.md) · [发布](https://github.com/MCapricorns/mycode/releases) · [更新日志](CHANGELOG.md)
+[许可证](LICENSE) · [文档](docs/README.md) · [发布](https://github.com/MCapricorns/mycode/releases) · [更新日志](CHANGELOG.md) · [X（@M_Capricorns）](https://x.com/M_Capricorns)
 
 English notes are [below](#english).
 
@@ -14,15 +14,15 @@ English notes are [below](#english).
 - **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
 - **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，可以用 Python heredoc 或短脚本改文件；`program` 直接启动钉住的程序映像）。这些改动都没有文件撤销。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
 - **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。委派工具是 `agent`。并发默认 4 个；设置里的 `0` 表示这个默认值，不是零个子代理。子代理没有墙钟超时。
-- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。状态栏版本为 **v0.9.16**。没有打开工作区时，空工作台只有「打开目录」；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。
+- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。状态栏版本为 **v0.9.18**。没有打开工作区时，空工作台只有「打开目录」；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。读不了的 `settings.json`、`ui.json`、`secrets.json` 和模型目录缓存会先备份再恢复默认，会话账本不动。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
 ## 界面
 
-v0.9.16。标题栏由客户端绘制。没有打开工作区时，空工作台只有「打开目录」。
+v0.9.18。标题栏由客户端绘制。没有打开工作区时，空工作台只有「打开目录」。
 
-![主窗口：v0.9.16，CSD 标题栏，空工作台只有打开目录](docs/images/readme-main.png)
+![主窗口：v0.9.18，CSD 标题栏，空工作台只有打开目录](docs/images/readme-main.png)
 
 外观页：语言、色板、界面字体、界面字号 S–XL。
 
@@ -68,7 +68,7 @@ cargo build --release -p mycode-desktop
 
 更早版本留下的 `checkpoints/<id>/` 会在删除会话时清掉。新的回合不再写文件快照。
 
-把整个目录换到另一台机器时，设置 `MYCODE_HOME` 指向它。应用不会跟随符号链接走出这个根。
+把整个目录换到另一台机器时，设置 `MYCODE_HOME` 指向它。应用不会跟随符号链接走出这个根。上述四个 JSON 损坏时会在同目录留下 `.broken-*` 备份并恢复默认；`sessions.db` 和 `sessions/` 不会因此被清空。
 
 ## 文档
 
@@ -96,7 +96,7 @@ pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64、macOS A
 
 mycode is a local-first desktop coding agent for Windows, macOS, and Linux x86_64.
 The conversation, the tool calls, and every session stay on your machine.
-You bring the API keys.
+You bring the API keys. Follow [@M_Capricorns](https://x.com/M_Capricorns) on X.
 
 ### Features
 
@@ -123,14 +123,16 @@ You bring the API keys.
   wall-clock timeout.
 - **UI.** English and Chinese, a dark theme, and a client-drawn title
   bar (CSD) on every platform: the system title bar stays hidden, and
-  minimize, zoom, and close sit on the right. The status badge reads
-  **v0.9.16**. With no workspace open, the empty desk offers Open folder
+  minimize, zoom, and close sit on the right.   The status badge reads
+  **v0.9.18**. With no workspace open, the empty desk offers Open folder
   only; New task appears after a folder is open. Appearance has
   Language, then the palettes slate, ocean, forest, dusk, sand, rose,
   ink, moss, ember, glacier, plum, copper, and aurora, plus Interface
   font and sizes S–XL. Fenced code in the transcript is highlighted
   with gpui-kit's Tree-sitter grammars. Updates download and verify,
-  then wait for a restart confirmation.
+  then wait for a restart confirmation. Unreadable `settings.json`,
+  `ui.json`, `secrets.json`, and the model catalog cache are backed up
+  and reset to defaults. Session ledgers are left alone.
 
 A tool line names its target: which file was read, what was searched,
 which command ran. Keys live only in `secrets.json`. Saved keys show as
@@ -138,9 +140,9 @@ a lock in Settings.
 
 ### Screenshots
 
-v0.9.16. The title bar is client-side (CSD). With no workspace open, the empty desk offers Open folder.
+v0.9.18. The title bar is client-side (CSD). With no workspace open, the empty desk offers Open folder.
 
-![Main window: v0.9.16, CSD title bar, empty desk with Open folder](docs/images/readme-main.png)
+![Main window: v0.9.18, CSD title bar, empty desk with Open folder](docs/images/readme-main.png)
 
 Appearance: Language, palette, Interface font, and S–XL.
 
@@ -193,7 +195,9 @@ payloads, and compaction checkpoints. Older installs may still have
 do not write file snapshots.
 
 Point `MYCODE_HOME` at a copied tree to move the app. Path resolution
-does not follow symlinks out of that root.
+does not follow symlinks out of that root. A damaged copy of the four
+JSON files above is kept as a `.broken-*` backup and replaced with
+defaults. `sessions.db` and `sessions/` are not cleared for that.
 
 ### Documentation
 

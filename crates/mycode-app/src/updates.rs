@@ -3,11 +3,15 @@
 //! The checker resolves the latest published release, picks the release
 //! asset matching the running platform, and compares semantic versions. The
 //! installer downloads the asset plus its `.sha256` sidecar, verifies the
-//! digest, extracts the new binary into a staging directory, and hands the
-//! actual swap to a small detached updater script so the running process can
-//! exit first. Asset names and staging conventions are produced by the
-//! release jobs in `.github/workflows/release.yml`. Pull requests build the
-//! same archives from `.github/workflows/ci.yml` and do not publish them.
+//! digest, and extracts the new binary into a staging directory. macOS and
+//! Linux hand the swap to a detached shell script. Windows copies the running
+//! executable and relaunches that copy with `--mycode-apply-update` so the
+//! helper can replace the install after this process exits. Asset names and
+//! staging conventions are produced by the release jobs in
+//! `.github/workflows/release.yml`. Pull requests build the same archives
+//! from `.github/workflows/ci.yml` and do not publish them.
+
+pub(crate) mod apply;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,21 +36,17 @@ pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Release asset suffix for the running platform, empty when unsupported.
+/// Release asset suffix for one target, empty when that target is unpublished.
 ///
-/// Published archives are Windows x64, Windows ARM64, and macOS Apple
-/// Silicon. Linux, Intel macOS, Windows x86, and every other target resolve
-/// no asset and stay on their installed version.
-#[must_use]
-pub fn asset_suffix() -> &'static str {
-    asset_suffix_for(std::env::consts::OS, std::env::consts::ARCH)
-}
-
+/// Published archives are Windows x64, Windows ARM64, macOS Apple Silicon,
+/// and Linux x86_64. Intel macOS, Windows x86, and every other target
+/// resolve no asset and stay on their installed version.
 fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
     match (os, arch) {
         ("windows", "x86_64") => "-x86_64-pc-windows-msvc.zip",
         ("windows", "aarch64") => "-aarch64-pc-windows-msvc.zip",
         ("macos", "aarch64") => "-aarch64-apple-darwin.zip",
+        ("linux", "x86_64") => "-x86_64-unknown-linux-gnu.zip",
         _ => "",
     }
 }
@@ -126,7 +126,7 @@ pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, Str
             brief_error(&error.to_string())
         )
     })?;
-    let Some(offer) = resolve_asset(&release.tag_name, &release.html_url, &release.assets) else {
+    let Some(offer) = resolve_asset(&release.tag_name, &release.html_url, &release.assets)? else {
         return Ok(None);
     };
     if !is_newer(&release.tag_name, current_version()) {
@@ -165,22 +165,55 @@ fn classify_release_status(status: reqwest::StatusCode) -> Result<Option<()>, St
     Ok(Some(()))
 }
 
-fn resolve_asset(tag: &str, notes_url: &str, assets: &[AssetJson]) -> Option<UpdateOffer> {
-    let suffix = asset_suffix();
+fn resolve_asset(
+    tag: &str,
+    notes_url: &str,
+    assets: &[AssetJson],
+) -> Result<Option<UpdateOffer>, String> {
+    resolve_asset_for(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        tag,
+        notes_url,
+        assets,
+    )
+}
+
+/// `Ok(None)` is an unsupported target (no published archive). A supported
+/// target with no matching file is an error, so Linux is not reported as
+/// already up to date when the zip is missing from the release.
+fn resolve_asset_for(
+    os: &str,
+    arch: &str,
+    tag: &str,
+    notes_url: &str,
+    assets: &[AssetJson],
+) -> Result<Option<UpdateOffer>, String> {
+    let suffix = asset_suffix_for(os, arch);
     if suffix.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let asset = assets
-        .iter()
-        .find(|asset| asset.name.starts_with("mycode-desktop-") && asset.name.ends_with(suffix))?;
+    // Published names look like
+    // `mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip`. The `.sha256`
+    // sidecar shares the prefix and must not be selected.
+    let asset = assets.iter().find(|asset| {
+        asset.name.starts_with("mycode-desktop-")
+            && asset.name.ends_with(suffix)
+            && !asset.name.ends_with(".sha256")
+    });
+    let Some(asset) = asset else {
+        return Err(format!(
+            "update check failed: release has no mycode-desktop*{suffix} asset"
+        ));
+    };
     let version = tag.trim_start_matches('v').to_owned();
-    Some(UpdateOffer {
+    Ok(Some(UpdateOffer {
         version,
         notes_url: notes_url.to_owned(),
         asset_url: asset.browser_download_url.clone(),
         asset_size: asset.size,
         checksum_url: format!("{}.sha256", asset.browser_download_url),
-    })
+    }))
 }
 
 /// Whether `tag` is strictly newer than `current` (both `vX.Y.Z` or `X.Y.Z`).
@@ -362,12 +395,15 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
     Ok(binary_path)
 }
 
-/// Arms the detached swap script and returns; the caller exits the process
-/// so the updater can replace the binary and relaunch it.
+/// Arms the platform swap and returns; the caller exits the process so the
+/// updater can replace the binary and relaunch it.
+///
+/// Windows launches a copy of this executable with [`apply::APPLY_UPDATE_ARG`].
+/// macOS and Linux launch `update.sh`.
 ///
 /// # Errors
 ///
-/// Returns a failure message when the script or its process cannot start.
+/// Returns a failure message when the helper or its process cannot start.
 pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
     let actual = file_sha256(&prepared.new_binary)?;
     if !actual.eq_ignore_ascii_case(&prepared.binary_sha256) {
@@ -375,50 +411,30 @@ pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
     }
     let current = std::env::current_exe().map_err(|error| format!("current exe: {error}"))?;
     let current = current.canonicalize().unwrap_or(current);
-    let script_path = prepared.stage_dir.join(if cfg!(windows) {
-        "update.cmd"
-    } else {
-        "update.sh"
-    });
-    let script = if cfg!(windows) {
-        windows_script(
-            &prepared.new_binary,
-            &current,
-            &prepared.binary_sha256,
-            true,
-        )
-    } else {
-        unix_script(
-            &prepared.new_binary,
-            &current,
-            &prepared.binary_sha256,
-            true,
-        )
-    };
-    std::fs::write(&script_path, script).map_err(|error| format!("updater script: {error}"))?;
-
     #[cfg(windows)]
-    spawn_windows_updater(&script_path)?;
+    {
+        apply::spawn_windows_helper(
+            &prepared.stage_dir,
+            &current,
+            &prepared.new_binary,
+            &prepared.binary_sha256,
+        )?;
+    }
     #[cfg(not(windows))]
-    Command::new("/bin/sh")
-        .arg(&script_path)
-        .spawn()
-        .map_err(|error| format!("updater spawn: {error}"))?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn spawn_windows_updater(script_path: &Path) -> Result<(), String> {
-    // 0x00000008 DETACHED_PROCESS | 0x08000000 CREATE_NO_WINDOW: the swap
-    // must outlive this process and never flash a console.
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    use std::os::windows::process::CommandExt as _;
-    Command::new("cmd")
-        .args(["/c", &script_path.to_string_lossy()])
-        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|error| format!("updater spawn: {error}"))?;
+    {
+        let script_path = prepared.stage_dir.join("update.sh");
+        let script = unix_script(
+            &prepared.new_binary,
+            &current,
+            &prepared.binary_sha256,
+            true,
+        );
+        std::fs::write(&script_path, script).map_err(|error| format!("updater script: {error}"))?;
+        Command::new("/bin/sh")
+            .arg(&script_path)
+            .spawn()
+            .map_err(|error| format!("updater spawn: {error}"))?;
+    }
     Ok(())
 }
 
@@ -436,133 +452,6 @@ pub fn cleanup_stale_stages() {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
-}
-
-fn windows_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: bool) -> String {
-    let previous = previous_path(current);
-    let previous = previous.to_string_lossy();
-    let current = current.to_string_lossy();
-    let new_binary = new_binary.to_string_lossy();
-    // `timeout` returns immediately when cmd has no console. The updater is
-    // spawned detached, so the wait is `ping`, which still sleeps about a
-    // second. The retry covers the replace, not only the backup copy: a
-    // running image can be copied and still refuse to be renamed.
-    //
-    // Paths are stored while delayed expansion is off, with `%` doubled so
-    // the stored value keeps a literal percent. Later references use `!VAR!`,
-    // which does not expand `%VAR%` inside the value. `certutil` runs in a
-    // child `cmd /v:on /c` so a `certutil.cmd` on PATH cannot take over this
-    // file, and so `%` in the path is expanded only by delayed expansion.
-    // Redirected certutil output is UTF-16; the test shim's echo is not.
-    // PowerShell keeps the 64 hex digits as ASCII.
-    //
-    // `call :checkhash` returns into this file. Deleting it and then
-    // `exit /b` makes cmd look the file up again, print "The batch file
-    // cannot be found.", and exit 1. `exit 0` ends this process while the
-    // file is still here. A second process deletes it after `ping`.
-    //
-    // PowerShell uses `-WindowStyle Hidden`. Cleanup and relaunch use
-    // `start /b`, so neither step opens a console. The release binary is
-    // the windows subsystem; `/b` starts it without a new window.
-    let relaunch_line = if relaunch {
-        "start \"\" /b \"!CURRENT!\"\n"
-    } else {
-        ""
-    };
-    let template = r#"@echo off
-setlocal EnableExtensions DisableDelayedExpansion
-set "TRIES=0"
-set "BACKED_UP=0"
-set "CURRENT=__CURRENT__"
-set "PREVIOUS=__PREVIOUS__"
-set "NEW=__NEW__"
-set "EXPECTED=__HASH__"
-setlocal EnableDelayedExpansion
-:retry
-if "!BACKED_UP!"=="0" goto backup
-goto replace
-:backup
-copy /y "!CURRENT!" "!PREVIOUS!" >nul 2>&1
-if errorlevel 1 goto wait
-set "BACKED_UP=1"
-:replace
-set "MYCODE_HASH_TARGET=!NEW!"
-call :checkhash
-if errorlevel 1 (
-  echo updater: staged binary sha256 does not match 1>&2
-  exit /b 1
-)
-move /y "!NEW!" "!CURRENT!" >nul 2>&1
-if errorlevel 1 goto wait
-set "MYCODE_HASH_TARGET=!CURRENT!"
-call :checkhash
-if errorlevel 1 goto rollback
-goto done
-:wait
-set /a TRIES+=1
-if !TRIES! GEQ 30 (
-  if "!BACKED_UP!"=="0" (
-    echo updater: could not back up the current binary 1>&2
-  ) else (
-    echo updater: could not replace the current binary before the retry limit 1>&2
-  )
-  exit /b 1
-)
-ping -n 2 127.0.0.1 >nul
-goto retry
-:rollback
-echo updater: replaced binary sha256 does not match; restoring backup 1>&2
-move /y "!PREVIOUS!" "!CURRENT!" >nul 2>&1
-exit /b 1
-:done
-__RELAUNCH__
-rem `exit 0` ends this cmd without returning into the batch. A second
-rem process deletes the script after ping, so this file is still here
-rem while we exit.
-start "" /b cmd /c "ping -n 3 127.0.0.1 >nul & del /f /q ""%~f0"""
-exit 0
-:checkhash
-set "HASHRESULT="
-set "HASHOUT=%~dp0mycode-hash.txt"
-set "HASHASCII=%~dp0mycode-hash-ascii.txt"
-set "PS1=%~dp0mycode-hash.ps1"
-del "%HASHOUT%" "%HASHASCII%" "%PS1%" >nul 2>&1
-setlocal DisableDelayedExpansion
-> "%PS1%" echo $bytes = [System.IO.File]::ReadAllBytes^($env:HASHOUT^)
->> "%PS1%" echo $encoding = [System.Text.Encoding]::ASCII
->> "%PS1%" echo if ^($bytes.Length -ge 2 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254^) { $encoding = [System.Text.Encoding]::Unicode }
->> "%PS1%" echo $text = $encoding.GetString^($bytes^)
->> "%PS1%" echo $text = $text -replace '\s', ''
->> "%PS1%" echo $match = [regex]::Match^($text, '[0-9A-Fa-f]{64}'^)
->> "%PS1%" echo if ^(-not $match.Success^) { [Console]::Error.WriteLine^('no sha256 in certutil output'^); exit 1 }
->> "%PS1%" echo [System.IO.File]::WriteAllText^($env:HASHASCII, $match.Value + [char]10^)
-cmd /v:on /c certutil -hashfile "!MYCODE_HASH_TARGET!" SHA256 > "%HASHOUT%"
-endlocal
-call "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -File "%PS1%"
-if errorlevel 1 (
-  echo updater: could not read certutil output for [!MYCODE_HASH_TARGET!] 1>&2
-  del "%HASHOUT%" "%HASHASCII%" "%PS1%" >nul 2>&1
-  exit /b 1
-)
-set /p HASHRESULT=<"%HASHASCII%"
-del "%HASHOUT%" "%HASHASCII%" "%PS1%" >nul 2>&1
-if not defined HASHRESULT (
-  echo updater: certutil did not return a sha256 target [!MYCODE_HASH_TARGET!] 1>&2
-  exit /b 1
-)
-if /i not "!HASHRESULT!"=="!EXPECTED!" (
-  echo updater: sha256 !HASHRESULT! does not match !EXPECTED! 1>&2
-  exit /b 1
-)
-exit /b 0
-"#;
-    template
-        .replace("__PREVIOUS__", &cmd_percent_escape(&previous))
-        .replace("__CURRENT__", &cmd_percent_escape(&current))
-        .replace("__NEW__", &cmd_percent_escape(&new_binary))
-        .replace("__HASH__", &cmd_percent_escape(sha256))
-        .replace("__RELAUNCH__", relaunch_line)
-        .replace('\n', "\r\n")
 }
 
 fn unix_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: bool) -> String {
@@ -666,12 +555,6 @@ fn shell_single_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-/// Double `%` so a batch file stores a literal percent instead of expanding
-/// an environment variable. The value is placed inside `set "VAR=..."`.
-fn cmd_percent_escape(text: &str) -> String {
-    text.replace('%', "%%")
-}
-
 fn file_sha256(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("hash read: {error}"))?;
     Ok(sha256_hex(&bytes))
@@ -699,6 +582,10 @@ mod tests {
         assert_eq!(
             asset_suffix_for("macos", "aarch64"),
             "-aarch64-apple-darwin.zip"
+        );
+        assert_eq!(
+            asset_suffix_for("linux", "x86_64"),
+            "-x86_64-unknown-linux-gnu.zip"
         );
     }
 
@@ -766,46 +653,11 @@ mod tests {
         assert!(!quiet.contains("nohup"), "{quiet}");
         let live = super::unix_script(staged, current, "ab", true);
         assert!(live.contains("nohup \"$current\""), "{live}");
-        let quiet = super::windows_script(staged, current, "ab", false);
-        assert!(!quiet.contains("start \"\" /b \"!CURRENT!\""), "{quiet}");
-        let live = super::windows_script(staged, current, "ab", true);
-        assert!(live.contains("start \"\" /b \"!CURRENT!\""), "{live}");
-        assert!(!live.contains("start \"\" \"!CURRENT!\""), "{live}");
-    }
-
-    #[test]
-    fn windows_script_percent_signs_survive_cmd_parsing() {
-        let current = std::path::Path::new(r"C:\updates\%SystemRoot%\app.exe");
-        let staged = std::path::Path::new(r"C:\updates\%SystemRoot%\next.exe");
-        let script = super::windows_script(staged, current, "abc", false);
-        assert!(
-            script.contains("set \"CURRENT=C:\\updates\\%%SystemRoot%%\\app.exe\""),
-            "{script}"
-        );
-        assert!(
-            script.contains("set \"MYCODE_HASH_TARGET=!NEW!\""),
-            "{script}"
-        );
-        assert!(
-            script.contains("cmd /v:on /c certutil -hashfile \"!MYCODE_HASH_TARGET!\" SHA256"),
-            "{script}"
-        );
-        assert!(
-            script.contains("WindowsPowerShell\\v1.0\\powershell.exe"),
-            "{script}"
-        );
-        assert!(
-            script.contains("-NoProfile -NonInteractive -WindowStyle Hidden -File \"%PS1%\""),
-            "{script}"
-        );
-        assert!(
-            script.contains(
-                "start \"\" /b cmd /c \"ping -n 3 127.0.0.1 >nul & del /f /q \"\"%~f0\"\"\""
-            ),
-            "{script}"
-        );
-        assert!(script.contains("\r\nexit 0\r\n"), "{script}");
-        assert!(!script.contains("del \"%~f0\" & exit /b 0"), "{script}");
+        let quiet = super::apply::helper_arguments(current, staged, "ab", 1, false);
+        assert!(!quiet.iter().any(|arg| arg == "--relaunch"));
+        let live = super::apply::helper_arguments(current, staged, "ab", 1, true);
+        assert!(live.iter().any(|arg| arg == "--relaunch"));
+        assert!(live.windows(2).any(|pair| pair == ["--target", "/tmp/app"]));
     }
 
     #[cfg(unix)]
@@ -1071,196 +923,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[cfg(windows)]
-    fn run_cmd(script: &std::path::Path) -> std::process::Output {
-        let script = script.to_string_lossy().into_owned();
-        std::process::Command::new("cmd")
-            .args(["/d", "/c", script.as_str()])
-            .output()
-            .unwrap()
+    fn release_assets() -> Vec<super::AssetJson> {
+        let names = [
+            "mycode-desktop-v0.9.18-aarch64-apple-darwin.zip",
+            "mycode-desktop-v0.9.18-aarch64-apple-darwin.zip.sha256",
+            "mycode-desktop-v0.9.18-aarch64-pc-windows-msvc.zip",
+            "mycode-desktop-v0.9.18-aarch64-pc-windows-msvc.zip.sha256",
+            "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip",
+            "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip.sha256",
+            "mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip",
+            "mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip.sha256",
+        ];
+        names
+            .into_iter()
+            .map(|name| super::AssetJson {
+                name: name.to_owned(),
+                browser_download_url: format!(
+                    "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/{name}"
+                ),
+                size: 1024,
+            })
+            .collect()
     }
 
-    #[cfg(windows)]
-    fn spawn_cmd(script: &std::path::Path) -> std::process::Child {
-        let script = script.to_string_lossy().into_owned();
-        std::process::Command::new("cmd")
-            .args(["/d", "/c", script.as_str()])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap()
-    }
-
-    /// Holds `path` so another process can read it but cannot rename it.
-    #[cfg(windows)]
-    fn lock_against_replace(path: &std::path::Path) -> std::fs::File {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_SHARE_READ: u32 = 0x0000_0001;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ)
-            .open(path)
-            .unwrap()
-    }
-
-    #[cfg(windows)]
     #[test]
-    fn windows_script_good_hash_replaces_when_target_is_not_running() {
-        let dir = scratch("win-good");
-        let current = dir.join("app.exe");
-        let staged = dir.join("next.exe");
-        let new = b"new-bytes";
-        std::fs::write(&current, b"old-bytes").unwrap();
-        std::fs::write(&staged, new).unwrap();
-        let script = super::windows_script(&staged, &current, &super::sha256_hex(new), false);
-        let path = dir.join("update.cmd");
-        std::fs::write(&path, script).unwrap();
-        let output = run_cmd(&path);
-        assert!(
-            output.status.success(),
-            "good hash should replace: {}",
-            output_text(&output)
-        );
-        assert_eq!(std::fs::read(&current).unwrap(), new);
-        let backup = super::previous_path(&current);
-        assert_eq!(std::fs::read(&backup).unwrap(), b"old-bytes");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_script_bad_hash_leaves_current_untouched() {
-        let dir = scratch("win-bad");
-        let current = dir.join("app.exe");
-        let staged = dir.join("next.exe");
-        std::fs::write(&current, b"old-bytes").unwrap();
-        std::fs::write(&staged, b"new-bytes").unwrap();
-        let script = super::windows_script(
-            &staged,
-            &current,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            false,
-        );
-        let path = dir.join("update.cmd");
-        std::fs::write(&path, script).unwrap();
-        let output = run_cmd(&path);
-        let text = output_text(&output);
-        assert!(!output.status.success(), "bad hash must fail: {text}");
-        assert!(
-            text.contains("sha256"),
-            "hash failure must be visible: {text}"
-        );
-        assert_eq!(std::fs::read(&current).unwrap(), b"old-bytes");
-        assert_eq!(std::fs::read(&staged).unwrap(), b"new-bytes");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_script_percent_in_path_is_literal() {
-        let dir = scratch("win-pct");
-        let root = dir.join("%SystemRoot%_%PATH%");
-        std::fs::create_dir_all(&root).unwrap();
-        let current = root.join("app.exe");
-        let staged = root.join("next.exe");
-        std::fs::write(&current, b"old-bytes").unwrap();
-        std::fs::write(&staged, b"new-bytes").unwrap();
-        let script =
-            super::windows_script(&staged, &current, &super::sha256_hex(b"new-bytes"), false);
-        let path = dir.join("update.cmd");
-        std::fs::write(&path, &script).unwrap();
-        let output = run_cmd(&path);
-        assert!(
-            output.status.success(),
-            "percent in the path must stay literal: {}\n{script}",
-            output_text(&output)
-        );
-        assert_eq!(std::fs::read(&current).unwrap(), b"new-bytes");
+    fn linux_x86_64_selects_the_published_zip_not_the_checksum() {
         assert_eq!(
-            std::fs::read(super::previous_path(&current)).unwrap(),
-            b"old-bytes"
+            asset_suffix_for("linux", "x86_64"),
+            "-x86_64-unknown-linux-gnu.zip"
         );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_script_retries_replace_while_target_is_busy() {
-        let dir = scratch("win-busy");
-        let current = dir.join("app.exe");
-        let staged = dir.join("next.exe");
-        std::fs::write(&current, b"old-bytes").unwrap();
-        std::fs::write(&staged, b"new-bytes").unwrap();
-        let script =
-            super::windows_script(&staged, &current, &super::sha256_hex(b"new-bytes"), false);
-        let path = dir.join("update.cmd");
-        std::fs::write(&path, script).unwrap();
-        let lock = lock_against_replace(&current);
-        let mut child = spawn_cmd(&path);
-        std::thread::sleep(std::time::Duration::from_millis(2000));
-        let backup = super::previous_path(&current);
-        assert_eq!(
-            std::fs::read(&current).unwrap(),
-            b"old-bytes",
-            "replace succeeded while the target was locked"
-        );
-        assert_eq!(std::fs::read(&backup).unwrap(), b"old-bytes");
-        drop(lock);
-        let output = wait_child(&mut child, std::time::Duration::from_secs(20));
+        let offer = super::resolve_asset_for(
+            "linux",
+            "x86_64",
+            "v0.9.18",
+            "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
+            &release_assets(),
+        )
+        .unwrap()
+        .expect("linux x86_64 is a published update target");
+        assert_eq!(offer.version, "0.9.18");
         assert!(
-            output.status.success(),
-            "replace should succeed after the lock is released: {}",
-            output_text(&output)
+            offer
+                .asset_url
+                .ends_with("mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip")
         );
-        assert_eq!(std::fs::read(&current).unwrap(), b"new-bytes");
-        assert_eq!(std::fs::read(&backup).unwrap(), b"old-bytes");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            offer
+                .checksum_url
+                .ends_with("mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip.sha256")
+        );
+        assert!(!offer.asset_url.ends_with(".sha256"));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_script_post_replace_mismatch_restores_backup() {
-        let dir = scratch("win-mismatch");
-        let bin = dir.join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let count = dir.join("certutil-count.txt");
-        // The script runs `certutil` with no extension, so PATH finds
-        // certutil.cmd before System32's certutil.exe. The first call
-        // hashes for real; the second prints a different hash.
-        let wrapper = format!(
-            "@echo off\r\nsetlocal EnableExtensions\r\nset /a N=0\r\nif exist \"{count}\" set /p N=<\"{count}\"\r\nset /a N+=1\r\n>\"{count}\" echo %N%\r\nif %N% GEQ 2 (\r\n  echo SHA256 hash of dummy:\r\n  echo ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\r\n  echo CertUtil: -hashfile command completed successfully.\r\n  exit /b 0\r\n)\r\n\"%SystemRoot%\\System32\\certutil.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n",
-            count = count.display()
-        );
-        std::fs::write(bin.join("certutil.cmd"), wrapper).unwrap();
-        let current = dir.join("app.exe");
-        let staged = dir.join("next.exe");
-        std::fs::write(&current, b"old-bytes").unwrap();
-        std::fs::write(&staged, b"new-bytes").unwrap();
-        let script =
-            super::windows_script(&staged, &current, &super::sha256_hex(b"new-bytes"), false);
-        let path = dir.join("update.cmd");
-        std::fs::write(&path, script).unwrap();
-        let path_text = path.to_string_lossy().into_owned();
-        let path_env = format!(
-            "{};{}",
-            bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
-        let output = std::process::Command::new("cmd")
-            .args(["/d", "/c", path_text.as_str()])
-            .env("PATH", path_env)
-            .output()
-            .unwrap();
-        let text = output_text(&output);
-        assert!(!output.status.success(), "mismatch must fail: {text}");
-        assert!(text.contains("restor"), "rollback must be visible: {text}");
-        assert_eq!(std::fs::read(&current).unwrap(), b"old-bytes");
-        let _ = std::fs::remove_dir_all(&dir);
+    fn supported_platform_without_its_zip_is_not_up_to_date() {
+        let error = super::resolve_asset_for(
+            "linux",
+            "x86_64",
+            "v0.9.18",
+            "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
+            &[super::AssetJson {
+                name: "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
+                browser_download_url: "https://github.com/example/app.zip".to_owned(),
+                size: 1,
+            }],
+        )
+        .unwrap_err();
+        assert!(error.contains("x86_64-unknown-linux-gnu.zip"), "{error}");
     }
 
     #[test]
     fn unsupported_platforms_have_no_asset() {
-        assert_eq!(asset_suffix_for("linux", "x86_64"), "");
         assert_eq!(asset_suffix_for("macos", "x86_64"), "");
         assert_eq!(asset_suffix_for("linux", "aarch64"), "");
         assert_eq!(asset_suffix_for("windows", "x86"), "");

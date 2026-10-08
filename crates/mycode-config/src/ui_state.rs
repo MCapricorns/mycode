@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
 use crate::error::ConfigErrorKind;
-use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
+use crate::secure_fs::owned_file::locked_update_owned_file;
 
 /// UI state path below the owned home.
 pub const UI_STATE_PATH: &str = "ui.json";
@@ -446,21 +446,47 @@ fn valid_session_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_SESSION_ID_BYTES && !value.chars().any(char::is_control)
 }
 
-/// Reads the UI state; a missing document yields the defaults.
+/// Reads the UI state.
+///
+/// A missing document yields the defaults. A document that cannot be parsed
+/// or validated is backed up and replaced with defaults.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] for owned-path security or oversized content.
+/// Returns [`ConfigError`] for owned-path security or when a damaged document
+/// cannot be copied aside.
 pub fn read_ui_state(home: &crate::HomeLayout) -> Result<UiState, ConfigError> {
-    let bytes = read_owned_file(home, UI_STATE_PATH, MAX_UI_STATE_BYTES)?;
-    let Some(bytes) = bytes else {
-        return Ok(UiState::default());
-    };
-    let (state, migrated) = decode_ui_state(bytes.as_slice())?;
-    if migrated {
-        let _ = replace_ui_state(home, &state);
-    }
-    Ok(state)
+    Ok(read_ui_state_with_repair(home)?.0)
+}
+
+/// Reads `ui.json`, repairing a damaged document.
+///
+/// The second value is set when the previous bytes were copied aside and the
+/// file was replaced with defaults. Workspaces and recent folders in that
+/// backup are not deleted from disk elsewhere; session ledgers stay put.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] for owned-path security or when the backup or the
+/// replacement cannot be published.
+pub fn read_ui_state_with_repair(
+    home: &crate::HomeLayout,
+) -> Result<(UiState, Option<crate::DocumentRepair>), ConfigError> {
+    let loaded = crate::document_repair::load_or_reset(
+        home,
+        UI_STATE_PATH,
+        MAX_UI_STATE_BYTES,
+        |bytes| {
+            let (state, migrated) = decode_ui_state(bytes)?;
+            if migrated {
+                let _ = replace_ui_state(home, &state);
+            }
+            Ok(state)
+        },
+        UiState::default,
+        || replace_ui_state(home, &UiState::default()),
+    )?;
+    Ok((loaded.value, loaded.repair))
 }
 
 /// Replaces the UI state under the owned-file lock (no revision CAS; the

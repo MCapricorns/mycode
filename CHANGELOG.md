@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### 修复
+
+- Windows 自更新改为带参数的助手进程。界面把当前程序复制出去，退出后由那份副本等待本进程结束，在安装目录里校验并替换二进制，再启动新版本。不再用脱离的 `cmd` 脚本，避免只留下 `.mycode-previous`、新程序换不上去。macOS 与 Linux 仍用原来的 `update.sh`。
+- 检查更新时，`api.github.com`、`github.com`、`codeload.github.com`、`uploads.github.com` 和 `*.githubusercontent.com` 的 DNS 如果同时给出公网地址和私网、ULA、链路本地或其他非公网地址，不再整段失败。只连接其中的公网地址。整段都是 `198.18.0.0/15`（本机 fake-ip）时，连接这些地址。和 RFC1918、回环或链路本地混在一起、字面私网主机，以及其他主机的混合解析，仍然拒绝。
+- Linux x86_64 对应发布包 `mycode-desktop-*-x86_64-unknown-linux-gnu.zip`（不选旁边的 `.sha256`）。这个包缺失时检查失败并提示，不再当成已是最新。
+- 关于页里手动检查或下载失败只在右下角提示。状态行不再把整段网络错误铺成大红字。启动时的自动检查失败同样提示，不再静默丢掉。
+- `settings.json`、`secrets.json`、`ui.json` 和 `catalog-cache.json` 无法解析或校验失败时，先把原文件留成旁边的 `.broken-*` 备份，再写入默认内容并继续启动，提示一次。会话账本不重置。备份写失败或文件读不出来时，不改原字节。
+
 ## [0.9.18] - 2026-10-08
 
 ### Changed
