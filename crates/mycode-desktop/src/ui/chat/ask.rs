@@ -112,6 +112,12 @@ pub(crate) fn render_ask_panel(
                                     )),
                             )
                         })
+                        .when(multiple, |this| {
+                            this.child(div().text_xs().opacity(0.5).child(t(
+                                "Select more than one, then answer",
+                                "可多选，选完后点回答",
+                            )))
+                        })
                         .when(optional, |this| {
                             this.child(div().text_xs().opacity(0.5).child(t("Optional", "可选")))
                         })
