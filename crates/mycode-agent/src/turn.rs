@@ -75,6 +75,8 @@ pub(crate) async fn stream_assistant(
         messages: std::mem::take(&mut state.messages),
         tools: env.tools.specs(),
         reasoning: config.reasoning,
+        max_output_tokens: config.max_output_tokens,
+        reasoning_token: config.reasoning_token.clone(),
     };
     let request = env.hooks.prepare_request(request).await;
     state.messages.clone_from(&request.messages);

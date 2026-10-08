@@ -383,13 +383,15 @@ pub(super) fn plan_edits(
                 // overlap rejection that follows.
                 matches.sort_by_key(|found| (found.start, found.end));
                 reject_overlapping_candidates(&matches)?;
+                let newline = dominant_newline(body);
                 for found in select_matches(matches, *pick, "literal")? {
+                    let replacement = match_newlines(&replacements[found.pattern_id], newline);
                     reserve_planned(
                         &mut planned,
                         &mut replacement_bytes,
                         found.start + bom_len,
                         found.end + bom_len,
-                        &replacements[found.pattern_id],
+                        &replacement,
                     )?;
                 }
             }
@@ -536,10 +538,142 @@ fn strip_bom(text: &str) -> (bool, &str) {
 }
 
 fn literal_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolError> {
-    if patterns.len() == 1 {
-        memmem_matches(body, &patterns[0])
+    let exact = if patterns.len() == 1 {
+        memmem_matches(body, &patterns[0])?
     } else {
-        ac_matches(body, patterns)
+        ac_matches(body, patterns)?
+    };
+    if !exact.is_empty() {
+        return Ok(exact);
+    }
+    // Windows files are often CRLF while the model sends LF (or the reverse).
+    // An exact miss retries with CR stripped in front of LF, then the
+    // replacement is written with the file's own line ending.
+    if body.contains('\r') || patterns.iter().any(|pattern| pattern.contains('\r')) {
+        return newline_insensitive_matches(body, patterns);
+    }
+    Ok(exact)
+}
+
+struct NormalizedNewlines {
+    text: String,
+    /// Original byte index of each byte in [`Self::text`].
+    map: Vec<usize>,
+}
+
+fn normalize_newlines(text: &str) -> NormalizedNewlines {
+    let mut out = String::with_capacity(text.len());
+    let mut map = Vec::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let ch = text[index..].chars().next().unwrap_or('\u{fffd}');
+        let len = ch.len_utf8();
+        out.push(ch);
+        for offset in 0..len {
+            map.push(start + offset);
+        }
+        index += len;
+    }
+    NormalizedNewlines { text: out, map }
+}
+
+fn newline_insensitive_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolError> {
+    let norm_body = normalize_newlines(body);
+    let norm_patterns: Vec<String> = patterns
+        .iter()
+        .map(|pattern| normalize_newlines(pattern).text)
+        .collect();
+    let found = if norm_patterns.len() == 1 {
+        memmem_matches(&norm_body.text, &norm_patterns[0])?
+    } else {
+        ac_matches(&norm_body.text, &norm_patterns)?
+    };
+    let mut mapped = Vec::with_capacity(found.len());
+    for hit in found {
+        let Some((start, end)) = map_newline_span(&norm_body, body, hit.start, hit.end) else {
+            continue;
+        };
+        mapped.push(Found {
+            start,
+            end,
+            pattern_id: hit.pattern_id,
+        });
+    }
+    Ok(mapped)
+}
+
+fn map_newline_span(
+    norm: &NormalizedNewlines,
+    body: &str,
+    start: usize,
+    end: usize,
+) -> Option<(usize, usize)> {
+    if start > end || end > norm.map.len() {
+        return None;
+    }
+    let mut orig_start = if start == norm.map.len() {
+        body.len()
+    } else {
+        norm.map[start]
+    };
+    let mut orig_end = if end == norm.map.len() {
+        body.len()
+    } else {
+        norm.map[end]
+    };
+    // A CRLF is one newline in the normalized text and two bytes in `body`.
+    // `map` records the LF. An endpoint that lands on that LF has to step
+    // back over the CR that belongs to the same newline.
+    // Start: the newline is inside the match, so the CR is too.
+    // End: `map[end]` is the first byte *after* the match. When that byte is
+    // the LF, the CR in front of it is outside the match as well.
+    if cr_before_lf(body, orig_start) {
+        orig_start -= 1;
+    }
+    if cr_before_lf(body, orig_end) {
+        orig_end -= 1;
+    }
+    (orig_start <= orig_end && body.is_char_boundary(orig_start) && body.is_char_boundary(orig_end))
+        .then_some((orig_start, orig_end))
+}
+
+fn cr_before_lf(body: &str, index: usize) -> bool {
+    index > 0
+        && body.as_bytes().get(index) == Some(&b'\n')
+        && body.as_bytes().get(index - 1) == Some(&b'\r')
+}
+
+/// The line ending the file already uses, when it has any newlines.
+fn dominant_newline(body: &str) -> Option<&'static str> {
+    let crlf = body.matches("\r\n").count();
+    let lf = body.bytes().filter(|byte| *byte == b'\n').count();
+    let bare_lf = lf.saturating_sub(crlf);
+    if crlf == 0 && bare_lf == 0 {
+        return None;
+    }
+    if crlf > bare_lf {
+        Some("\r\n")
+    } else {
+        Some("\n")
+    }
+}
+
+/// Rewrites `text`'s newlines to `newline`. `None` leaves `text` unchanged.
+fn match_newlines(text: &str, newline: Option<&str>) -> String {
+    let Some(newline) = newline else {
+        return text.to_owned();
+    };
+    let lf = text.replace("\r\n", "\n").replace('\r', "\n");
+    if newline == "\n" {
+        lf
+    } else {
+        lf.replace('\n', "\r\n")
     }
 }
 
@@ -935,6 +1069,8 @@ fn truncated_sides(old: &[&str], new: &[&str], line_bytes: usize, max_emitted: u
 
 fn push_preview_line(out: &mut String, sign: char, line: &str, line_bytes: usize) {
     let (cut, truncated) = crate::builtin::truncate_bytes(line, line_bytes);
+    // `++` / `--` are the markers the transcript paints bright green and red.
+    out.push(sign);
     out.push(sign);
     out.push(' ');
     out.push_str(&cut.replace('\r', "\\r"));
@@ -951,4 +1087,83 @@ pub(super) fn snippet(text: &str) -> String {
         visible.push('\u{2026}');
     }
     visible
+}
+
+#[cfg(test)]
+mod newline_tests {
+    use super::{Pick, PreparedOp, apply_planned, plan_edits};
+    use crate::tool::ToolError;
+    use tokio_util::sync::CancellationToken;
+
+    fn literal(old: &str, new: &str) -> PreparedOp {
+        PreparedOp::Literal {
+            patterns: vec![old.to_owned()],
+            replacements: vec![new.to_owned()],
+            pick: Pick::Unique,
+        }
+    }
+
+    fn apply(body: &str, old: &str, new: &str) -> Result<String, ToolError> {
+        let ops = [literal(old, new)];
+        let cancel = CancellationToken::new();
+        let planned = plan_edits(body, &ops, None, &cancel)?;
+        Ok(apply_planned(body, &planned, &cancel)?.text)
+    }
+
+    #[test]
+    fn crlf_file_matches_lf_old_string_and_keeps_crlf() {
+        let body = "fn main() {\r\n    let x = 1;\r\n}\r\n";
+        let updated = apply(body, "    let x = 1;\n", "    let x = 2;\n").expect("edit");
+        assert_eq!(updated, "fn main() {\r\n    let x = 2;\r\n}\r\n");
+    }
+
+    #[test]
+    fn lf_file_matches_crlf_old_string_and_keeps_lf() {
+        let body = "alpha\nbeta\n";
+        let updated = apply(body, "alpha\r\n", "gamma\r\n").expect("edit");
+        assert_eq!(updated, "gamma\nbeta\n");
+    }
+
+    #[test]
+    fn exact_crlf_match_still_replaces_once() {
+        let body = "a\r\nb\r\n";
+        let updated = apply(body, "a\r\n", "c\r\n").expect("edit");
+        assert_eq!(updated, "c\r\nb\r\n");
+    }
+
+    #[test]
+    fn repeated_crlf_lines_stay_ambiguous() {
+        let body = "same\r\nsame\r\n";
+        let error = apply(body, "same\n", "x\n").expect_err("two matches");
+        let text = error.to_string();
+        assert!(text.contains("occurs"), "{text}");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_at_a_crlf_keeps_the_following_line() {
+        let body = "one\r\ntwo\r\nthree\r\n";
+        let updated = apply(body, "one\ntwo\n", "ONE\nTWO\n").expect("edit");
+        assert_eq!(updated, "ONE\r\nTWO\r\nthree\r\n");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_before_a_crlf_does_not_eat_the_cr() {
+        let body = "head\r\none\r\ntwo\r\ntail\r\n";
+        let updated = apply(body, "one\ntwo", "ONE\nTWO").expect("edit");
+        assert_eq!(updated, "head\r\nONE\r\nTWO\r\ntail\r\n");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_at_eof_crlf_replaces_the_whole_tail() {
+        let body = "one\r\ntwo\r\n";
+        let updated = apply(body, "one\ntwo\n", "ONE\nTWO\n").expect("edit");
+        assert_eq!(updated, "ONE\r\nTWO\r\n");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_at_eof_before_the_final_crlf_keeps_it() {
+        let body = "one\r\ntwo\r\n";
+        let updated = apply(body, "one\ntwo", "ONE\nTWO").expect("edit");
+        assert_eq!(updated, "ONE\r\nTWO\r\n");
+    }
 }

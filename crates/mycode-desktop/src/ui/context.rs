@@ -15,9 +15,40 @@ use crate::i18n::t;
 use crate::view_model::cache_percent;
 use crate::workspace::Workspace;
 
-/// How many dirty files the inspector preview lists before pointing at the
-/// full drawer.
+/// How many dirty files the inspector preview lists before the rest are only
+/// in the full drawer. View all stays available for any non-empty list so a
+/// one-file change can still open the drawer.
 const CHANGES_PREVIEW: usize = 6;
+
+/// Docked Details column width, including its outer padding.
+pub(super) const INSPECTOR_DOCKED_WIDTH: f32 = 316.;
+/// Overlay Details card: 8px from the window edge plus a 320px card.
+pub(super) const INSPECTOR_OVERLAY_SPAN: f32 = 328.;
+const INSPECTOR_OVERLAY_MARGIN: f32 = 8.;
+const INSPECTOR_OVERLAY_WIDTH: f32 = 320.;
+const CHANGES_DRAWER_WIDTH: f32 = 480.;
+const DIFF_PANEL_WIDTH: f32 = 560.;
+const PANEL_GAP: f32 = 12.;
+
+/// Right insets for the changes drawer and the diff panel.
+///
+/// The diff sits to the left of whichever right-hand surface is open, with a
+/// gap, so it does not slide under Details or the review drawer.
+pub(crate) fn panel_rights(inspector_span: f32, drawer_open: bool) -> (f32, f32) {
+    let drawer_right = if inspector_span > 0. {
+        inspector_span + PANEL_GAP
+    } else {
+        PANEL_GAP
+    };
+    let diff_right = if drawer_open {
+        drawer_right + CHANGES_DRAWER_WIDTH + PANEL_GAP
+    } else if inspector_span > 0. {
+        inspector_span + PANEL_GAP
+    } else {
+        PANEL_GAP
+    };
+    (drawer_right, diff_right)
+}
 
 pub(super) fn render_context_panel(
     workspace: &mut Workspace,
@@ -29,7 +60,7 @@ pub(super) fn render_context_panel(
     // double-click there both pinned the panel and zoomed the window.
     div()
         .id("context-panel")
-        .w(px(316.))
+        .w(px(INSPECTOR_DOCKED_WIDTH))
         .h_full()
         .flex()
         .flex_col()
@@ -86,10 +117,10 @@ pub(super) fn render_inspector_drawer(
                 // again. Occlude drops the backdrop out of that hit test.
                 .occlude()
                 .absolute()
-                .top(px(8.))
-                .right(px(8.))
-                .bottom(px(8.))
-                .w(px(320.))
+                .top(px(INSPECTOR_OVERLAY_MARGIN))
+                .right(px(INSPECTOR_OVERLAY_MARGIN))
+                .bottom(px(INSPECTOR_OVERLAY_MARGIN))
+                .w(px(INSPECTOR_OVERLAY_WIDTH))
                 .flex()
                 .flex_col()
                 .rounded(px(12.))
@@ -295,7 +326,6 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
     let git = workspace.git();
     let selected = workspace.git_diff_path();
     let shown: Vec<_> = git.files.iter().take(CHANGES_PREVIEW).collect();
-    let hidden_count = git.files.len().saturating_sub(shown.len());
     div()
         .id("changes")
         .flex()
@@ -357,8 +387,8 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                 .when(open, |row| row.bg(theme.accent))
                 .hover(|row| row.bg(theme.secondary_hover))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
+                    cx.stop_propagation();
                     workspace.on_select_git_file(&path, cx);
-                    cx.notify();
                 }))
                 .child(
                     div()
@@ -376,7 +406,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                         .child(file.path.clone()),
                 )
         }))
-        .when(hidden_count > 0, |this| {
+        .when(!git.files.is_empty(), |this| {
             this.child(
                 div()
                     .id("git-file-more")
@@ -402,16 +432,6 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                     .child(Icon::new(IconName::ChevronRight).xsmall()),
             )
         })
-        .when(selected.is_some(), |this| {
-            this.child(
-                div()
-                    .text_xs()
-                    .font_family(theme.mono_font_family.clone())
-                    .whitespace_normal()
-                    .text_color(theme.muted_foreground)
-                    .child(workspace.git_diff().to_owned()),
-            )
-        })
 }
 
 /// The full changes drawer: every dirty file plus the selected file's diff.
@@ -419,6 +439,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
 /// tree stays browsable.
 pub(super) fn render_changes_drawer(
     workspace: &mut Workspace,
+    inspector_span: f32,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
@@ -426,6 +447,7 @@ pub(super) fn render_changes_drawer(
     let selected = workspace.git_diff_path();
     let diff = workspace.git_diff().to_owned();
     let files = git.files.clone();
+    let (drawer_right, _) = panel_rights(inspector_span, true);
     div()
         .id("changes-drawer-layer")
         .absolute()
@@ -434,20 +456,28 @@ pub(super) fn render_changes_drawer(
             div()
                 .id("changes-drawer-backdrop")
                 .absolute()
-                .size_full()
+                .top_0()
+                .left_0()
+                .bottom_0()
+                // Leave the Details card uncovered so a click there is not
+                // an outside-click on this drawer, and this scrim is not
+                // what dismisses Details.
+                .right(px(inspector_span))
                 .bg(super::skin::menu_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
+                    cx.stop_propagation();
                     workspace.on_toggle_changes_panel(false, cx);
                 })),
         )
         .child(
             div()
                 .id("changes-drawer")
+                .occlude()
                 .absolute()
                 .top(px(44.))
-                .right(px(12.))
+                .right(px(drawer_right))
                 .bottom(px(12.))
-                .w(px(480.))
+                .w(px(CHANGES_DRAWER_WIDTH))
                 .flex()
                 .flex_col()
                 .rounded(px(12.))
@@ -455,6 +485,12 @@ pub(super) fn render_changes_drawer(
                 .border_color(super::skin::glass_border(theme))
                 .bg(super::skin::popover(theme))
                 .overflow_hidden()
+                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_click(|_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .child(
                     div()
                         .px_3()
@@ -518,8 +554,8 @@ pub(super) fn render_changes_drawer(
                                 .when(open, |row| row.bg(theme.accent))
                                 .hover(|row| row.bg(theme.secondary_hover))
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    cx.stop_propagation();
                                     workspace.on_select_git_file(&path, cx);
-                                    cx.notify();
                                 }))
                                 .child(
                                     div()
@@ -534,23 +570,143 @@ pub(super) fn render_changes_drawer(
                 .child(
                     div()
                         .id("changes-drawer-diff")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
                         .px_3()
                         .py_2()
                         .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .whitespace_normal()
                         .text_color(theme.muted_foreground)
-                        .child(if diff.is_empty() {
-                            t("Pick a file to see its diff.", "选择一个文件查看差异。").to_owned()
+                        .child(if selected.is_none() {
+                            t("Pick a file to open its diff.", "选择一个文件以打开差异。")
+                                .to_owned()
+                        } else if diff.is_empty() {
+                            t("Opening the diff panel…", "正在打开差异面板…").to_owned()
                         } else {
-                            diff
+                            t(
+                                "Diff is open in its own panel.",
+                                "差异已在单独的面板中打开。",
+                            )
+                            .to_owned()
                         }),
                 ),
         )
         .into_any_element()
+}
+
+/// Dedicated diff panel. File clicks in the changes list and in the review-all
+/// drawer both open this, so the patch is not clipped inside the inspector.
+pub(super) fn render_diff_panel(
+    workspace: &mut Workspace,
+    inspector_span: f32,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let path = workspace
+        .git_diff_path()
+        .unwrap_or(t("Diff", "差异"))
+        .to_owned();
+    let diff = workspace.git_diff().to_owned();
+    let lines = diff_lines(&diff);
+    let (_, diff_right) = panel_rights(inspector_span, workspace.vm().changes_panel_open);
+    div()
+        .id("diff-panel-layer")
+        .occlude()
+        .absolute()
+        .top(px(44.))
+        .right(px(diff_right))
+        .bottom(px(12.))
+        .w(px(DIFF_PANEL_WIDTH))
+        .flex()
+        .flex_col()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(super::skin::glass_border(theme))
+        .bg(super::skin::popover(theme))
+        .overflow_hidden()
+        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(|_, _, cx| {
+            cx.stop_propagation();
+        })
+        .child(
+            div()
+                .px_3()
+                .py_2()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(div().flex_1().min_w_0().text_sm().truncate().child(path))
+                .child(
+                    div()
+                        .id("diff-panel-close")
+                        .px_2()
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .hover(|this| this.bg(theme.secondary_hover))
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            cx.stop_propagation();
+                            workspace.on_close_git_diff_panel(cx);
+                        }))
+                        .child(t("Close", "关闭")),
+                ),
+        )
+        .child(
+            div()
+                .id("diff-panel-body")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .py_2()
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .children(lines.into_iter().enumerate().map(|(index, line)| {
+                    let (color, bg) = diff_line_paint(&line, theme);
+                    div()
+                        .id(format!("diff-line-{index}"))
+                        .px_3()
+                        .text_color(color)
+                        .bg(bg)
+                        .child(if line.is_empty() {
+                            " ".to_owned()
+                        } else {
+                            line
+                        })
+                })),
+        )
+        .into_any_element()
+}
+
+fn diff_lines(diff: &str) -> Vec<String> {
+    if diff.is_empty() {
+        return vec![t("Loading diff…", "正在加载差异…").to_owned()];
+    }
+    diff.lines().map(str::to_owned).collect()
+}
+
+fn diff_line_paint(line: &str, theme: &Theme) -> (gpui_kit::Hsla, gpui_kit::Hsla) {
+    let added = line.starts_with('+') && !line.starts_with("+++");
+    let removed = line.starts_with('-') && !line.starts_with("---");
+    if added {
+        let ink = vivid(0x3D_FF_9A);
+        return (ink, ink.opacity(0.14));
+    }
+    if removed {
+        let ink = vivid(0xFF_5C_6A);
+        return (ink, ink.opacity(0.14));
+    }
+    if line.starts_with("@@") {
+        return (theme.primary, theme.transparent);
+    }
+    (theme.muted_foreground, theme.transparent)
+}
+
+fn vivid(hex: u32) -> gpui_kit::Hsla {
+    gpui_kit::rgb(hex).into()
 }
 
 fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
@@ -595,7 +751,6 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             .is_none_or(|selected| turn.model == selected)
     };
     let live = vm.live_turn.as_ref().filter(|turn| model_of(turn));
-    let last = vm.last_turn.as_ref().filter(|turn| model_of(turn));
 
     div()
         .id("model-usage")
@@ -620,11 +775,9 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         })
         .child(stat_line(t("Thinking", "思考"), thinking, theme))
         .when(context_window > 0, |this| {
-            let used = live
-                .map(|turn| turn.input)
-                .or_else(|| last.map(|turn| turn.input))
-                .or_else(|| usage.map(|row| row.input))
-                .unwrap_or(0);
+            // The meter is the latest prompt, kept across an interrupt.
+            // Summing every tool round or every turn is what painted 1.4M/1.0M.
+            let used = vm.context_used;
             this.child(bar_row(
                 "context",
                 used,
@@ -684,13 +837,28 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
 
 fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u64 {
     let shown = vm.selected_model.as_deref();
+    let provider_id = vm.selected_provider.as_deref();
+    let base_url = provider_id.and_then(|id| {
+        vm.settings.as_ref().and_then(|settings| {
+            settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .map(|provider| provider.base_url.as_str())
+        })
+    });
     let catalog_context = vm.catalog.as_ref().and_then(|catalog| {
-        let provider_id = vm.selected_provider.as_deref()?;
-        let provider = catalog.provider(provider_id)?;
-        provider
+        let provider_id = provider_id?;
+        if let Some(model_id) = shown {
+            return catalog
+                .model_for_endpoint(provider_id, base_url, model_id)
+                .map(|model| model.context)
+                .filter(|context| *context > 0);
+        }
+        catalog
+            .provider(provider_id)?
             .models
-            .iter()
-            .find(|model| shown.is_none_or(|id| model.id == id))
+            .first()
             .map(|model| model.context)
             .filter(|context| *context > 0)
     });
@@ -927,5 +1095,27 @@ mod tests {
     fn pinning_leaves_the_panel_open() {
         assert_eq!(inspector_flags_after_pin(false), (true, true));
         assert_eq!(inspector_flags_after_pin(true), (true, false));
+    }
+
+    #[test]
+    fn the_diff_sits_left_of_details_and_the_drawer() {
+        let (drawer, diff) = super::panel_rights(0., false);
+        assert_eq!(diff, 12.);
+        assert_eq!(drawer, 12.);
+
+        assert_eq!(
+            super::INSPECTOR_OVERLAY_SPAN,
+            super::INSPECTOR_OVERLAY_MARGIN + super::INSPECTOR_OVERLAY_WIDTH
+        );
+        let (_, beside_details) = super::panel_rights(super::INSPECTOR_OVERLAY_SPAN, false);
+        assert_eq!(beside_details, super::INSPECTOR_OVERLAY_SPAN + 12.);
+
+        let (drawer, beside_drawer) = super::panel_rights(super::INSPECTOR_DOCKED_WIDTH, true);
+        assert_eq!(drawer, super::INSPECTOR_DOCKED_WIDTH + 12.);
+        assert!(beside_drawer > drawer + 480.);
+        assert_eq!(
+            beside_drawer,
+            super::INSPECTOR_DOCKED_WIDTH + 12. + 480. + 12.
+        );
     }
 }

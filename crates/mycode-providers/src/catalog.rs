@@ -74,75 +74,32 @@ pub struct CatalogModel {
 impl CatalogModel {
     /// Thinking choices advertised for this model.
     ///
-    /// An explicit models.dev effort list is kept as published. A toggle-only
-    /// row or a bare `reasoning: true` also offers the standard effort ladder.
-    /// GLM rows always add Off, On, and Max beside that list: the wire sends
-    /// `thinking.type` for the switch and `reasoning_effort` for a named rung,
-    /// and a published `low`/`high`/`max` list otherwise hides Off.
+    /// Only levels models.dev published are offered. A toggle adds Off and On.
+    /// An effort list is kept as published (`none` is shown as Off). A model
+    /// that merely sets `reasoning: true` does not grow a guessed ladder;
+    /// the composer offers Default and leaves the provider's own setting.
     #[must_use]
     pub fn reasoning_levels(&self) -> Vec<String> {
-        if !self.reasoning {
+        if !self.reasoning && self.reasoning_efforts.is_empty() && !self.reasoning_toggle {
             return Vec::new();
         }
-        let levels = if self.reasoning_efforts.is_empty() {
-            standard_reasoning_levels()
-        } else {
-            let mut levels = vec!["default".to_owned()];
-            if self.reasoning_toggle {
-                levels.push("off".to_owned());
+        let mut levels = vec!["default".to_owned()];
+        if self.reasoning_toggle {
+            levels.push("off".to_owned());
+            levels.push("on".to_owned());
+        }
+        for effort in &self.reasoning_efforts {
+            let key = match effort.as_str() {
+                "none" => "off",
+                "default" => continue,
+                other => other,
+            };
+            if !levels.iter().any(|level| level == key) {
+                levels.push(key.to_owned());
             }
-            for effort in &self.reasoning_efforts {
-                let key = match effort.as_str() {
-                    "none" => "off",
-                    "default" => continue,
-                    other => other,
-                };
-                if !levels.iter().any(|level| level == key) {
-                    levels.push(key.to_owned());
-                }
-            }
-            levels
-        };
-        if self.id.to_ascii_lowercase().contains("glm") {
-            glm_reasoning_levels(levels)
-        } else {
-            levels
         }
+        levels
     }
-}
-
-/// Puts Off and On next to Default, then keeps the published rungs, and
-/// makes sure Low, High, and Max are selectable.
-fn glm_reasoning_levels(levels: Vec<String>) -> Vec<String> {
-    let mut next = Vec::new();
-    if levels.iter().any(|level| level == "default") {
-        next.push("default".to_owned());
-    }
-    for token in ["off", "on"] {
-        next.push((*token).to_owned());
-    }
-    for level in levels {
-        if !next.iter().any(|existing| existing == &level) {
-            next.push(level);
-        }
-    }
-    for token in ["low", "high", "max"] {
-        if !next.iter().any(|existing| existing == token) {
-            next.push((*token).to_owned());
-        }
-    }
-    next
-}
-
-/// Effort ladder used when a model supports reasoning but publishes no list.
-#[must_use]
-pub fn standard_reasoning_levels() -> Vec<String> {
-    [
-        "default", "off", "on", "minimal", "low", "medium", "high", "xhigh", "max",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
 }
 
 /// One provider preset: endpoint data plus its model list.
@@ -203,6 +160,51 @@ impl CatalogDocument {
             .models
             .iter()
             .find(|model| model.id == model_id)
+    }
+
+    /// Resolves a model for a configured endpoint.
+    ///
+    /// The catalog provider id wins, then an exact base URL. When neither
+    /// names a catalog provider, the model id is matched across the whole
+    /// catalog. Providers are sorted by id. A row that publishes a reasoning
+    /// toggle or effort list wins over an earlier row that only repeats the
+    /// id, so a custom GLM gateway still picks up Off/On and the output cap.
+    /// A catalog provider that simply does not list the model does not borrow
+    /// another vendor's row.
+    #[must_use]
+    pub fn model_for_endpoint(
+        &self,
+        provider_id: &str,
+        base_url: Option<&str>,
+        model_id: &str,
+    ) -> Option<&CatalogModel> {
+        if let Some(provider) = self.provider(provider_id).or_else(|| {
+            let base_url = base_url.filter(|url| !url.is_empty())?;
+            self.providers.iter().find(|item| item.base_url == base_url)
+        }) {
+            return provider.models.iter().find(|model| model.id == model_id);
+        }
+        self.model_by_id(model_id)
+    }
+
+    fn model_by_id(&self, model_id: &str) -> Option<&CatalogModel> {
+        let mut with_output = None;
+        let mut any = None;
+        for provider in &self.providers {
+            let Some(model) = provider.models.iter().find(|model| model.id == model_id) else {
+                continue;
+            };
+            if model.reasoning_toggle || !model.reasoning_efforts.is_empty() {
+                return Some(model);
+            }
+            if with_output.is_none() && model.output > 0 {
+                with_output = Some(model);
+            }
+            if any.is_none() {
+                any = Some(model);
+            }
+        }
+        with_output.or(any)
     }
 
     /// Returns a display name for a provider id, even when absent.
@@ -326,7 +328,7 @@ mod tests {
     use super::CatalogModel;
 
     #[test]
-    fn glm_published_efforts_still_offer_off_on_and_max() {
+    fn published_efforts_are_not_padded_with_a_guessed_ladder() {
         let model = CatalogModel {
             id: "glm-5.3-flash".to_owned(),
             reasoning: true,
@@ -334,10 +336,53 @@ mod tests {
             ..CatalogModel::default()
         };
         let levels = model.reasoning_levels();
-        assert_eq!(levels.first().map(String::as_str), Some("default"));
-        for level in ["off", "on", "low", "high", "max"] {
-            assert!(levels.iter().any(|item| item == level), "{level}");
-        }
+        assert_eq!(
+            levels,
+            vec![
+                "default".to_owned(),
+                "low".to_owned(),
+                "high".to_owned(),
+                "max".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_toggle_adds_off_and_on_without_inventing_efforts() {
+        let model = CatalogModel {
+            id: "claude".to_owned(),
+            reasoning: true,
+            reasoning_toggle: true,
+            ..CatalogModel::default()
+        };
+        assert_eq!(
+            model.reasoning_levels(),
+            vec!["default".to_owned(), "off".to_owned(), "on".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_custom_glm_provider_borrows_limits_and_reasoning_levels() {
+        let document = super::parse_snapshot(include_bytes!("catalog/snapshot.json"));
+        let model = document
+            .model_for_endpoint("my-glm", Some("https://glm.example/v1"), "glm-4.7")
+            .expect("catalog row");
+        assert!(model.reasoning_toggle);
+        assert!(model.output > 0);
+        assert!(model.context > 0);
+        let levels = model.reasoning_levels();
+        assert!(
+            levels.iter().any(|level| level == "off"),
+            "glm-4.7 toggle should offer Off, got {levels:?}"
+        );
+        assert!(levels.iter().any(|level| level == "on"), "{levels:?}");
+        assert!(levels.iter().any(|level| level == "default"), "{levels:?}");
+        assert!(
+            document
+                .model_for_endpoint("302ai", None, "not-a-real-model")
+                .is_none(),
+            "a known provider does not borrow another vendor's model"
+        );
     }
 
     #[test]

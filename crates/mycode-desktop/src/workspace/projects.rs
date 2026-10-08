@@ -157,6 +157,8 @@ impl Workspace {
                     }
                 } else if insert == "/settings" {
                     self.on_show_main_view(crate::view_model::MainView::Settings, cx);
+                } else if insert == "/compact" {
+                    self.on_compact(cx);
                 } else if let Some(spec) = insert.strip_prefix("mcp:") {
                     self.insert_mcp_draft(spec, cx);
                 } else if let Some(slug) = insert.strip_prefix('/') {
@@ -798,6 +800,7 @@ impl Workspace {
             selected_provider: self.vm.selected_provider.clone(),
             selected_model: self.vm.selected_model.clone(),
             session_projects: self.vm.session_projects.clone(),
+            session_models: self.vm.session_models.clone(),
             // The legacy root list mirrors the active workspace so a
             // downgrade build still shows a sensible folder set.
             workspace_roots: self.vm.workspace_roots.clone(),

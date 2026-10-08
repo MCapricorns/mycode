@@ -81,8 +81,7 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
 /// locales). `try`/`catch` keeps locked-down hosts that forbid the .NET
 /// property assignment running the user script unchanged.
 #[cfg(windows)]
-const POWERSHELL_UTF8_PRELUDE: &str =
-    "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }";
+const POWERSHELL_UTF8_PRELUDE: &str = "try { $utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8 } catch { }";
 
 #[cfg(windows)]
 const WINDOWS_SHELL_EXECUTABLE: &str = "pwsh.exe";

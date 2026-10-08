@@ -67,8 +67,11 @@ pub(crate) enum MentionKind {
 }
 
 /// Built-in slash commands offered by the composer menu.
-pub(crate) const COMPOSER_COMMANDS: &[(&str, &str)] =
-    &[("/new", "new chat"), ("/settings", "settings")];
+pub(crate) const COMPOSER_COMMANDS: &[(&str, &str)] = &[
+    ("/new", "new chat"),
+    ("/compact", "compact context"),
+    ("/settings", "settings"),
+];
 
 /// Whether `title` matches a sidebar filter. An empty filter matches every
 /// title. The comparison is case-insensitive and does not touch disk.

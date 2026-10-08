@@ -8,10 +8,6 @@ use crate::ConfigError;
 /// Accepted `tools.shell.kind` values.
 pub const VALID_SHELL_KINDS: [&str; 2] = ["pwsh", "bash"];
 
-/// Kinds older builds accepted. A stored entry with one of them is dropped on
-/// load so first-run detection re-runs with this build's candidates.
-pub const RETIRED_SHELL_KINDS: [&str; 2] = ["powershell", "cmd"];
-
 /// One resolved platform shell used by the `shell` tool.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -50,22 +46,6 @@ pub struct ToolsSettings {
 
 pub(super) fn tools_are_default(tools: &ToolsSettings) -> bool {
     *tools == ToolsSettings::default()
-}
-
-/// Drops a stored shell whose kind this build retired (`powershell`, `cmd`).
-///
-/// Returns whether the document changed, so the caller can persist the
-/// migration and detection can refill the entry.
-pub(super) fn retire_unsupported_shell(settings: &mut AppSettings) -> bool {
-    let retired = settings
-        .tools
-        .shell
-        .as_ref()
-        .is_some_and(|shell| RETIRED_SHELL_KINDS.contains(&shell.kind.as_str()));
-    if retired {
-        settings.tools.shell = None;
-    }
-    retired
 }
 
 impl AppSettings {

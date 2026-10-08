@@ -226,11 +226,14 @@ pub struct Workspace {
     git_status_inflight: bool,
     /// The tree changed again while a status read was in flight.
     git_status_pending: bool,
-    /// Path whose diff is shown in the changes panel.
+    /// Path whose diff is shown in the dedicated diff panel.
     git_diff_path: Option<String>,
     git_diff: String,
     /// Bumped when the diff target changes so a stale diff is dropped.
     git_diff_generation: u64,
+    /// The selected file's diff is open in its own panel, separate from the
+    /// changes list. A file click always opens it.
+    git_diff_panel_open: bool,
     /// Tool rows the transcript is showing in full. Empty means one-line summaries.
     expanded_tools: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
@@ -319,6 +322,7 @@ impl Workspace {
             git_diff_path: None,
             git_diff: String::new(),
             git_diff_generation: 0,
+            git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
             applied_font_size: String::new(),
             applied_font_family: String::new(),
@@ -372,7 +376,16 @@ impl Workspace {
                 while let Ok(event) = events.try_recv() {
                     buffer.push_back(event);
                 }
-                if buffer.front().is_some_and(stream_frame::is_stream_delta)
+                // A queued follow-up must not wait out the typewriter. The
+                // frame budget holds `ChatDone` until every delta has been
+                // painted (~80 characters / 64ms), so a long reply kept the
+                // queue parked for the whole animation. When something is
+                // waiting, apply the burst now and let the next send start.
+                let rush = this
+                    .update(cx, |workspace, _| !workspace.vm.queued.is_empty())
+                    .unwrap_or(false);
+                if !rush
+                    && buffer.front().is_some_and(stream_frame::is_stream_delta)
                     && let Some(wait) = not_before.checked_duration_since(Instant::now())
                     && !wait.is_zero()
                 {
@@ -381,7 +394,12 @@ impl Workspace {
                         buffer.push_back(event);
                     }
                 }
-                let (slice, rest) = stream_frame::split_stream_frame(std::mem::take(&mut buffer));
+                let (slice, rest) = if rush {
+                    let pending = std::mem::take(&mut buffer);
+                    (pending.into_iter().collect(), VecDeque::new())
+                } else {
+                    stream_frame::split_stream_frame(std::mem::take(&mut buffer))
+                };
                 buffer = rest;
                 let mut streamed = false;
                 for event in slice {
@@ -393,10 +411,10 @@ impl Workspace {
                         return;
                     }
                 }
-                if streamed {
+                if streamed && !rush {
                     not_before = Instant::now() + stream_frame::STREAM_FRAME;
                 }
-                if !buffer.is_empty() {
+                if !buffer.is_empty() && !rush {
                     let now = Instant::now();
                     let wait = not_before
                         .checked_duration_since(now)
@@ -419,6 +437,16 @@ impl Workspace {
 
     pub(crate) fn git_diff(&self) -> &str {
         &self.git_diff
+    }
+
+    pub(crate) fn git_diff_panel_open(&self) -> bool {
+        self.git_diff_panel_open
+    }
+
+    /// Closes the dedicated file-diff panel. The changes list stays as it was.
+    pub(crate) fn on_close_git_diff_panel(&mut self, cx: &mut Context<Self>) {
+        self.git_diff_panel_open = false;
+        cx.notify();
     }
 
     fn on_composer_event(
@@ -1110,13 +1138,14 @@ impl Workspace {
         self.persist_ui_state(cx);
     }
 
-    /// Persists the requested reasoning effort through the settings doc.
+    /// Stores the reasoning effort on the open session. Other sessions keep
+    /// the effort they already chose.
     pub(crate) fn on_select_reasoning(&mut self, level: &str, cx: &mut Context<Self>) {
         self.apply_action(
             DesktopAction::SettingsReasoningChanged(level.to_owned()),
             cx,
         );
-        self.on_save_settings(cx);
+        self.persist_ui_state(cx);
     }
 
     /// Loads the next older page when the viewport is within a short distance
@@ -1261,6 +1290,10 @@ impl Workspace {
         let id = self.next_toast_id;
         self.next_toast_id = self.next_toast_id.wrapping_add(1);
         self.toasts.push(Toast { id, text, kind });
+        // A click handler repaints on its own. A toast pushed from the event
+        // pump (compaction finishing, a while after "Compacting…") does not,
+        // so the row was removed by its timer before the window ever drew it.
+        cx.notify();
         const MAX_TOASTS: usize = 4;
         if self.toasts.len() > MAX_TOASTS {
             let drop_count = self.toasts.len() - MAX_TOASTS;

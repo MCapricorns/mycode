@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 async-channel = { workspace = true }
+serde_json = { workspace = true }
 # `tree-sitter-languages` turns on gpui-kit's own grammars. Fenced code in
 # TextView is highlighted by that highlighter; this crate does not depend
 # on tree-sitter itself.

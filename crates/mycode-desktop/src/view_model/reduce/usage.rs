@@ -97,6 +97,16 @@ pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
     }
     state.usage_totals = totals;
     state.last_turn = last;
+    state.context_used = entries
+        .iter()
+        .rev()
+        .find_map(|entry| {
+            if entry.kind != EntryKind::Usage {
+                return None;
+            }
+            crate::view_model::parse_context_tokens(&entry.text)
+        })
+        .unwrap_or(0);
 }
 
 /// Whether a usage row's key and `key` name the same model under possibly

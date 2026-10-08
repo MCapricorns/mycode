@@ -46,37 +46,98 @@ pub(crate) struct CompactScope<'a> {
     pub context_window: u64,
 }
 
+/// What a compaction attempt did with the checkpoint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CompactStatus {
+    /// A new checkpoint was written.
+    Wrote,
+    /// There is nothing new to summarize.
+    Unchanged,
+    /// A checkpoint already covers this exact head.
+    Covered,
+    /// The summary request failed. The history is unchanged.
+    Failed(String),
+}
+
+/// History after one compaction attempt, plus whether a checkpoint was written.
+pub(crate) struct Compacted {
+    pub messages: Vec<Arc<Message>>,
+    pub status: CompactStatus,
+}
+
 /// Compacts history before a provider request. Failures degrade to the
 /// original history so a turn never dies on housekeeping.
 pub(crate) async fn compact_history(
     scope: &CompactScope<'_>,
     history: Vec<Arc<Message>>,
-) -> Vec<Arc<Message>> {
-    let threshold = compaction_threshold(scope.context_window);
+    force: bool,
+) -> Compacted {
+    let threshold = if force {
+        0
+    } else {
+        compaction_threshold(scope.context_window)
+    };
     let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
-        return history;
+        return Compacted {
+            messages: history,
+            status: CompactStatus::Unchanged,
+        };
     };
     let prior = mycode_config::read_compaction(scope.home, scope.session_id)
         .ok()
         .flatten()
         .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
+    // `/compact` on a head this checkpoint already covers would summarize the
+    // same prefix again (same replaced count, same tail). Say so instead.
+    if force
+        && let Some(checkpoint) = prior.as_ref()
+        && checkpoint.covered_head == scope.head
+        && checkpoint.covered_messages > 0
+    {
+        return Compacted {
+            messages: history,
+            status: CompactStatus::Covered,
+        };
+    }
     // `covered_messages` indexes a ledger replay, which has no summary
     // prefix. Once a summary has replaced that prefix, the same index
     // points into the tail and would drop messages that must stay.
     let already_summarized = history
         .first()
         .is_some_and(|message| is_summary_message(message));
-    if !already_summarized
+    // A checkpoint still applies after the head moves by appends, while the
+    // uncovered tail fits. `/compact` writes that checkpoint; the next turn
+    // uses it instead of waiting for the automatic threshold. A forced
+    // compact summarizes again only when this head is not already covered.
+    if !force
+        && !already_summarized
         && let Some(checkpoint) = prior.as_ref()
-        && checkpoint.covered_head == scope.head
         && checkpoint.covered_messages > 0
         && checkpoint.covered_messages < history.len()
         && !is_tool_result(&history[checkpoint.covered_messages])
     {
-        return with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
+        let tail_tokens: usize = history[checkpoint.covered_messages..]
+            .iter()
+            .map(|message| message_tokens(message))
+            .sum();
+        let same_head = checkpoint.covered_head == scope.head;
+        if same_head || tail_tokens <= compaction_threshold(scope.context_window) {
+            return Compacted {
+                messages: with_summary(
+                    &checkpoint.summary,
+                    &history[checkpoint.covered_messages..],
+                ),
+                status: CompactStatus::Unchanged,
+            };
+        }
     }
+    let covered = prior.as_ref().map(|checkpoint| checkpoint.covered_messages);
     let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
-    let transcript = compaction_transcript(prior_summary, &history[..head_end]);
+    // The previous summary already stands in for `history[..covered]`.
+    // Sending that prefix again makes a later `/compact` re-bill the same
+    // leading messages on top of the old summary.
+    let transcript =
+        compaction_transcript(prior_summary, transcript_head(&history, head_end, covered));
     let summarized = tokio::time::timeout(
         SUMMARY_TIMEOUT,
         summarize_transcript(scope.wire, &transcript),
@@ -86,11 +147,17 @@ pub(crate) async fn compact_history(
         Ok(Ok(summary)) => summary,
         Ok(Err(message)) => {
             eprintln!("[mycode-compaction] skipped: {message}");
-            return history;
+            return Compacted {
+                messages: history,
+                status: CompactStatus::Failed(message),
+            };
         }
         Err(_) => {
             eprintln!("[mycode-compaction] skipped: summary timed out");
-            return history;
+            return Compacted {
+                messages: history,
+                status: CompactStatus::Failed("summary timed out".to_owned()),
+            };
         }
     };
     let compacted = with_summary(&summary, &history[head_end..]);
@@ -102,7 +169,10 @@ pub(crate) async fn compact_history(
             "[mycode-compaction] shrunk an already summarized history in memory ({} remain)",
             compacted.len()
         );
-        return compacted;
+        return Compacted {
+            messages: compacted,
+            status: CompactStatus::Unchanged,
+        };
     }
     let checkpoint = mycode_config::CompactionCheckpoint {
         format_version: mycode_config::COMPACTION_FORMAT_VERSION,
@@ -120,13 +190,19 @@ pub(crate) async fn compact_history(
     };
     if let Err(error) = mycode_config::write_compaction(scope.home, scope.session_id, &checkpoint) {
         eprintln!("[mycode-compaction] checkpoint write failed: {error:?}");
-        return history;
+        return Compacted {
+            messages: history,
+            status: CompactStatus::Failed(format!("checkpoint write failed: {error:?}")),
+        };
     }
     eprintln!(
         "[mycode-compaction] replaced {head_end} messages with a checkpoint ({} remain)",
         compacted.len()
     );
-    compacted
+    Compacted {
+        messages: compacted,
+        status: CompactStatus::Wrote,
+    }
 }
 
 fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {
@@ -268,6 +344,24 @@ fn compaction_split(
     Some(tail_start)
 }
 
+/// Messages that still need to be summarized.
+///
+/// `covered` is the checkpoint's `covered_messages`. Those leading messages
+/// are already inside the previous summary, so the new transcript starts
+/// there and stops at `head_end` (the verbatim tail stays out).
+fn transcript_head(
+    history: &[Arc<Message>],
+    head_end: usize,
+    covered: Option<usize>,
+) -> &[Arc<Message>] {
+    let head_end = head_end.min(history.len());
+    let start = covered
+        .filter(|count| *count > 0)
+        .map(|count| count.min(head_end))
+        .unwrap_or(0);
+    &history[start..head_end]
+}
+
 fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> String {
     let mut transcript = String::new();
     if let Some(summary) = prior_summary {
@@ -348,4 +442,49 @@ Preserve names, paths, and error text. Do not invent work that did not happen.",
         return Err("summary was empty".to_owned());
     }
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mycode_core::{Message, UserMessage};
+
+    use super::{compaction_transcript, transcript_head};
+
+    fn user(text: &str) -> Arc<Message> {
+        Arc::new(Message::User(UserMessage::text(text)))
+    }
+
+    #[test]
+    fn a_later_compact_summarizes_only_the_uncovered_head() {
+        let history = vec![
+            user("old-a"),
+            user("old-b"),
+            user("old-c"),
+            user("new-d"),
+            user("new-e"),
+            user("kept-tail"),
+        ];
+        let head = transcript_head(&history, 5, Some(3));
+        let transcript = compaction_transcript(Some("prior summary"), head);
+        assert!(transcript.contains("prior summary"), "{transcript}");
+        assert!(transcript.contains("new-d"), "{transcript}");
+        assert!(transcript.contains("new-e"), "{transcript}");
+        assert!(!transcript.contains("old-a"), "{transcript}");
+        assert!(!transcript.contains("old-b"), "{transcript}");
+        assert!(!transcript.contains("old-c"), "{transcript}");
+        assert!(!transcript.contains("kept-tail"), "{transcript}");
+    }
+
+    #[test]
+    fn the_first_compact_still_includes_the_whole_head() {
+        let history = vec![user("one"), user("two"), user("tail")];
+        let head = transcript_head(&history, 2, None);
+        assert_eq!(head.len(), 2);
+        let transcript = compaction_transcript(None, head);
+        assert!(transcript.contains("one"), "{transcript}");
+        assert!(transcript.contains("two"), "{transcript}");
+        assert!(!transcript.contains("tail"), "{transcript}");
+    }
 }

@@ -25,8 +25,9 @@ pub(crate) use self::composer::preferred_slash_index;
 use self::composer::{parse_mention, slash_items};
 use self::jobs::{finish_live_job, tool_progress, tool_started};
 use self::models::{
-    active_preset_changed, clamp_reasoning_to_catalog, ensure_model_selection, model_selected,
-    provider_selected,
+    active_preset_changed, apply_session_model, assign_fresh_session_model,
+    clamp_reasoning_to_catalog, ensure_model_selection, model_selected, provider_selected,
+    remember_active_session_model, remember_session_model,
 };
 use self::projects::{
     bind_session_project, session_bindings_forgotten, session_project_bound,
@@ -56,11 +57,22 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sessions = sessions;
         }
         DesktopAction::SessionCreated(mut summary) => {
+            // A new chat keeps the model already on the picker and pins it,
+            // so leaving and coming back does not jump to the first enabled
+            // model. The previous chat's pin is written first.
+            if let Some(previous) = state
+                .active
+                .as_ref()
+                .map(|active| active.session_id.clone())
+            {
+                remember_session_model(state, &previous);
+            }
             state
                 .sessions
                 .retain(|s| s.session_id != summary.session_id);
             summary.active = true;
             state.sessions.insert(0, summary.clone());
+            let session_id = summary.session_id.clone();
             state.active = Some(ActiveConversation {
                 session_id: summary.session_id,
                 branch_id: summary.root_branch_id,
@@ -69,6 +81,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 older_before: None,
                 streaming: None,
             });
+            remember_session_model(state, &session_id);
             state.live_jobs.clear();
             state.subagent_window = None;
             state.changes_panel_open = false;
@@ -112,6 +125,14 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 .as_ref()
                 .map(|active| active.session_id.as_str())
                 != Some(conversation.session_id.as_str());
+            let previous_session = if switched {
+                state
+                    .active
+                    .as_ref()
+                    .map(|active| active.session_id.clone())
+            } else {
+                None
+            };
             if switched {
                 // Queue, tasks, and asks belong to the previous session.
                 state.queued.clear();
@@ -128,8 +149,14 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 session.active = session.session_id == session_id;
             }
             if switched {
+                if let Some(previous) = previous_session {
+                    remember_session_model(state, &previous);
+                }
                 rebuild_session_usage(state);
                 state.live_turn = None;
+                if !apply_session_model(state, &session_id) {
+                    assign_fresh_session_model(state, &session_id);
+                }
             }
             // The composer is one widget. A draft typed in the previous
             // session must not ride along and send into this one. Opening
@@ -241,6 +268,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::UsageSnapshot {
             model,
             input,
+            context,
             output,
             cache,
             elapsed_ms,
@@ -252,11 +280,15 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 cache,
                 elapsed_ms,
             });
+            if context > 0 {
+                state.context_used = context;
+            }
         }
         DesktopAction::UsageRecorded {
             provider,
             model,
             input,
+            context,
             output,
             cache,
             elapsed_ms,
@@ -294,6 +326,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             row.cache = row.cache.saturating_add(cache.unwrap_or_default());
             row.requests = row.requests.saturating_add(1);
             state.live_turn = None;
+            if context > 0 {
+                state.context_used = context;
+            }
         }
         DesktopAction::AskRequested(rows) => {
             state.ask_answers = vec![String::new(); rows.len()];
@@ -688,6 +723,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             selected_provider,
             selected_model,
             session_projects,
+            session_models,
             workspaces,
             session_workspaces,
             trusted_projects,
@@ -698,6 +734,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;
+            state.session_models = session_models;
             state.workspaces = workspaces;
             state.session_workspaces = session_workspaces;
             state.trusted_projects = trusted_projects;
@@ -711,6 +748,14 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.selected_model = selected_model;
             }
             ensure_model_selection(state);
+            if let Some(session_id) = state
+                .active
+                .as_ref()
+                .map(|active| active.session_id.clone())
+                && !apply_session_model(state, &session_id)
+            {
+                remember_session_model(state, &session_id);
+            }
         }
         DesktopAction::WorkspaceMenuToggled(open) => {
             state.workspace_menu_open = open;
@@ -808,8 +853,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsReasoningChanged(level) => {
             state.reasoning_menu_open = false;
-            // Apply the pick even while a save is in flight. Dropping it
-            // there left the composer on the old level after the ack.
+            // The pick belongs to this session. It is not written into the
+            // shared settings document, which every other session would load.
             if state.settings.is_none() {
                 return;
             }
@@ -818,13 +863,12 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             } else if selected_reasoning_levels(state).contains(&level) {
                 Some(level.clone())
             } else {
-                // Levels the catalog does not advertise are refused.
                 return;
             };
-            edit_settings(state, |settings| {
+            if let Some(settings) = state.settings.as_mut() {
                 settings.reasoning = picked;
-                true
-            });
+            }
+            remember_active_session_model(state);
         }
         DesktopAction::PresetSearchChanged(text) => state.preset_search = text,
         DesktopAction::ActivePresetChanged(preset) => active_preset_changed(state, preset),
@@ -1031,7 +1075,11 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_pick_is_kept_while_a_save_is_in_flight() {
+    fn reasoning_pick_stays_on_the_session_and_does_not_dirty_settings() {
+        use std::sync::Arc;
+
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+
         let mut state = WorkspaceState::default();
         let mut settings = crate::view_model::SettingsState::from_settings(
             &mycode_config::AppSettings::default(),
@@ -1040,15 +1088,81 @@ mod tests {
         );
         settings.saving = true;
         state.settings = Some(settings);
+        state.catalog = Some(Arc::new(CatalogDocument {
+            providers: vec![CatalogProvider {
+                id: "zhipu".to_owned(),
+                models: vec![CatalogModel {
+                    id: "glm-4.7".to_owned(),
+                    reasoning: true,
+                    reasoning_efforts: vec!["high".to_owned()],
+                    ..CatalogModel::default()
+                }],
+                ..CatalogProvider::default()
+            }],
+        }));
         state.selected_provider = Some("zhipu".to_owned());
         state.selected_model = Some("glm-4.7".to_owned());
+        state.active = Some(mycode_app::ActiveConversation {
+            session_id: "session-a".to_owned(),
+            branch_id: "branch".to_owned(),
+            head: "empty".to_owned(),
+            entries: Vec::new(),
+            older_before: None,
+            streaming: None,
+        });
         reduce(
             &mut state,
             DesktopAction::SettingsReasoningChanged("high".to_owned()),
         );
         let settings = state.settings.expect("settings");
         assert_eq!(settings.reasoning.as_deref(), Some("high"));
-        assert!(settings.dirty);
+        assert!(!settings.dirty);
         assert!(settings.saving);
+        assert_eq!(
+            mycode_config::session_model(&state.session_models, "session-a")
+                .and_then(|pin| pin.reasoning.as_deref()),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn a_new_session_inherits_the_open_chat_model() {
+        let mut settings = crate::view_model::SettingsState::from_settings(
+            &mycode_config::AppSettings::default(),
+            1,
+            Vec::new(),
+        );
+        settings.reasoning = Some("on".to_owned());
+        let mut state = WorkspaceState {
+            settings: Some(settings),
+            selected_provider: Some("zai".to_owned()),
+            selected_model: Some("glm-4.7".to_owned()),
+            active: Some(mycode_app::ActiveConversation {
+                session_id: "old".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            DesktopAction::SessionCreated(mycode_app::SessionSummary {
+                session_id: "new".to_owned(),
+                root_branch_id: "branch".to_owned(),
+                title: String::new(),
+                event_count: 0,
+                active: false,
+                corrupt: false,
+            }),
+        );
+        let inherited = mycode_config::session_model(&state.session_models, "new").expect("pin");
+        assert_eq!(inherited.provider, "zai");
+        assert_eq!(inherited.model, "glm-4.7");
+        assert_eq!(inherited.reasoning.as_deref(), Some("on"));
+        let previous = mycode_config::session_model(&state.session_models, "old").expect("old");
+        assert_eq!(previous.model, "glm-4.7");
     }
 }

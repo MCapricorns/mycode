@@ -22,10 +22,7 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
 /// Palette ids the settings page offers, in display order.
 ///
 /// Must stay identical to `mycode_config::VALID_PALETTES`.
-pub const PALETTES: [&str; 13] = [
-    "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss", "ember", "glacier", "plum",
-    "copper", "aurora",
-];
+pub const PALETTES: [&str; 6] = ["slate", "ocean", "forest", "dusk", "ember", "aurora"];
 
 /// Canonical palette id. Unknown values fall back to slate.
 #[must_use]
@@ -44,14 +41,7 @@ pub fn palette_label(palette: &str) -> &'static str {
         "ocean" => t("Ocean", "海洋"),
         "forest" => t("Forest", "森林"),
         "dusk" => t("Dusk", "暮色"),
-        "sand" => t("Sand", "沙丘"),
-        "rose" => t("Rose", "玫瑰"),
-        "ink" => t("Ink", "墨色"),
-        "moss" => t("Moss", "苔原"),
         "ember" => t("Ember", "余烬"),
-        "glacier" => t("Glacier", "冰川"),
-        "plum" => t("Plum", "梅紫"),
-        "copper" => t("Copper", "铜绿"),
         "aurora" => t("Aurora", "极光"),
         _ => t("Slate", "石板灰"),
     }
@@ -129,10 +119,8 @@ pub fn apply_font_size(theme: &mut Theme, id: &str) {
 
 /// Swatches on one full row of the settings palette.
 ///
-/// Thirteen colors do not fit a normal settings card on one line (the window
-/// can be as narrow as 960px, with a 236px nav beside the card). Seven
-/// columns stay near 400px, wrap the rest, and leave the last row left-aligned.
-pub const PALETTE_COLUMNS: u16 = 7;
+/// Six palettes fit one row of the settings card.
+pub const PALETTE_COLUMNS: u16 = 6;
 
 /// Fixed width of one palette cell, in pixels.
 ///
@@ -148,11 +136,7 @@ pub const PALETTE_GAP_PX: f32 = 6.;
 /// Side length of the color square inside a palette cell, in pixels.
 pub const PALETTE_SWATCH_PX: f32 = 28.;
 
-/// Width of one full palette row: seven fixed cells and the gaps between them.
-///
-/// The wrapping row uses this as its max width, so a normal settings card
-/// shows seven columns and the last six stay on the left. A single row of
-/// all thirteen swatches is wider than that card.
+/// Width of one full palette row: six fixed cells and the gaps between them.
 #[must_use]
 pub fn palette_row_max_px() -> f32 {
     let columns = f32::from(PALETTE_COLUMNS.max(1));
@@ -367,49 +351,49 @@ struct Spec {
 fn spec_for(palette: &str) -> Spec {
     match palette {
         "ocean" => Spec {
-            bg: 0x0E1A20,
-            wash: 0x12343C,
-            surface: 0x15242C,
-            card: 0x1C3038,
-            hover: 0x254048,
-            ink: 0xE6F3F4,
-            dim: 0x9BB8BE,
-            line: 0x2C4A52,
-            accent: 0x3EC6C0,
-            accent_ink: 0x06201E,
-            tint: 0x1A3C40,
+            bg: 0x071428,
+            wash: 0x0A3A6E,
+            surface: 0x0C1E38,
+            card: 0x12304C,
+            hover: 0x1A4468,
+            ink: 0xE7F2FF,
+            dim: 0x8EB4D8,
+            line: 0x1E4E78,
+            accent: 0x4DA3FF,
+            accent_ink: 0x041018,
+            tint: 0x12385C,
             green: 0x8FBF9F,
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
         "forest" => Spec {
-            bg: 0x121814,
-            wash: 0x1A2A1E,
-            surface: 0x1A221C,
-            card: 0x222C24,
-            hover: 0x2C3A30,
-            ink: 0xE7F0E8,
-            dim: 0xA3B8A8,
-            line: 0x334238,
-            accent: 0x6FBF8A,
-            accent_ink: 0x0E1A12,
-            tint: 0x24382A,
+            bg: 0x0A1C12,
+            wash: 0x146B32,
+            surface: 0x102818,
+            card: 0x163822,
+            hover: 0x1E4C2E,
+            ink: 0xE7F8EC,
+            dim: 0x8FCB9E,
+            line: 0x1E5A34,
+            accent: 0x3DDC7A,
+            accent_ink: 0x04140A,
+            tint: 0x145C30,
             green: 0x8FBF9F,
             red: 0xE08B7A,
             info: 0x8FB4C4,
         },
         "dusk" => Spec {
-            bg: 0x16141C,
-            wash: 0x261C34,
-            surface: 0x1E1A26,
-            card: 0x282232,
-            hover: 0x342C42,
-            ink: 0xEDE8F4,
-            dim: 0xB4A8C4,
-            line: 0x3C344C,
-            accent: 0xC4B5FD,
-            accent_ink: 0x1A1424,
-            tint: 0x322848,
+            bg: 0x140A22,
+            wash: 0x4A1878,
+            surface: 0x1E1030,
+            card: 0x2A1844,
+            hover: 0x3C2460,
+            ink: 0xF4E9FF,
+            dim: 0xC4A6E4,
+            line: 0x4C2878,
+            accent: 0xC084FC,
+            accent_ink: 0x140820,
+            tint: 0x3A1868,
             green: 0x8FBF9F,
             red: 0xE08B7A,
             info: 0x8FB4C4,
@@ -479,17 +463,17 @@ fn spec_for(palette: &str) -> Spec {
             info: 0x8FB4C4,
         },
         "ember" => Spec {
-            bg: 0x1A1410,
-            wash: 0x3A2418,
-            surface: 0x241C16,
-            card: 0x2E241C,
-            hover: 0x3C3024,
-            ink: 0xF6EDE4,
-            dim: 0xC4B0A0,
-            line: 0x4A382C,
-            accent: 0xE08A4A,
-            accent_ink: 0x1C1008,
-            tint: 0x3A2818,
+            bg: 0x241008,
+            wash: 0x8A3410,
+            surface: 0x321608,
+            card: 0x4A220C,
+            hover: 0x6A3010,
+            ink: 0xFFF1E6,
+            dim: 0xE8B898,
+            line: 0x7A3A14,
+            accent: 0xFF8A3D,
+            accent_ink: 0x1C0A04,
+            tint: 0x6A2C0C,
             green: 0x8FBF9F,
             red: 0xE08B7A,
             info: 0xC4A888,
@@ -543,33 +527,33 @@ fn spec_for(palette: &str) -> Spec {
             info: 0xA8C4BC,
         },
         "aurora" => Spec {
-            bg: 0x101418,
-            wash: 0x142830,
-            surface: 0x161C22,
-            card: 0x1E262C,
-            hover: 0x28343A,
-            ink: 0xE6F4F0,
-            dim: 0x9CB4B0,
-            line: 0x2C4044,
-            accent: 0x5ED4A0,
-            accent_ink: 0x081410,
-            tint: 0x143028,
+            bg: 0x041816,
+            wash: 0x0E6A62,
+            surface: 0x082420,
+            card: 0x0E3834,
+            hover: 0x14564E,
+            ink: 0xE6FFFB,
+            dim: 0x8EDDD4,
+            line: 0x146E64,
+            accent: 0x2EE6C7,
+            accent_ink: 0x021412,
+            tint: 0x0E5850,
             green: 0x8FBF9F,
             red: 0xE08B7A,
             info: 0x8EC8B4,
         },
         _ => Spec {
-            bg: 0x171A20,
-            wash: 0x1E2A3A,
-            surface: 0x22262E,
-            card: 0x2A303A,
-            hover: 0x343B48,
-            ink: 0xE8EAF0,
-            dim: 0xA7B0BE,
-            line: 0x3A4250,
-            accent: 0x7AA2F7,
+            bg: 0x12151C,
+            wash: 0x24304A,
+            surface: 0x1A1E28,
+            card: 0x242A38,
+            hover: 0x323848,
+            ink: 0xEEF1F8,
+            dim: 0xA8B0C4,
+            line: 0x3A445C,
+            accent: 0x8AABFF,
             accent_ink: 0x10141C,
-            tint: 0x2A3550,
+            tint: 0x2A3558,
             green: 0x8FBF9F,
             red: 0xE08B7A,
             info: 0x8FB4C4,
@@ -587,11 +571,104 @@ pub fn apply_palette(theme: &mut Theme, palette: &str) {
     let spec = spec_for(normalize_palette(palette));
     paint(theme, &spec);
     sync_controls(theme);
+    // Palette paints replace the stock colors. The code highlighter is a
+    // separate theme; leaving the light default on a dark page makes every
+    // token the same color as the background, so fenced code shows no
+    // highlight. Always install the dark syntax theme after a palette, then
+    // lift comments toward the page ink. The stock gray sits too close to
+    // these dark code cards.
+    install_highlight(theme, &spec);
+}
+
+fn install_highlight(theme: &mut Theme, spec: &Spec) {
+    let mut highlight = (*gpui_kit::component::highlighter::HighlightTheme::default_dark()).clone();
+    let comment = syntax_color(comment_ink(spec), true);
+    highlight.style.syntax.comment = Some(comment);
+    highlight.style.syntax.comment_doc = Some(comment);
+    theme.highlight_theme = std::sync::Arc::new(highlight);
+}
+
+/// Muted gray-blue, or gray-green when the palette accent is already green.
+///
+/// Lightness is chosen so the color clears the code card by about 5:1 and
+/// stays well short of the page ink. A mix toward that ink made comments
+/// the same color as ordinary code.
+fn comment_ink(spec: &Spec) -> Hsla {
+    let card = hex(spec.card);
+    let accent = hex(spec.accent);
+    let hue = if (0.25..0.50).contains(&accent.h) {
+        0.40
+    } else {
+        0.58
+    };
+    let mut best = Hsla {
+        h: hue,
+        s: 0.34,
+        l: 0.62,
+        a: 1.,
+    };
+    let mut best_gap = f32::MAX;
+    let mut lightness = 0.42_f32;
+    while lightness <= 0.80 {
+        let color = Hsla {
+            h: hue,
+            s: 0.34,
+            l: lightness,
+            a: 1.,
+        };
+        let ratio = contrast_ratio(color, card);
+        if (4.5..=6.2).contains(&ratio) {
+            let gap = (ratio - 5.1).abs();
+            if gap < best_gap {
+                best = color;
+                best_gap = gap;
+            }
+        }
+        lightness += 0.01;
+    }
+    best
+}
+
+fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
+    let lighter = relative_luminance(a).max(relative_luminance(b));
+    let darker = relative_luminance(a).min(relative_luminance(b));
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn relative_luminance(color: Hsla) -> f32 {
+    let rgb = color.to_rgb();
+    let channel = |value: f32| {
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+}
+
+fn syntax_color(color: Hsla, italic: bool) -> gpui_kit::component::highlighter::ThemeStyle {
+    let rgb = color.to_rgb();
+    let channel = |value: f32| (value * 255.).round().clamp(0., 255.) as u8;
+    let hex = format!(
+        "#{:02X}{:02X}{:02X}",
+        channel(rgb.r),
+        channel(rgb.g),
+        channel(rgb.b)
+    );
+    let style = if italic {
+        r#", "font_style": "italic""#
+    } else {
+        ""
+    };
+    serde_json::from_str(&format!(r#"{{"color":"{hex}"{style}}}"#)).expect("syntax color")
 }
 
 fn paint(theme: &mut Theme, spec: &Spec) {
     let bg = hex(spec.bg);
-    let wash = soften(hex(spec.wash), bg, 0.82);
+    // Keep enough of the palette wash that the six themes do not collapse
+    // into the same gray. Chrome then paints this through a translucent fill.
+    let wash = soften(hex(spec.wash), bg, 0.28);
     let surface = hex(spec.surface);
     let card = hex(spec.card);
     let hover = hex(spec.hover);
@@ -621,8 +698,9 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.accent = tint;
     theme.accent_foreground = accent;
     theme.caret = accent;
-    // Painted over the glyphs, so an opaque fill hides the selected text.
-    theme.selection = hex_a(spec.accent, 0.38);
+    // Selected text. Opaque fills cover the glyphs; this stays translucent
+    // and bright enough to see on every palette.
+    theme.selection = hex_a(spec.accent, 0.55);
     theme.primary = accent;
     theme.primary_foreground = accent_ink;
     theme.primary_hover = accent;
@@ -775,22 +853,19 @@ mod tests {
     }
 
     #[test]
-    fn palette_wraps_to_seven_fixed_cells_with_a_short_last_row() {
-        assert_eq!(super::PALETTE_COLUMNS, 7);
+    fn palette_row_is_six_fixed_cells() {
+        assert_eq!(super::PALETTE_COLUMNS, 6);
         assert_eq!(super::PALETTE_SWATCH_PX, 28.);
         assert_eq!(super::PALETTE_CELL_PX, 52.);
         assert_eq!(super::PALETTE_GAP_PX, 6.);
         const _: () = assert!(super::PALETTE_CELL_PX > super::PALETTE_SWATCH_PX);
-        assert_eq!(super::PALETTES.len(), 13);
+        assert_eq!(super::PALETTES.len(), 6);
         let columns = usize::from(super::PALETTE_COLUMNS);
         assert_eq!(super::PALETTES.len() / columns, 1);
-        assert_eq!(super::PALETTES.len() % columns, 6);
+        assert_eq!(super::PALETTES.len() % columns, 0);
         let row = super::palette_row_max_px();
-        let seven = super::PALETTE_CELL_PX * 7. + super::PALETTE_GAP_PX * 6.;
-        let eight = super::PALETTE_CELL_PX * 8. + super::PALETTE_GAP_PX * 7.;
-        assert!((row - seven).abs() < f32::EPSILON);
-        assert!((row - 400.).abs() < f32::EPSILON);
-        assert!(eight > row);
+        let six = super::PALETTE_CELL_PX * 6. + super::PALETTE_GAP_PX * 5.;
+        assert!((row - six).abs() < f32::EPSILON);
     }
 
     /// The swatch must preview the page, not a solid accent chip. The colors
@@ -875,6 +950,34 @@ mod tests {
             assert!(
                 boundary >= 3.0,
                 "{id}: primary edge against the card is {boundary:.2}, want >= 3"
+            );
+            let comment = super::comment_ink(&spec);
+            let comments = contrast(comment, card);
+            assert!(
+                (4.5..=6.2).contains(&comments),
+                "{id}: comment contrast is {comments:.2}, want 4.5..=6.2"
+            );
+            assert!(
+                comment.s >= 0.2,
+                "{id}: comment saturation is {:.2}, want a visible hue",
+                comment.s
+            );
+            let ink_gap = (comment.l - ink.l).abs();
+            assert!(
+                ink_gap >= 0.12,
+                "{id}: comment lightness is too close to the page ink"
+            );
+            let mut theme = gpui_kit::component::theme::Theme::default();
+            super::apply_palette(&mut theme, id);
+            let painted = theme
+                .highlight_theme
+                .style("comment")
+                .expect("comment style");
+            assert_eq!(painted.font_style, Some(gpui_kit::FontStyle::Italic));
+            let painted_ratio = contrast(painted.color.expect("comment color"), card);
+            assert!(
+                (4.5..=6.2).contains(&painted_ratio),
+                "{id}: installed comment contrast is {painted_ratio:.2}"
             );
         }
     }

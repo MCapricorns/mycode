@@ -14,7 +14,10 @@ use crate::secure_fs::owned_file::locked_update_owned_file;
 /// UI state path below the owned home.
 pub const UI_STATE_PATH: &str = "ui.json";
 /// Maximum encoded UI state size.
-pub const MAX_UI_STATE_BYTES: usize = 64 * 1024;
+///
+/// Session model pins sit beside the project bindings, so the document is
+/// larger than the original recent-folder list.
+pub const MAX_UI_STATE_BYTES: usize = 256 * 1024;
 /// UI state format version.
 pub const UI_STATE_FORMAT_VERSION: u32 = 1;
 /// UI state kind tag.
@@ -43,6 +46,9 @@ pub const MAX_RECENT_MODELS: usize = 8;
 pub const MAX_STARRED_MODELS: usize = 24;
 /// Maximum characters in one provider or model id on a pin.
 const MAX_MODEL_PIN_CHARS: usize = 256;
+/// Per-session model pins. Each chat keeps its own provider, model, and
+/// reasoning effort so one session cannot change the others.
+pub const MAX_SESSION_MODELS: usize = 128;
 
 /// One named workspace: a set of folders plus the chats grouped under it.
 ///
@@ -136,6 +142,69 @@ pub fn toggle_star(starred: &mut Vec<ModelPin>, provider: &str, model: &str) -> 
     true
 }
 
+/// Provider, model, and reasoning effort for one session.
+///
+/// The picker shows this pin while the session is open. Other sessions keep
+/// their own pins, so a model that one chat cannot use does not leak.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelPin {
+    /// Session identity spelling.
+    pub session_id: String,
+    /// Provider id from settings.
+    pub provider: String,
+    /// Model id offered by that provider.
+    pub model: String,
+    /// Requested reasoning effort. Absent leaves the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+}
+
+/// Inserts or replaces one session's model pin, newest first.
+///
+/// Invalid ids are ignored. `reasoning` that is not a short token is dropped
+/// rather than stored, so a bad value cannot fail the whole document later.
+pub fn upsert_session_model(
+    pins: &mut Vec<SessionModelPin>,
+    session_id: &str,
+    provider: &str,
+    model: &str,
+    reasoning: Option<String>,
+) {
+    if !valid_session_id(session_id) || !valid_pin_part(provider) || !valid_pin_part(model) {
+        return;
+    }
+    let reasoning = reasoning.filter(|level| valid_effort_token(level));
+    pins.retain(|pin| pin.session_id != session_id);
+    pins.insert(
+        0,
+        SessionModelPin {
+            session_id: session_id.to_owned(),
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            reasoning,
+        },
+    );
+    pins.truncate(MAX_SESSION_MODELS);
+}
+
+/// The pin for `session_id`, if one was stored.
+#[must_use]
+pub fn session_model<'a>(
+    pins: &'a [SessionModelPin],
+    session_id: &str,
+) -> Option<&'a SessionModelPin> {
+    pins.iter().find(|pin| pin.session_id == session_id)
+}
+
+fn valid_effort_token(value: &str) -> bool {
+    let len = value.chars().count();
+    (1..=32).contains(&len)
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+}
+
 /// Durable desktop UI state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -180,6 +249,9 @@ pub struct UiState {
     /// Models the user starred in the picker, newest first.
     #[serde(default)]
     pub starred_models: Vec<ModelPin>,
+    /// Per-session provider, model, and reasoning. Newest first.
+    #[serde(default)]
+    pub session_models: Vec<SessionModelPin>,
 }
 
 impl Default for UiState {
@@ -198,6 +270,7 @@ impl Default for UiState {
             trusted_projects: Vec::new(),
             recent_models: Vec::new(),
             starred_models: Vec::new(),
+            session_models: Vec::new(),
         }
     }
 }
@@ -304,6 +377,8 @@ impl UiState {
             .retain(|(existing, _)| existing != session_id);
         self.session_workspaces
             .retain(|(existing, _)| existing != session_id);
+        self.session_models
+            .retain(|pin| pin.session_id != session_id);
     }
 
     /// Validates the document.
@@ -401,6 +476,21 @@ impl UiState {
         }
         validate_pins(&self.recent_models, MAX_RECENT_MODELS)?;
         validate_pins(&self.starred_models, MAX_STARRED_MODELS)?;
+        if self.session_models.len() > MAX_SESSION_MODELS {
+            return Err(invalid());
+        }
+        for pin in &self.session_models {
+            if !valid_session_id(&pin.session_id)
+                || !valid_pin_part(&pin.provider)
+                || !valid_pin_part(&pin.model)
+                || pin
+                    .reasoning
+                    .as_deref()
+                    .is_some_and(|level| !valid_effort_token(level))
+            {
+                return Err(invalid());
+            }
+        }
         Ok(())
     }
 }
