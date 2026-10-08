@@ -622,19 +622,31 @@ fn map_newline_span(
     } else {
         norm.map[start]
     };
-    let orig_end = if end == norm.map.len() {
+    let mut orig_end = if end == norm.map.len() {
         body.len()
     } else {
         norm.map[end]
     };
-    if orig_start > 0
-        && body.as_bytes().get(orig_start) == Some(&b'\n')
-        && body.as_bytes().get(orig_start - 1) == Some(&b'\r')
-    {
+    // A CRLF is one newline in the normalized text and two bytes in `body`.
+    // `map` records the LF. An endpoint that lands on that LF has to step
+    // back over the CR that belongs to the same newline.
+    // Start: the newline is inside the match, so the CR is too.
+    // End: `map[end]` is the first byte *after* the match. When that byte is
+    // the LF, the CR in front of it is outside the match as well.
+    if cr_before_lf(body, orig_start) {
         orig_start -= 1;
+    }
+    if cr_before_lf(body, orig_end) {
+        orig_end -= 1;
     }
     (orig_start <= orig_end && body.is_char_boundary(orig_start) && body.is_char_boundary(orig_end))
         .then_some((orig_start, orig_end))
+}
+
+fn cr_before_lf(body: &str, index: usize) -> bool {
+    index > 0
+        && body.as_bytes().get(index) == Some(&b'\n')
+        && body.as_bytes().get(index - 1) == Some(&b'\r')
 }
 
 /// The line ending the file already uses, when it has any newlines.
@@ -1125,5 +1137,33 @@ mod newline_tests {
         let error = apply(body, "same\n", "x\n").expect_err("two matches");
         let text = error.to_string();
         assert!(text.contains("occurs"), "{text}");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_at_a_crlf_keeps_the_following_line() {
+        let body = "one\r\ntwo\r\nthree\r\n";
+        let updated = apply(body, "one\ntwo\n", "ONE\nTWO\n").expect("edit");
+        assert_eq!(updated, "ONE\r\nTWO\r\nthree\r\n");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_before_a_crlf_does_not_eat_the_cr() {
+        let body = "head\r\none\r\ntwo\r\ntail\r\n";
+        let updated = apply(body, "one\ntwo", "ONE\nTWO").expect("edit");
+        assert_eq!(updated, "head\r\nONE\r\nTWO\r\ntail\r\n");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_at_eof_crlf_replaces_the_whole_tail() {
+        let body = "one\r\ntwo\r\n";
+        let updated = apply(body, "one\ntwo\n", "ONE\nTWO\n").expect("edit");
+        assert_eq!(updated, "ONE\r\nTWO\r\n");
+    }
+
+    #[test]
+    fn multiline_lf_span_ending_at_eof_before_the_final_crlf_keeps_it() {
+        let body = "one\r\ntwo\r\n";
+        let updated = apply(body, "one\ntwo", "ONE\nTWO").expect("edit");
+        assert_eq!(updated, "ONE\r\nTWO\r\n");
     }
 }
