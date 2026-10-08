@@ -20,7 +20,7 @@ use crate::ledger::{HeadWriter, head_spelling, ledger_history, render_error};
 use crate::oauth::resolve_request_auth;
 use crate::projection::{project_assistant_message, project_tool_result_message, project_usage};
 use crate::protocol::CHAT_CANCELLED;
-use crate::state::{CoreState, model_context_window};
+use crate::state::{CoreState, model_context_window, model_output_limit};
 use crate::tool_hosts::{BridgeAskChannel, BridgeWebHost, register_ask};
 
 /// One model turn: resolve the provider, stream the reply into the event
@@ -34,6 +34,7 @@ pub(crate) async fn chat_turn(
     expected_head: HeadStamp,
     provider_id: String,
     model: String,
+    reasoning: Option<String>,
 ) {
     let session_id = session.as_str().to_owned();
     let cwd = state.project_dir(&session_id);
@@ -46,6 +47,7 @@ pub(crate) async fn chat_turn(
         expected_head,
         &provider_id,
         &model,
+        reasoning.as_deref(),
         cwd,
     )
     .await
@@ -54,6 +56,100 @@ pub(crate) async fn chat_turn(
             session_id,
             message,
         });
+    }
+}
+
+/// Runs `/compact`: summarize the ledger now and store a checkpoint the next
+/// turn will send instead of the full history.
+pub(crate) async fn manual_compact(
+    state: Arc<CoreState>,
+    events: crate::BridgeEventTx,
+    session: SessionId,
+    branch: BranchId,
+    expected_head: HeadStamp,
+    provider_id: String,
+    model: String,
+) {
+    let session_id = session.as_str().to_owned();
+    let outcome = compact_session_now(
+        &state,
+        &session,
+        &branch,
+        &expected_head,
+        &provider_id,
+        &model,
+    )
+    .await;
+    let (ok, message) = match outcome {
+        Ok(message) => (true, message),
+        Err(message) => (false, message),
+    };
+    let _ = events.try_send(BridgeEvent::CompactFinished {
+        session_id,
+        message,
+        ok,
+    });
+}
+
+async fn compact_session_now(
+    state: &CoreState,
+    session: &SessionId,
+    branch: &BranchId,
+    expected_head: &HeadStamp,
+    provider_id: &str,
+    model: &str,
+) -> Result<String, String> {
+    let home = &state.home;
+    let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
+    let (bearer, extra_headers) = resolve_request_auth(state, &provider, &stored_key).await?;
+    let mut resolved =
+        ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
+            .map_err(|error| format!("provider setup failed: {error:?}"))?;
+    resolved.headers.extend(extra_headers);
+    let transport: Arc<dyn SseTransport> =
+        Arc::new(ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?);
+    let wire = WireProvider::new(resolved, transport);
+    let expected_head = match state.service.open(session).await {
+        Ok(opened) => opened
+            .heads
+            .iter()
+            .find(|head| &head.branch_id == branch)
+            .map(|head| head.head.clone())
+            .unwrap_or_else(|| expected_head.clone()),
+        Err(_) => expected_head.clone(),
+    };
+    let history = ledger_history(&state.service, session, branch, &expected_head)
+        .await
+        .map_err(render_error)?;
+    if history.len() < 2 {
+        return Ok("empty".to_owned());
+    }
+    let before = mycode_config::read_compaction(home, session.as_str())
+        .ok()
+        .flatten()
+        .map(|checkpoint| checkpoint.created_at_unix)
+        .unwrap_or(0);
+    let head_stamp_text = head_spelling(&expected_head);
+    let context_window = model_context_window(state, &provider, model);
+    let scope = crate::compaction::CompactScope {
+        home,
+        wire: &wire,
+        model,
+        session_id: session.as_str(),
+        branch_id: branch.as_str(),
+        head: &head_stamp_text,
+        context_window,
+    };
+    let _compacted = crate::compaction::compact_history(&scope, history, true).await;
+    let after = mycode_config::read_compaction(home, session.as_str())
+        .ok()
+        .flatten()
+        .map(|checkpoint| checkpoint.created_at_unix)
+        .unwrap_or(0);
+    if after > before {
+        Ok("compacted".to_owned())
+    } else {
+        Ok("empty".to_owned())
     }
 }
 
@@ -139,6 +235,7 @@ async fn run_chat_turn(
     expected_head: HeadStamp,
     provider_id: &str,
     model: &str,
+    reasoning: Option<&str>,
     cwd: PathBuf,
 ) -> Result<(), String> {
     let home = &state.home;
@@ -177,7 +274,7 @@ async fn run_chat_turn(
             .unwrap_or(expected_head),
         Err(_) => expected_head,
     };
-    let mut history = ledger_history(&state.service, &session, &branch, &expected_head)
+    let history = ledger_history(&state.service, &session, &branch, &expected_head)
         .await
         .map_err(render_error)?;
     let usage_enabled = settings.usage.enabled;
@@ -249,15 +346,12 @@ async fn run_chat_turn(
         registry.register(Arc::new(crate::mcp_tools::UseTool::new(catalog)));
     }
 
-    // Split the last committed user message off as the prompt; everything
-    // before it is replay history.
-    let Some(last) = history.pop() else {
-        return Err("the turn has no user message to answer".to_owned());
-    };
-    let prompt = match Arc::unwrap_or_clone(last) {
-        Message::User(user) => user,
-        _ => return Err("the turn has no user message to answer".to_owned()),
-    };
+    // The prompt is the latest user message. A trailing assistant or tool
+    // result (an interrupted turn, or a write that landed after the user
+    // message) used to fail the turn and leave the session unable to send.
+    // Those suffix messages stay in the ledger and are omitted from this
+    // request so the session can continue.
+    let (history, prompt) = split_latest_user(history)?;
     // Owned for the compaction hook and the cancel registration.
     let session_id = session_id.to_owned();
 
@@ -274,7 +368,7 @@ async fn run_chat_turn(
         head: &head_stamp_text,
         context_window,
     };
-    let history = crate::compaction::compact_history(&compact_scope, history).await;
+    let history = crate::compaction::compact_history(&compact_scope, history, false).await;
 
     let resources = mycode_config::discover_resources(home, &cwd);
     let mut system_prompt = String::from(
@@ -367,7 +461,8 @@ cwd for both script and program mode.",
                 head: &head,
                 context_window,
             };
-            request.messages = crate::compaction::compact_history(&scope, request.messages).await;
+            request.messages =
+                crate::compaction::compact_history(&scope, request.messages, false).await;
             request
         }
     });
@@ -375,14 +470,10 @@ cwd for both script and program mode.",
     // Publish the token so an Escape-driven CancelChat can abort this turn;
     // the guard unpublishes it on every exit path.
     let _cancel_guard = CancelGuard::register(state.turn_cancels.clone(), &session_id, &cancel);
-    let mut config = AgentConfig::new().with_system_prompt(system_prompt);
-    if let Some(level) = settings.reasoning_effort.as_deref() {
-        let Some(level) = mycode_core::ReasoningLevel::parse(level) else {
-            return Err(
-                "settings reasoningEffort must be a models.dev option (off, on, minimal, low, medium, high, xhigh, max)"
-                    .to_owned(),
-            );
-        };
+    let mut config = AgentConfig::new()
+        .with_system_prompt(system_prompt)
+        .with_max_output_tokens(model_output_limit(state, &provider, model));
+    if let Some(level) = reasoning.and_then(mycode_core::ReasoningLevel::parse) {
         config = config.with_reasoning(level);
     }
     let mut agent = Agent::new(config);
@@ -495,6 +586,7 @@ cwd for both script and program mode.",
                             session_id: pump_session_id.clone(),
                             model: usage_model.clone(),
                             input: turn_usage.input,
+                            context: turn_usage.latest_input,
                             output: turn_usage.output,
                             cache: turn_usage.cache,
                             elapsed_ms: turn_started.elapsed().as_millis() as u64,
@@ -581,6 +673,7 @@ cwd for both script and program mode.",
                                             "provider": usage_provider,
                                             "model": usage_model,
                                             "input": turn_usage.input,
+                                            "context": turn_usage.latest_input,
                                             "output": turn_usage.output,
                                             "cache": turn_usage.cache,
                                             "elapsed_ms": elapsed_ms,
@@ -595,6 +688,7 @@ cwd for both script and program mode.",
                                                     provider: usage_provider.clone(),
                                                     model: usage_model.clone(),
                                                     input: turn_usage.input,
+                                                    context: turn_usage.latest_input,
                                                     output: turn_usage.output,
                                                     cache: turn_usage.cache,
                                                     elapsed_ms,
@@ -722,6 +816,9 @@ impl Drop for CancelGuard {
 struct TurnUsage {
     seen: bool,
     input: u64,
+    /// Most recent request's prompt tokens. The context meter uses this
+    /// instead of `input`, which sums every tool round.
+    latest_input: u64,
     output: u64,
     cache: Option<u64>,
 }
@@ -730,9 +827,39 @@ impl TurnUsage {
     fn fold(&mut self, usage: &mycode_core::Usage) {
         self.seen = true;
         self.input = self.input.saturating_add(usage.input_tokens);
+        if usage.input_tokens > 0 {
+            self.latest_input = usage.input_tokens;
+        }
         self.output = self.output.saturating_add(usage.output_tokens);
         if let Some(cache) = usage.cache_read_tokens {
             self.cache = Some(self.cache.unwrap_or_default().saturating_add(cache));
         }
     }
+}
+
+/// Splits the latest non-empty user message off as the prompt.
+///
+/// Messages after it are dropped from this request only. Returning an error
+/// here used to stick: the next send loaded the same tail and failed again.
+fn split_latest_user(
+    history: Vec<Arc<Message>>,
+) -> Result<(Vec<Arc<Message>>, mycode_core::UserMessage), String> {
+    let Some(index) = history.iter().rposition(
+        |message| matches!(message.as_ref(), Message::User(user) if user_has_text(user)),
+    ) else {
+        return Err("the turn has no user message to answer".to_owned());
+    };
+    let prompt = match Arc::unwrap_or_clone(Arc::clone(&history[index])) {
+        Message::User(user) => user,
+        _ => return Err("the turn has no user message to answer".to_owned()),
+    };
+    let prior = history.into_iter().take(index).collect();
+    Ok((prior, prompt))
+}
+
+fn user_has_text(user: &mycode_core::UserMessage) -> bool {
+    user.content.iter().any(|block| match block {
+        mycode_core::ContentBlock::Text(text) => !text.text.trim().is_empty(),
+        _ => false,
+    })
 }

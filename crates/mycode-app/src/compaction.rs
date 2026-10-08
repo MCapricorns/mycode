@@ -51,8 +51,13 @@ pub(crate) struct CompactScope<'a> {
 pub(crate) async fn compact_history(
     scope: &CompactScope<'_>,
     history: Vec<Arc<Message>>,
+    force: bool,
 ) -> Vec<Arc<Message>> {
-    let threshold = compaction_threshold(scope.context_window);
+    let threshold = if force {
+        0
+    } else {
+        compaction_threshold(scope.context_window)
+    };
     let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
         return history;
     };
@@ -66,14 +71,25 @@ pub(crate) async fn compact_history(
     let already_summarized = history
         .first()
         .is_some_and(|message| is_summary_message(message));
-    if !already_summarized
+    // A checkpoint still applies after the head moves by appends, while the
+    // uncovered tail fits. `/compact` writes that checkpoint; the next turn
+    // uses it instead of waiting for the automatic threshold. A forced
+    // compact always summarizes again.
+    if !force
+        && !already_summarized
         && let Some(checkpoint) = prior.as_ref()
-        && checkpoint.covered_head == scope.head
         && checkpoint.covered_messages > 0
         && checkpoint.covered_messages < history.len()
         && !is_tool_result(&history[checkpoint.covered_messages])
     {
-        return with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
+        let tail_tokens: usize = history[checkpoint.covered_messages..]
+            .iter()
+            .map(|message| message_tokens(message))
+            .sum();
+        let same_head = checkpoint.covered_head == scope.head;
+        if same_head || tail_tokens <= compaction_threshold(scope.context_window) {
+            return with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
+        }
     }
     let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
     let transcript = compaction_transcript(prior_summary, &history[..head_end]);

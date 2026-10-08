@@ -231,6 +231,30 @@ pub(crate) fn model_context_window(
         .unwrap_or(0)
 }
 
+/// models.dev `limit.output` for this model. `None` when the catalog does
+/// not publish an output cap; callers must not substitute a fixed 4096.
+pub(crate) fn model_output_limit(
+    state: &CoreState,
+    provider: &ProviderSettings,
+    model: &str,
+) -> Option<u64> {
+    let Ok(catalog) = state.catalog.read() else {
+        return None;
+    };
+    let document = &catalog.document;
+    document
+        .provider(&provider.id)
+        .or_else(|| {
+            document
+                .providers
+                .iter()
+                .find(|item| item.base_url == provider.base_url)
+        })
+        .and_then(|item| item.models.iter().find(|entry| entry.id == model))
+        .map(|entry| entry.output)
+        .filter(|output| *output > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::startup_update_event;

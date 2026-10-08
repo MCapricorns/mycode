@@ -125,6 +125,23 @@ pub enum BridgeCommand {
         provider_id: String,
         /// Model id offered by that provider.
         model: String,
+        /// Reasoning effort for this session. `None` leaves the provider
+        /// default. Global settings are not consulted, so one session's
+        /// pick cannot fail the others.
+        reasoning: Option<String>,
+    },
+    /// Summarize the open session now. The next turn sends the checkpoint.
+    CompactSession {
+        /// Target session.
+        session: SessionId,
+        /// Target branch.
+        branch: BranchId,
+        /// Head the UI observed.
+        expected_head: HeadStamp,
+        /// Provider identity from settings.
+        provider_id: String,
+        /// Model id that writes the summary.
+        model: String,
     },
     /// Abort the in-flight turn of one session (Escape in the chat).
     CancelChat {
@@ -297,8 +314,10 @@ pub enum BridgeEvent {
         session_id: String,
         /// Model id the turn is running on.
         model: String,
-        /// Input tokens summed so far this turn.
+        /// Input tokens summed so far this turn (billing).
         input: u64,
+        /// Latest prompt size, not the sum of tool rounds.
+        context: u64,
         /// Output tokens summed so far this turn.
         output: u64,
         /// Prompt tokens served from the provider cache, when reported.
@@ -314,8 +333,10 @@ pub enum BridgeEvent {
         provider: String,
         /// Model id.
         model: String,
-        /// Input tokens.
+        /// Input tokens summed for this turn (billing).
         input: u64,
+        /// Latest prompt size for the context meter.
+        context: u64,
         /// Output tokens.
         output: u64,
         /// Prompt tokens served from the provider cache, when reported.
@@ -391,6 +412,15 @@ pub enum BridgeEvent {
     CopilotSignInFailed {
         /// Rendered failure for the sign-in panel.
         message: String,
+    },
+    /// `/compact` finished. `ok` is false when the provider could not run.
+    CompactFinished {
+        /// Session identity spelling.
+        session_id: String,
+        /// `compacted`, `empty`, or a rendered failure.
+        message: String,
+        /// Whether the command completed without a provider error.
+        ok: bool,
     },
 }
 

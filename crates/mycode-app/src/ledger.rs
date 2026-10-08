@@ -236,10 +236,10 @@ pub(crate) async fn ledger_history(
                         // gateways reject a later thinking-enabled turn
                         // if prior signatures are stripped ("unrecognized
                         // chat message"). Each wire adapter drops blocks
-                        // it cannot replay.
-                        if !assistant.blocks.is_empty() {
-                            history.push(Arc::new(Message::Assistant(assistant)));
-                        }
+                        // it cannot replay. Empty blocks stay too: dropping
+                        // them shifted the tail and the next turn could not
+                        // find its user message.
+                        history.push(Arc::new(Message::Assistant(assistant)));
                     }
                     Err(_) => history.push(Arc::new(Message::User(UserMessage::text(
                         decode_text(payload),

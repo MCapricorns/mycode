@@ -65,7 +65,11 @@ pub(crate) fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry
     } else {
         format!("{provider}/{model}")
     };
+    let context = value["context"].as_u64().unwrap_or(0);
     let mut text = format!("{key}: {input} in / {output} out");
+    if context > 0 {
+        text.push_str(&format!(" \u{b7} ctx {context}"));
+    }
     if let Some(cache) = cache {
         text.push_str(&format!(" \u{b7} cache {cache}"));
     }

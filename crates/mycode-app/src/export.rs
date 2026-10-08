@@ -272,12 +272,11 @@ pub fn import_from_file_with(
         return Err("bundle exceeds the size limit".to_owned());
     }
     let body = std::fs::read(path).map_err(|error| format!("read: {error}"))?;
-    let mut bundle: ExportBundle =
+    let bundle: ExportBundle =
         serde_json::from_slice(&body).map_err(|error| format!("bundle: {error}"))?;
     if bundle.format_version != EXPORT_FORMAT_VERSION || bundle.kind != EXPORT_KIND {
         return Err("not a MYCode export bundle".to_owned());
     }
-    bundle.settings.retire_light_theme();
     bundle
         .settings
         .validate()

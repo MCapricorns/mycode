@@ -18,7 +18,7 @@ use crate::state::{
     spawn_update_check,
 };
 use crate::tool_hosts::deliver_ask_answer;
-use crate::turn::chat_turn;
+use crate::turn::{chat_turn, manual_compact};
 use crate::{BridgeCommand, BridgeReply, CatalogInfo, WithReply, protocol::SessionSummary};
 
 pub(crate) fn run_core(
@@ -88,12 +88,33 @@ pub(crate) fn run_core(
                     expected_head,
                     provider_id,
                     model,
+                    reasoning,
                 } => {
                     // One live turn per session. A second turn used to replace
                     // the cancel token without stopping the first, so both
                     // pumps appended to the same branch.
                     cancel_session_work(&state, session.as_str());
                     let task = chat_turn(
+                        state.clone(),
+                        events.clone(),
+                        session,
+                        branch,
+                        expected_head,
+                        provider_id,
+                        model,
+                        reasoning,
+                    );
+                    tokio::spawn(task);
+                    let _ = with_reply.reply.send(BridgeReply::ChatStarted(Ok(())));
+                }
+                BridgeCommand::CompactSession {
+                    session,
+                    branch,
+                    expected_head,
+                    provider_id,
+                    model,
+                } => {
+                    let task = manual_compact(
                         state.clone(),
                         events.clone(),
                         session,
@@ -209,7 +230,9 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::LoadSettings => BridgeReply::Settings(Err(message)),
         BridgeCommand::SaveSettings { .. } => BridgeReply::SettingsSaved(Err(message)),
         BridgeCommand::SaveProviderKey { .. } => BridgeReply::ProviderKeySaved(Err(message)),
-        BridgeCommand::ChatTurn { .. } => BridgeReply::ChatStarted(Err(message)),
+        BridgeCommand::ChatTurn { .. } | BridgeCommand::CompactSession { .. } => {
+            BridgeReply::ChatStarted(Err(message))
+        }
         BridgeCommand::SearchProjectFiles { .. } => BridgeReply::ProjectFiles(Err(message)),
         BridgeCommand::McpListTools { server } => BridgeReply::McpTools {
             server_id: server.id.clone(),
@@ -363,7 +386,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::StartOAuthSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(
             "device sign-in runs as a concurrent task".to_owned(),
         )),
-        BridgeCommand::ChatTurn { .. } => {
+        BridgeCommand::ChatTurn { .. } | BridgeCommand::CompactSession { .. } => {
             BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
         }
         BridgeCommand::CancelChat { .. } => {
