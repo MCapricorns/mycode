@@ -41,6 +41,8 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
     }
     if let Some(level) = request.reasoning {
         apply_responses_thinking(&mut body, model, endpoint, level);
+    } else if let Some(token) = request.reasoning_token.as_deref() {
+        body["reasoning"] = json!({ "effort": token });
     }
     body
 }

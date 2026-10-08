@@ -473,8 +473,12 @@ cwd for both script and program mode.",
     let mut config = AgentConfig::new()
         .with_system_prompt(system_prompt)
         .with_max_output_tokens(model_output_limit(state, &provider, model));
-    if let Some(level) = reasoning.and_then(mycode_core::ReasoningLevel::parse) {
-        config = config.with_reasoning(level);
+    if let Some(token) = reasoning {
+        if let Some(level) = mycode_core::ReasoningLevel::parse(token) {
+            config = config.with_reasoning(level);
+        } else if effort_token_ok(token) {
+            config = config.with_reasoning_token(Some(token.to_owned()));
+        }
     }
     let mut agent = Agent::new(config);
 
@@ -855,6 +859,14 @@ fn split_latest_user(
     };
     let prior = history.into_iter().take(index).collect();
     Ok((prior, prompt))
+}
+
+fn effort_token_ok(token: &str) -> bool {
+    let len = token.chars().count();
+    (1..=32).contains(&len)
+        && token.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
 }
 
 fn user_has_text(user: &mycode_core::UserMessage) -> bool {

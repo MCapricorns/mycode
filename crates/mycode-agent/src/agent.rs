@@ -38,6 +38,8 @@ pub struct AgentConfig {
     pub reasoning: Option<mycode_core::ReasoningLevel>,
     /// models.dev output cap forwarded onto each provider request.
     pub max_output_tokens: Option<u64>,
+    /// Published effort spelling that is not a built-in level.
+    pub reasoning_token: Option<String>,
 }
 
 impl AgentConfig {
@@ -65,6 +67,13 @@ impl AgentConfig {
     #[must_use]
     pub fn with_max_output_tokens(mut self, limit: Option<u64>) -> Self {
         self.max_output_tokens = limit.filter(|tokens| *tokens > 0);
+        self
+    }
+
+    /// Forwards a models.dev effort token the built-in levels do not name.
+    #[must_use]
+    pub fn with_reasoning_token(mut self, token: impl Into<Option<String>>) -> Self {
+        self.reasoning_token = token.into();
         self
     }
 }

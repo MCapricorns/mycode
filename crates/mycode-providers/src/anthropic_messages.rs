@@ -51,6 +51,8 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
     }
     if let Some(level) = request.reasoning {
         crate::wire_common::apply_anthropic_thinking(&mut body, model, endpoint, level);
+    } else if let Some(token) = request.reasoning_token.as_deref() {
+        body["output_config"] = json!({ "effort": token });
     }
     body
 }

@@ -119,6 +119,10 @@ pub struct Request {
     /// catalog does not publish one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
+    /// Effort token published by models.dev that is not one of the built-in
+    /// levels. Sent as-is; no budget is invented for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_token: Option<String>,
 }
 
 impl Default for Request {
@@ -129,6 +133,7 @@ impl Default for Request {
             tools: Arc::from([]),
             reasoning: None,
             max_output_tokens: None,
+            reasoning_token: None,
         }
     }
 }
