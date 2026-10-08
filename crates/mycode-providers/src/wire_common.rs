@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use mycode_core::{
     ContentBlock, ReasoningLevel, StopReason, TextBlock, ThinkingBlock, ToolCall, Usage,
+    interrupted_response_text,
 };
 
 /// Ceiling for one streamed assistant payload (text, thinking, and tool JSON).
@@ -33,8 +34,32 @@ pub(crate) fn map_stop_reason(token: &str) -> StopReason {
     match token {
         "tool_calls" | "function_call" | "tool_use" => StopReason::ToolUse,
         "length" | "max_tokens" => StopReason::Length,
+        "error" | "network_error" | "content_filter" | "sensitive" => StopReason::Error,
         _ => StopReason::Stop,
     }
+}
+
+/// Appends the shared interruption line once.
+pub(crate) fn append_interruption(text: &mut String, detail: &str) {
+    let note = interrupted_response_text(detail);
+    if text.contains(note.as_str()) {
+        return;
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&note);
+}
+
+/// Reads a provider error message from a JSON object, when one is present.
+pub(crate) fn provider_error_detail(value: &Value) -> Option<String> {
+    let error = value.get("error").filter(|error| !error.is_null())?;
+    let detail = error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())
+        .unwrap_or("provider error");
+    Some(detail.to_owned())
 }
 
 /// Accounts `extra` bytes toward [`MAX_STREAM_ACCUMULATED_BYTES`].
@@ -60,6 +85,96 @@ pub(crate) fn minimax_target(model: &str, endpoint: &str) -> bool {
         || endpoint.to_ascii_lowercase().contains("minimax")
 }
 
+/// Zhipu / Z.AI / BigModel, including a model id that contains `glm`.
+pub(crate) fn glm_target(model: &str, endpoint: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    let endpoint = endpoint.to_ascii_lowercase();
+    model.contains("glm")
+        || endpoint.contains("bigmodel")
+        || endpoint.contains("z.ai")
+        || endpoint.contains("zhipu")
+}
+
+/// GLM-5 keeps thinking on. `thinking.type = "disabled"` is rejected.
+pub(crate) fn glm_cannot_disable(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut index = 0;
+    while index + 3 <= bytes.len() {
+        if bytes[index..].starts_with(b"glm") {
+            let after = lower[index + 3..].trim_start_matches(['-', '_', '.']);
+            if let Some(stripped) = after.strip_prefix('5') {
+                let boundary = stripped.chars().next();
+                if boundary.is_none_or(|ch| !ch.is_ascii_digit()) {
+                    return true;
+                }
+            }
+        }
+        index += 1;
+    }
+    false
+}
+
+/// How an assistant turn's reasoning is echoed on the next request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReasoningReplay {
+    /// Leave thinking out of the wire history.
+    Omit,
+    /// OpenAI-style `reasoning_content` (GLM, DeepSeek, Kimi/Moonshot).
+    Content,
+    /// MiniMax `reasoning_details`.
+    Details,
+}
+
+/// Vendors that reject a follow-up unless prior reasoning is echoed.
+pub(crate) fn reasoning_replay(model: &str, endpoint: &str) -> ReasoningReplay {
+    if minimax_target(model, endpoint) {
+        return ReasoningReplay::Details;
+    }
+    let model_lower = model.to_ascii_lowercase();
+    let endpoint_lower = endpoint.to_ascii_lowercase();
+    if glm_target(model, endpoint)
+        || model_lower.contains("deepseek")
+        || endpoint_lower.contains("deepseek")
+        || model_lower.contains("kimi")
+        || model_lower.contains("moonshot")
+        || endpoint_lower.contains("moonshot")
+    {
+        return ReasoningReplay::Content;
+    }
+    ReasoningReplay::Omit
+}
+
+/// Applies GLM thinking fields.
+///
+/// Effort levels enable thinking and, on chat-completions bodies, also set
+/// `reasoning_effort`. Anthropic GLM bodies must not send `budget_tokens`.
+/// `glm-5` cannot be switched off.
+pub(crate) fn apply_glm_thinking(
+    body: &mut Value,
+    model: &str,
+    level: ReasoningLevel,
+    effort_field: bool,
+) {
+    match level {
+        ReasoningLevel::Off if glm_cannot_disable(model) => {
+            body["thinking"] = json!({ "type": "enabled" });
+        }
+        ReasoningLevel::Off => {
+            body["thinking"] = json!({ "type": "disabled" });
+        }
+        ReasoningLevel::On => {
+            body["thinking"] = json!({ "type": "enabled" });
+        }
+        other => {
+            body["thinking"] = json!({ "type": "enabled" });
+            if effort_field && let Some(token) = other.effort_token() {
+                body["reasoning_effort"] = json!(token);
+            }
+        }
+    }
+}
+
 /// Applies the requested reasoning effort to an OpenAI-style body.
 ///
 /// Thinking On is `thinking.type = "enabled"` except on MiniMax, where the
@@ -70,6 +185,10 @@ pub(crate) fn apply_reasoning_effort(
     endpoint: &str,
     level: ReasoningLevel,
 ) {
+    if glm_target(model, endpoint) {
+        apply_glm_thinking(body, model, level, true);
+        return;
+    }
     match level {
         ReasoningLevel::Off => {
             body["reasoning_effort"] = json!("none");
@@ -177,6 +296,24 @@ pub(crate) fn join_text(blocks: &[ContentBlock]) -> String {
         .join("")
 }
 
+/// Concatenates non-empty thinking blocks, separated by newlines.
+pub(crate) fn join_thinking(blocks: &[ContentBlock]) -> String {
+    let mut joined = String::new();
+    for block in blocks {
+        let ContentBlock::Thinking(thinking) = block else {
+            continue;
+        };
+        if thinking.text.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push('\n');
+        }
+        joined.push_str(&thinking.text);
+    }
+    joined
+}
+
 /// Assembles terminal content blocks: optional thinking, optional text, then
 /// one tool-call block per stitched call. Arguments parse as JSON and default
 /// to an empty object when a vendor streams an invalid fragment.
@@ -193,10 +330,29 @@ pub(crate) fn assemble_blocks<'a>(
         blocks.push(ContentBlock::Text(TextBlock::new(text)));
     }
     for (id, name, arguments) in calls {
+        if id.is_empty() || name.is_empty() {
+            continue;
+        }
         let arguments = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
         blocks.push(ContentBlock::ToolCall(ToolCall::new(id, name, arguments)));
     }
     blocks
+}
+
+/// Stop reason for an assembled message. An interruption wins over tool use
+/// so a partial call is not executed.
+pub(crate) fn assembled_stop_reason(
+    interrupted: bool,
+    has_calls: bool,
+    stop_reason: Option<StopReason>,
+) -> StopReason {
+    if interrupted || stop_reason == Some(StopReason::Error) {
+        StopReason::Error
+    } else if has_calls && stop_reason != Some(StopReason::Length) {
+        StopReason::ToolUse
+    } else {
+        stop_reason.unwrap_or(StopReason::Stop)
+    }
 }
 
 #[cfg(test)]
@@ -280,5 +436,54 @@ mod tests {
         );
         assert_eq!(claude["thinking"]["type"], "enabled");
         assert!(claude["thinking"]["budget_tokens"].as_u64().unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn glm_effort_enables_thinking_and_glm5_cannot_disable() {
+        let mut high = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut high,
+            "glm-4.7",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            ReasoningLevel::High,
+        );
+        assert_eq!(high["thinking"]["type"], "enabled");
+        assert_eq!(high["reasoning_effort"], "high");
+
+        let mut off = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut off,
+            "glm-4.7",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            ReasoningLevel::Off,
+        );
+        assert_eq!(off["thinking"]["type"], "disabled");
+        assert!(off.get("reasoning_effort").is_none());
+
+        let mut locked = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut locked,
+            "glm-5.3",
+            "https://api.z.ai/api/paas/v4/chat/completions",
+            ReasoningLevel::Off,
+        );
+        assert_eq!(locked["thinking"]["type"], "enabled");
+        assert!(locked.get("reasoning_effort").is_none());
+        assert!(super::glm_cannot_disable("GLM-5"));
+        assert!(!super::glm_cannot_disable("glm-4.7"));
+        assert!(!super::glm_cannot_disable("glm-50"));
+    }
+
+    #[test]
+    fn glm_messages_body_has_no_budget_tokens() {
+        let high = Request::new().with_reasoning(ReasoningLevel::High);
+        let body = crate::anthropic_messages::build_body(
+            "glm-4.7",
+            "https://open.bigmodel.cn/api/anthropic/v1/messages",
+            &high,
+        );
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body["thinking"].get("budget_tokens").is_none());
+        assert!(body.get("reasoning_effort").is_none());
     }
 }

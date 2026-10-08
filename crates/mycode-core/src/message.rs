@@ -322,6 +322,32 @@ pub enum StopReason {
     Error,
 }
 
+/// Visible line kept with whatever thinking and text already arrived when a
+/// provider stream fails. Adapters and the agent share this spelling.
+#[must_use]
+pub fn interrupted_response_text(detail: &str) -> String {
+    let mut flat = String::new();
+    for ch in detail.chars() {
+        if flat.chars().count() >= 240 {
+            break;
+        }
+        if ch.is_control() {
+            if !flat.ends_with(' ') {
+                flat.push(' ');
+            }
+            continue;
+        }
+        flat.push(ch);
+    }
+    let flat = flat.trim();
+    let detail = if flat.is_empty() {
+        "the response ended early"
+    } else {
+        flat
+    };
+    format!("[error] the response was interrupted: {detail}")
+}
+
 /// Token usage reported by a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

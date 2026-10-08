@@ -23,6 +23,12 @@ pub(crate) trait FrameReducer: Send + 'static {
 
     /// Produces the terminal event for a stream that ended without one.
     fn finish(&mut self) -> StreamEvent;
+
+    /// Ends the stream after a transport or protocol failure.
+    ///
+    /// Keeps thinking, text, and named tool calls already reduced, and marks
+    /// the message with [`mycode_core::StopReason::Error`].
+    fn interrupt(&mut self, detail: &str) -> StreamEvent;
 }
 
 /// Drives one provider request to exactly one terminal.
@@ -53,7 +59,7 @@ pub(crate) async fn drive(
         let chunk = match chunk {
             Some(Ok(chunk)) => chunk,
             Some(Err(error)) => {
-                let _ = sender.send(StreamEvent::Error(error)).await;
+                let _ = sender.send(reducer.interrupt(&error.to_string())).await;
                 return;
             }
             None => break,
@@ -61,7 +67,7 @@ pub(crate) async fn drive(
         let frames = match parser.feed(&chunk) {
             Ok(frames) => frames,
             Err(error) => {
-                let _ = sender.send(StreamEvent::Error(error)).await;
+                let _ = sender.send(reducer.interrupt(&error.to_string())).await;
                 return;
             }
         };
@@ -81,7 +87,7 @@ pub(crate) async fn drive(
         }
         Ok(None) => {}
         Err(error) => {
-            let _ = sender.send(StreamEvent::Error(error)).await;
+            let _ = sender.send(reducer.interrupt(&error.to_string())).await;
             return;
         }
     }

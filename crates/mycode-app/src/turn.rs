@@ -393,6 +393,7 @@ cwd for both script and program mode.",
     let pump_session_id = session_id.to_owned();
     let pump = tokio::spawn(async move {
         let mut pending_assistant: Option<std::sync::Arc<mycode_core::Message>> = None;
+        let mut last_step: Option<crate::protocol::ConversationEntry> = None;
         let mut turn_usage = TurnUsage::default();
         loop {
             let event = match agent_rx.recv().await {
@@ -520,9 +521,11 @@ cwd for both script and program mode.",
                     };
                     match writer.write(EventKind::Message, &payload).await {
                         Ok(event_id) => {
+                            let entry = project_assistant_message(&event_id, assistant);
+                            last_step = Some(entry.clone());
                             let _ = pump_events.try_send(BridgeEvent::AssistantStep {
                                 session_id: pump_session_id.clone(),
-                                entry: project_assistant_message(&event_id, assistant),
+                                entry,
                             });
                         }
                         Err(error) => {
@@ -539,15 +542,28 @@ cwd for both script and program mode.",
                     let Some(message) = pending_assistant.take() else {
                         // A cancelled mid-stream turn commits nothing; the
                         // UI resets quietly on the sentinel message.
-                        let message =
-                            if matches!(outcome, mycode_core::events::TurnOutcome::Aborted) {
-                                CHAT_CANCELLED.to_owned()
-                            } else {
-                                "the turn ended without an assistant message".to_owned()
-                            };
+                        if matches!(outcome, mycode_core::events::TurnOutcome::Aborted) {
+                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
+                                session_id: pump_session_id.clone(),
+                                message: CHAT_CANCELLED.to_owned(),
+                            });
+                            return;
+                        }
+                        // A failed stream that already committed a tool step
+                        // (or any earlier step) is done. Reporting "no
+                        // assistant message" used to clear the live bubble
+                        // after the step was the whole turn.
+                        if let Some(entry) = last_step {
+                            let _ = pump_events.try_send(BridgeEvent::ChatDone {
+                                session_id: pump_session_id.clone(),
+                                head: writer.head().await,
+                                entry,
+                            });
+                            return;
+                        }
                         let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                             session_id: pump_session_id.clone(),
-                            message,
+                            message: "the turn ended without an assistant message".to_owned(),
                         });
                         return;
                     };
@@ -614,6 +630,16 @@ cwd for both script and program mode.",
                     return;
                 }
                 mycode_core::events::AgentEvent::Error(error) => {
+                    if let Some(message) = pending_assistant.take()
+                        && let mycode_core::Message::Assistant(assistant) = message.as_ref()
+                        && let Ok(payload) = serde_json::to_vec(assistant)
+                        && let Ok(event_id) = writer.write(EventKind::Message, &payload).await
+                    {
+                        let _ = pump_events.try_send(BridgeEvent::AssistantStep {
+                            session_id: pump_session_id.clone(),
+                            entry: project_assistant_message(&event_id, assistant),
+                        });
+                    }
                     let _ = pump_events.try_send(BridgeEvent::ChatFailed {
                         session_id: pump_session_id.clone(),
                         message: format!("agent error: {error}"),
@@ -632,11 +658,14 @@ cwd for both script and program mode.",
         .with_extra_roots(extra_roots);
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
-    let _ = outcome
-        .as_ref()
-        .map_err(|error| format!("turn failed: {error}"))?;
-    // The pump emits ChatDone/ChatFailed; wait for it to finish draining.
-    let _ = pump.await;
+    // Drain the pump before returning. An agent error already became
+    // ChatFailed inside the pump; returning Err here would send a second one.
+    let pump_ended = pump.await;
+    if outcome.is_err() && pump_ended.is_ok() {
+        return Ok(());
+    }
+    outcome.map_err(|error| format!("turn failed: {error}"))?;
+    pump_ended.map_err(|_| "the turn pump stopped".to_owned())?;
     Ok(())
 }
 

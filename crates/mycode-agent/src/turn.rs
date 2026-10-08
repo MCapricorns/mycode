@@ -16,7 +16,7 @@ use std::task::{Context, Poll};
 use mycode_core::events::{AgentEvent, MessageDelta};
 use mycode_core::message::{AssistantMessage, ContentBlock, Message, ToolCall, ToolResultMessage};
 use mycode_core::{CallId, MycodeError};
-use mycode_core::{ProviderError, ProviderErrorKind, Request, StreamEvent};
+use mycode_core::{Request, StreamEvent};
 use mycode_tools::{
     PreparedFile, PreparedSearch, ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream,
     ToolStreamItem, prepare_file_async, prepare_search_async_with_access,
@@ -94,26 +94,34 @@ pub(crate) async fn stream_assistant(
     // One request gets a child token: dropping its receiver must stop that
     // producer without cancelling later response cycles in the same turn.
     let request_cancel = token.child_token();
+    let mut draft_text = String::new();
+    let mut draft_thinking = String::new();
     let mut stream = match env.provider.stream(&request, request_cancel).await {
         Ok(stream) => stream,
         Err(error) if error.is_cancelled() => return Err(TurnFailure::Aborted),
-        // Setup failures follow the same telemetry ordering as mid-stream
-        // failures: Error is emitted at the failure site before turn end.
+        // Nothing has streamed. Keep a visible assistant line instead of
+        // dropping the turn.
         Err(error) => {
-            let error = MycodeError::from(error);
-            emit(env, AgentEvent::Error(error.clone()));
-            return Err(TurnFailure::Error(error));
+            return Ok(commit_interrupted(
+                env,
+                state,
+                String::new(),
+                String::new(),
+                &error.to_string(),
+            ));
         }
     };
     while let Some(event) = stream.next().await {
         match event {
             StreamEvent::TextDelta(delta) => {
+                draft_text.push_str(&delta);
                 emit(
                     env,
                     AgentEvent::MessageDelta(MessageDelta::TextDelta(delta)),
                 );
             }
             StreamEvent::ThinkingDelta(delta) => {
+                draft_thinking.push_str(&delta);
                 emit(
                     env,
                     AgentEvent::MessageDelta(MessageDelta::ThinkingDelta(delta)),
@@ -126,6 +134,7 @@ pub(crate) async fn stream_assistant(
                 );
             }
             StreamEvent::Done { message } => {
+                let message = merge_draft(message, &draft_thinking, &draft_text);
                 let shared = Arc::new(Message::Assistant(message.clone()));
                 state.messages.push(Arc::clone(&shared));
                 emit(env, AgentEvent::MessageAdded(shared));
@@ -135,9 +144,13 @@ pub(crate) async fn stream_assistant(
                 if error.is_cancelled() {
                     return Err(TurnFailure::Aborted);
                 }
-                let error = MycodeError::from(error);
-                emit(env, AgentEvent::Error(error.clone()));
-                return Err(TurnFailure::Error(error));
+                return Ok(commit_interrupted(
+                    env,
+                    state,
+                    draft_thinking,
+                    draft_text,
+                    &error.to_string(),
+                ));
             }
         }
     }
@@ -146,12 +159,69 @@ pub(crate) async fn stream_assistant(
     if token.is_cancelled() {
         return Err(TurnFailure::Aborted);
     }
-    let error = MycodeError::from(ProviderError::with_message(
-        ProviderErrorKind::Protocol,
+    Ok(commit_interrupted(
+        env,
+        state,
+        draft_thinking,
+        draft_text,
         "provider stream ended without a terminal event",
-    ));
-    emit(env, AgentEvent::Error(error.clone()));
-    Err(TurnFailure::Error(error))
+    ))
+}
+
+/// Keeps streamed thinking and text, then adds the shared interruption line.
+///
+/// Tool names are not present on deltas, so calls reconstructed here are
+/// omitted. A reducer that can name them emits `Done` instead.
+fn commit_interrupted(
+    env: &TurnEnv<'_>,
+    state: &mut AgentState,
+    thinking: String,
+    mut text: String,
+    detail: &str,
+) -> AssistantMessage {
+    let note = mycode_core::interrupted_response_text(detail);
+    if !text.contains(note.as_str()) {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&note);
+    }
+    let mut blocks = Vec::new();
+    if !thinking.is_empty() {
+        blocks.push(ContentBlock::Thinking(mycode_core::ThinkingBlock::new(
+            thinking,
+        )));
+    }
+    blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+    let message = AssistantMessage {
+        blocks,
+        usage: None,
+        stop_reason: mycode_core::StopReason::Error,
+    };
+    let shared = Arc::new(Message::Assistant(message.clone()));
+    state.messages.push(Arc::clone(&shared));
+    emit(env, AgentEvent::MessageAdded(shared));
+    message
+}
+
+/// Fills thinking or text the reducer omitted when the draft already has it.
+fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> AssistantMessage {
+    let has_thinking = message
+        .blocks
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Thinking(_)));
+    if !has_thinking && !thinking.is_empty() {
+        message.blocks.insert(
+            0,
+            ContentBlock::Thinking(mycode_core::ThinkingBlock::new(thinking)),
+        );
+    }
+    if message.text().is_empty() && !text.is_empty() {
+        message
+            .blocks
+            .push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+    }
+    message
 }
 
 /// Fail a tool call from a `Length`-truncated message without executing
@@ -185,6 +255,29 @@ pub(crate) fn fail_truncated_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
 /// `tool_call` id to be answered by a following tool message — so the
 /// loop writes cancellation results for the undispatched remainder
 /// before unwinding (pi parity; keeps state consistent on abort).
+/// Synthesize an `is_error` tool result for a call that arrived on a
+/// failed provider turn. The call is not executed. The result keeps the
+/// assistant `tool_call` id paired for the next request.
+pub(crate) fn fail_interrupted_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
+    let call_id = CallId::from(call.id.as_str());
+    emit(
+        env,
+        AgentEvent::ToolStarted {
+            call_id: call_id.clone(),
+            name: call.name.clone(),
+            target: call.target(),
+        },
+    );
+    completed_error(
+        env,
+        &call_id,
+        call,
+        "tool call was not executed: the response was interrupted before the call \
+            could run"
+            .into(),
+    )
+}
+
 pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
     let call_id = CallId::from(call.id.as_str());
     emit(
