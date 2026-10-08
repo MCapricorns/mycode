@@ -2,16 +2,16 @@
 //!
 //! Covers Anthropic and Anthropic-compatible gateways (Z.AI GLM coding plans,
 //! custom relays). Thinking signatures round-trip verbatim, including
-//! signature-only blocks whose reasoning text is empty; the adapter never
-//! enables thinking explicitly, so default-thinking models keep their own
-//! configuration.
+//! signature-only blocks whose reasoning text is empty. The request payload
+//! follows the model and endpoint: MiniMax stays `adaptive`, every Kimi model
+//! uses adaptive effort, and Z.AI does not receive a token budget.
 
 use serde_json::{Value, json};
 
 use mycode_core::{
     AssistantMessage, ContentBlock, Message, StopReason, ThinkingBlock, ToolSpec, Usage,
 };
-use mycode_core::{ReasoningLevel, Request, StreamEvent};
+use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
@@ -43,38 +43,7 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        if glm_target(model, endpoint) {
-            // Z.AI rejects `budget_tokens` and, on glm-5, `thinking.type = disabled`.
-            crate::wire_common::apply_glm_thinking(&mut body, model, level, false);
-        } else {
-            match level {
-                ReasoningLevel::Off => {
-                    body["thinking"] = json!({ "type": "disabled" });
-                }
-                // MiniMax's Anthropic-compatible API uses the same on-value as
-                // its OpenAI body: `adaptive`, not `enabled`.
-                ReasoningLevel::On if crate::wire_common::minimax_target(model, endpoint) => {
-                    body["thinking"] = json!({ "type": "adaptive" });
-                }
-                level => {
-                    // Thinking budget must stay below max_tokens; raise the cap
-                    // so the budget always fits. Rungs follow models.dev effort
-                    // tokens rather than a hardcoded three-step list.
-                    let budget = match level {
-                        ReasoningLevel::Minimal | ReasoningLevel::Low => 1_024,
-                        ReasoningLevel::On | ReasoningLevel::Medium => 4_096,
-                        ReasoningLevel::High => 16_384,
-                        ReasoningLevel::Xhigh | ReasoningLevel::Max => 32_768,
-                        ReasoningLevel::Off => 0,
-                    };
-                    let max_tokens = body["max_tokens"].as_u64().unwrap_or(MAX_TOKENS_DEFAULT);
-                    if max_tokens <= budget {
-                        body["max_tokens"] = json!(budget + MAX_TOKENS_DEFAULT);
-                    }
-                    body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
-                }
-            }
-        }
+        crate::wire_common::apply_anthropic_thinking(&mut body, model, endpoint, level);
     }
     body
 }

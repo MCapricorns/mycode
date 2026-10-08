@@ -12,7 +12,7 @@ use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    MAX_STREAM_INDEX, append_interruption, apply_reasoning_effort, assemble_blocks,
+    MAX_STREAM_INDEX, append_interruption, apply_responses_thinking, assemble_blocks,
     assembled_stop_reason, charge_stream, join_text, merge_usage, provider_error_detail,
     usage_from_value,
 };
@@ -37,7 +37,7 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        apply_reasoning_effort(&mut body, model, endpoint, level);
+        apply_responses_thinking(&mut body, model, endpoint, level);
     }
     body
 }
