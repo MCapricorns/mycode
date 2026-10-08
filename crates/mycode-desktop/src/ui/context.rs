@@ -456,9 +456,16 @@ pub(super) fn render_changes_drawer(
             div()
                 .id("changes-drawer-backdrop")
                 .absolute()
-                .size_full()
+                .top_0()
+                .left_0()
+                .bottom_0()
+                // Leave the Details card uncovered so a click there is not
+                // an outside-click on this drawer, and this scrim is not
+                // what dismisses Details.
+                .right(px(inspector_span))
                 .bg(super::skin::menu_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
+                    cx.stop_propagation();
                     workspace.on_toggle_changes_panel(false, cx);
                 })),
         )
@@ -478,6 +485,12 @@ pub(super) fn render_changes_drawer(
                 .border_color(super::skin::glass_border(theme))
                 .bg(super::skin::popover(theme))
                 .overflow_hidden()
+                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_click(|_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .child(
                     div()
                         .px_3()
@@ -608,6 +621,12 @@ pub(super) fn render_diff_panel(
         .border_color(super::skin::glass_border(theme))
         .bg(super::skin::popover(theme))
         .overflow_hidden()
+        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(|_, _, cx| {
+            cx.stop_propagation();
+        })
         .child(
             div()
                 .px_3()

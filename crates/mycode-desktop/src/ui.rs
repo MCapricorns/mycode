@@ -134,15 +134,19 @@ pub fn render_root(
                 && crate::view_model::task_surface_visible(workspace.vm()),
             |this| this.child(context::render_subagent_window(workspace, cx)),
         )
+        .when(inspector_overlay, |this| {
+            this.child(context::render_inspector_drawer(workspace, cx))
+        })
+        // Drawer and diff are painted after the Details overlay. Its backdrop
+        // is a full-window click target; if these panels were underneath,
+        // the first click on a file would dismiss Details instead of opening
+        // the diff.
         .when(workspace.vm().changes_panel_open, |this| {
             this.child(context::render_changes_drawer(
                 workspace,
                 inspector_span,
                 cx,
             ))
-        })
-        .when(inspector_overlay, |this| {
-            this.child(context::render_inspector_drawer(workspace, cx))
         })
         .when(workspace.git_diff_panel_open(), |this| {
             this.child(context::render_diff_panel(workspace, inspector_span, cx))
