@@ -227,6 +227,11 @@ impl Workspace {
                         crate::i18n::t("Nothing to compact yet.", "现在没有可压缩的上下文。")
                             .to_owned()
                     }
+                    "covered" => crate::i18n::t(
+                        "Already compacted. New messages can be folded in with another /compact.",
+                        "已经压缩过了。有新消息时可以再 /compact。",
+                    )
+                    .to_owned(),
                     other => other.to_owned(),
                 };
                 self.push_toast(

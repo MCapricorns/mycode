@@ -124,11 +124,6 @@ async fn compact_session_now(
     if history.len() < 2 {
         return Ok("empty".to_owned());
     }
-    let before = mycode_config::read_compaction(home, session.as_str())
-        .ok()
-        .flatten()
-        .map(|checkpoint| checkpoint.created_at_unix)
-        .unwrap_or(0);
     let head_stamp_text = head_spelling(&expected_head);
     let context_window = model_context_window(state, &provider, model);
     let scope = crate::compaction::CompactScope {
@@ -140,16 +135,12 @@ async fn compact_session_now(
         head: &head_stamp_text,
         context_window,
     };
-    let _compacted = crate::compaction::compact_history(&scope, history, true).await;
-    let after = mycode_config::read_compaction(home, session.as_str())
-        .ok()
-        .flatten()
-        .map(|checkpoint| checkpoint.created_at_unix)
-        .unwrap_or(0);
-    if after > before {
-        Ok("compacted".to_owned())
-    } else {
-        Ok("empty".to_owned())
+    let compacted = crate::compaction::compact_history(&scope, history, true).await;
+    match compacted.status {
+        crate::compaction::CompactStatus::Wrote => Ok("compacted".to_owned()),
+        crate::compaction::CompactStatus::Covered => Ok("covered".to_owned()),
+        crate::compaction::CompactStatus::Unchanged => Ok("empty".to_owned()),
+        crate::compaction::CompactStatus::Failed(message) => Err(message),
     }
 }
 
@@ -368,7 +359,9 @@ async fn run_chat_turn(
         head: &head_stamp_text,
         context_window,
     };
-    let history = crate::compaction::compact_history(&compact_scope, history, false).await;
+    let history = crate::compaction::compact_history(&compact_scope, history, false)
+        .await
+        .messages;
 
     let resources = mycode_config::discover_resources(home, &cwd);
     let mut system_prompt = String::from(
@@ -461,8 +454,9 @@ cwd for both script and program mode.",
                 head: &head,
                 context_window,
             };
-            request.messages =
-                crate::compaction::compact_history(&scope, request.messages, false).await;
+            request.messages = crate::compaction::compact_history(&scope, request.messages, false)
+                .await
+                .messages;
             request
         }
     });

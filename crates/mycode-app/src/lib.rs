@@ -417,7 +417,7 @@ pub enum BridgeEvent {
     CompactFinished {
         /// Session identity spelling.
         session_id: String,
-        /// `compacted`, `empty`, or a rendered failure.
+        /// `compacted`, `covered`, `empty`, or a rendered failure.
         message: String,
         /// Whether the command completed without a provider error.
         ok: bool,

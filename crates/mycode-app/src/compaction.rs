@@ -46,25 +46,59 @@ pub(crate) struct CompactScope<'a> {
     pub context_window: u64,
 }
 
+/// What a compaction attempt did with the checkpoint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CompactStatus {
+    /// A new checkpoint was written.
+    Wrote,
+    /// There is nothing new to summarize.
+    Unchanged,
+    /// A checkpoint already covers this exact head.
+    Covered,
+    /// The summary request failed. The history is unchanged.
+    Failed(String),
+}
+
+/// History after one compaction attempt, plus whether a checkpoint was written.
+pub(crate) struct Compacted {
+    pub messages: Vec<Arc<Message>>,
+    pub status: CompactStatus,
+}
+
 /// Compacts history before a provider request. Failures degrade to the
 /// original history so a turn never dies on housekeeping.
 pub(crate) async fn compact_history(
     scope: &CompactScope<'_>,
     history: Vec<Arc<Message>>,
     force: bool,
-) -> Vec<Arc<Message>> {
+) -> Compacted {
     let threshold = if force {
         0
     } else {
         compaction_threshold(scope.context_window)
     };
     let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
-        return history;
+        return Compacted {
+            messages: history,
+            status: CompactStatus::Unchanged,
+        };
     };
     let prior = mycode_config::read_compaction(scope.home, scope.session_id)
         .ok()
         .flatten()
         .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
+    // `/compact` on a head this checkpoint already covers would summarize the
+    // same prefix again (same replaced count, same tail). Say so instead.
+    if force
+        && let Some(checkpoint) = prior.as_ref()
+        && checkpoint.covered_head == scope.head
+        && checkpoint.covered_messages > 0
+    {
+        return Compacted {
+            messages: history,
+            status: CompactStatus::Covered,
+        };
+    }
     // `covered_messages` indexes a ledger replay, which has no summary
     // prefix. Once a summary has replaced that prefix, the same index
     // points into the tail and would drop messages that must stay.
@@ -74,7 +108,7 @@ pub(crate) async fn compact_history(
     // A checkpoint still applies after the head moves by appends, while the
     // uncovered tail fits. `/compact` writes that checkpoint; the next turn
     // uses it instead of waiting for the automatic threshold. A forced
-    // compact always summarizes again.
+    // compact summarizes again only when this head is not already covered.
     if !force
         && !already_summarized
         && let Some(checkpoint) = prior.as_ref()
@@ -88,7 +122,13 @@ pub(crate) async fn compact_history(
             .sum();
         let same_head = checkpoint.covered_head == scope.head;
         if same_head || tail_tokens <= compaction_threshold(scope.context_window) {
-            return with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
+            return Compacted {
+                messages: with_summary(
+                    &checkpoint.summary,
+                    &history[checkpoint.covered_messages..],
+                ),
+                status: CompactStatus::Unchanged,
+            };
         }
     }
     let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
@@ -102,11 +142,17 @@ pub(crate) async fn compact_history(
         Ok(Ok(summary)) => summary,
         Ok(Err(message)) => {
             eprintln!("[mycode-compaction] skipped: {message}");
-            return history;
+            return Compacted {
+                messages: history,
+                status: CompactStatus::Failed(message),
+            };
         }
         Err(_) => {
             eprintln!("[mycode-compaction] skipped: summary timed out");
-            return history;
+            return Compacted {
+                messages: history,
+                status: CompactStatus::Failed("summary timed out".to_owned()),
+            };
         }
     };
     let compacted = with_summary(&summary, &history[head_end..]);
@@ -118,7 +164,10 @@ pub(crate) async fn compact_history(
             "[mycode-compaction] shrunk an already summarized history in memory ({} remain)",
             compacted.len()
         );
-        return compacted;
+        return Compacted {
+            messages: compacted,
+            status: CompactStatus::Unchanged,
+        };
     }
     let checkpoint = mycode_config::CompactionCheckpoint {
         format_version: mycode_config::COMPACTION_FORMAT_VERSION,
@@ -136,13 +185,19 @@ pub(crate) async fn compact_history(
     };
     if let Err(error) = mycode_config::write_compaction(scope.home, scope.session_id, &checkpoint) {
         eprintln!("[mycode-compaction] checkpoint write failed: {error:?}");
-        return history;
+        return Compacted {
+            messages: history,
+            status: CompactStatus::Failed(format!("checkpoint write failed: {error:?}")),
+        };
     }
     eprintln!(
         "[mycode-compaction] replaced {head_end} messages with a checkpoint ({} remain)",
         compacted.len()
     );
-    compacted
+    Compacted {
+        messages: compacted,
+        status: CompactStatus::Wrote,
+    }
 }
 
 fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {

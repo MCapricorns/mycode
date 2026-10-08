@@ -1290,6 +1290,10 @@ impl Workspace {
         let id = self.next_toast_id;
         self.next_toast_id = self.next_toast_id.wrapping_add(1);
         self.toasts.push(Toast { id, text, kind });
+        // A click handler repaints on its own. A toast pushed from the event
+        // pump (compaction finishing, a while after "Compacting…") does not,
+        // so the row was removed by its timer before the window ever drew it.
+        cx.notify();
         const MAX_TOASTS: usize = 4;
         if self.toasts.len() > MAX_TOASTS {
             let drop_count = self.toasts.len() - MAX_TOASTS;
