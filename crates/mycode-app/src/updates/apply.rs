@@ -343,7 +343,9 @@ fn process_is_running(pid: u32) -> bool {
         let mut code = 0u32;
         let ok = GetExitCodeProcess(handle, &mut code);
         let _ = CloseHandle(handle);
-        ok != 0 && code == STILL_ACTIVE
+        // `GetExitCodeProcess` writes a `u32`. windows-sys 0.61 types
+        // `STILL_ACTIVE` as `i32` (NTSTATUS, value 259).
+        ok != 0 && code == STILL_ACTIVE as u32
     }
 }
 
