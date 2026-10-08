@@ -14,15 +14,15 @@ English notes are [below](#english).
 - **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
 - **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，可以用 Python heredoc 或短脚本改文件；`program` 直接启动钉住的程序映像）。这些改动都没有文件撤销。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
 - **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。委派工具是 `agent`。并发默认 4 个；设置里的 `0` 表示这个默认值，不是零个子代理。子代理没有墙钟超时。
-- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。状态栏版本为 **v0.9.18**。没有打开工作区时，空工作台只有「打开目录」；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。读不了的 `settings.json`、`ui.json`、`secrets.json` 和模型目录缓存会先备份再恢复默认，会话账本不动。
+- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。状态栏版本为 **v0.9.19**。没有打开工作区时，空工作台只有「打开目录」；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。读不了的 `settings.json`、`ui.json`、`secrets.json` 和模型目录缓存会先备份再恢复默认，会话账本不动。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
 ## 界面
 
-v0.9.18。标题栏由客户端绘制。没有打开工作区时，空工作台只有「打开目录」。
+v0.9.19。标题栏由客户端绘制。没有打开工作区时，空工作台只有「打开目录」。
 
-![主窗口：v0.9.18，CSD 标题栏，空工作台只有打开目录](docs/images/readme-main.png)
+![主窗口：v0.9.19，CSD 标题栏，空工作台只有打开目录](docs/images/readme-main.png)
 
 外观页：语言、色板、界面字体、界面字号 S–XL。
 
@@ -124,7 +124,7 @@ You bring the API keys. Follow [@M_Capricorns](https://x.com/M_Capricorns) on X.
 - **UI.** English and Chinese, a dark theme, and a client-drawn title
   bar (CSD) on every platform: the system title bar stays hidden, and
   minimize, zoom, and close sit on the right.   The status badge reads
-  **v0.9.18**. With no workspace open, the empty desk offers Open folder
+  **v0.9.19**. With no workspace open, the empty desk offers Open folder
   only; New task appears after a folder is open. Appearance has
   Language, then the palettes slate, ocean, forest, dusk, sand, rose,
   ink, moss, ember, glacier, plum, copper, and aurora, plus Interface
@@ -140,9 +140,9 @@ a lock in Settings.
 
 ### Screenshots
 
-v0.9.18. The title bar is client-side (CSD). With no workspace open, the empty desk offers Open folder.
+v0.9.19. The title bar is client-side (CSD). With no workspace open, the empty desk offers Open folder.
 
-![Main window: v0.9.18, CSD title bar, empty desk with Open folder](docs/images/readme-main.png)
+![Main window: v0.9.19, CSD title bar, empty desk with Open folder](docs/images/readme-main.png)
 
 Appearance: Language, palette, Interface font, and S–XL.
 
