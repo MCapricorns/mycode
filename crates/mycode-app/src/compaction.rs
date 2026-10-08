@@ -131,8 +131,13 @@ pub(crate) async fn compact_history(
             };
         }
     }
+    let covered = prior.as_ref().map(|checkpoint| checkpoint.covered_messages);
     let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
-    let transcript = compaction_transcript(prior_summary, &history[..head_end]);
+    // The previous summary already stands in for `history[..covered]`.
+    // Sending that prefix again makes a later `/compact` re-bill the same
+    // leading messages on top of the old summary.
+    let transcript =
+        compaction_transcript(prior_summary, transcript_head(&history, head_end, covered));
     let summarized = tokio::time::timeout(
         SUMMARY_TIMEOUT,
         summarize_transcript(scope.wire, &transcript),
@@ -339,6 +344,24 @@ fn compaction_split(
     Some(tail_start)
 }
 
+/// Messages that still need to be summarized.
+///
+/// `covered` is the checkpoint's `covered_messages`. Those leading messages
+/// are already inside the previous summary, so the new transcript starts
+/// there and stops at `head_end` (the verbatim tail stays out).
+fn transcript_head(
+    history: &[Arc<Message>],
+    head_end: usize,
+    covered: Option<usize>,
+) -> &[Arc<Message>] {
+    let head_end = head_end.min(history.len());
+    let start = covered
+        .filter(|count| *count > 0)
+        .map(|count| count.min(head_end))
+        .unwrap_or(0);
+    &history[start..head_end]
+}
+
 fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> String {
     let mut transcript = String::new();
     if let Some(summary) = prior_summary {
@@ -419,4 +442,49 @@ Preserve names, paths, and error text. Do not invent work that did not happen.",
         return Err("summary was empty".to_owned());
     }
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mycode_core::{Message, UserMessage};
+
+    use super::{compaction_transcript, transcript_head};
+
+    fn user(text: &str) -> Arc<Message> {
+        Arc::new(Message::User(UserMessage::text(text)))
+    }
+
+    #[test]
+    fn a_later_compact_summarizes_only_the_uncovered_head() {
+        let history = vec![
+            user("old-a"),
+            user("old-b"),
+            user("old-c"),
+            user("new-d"),
+            user("new-e"),
+            user("kept-tail"),
+        ];
+        let head = transcript_head(&history, 5, Some(3));
+        let transcript = compaction_transcript(Some("prior summary"), head);
+        assert!(transcript.contains("prior summary"), "{transcript}");
+        assert!(transcript.contains("new-d"), "{transcript}");
+        assert!(transcript.contains("new-e"), "{transcript}");
+        assert!(!transcript.contains("old-a"), "{transcript}");
+        assert!(!transcript.contains("old-b"), "{transcript}");
+        assert!(!transcript.contains("old-c"), "{transcript}");
+        assert!(!transcript.contains("kept-tail"), "{transcript}");
+    }
+
+    #[test]
+    fn the_first_compact_still_includes_the_whole_head() {
+        let history = vec![user("one"), user("two"), user("tail")];
+        let head = transcript_head(&history, 2, None);
+        assert_eq!(head.len(), 2);
+        let transcript = compaction_transcript(None, head);
+        assert!(transcript.contains("one"), "{transcript}");
+        assert!(transcript.contains("two"), "{transcript}");
+        assert!(!transcript.contains("tail"), "{transcript}");
+    }
 }
