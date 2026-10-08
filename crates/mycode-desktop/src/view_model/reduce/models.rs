@@ -233,10 +233,49 @@ mod tests {
                 .as_deref(),
             Some("high")
         );
-        assert!(
-            super::selected_reasoning_levels(&state)
-                .iter()
-                .any(|level| level == "high")
-        );
+        let levels = super::selected_reasoning_levels(&state);
+        for level in ["off", "on", "high", "max"] {
+            assert!(levels.iter().any(|item| item == level), "{level}");
+        }
+    }
+
+    #[test]
+    fn glm_and_custom_endpoints_can_pick_off_and_max() {
+        use std::sync::Arc;
+
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+
+        let mut state = WorkspaceState {
+            catalog: Some(Arc::new(CatalogDocument {
+                providers: vec![CatalogProvider {
+                    id: "zai".to_owned(),
+                    models: vec![CatalogModel {
+                        id: "glm-5.3-flash".to_owned(),
+                        reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_owned(),
+                            "high".to_owned(),
+                            "max".to_owned(),
+                        ],
+                        ..CatalogModel::default()
+                    }],
+                    ..CatalogProvider::default()
+                }],
+            })),
+            selected_provider: Some("zai".to_owned()),
+            selected_model: Some("glm-5.3-flash".to_owned()),
+            ..WorkspaceState::default()
+        };
+        let listed = super::selected_reasoning_levels(&state);
+        for level in ["default", "off", "on", "high", "max"] {
+            assert!(listed.iter().any(|item| item == level), "zai {level}");
+        }
+
+        state.selected_provider = Some("my-gateway".to_owned());
+        state.selected_model = Some("glm-5.3-flash".to_owned());
+        let custom = super::selected_reasoning_levels(&state);
+        for level in ["off", "on", "high", "max"] {
+            assert!(custom.iter().any(|item| item == level), "custom {level}");
+        }
     }
 }
