@@ -63,6 +63,9 @@ struct ModelsDevModel {
     tool_call: bool,
     attachment: bool,
     reasoning_options: Vec<ModelsDevReasoningOption>,
+    /// OpenCode reads these keys as the selectable efforts when a model
+    /// publishes variants instead of (or ahead of an empty) effort list.
+    variants: std::collections::BTreeMap<String, serde_json::Value>,
     limit: ModelsDevLimit,
     cost: ModelsDevCost,
 }
@@ -180,7 +183,7 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
 }
 
 fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
-    const MAX_EFFORTS: usize = 8;
+    const MAX_EFFORTS: usize = 16;
     let mut toggle = false;
     let mut efforts = Vec::new();
     for option in &model.reasoning_options {
@@ -188,24 +191,44 @@ fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
             "toggle" => toggle = true,
             "effort" => {
                 for value in &option.values {
-                    let Some(token) = clean_text(value) else {
-                        continue;
-                    };
-                    let token = token.to_ascii_lowercase();
-                    if mycode_core::ReasoningLevel::parse(&token).is_none() && token != "default" {
-                        continue;
-                    }
-                    if !efforts.iter().any(|existing| existing == &token)
-                        && efforts.len() < MAX_EFFORTS
-                    {
-                        efforts.push(token);
-                    }
+                    push_effort(&mut efforts, value, MAX_EFFORTS);
                 }
             }
             _ => {}
         }
     }
+    // models.dev `variants` is the map OpenCode treats as the effort menu
+    // when the effort list is empty. Keys are the levels; values are wire
+    // config and are not turned into extra rungs.
+    if efforts.is_empty() {
+        for key in model.variants.keys() {
+            push_effort(&mut efforts, key, MAX_EFFORTS);
+        }
+    }
     (toggle, efforts)
+}
+
+/// Keeps one published effort token. Unknown spellings stay; nothing is
+/// invented to fill a ladder, and tokens that are not identifiers are dropped.
+fn push_effort(efforts: &mut Vec<String>, value: &str, cap: usize) {
+    let Some(token) = clean_text(value) else {
+        return;
+    };
+    let token = token.to_ascii_lowercase();
+    if token == "default" || !effort_token_ok(&token) || efforts.len() >= cap {
+        return;
+    }
+    if !efforts.iter().any(|existing| existing == &token) {
+        efforts.push(token);
+    }
+}
+
+fn effort_token_ok(token: &str) -> bool {
+    let len = token.chars().count();
+    (1..=32).contains(&len)
+        && token.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
 }
 
 /// Model ids keep the provider's own spelling: any nonempty printable id

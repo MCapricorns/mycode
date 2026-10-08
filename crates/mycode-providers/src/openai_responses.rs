@@ -36,6 +36,9 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
     if !tools.is_empty() {
         body["tools"] = json!(tools);
     }
+    if let Some(limit) = request.max_output_tokens.filter(|tokens| *tokens > 0) {
+        body["max_output_tokens"] = json!(limit);
+    }
     if let Some(level) = request.reasoning {
         apply_responses_thinking(&mut body, model, endpoint, level);
     }

@@ -115,6 +115,10 @@ pub struct Request {
     /// Reasoning effort; `None` leaves the provider default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningLevel>,
+    /// Output token cap from models.dev `limit.output`. `None` when the
+    /// catalog does not publish one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
 }
 
 impl Default for Request {
@@ -124,6 +128,7 @@ impl Default for Request {
             messages: Vec::new(),
             tools: Arc::from([]),
             reasoning: None,
+            max_output_tokens: None,
         }
     }
 }

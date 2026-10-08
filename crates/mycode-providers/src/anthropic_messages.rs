@@ -19,8 +19,11 @@ use crate::wire_common::{
     map_stop_reason, merge_usage, provider_error_detail, usage_from_value,
 };
 
-/// Output ceiling sent with every request; the Messages API requires it.
-pub const MAX_TOKENS_DEFAULT: u64 = 4096;
+/// Output ceiling used only when models.dev publishes no `limit.output`.
+///
+/// The Messages API requires `max_tokens`. A published model uses its own
+/// output cap; this fallback is not a guess about any particular model.
+const MAX_TOKENS_WHEN_UNPUBLISHED: u64 = 8192;
 
 /// Converts one provider-neutral request into a Messages body.
 #[must_use]
@@ -30,9 +33,13 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         convert_message(model, endpoint, message, &mut messages);
     }
     let tools: Vec<Value> = request.tools.iter().map(convert_tool).collect();
+    let max_tokens = request
+        .max_output_tokens
+        .filter(|tokens| *tokens > 0)
+        .unwrap_or(MAX_TOKENS_WHEN_UNPUBLISHED);
     let mut body = json!({
         "model": model,
-        "max_tokens": MAX_TOKENS_DEFAULT,
+        "max_tokens": max_tokens,
         "messages": messages,
         "stream": true,
     });

@@ -36,6 +36,8 @@ pub struct AgentConfig {
     pub system_prompt: Vec<String>,
     /// Requested reasoning effort for providers that support it.
     pub reasoning: Option<mycode_core::ReasoningLevel>,
+    /// models.dev output cap forwarded onto each provider request.
+    pub max_output_tokens: Option<u64>,
 }
 
 impl AgentConfig {
@@ -56,6 +58,13 @@ impl AgentConfig {
     #[must_use]
     pub fn with_reasoning(mut self, level: impl Into<Option<mycode_core::ReasoningLevel>>) -> Self {
         self.reasoning = level.into();
+        self
+    }
+
+    /// Sets the models.dev output cap. `None` and `0` leave the field unset.
+    #[must_use]
+    pub fn with_max_output_tokens(mut self, limit: Option<u64>) -> Self {
+        self.max_output_tokens = limit.filter(|tokens| *tokens > 0);
         self
     }
 }
