@@ -380,6 +380,11 @@ pub enum BridgeEvent {
         /// The resolved release offer.
         offer: UpdateOffer,
     },
+    /// The automatic update check failed. The UI toasts `message`.
+    UpdateCheckFailed {
+        /// Short failure text. Not drawn as a full-width error in About.
+        message: String,
+    },
     /// The Copilot device-flow sign-in completed; the provider is ready.
     CopilotSignedIn,
     /// The Copilot device-flow sign-in failed or expired.

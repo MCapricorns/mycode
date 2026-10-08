@@ -183,10 +183,24 @@ pub(crate) fn spawn_update_check(state: Arc<CoreState>, events: crate::BridgeEve
         if !ui_state.auto_update {
             return;
         }
-        if let Ok(Some(offer)) = crate::updates::latest_release(UPDATE_USER_AGENT).await {
-            let _ = events.try_send(BridgeEvent::UpdateAvailable { offer });
+        if let Some(event) =
+            startup_update_event(crate::updates::latest_release(UPDATE_USER_AGENT).await)
+        {
+            let _ = events.try_send(event);
         }
     });
+}
+
+/// Turns one startup check into an event. `Ok(None)` stays quiet (current or
+/// an unpublished target). A transport or pin failure must be visible.
+fn startup_update_event(
+    result: Result<Option<crate::updates::UpdateOffer>, String>,
+) -> Option<crate::BridgeEvent> {
+    match result {
+        Ok(Some(offer)) => Some(crate::BridgeEvent::UpdateAvailable { offer }),
+        Ok(None) => None,
+        Err(message) => Some(crate::BridgeEvent::UpdateCheckFailed { message }),
+    }
 }
 
 /// Catalog or settings context window for compaction. Zero means the
@@ -215,4 +229,36 @@ pub(crate) fn model_context_window(
         .map(|entry| entry.context)
         .filter(|context| *context > 0)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::startup_update_event;
+    use crate::BridgeEvent;
+    use crate::updates::UpdateOffer;
+
+    #[test]
+    fn startup_check_failure_is_an_event_and_current_is_quiet() {
+        let failed = startup_update_event(Err(
+            "update check failed: resolved addresses are not all public".to_owned(),
+        ));
+        match failed {
+            Some(BridgeEvent::UpdateCheckFailed { message }) => {
+                assert!(message.contains("not all public"), "{message}");
+            }
+            other => panic!("startup failure was swallowed: {other:?}"),
+        }
+        assert!(startup_update_event(Ok(None)).is_none());
+        let offer = UpdateOffer {
+            version: "0.9.18".to_owned(),
+            notes_url: "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18".to_owned(),
+            asset_url: "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip".to_owned(),
+            asset_size: 1,
+            checksum_url: "https://github.com/example/app.zip.sha256".to_owned(),
+        };
+        assert!(matches!(
+            startup_update_event(Ok(Some(offer))),
+            Some(BridgeEvent::UpdateAvailable { .. })
+        ));
+    }
 }

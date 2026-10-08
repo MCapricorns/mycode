@@ -205,6 +205,24 @@ impl Workspace {
                 self.on_download_update(cx);
                 return;
             }
+            BridgeEvent::UpdateCheckFailed { message } => {
+                // Startup (and any later automatic check that reports here)
+                // used to drop the error. Toast it. About keeps the short
+                // status line and does not paint this string in red.
+                if matches!(
+                    self.vm.update,
+                    UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+                ) {
+                    return;
+                }
+                let brief = mycode_app::brief_error(&message);
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
+                    cx,
+                );
+                self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
+                return;
+            }
         };
         self.apply_action(action, cx);
     }
@@ -555,9 +573,10 @@ impl Workspace {
                     DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
                     cx,
                 );
-                if self.take_manual_update_check() {
-                    self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
-                }
+                // Manual and automatic checks both toast. The About row does
+                // not render `brief`.
+                let _ = self.take_manual_update_check();
+                self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
             }
             BridgeReply::UpdateDownloaded(Ok(prepared)) => {
                 let version = self

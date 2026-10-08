@@ -131,7 +131,7 @@ pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, Str
             brief_error(&error.to_string())
         )
     })?;
-    let Some(offer) = resolve_asset(&release.tag_name, &release.html_url, &release.assets) else {
+    let Some(offer) = resolve_asset(&release.tag_name, &release.html_url, &release.assets)? else {
         return Ok(None);
     };
     if !is_newer(&release.tag_name, current_version()) {
@@ -170,22 +170,55 @@ fn classify_release_status(status: reqwest::StatusCode) -> Result<Option<()>, St
     Ok(Some(()))
 }
 
-fn resolve_asset(tag: &str, notes_url: &str, assets: &[AssetJson]) -> Option<UpdateOffer> {
-    let suffix = asset_suffix();
+fn resolve_asset(
+    tag: &str,
+    notes_url: &str,
+    assets: &[AssetJson],
+) -> Result<Option<UpdateOffer>, String> {
+    resolve_asset_for(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        tag,
+        notes_url,
+        assets,
+    )
+}
+
+/// `Ok(None)` is an unsupported target (no published archive). A supported
+/// target with no matching file is an error, so Linux is not reported as
+/// already up to date when the zip is missing from the release.
+fn resolve_asset_for(
+    os: &str,
+    arch: &str,
+    tag: &str,
+    notes_url: &str,
+    assets: &[AssetJson],
+) -> Result<Option<UpdateOffer>, String> {
+    let suffix = asset_suffix_for(os, arch);
     if suffix.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let asset = assets
-        .iter()
-        .find(|asset| asset.name.starts_with("mycode-desktop-") && asset.name.ends_with(suffix))?;
+    // Published names look like
+    // `mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip`. The `.sha256`
+    // sidecar shares the prefix and must not be selected.
+    let asset = assets.iter().find(|asset| {
+        asset.name.starts_with("mycode-desktop-")
+            && asset.name.ends_with(suffix)
+            && !asset.name.ends_with(".sha256")
+    });
+    let Some(asset) = asset else {
+        return Err(format!(
+            "update check failed: release has no mycode-desktop*{suffix} asset"
+        ));
+    };
     let version = tag.trim_start_matches('v').to_owned();
-    Some(UpdateOffer {
+    Ok(Some(UpdateOffer {
         version,
         notes_url: notes_url.to_owned(),
         asset_url: asset.browser_download_url.clone(),
         asset_size: asset.size,
         checksum_url: format!("{}.sha256", asset.browser_download_url),
-    })
+    }))
 }
 
 /// Whether `tag` is strictly newer than `current` (both `vX.Y.Z` or `X.Y.Z`).
@@ -893,6 +926,75 @@ mod tests {
         assert!(!current.exists(), "script replaced without a backup");
         assert_eq!(std::fs::read(&staged).unwrap(), b"new-bytes");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn release_assets() -> Vec<super::AssetJson> {
+        let names = [
+            "mycode-desktop-v0.9.18-aarch64-apple-darwin.zip",
+            "mycode-desktop-v0.9.18-aarch64-apple-darwin.zip.sha256",
+            "mycode-desktop-v0.9.18-aarch64-pc-windows-msvc.zip",
+            "mycode-desktop-v0.9.18-aarch64-pc-windows-msvc.zip.sha256",
+            "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip",
+            "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip.sha256",
+            "mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip",
+            "mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip.sha256",
+        ];
+        names
+            .into_iter()
+            .map(|name| super::AssetJson {
+                name: name.to_owned(),
+                browser_download_url: format!(
+                    "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/{name}"
+                ),
+                size: 1024,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn linux_x86_64_selects_the_published_zip_not_the_checksum() {
+        assert_eq!(
+            asset_suffix_for("linux", "x86_64"),
+            "-x86_64-unknown-linux-gnu.zip"
+        );
+        let offer = super::resolve_asset_for(
+            "linux",
+            "x86_64",
+            "v0.9.18",
+            "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
+            &release_assets(),
+        )
+        .unwrap()
+        .expect("linux x86_64 is a published update target");
+        assert_eq!(offer.version, "0.9.18");
+        assert!(
+            offer
+                .asset_url
+                .ends_with("mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip")
+        );
+        assert!(
+            offer
+                .checksum_url
+                .ends_with("mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip.sha256")
+        );
+        assert!(!offer.asset_url.ends_with(".sha256"));
+    }
+
+    #[test]
+    fn supported_platform_without_its_zip_is_not_up_to_date() {
+        let error = super::resolve_asset_for(
+            "linux",
+            "x86_64",
+            "v0.9.18",
+            "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
+            &[super::AssetJson {
+                name: "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
+                browser_download_url: "https://github.com/example/app.zip".to_owned(),
+                size: 1,
+            }],
+        )
+        .unwrap_err();
+        assert!(error.contains("x86_64-unknown-linux-gnu.zip"), "{error}");
     }
 
     #[test]

@@ -10,7 +10,7 @@
 
 所有请求都带配置的 User-Agent（未设置时用 pi agent 的默认值）。HTTP 客户端走操作系统 TLS 和系统代理，不启用会再编一套加密库的 rustls 特性。
 
-出站请求先解析域名，再只连接检查过的地址。`PublicHttps`（网页检索、更新下载）要求 https、443 端口，并且解析结果全部是公网地址。GitHub 发布用的 `api.github.com`、`github.com`、`www.github.com`、`codeload.github.com`、`uploads.github.com` 和 `*.githubusercontent.com` 是例外：DNS 里夹了私网、ULA 或链路本地地址时，丢掉这些地址，只连接剩下的公网地址；一个公网地址都没有则拒绝。其他主机的混合解析、字面私网地址、回环和链路本地仍然拒绝。`CheckRedirect` 的第一跳可以整段是公网或整段是私网（本机模型），之后的跳转必须全是公网。
+出站请求先解析域名，再只连接检查过的地址。`PublicHttps`（网页检索、更新下载）要求 https、443 端口，并且解析结果全部是公网地址。GitHub 发布用的 `api.github.com`、`github.com`、`www.github.com`、`codeload.github.com`、`uploads.github.com` 和 `*.githubusercontent.com` 是例外：DNS 里夹了私网、ULA 或链路本地地址时，丢掉这些地址，只连接剩下的公网地址。整段都是 `198.18.0.0/15`（本机 fake-ip）时可以连接这些地址。和 RFC1918、回环或链路本地混在一起则拒绝。其他主机的混合解析、字面私网地址、回环和链路本地仍然拒绝。`CheckRedirect` 的第一跳可以整段是公网或整段是私网（本机模型），之后的跳转必须全是公网。
 
 端点拼接避免把路径写两遍：base 已经以 `/v1/messages` 或 `/chat/completions` 结尾时原样使用。
 
