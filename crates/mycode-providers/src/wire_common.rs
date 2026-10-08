@@ -119,17 +119,22 @@ pub(crate) fn glm_cannot_disable(model: &str) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReasoningReplay {
     /// Leave thinking out of the wire history.
+    ///
+    /// This is the MiniMax and generic OpenAI shape. MiniMax-M3 with
+    /// thinking on already keeps multi-turn replies without an extra
+    /// reasoning field, so that request is left as it was.
     Omit,
     /// OpenAI-style `reasoning_content` (GLM, DeepSeek, Kimi/Moonshot).
     Content,
-    /// MiniMax `reasoning_details`.
-    Details,
 }
 
 /// Vendors that reject a follow-up unless prior reasoning is echoed.
 pub(crate) fn reasoning_replay(model: &str, endpoint: &str) -> ReasoningReplay {
+    // MiniMax stays on the omit path even though the name would not match
+    // the GLM/DeepSeek checks. A successful MiniMax turn must not grow a
+    // new reasoning field.
     if minimax_target(model, endpoint) {
-        return ReasoningReplay::Details;
+        return ReasoningReplay::Omit;
     }
     let model_lower = model.to_ascii_lowercase();
     let endpoint_lower = endpoint.to_ascii_lowercase();

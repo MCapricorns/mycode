@@ -98,19 +98,8 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
             if !tool_calls.is_empty() {
                 wire["tool_calls"] = json!(tool_calls);
             }
-            if !thinking.is_empty() {
-                match replay {
-                    ReasoningReplay::Content => {
-                        wire["reasoning_content"] = json!(thinking);
-                    }
-                    ReasoningReplay::Details => {
-                        wire["reasoning_details"] = json!([{
-                            "type": "reasoning.text",
-                            "text": thinking,
-                        }]);
-                    }
-                    ReasoningReplay::Omit => {}
-                }
+            if !thinking.is_empty() && replay == ReasoningReplay::Content {
+                wire["reasoning_content"] = json!(thinking);
             }
             messages.push(wire);
         }
@@ -577,10 +566,26 @@ mod tests {
                 ..Request::default()
             },
         );
+        assert_eq!(minimax["messages"][0]["content"], "answer");
         assert!(minimax["messages"][0].get("reasoning_content").is_none());
-        assert_eq!(
-            minimax["messages"][0]["reasoning_details"][0]["text"],
-            "why"
+        assert!(minimax["messages"][0].get("reasoning_details").is_none());
+
+        let minimax_thinking_only = build_body(
+            "MiniMax-M3",
+            "https://api.minimaxi.com/v1",
+            &Request {
+                messages: vec![std::sync::Arc::new(Message::Assistant(AssistantMessage {
+                    blocks: vec![ContentBlock::Thinking(ThinkingBlock::new("why"))],
+                    usage: None,
+                    stop_reason: StopReason::Stop,
+                }))],
+                ..Request::default()
+            },
+        );
+        assert!(
+            minimax_thinking_only["messages"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
         );
     }
 }
