@@ -274,7 +274,8 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     });
     let update_lamp = match vm.update {
         UpdateState::Available { .. } | UpdateState::Ready { .. } => Some(desk.amber),
-        UpdateState::Failed(_) => Some(desk.red),
+        // A failed check is the bottom-right toast. The About row stays
+        // quiet instead of painting a red lamp or the transport error.
         _ => None,
     };
     vec![

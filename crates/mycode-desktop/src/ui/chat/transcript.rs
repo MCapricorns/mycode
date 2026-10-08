@@ -299,19 +299,7 @@ pub(super) fn render_tool_block(
                         .text_color(theme.foreground)
                         .child(call.text.to_string()),
                 )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .max_w(px(220.))
-                        .truncate()
-                        .text_xs()
-                        .text_color(if failed {
-                            desk.red
-                        } else {
-                            theme.muted_foreground
-                        })
-                        .child(status),
-                ),
+                .child(tool_status_node(&status, failed, theme)),
         );
     let row = if let (true, Some(result)) = (expanded, result) {
         row.child(div().pt_1().pl(px(16.)).child(result_body(
@@ -334,10 +322,10 @@ fn tool_status(result: Option<&ConversationEntry>) -> String {
     if text.starts_with("failed:") {
         return t("failed", "失败").to_owned();
     }
-    let added = text.lines().filter(|line| line.starts_with("+ ")).count();
-    let removed = text.lines().filter(|line| line.starts_with("- ")).count();
+    let added = text.lines().filter(|line| diff_added_line(line)).count();
+    let removed = text.lines().filter(|line| diff_removed_line(line)).count();
     if added + removed > 0 {
-        return format!("+{added} −{removed}");
+        return format!("++{added} --{removed}");
     }
     let first = text
         .lines()
@@ -355,6 +343,52 @@ fn tool_name(label: &str) -> &str {
     label.split_whitespace().next().unwrap_or(label)
 }
 
+fn diff_added_line(line: &str) -> bool {
+    (line.starts_with("++ ") || line.starts_with("+ ")) && !line.starts_with("+++")
+}
+
+fn diff_removed_line(line: &str) -> bool {
+    (line.starts_with("-- ") || line.starts_with("- ")) && !line.starts_with("---")
+}
+
+fn diff_green() -> gpui_kit::Hsla {
+    gpui_kit::rgb(0x3D_FF_9A).into()
+}
+
+fn diff_red() -> gpui_kit::Hsla {
+    gpui_kit::rgb(0xFF_4D_5A).into()
+}
+
+fn tool_status_node(status: &str, failed: bool, theme: &Theme) -> gpui_kit::AnyElement {
+    if let Some((added, removed)) = status.split_once(" --")
+        && let Some(added) = added.strip_prefix("++")
+    {
+        return div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .flex_shrink_0()
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .child(div().text_color(diff_green()).child(format!("++{added}")))
+            .child(div().text_color(diff_red()).child(format!("--{removed}")))
+            .into_any_element();
+    }
+    div()
+        .flex_shrink_0()
+        .max_w(px(220.))
+        .truncate()
+        .text_xs()
+        .text_color(if failed {
+            diff_red()
+        } else {
+            theme.muted_foreground
+        })
+        .child(status.to_owned())
+        .into_any_element()
+}
+
 /// The tool result body: edit diffs and search hits render as a preview
 /// so additions, deletions, and matches stay visible. Other long output
 /// stays a dark CRT strip.
@@ -370,9 +404,7 @@ fn result_body(
     let diff_lines = lines
         .iter()
         .filter(|line| {
-            line.starts_with("+ ")
-                || line.starts_with("- ")
-                || line.strip_prefix("[diff truncated]").is_some()
+            diff_added_line(line) || diff_removed_line(line) || line.starts_with("[diff truncated]")
         })
         .count();
     if diff_lines > 0 {
@@ -405,8 +437,8 @@ fn result_body(
 }
 
 fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
-    let added = lines.iter().filter(|line| line.starts_with("+ ")).count();
-    let removed = lines.iter().filter(|line| line.starts_with("- ")).count();
+    let added = lines.iter().filter(|line| diff_added_line(line)).count();
+    let removed = lines.iter().filter(|line| diff_removed_line(line)).count();
     let shown = lines.len().min(80);
     div()
         .flex()
@@ -414,16 +446,29 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
         .py_1()
         .text_xs()
         .font_family(theme.mono_font_family.clone())
-        .child(preview_caption(
-            &format!("{}  +{added}  -{removed}", t("DIFF", "差异")),
-            desk.green,
-            theme,
-        ))
+        .child(
+            div()
+                .px_2()
+                .py(px(2.))
+                .flex()
+                .flex_row()
+                .gap_2()
+                .font_family(theme.mono_font_family.clone())
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(t("DIFF", "差异")),
+                )
+                .child(div().text_color(diff_green()).child(format!("++{added}")))
+                .child(div().text_color(diff_red()).child(format!("--{removed}"))),
+        )
         .children(lines.iter().take(shown).map(|line| {
-            let (color, bg) = if line.starts_with("+ ") {
-                (desk.green, desk.green.opacity(0.08))
-            } else if line.starts_with("- ") {
-                (desk.red, desk.red.opacity(0.08))
+            let (color, bg) = if diff_added_line(line) {
+                let ink = diff_green();
+                (ink, ink.opacity(0.16))
+            } else if diff_removed_line(line) {
+                let ink = diff_red();
+                (ink, ink.opacity(0.16))
             } else {
                 (theme.muted_foreground, theme.transparent)
             };

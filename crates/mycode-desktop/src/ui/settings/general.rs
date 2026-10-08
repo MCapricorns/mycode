@@ -155,7 +155,7 @@ pub(super) fn render_general_section(
 
 /// Label above a wrapping row of fixed-width swatches.
 ///
-/// Thirteen palettes fill one row of seven and leave six on the last.
+/// Six palettes fill one row.
 /// Cells share one width, so the last row stays on the left. The row is a
 /// flex wrap, not a grid: grid row tracks still grew into the settings
 /// scrollport and hid the font controls in that gap.
@@ -709,8 +709,7 @@ mod appearance_layout {
             let swatch = window.find("swatch-slate").bounds();
             let accent = window.find("swatch-accent-slate").bounds();
             let slate = window.find("palette-slate").bounds();
-            let ink = window.find("palette-ink").bounds();
-            let moss = window.find("palette-moss").bounds();
+            let ocean = window.find("palette-ocean").bounds();
             let aurora = window.find("palette-aurora").bounds();
             let font = window.find("dropdown-font-family").bounds();
             let font_row = window.find("dropdown-row-font-family").bounds();
@@ -754,20 +753,15 @@ mod appearance_layout {
                 "palette row should be content height, got {swatches:?}"
             );
             assert!(
-                (ink.origin.y - slate.origin.y).abs() <= px(2.)
-                    && moss.origin.y > slate.bottom()
-                    && moss.origin.y - slate.bottom() < px(24.),
-                "seven cells on the first row, eighth wraps under it: slate {slate:?} ink {ink:?} moss {moss:?}"
-            );
-            assert!(
-                (moss.origin.x - slate.origin.x).abs() <= px(2.)
-                    && aurora.origin.x > moss.origin.x
-                    && (aurora.origin.y - moss.origin.y).abs() <= px(2.)
-                    && aurora.right() < slate.origin.x + px(crate::ui::desk::palette_row_max_px())
+                (ocean.origin.y - slate.origin.y).abs() <= px(2.)
+                    && (aurora.origin.y - slate.origin.y).abs() <= px(2.)
+                    && aurora.origin.x > ocean.origin.x
+                    && aurora.right()
+                        <= slate.origin.x + px(crate::ui::desk::palette_row_max_px()) + px(2.)
                     && swatches.right() <= card.right() + px(1.)
                     && swatches.size.width
                         <= px(crate::ui::desk::palette_row_max_px()) + px(2.),
-                "last row stays inside the card: moss {moss:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
+                "six palettes stay on one row inside the card: slate {slate:?} ocean {ocean:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
             );
             assert!(
                 font.size.height < px(120.)
@@ -865,21 +859,17 @@ mod appearance_layout {
             let chip = window.find("font-size-xl").bounds();
             let swatches = window.find("palette-swatches").bounds();
             let slate = window.find("palette-slate").bounds();
-            let ink = window.find("palette-ink").bounds();
-            let moss = window.find("palette-moss").bounds();
             let aurora = window.find("palette-aurora").bounds();
             assert!(
                 language.bottom() <= content.bottom(),
                 "language should stay on the first screen, language {language:?} content {content:?}"
             );
             assert!(
-                (ink.origin.y - slate.origin.y).abs() <= px(2.)
-                    && moss.origin.y > slate.bottom()
-                    && aurora.origin.y > slate.bottom()
+                (aurora.origin.y - slate.origin.y).abs() <= px(2.)
                     && swatches.right() <= card.right() + px(1.)
                     && swatches.size.width
                         <= px(crate::ui::desk::palette_row_max_px()) + px(2.),
-                "palette should wrap inside the card, not one row of every swatch: slate {slate:?} ink {ink:?} moss {moss:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
+                "palette stays on one row inside the card: slate {slate:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
             );
             assert!(
                 button.right() <= card.right() + px(1.) && hint.right() <= button.left() + px(4.),

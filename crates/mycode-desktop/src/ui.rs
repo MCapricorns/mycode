@@ -129,6 +129,9 @@ pub fn render_root(
         .when(workspace.vm().changes_panel_open, |this| {
             this.child(context::render_changes_drawer(workspace, cx))
         })
+        .when(workspace.git_diff_panel_open(), |this| {
+            this.child(context::render_diff_panel(workspace, cx))
+        })
         .when(inspector_overlay, |this| {
             this.child(context::render_inspector_drawer(workspace, cx))
         })

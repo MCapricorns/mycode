@@ -26,6 +26,7 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
         state.reasoning_menu_open = false;
     }
     clamp_reasoning_to_catalog(state);
+    remember_active_session_model(state);
 }
 
 /// The `ModelSelected` transition: the model picker selected a model; an
@@ -76,6 +77,7 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
         state.reasoning_menu_open = false;
     }
     clamp_reasoning_to_catalog(state);
+    remember_active_session_model(state);
 }
 
 /// The `ActivePresetChanged` transition: a preset form opened or closed.
@@ -163,9 +165,9 @@ pub(crate) fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool 
 
 /// Thinking choices advertised for one catalog model.
 ///
-/// A missing catalog row still offers the standard ladder. Custom GLM
-/// endpoints are often absent from models.dev; refusing every level but
-/// `default` made a saved effort look like it had not been stored.
+/// A missing catalog row offers Default only. The stored pick is kept so a
+/// custom endpoint does not look unset, but the menu does not invent
+/// off/on/low/medium/high/xhigh/max.
 #[must_use]
 pub(crate) fn reasoning_levels_for(
     state: &WorkspaceState,
@@ -173,15 +175,30 @@ pub(crate) fn reasoning_levels_for(
     model_id: Option<&str>,
 ) -> Vec<String> {
     let Some(catalog) = state.catalog.as_ref() else {
-        return mycode_providers::catalog::standard_reasoning_levels();
+        return unpublished_reasoning_levels(state);
     };
     let (Some(provider_id), Some(model_id)) = (provider_id, model_id) else {
-        return mycode_providers::catalog::standard_reasoning_levels();
+        return unpublished_reasoning_levels(state);
     };
     match catalog.model(provider_id, model_id) {
         Some(model) => model.reasoning_levels(),
-        None => mycode_providers::catalog::standard_reasoning_levels(),
+        None => unpublished_reasoning_levels(state),
     }
+}
+
+/// Default, plus the stored effort when models.dev has no list for this row.
+fn unpublished_reasoning_levels(state: &WorkspaceState) -> Vec<String> {
+    let mut levels = vec!["default".to_owned()];
+    if let Some(stored) = state
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.reasoning.clone())
+        && stored != "default"
+        && !levels.iter().any(|level| level == &stored)
+    {
+        levels.push(stored);
+    }
+    levels
 }
 
 /// Thinking choices for the composer chip's selected model.
@@ -194,8 +211,73 @@ pub(crate) fn selected_reasoning_levels(state: &WorkspaceState) -> Vec<String> {
     )
 }
 
+/// Stores the picker on the active session so the next session switch
+/// restores this chat's model instead of whatever the other chat last used.
+pub(super) fn remember_active_session_model(state: &mut WorkspaceState) {
+    let Some(session_id) = state
+        .active
+        .as_ref()
+        .map(|active| active.session_id.clone())
+    else {
+        return;
+    };
+    remember_session_model(state, &session_id);
+}
+
+/// Stores the current picker on `session_id`.
+pub(super) fn remember_session_model(state: &mut WorkspaceState, session_id: &str) {
+    let (Some(provider), Some(model)) = (
+        state.selected_provider.clone(),
+        state.selected_model.clone(),
+    ) else {
+        return;
+    };
+    let reasoning = state
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.reasoning.clone());
+    mycode_config::upsert_session_model(
+        &mut state.session_models,
+        session_id,
+        &provider,
+        &model,
+        reasoning,
+    );
+}
+
+/// Restores `session_id`'s pin onto the picker. Returns false when this
+/// session has not chosen a model yet.
+pub(super) fn apply_session_model(state: &mut WorkspaceState, session_id: &str) -> bool {
+    let Some(pin) = mycode_config::session_model(&state.session_models, session_id).cloned() else {
+        return false;
+    };
+    state.selected_provider = Some(pin.provider);
+    state.selected_model = Some(pin.model);
+    if let Some(settings) = state.settings.as_mut() {
+        settings.reasoning = pin.reasoning;
+    }
+    true
+}
+
+/// Gives a session that has no pin the first enabled model, then freezes
+/// that choice on the session. It does not copy the previous chat's pick.
+pub(super) fn assign_fresh_session_model(state: &mut WorkspaceState, session_id: &str) {
+    state.selected_provider = None;
+    state.selected_model = None;
+    if let Some(settings) = state.settings.as_mut() {
+        settings.reasoning = None;
+    }
+    ensure_model_selection(state);
+    remember_session_model(state, session_id);
+}
+
 pub(super) fn clamp_reasoning_to_catalog(state: &mut WorkspaceState) {
     let levels = selected_reasoning_levels(state);
+    // No published rungs: keep a stored effort instead of wiping it. The
+    // menu still shows Default, and the chip can display the stored token.
+    if !levels.iter().any(|level| level != "default") {
+        return;
+    }
     let Some(settings) = state.settings.as_mut() else {
         return;
     };
@@ -234,13 +316,13 @@ mod tests {
             Some("high")
         );
         let levels = super::selected_reasoning_levels(&state);
-        for level in ["off", "on", "high", "max"] {
-            assert!(levels.iter().any(|item| item == level), "{level}");
-        }
+        assert!(levels.iter().any(|item| item == "default"));
+        assert!(levels.iter().any(|item| item == "high"));
+        assert!(!levels.iter().any(|item| item == "xhigh"));
     }
 
     #[test]
-    fn glm_and_custom_endpoints_can_pick_off_and_max() {
+    fn published_efforts_are_the_menu_and_custom_rows_do_not_guess() {
         use std::sync::Arc;
 
         use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
@@ -267,15 +349,19 @@ mod tests {
             ..WorkspaceState::default()
         };
         let listed = super::selected_reasoning_levels(&state);
-        for level in ["default", "off", "on", "high", "max"] {
-            assert!(listed.iter().any(|item| item == level), "zai {level}");
-        }
+        assert_eq!(
+            listed,
+            vec![
+                "default".to_owned(),
+                "low".to_owned(),
+                "high".to_owned(),
+                "max".to_owned()
+            ]
+        );
 
         state.selected_provider = Some("my-gateway".to_owned());
         state.selected_model = Some("glm-5.3-flash".to_owned());
         let custom = super::selected_reasoning_levels(&state);
-        for level in ["off", "on", "high", "max"] {
-            assert!(custom.iter().any(|item| item == level), "custom {level}");
-        }
+        assert_eq!(custom, vec!["default".to_owned()]);
     }
 }

@@ -402,16 +402,6 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                     .child(Icon::new(IconName::ChevronRight).xsmall()),
             )
         })
-        .when(selected.is_some(), |this| {
-            this.child(
-                div()
-                    .text_xs()
-                    .font_family(theme.mono_font_family.clone())
-                    .whitespace_normal()
-                    .text_color(theme.muted_foreground)
-                    .child(workspace.git_diff().to_owned()),
-            )
-        })
 }
 
 /// The full changes drawer: every dirty file plus the selected file's diff.
@@ -534,23 +524,136 @@ pub(super) fn render_changes_drawer(
                 .child(
                     div()
                         .id("changes-drawer-diff")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
                         .px_3()
                         .py_2()
                         .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .whitespace_normal()
                         .text_color(theme.muted_foreground)
-                        .child(if diff.is_empty() {
-                            t("Pick a file to see its diff.", "选择一个文件查看差异。").to_owned()
+                        .child(if selected.is_none() {
+                            t("Pick a file to open its diff.", "选择一个文件以打开差异。")
+                                .to_owned()
+                        } else if diff.is_empty() {
+                            t("Opening the diff panel…", "正在打开差异面板…").to_owned()
                         } else {
-                            diff
+                            t(
+                                "Diff is open in its own panel.",
+                                "差异已在单独的面板中打开。",
+                            )
+                            .to_owned()
                         }),
                 ),
         )
         .into_any_element()
+}
+
+/// Dedicated diff panel. File clicks in the changes list and in the review-all
+/// drawer both open this, so the patch is not clipped inside the inspector.
+pub(super) fn render_diff_panel(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let path = workspace
+        .git_diff_path()
+        .unwrap_or(t("Diff", "差异"))
+        .to_owned();
+    let diff = workspace.git_diff().to_owned();
+    let lines = diff_lines(&diff);
+    let drawer_open = workspace.vm().changes_panel_open;
+    let right = if drawer_open { px(504.) } else { px(12.) };
+    div()
+        .id("diff-panel-layer")
+        .absolute()
+        .top(px(44.))
+        .right(right)
+        .bottom(px(12.))
+        .w(px(560.))
+        .flex()
+        .flex_col()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(super::skin::glass_border(theme))
+        .bg(super::skin::popover(theme))
+        .overflow_hidden()
+        .child(
+            div()
+                .px_3()
+                .py_2()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(div().flex_1().min_w_0().text_sm().truncate().child(path))
+                .child(
+                    div()
+                        .id("diff-panel-close")
+                        .px_2()
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .hover(|this| this.bg(theme.secondary_hover))
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            cx.stop_propagation();
+                            workspace.on_close_git_diff_panel(cx);
+                        }))
+                        .child(t("Close", "关闭")),
+                ),
+        )
+        .child(
+            div()
+                .id("diff-panel-body")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .py_2()
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .children(lines.into_iter().enumerate().map(|(index, line)| {
+                    let (color, bg) = diff_line_paint(&line, theme);
+                    div()
+                        .id(format!("diff-line-{index}"))
+                        .px_3()
+                        .text_color(color)
+                        .bg(bg)
+                        .child(if line.is_empty() {
+                            " ".to_owned()
+                        } else {
+                            line
+                        })
+                })),
+        )
+        .into_any_element()
+}
+
+fn diff_lines(diff: &str) -> Vec<String> {
+    if diff.is_empty() {
+        return vec![t("Loading diff…", "正在加载差异…").to_owned()];
+    }
+    diff.lines().map(str::to_owned).collect()
+}
+
+fn diff_line_paint(line: &str, theme: &Theme) -> (gpui_kit::Hsla, gpui_kit::Hsla) {
+    let added = line.starts_with('+') && !line.starts_with("+++");
+    let removed = line.starts_with('-') && !line.starts_with("---");
+    if added {
+        let ink = vivid(0x3D_FF_9A);
+        return (ink, ink.opacity(0.14));
+    }
+    if removed {
+        let ink = vivid(0xFF_5C_6A);
+        return (ink, ink.opacity(0.14));
+    }
+    if line.starts_with("@@") {
+        return (theme.primary, theme.transparent);
+    }
+    (theme.muted_foreground, theme.transparent)
+}
+
+fn vivid(hex: u32) -> gpui_kit::Hsla {
+    gpui_kit::rgb(hex).into()
 }
 
 fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
@@ -595,7 +698,6 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             .is_none_or(|selected| turn.model == selected)
     };
     let live = vm.live_turn.as_ref().filter(|turn| model_of(turn));
-    let last = vm.last_turn.as_ref().filter(|turn| model_of(turn));
 
     div()
         .id("model-usage")
@@ -620,11 +722,9 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         })
         .child(stat_line(t("Thinking", "思考"), thinking, theme))
         .when(context_window > 0, |this| {
-            let used = live
-                .map(|turn| turn.input)
-                .or_else(|| last.map(|turn| turn.input))
-                .or_else(|| usage.map(|row| row.input))
-                .unwrap_or(0);
+            // The meter is the latest prompt, kept across an interrupt.
+            // Summing every tool round or every turn is what painted 1.4M/1.0M.
+            let used = vm.context_used;
             this.child(bar_row(
                 "context",
                 used,

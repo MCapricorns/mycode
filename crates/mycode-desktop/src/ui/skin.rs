@@ -13,22 +13,22 @@ use gpui_kit::{
 };
 
 /// Sidebar, title bar, settings nav, inspector. Translucent over the blur.
-const RAIL_ALPHA: f32 = 0.84;
-/// Conversation and settings page. Near-solid so body text keeps contrast.
-const PAGE_ALPHA: f32 = 0.94;
-/// Menus, dialogs, and the composer. High enough that type behind them
-/// does not show through; still short of an opaque slab.
-const OVERLAY_ALPHA: f32 = 0.92;
+const RAIL_ALPHA: f32 = 0.58;
+/// Conversation and settings page. Still readable, with the window blur
+/// and the palette gradient showing through.
+const PAGE_ALPHA: f32 = 0.82;
+/// Menus, dialogs, and the composer. Frosted, not an opaque slab.
+const OVERLAY_ALPHA: f32 = 0.74;
 /// Form cards on the reading page. A small lift plus translucency, so a
 /// card is not the same color as the page under it.
-const CARD_ALPHA: f32 = 0.88;
+const CARD_ALPHA: f32 = 0.68;
 
 const _: () = {
     assert!(RAIL_ALPHA < PAGE_ALPHA);
     assert!(PAGE_ALPHA < 1.);
     assert!(OVERLAY_ALPHA < 1.);
     assert!(CARD_ALPHA < 1.);
-    assert!(RAIL_ALPHA >= 0.75);
+    assert!(RAIL_ALPHA >= 0.5);
 };
 
 /// Reading-column wash. Stops stay translucent so a hint of the window

@@ -29,6 +29,7 @@ impl Workspace {
         self.git_diff_generation = self.git_diff_generation.wrapping_add(1);
         self.git_diff_path = None;
         self.git_diff.clear();
+        self.git_diff_panel_open = false;
 
         let Some(root) = self.vm.project_dir.clone() else {
             self.git = GitSnapshot::empty(t("No folder", "未打开目录"));
@@ -42,12 +43,16 @@ impl Workspace {
         self.spawn_git_status(cx);
     }
 
-    /// Shows or hides the diff for one dirty path.
+    /// Opens one dirty path in the dedicated diff panel.
+    ///
+    /// The changes list (inspector preview or the review-all drawer) only
+    /// names files. The diff itself is a separate panel so the patch is
+    /// readable. Clicking a file always opens that panel, including when
+    /// the full changes drawer is already open.
     pub(crate) fn on_select_git_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.git_diff_panel_open = true;
         if self.git_diff_path.as_deref() == Some(path) {
-            self.git_diff_path = None;
-            self.git_diff.clear();
-            self.git_diff_generation = self.git_diff_generation.wrapping_add(1);
+            cx.notify();
             return;
         }
         let Some(root) = self.vm.project_dir.clone() else {

@@ -75,6 +75,7 @@ impl Workspace {
                 session_id,
                 model,
                 input,
+                context,
                 output,
                 cache,
                 elapsed_ms,
@@ -85,6 +86,7 @@ impl Workspace {
                 DesktopAction::UsageSnapshot {
                     model,
                     input,
+                    context,
                     output,
                     cache,
                     elapsed_ms,
@@ -95,6 +97,7 @@ impl Workspace {
                 provider,
                 model,
                 input,
+                context,
                 output,
                 cache,
                 elapsed_ms,
@@ -107,6 +110,7 @@ impl Workspace {
                     provider,
                     model,
                     input,
+                    context,
                     output,
                     cache,
                     elapsed_ms,
@@ -203,6 +207,37 @@ impl Workspace {
                 // An offer on the wire starts the download right away; the
                 // install itself always waits for the user's confirm.
                 self.on_download_update(cx);
+                return;
+            }
+            BridgeEvent::CompactFinished {
+                session_id,
+                message,
+                ok,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                let text = match message.as_str() {
+                    "compacted" => crate::i18n::t(
+                        "Context compacted. The next turn uses the summary.",
+                        "上下文已压缩。下一轮会使用摘要。",
+                    )
+                    .to_owned(),
+                    "empty" => {
+                        crate::i18n::t("Nothing to compact yet.", "现在没有可压缩的上下文。")
+                            .to_owned()
+                    }
+                    other => other.to_owned(),
+                };
+                self.push_toast(
+                    text,
+                    if ok {
+                        crate::workspace::ToastKind::Info
+                    } else {
+                        crate::workspace::ToastKind::Error
+                    },
+                    cx,
+                );
                 return;
             }
             BridgeEvent::UpdateCheckFailed { message } => {
@@ -514,6 +549,7 @@ impl Workspace {
                         selected_provider: ui_state.selected_provider,
                         selected_model: ui_state.selected_model,
                         session_projects: ui_state.session_projects,
+                        session_models: ui_state.session_models,
                         workspaces: ui_state.workspaces,
                         session_workspaces: ui_state.session_workspaces,
                         trusted_projects: ui_state.trusted_projects,
@@ -634,6 +670,79 @@ impl Workspace {
 
     /// Starts one model turn over the active conversation using the picked
     /// provider/model, falling back to the first enabled provider.
+    pub(super) fn on_compact(&mut self, cx: &mut Context<Self>) {
+        if self.vm.sending {
+            self.push_toast(
+                crate::i18n::t(
+                    "Wait for the current turn to finish, then /compact.",
+                    "等当前这一轮结束再 /compact。",
+                )
+                .to_owned(),
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        }
+        let Some(conversation) = self.vm.active.clone() else {
+            self.push_toast(
+                crate::i18n::t("Open a chat before compacting.", "先打开一个对话再压缩。")
+                    .to_owned(),
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        };
+        let (Some(session), Some(branch)) = (
+            SessionId::parse(&conversation.session_id),
+            BranchId::parse(&conversation.branch_id),
+        ) else {
+            return;
+        };
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let provider = settings.providers.iter().find(|provider| {
+            provider.enabled && Some(&provider.id) == self.vm.selected_provider.as_ref()
+        });
+        let Some(provider) = provider else {
+            self.push_toast(
+                crate::i18n::t(
+                    "Choose a model before compacting.",
+                    "压缩前先选择一个模型。",
+                )
+                .to_owned(),
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        };
+        let Some(model) = self
+            .vm
+            .selected_model
+            .clone()
+            .filter(|model| provider.models.contains(model))
+            .or_else(|| provider.models.first().cloned())
+        else {
+            return;
+        };
+        let provider_id = provider.id.clone();
+        self.push_toast(
+            crate::i18n::t("Compacting context…", "正在压缩上下文…").to_owned(),
+            crate::workspace::ToastKind::Info,
+            cx,
+        );
+        self.dispatch(
+            BridgeCommand::CompactSession {
+                session,
+                branch,
+                expected_head: crate::workspace::parse_head(&conversation.head),
+                provider_id,
+                model,
+            },
+            cx,
+        );
+    }
+
     fn begin_chat_turn(&mut self, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.clone() else {
             self.apply_action(DesktopAction::Failed("no open session".to_owned()), cx);
@@ -683,6 +792,20 @@ impl Workspace {
             );
             return;
         };
+        let reasoning = self
+            .vm
+            .active
+            .as_ref()
+            .and_then(|active| {
+                mycode_config::session_model(&self.vm.session_models, &active.session_id)
+                    .and_then(|pin| pin.reasoning.clone())
+            })
+            .or_else(|| {
+                self.vm
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| settings.reasoning.clone())
+            });
         // The bridge rebuilds the turn history from the ledger's typed
         // events, so tool_use/tool_result pairing survives replay.
         self.dispatch(
@@ -692,6 +815,7 @@ impl Workspace {
                 expected_head,
                 provider_id: provider.id.clone(),
                 model,
+                reasoning,
             },
             cx,
         );

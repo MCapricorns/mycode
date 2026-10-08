@@ -180,6 +180,9 @@ pub(super) fn session_bindings_forgotten(state: &mut WorkspaceState, session_id:
         .session_workspaces
         .retain(|(existing, _)| existing != &session_id);
     state
+        .session_models
+        .retain(|pin| pin.session_id != session_id);
+    state
         .sessions
         .retain(|session| session.session_id != session_id);
 }

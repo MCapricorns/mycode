@@ -222,6 +222,11 @@ impl Workspace {
             cx.notify();
             return;
         }
+        if self.git_diff_panel_open {
+            self.git_diff_panel_open = false;
+            cx.notify();
+            return;
+        }
         if self.vm.changes_panel_open {
             self.apply_action(DesktopAction::ChangesPanelToggled(false), cx);
             return;

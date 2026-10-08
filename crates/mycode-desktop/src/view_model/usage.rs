@@ -53,6 +53,17 @@ pub(crate) fn parse_usage_text(text: &str) -> Option<(String, u64, u64, Option<u
     ))
 }
 
+/// Latest prompt size stored on a usage line (`· ctx N`). Older lines that
+/// only carry the billed sum have no context figure.
+#[must_use]
+pub(crate) fn parse_context_tokens(text: &str) -> Option<u64> {
+    text.split('\u{b7}')
+        .find_map(|part| part.trim().strip_prefix("ctx "))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .filter(|tokens| *tokens > 0)
+}
+
 /// Metrics for one completed model turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TurnStats {

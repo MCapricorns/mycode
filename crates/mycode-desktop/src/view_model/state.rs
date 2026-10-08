@@ -100,6 +100,10 @@ pub(crate) struct WorkspaceState {
     /// Token counts for the turn that is still running, when the provider
     /// has reported any. Cleared when the turn commits or fails.
     pub live_turn: Option<TurnStats>,
+    /// Latest prompt size for the open session, in tokens. This is the last
+    /// provider-reported input count, not the sum of every tool round, and
+    /// it stays put when a send is interrupted.
+    pub context_used: u64,
     /// Active composer mention autocomplete, when a trigger is typed.
     pub mention: Option<ComposerMention>,
     /// In-flight Copilot device-flow sign-in, when any.
@@ -132,6 +136,8 @@ pub(crate) struct WorkspaceState {
     /// Session-to-project bindings (session id, project path), most recent
     /// first. Restores each chat's tool working directory.
     pub session_projects: Vec<(String, String)>,
+    /// Per-session provider, model, and reasoning. Newest first.
+    pub session_models: Vec<mycode_config::SessionModelPin>,
     /// Named workspaces; the sidebar shows one at a time.
     pub workspaces: Vec<mycode_config::WorkspaceDef>,
     /// Session-to-workspace bindings (session id, workspace id). A session
@@ -333,6 +339,7 @@ pub enum DesktopAction {
     UsageSnapshot {
         model: String,
         input: u64,
+        context: u64,
         output: u64,
         cache: Option<u64>,
         elapsed_ms: u64,
@@ -342,6 +349,7 @@ pub enum DesktopAction {
         provider: String,
         model: String,
         input: u64,
+        context: u64,
         output: u64,
         cache: Option<u64>,
         elapsed_ms: u64,
@@ -449,6 +457,8 @@ pub enum DesktopAction {
         selected_model: Option<String>,
         /// Session-to-project bindings.
         session_projects: Vec<(String, String)>,
+        /// Per-session model pins.
+        session_models: Vec<mycode_config::SessionModelPin>,
         /// Named workspaces.
         workspaces: Vec<mycode_config::WorkspaceDef>,
         /// Session-to-workspace bindings.
