@@ -582,18 +582,72 @@ pub fn apply_palette(theme: &mut Theme, palette: &str) {
 
 fn install_highlight(theme: &mut Theme, spec: &Spec) {
     let mut highlight = (*gpui_kit::component::highlighter::HighlightTheme::default_dark()).clone();
-    let comment = syntax_color(comment_ink(spec));
+    let comment = syntax_color(comment_ink(spec), true);
     highlight.style.syntax.comment = Some(comment);
     highlight.style.syntax.comment_doc = Some(comment);
     theme.highlight_theme = std::sync::Arc::new(highlight);
 }
 
-/// Comments stay a step quieter than the page ink and still clear the card.
+/// Muted gray-blue, or gray-green when the palette accent is already green.
+///
+/// Lightness is chosen so the color clears the code card by about 5:1 and
+/// stays well short of the page ink. A mix toward that ink made comments
+/// the same color as ordinary code.
 fn comment_ink(spec: &Spec) -> Hsla {
-    soften(hex(spec.ink), hex(spec.dim), 0.18)
+    let card = hex(spec.card);
+    let accent = hex(spec.accent);
+    let hue = if (0.25..0.50).contains(&accent.h) {
+        0.40
+    } else {
+        0.58
+    };
+    let mut best = Hsla {
+        h: hue,
+        s: 0.34,
+        l: 0.62,
+        a: 1.,
+    };
+    let mut best_gap = f32::MAX;
+    let mut lightness = 0.42_f32;
+    while lightness <= 0.80 {
+        let color = Hsla {
+            h: hue,
+            s: 0.34,
+            l: lightness,
+            a: 1.,
+        };
+        let ratio = contrast_ratio(color, card);
+        if (4.5..=6.2).contains(&ratio) {
+            let gap = (ratio - 5.1).abs();
+            if gap < best_gap {
+                best = color;
+                best_gap = gap;
+            }
+        }
+        lightness += 0.01;
+    }
+    best
 }
 
-fn syntax_color(color: Hsla) -> gpui_kit::component::highlighter::ThemeStyle {
+fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
+    let lighter = relative_luminance(a).max(relative_luminance(b));
+    let darker = relative_luminance(a).min(relative_luminance(b));
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn relative_luminance(color: Hsla) -> f32 {
+    let rgb = color.to_rgb();
+    let channel = |value: f32| {
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+}
+
+fn syntax_color(color: Hsla, italic: bool) -> gpui_kit::component::highlighter::ThemeStyle {
     let rgb = color.to_rgb();
     let channel = |value: f32| (value * 255.).round().clamp(0., 255.) as u8;
     let hex = format!(
@@ -602,7 +656,12 @@ fn syntax_color(color: Hsla) -> gpui_kit::component::highlighter::ThemeStyle {
         channel(rgb.g),
         channel(rgb.b)
     );
-    serde_json::from_str(&format!(r#"{{"color":"{hex}"}}"#)).expect("syntax color")
+    let style = if italic {
+        r#", "font_style": "italic""#
+    } else {
+        ""
+    };
+    serde_json::from_str(&format!(r#"{{"color":"{hex}"{style}}}"#)).expect("syntax color")
 }
 
 fn paint(theme: &mut Theme, spec: &Spec) {
@@ -895,20 +954,30 @@ mod tests {
             let comment = super::comment_ink(&spec);
             let comments = contrast(comment, card);
             assert!(
-                comments >= 7.0,
-                "{id}: comment ink on the card is {comments:.2}, want >= 7"
+                (4.5..=6.2).contains(&comments),
+                "{id}: comment contrast is {comments:.2}, want 4.5..=6.2"
+            );
+            assert!(
+                comment.s >= 0.2,
+                "{id}: comment saturation is {:.2}, want a visible hue",
+                comment.s
+            );
+            let ink_gap = (comment.l - ink.l).abs();
+            assert!(
+                ink_gap >= 0.12,
+                "{id}: comment lightness is too close to the page ink"
             );
             let mut theme = gpui_kit::component::theme::Theme::default();
             super::apply_palette(&mut theme, id);
             let painted = theme
                 .highlight_theme
                 .style("comment")
-                .and_then(|style| style.color)
-                .expect("comment color");
-            let painted_ratio = contrast(painted, card);
+                .expect("comment style");
+            assert_eq!(painted.font_style, Some(gpui_kit::FontStyle::Italic));
+            let painted_ratio = contrast(painted.color.expect("comment color"), card);
             assert!(
-                painted_ratio >= 7.0,
-                "{id}: installed comment color contrast is {painted_ratio:.2}"
+                (4.5..=6.2).contains(&painted_ratio),
+                "{id}: installed comment contrast is {painted_ratio:.2}"
             );
         }
     }
