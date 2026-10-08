@@ -15,9 +15,40 @@ use crate::i18n::t;
 use crate::view_model::cache_percent;
 use crate::workspace::Workspace;
 
-/// How many dirty files the inspector preview lists before pointing at the
-/// full drawer.
+/// How many dirty files the inspector preview lists before the rest are only
+/// in the full drawer. View all stays available for any non-empty list so a
+/// one-file change can still open the drawer.
 const CHANGES_PREVIEW: usize = 6;
+
+/// Docked Details column width, including its outer padding.
+pub(super) const INSPECTOR_DOCKED_WIDTH: f32 = 316.;
+/// Overlay Details card: 8px from the window edge plus a 320px card.
+pub(super) const INSPECTOR_OVERLAY_SPAN: f32 = 328.;
+const INSPECTOR_OVERLAY_MARGIN: f32 = 8.;
+const INSPECTOR_OVERLAY_WIDTH: f32 = 320.;
+const CHANGES_DRAWER_WIDTH: f32 = 480.;
+const DIFF_PANEL_WIDTH: f32 = 560.;
+const PANEL_GAP: f32 = 12.;
+
+/// Right insets for the changes drawer and the diff panel.
+///
+/// The diff sits to the left of whichever right-hand surface is open, with a
+/// gap, so it does not slide under Details or the review drawer.
+pub(crate) fn panel_rights(inspector_span: f32, drawer_open: bool) -> (f32, f32) {
+    let drawer_right = if inspector_span > 0. {
+        inspector_span + PANEL_GAP
+    } else {
+        PANEL_GAP
+    };
+    let diff_right = if drawer_open {
+        drawer_right + CHANGES_DRAWER_WIDTH + PANEL_GAP
+    } else if inspector_span > 0. {
+        inspector_span + PANEL_GAP
+    } else {
+        PANEL_GAP
+    };
+    (drawer_right, diff_right)
+}
 
 pub(super) fn render_context_panel(
     workspace: &mut Workspace,
@@ -29,7 +60,7 @@ pub(super) fn render_context_panel(
     // double-click there both pinned the panel and zoomed the window.
     div()
         .id("context-panel")
-        .w(px(316.))
+        .w(px(INSPECTOR_DOCKED_WIDTH))
         .h_full()
         .flex()
         .flex_col()
@@ -86,10 +117,10 @@ pub(super) fn render_inspector_drawer(
                 // again. Occlude drops the backdrop out of that hit test.
                 .occlude()
                 .absolute()
-                .top(px(8.))
-                .right(px(8.))
-                .bottom(px(8.))
-                .w(px(320.))
+                .top(px(INSPECTOR_OVERLAY_MARGIN))
+                .right(px(INSPECTOR_OVERLAY_MARGIN))
+                .bottom(px(INSPECTOR_OVERLAY_MARGIN))
+                .w(px(INSPECTOR_OVERLAY_WIDTH))
                 .flex()
                 .flex_col()
                 .rounded(px(12.))
@@ -295,7 +326,6 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
     let git = workspace.git();
     let selected = workspace.git_diff_path();
     let shown: Vec<_> = git.files.iter().take(CHANGES_PREVIEW).collect();
-    let hidden_count = git.files.len().saturating_sub(shown.len());
     div()
         .id("changes")
         .flex()
@@ -357,8 +387,8 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                 .when(open, |row| row.bg(theme.accent))
                 .hover(|row| row.bg(theme.secondary_hover))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
+                    cx.stop_propagation();
                     workspace.on_select_git_file(&path, cx);
-                    cx.notify();
                 }))
                 .child(
                     div()
@@ -376,7 +406,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                         .child(file.path.clone()),
                 )
         }))
-        .when(hidden_count > 0, |this| {
+        .when(!git.files.is_empty(), |this| {
             this.child(
                 div()
                     .id("git-file-more")
@@ -409,6 +439,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
 /// tree stays browsable.
 pub(super) fn render_changes_drawer(
     workspace: &mut Workspace,
+    inspector_span: f32,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
@@ -416,6 +447,7 @@ pub(super) fn render_changes_drawer(
     let selected = workspace.git_diff_path();
     let diff = workspace.git_diff().to_owned();
     let files = git.files.clone();
+    let (drawer_right, _) = panel_rights(inspector_span, true);
     div()
         .id("changes-drawer-layer")
         .absolute()
@@ -433,11 +465,12 @@ pub(super) fn render_changes_drawer(
         .child(
             div()
                 .id("changes-drawer")
+                .occlude()
                 .absolute()
                 .top(px(44.))
-                .right(px(12.))
+                .right(px(drawer_right))
                 .bottom(px(12.))
-                .w(px(480.))
+                .w(px(CHANGES_DRAWER_WIDTH))
                 .flex()
                 .flex_col()
                 .rounded(px(12.))
@@ -508,8 +541,8 @@ pub(super) fn render_changes_drawer(
                                 .when(open, |row| row.bg(theme.accent))
                                 .hover(|row| row.bg(theme.secondary_hover))
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    cx.stop_propagation();
                                     workspace.on_select_git_file(&path, cx);
-                                    cx.notify();
                                 }))
                                 .child(
                                     div()
@@ -549,6 +582,7 @@ pub(super) fn render_changes_drawer(
 /// drawer both open this, so the patch is not clipped inside the inspector.
 pub(super) fn render_diff_panel(
     workspace: &mut Workspace,
+    inspector_span: f32,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
@@ -558,15 +592,15 @@ pub(super) fn render_diff_panel(
         .to_owned();
     let diff = workspace.git_diff().to_owned();
     let lines = diff_lines(&diff);
-    let drawer_open = workspace.vm().changes_panel_open;
-    let right = if drawer_open { px(504.) } else { px(12.) };
+    let (_, diff_right) = panel_rights(inspector_span, workspace.vm().changes_panel_open);
     div()
         .id("diff-panel-layer")
+        .occlude()
         .absolute()
         .top(px(44.))
-        .right(right)
+        .right(px(diff_right))
         .bottom(px(12.))
-        .w(px(560.))
+        .w(px(DIFF_PANEL_WIDTH))
         .flex()
         .flex_col()
         .rounded(px(12.))
@@ -784,13 +818,28 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
 
 fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u64 {
     let shown = vm.selected_model.as_deref();
+    let provider_id = vm.selected_provider.as_deref();
+    let base_url = provider_id.and_then(|id| {
+        vm.settings.as_ref().and_then(|settings| {
+            settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .map(|provider| provider.base_url.as_str())
+        })
+    });
     let catalog_context = vm.catalog.as_ref().and_then(|catalog| {
-        let provider_id = vm.selected_provider.as_deref()?;
-        let provider = catalog.provider(provider_id)?;
-        provider
+        let provider_id = provider_id?;
+        if let Some(model_id) = shown {
+            return catalog
+                .model_for_endpoint(provider_id, base_url, model_id)
+                .map(|model| model.context)
+                .filter(|context| *context > 0);
+        }
+        catalog
+            .provider(provider_id)?
             .models
-            .iter()
-            .find(|model| shown.is_none_or(|id| model.id == id))
+            .first()
             .map(|model| model.context)
             .filter(|context| *context > 0)
     });
@@ -1027,5 +1076,27 @@ mod tests {
     fn pinning_leaves_the_panel_open() {
         assert_eq!(inspector_flags_after_pin(false), (true, true));
         assert_eq!(inspector_flags_after_pin(true), (true, false));
+    }
+
+    #[test]
+    fn the_diff_sits_left_of_details_and_the_drawer() {
+        let (drawer, diff) = super::panel_rights(0., false);
+        assert_eq!(diff, 12.);
+        assert_eq!(drawer, 12.);
+
+        assert_eq!(
+            super::INSPECTOR_OVERLAY_SPAN,
+            super::INSPECTOR_OVERLAY_MARGIN + super::INSPECTOR_OVERLAY_WIDTH
+        );
+        let (_, beside_details) = super::panel_rights(super::INSPECTOR_OVERLAY_SPAN, false);
+        assert_eq!(beside_details, super::INSPECTOR_OVERLAY_SPAN + 12.);
+
+        let (drawer, beside_drawer) = super::panel_rights(super::INSPECTOR_DOCKED_WIDTH, true);
+        assert_eq!(drawer, super::INSPECTOR_DOCKED_WIDTH + 12.);
+        assert!(beside_drawer > drawer + 480.);
+        assert_eq!(
+            beside_drawer,
+            super::INSPECTOR_DOCKED_WIDTH + 12. + 480. + 12.
+        );
     }
 }

@@ -13,6 +13,35 @@ use crate::workspace::Workspace;
 /// Wakes once a day of runtime, then checks for an update when that is enabled.
 const UPDATE_RECHECK_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// One floating layer Escape can dismiss.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DismissLayer {
+    Picker,
+    Diff,
+    Changes,
+    Inspector,
+}
+
+/// The single layer one Escape press closes. Later flags stay open.
+pub(crate) fn top_dismiss_layer(
+    picker: bool,
+    diff: bool,
+    changes: bool,
+    inspector_overlay: bool,
+) -> Option<DismissLayer> {
+    if picker {
+        Some(DismissLayer::Picker)
+    } else if diff {
+        Some(DismissLayer::Diff)
+    } else if changes {
+        Some(DismissLayer::Changes)
+    } else if inspector_overlay {
+        Some(DismissLayer::Inspector)
+    } else {
+        None
+    }
+}
+
 impl Workspace {
     /// Parks until a day has passed, then runs the automatic update check.
     pub(super) fn spawn_update_recheck(&self, cx: &mut Context<Self>) {
@@ -217,28 +246,38 @@ impl Workspace {
     /// Escape dismisses the topmost layer: the folder picker, then other
     /// floating UI. With nothing open it leaves the settings view.
     pub(crate) fn on_escape(&mut self, cx: &mut Context<Self>) {
-        if self.project_picker.is_some() {
-            self.project_picker = None;
-            cx.notify();
-            return;
-        }
-        if self.git_diff_panel_open {
-            self.git_diff_panel_open = false;
-            cx.notify();
-            return;
-        }
-        if self.vm.changes_panel_open {
-            self.apply_action(DesktopAction::ChangesPanelToggled(false), cx);
-            return;
-        }
-        if self.vm.inspector_open && !self.vm.inspector_pinned {
-            self.apply_action(
-                DesktopAction::InspectorChanged {
-                    open: false,
-                    pinned: false,
-                },
-                cx,
-            );
+        // One keypress closes one layer. Diff is painted above the drawer
+        // and Details, so it goes first; the drawer next; then an unpinned
+        // Details overlay. A pinned Details column is part of the desk, not
+        // a floating layer.
+        if let Some(layer) = top_dismiss_layer(
+            self.project_picker.is_some(),
+            self.git_diff_panel_open,
+            self.vm.changes_panel_open,
+            self.vm.inspector_open && !self.vm.inspector_pinned,
+        ) {
+            match layer {
+                DismissLayer::Picker => {
+                    self.project_picker = None;
+                    cx.notify();
+                }
+                DismissLayer::Diff => {
+                    self.git_diff_panel_open = false;
+                    cx.notify();
+                }
+                DismissLayer::Changes => {
+                    self.apply_action(DesktopAction::ChangesPanelToggled(false), cx);
+                }
+                DismissLayer::Inspector => {
+                    self.apply_action(
+                        DesktopAction::InspectorChanged {
+                            open: false,
+                            pinned: false,
+                        },
+                        cx,
+                    );
+                }
+            }
             return;
         }
         if self.vm.update_dialog_open {
@@ -348,5 +387,31 @@ impl Workspace {
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DismissLayer, top_dismiss_layer};
+
+    #[test]
+    fn escape_closes_one_layer_topmost_first() {
+        assert_eq!(
+            top_dismiss_layer(false, true, true, true),
+            Some(DismissLayer::Diff)
+        );
+        assert_eq!(
+            top_dismiss_layer(false, false, true, true),
+            Some(DismissLayer::Changes)
+        );
+        assert_eq!(
+            top_dismiss_layer(false, false, false, true),
+            Some(DismissLayer::Inspector)
+        );
+        assert_eq!(
+            top_dismiss_layer(true, true, true, true),
+            Some(DismissLayer::Picker)
+        );
+        assert_eq!(top_dismiss_layer(false, false, false, false), None);
     }
 }

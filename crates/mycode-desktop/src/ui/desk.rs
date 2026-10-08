@@ -574,8 +574,35 @@ pub fn apply_palette(theme: &mut Theme, palette: &str) {
     // Palette paints replace the stock colors. The code highlighter is a
     // separate theme; leaving the light default on a dark page makes every
     // token the same color as the background, so fenced code shows no
-    // highlight. Always install the dark syntax theme after a palette.
-    theme.highlight_theme = gpui_kit::component::highlighter::HighlightTheme::default_dark();
+    // highlight. Always install the dark syntax theme after a palette, then
+    // lift comments toward the page ink. The stock gray sits too close to
+    // these dark code cards.
+    install_highlight(theme, &spec);
+}
+
+fn install_highlight(theme: &mut Theme, spec: &Spec) {
+    let mut highlight = (*gpui_kit::component::highlighter::HighlightTheme::default_dark()).clone();
+    let comment = syntax_color(comment_ink(spec));
+    highlight.style.syntax.comment = Some(comment);
+    highlight.style.syntax.comment_doc = Some(comment);
+    theme.highlight_theme = std::sync::Arc::new(highlight);
+}
+
+/// Comments stay a step quieter than the page ink and still clear the card.
+fn comment_ink(spec: &Spec) -> Hsla {
+    soften(hex(spec.ink), hex(spec.dim), 0.18)
+}
+
+fn syntax_color(color: Hsla) -> gpui_kit::component::highlighter::ThemeStyle {
+    let rgb = color.to_rgb();
+    let channel = |value: f32| (value * 255.).round().clamp(0., 255.) as u8;
+    let hex = format!(
+        "#{:02X}{:02X}{:02X}",
+        channel(rgb.r),
+        channel(rgb.g),
+        channel(rgb.b)
+    );
+    serde_json::from_str(&format!(r#"{{"color":"{hex}"}}"#)).expect("syntax color")
 }
 
 fn paint(theme: &mut Theme, spec: &Spec) {
@@ -864,6 +891,24 @@ mod tests {
             assert!(
                 boundary >= 3.0,
                 "{id}: primary edge against the card is {boundary:.2}, want >= 3"
+            );
+            let comment = super::comment_ink(&spec);
+            let comments = contrast(comment, card);
+            assert!(
+                comments >= 7.0,
+                "{id}: comment ink on the card is {comments:.2}, want >= 7"
+            );
+            let mut theme = gpui_kit::component::theme::Theme::default();
+            super::apply_palette(&mut theme, id);
+            let painted = theme
+                .highlight_theme
+                .style("comment")
+                .and_then(|style| style.color)
+                .expect("comment color");
+            let painted_ratio = contrast(painted, card);
+            assert!(
+                painted_ratio >= 7.0,
+                "{id}: installed comment color contrast is {painted_ratio:.2}"
             );
         }
     }

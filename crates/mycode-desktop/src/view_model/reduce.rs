@@ -57,11 +57,22 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sessions = sessions;
         }
         DesktopAction::SessionCreated(mut summary) => {
+            // A new chat keeps the model already on the picker and pins it,
+            // so leaving and coming back does not jump to the first enabled
+            // model. The previous chat's pin is written first.
+            if let Some(previous) = state
+                .active
+                .as_ref()
+                .map(|active| active.session_id.clone())
+            {
+                remember_session_model(state, &previous);
+            }
             state
                 .sessions
                 .retain(|s| s.session_id != summary.session_id);
             summary.active = true;
             state.sessions.insert(0, summary.clone());
+            let session_id = summary.session_id.clone();
             state.active = Some(ActiveConversation {
                 session_id: summary.session_id,
                 branch_id: summary.root_branch_id,
@@ -70,6 +81,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 older_before: None,
                 streaming: None,
             });
+            remember_session_model(state, &session_id);
             state.live_jobs.clear();
             state.subagent_window = None;
             state.changes_panel_open = false;
@@ -1111,5 +1123,46 @@ mod tests {
                 .and_then(|pin| pin.reasoning.as_deref()),
             Some("high")
         );
+    }
+
+    #[test]
+    fn a_new_session_inherits_the_open_chat_model() {
+        let mut settings = crate::view_model::SettingsState::from_settings(
+            &mycode_config::AppSettings::default(),
+            1,
+            Vec::new(),
+        );
+        settings.reasoning = Some("on".to_owned());
+        let mut state = WorkspaceState {
+            settings: Some(settings),
+            selected_provider: Some("zai".to_owned()),
+            selected_model: Some("glm-4.7".to_owned()),
+            active: Some(mycode_app::ActiveConversation {
+                session_id: "old".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            DesktopAction::SessionCreated(mycode_app::SessionSummary {
+                session_id: "new".to_owned(),
+                root_branch_id: "branch".to_owned(),
+                title: String::new(),
+                event_count: 0,
+                active: false,
+                corrupt: false,
+            }),
+        );
+        let inherited = mycode_config::session_model(&state.session_models, "new").expect("pin");
+        assert_eq!(inherited.provider, "zai");
+        assert_eq!(inherited.model, "glm-4.7");
+        assert_eq!(inherited.reasoning.as_deref(), Some("on"));
+        let previous = mycode_config::session_model(&state.session_models, "old").expect("old");
+        assert_eq!(previous.model, "glm-4.7");
     }
 }

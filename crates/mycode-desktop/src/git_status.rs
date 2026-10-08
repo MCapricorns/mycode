@@ -98,22 +98,113 @@ pub(crate) fn read_status(root: &Path) -> GitSnapshot {
     }
 }
 
-/// Unified diff for one path. Untracked files have no HEAD diff.
+/// Unified diff for one path.
+///
+/// `git diff HEAD` includes staged edits. An untracked file has no HEAD
+/// object, so the whole file is shown as added lines.
 pub(crate) fn read_diff(root: &Path, path: &str) -> String {
     let output = git_command()
         .arg("-C")
         .arg(root)
-        .args(["diff", "--", path])
+        .args(["diff", "HEAD", "--", path])
         .output();
     let Ok(output) = output else {
         return t("git is not installed", "未安装 git").to_owned();
     };
     let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if text.is_empty() {
-        t("No diff against HEAD.", "与 HEAD 无差异。").to_owned()
-    } else if text.len() > 12_000 {
+    if !text.is_empty() {
+        return cap_diff(&text);
+    }
+    if untracked(root, path) {
+        return added_file_diff(root, path);
+    }
+    t("No diff against HEAD.", "与 HEAD 无差异。").to_owned()
+}
+
+fn cap_diff(text: &str) -> String {
+    if text.len() > 12_000 {
         format!("{}…", &text[..12_000])
     } else {
-        text
+        text.to_owned()
+    }
+}
+
+fn untracked(root: &Path, path: &str) -> bool {
+    let Ok(output) = git_command()
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain=v1", "--", path])
+        .output()
+    else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .any(|line| line.starts_with("?? ") && line[3..].trim() == path)
+}
+
+/// The whole file as a new-file unified diff. Binary files stay a one-line note.
+fn added_file_diff(root: &Path, path: &str) -> String {
+    if path.is_empty() || path.contains('\0') || Path::new(path).is_absolute() {
+        return t("No diff against HEAD.", "与 HEAD 无差异。").to_owned();
+    }
+    let full = root.join(path);
+    let Ok(bytes) = std::fs::read(&full) else {
+        return t("No diff against HEAD.", "与 HEAD 无差异。").to_owned();
+    };
+    if bytes.contains(&0) {
+        return t("Binary file (not shown).", "二进制文件（未显示）。").to_owned();
+    }
+    let body = String::from_utf8_lossy(&bytes);
+    cap_diff(&added_lines(path, &body))
+}
+
+/// Unified diff that adds every line of `body`.
+fn added_lines(path: &str, body: &str) -> String {
+    let mut lines: Vec<&str> = body.split('\n').collect();
+    if body.ends_with('\n') {
+        lines.pop();
+    }
+    if lines.len() == 1 && lines[0].is_empty() && body.is_empty() {
+        lines.clear();
+    }
+    let count = lines.len();
+    let mut out = String::new();
+    out.push_str(&format!("diff --git a/{path} b/{path}\n"));
+    out.push_str("new file mode 100644\n");
+    out.push_str("--- /dev/null\n");
+    out.push_str(&format!("+++ b/{path}\n"));
+    if count == 0 {
+        out.push_str("@@ -0,0 +0,0 @@\n");
+        return out;
+    }
+    out.push_str(&format!("@@ -0,0 +1,{count} @@\n"));
+    for line in lines {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        out.push('+');
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::added_lines;
+
+    #[test]
+    fn an_untracked_file_is_shown_as_added_lines() {
+        let diff = added_lines("f.txt", "alpha\nbeta\n");
+        assert!(diff.contains("+++ b/f.txt"), "{diff}");
+        assert!(diff.contains("+alpha\n"), "{diff}");
+        assert!(diff.contains("+beta\n"), "{diff}");
+        assert!(!diff.contains("No diff"), "{diff}");
+    }
+
+    #[test]
+    fn a_crlf_new_file_does_not_keep_the_carriage_return_in_the_row() {
+        let diff = added_lines("f.txt", "one\r\ntwo\r\n");
+        assert!(diff.contains("+one\n"), "{diff}");
+        assert!(!diff.contains("+one\r"), "{diff}");
     }
 }
