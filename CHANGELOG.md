@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 模型流中途失败、异常结束或连接中断时，已经到达的思考和正文会留在对话里，并附带一行可见错误。回合不再像没发生过一样被清掉。用户取消仍然丢弃半截回复。
+- GLM、DeepSeek、Kimi 会在后续请求里带回思考内容。思考开关按 OpenCode 对 models.dev 的网关规则发送，不再对所有厂商套同一个 `thinking.type`。Z.AI / GLM 开启时带 `clear_thinking: false`，关闭时显式 `disabled`（含 glm-5）。DashScope 上所有模型（Kimi、GLM、Qwen、DeepSeek、MiniMax）用 `enable_thinking`。Kimi 整族走同一套：对话补全是 thinking 开关，Anthropic 口是 adaptive effort。OpenRouter 用 `reasoning.effort`。MiniMax 思考开启仍是 `adaptive`，正常多轮的请求形状保持不变。
+- `ask_user` 可以多选。点选若干选项后提交，模型会收到全部值。单选仍是点一下即提交。
+- 详情面板点置顶不再被背后的遮罩立刻关掉。置顶状态会留下，面板保持可见，不必再点一次标题栏开关。
+- 输入框选择的思考强度会写入设置。保存进行中再选一次也不会丢掉。目录里没有的自定义模型可以选关闭、开启、高、最高。GLM 即使 models.dev 只列了部分档位，菜单也提供关闭、开启、低、高、最高。
+- 本机没有 git 不是思考突然消失的原因。变更面板仍提示未安装 git；需要工作树的子代理失败时，只返回该次工具错误。
+
 ## [0.9.16] - 2026-10-07
 
 ### 产品

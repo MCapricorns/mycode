@@ -79,6 +79,12 @@ pub(super) fn render_inspector_drawer(
         .child(
             div()
                 .id("inspector-drawer")
+                // The backdrop is a sibling underneath, and a normal hitbox
+                // does not block it. Pin used to set `pinned` and the same
+                // click then reached the backdrop, which set `open` back to
+                // false. The title-bar toggle was the only way to show it
+                // again. Occlude drops the backdrop out of that hit test.
+                .occlude()
                 .absolute()
                 .top(px(8.))
                 .right(px(8.))
@@ -91,9 +97,21 @@ pub(super) fn render_inspector_drawer(
                 .border_color(super::skin::glass_border(theme))
                 .bg(super::skin::glass_sidebar(theme))
                 .overflow_hidden()
+                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_click(|_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .child(inspector_bar(false, cx))
                 .child(inspector_body(workspace, cx)),
         )
+}
+
+/// Pin keeps the panel open. A docked pin returns to the overlay; an
+/// overlay pin stays open and becomes pinned.
+pub(crate) fn inspector_flags_after_pin(docked: bool) -> (bool, bool) {
+    if docked { (true, false) } else { (true, true) }
 }
 
 fn inspector_bar(docked: bool, cx: &Context<Workspace>) -> impl IntoElement {
@@ -127,11 +145,9 @@ fn inspector_bar(docked: bool, cx: &Context<Workspace>) -> impl IntoElement {
             },
             IconName::Pin,
             cx.listener(move |workspace, _, _, cx| {
-                if docked {
-                    workspace.on_set_inspector(true, false, cx);
-                } else {
-                    workspace.on_set_inspector(true, true, cx);
-                }
+                cx.stop_propagation();
+                let (open, pinned) = inspector_flags_after_pin(docked);
+                workspace.on_set_inspector(open, pinned, cx);
             }),
             cx,
         ))
@@ -140,6 +156,7 @@ fn inspector_bar(docked: bool, cx: &Context<Workspace>) -> impl IntoElement {
                 "inspector-close",
                 IconName::X,
                 cx.listener(|workspace, _, _, cx| {
+                    cx.stop_propagation();
                     workspace.on_set_inspector(false, false, cx);
                 }),
                 cx,
@@ -900,4 +917,15 @@ pub(super) fn render_subagent_window(
                 })),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inspector_flags_after_pin;
+
+    #[test]
+    fn pinning_leaves_the_panel_open() {
+        assert_eq!(inspector_flags_after_pin(false), (true, true));
+        assert_eq!(inspector_flags_after_pin(true), (true, false));
+    }
 }

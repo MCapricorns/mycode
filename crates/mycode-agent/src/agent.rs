@@ -14,6 +14,10 @@
 //! completed messages enter history), `is_streaming` resets, and
 //! `prompt()` returns [`TurnOutcome::Aborted`] — never a half
 //! `TurnEnded::Completed`.
+//!
+//! A provider or transport failure is different: thinking and text that
+//! already arrived stay in history, with one visible interruption line.
+//! Named tool calls on that message are not executed. The turn completes.
 
 use std::sync::Arc;
 
@@ -118,10 +122,12 @@ impl Agent {
     /// stream responses and dispatch tools until the model stops.
     ///
     /// Cancellation (`env.cancel`) ends the turn with
-    /// [`TurnOutcome::Aborted`]. A provider failure emits
-    /// [`AgentEvent::Error`] + `TurnEnded(Aborted)` and returns
-    /// `Err`; tool-level failures never end the turn (they become
-    /// `is_error` tool results the model can react to).
+    /// [`TurnOutcome::Aborted`] and drops an in-flight partial.
+    /// A provider failure keeps the partial assistant message and
+    /// completes the turn. Tool-level failures never end the turn
+    /// (they become `is_error` tool results the model can react to).
+    /// A missing `git` binary is one of those tool failures when a
+    /// worktree lease cannot be created; it does not rewind the turn.
     pub async fn prompt(
         &mut self,
         msg: Message,
@@ -198,7 +204,18 @@ async fn agent_loop(
             })
             .collect();
 
-        if calls.is_empty() {
+        if calls.is_empty() || assistant.stop_reason == StopReason::Error {
+            // A failed stream may still name tool calls. Pair each one
+            // with an error result and stop; do not run them or retry.
+            if assistant.stop_reason == StopReason::Error {
+                for call in calls
+                    .iter()
+                    .filter(|call| !call.id.is_empty() && !call.name.is_empty())
+                {
+                    let message = turn::fail_interrupted_call(env, call);
+                    turn::push_message(env, state, Message::ToolResult(message));
+                }
+            }
             has_tool_calls = false;
         } else if assistant.stop_reason == StopReason::Length {
             // Truncated arguments are never executed (pi parity);
@@ -297,4 +314,140 @@ async fn dispatch_response_calls(
         .into_iter()
         .map(|message| message.expect("every call was dispatched"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use mycode_core::{
+        ContentBlock, EventStream, Message, Provider, ProviderError, ProviderErrorKind, Request,
+        StopReason, StreamEvent, UserMessage,
+    };
+    use mycode_tools::ToolRegistry;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{Agent, AgentConfig};
+    use crate::env::TurnEnv;
+    use crate::hooks::HookRunner;
+
+    struct Scripted {
+        events: Vec<StreamEvent>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for Scripted {
+        async fn stream(
+            &self,
+            _request: &Request,
+            cancel: CancellationToken,
+        ) -> Result<EventStream, ProviderError> {
+            let (sender, stream) = EventStream::channel(cancel);
+            for event in self.events.clone() {
+                sender.send(event).await;
+            }
+            Ok(stream)
+        }
+    }
+
+    fn assistant_text(agent: &Agent) -> String {
+        agent
+            .state()
+            .messages()
+            .iter()
+            .rev()
+            .find_map(|message| match message.as_ref() {
+                Message::Assistant(assistant) => Some(assistant.text()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn assistant_thinking(agent: &Agent) -> String {
+        agent
+            .state()
+            .messages()
+            .iter()
+            .rev()
+            .find_map(|message| match message.as_ref() {
+                Message::Assistant(assistant) => Some(
+                    assistant
+                        .blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Thinking(thinking) => Some(thinking.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn provider_error_keeps_streamed_thinking() {
+        let provider = Scripted {
+            events: vec![
+                StreamEvent::ThinkingDelta("plan the edit".into()),
+                StreamEvent::TextDelta("partial".into()),
+                StreamEvent::Error(ProviderError::with_message(
+                    ProviderErrorKind::Unavailable,
+                    "connection reset",
+                )),
+            ],
+        };
+        let tools = ToolRegistry::new();
+        let hooks = HookRunner::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks);
+        let mut agent = Agent::new(AgentConfig::new());
+        let outcome = agent
+            .prompt(Message::User(UserMessage::text("开始写")), &env)
+            .await
+            .expect("completed turn");
+        assert!(matches!(
+            outcome,
+            mycode_core::events::TurnOutcome::Completed
+        ));
+        assert_eq!(assistant_thinking(&agent), "plan the edit");
+        let text = assistant_text(&agent);
+        assert!(text.contains("partial"));
+        assert!(text.contains("[error] the response was interrupted:"));
+        assert!(text.contains("connection reset"));
+        let stop =
+            agent
+                .state()
+                .messages()
+                .iter()
+                .rev()
+                .find_map(|message| match message.as_ref() {
+                    Message::Assistant(assistant) => Some(assistant.stop_reason),
+                    _ => None,
+                });
+        assert_eq!(stop, Some(StopReason::Error));
+    }
+
+    #[tokio::test]
+    async fn cancel_still_drops_the_partial() {
+        let provider = Scripted {
+            events: vec![
+                StreamEvent::ThinkingDelta("discard me".into()),
+                StreamEvent::Error(ProviderError::new(ProviderErrorKind::Cancelled)),
+            ],
+        };
+        let tools = ToolRegistry::new();
+        let hooks = HookRunner::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks);
+        let mut agent = Agent::new(AgentConfig::new());
+        let outcome = agent
+            .prompt(Message::User(UserMessage::text("开始写")), &env)
+            .await
+            .expect("aborted turn");
+        assert!(matches!(outcome, mycode_core::events::TurnOutcome::Aborted));
+        assert!(
+            agent
+                .state()
+                .messages()
+                .iter()
+                .all(|message| { !matches!(message.as_ref(), Message::Assistant(_)) })
+        );
+    }
 }

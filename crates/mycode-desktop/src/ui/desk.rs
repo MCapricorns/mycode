@@ -780,7 +780,7 @@ mod tests {
         assert_eq!(super::PALETTE_SWATCH_PX, 28.);
         assert_eq!(super::PALETTE_CELL_PX, 52.);
         assert_eq!(super::PALETTE_GAP_PX, 6.);
-        assert!(super::PALETTE_CELL_PX > super::PALETTE_SWATCH_PX);
+        const _: () = assert!(super::PALETTE_CELL_PX > super::PALETTE_SWATCH_PX);
         assert_eq!(super::PALETTES.len(), 13);
         let columns = usize::from(super::PALETTE_COLUMNS);
         assert_eq!(super::PALETTES.len() / columns, 1);

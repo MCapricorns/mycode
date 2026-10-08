@@ -17,8 +17,7 @@ pub(crate) fn render_ask_panel(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    let rows: Vec<(String, Vec<String>, bool)> =
-        workspace.vm().pending_ask.clone().unwrap_or_default();
+    let rows = workspace.vm().pending_ask.clone().unwrap_or_default();
     let picks = workspace.vm().ask_answers.clone();
     let single = rows.len() == 1;
     let ask_input = workspace.ask_input(window, cx);
@@ -58,64 +57,71 @@ pub(crate) fn render_ask_panel(
                                 .child(t("The agent needs your input", "代理需要你的输入")),
                         ),
                 )
-                .children(
-                    rows.iter()
-                        .enumerate()
-                        .map(|(index, (question, choices, optional))| {
-                            let picked = picks.get(index).cloned().unwrap_or_default();
+                .children(rows.iter().enumerate().map(|(index, row)| {
+                    let question = row.question.clone();
+                    let choices = row.choices.clone();
+                    let optional = row.optional;
+                    let multiple = row.multiple;
+                    let picked = picks.get(index).cloned().unwrap_or_default();
+                    div()
+                        .id(format!("ask-row-{index}"))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
                             div()
-                                .id(format!("ask-row-{index}"))
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(div().text_sm().child(format!(
-                                    "{}. {}",
-                                    index + 1,
-                                    question
-                                )))
-                                .when(!choices.is_empty(), |this| {
-                                    this.child(
-                                        div()
-                                            .id(format!("ask-choices-{index}"))
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .items_center()
-                                            .gap_2()
-                                            .children(choices.iter().enumerate().map(
-                                                |(choice_index, choice)| {
-                                                    let answer = choice.clone();
-                                                    let selected = picked == *choice;
-                                                    ask_choice_chip(
-                                                        format!(
-                                                            "ask-{index}-{choice_index}-{}",
-                                                            short_id(choice)
-                                                        ),
-                                                        choice.clone(),
-                                                        selected,
-                                                        theme,
-                                                    )
-                                                    .on_click(cx.listener(
-                                                        move |workspace, _, _, cx| {
-                                                            workspace.on_pick_ask_choice(
-                                                                index,
-                                                                answer.clone(),
-                                                                single,
-                                                                cx,
-                                                            );
-                                                        },
-                                                    ))
-                                                },
-                                            )),
-                                    )
-                                })
-                                .when(*optional, |this| {
-                                    this.child(
-                                        div().text_xs().opacity(0.5).child(t("Optional", "可选")),
-                                    )
-                                })
-                        }),
-                )
+                                .text_sm()
+                                .child(format!("{}. {}", index + 1, question)),
+                        )
+                        .when(!choices.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .id(format!("ask-choices-{index}"))
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .children(choices.iter().enumerate().map(
+                                        |(choice_index, choice)| {
+                                            let answer = choice.clone();
+                                            let selected =
+                                                mycode_tools::builtin::ask_choice_selected(
+                                                    &picked, choice,
+                                                );
+                                            ask_choice_chip(
+                                                format!(
+                                                    "ask-{index}-{choice_index}-{}",
+                                                    short_id(choice)
+                                                ),
+                                                choice.clone(),
+                                                selected,
+                                                theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(move |workspace, _, _, cx| {
+                                                    workspace.on_pick_ask_choice(
+                                                        index,
+                                                        answer.clone(),
+                                                        single && !multiple,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                        },
+                                    )),
+                            )
+                        })
+                        .when(multiple, |this| {
+                            this.child(div().text_xs().opacity(0.5).child(t(
+                                "Select more than one, then answer",
+                                "可多选，选完后点回答",
+                            )))
+                        })
+                        .when(optional, |this| {
+                            this.child(div().text_xs().opacity(0.5).child(t("Optional", "可选")))
+                        })
+                }))
                 .child(
                     div()
                         .id("ask-free-row")

@@ -163,8 +163,9 @@ pub(crate) fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool 
 
 /// Thinking choices advertised for one catalog model.
 ///
-/// Missing catalog rows yield only `default` so the UI never invents
-/// low/medium/high.
+/// A missing catalog row still offers the standard ladder. Custom GLM
+/// endpoints are often absent from models.dev; refusing every level but
+/// `default` made a saved effort look like it had not been stored.
 #[must_use]
 pub(crate) fn reasoning_levels_for(
     state: &WorkspaceState,
@@ -172,14 +173,14 @@ pub(crate) fn reasoning_levels_for(
     model_id: Option<&str>,
 ) -> Vec<String> {
     let Some(catalog) = state.catalog.as_ref() else {
-        return vec!["default".to_owned()];
+        return mycode_providers::catalog::standard_reasoning_levels();
     };
     let (Some(provider_id), Some(model_id)) = (provider_id, model_id) else {
-        return vec!["default".to_owned()];
+        return mycode_providers::catalog::standard_reasoning_levels();
     };
     match catalog.model(provider_id, model_id) {
         Some(model) => model.reasoning_levels(),
-        None => vec!["default".to_owned()],
+        None => mycode_providers::catalog::standard_reasoning_levels(),
     }
 }
 
@@ -204,5 +205,77 @@ pub(super) fn clamp_reasoning_to_catalog(state: &mut WorkspaceState) {
     if !levels.iter().any(|level| level == current) {
         settings.reasoning = None;
         super::mark_settings_dirty(settings);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_reasoning_to_catalog;
+    use crate::view_model::{SettingsState, WorkspaceState};
+
+    #[test]
+    fn a_custom_model_keeps_the_stored_effort() {
+        let mut state = WorkspaceState::default();
+        let document = mycode_config::AppSettings {
+            reasoning_effort: Some("high".to_owned()),
+            ..mycode_config::AppSettings::default()
+        };
+        state.settings = Some(SettingsState::from_settings(&document, 1, Vec::new()));
+        state.selected_provider = Some("zhipu".to_owned());
+        state.selected_model = Some("glm-4.7".to_owned());
+        clamp_reasoning_to_catalog(&mut state);
+        assert_eq!(
+            state
+                .settings
+                .as_ref()
+                .expect("settings")
+                .reasoning
+                .as_deref(),
+            Some("high")
+        );
+        let levels = super::selected_reasoning_levels(&state);
+        for level in ["off", "on", "high", "max"] {
+            assert!(levels.iter().any(|item| item == level), "{level}");
+        }
+    }
+
+    #[test]
+    fn glm_and_custom_endpoints_can_pick_off_and_max() {
+        use std::sync::Arc;
+
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+
+        let mut state = WorkspaceState {
+            catalog: Some(Arc::new(CatalogDocument {
+                providers: vec![CatalogProvider {
+                    id: "zai".to_owned(),
+                    models: vec![CatalogModel {
+                        id: "glm-5.3-flash".to_owned(),
+                        reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_owned(),
+                            "high".to_owned(),
+                            "max".to_owned(),
+                        ],
+                        ..CatalogModel::default()
+                    }],
+                    ..CatalogProvider::default()
+                }],
+            })),
+            selected_provider: Some("zai".to_owned()),
+            selected_model: Some("glm-5.3-flash".to_owned()),
+            ..WorkspaceState::default()
+        };
+        let listed = super::selected_reasoning_levels(&state);
+        for level in ["default", "off", "on", "high", "max"] {
+            assert!(listed.iter().any(|item| item == level), "zai {level}");
+        }
+
+        state.selected_provider = Some("my-gateway".to_owned());
+        state.selected_model = Some("glm-5.3-flash".to_owned());
+        let custom = super::selected_reasoning_levels(&state);
+        for level in ["off", "on", "high", "max"] {
+            assert!(custom.iter().any(|item| item == level), "custom {level}");
+        }
     }
 }

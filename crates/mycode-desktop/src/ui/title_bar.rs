@@ -350,10 +350,10 @@ mod tests {
 
     #[test]
     fn caption_buttons_are_minimize_zoom_close_on_the_right() {
-        assert!(CONTROL_HIT >= 28.);
-        assert!(CONTROL_GAP > 0. && CONTROL_GAP <= 4.);
-        assert!(CAPTION_EDGE >= 4.);
-        assert!(BAR_HEIGHT >= CONTROL_HIT);
+        const _: () = assert!(CONTROL_HIT >= 28.);
+        const _: () = assert!(CONTROL_GAP > 0. && CONTROL_GAP <= 4.);
+        const _: () = assert!(CAPTION_EDGE >= 4.);
+        const _: () = assert!(BAR_HEIGHT >= CONTROL_HIT);
         let normal: Vec<_> = caption_buttons(false)
             .into_iter()
             .map(|button| button.id)

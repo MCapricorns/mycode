@@ -25,8 +25,8 @@ pub use events::{AgentEvent, MessageDelta, TurnOutcome};
 pub use ids::CallId;
 pub use message::{
     AssistantMessage, BinaryData, ContentBlock, CustomMessage, Message, SharedMessage, StopReason,
-    TextBlock, ThinkingBlock, ToolCall, ToolResultMessage, Usage, UserMessage, tool_label,
-    tool_target,
+    TextBlock, ThinkingBlock, ToolCall, ToolResultMessage, Usage, UserMessage,
+    interrupted_response_text, tool_label, tool_target,
 };
 #[doc(inline)]
 pub use provider::{

@@ -12,8 +12,9 @@ use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    MAX_STREAM_INDEX, apply_reasoning_effort, assemble_blocks, charge_stream, join_text,
-    merge_usage, usage_from_value,
+    MAX_STREAM_INDEX, append_interruption, apply_responses_thinking, assemble_blocks,
+    assembled_stop_reason, charge_stream, join_text, merge_usage, provider_error_detail,
+    usage_from_value,
 };
 
 /// Converts one provider-neutral request into a Responses body.
@@ -36,7 +37,7 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        apply_reasoning_effort(&mut body, model, endpoint, level);
+        apply_responses_thinking(&mut body, model, endpoint, level);
     }
     body
 }
@@ -112,6 +113,10 @@ pub(crate) struct ResponsesReducer {
     text: String,
     function_calls: Vec<FunctionCallAccumulator>,
     usage: Option<Usage>,
+    /// Set once `response.completed` or `response.incomplete` arrives.
+    completed: bool,
+    /// Detail for [`StopReason::Error`] when the stream fails after bytes.
+    interrupt: Option<String>,
     terminal_sent: bool,
     /// Bytes retained across text, thinking, and tool-argument fragments.
     accumulated: usize,
@@ -125,8 +130,25 @@ impl ResponsesReducer {
         Self::default()
     }
 
+    fn begin_interrupt(&mut self, detail: &str) {
+        if self.interrupt.is_none() {
+            self.interrupt = Some(detail.to_owned());
+        }
+    }
+
+    fn has_partial(&self) -> bool {
+        !self.thinking.is_empty()
+            || !self.text.is_empty()
+            || self.function_calls.iter().any(|call| {
+                !call.id.is_empty() || !call.name.is_empty() || !call.arguments.is_empty()
+            })
+    }
+
     fn assemble(&mut self) -> StreamEvent {
         self.terminal_sent = true;
+        if let Some(detail) = self.interrupt.clone() {
+            append_interruption(&mut self.text, &detail);
+        }
         let blocks = assemble_blocks(
             &self.thinking,
             &self.text,
@@ -138,13 +160,18 @@ impl ResponsesReducer {
                 )
             }),
         );
-        let stop_reason = if self.length_limited {
-            StopReason::Length
-        } else if !self.function_calls.is_empty() {
-            StopReason::ToolUse
+        let has_calls = self
+            .function_calls
+            .iter()
+            .any(|call| !call.id.is_empty() && !call.name.is_empty());
+        let recorded = if self.interrupt.is_some() {
+            Some(StopReason::Error)
+        } else if self.length_limited {
+            Some(StopReason::Length)
         } else {
-            StopReason::Stop
+            None
         };
+        let stop_reason = assembled_stop_reason(self.interrupt.is_some(), has_calls, recorded);
         StreamEvent::Done {
             message: AssistantMessage {
                 blocks,
@@ -160,7 +187,14 @@ impl FrameReducer for ResponsesReducer {
         if self.terminal_sent {
             return Vec::new();
         }
+        if data.trim().is_empty() {
+            return Vec::new();
+        }
         let Ok(event) = serde_json::from_str::<Value>(data) else {
+            if self.has_partial() {
+                self.begin_interrupt("invalid responses frame");
+                return vec![self.assemble()];
+            }
             return vec![crate::driver::protocol_error("invalid responses frame")];
         };
         match event["type"].as_str().unwrap_or_default() {
@@ -235,6 +269,7 @@ impl FrameReducer for ResponsesReducer {
                 }
             }
             "response.completed" | "response.incomplete" => {
+                self.completed = true;
                 let response = &event["response"];
                 let usage = &response["usage"];
                 self.usage = Some(merge_usage(self.usage, usage_from_value(usage)));
@@ -247,16 +282,11 @@ impl FrameReducer for ResponsesReducer {
                 return vec![self.assemble()];
             }
             "response.failed" | "error" => {
-                self.terminal_sent = true;
-                return vec![StreamEvent::Error(
-                    mycode_core::ProviderError::with_message(
-                        mycode_core::ProviderErrorKind::Rejected,
-                        event["error"]["message"]
-                            .as_str()
-                            .or_else(|| event["response"]["error"]["message"].as_str())
-                            .unwrap_or("responses stream failed"),
-                    ),
-                )];
+                let detail = provider_error_detail(&event)
+                    .or_else(|| provider_error_detail(&event["response"]))
+                    .unwrap_or_else(|| "responses stream failed".to_owned());
+                self.begin_interrupt(&detail);
+                return vec![self.assemble()];
             }
             _ => {}
         }
@@ -267,6 +297,59 @@ impl FrameReducer for ResponsesReducer {
         if self.terminal_sent {
             return crate::driver::protocol_error("responses stream ended after terminal");
         }
+        if !self.completed && self.has_partial() {
+            self.begin_interrupt("the stream ended before response.completed");
+        }
         self.assemble()
+    }
+
+    fn interrupt(&mut self, detail: &str) -> StreamEvent {
+        if self.terminal_sent {
+            return crate::driver::protocol_error("responses stream ended after terminal");
+        }
+        self.begin_interrupt(detail);
+        self.assemble()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mycode_core::{ContentBlock, StopReason};
+
+    use super::ResponsesReducer;
+    use crate::driver::FrameReducer;
+
+    #[test]
+    fn failed_event_keeps_reasoning_summary() {
+        let mut reducer = ResponsesReducer::new();
+        reducer.feed(r#"{"type":"response.reasoning_summary_text.delta","delta":"consider"}"#);
+        let events = reducer
+            .feed(r#"{"type":"response.failed","response":{"error":{"message":"server busy"}}}"#);
+        let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+            panic!("done");
+        };
+        let thinking = message
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::Thinking(thinking) => Some(thinking.text.as_str()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert_eq!(thinking, "consider");
+        assert!(message.text().contains("server busy"));
+        assert_eq!(message.stop_reason, StopReason::Error);
+    }
+
+    #[test]
+    fn eof_before_completed_keeps_text() {
+        let mut reducer = ResponsesReducer::new();
+        reducer.feed(r#"{"type":"response.output_text.delta","delta":"partial answer"}"#);
+        let mycode_core::StreamEvent::Done { message } = reducer.finish() else {
+            panic!("done");
+        };
+        assert!(message.text().contains("partial answer"));
+        assert!(message.text().contains("response.completed"));
+        assert_eq!(message.stop_reason, StopReason::Error);
     }
 }

@@ -74,33 +74,75 @@ pub struct CatalogModel {
 impl CatalogModel {
     /// Thinking choices advertised for this model.
     ///
-    /// Built from models.dev `reasoning_options`. Effort lists win; a
-    /// toggle-only row is off/on; a bare `reasoning: true` with no options
-    /// is also treated as a toggle so the UI never invents low/medium/high.
+    /// An explicit models.dev effort list is kept as published. A toggle-only
+    /// row or a bare `reasoning: true` also offers the standard effort ladder.
+    /// GLM rows always add Off, On, and Max beside that list: the wire sends
+    /// `thinking.type` for the switch and `reasoning_effort` for a named rung,
+    /// and a published `low`/`high`/`max` list otherwise hides Off.
     #[must_use]
     pub fn reasoning_levels(&self) -> Vec<String> {
         if !self.reasoning {
             return Vec::new();
         }
-        let mut levels = vec!["default".to_owned()];
-        if self.reasoning_toggle || self.reasoning_efforts.is_empty() {
-            levels.push("off".to_owned());
-        }
-        if self.reasoning_efforts.is_empty() {
-            levels.push("on".to_owned());
-        }
-        for effort in &self.reasoning_efforts {
-            let key = match effort.as_str() {
-                "none" => "off",
-                "default" => continue,
-                other => other,
-            };
-            if !levels.iter().any(|level| level == key) {
-                levels.push(key.to_owned());
+        let levels = if self.reasoning_efforts.is_empty() {
+            standard_reasoning_levels()
+        } else {
+            let mut levels = vec!["default".to_owned()];
+            if self.reasoning_toggle {
+                levels.push("off".to_owned());
             }
+            for effort in &self.reasoning_efforts {
+                let key = match effort.as_str() {
+                    "none" => "off",
+                    "default" => continue,
+                    other => other,
+                };
+                if !levels.iter().any(|level| level == key) {
+                    levels.push(key.to_owned());
+                }
+            }
+            levels
+        };
+        if self.id.to_ascii_lowercase().contains("glm") {
+            glm_reasoning_levels(levels)
+        } else {
+            levels
         }
-        levels
     }
+}
+
+/// Puts Off and On next to Default, then keeps the published rungs, and
+/// makes sure Low, High, and Max are selectable.
+fn glm_reasoning_levels(levels: Vec<String>) -> Vec<String> {
+    let mut next = Vec::new();
+    if levels.iter().any(|level| level == "default") {
+        next.push("default".to_owned());
+    }
+    for token in ["off", "on"] {
+        next.push((*token).to_owned());
+    }
+    for level in levels {
+        if !next.iter().any(|existing| existing == &level) {
+            next.push(level);
+        }
+    }
+    for token in ["low", "high", "max"] {
+        if !next.iter().any(|existing| existing == token) {
+            next.push((*token).to_owned());
+        }
+    }
+    next
+}
+
+/// Effort ladder used when a model supports reasoning but publishes no list.
+#[must_use]
+pub fn standard_reasoning_levels() -> Vec<String> {
+    [
+        "default", "off", "on", "minimal", "low", "medium", "high", "xhigh", "max",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 /// One provider preset: endpoint data plus its model list.
@@ -276,5 +318,40 @@ fn openai_codex_preset() -> CatalogProvider {
             ..CatalogModel::default()
         })
         .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CatalogModel;
+
+    #[test]
+    fn glm_published_efforts_still_offer_off_on_and_max() {
+        let model = CatalogModel {
+            id: "glm-5.3-flash".to_owned(),
+            reasoning: true,
+            reasoning_efforts: vec!["low".to_owned(), "high".to_owned(), "max".to_owned()],
+            ..CatalogModel::default()
+        };
+        let levels = model.reasoning_levels();
+        assert_eq!(levels.first().map(String::as_str), Some("default"));
+        for level in ["off", "on", "low", "high", "max"] {
+            assert!(levels.iter().any(|item| item == level), "{level}");
+        }
+    }
+
+    #[test]
+    fn a_non_glm_effort_list_stays_as_published() {
+        let model = CatalogModel {
+            id: "gpt-5".to_owned(),
+            reasoning: true,
+            reasoning_efforts: vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()],
+            ..CatalogModel::default()
+        };
+        let levels = model.reasoning_levels();
+        assert!(!levels.iter().any(|level| level == "off"));
+        assert!(!levels.iter().any(|level| level == "on"));
+        assert!(!levels.iter().any(|level| level == "max"));
+        assert!(levels.iter().any(|level| level == "high"));
     }
 }

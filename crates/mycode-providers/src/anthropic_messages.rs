@@ -2,20 +2,21 @@
 //!
 //! Covers Anthropic and Anthropic-compatible gateways (Z.AI GLM coding plans,
 //! custom relays). Thinking signatures round-trip verbatim, including
-//! signature-only blocks whose reasoning text is empty; the adapter never
-//! enables thinking explicitly, so default-thinking models keep their own
-//! configuration.
+//! signature-only blocks whose reasoning text is empty. The request payload
+//! follows the model and endpoint: MiniMax stays `adaptive`, every Kimi model
+//! uses adaptive effort, and Z.AI does not receive a token budget.
 
 use serde_json::{Value, json};
 
 use mycode_core::{
     AssistantMessage, ContentBlock, Message, StopReason, ThinkingBlock, ToolSpec, Usage,
 };
-use mycode_core::{ProviderError, ProviderErrorKind, ReasoningLevel, Request, StreamEvent};
+use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    MAX_STREAM_INDEX, charge_stream, map_stop_reason, merge_usage, usage_from_value,
+    MAX_STREAM_INDEX, append_interruption, assembled_stop_reason, charge_stream, glm_target,
+    map_stop_reason, merge_usage, provider_error_detail, usage_from_value,
 };
 
 /// Output ceiling sent with every request; the Messages API requires it.
@@ -26,7 +27,7 @@ pub const MAX_TOKENS_DEFAULT: u64 = 4096;
 pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Value {
     let mut messages = Vec::new();
     for message in &request.messages {
-        convert_message(message, &mut messages);
+        convert_message(model, endpoint, message, &mut messages);
     }
     let tools: Vec<Value> = request.tools.iter().map(convert_tool).collect();
     let mut body = json!({
@@ -42,33 +43,7 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        match level {
-            ReasoningLevel::Off => {
-                body["thinking"] = json!({ "type": "disabled" });
-            }
-            // MiniMax's Anthropic-compatible API uses the same on-value as
-            // its OpenAI body: `adaptive`, not `enabled`.
-            ReasoningLevel::On if crate::wire_common::minimax_target(model, endpoint) => {
-                body["thinking"] = json!({ "type": "adaptive" });
-            }
-            level => {
-                // Thinking budget must stay below max_tokens; raise the cap
-                // so the budget always fits. Rungs follow models.dev effort
-                // tokens rather than a hardcoded three-step list.
-                let budget = match level {
-                    ReasoningLevel::Minimal | ReasoningLevel::Low => 1_024,
-                    ReasoningLevel::On | ReasoningLevel::Medium => 4_096,
-                    ReasoningLevel::High => 16_384,
-                    ReasoningLevel::Xhigh | ReasoningLevel::Max => 32_768,
-                    ReasoningLevel::Off => 0,
-                };
-                let max_tokens = body["max_tokens"].as_u64().unwrap_or(MAX_TOKENS_DEFAULT);
-                if max_tokens <= budget {
-                    body["max_tokens"] = json!(budget + MAX_TOKENS_DEFAULT);
-                }
-                body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
-            }
-        }
+        crate::wire_common::apply_anthropic_thinking(&mut body, model, endpoint, level);
     }
     body
 }
@@ -81,7 +56,8 @@ fn convert_tool(tool: &ToolSpec) -> Value {
     })
 }
 
-fn convert_message(message: &Message, messages: &mut Vec<Value>) {
+fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mut Vec<Value>) {
+    let glm = glm_target(model, endpoint);
     match message {
         Message::User(user) => {
             messages.push(json!({"role": "user", "content": block_content(&user.content)}));
@@ -96,14 +72,23 @@ fn convert_message(message: &Message, messages: &mut Vec<Value>) {
                         "text": text.text,
                     })),
                     // Signatures replay verbatim; empty thinking text is kept
-                    // whenever a signature exists.
+                    // whenever a signature exists. GLM coding plans also accept
+                    // the unsigned thinking text from the previous turn.
                     ContentBlock::Thinking(thinking) => {
-                        let signature = thinking.signature.as_deref()?;
-                        Some(json!({
-                            "type": "thinking",
-                            "thinking": thinking.text,
-                            "signature": signature,
-                        }))
+                        if let Some(signature) = thinking.signature.as_deref() {
+                            return Some(json!({
+                                "type": "thinking",
+                                "thinking": thinking.text,
+                                "signature": signature,
+                            }));
+                        }
+                        if glm && !thinking.text.is_empty() {
+                            return Some(json!({
+                                "type": "thinking",
+                                "thinking": thinking.text,
+                            }));
+                        }
+                        None
                     }
                     ContentBlock::ToolCall(call) => Some(json!({
                         "type": "tool_use",
@@ -181,6 +166,8 @@ pub(crate) struct MessagesReducer {
     output_tokens: u64,
     cache_read_tokens: Option<u64>,
     stop_reason: Option<StopReason>,
+    /// Detail for [`StopReason::Error`] when the stream fails after bytes.
+    interrupt: Option<String>,
     message_stopped: bool,
     terminal_sent: bool,
     /// Bytes retained across text, thinking, and tool-argument fragments.
@@ -202,6 +189,28 @@ impl MessagesReducer {
             BlockAccumulator::ToolUse { id, .. } => Some(id.clone()),
             _ => None,
         }
+    }
+
+    fn begin_interrupt(&mut self, detail: &str) {
+        if self.interrupt.is_none() {
+            self.interrupt = Some(detail.to_owned());
+        }
+        self.stop_reason = Some(StopReason::Error);
+    }
+
+    fn has_content(&self) -> bool {
+        self.blocks.iter().any(|block| match block {
+            BlockAccumulator::Empty => false,
+            BlockAccumulator::Thinking { text, signature } => {
+                !text.is_empty() || signature.is_some()
+            }
+            BlockAccumulator::Text { text } => !text.is_empty(),
+            BlockAccumulator::ToolUse {
+                id,
+                name,
+                arguments,
+            } => !id.is_empty() || !name.is_empty() || !arguments.is_empty(),
+        })
     }
 
     fn assemble(&mut self) -> StreamEvent {
@@ -236,6 +245,9 @@ impl MessagesReducer {
                     name,
                     arguments,
                 } => {
+                    if id.is_empty() || name.is_empty() {
+                        continue;
+                    }
                     let arguments =
                         serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
                     blocks.push(ContentBlock::ToolCall(mycode_core::ToolCall::new(
@@ -247,17 +259,27 @@ impl MessagesReducer {
                 BlockAccumulator::Empty => {}
             }
         }
+        if let Some(detail) = self.interrupt.clone() {
+            let note_target = blocks.iter_mut().rev().find_map(|block| match block {
+                ContentBlock::Text(text) => Some(&mut text.text),
+                _ => None,
+            });
+            if let Some(text) = note_target {
+                append_interruption(text, &detail);
+            } else {
+                let mut text = String::new();
+                append_interruption(&mut text, &detail);
+                blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+            }
+        }
         // XML-filtered calls arrive with an `end_turn` stop reason; any
         // dispatched call set must read as tool use (length stays).
-        let has_calls = self
-            .blocks
+        // An interruption is not tool use.
+        let has_calls = blocks
             .iter()
-            .any(|block| matches!(block, BlockAccumulator::ToolUse { .. }));
-        let stop_reason = if has_calls && self.stop_reason != Some(StopReason::Length) {
-            StopReason::ToolUse
-        } else {
-            self.stop_reason.unwrap_or(StopReason::Stop)
-        };
+            .any(|block| matches!(block, ContentBlock::ToolCall(_)));
+        let stop_reason =
+            assembled_stop_reason(self.interrupt.is_some(), has_calls, self.stop_reason);
         StreamEvent::Done {
             message: AssistantMessage {
                 blocks,
@@ -277,7 +299,14 @@ impl FrameReducer for MessagesReducer {
         if self.terminal_sent {
             return Vec::new();
         }
+        if data.trim().is_empty() {
+            return Vec::new();
+        }
         let Ok(event) = serde_json::from_str::<Value>(data) else {
+            if self.has_content() {
+                self.begin_interrupt("invalid messages frame");
+                return vec![self.assemble()];
+            }
             return vec![crate::driver::protocol_error("invalid messages frame")];
         };
         let event_type = event["type"].as_str().unwrap_or_default();
@@ -397,10 +426,18 @@ impl FrameReducer for MessagesReducer {
                                     "stream exceeded the output limit",
                                 )];
                             }
-                            if let BlockAccumulator::Thinking { text, .. } = self
-                                .blocks
-                                .get_mut(self.current)
-                                .unwrap_or(&mut BlockAccumulator::Empty)
+                            if !matches!(
+                                self.blocks.get(self.current),
+                                Some(BlockAccumulator::Thinking { .. })
+                            ) {
+                                self.blocks.push(BlockAccumulator::Thinking {
+                                    text: String::new(),
+                                    signature: None,
+                                });
+                                self.current = self.blocks.len() - 1;
+                            }
+                            if let BlockAccumulator::Thinking { text, .. } =
+                                &mut self.blocks[self.current]
                             {
                                 text.push_str(part);
                                 return vec![StreamEvent::ThinkingDelta(part.to_owned())];
@@ -445,7 +482,12 @@ impl FrameReducer for MessagesReducer {
             "content_block_stop" => {}
             "message_delta" => {
                 if let Some(stop) = event["delta"]["stop_reason"].as_str() {
-                    self.stop_reason = Some(map_stop_reason(stop));
+                    let reason = map_stop_reason(stop);
+                    if reason == StopReason::Error {
+                        self.begin_interrupt(stop);
+                    } else if self.stop_reason != Some(StopReason::Error) {
+                        self.stop_reason = Some(reason);
+                    }
                 }
                 if event.get("usage").is_some() {
                     let parsed = usage_from_value(&event["usage"]);
@@ -467,13 +509,14 @@ impl FrameReducer for MessagesReducer {
                 return vec![self.assemble()];
             }
             "error" => {
-                self.terminal_sent = true;
-                return vec![StreamEvent::Error(ProviderError::with_message(
-                    ProviderErrorKind::Rejected,
+                let detail = provider_error_detail(&event).unwrap_or_else(|| {
                     event["error"]["message"]
                         .as_str()
-                        .unwrap_or("provider error frame"),
-                ))];
+                        .unwrap_or("provider error frame")
+                        .to_owned()
+                });
+                self.begin_interrupt(&detail);
+                return vec![self.assemble()];
             }
             "ping" => {}
             _ => {}
@@ -488,6 +531,95 @@ impl FrameReducer for MessagesReducer {
         if self.message_stopped || self.stop_reason.is_some() {
             return self.assemble();
         }
+        if self.has_content() {
+            self.begin_interrupt("messages stream ended before message_stop");
+            return self.assemble();
+        }
         crate::driver::protocol_error("messages stream ended before message_stop")
+    }
+
+    fn interrupt(&mut self, detail: &str) -> StreamEvent {
+        if self.terminal_sent {
+            return crate::driver::protocol_error("messages stream ended after terminal");
+        }
+        self.begin_interrupt(detail);
+        self.assemble()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mycode_core::{
+        AssistantMessage, ContentBlock, Message, Request, StopReason, ThinkingBlock,
+    };
+
+    use super::MessagesReducer;
+    use crate::anthropic_messages::build_body;
+    use crate::driver::FrameReducer;
+
+    fn thinking_of(message: &AssistantMessage) -> String {
+        message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Thinking(thinking) => Some(thinking.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn eof_before_message_stop_keeps_thinking() {
+        let mut reducer = MessagesReducer::new();
+        reducer.feed(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"still here"}}"#,
+        );
+        let mycode_core::StreamEvent::Done { message } = reducer.finish() else {
+            panic!("done");
+        };
+        assert_eq!(thinking_of(&message), "still here");
+        assert!(message.text().contains("message_stop"));
+        assert_eq!(message.stop_reason, StopReason::Error);
+    }
+
+    #[test]
+    fn error_event_keeps_prior_thinking() {
+        let mut reducer = MessagesReducer::new();
+        reducer.feed(
+            r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"partial"}}"#,
+        );
+        let events = reducer.feed(r#"{"type":"error","error":{"message":"overloaded"}}"#);
+        let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+            panic!("done");
+        };
+        assert_eq!(thinking_of(&message), "partial");
+        assert!(message.text().contains("overloaded"));
+    }
+
+    #[test]
+    fn glm_replays_unsigned_thinking() {
+        let request = Request {
+            messages: vec![std::sync::Arc::new(Message::Assistant(AssistantMessage {
+                blocks: vec![ContentBlock::Thinking(ThinkingBlock::new("unsigned"))],
+                usage: None,
+                stop_reason: StopReason::Stop,
+            }))],
+            ..Request::default()
+        };
+        let glm = build_body(
+            "glm-4.7",
+            "https://open.bigmodel.cn/api/anthropic/v1/messages",
+            &request,
+        );
+        assert_eq!(glm["messages"][0]["content"][0]["thinking"], "unsigned");
+        let claude = build_body(
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com/v1/messages",
+            &request,
+        );
+        assert!(claude["messages"].as_array().unwrap().is_empty());
     }
 }
