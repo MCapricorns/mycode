@@ -390,6 +390,15 @@ fn push_choice(out: &mut Vec<serde_json::Value>, value: serde_json::Value) {
             }
         }
         serde_json::Value::Object(map) => {
+            // MiniMax XML decodes a choice list as one field, e.g.
+            // `{"item":["chips","cookies"]}`. Any single-field object is that
+            // wrapper: an array value is the list, a string value is one chip.
+            if map.len() == 1 {
+                if let Some(inner) = map.into_values().next() {
+                    push_choice(out, unwrap_json_string(inner));
+                }
+                return;
+            }
             if let Some(text) = ["text", "label", "value", "name"]
                 .into_iter()
                 .find_map(|key| map.get(key).cloned())
@@ -633,6 +642,69 @@ mod tests {
         }));
         assert_eq!(labeled[0].choices, vec!["Yes, proceed".to_owned()]);
         assert!(!labeled[0].multiple);
+    }
+
+    #[test]
+    fn wrapped_choice_objects_become_string_chips() {
+        let snacks = ["chips", "cookies", "fruit", "candy"];
+        let json_path = accept_ask(json!({
+            "questions": [{
+                "question": "Pick snacks",
+                "choices": snacks,
+                "multiple": true
+            }]
+        }));
+        let raw = json!({
+            "questions": [{
+                "question": "Pick snacks",
+                "choices": {"item": snacks},
+                "multiple": "true"
+            }]
+        });
+        assert!(
+            validate_args::<AskArgs>(&raw).is_err(),
+            "a wrapped choice object must not pass the schema unchanged"
+        );
+        let shapes = [
+            raw,
+            json!({
+                "questions": [{
+                    "question": "Pick snacks",
+                    "choices": {"choice": snacks},
+                    "multiple": "true"
+                }]
+            }),
+            json!({
+                "questions": [{
+                    "question": "Pick snacks",
+                    "choices": {"snacks": snacks},
+                    "multiple": true
+                }]
+            }),
+            json!({
+                "question": "Pick snacks",
+                "choices": "{\"item\":[\"chips\",\"cookies\",\"fruit\",\"candy\"]}",
+                "multiple": "true"
+            }),
+        ];
+        for shape in shapes {
+            let parsed = accept_ask(shape.clone());
+            assert_eq!(parsed, json_path, "{shape}");
+            assert_eq!(parsed[0].choices, snacks);
+            assert!(parsed[0].multiple, "{shape}");
+        }
+        let mut picked = String::new();
+        for choice in &json_path[0].choices {
+            picked = toggle_ask_choice(&picked, choice, true);
+        }
+        assert_eq!(picked, "chips\ncookies\nfruit\ncandy");
+        let rendered = render_ask_answers(&[AskAnswer {
+            question: json_path[0].question.clone(),
+            answer: picked,
+        }]);
+        for snack in snacks {
+            assert!(rendered.contains(snack), "{rendered}");
+        }
     }
 
     #[test]
