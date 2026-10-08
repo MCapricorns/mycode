@@ -778,21 +778,32 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             // The meter is the latest prompt, kept across an interrupt.
             // Summing every tool round or every turn is what painted 1.4M/1.0M.
             let used = vm.context_used;
+            let cached = vm.context_cache;
+            let figure = if cached > 0 {
+                format!(
+                    "{} / {} · {} {}",
+                    super::compact_count(used),
+                    super::compact_count(context_window),
+                    super::compact_count(cached),
+                    t("cached", "缓存"),
+                )
+            } else {
+                format!(
+                    "{} / {}",
+                    super::compact_count(used),
+                    super::compact_count(context_window)
+                )
+            };
             this.child(bar_row(
                 "context",
                 used,
                 context_window,
                 theme.cyan,
-                &format!(
-                    "{} / {}",
-                    super::compact_count(used),
-                    super::compact_count(context_window)
-                ),
+                &figure,
                 theme,
             ))
         })
         .when_some(usage, |this, row| {
-            let share = cache_percent(row.cache, row.input);
             this.child(stat_line(
                 t("Input", "输入"),
                 &super::compact_count(row.input),
@@ -803,8 +814,12 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 &super::compact_count(row.output),
                 theme,
             ))
-            .when_some(share, |this, share| {
-                this.child(stat_line(t("Cache", "缓存"), &format!("{share}%"), theme))
+            .when(row.cache > 0, |this| {
+                let value = match cache_percent(row.cache, row.input) {
+                    Some(share) => format!("{} · {share}%", super::compact_count(row.cache)),
+                    None => super::compact_count(row.cache),
+                };
+                this.child(stat_line(t("Cache", "缓存"), &value, theme))
             })
             .child(stat_line(
                 t("Turns", "轮次"),

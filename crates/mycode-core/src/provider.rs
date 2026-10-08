@@ -123,6 +123,9 @@ pub struct Request {
     /// levels. Sent as-is; no budget is invented for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_token: Option<String>,
+    /// Stable session key for providers that accept `prompt_cache_key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 impl Default for Request {
@@ -134,6 +137,7 @@ impl Default for Request {
             reasoning: None,
             max_output_tokens: None,
             reasoning_token: None,
+            prompt_cache_key: None,
         }
     }
 }

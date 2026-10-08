@@ -349,7 +349,7 @@ pub fn interrupted_response_text(detail: &str) -> String {
 }
 
 /// Token usage reported by a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Usage {
     pub input_tokens: u64,
@@ -357,6 +357,15 @@ pub struct Usage {
     /// Prompt tokens served from the provider cache, when reported.
     #[serde(default)]
     pub cache_read_tokens: Option<u64>,
+    /// Prompt tokens written into the provider cache, when reported.
+    #[serde(default)]
+    pub cache_write_tokens: Option<u64>,
+    /// Prompt size for the context meter.
+    ///
+    /// OpenAI-style `prompt_tokens` already includes cache reads. Anthropic
+    /// `input_tokens` excludes them, so adapters set this to the sum.
+    #[serde(default)]
+    pub prompt_tokens: u64,
 }
 
 /// Binary content (base64) with its MIME type.

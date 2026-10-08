@@ -310,6 +310,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             model,
             input,
             context,
+            context_cache,
             output,
             cache,
             elapsed_ms,
@@ -323,6 +324,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             });
             if context > 0 {
                 state.context_used = context;
+                state.context_cache = context_cache;
             }
         }
         DesktopAction::UsageRecorded {
@@ -330,6 +332,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             model,
             input,
             context,
+            context_cache,
             output,
             cache,
             elapsed_ms,
@@ -369,6 +372,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.live_turn = None;
             if context > 0 {
                 state.context_used = context;
+                state.context_cache = context_cache;
             }
         }
         DesktopAction::AskRequested(rows) => {

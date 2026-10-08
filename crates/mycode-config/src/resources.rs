@@ -69,6 +69,13 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
     files
 }
 
+/// Maximum skills named in one system prompt.
+///
+/// [`discover_skills`] returns every match in a stable order. Prompt
+/// builders truncate to this cap so the included set does not depend on
+/// directory iteration order.
+pub const MAX_SKILLS: usize = 32;
+
 /// One slash-command skill discovered under `.agents`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillFile {
@@ -83,25 +90,28 @@ pub struct SkillFile {
 }
 
 /// Discovers `/` skills from the workspace and the user-global `.agents` tree.
+///
+/// Directory entries are sorted by path before they are read, duplicate slugs
+/// keep the first hit (workspace before global), and the result is sorted by
+/// slug. There is no discovery cap; callers truncate to [`MAX_SKILLS`].
 #[must_use]
 pub fn discover_skills(workspace_root: &Path, user_home: Option<&Path>) -> Vec<SkillFile> {
-    const MAX_SKILLS: usize = 24;
     let mut skills = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     let mut push_root = |root: &Path, global: bool| {
-        collect_skills(root, &mut skills, &mut seen, MAX_SKILLS, global);
-        collect_skills(
-            &root.join("skills"),
-            &mut skills,
-            &mut seen,
-            MAX_SKILLS,
-            global,
-        );
+        collect_skills(root, &mut skills, &mut seen, global);
+        collect_skills(&root.join("skills"), &mut skills, &mut seen, global);
     };
     push_root(&workspace_root.join(".agents"), false);
     if let Some(user_home) = user_home {
         push_root(&user_home.join(".agents"), true);
     }
+    skills.sort_by(|left, right| {
+        left.slug
+            .cmp(&right.slug)
+            .then_with(|| left.global.cmp(&right.global))
+            .then_with(|| left.path.cmp(&right.path))
+    });
     skills
 }
 
@@ -109,17 +119,14 @@ fn collect_skills(
     dir: &Path,
     skills: &mut Vec<SkillFile>,
     seen: &mut std::collections::BTreeSet<String>,
-    max: usize,
     global: bool,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    for entry in entries.flatten() {
-        if skills.len() >= max {
-            return;
-        }
-        let path = entry.path();
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for path in paths {
         if path.is_dir() {
             let skill = path.join("SKILL.md");
             if skill.is_file() {
@@ -234,4 +241,62 @@ bodies into the prompt.",
     }
     out.push_str("\n</skills>");
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::discover_skills;
+
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp(label: &str) -> TempDir {
+        let path = std::env::temp_dir().join(format!(
+            "mycode-skills-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        TempDir(path)
+    }
+
+    fn skill(dir: &std::path::Path, slug: &str, title: &str) {
+        let path = dir.join(slug);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("SKILL.md"), format!("# {title}\n")).unwrap();
+    }
+
+    #[test]
+    fn skills_sort_by_slug_and_workspace_wins_duplicates() {
+        let workspace = temp("workspace");
+        let user = temp("user");
+        for slug in ["zebra", "alpha", "middle"] {
+            skill(&workspace.0.join(".agents"), slug, slug);
+        }
+        skill(&user.0.join(".agents"), "alpha", "global alpha");
+        skill(&user.0.join(".agents"), "only-global", "global");
+        let first = discover_skills(&workspace.0, Some(&user.0));
+        let second = discover_skills(&workspace.0, Some(&user.0));
+        assert_eq!(first, second);
+        let slugs: Vec<_> = first.iter().map(|skill| skill.slug.as_str()).collect();
+        assert_eq!(slugs, ["alpha", "middle", "only-global", "zebra"]);
+        assert!(!first[0].global);
+        assert_eq!(first[0].title, "alpha");
+        assert!(
+            first
+                .iter()
+                .any(|skill| skill.slug == "only-global" && skill.global)
+        );
+    }
 }

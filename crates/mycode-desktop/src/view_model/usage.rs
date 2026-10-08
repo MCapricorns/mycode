@@ -16,13 +16,22 @@ pub(crate) struct UsageTotal {
     pub requests: u64,
 }
 
-/// Share of prompt tokens served from cache, as a whole percent.
+/// Share of the prompt served from cache, as a whole percent.
 ///
-/// Providers report cache reads as a subset of the input count, so the ratio
-/// is only meaningful once input tokens exist.
+/// OpenAI-style usage counts cache reads inside `input`. Anthropic's billed
+/// input excludes them, so a cache read larger than `input` is measured
+/// against `input + cache`.
 #[must_use]
 pub(crate) fn cache_percent(cache: u64, input: u64) -> Option<u64> {
-    (input > 0 && cache > 0).then(|| (cache.min(input) * 100) / input)
+    if cache == 0 {
+        return None;
+    }
+    let base = if cache > input {
+        input.saturating_add(cache)
+    } else {
+        input
+    };
+    (base > 0).then_some((cache.min(base) * 100) / base)
 }
 
 /// Whether a `provider/model` usage key belongs to `model`.
@@ -64,6 +73,15 @@ pub(crate) fn parse_context_tokens(text: &str) -> Option<u64> {
         .filter(|tokens| *tokens > 0)
 }
 
+/// Cache-read tokens on the latest prompt (`· hit N`). Absent on older lines.
+#[must_use]
+pub(crate) fn parse_context_cache(text: &str) -> Option<u64> {
+    text.split('\u{b7}')
+        .find_map(|part| part.trim().strip_prefix("hit "))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+}
+
 /// Metrics for one completed model turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TurnStats {
@@ -77,4 +95,23 @@ pub(crate) struct TurnStats {
     pub cache: Option<u64>,
     /// Wall-clock duration in milliseconds.
     pub elapsed_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cache_percent, parse_context_cache, parse_context_tokens, parse_usage_text};
+
+    #[test]
+    fn usage_line_round_trips_context_and_cache_read() {
+        let text = "zai/glm-5.3: 100 in / 20 out · ctx 12000 · hit 11800 · cache 11800 · 40 tok/s · 95% cached";
+        let (key, input, output, cache) = parse_usage_text(text).unwrap();
+        assert_eq!(key, "zai/glm-5.3");
+        assert_eq!(input, 100);
+        assert_eq!(output, 20);
+        assert_eq!(cache, Some(11800));
+        assert_eq!(parse_context_tokens(text), Some(12000));
+        assert_eq!(parse_context_cache(text), Some(11800));
+        assert_eq!(cache_percent(11800, 545), Some(95));
+        assert_eq!(cache_percent(100, 400), Some(25));
+    }
 }

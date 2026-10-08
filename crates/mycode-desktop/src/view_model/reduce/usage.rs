@@ -50,6 +50,7 @@ pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
     else {
         state.usage_totals.clear();
         state.last_turn = None;
+        state.context_cache = 0;
         return;
     };
     let mut totals: Vec<UsageTotal> = Vec::new();
@@ -97,15 +98,15 @@ pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
     }
     state.usage_totals = totals;
     state.last_turn = last;
-    state.context_used = entries
-        .iter()
-        .rev()
-        .find_map(|entry| {
-            if entry.kind != EntryKind::Usage {
-                return None;
-            }
-            crate::view_model::parse_context_tokens(&entry.text)
-        })
+    let latest_context = entries.iter().rev().find(|entry| {
+        entry.kind == EntryKind::Usage
+            && crate::view_model::parse_context_tokens(&entry.text).is_some()
+    });
+    state.context_used = latest_context
+        .and_then(|entry| crate::view_model::parse_context_tokens(&entry.text))
+        .unwrap_or(0);
+    state.context_cache = latest_context
+        .and_then(|entry| crate::view_model::parse_context_cache(&entry.text))
         .unwrap_or(0);
 }
 

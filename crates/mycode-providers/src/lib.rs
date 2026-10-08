@@ -15,6 +15,7 @@
 //! configuration authority stays free of network dependencies.
 
 mod anthropic_messages;
+mod cache;
 pub mod catalog;
 mod driver;
 mod http_pin;
@@ -57,6 +58,8 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// One resolved streaming provider endpoint.
 #[derive(Clone)]
 pub struct ResolvedProvider {
+    /// Provider id from settings, used on the usage log line.
+    pub id: String,
     /// Wire protocol kind from settings.
     pub kind: String,
     /// Full request endpoint URL.
@@ -132,6 +135,7 @@ impl ResolvedProvider {
         let mut headers = vec![("user-agent".to_owned(), user_agent.to_owned())];
         headers.extend(extra);
         Ok(Self {
+            id: settings.id.clone(),
             kind: settings.kind.clone(),
             endpoint,
             model: model.to_owned(),
@@ -165,9 +169,16 @@ impl WireProvider {
             "openai-responses" => openai_responses::build_body(model, endpoint, request),
             _ => openai_completions::build_body(model, endpoint, request),
         };
+        let mut headers = self.resolved.headers.clone();
+        if let Some(header) = cache::openrouter_session_header(
+            &self.resolved.endpoint,
+            request.prompt_cache_key.as_deref(),
+        ) {
+            headers.push(header);
+        }
         TransportCall {
             endpoint: self.resolved.endpoint.clone(),
-            headers: self.resolved.headers.clone(),
+            headers,
             body: serde_json::to_vec(&body).unwrap_or_default(),
         }
     }
@@ -193,8 +204,10 @@ impl Provider for WireProvider {
         let reducer = self.reducer_for();
         let (sender, stream) = EventStream::channel(cancel.clone());
         let transport = Arc::clone(&self.transport);
+        let provider_id = self.resolved.id.clone();
+        let model = self.resolved.model.clone();
         tokio::spawn(async move {
-            driver::drive(transport, call, reducer, sender, cancel).await;
+            driver::drive(transport, call, reducer, sender, cancel, provider_id, model).await;
         });
         Ok(stream)
     }

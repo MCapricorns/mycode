@@ -50,6 +50,10 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
     } else if let Some(token) = request.reasoning_token.as_deref() {
         body["reasoning_effort"] = json!(token);
     }
+    if crate::cache::explicit_chat_cache(model, endpoint) {
+        crate::cache::apply_chat_cache_breakpoints(&mut body);
+    }
+    crate::cache::apply_prompt_cache_key(&mut body, endpoint, request.prompt_cache_key.as_deref());
     body
 }
 

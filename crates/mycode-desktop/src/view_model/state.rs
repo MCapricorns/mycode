@@ -113,6 +113,9 @@ pub(crate) struct WorkspaceState {
     /// provider-reported input count, not the sum of every tool round, and
     /// it stays put when a send is interrupted.
     pub context_used: u64,
+    /// Cache-read tokens on the latest prompt. `0` when the provider reported
+    /// none. Shown on the context meter next to [`Self::context_used`].
+    pub context_cache: u64,
     /// Active composer mention autocomplete, when a trigger is typed.
     pub mention: Option<ComposerMention>,
     /// In-flight Copilot device-flow sign-in, when any.
@@ -353,6 +356,7 @@ pub enum DesktopAction {
         model: String,
         input: u64,
         context: u64,
+        context_cache: u64,
         output: u64,
         cache: Option<u64>,
         elapsed_ms: u64,
@@ -363,6 +367,7 @@ pub enum DesktopAction {
         model: String,
         input: u64,
         context: u64,
+        context_cache: u64,
         output: u64,
         cache: Option<u64>,
         elapsed_ms: u64,

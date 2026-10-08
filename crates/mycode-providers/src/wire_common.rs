@@ -521,28 +521,102 @@ pub(crate) fn token_count(value: &Value, keys: &[&str]) -> u64 {
     0
 }
 
-/// Builds usage from either OpenAI or Responses field names.
+/// Builds usage from OpenAI, Anthropic, DeepSeek, or Gemini field names.
+///
+/// `prompt_tokens` is the context-meter size. OpenAI `prompt_tokens` and
+/// Responses `input_tokens` already include cache reads. Anthropic
+/// `input_tokens` does not, so a payload that carries Anthropic cache fields
+/// sums the uncached input with cache reads and cache writes.
 pub(crate) fn usage_from_value(usage: &Value) -> Usage {
-    let cache = token_count(
+    let input_tokens = token_count(
+        usage,
+        &[
+            "input_tokens",
+            "prompt_tokens",
+            "input",
+            "promptTokenCount",
+            "prompt_token_count",
+        ],
+    );
+    let output_tokens = token_count(
+        usage,
+        &[
+            "output_tokens",
+            "completion_tokens",
+            "output",
+            "candidatesTokenCount",
+            "candidates_token_count",
+        ],
+    );
+    let cache_read = cache_read_count(usage);
+    let cache_write = cache_write_count(usage);
+    let anthropic_split = usage.get("cache_read_input_tokens").is_some()
+        || usage.get("cache_creation_input_tokens").is_some()
+        || usage.get("cache_creation").is_some()
+        || usage.get("cache_write_input_tokens").is_some();
+    let prompt_tokens = if anthropic_split {
+        input_tokens
+            .saturating_add(cache_read)
+            .saturating_add(cache_write)
+    } else {
+        input_tokens
+    };
+    Usage {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens: (cache_read > 0).then_some(cache_read),
+        cache_write_tokens: (cache_write > 0).then_some(cache_write),
+        prompt_tokens,
+    }
+}
+
+fn cache_read_count(usage: &Value) -> u64 {
+    let direct = token_count(
         usage,
         &[
             "cache_read_tokens",
             "cache_read_input_tokens",
             "cached_tokens",
+            "prompt_cache_hit_tokens",
+            "cachedContentTokenCount",
+            "cached_content_token_count",
         ],
-    )
-    .max(
-        usage
-            .get("prompt_tokens_details")
-            .or_else(|| usage.get("input_tokens_details"))
-            .map(|details| token_count(details, &["cached_tokens", "cache_read_tokens"]))
-            .unwrap_or(0),
     );
-    Usage {
-        input_tokens: token_count(usage, &["input_tokens", "prompt_tokens", "input"]),
-        output_tokens: token_count(usage, &["output_tokens", "completion_tokens", "output"]),
-        cache_read_tokens: (cache > 0).then_some(cache),
-    }
+    let nested = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"))
+        .map(|details| token_count(details, &["cached_tokens", "cache_read_tokens"]))
+        .unwrap_or(0);
+    direct.max(nested)
+}
+
+fn cache_write_count(usage: &Value) -> u64 {
+    let direct = token_count(
+        usage,
+        &[
+            "cache_creation_input_tokens",
+            "cache_write_input_tokens",
+            "cache_write_tokens",
+        ],
+    );
+    let nested_details = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"))
+        .map(|details| {
+            token_count(
+                details,
+                &["cache_write_tokens", "cache_creation_input_tokens"],
+            )
+        })
+        .unwrap_or(0);
+    let nested_creation = usage
+        .get("cache_creation")
+        .map(|creation| {
+            token_count(creation, &["ephemeral_5m_input_tokens"])
+                .saturating_add(token_count(creation, &["ephemeral_1h_input_tokens"]))
+        })
+        .unwrap_or(0);
+    direct.max(nested_details).max(nested_creation)
 }
 
 /// Keeps a non-zero count when a later partial usage object reports 0.
@@ -562,6 +636,12 @@ pub(crate) fn merge_usage(previous: Option<Usage>, next: Usage) -> Usage {
             previous.output_tokens
         },
         cache_read_tokens: next.cache_read_tokens.or(previous.cache_read_tokens),
+        cache_write_tokens: next.cache_write_tokens.or(previous.cache_write_tokens),
+        prompt_tokens: if next.prompt_tokens > 0 {
+            next.prompt_tokens
+        } else {
+            previous.prompt_tokens
+        },
     }
 }
 
@@ -926,5 +1006,92 @@ mod tests {
         assert_eq!(body["reasoning"]["effort"], "low");
         assert!(body.get("reasoning_effort").is_none());
         assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn usage_parses_cache_read_and_write_across_providers() {
+        let anthropic = super::usage_from_value(&serde_json::json!({
+            "input_tokens": 100,
+            "cache_read_input_tokens": 11800,
+            "cache_creation_input_tokens": 20,
+            "output_tokens": 420,
+        }));
+        assert_eq!(anthropic.input_tokens, 100);
+        assert_eq!(anthropic.cache_read_tokens, Some(11800));
+        assert_eq!(anthropic.cache_write_tokens, Some(20));
+        assert_eq!(anthropic.output_tokens, 420);
+        assert_eq!(anthropic.prompt_tokens, 11920);
+
+        let nested = super::usage_from_value(&serde_json::json!({
+            "input_tokens": 10,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 4,
+                "ephemeral_1h_input_tokens": 6,
+            },
+            "output_tokens": 1,
+        }));
+        assert_eq!(nested.cache_write_tokens, Some(10));
+        assert_eq!(nested.prompt_tokens, 20);
+
+        let both = super::usage_from_value(&serde_json::json!({
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 20,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 20,
+            },
+        }));
+        assert_eq!(both.cache_write_tokens, Some(20));
+        assert_eq!(both.prompt_tokens, 30);
+
+        let openai = super::usage_from_value(&serde_json::json!({
+            "prompt_tokens": 12345,
+            "completion_tokens": 420,
+            "prompt_tokens_details": {
+                "cached_tokens": 11800,
+                "cache_write_tokens": 15,
+            },
+        }));
+        assert_eq!(openai.input_tokens, 12345);
+        assert_eq!(openai.cache_read_tokens, Some(11800));
+        assert_eq!(openai.cache_write_tokens, Some(15));
+        assert_eq!(openai.prompt_tokens, 12345);
+
+        let deepseek = super::usage_from_value(&serde_json::json!({
+            "prompt_tokens": 12345,
+            "completion_tokens": 420,
+            "prompt_cache_hit_tokens": 11800,
+            "prompt_cache_miss_tokens": 545,
+        }));
+        assert_eq!(deepseek.input_tokens, 12345);
+        assert_eq!(deepseek.cache_read_tokens, Some(11800));
+        assert_eq!(deepseek.cache_write_tokens, None);
+        assert_eq!(deepseek.prompt_tokens, 12345);
+
+        let gemini = super::usage_from_value(&serde_json::json!({
+            "promptTokenCount": 1000,
+            "candidatesTokenCount": 20,
+            "cachedContentTokenCount": 800,
+        }));
+        assert_eq!(gemini.input_tokens, 1000);
+        assert_eq!(gemini.output_tokens, 20);
+        assert_eq!(gemini.cache_read_tokens, Some(800));
+        assert_eq!(gemini.prompt_tokens, 1000);
+    }
+
+    #[test]
+    fn merge_usage_keeps_prompt_tokens_when_a_delta_reports_output_only() {
+        let previous = super::usage_from_value(&serde_json::json!({
+            "input_tokens": 100,
+            "cache_read_input_tokens": 50,
+            "cache_creation_input_tokens": 5,
+            "output_tokens": 1,
+        }));
+        let next = super::usage_from_value(&serde_json::json!({"output_tokens": 9}));
+        let merged = super::merge_usage(Some(previous), next);
+        assert_eq!(merged.input_tokens, 100);
+        assert_eq!(merged.output_tokens, 9);
+        assert_eq!(merged.cache_read_tokens, Some(50));
+        assert_eq!(merged.cache_write_tokens, Some(5));
+        assert_eq!(merged.prompt_tokens, 155);
     }
 }
