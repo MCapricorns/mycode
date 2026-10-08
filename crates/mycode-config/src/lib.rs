@@ -77,9 +77,9 @@ pub use subagents::{
 };
 #[doc(inline)]
 pub use ui_state::{
-    MAX_RECENT_MODELS, MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES,
-    MAX_STARRED_MODELS, MAX_TRUSTED_PROJECTS, MAX_WORKSPACE_NAME_CHARS, MAX_WORKSPACE_ROOTS,
-    MAX_WORKSPACES, ModelPin, UI_STATE_FORMAT_VERSION, UI_STATE_KIND, UI_STATE_PATH, UiState,
-    WorkspaceDef, read_ui_state, read_ui_state_with_repair, remember_model, replace_ui_state,
-    toggle_star,
+    MAX_RECENT_MODELS, MAX_RECENT_PROJECTS, MAX_SESSION_MODELS, MAX_SESSION_PROJECTS,
+    MAX_SESSION_WORKSPACES, MAX_STARRED_MODELS, MAX_TRUSTED_PROJECTS, MAX_WORKSPACE_NAME_CHARS,
+    MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UI_STATE_FORMAT_VERSION,
+    UI_STATE_KIND, UI_STATE_PATH, UiState, WorkspaceDef, read_ui_state, read_ui_state_with_repair,
+    remember_model, replace_ui_state, session_model, toggle_star, upsert_session_model,
 };

@@ -37,7 +37,7 @@ pub use web::{
 use serde::{Deserialize, Serialize};
 
 use subagent_roles::subagents_are_default;
-use tools_shell::{retire_unsupported_shell, tools_are_default};
+use tools_shell::tools_are_default;
 
 use crate::ConfigError;
 use crate::authority::AuthorityRevision;
@@ -75,10 +75,10 @@ impl Default for UsageSettings {
 }
 
 /// Palette ids the desktop can paint. Slate is the default.
-pub const VALID_PALETTES: [&str; 13] = [
-    "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss", "ember", "glacier", "plum",
-    "copper", "aurora",
-];
+///
+/// Six palettes, each a different hue. Older ids are not migrated; a file
+/// that names one is reset to the defaults.
+pub const VALID_PALETTES: [&str; 6] = ["slate", "ocean", "forest", "dusk", "ember", "aurora"];
 
 /// UI language ids: follow the system, English, or Simplified Chinese.
 pub const VALID_LANGUAGES: [&str; 3] = ["auto", "en", "zh"];
@@ -224,23 +224,10 @@ impl AppSettings {
         }
     }
 
-    /// The only painted theme. Stored `light` is retired before this is read.
+    /// The only painted theme.
     #[must_use]
     pub fn effective_theme(&self) -> &'static str {
         "dark"
-    }
-
-    /// Rewrites a stored light theme to dark.
-    ///
-    /// Light mode is no longer painted. Call this before [`Self::validate`]
-    /// so an older document stays readable and can be published back as dark.
-    pub fn retire_light_theme(&mut self) -> bool {
-        if self.appearance.theme == "light" {
-            self.appearance.theme = "dark".to_owned();
-            true
-        } else {
-            false
-        }
     }
 
     /// Returns the effective palette. Unknown values read as slate.
@@ -476,14 +463,14 @@ fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
             .with_detail("settings.json: formatVersion or kind does not match this build"));
     }
     let revision = AuthorityRevision::new(document.revision)?;
-    let mut settings = document.settings;
-    let retired_shell = retire_unsupported_shell(&mut settings);
-    let retired_theme = settings.retire_light_theme();
+    let settings = document.settings;
+    // No in-place upgrade. A document that does not validate is rejected
+    // and the caller replaces the file with defaults.
     settings.validate()?;
     Ok(ParsedSettings {
         settings,
         revision,
-        migrated: decoded.migrated || retired_shell || retired_theme,
+        migrated: decoded.migrated,
     })
 }
 
