@@ -37,9 +37,10 @@ v0.9.20。标题栏由客户端绘制。没有打开工作区时，空工作台�
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
+| `mycode-desktop-v<version>-aarch64-apple-darwin.dmg` | macOS Apple Silicon（`MYCode.app` 安装镜像） |
 | `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 |
 
-每个 zip 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。
+每个 zip 和 dmg 旁有 `.sha256`。0.4.0 之后不再提供 Intel macOS 构建。dmg 内的 app 只做 ad-hoc 签名（仓库没有 Developer ID 证书），首次打开需右键「打开」或运行 `xattr -d com.apple.quarantine /Applications/MYCode.app`。
 
 ## 从源码构建
 
@@ -84,7 +85,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 上构建并打包四个平台的 release 二进制（zip 与 `.sha256`）。pull request 不创建标签、不发 GitHub Release、不改版本、不推 `ci/release-*`。推送到 `main` 并完成四个平台构建后，每次都会新建 GitHub Release：新标签 `v<version>`、四个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 都从这次提交构建。四个构建都成功之后，先用该提交创建标签并上传压缩包，再把版本写回 `main`：能快进就快进；若构建期间 `main` 有了新提交，就把版本提交重放到当前 `main` 上再推送（不强制推送；只自动处理 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md` 的冲突，计划中的版本号保留，构建期间写进 `## [Unreleased]` 的新说明也保留）。临时引用会在成功或失败后删除。因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
+pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 上构建并打包四个平台的 release 二进制（zip 与 `.sha256`；macOS 另产出一个 dmg）。pull request 不创建标签、不发 GitHub Release、不改版本、不推 `ci/release-*`。推送到 `main` 并完成四个平台构建后，每次都会新建 GitHub Release：新标签 `v<version>`、四个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）、macOS 的 dmg 和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 都从这次提交构建。四个构建都成功之后，先用该提交创建标签并上传压缩包，再把版本写回 `main`：能快进就快进；若构建期间 `main` 有了新提交，就把版本提交重放到当前 `main` 上再推送（不强制推送；只自动处理 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md` 的冲突，计划中的版本号保留，构建期间写进 `## [Unreleased]` 的新说明也保留）。临时引用会在成功或失败后删除。因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
 
 ## 许可
 
@@ -157,9 +158,13 @@ Appearance: Language, palette, Interface font, and S–XL.
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
 | `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
+| `mycode-desktop-v<version>-aarch64-apple-darwin.dmg` | macOS Apple Silicon (`MYCode.app` install image) |
 | `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 |
 
-Each zip has a `.sha256` sidecar. Intel macOS builds stopped after 0.4.0.
+Each zip and dmg has a `.sha256` sidecar. Intel macOS builds stopped
+after 0.4.0. The app inside the dmg is only ad-hoc signed (this
+repository has no Developer ID certificate); right-click → Open once, or
+run `xattr -d com.apple.quarantine /Applications/MYCode.app`.
 
 ### Build
 
@@ -216,11 +221,11 @@ cargo test -p mycode-tools --lib native_image_launches --locked
 
 Pull requests and pushes to `main` build and package the four platform
 release binaries on Windows x64, Windows ARM64, macOS Apple Silicon, and
-Linux x86_64 (zip and `.sha256`). Pull requests do not publish, tag, bump the version, or push
+Linux x86_64 (zip and `.sha256`; macOS also produces a dmg). Pull requests do not publish, tag, bump the version, or push
 a `ci/release-*` ref. A push to
 `main` publishes a new GitHub Release after those four builds succeed: a new
 `v<version>` tag, the four platform zips (Windows x64, Windows ARM64,
-macOS Apple Silicon, and Linux x86_64), their `.sha256` sidecars, and the matching
+macOS Apple Silicon, and Linux x86_64), the macOS dmg, their `.sha256` sidecars, and the matching
 `CHANGELOG.md` section (not generated commit notes). When
 that version already has a tag, release-plan bumps the patch in
 `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md` and pushes that commit
@@ -236,7 +241,7 @@ The version compiled into the binaries matches the tag. Notes under
 `## [Unreleased]` in `CHANGELOG.md` move into that version; an empty
 section gets one fixed sentence. Archives already uploaded for an older
 tag do not skip the release. A hand-bumped version that has no tag yet
-still needs its own `CHANGELOG.md` section. The zip archives are
+still needs its own `CHANGELOG.md` section. The zip and dmg archives are
 unsigned; this repository has no code-signing certificate.
 
 ### License
