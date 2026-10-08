@@ -137,6 +137,12 @@ pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
     if let Some(payload) = bytes.strip_prefix(&[0xfe, 0xff]) {
         return decode_utf16(payload, u16::from_be_bytes);
     }
+    // PowerShell writes UTF-16LE to a pipe with no BOM. Those bytes are
+    // often also valid UTF-8 (ASCII plus NUL), so the UTF-16 check has to
+    // run before `from_utf8` or CJK comes out as `o\0k\0`.
+    if let Some(text) = decode_utf16_le_without_bom(bytes) {
+        return text;
+    }
     if let Ok(text) = std::str::from_utf8(bytes) {
         return text.to_owned();
     }
@@ -144,6 +150,47 @@ pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
         return text;
     }
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// UTF-16LE with no BOM. PowerShell pipes often emit this for non-ASCII
+/// text. A buffer is accepted only when most units look like BMP text
+/// (ASCII, CJK, kana, fullwidth), so arbitrary binary stays on the
+/// code-page path.
+fn decode_utf16_le_without_bom(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    // UTF-16LE text has NULs in the high byte (odd index). Plain UTF-8,
+    // including the shell launch probe, does not. Requiring half of those
+    // high bytes to be NUL keeps ASCII UTF-8 from being read as CJK.
+    let pairs = bytes.len() / 2;
+    let mut odd_nuls = 0usize;
+    let mut even_nuls = 0usize;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != 0 {
+            continue;
+        }
+        if index % 2 == 0 {
+            even_nuls += 1;
+        } else {
+            odd_nuls += 1;
+        }
+    }
+    if odd_nuls == 0 || odd_nuls * 2 < pairs || even_nuls > odd_nuls {
+        return None;
+    }
+    let (chunks, _) = bytes.as_chunks::<2>();
+    let decoded: Vec<u16> = chunks.iter().copied().map(u16::from_le_bytes).collect();
+    if decoded.contains(&0) {
+        return None;
+    }
+    let text = String::from_utf16(&decoded).ok()?;
+    let chars = text.chars().count();
+    let printable = text
+        .chars()
+        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\r' | '\t'))
+        .count();
+    (chars > 0 && printable * 4 >= chars * 3).then_some(text)
 }
 
 /// Decodes bytes with the OEM page, then the ANSI page, then the console
@@ -232,4 +279,36 @@ fn decode_utf16(payload: &[u8], decode_unit: fn([u8; 2]) -> u16) -> String {
         decoded.push('\u{fffd}');
     }
     decoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_captured_text;
+
+    fn utf16_le(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[test]
+    fn utf16_le_without_bom_decodes_cjk() {
+        let bytes = utf16_le("你好 pwsh\r\n");
+        assert!(!bytes.starts_with(&[0xFF, 0xFE]));
+        assert_eq!(decode_captured_text(&bytes), "你好 pwsh\r\n");
+    }
+
+    #[test]
+    fn utf8_still_wins_over_the_utf16_heuristic() {
+        assert_eq!(decode_captured_text("café".as_bytes()), "café");
+    }
+
+    #[test]
+    fn odd_invalid_utf8_is_not_decoded_as_utf16() {
+        let text = decode_captured_text(&[0xFF, 0x00, 0x41]);
+        assert!(text.contains('\u{FFFD}'), "{text:?}");
+    }
+
+    #[test]
+    fn ascii_utf16_le_without_bom_decodes() {
+        assert_eq!(decode_captured_text(&utf16_le("ok\r\n")), "ok\r\n");
+    }
 }
