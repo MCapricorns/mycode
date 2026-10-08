@@ -74,20 +74,21 @@ pub struct CatalogModel {
 impl CatalogModel {
     /// Thinking choices advertised for this model.
     ///
-    /// Built from models.dev `reasoning_options`. Effort lists win; a
-    /// toggle-only row is off/on; a bare `reasoning: true` with no options
-    /// is also treated as a toggle so the UI never invents low/medium/high.
+    /// An explicit models.dev effort list is kept as published. A toggle-only
+    /// row or a bare `reasoning: true` also offers the standard effort ladder
+    /// so a depth pick (low, medium, high) can be stored for vendors such as
+    /// GLM that accept `reasoning_effort` without listing it.
     #[must_use]
     pub fn reasoning_levels(&self) -> Vec<String> {
         if !self.reasoning {
             return Vec::new();
         }
+        if self.reasoning_efforts.is_empty() {
+            return standard_reasoning_levels();
+        }
         let mut levels = vec!["default".to_owned()];
         if self.reasoning_toggle || self.reasoning_efforts.is_empty() {
             levels.push("off".to_owned());
-        }
-        if self.reasoning_efforts.is_empty() {
-            levels.push("on".to_owned());
         }
         for effort in &self.reasoning_efforts {
             let key = match effort.as_str() {
@@ -101,6 +102,17 @@ impl CatalogModel {
         }
         levels
     }
+}
+
+/// Effort ladder used when a model supports reasoning but publishes no list.
+#[must_use]
+pub fn standard_reasoning_levels() -> Vec<String> {
+    [
+        "default", "off", "on", "minimal", "low", "medium", "high", "xhigh", "max",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 /// One provider preset: endpoint data plus its model list.

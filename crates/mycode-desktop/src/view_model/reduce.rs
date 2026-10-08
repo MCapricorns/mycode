@@ -25,7 +25,8 @@ pub(crate) use self::composer::preferred_slash_index;
 use self::composer::{parse_mention, slash_items};
 use self::jobs::{finish_live_job, tool_progress, tool_started};
 use self::models::{
-    active_preset_changed, ensure_model_selection, model_selected, provider_selected,
+    active_preset_changed, clamp_reasoning_to_catalog, ensure_model_selection, model_selected,
+    provider_selected,
 };
 use self::projects::{
     bind_session_project, session_bindings_forgotten, session_project_bound,
@@ -678,6 +679,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         } => {
             state.catalog = Some(document);
             state.catalog_fetched_at = fetched_at;
+            clamp_reasoning_to_catalog(state);
         }
         DesktopAction::UiStateLoaded {
             recents,
@@ -806,11 +808,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsReasoningChanged(level) => {
             state.reasoning_menu_open = false;
-            if state
-                .settings
-                .as_ref()
-                .is_none_or(|settings| settings.saving)
-            {
+            // Apply the pick even while a save is in flight. Dropping it
+            // there left the composer on the old level after the ack.
+            if state.settings.is_none() {
                 return;
             }
             let picked: Option<String> = if level == "default" || level.is_empty() {
@@ -1028,5 +1028,27 @@ mod tests {
         assert_eq!(active.entries[0].event_id, "e5");
         assert_eq!(active.older_before.as_deref(), Some("e5"));
         assert!(!state.history_loading);
+    }
+
+    #[test]
+    fn reasoning_pick_is_kept_while_a_save_is_in_flight() {
+        let mut state = WorkspaceState::default();
+        let mut settings = crate::view_model::SettingsState::from_settings(
+            &mycode_config::AppSettings::default(),
+            1,
+            Vec::new(),
+        );
+        settings.saving = true;
+        state.settings = Some(settings);
+        state.selected_provider = Some("zhipu".to_owned());
+        state.selected_model = Some("glm-4.7".to_owned());
+        reduce(
+            &mut state,
+            DesktopAction::SettingsReasoningChanged("high".to_owned()),
+        );
+        let settings = state.settings.expect("settings");
+        assert_eq!(settings.reasoning.as_deref(), Some("high"));
+        assert!(settings.dirty);
+        assert!(settings.saving);
     }
 }
