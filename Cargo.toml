@@ -14,7 +14,7 @@ members = [
 clippy.mod_module_files = "deny"
 
 [workspace.package]
-version = "0.9.16"
+version = "0.9.17"
 edition = "2024"
 license = "Apache-2.0"
 
