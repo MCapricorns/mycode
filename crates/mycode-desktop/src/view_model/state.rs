@@ -422,6 +422,8 @@ pub enum DesktopAction {
     /// An intermediate assistant step (with tool calls) was committed; the
     /// streamed text so far belongs to it, so the live bubble resets.
     AssistantStepCommitted(ConversationEntry),
+    /// Manual or automatic compaction wrote a summary the transcript should show.
+    SummaryShown(ConversationEntry),
     /// The model turn finished and its entry was committed.
     ChatDone {
         head: String,

@@ -369,6 +369,17 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);
         }
+        DesktopAction::SummaryShown(entry) => {
+            if let Some(conversation) = state.active.as_mut() {
+                let already = conversation
+                    .entries
+                    .iter()
+                    .any(|existing| existing.event_id == entry.event_id);
+                if !already {
+                    conversation.entries.push(entry);
+                }
+            }
+        }
         DesktopAction::AssistantStepCommitted(entry) => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);
@@ -1164,5 +1175,37 @@ mod tests {
         assert_eq!(inherited.reasoning.as_deref(), Some("on"));
         let previous = mycode_config::session_model(&state.session_models, "old").expect("old");
         assert_eq!(previous.model, "glm-4.7");
+    }
+
+    #[test]
+    fn manual_and_auto_compaction_show_the_summary_in_the_chat() {
+        use mycode_app::protocol::{ConversationEntry, EntryKind};
+
+        let mut state = WorkspaceState {
+            active: Some(mycode_app::ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "e1".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        let text = mycode_app::display_summary_text("files: src/main.rs");
+        let entry = ConversationEntry {
+            event_id: "sum-1".to_owned(),
+            kind: EntryKind::UserMessage,
+            text: text.into(),
+            call_id: None,
+            thinking: String::new(),
+        };
+        // Both triggers emit this action with the written summary.
+        reduce(&mut state, DesktopAction::SummaryShown(entry.clone()));
+        reduce(&mut state, DesktopAction::SummaryShown(entry));
+        let entries = &state.active.expect("open").entries;
+        assert_eq!(entries.len(), 1);
+        assert!(mycode_app::is_compaction_summary(&entries[0].text));
+        assert!(mycode_app::summary_body(&entries[0].text).contains("src/main.rs"));
     }
 }

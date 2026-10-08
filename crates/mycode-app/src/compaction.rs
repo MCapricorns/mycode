@@ -25,6 +25,28 @@ const TRANSCRIPT_CAP_CHARS: usize = 300_000;
 const EXCERPT_CHARS: usize = 4_000;
 const SUMMARY_PREFIX: &str = "COMPACTION SUMMARY";
 
+/// Ledger text for the summary the user sees. The model request still uses
+/// the checkpoint; [`crate::ledger::ledger_history`] skips this copy so the
+/// covered-message index does not move.
+#[must_use]
+pub fn display_summary_text(summary: &str) -> String {
+    format!("{SUMMARY_PREFIX}\n\n{summary}")
+}
+
+/// Whether `text` is the visible compaction summary, not a user prompt.
+#[must_use]
+pub fn is_display_only_summary(text: &str) -> bool {
+    text.starts_with(SUMMARY_PREFIX)
+}
+
+/// Summary body without the marker line.
+#[must_use]
+pub fn summary_body(text: &str) -> &str {
+    text.strip_prefix(SUMMARY_PREFIX)
+        .unwrap_or(text)
+        .trim_start_matches(['\n', '\r'])
+}
+
 /// Tokens that fire auto-compaction for this model window.
 #[must_use]
 pub(crate) fn compaction_threshold(context_window: u64) -> usize {
@@ -63,6 +85,9 @@ pub(crate) enum CompactStatus {
 pub(crate) struct Compacted {
     pub messages: Vec<Arc<Message>>,
     pub status: CompactStatus,
+    /// Summary text when this attempt wrote a new checkpoint. Manual and
+    /// automatic compaction both surface this in the transcript.
+    pub summary: Option<String>,
 }
 
 /// Compacts history before a provider request. Failures degrade to the
@@ -81,6 +106,7 @@ pub(crate) async fn compact_history(
         return Compacted {
             messages: history,
             status: CompactStatus::Unchanged,
+            summary: None,
         };
     };
     let prior = mycode_config::read_compaction(scope.home, scope.session_id)
@@ -97,6 +123,7 @@ pub(crate) async fn compact_history(
         return Compacted {
             messages: history,
             status: CompactStatus::Covered,
+            summary: None,
         };
     }
     // `covered_messages` indexes a ledger replay, which has no summary
@@ -128,6 +155,7 @@ pub(crate) async fn compact_history(
                     &history[checkpoint.covered_messages..],
                 ),
                 status: CompactStatus::Unchanged,
+                summary: None,
             };
         }
     }
@@ -150,6 +178,7 @@ pub(crate) async fn compact_history(
             return Compacted {
                 messages: history,
                 status: CompactStatus::Failed(message),
+                summary: None,
             };
         }
         Err(_) => {
@@ -157,6 +186,7 @@ pub(crate) async fn compact_history(
             return Compacted {
                 messages: history,
                 status: CompactStatus::Failed("summary timed out".to_owned()),
+                summary: None,
             };
         }
     };
@@ -172,8 +202,10 @@ pub(crate) async fn compact_history(
         return Compacted {
             messages: compacted,
             status: CompactStatus::Unchanged,
+            summary: None,
         };
     }
+    let shown = summary.clone();
     let checkpoint = mycode_config::CompactionCheckpoint {
         format_version: mycode_config::COMPACTION_FORMAT_VERSION,
         kind: mycode_config::COMPACTION_KIND.to_owned(),
@@ -193,6 +225,7 @@ pub(crate) async fn compact_history(
         return Compacted {
             messages: history,
             status: CompactStatus::Failed(format!("checkpoint write failed: {error:?}")),
+            summary: None,
         };
     }
     eprintln!(
@@ -202,6 +235,7 @@ pub(crate) async fn compact_history(
     Compacted {
         messages: compacted,
         status: CompactStatus::Wrote,
+        summary: Some(shown),
     }
 }
 
@@ -450,7 +484,10 @@ mod tests {
 
     use mycode_core::{Message, UserMessage};
 
-    use super::{compaction_transcript, transcript_head};
+    use super::{
+        CompactStatus, Compacted, compaction_transcript, display_summary_text,
+        is_display_only_summary, transcript_head,
+    };
 
     fn user(text: &str) -> Arc<Message> {
         Arc::new(Message::User(UserMessage::text(text)))
@@ -486,5 +523,26 @@ mod tests {
         assert!(transcript.contains("one"), "{transcript}");
         assert!(transcript.contains("two"), "{transcript}");
         assert!(!transcript.contains("tail"), "{transcript}");
+    }
+
+    #[test]
+    fn manual_and_auto_compaction_post_the_same_summary_message() {
+        let body = "files touched: src/main.rs\nnext: run the tests";
+        let manual = Compacted {
+            messages: Vec::new(),
+            status: CompactStatus::Wrote,
+            summary: Some(body.to_owned()),
+        };
+        let auto = Compacted {
+            messages: Vec::new(),
+            status: CompactStatus::Wrote,
+            summary: Some(body.to_owned()),
+        };
+        let manual_text = display_summary_text(manual.summary.as_deref().expect("manual"));
+        let auto_text = display_summary_text(auto.summary.as_deref().expect("auto"));
+        assert_eq!(manual_text, auto_text);
+        assert!(is_display_only_summary(&manual_text));
+        assert!(manual_text.contains(body));
+        assert!(super::summary_body(&manual_text).contains("src/main.rs"));
     }
 }

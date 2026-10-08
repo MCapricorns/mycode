@@ -80,14 +80,65 @@ pub(crate) async fn manual_compact(
         &model,
     )
     .await;
-    let (ok, message) = match outcome {
-        Ok(message) => (true, message),
-        Err(message) => (false, message),
+    let (ok, message, summary) = match outcome {
+        Ok((message, summary)) => (true, message, summary),
+        Err(message) => (false, message, None),
     };
+    if let Some(summary) = summary.as_deref() {
+        show_compaction_summary(&state, &events, &session, &branch, &session_id, summary).await;
+    }
     let _ = events.try_send(BridgeEvent::CompactFinished {
         session_id,
         message,
         ok,
+    });
+}
+
+/// Writes the summary into the ledger as a transcript row and tells the UI.
+/// The model history skips this row; the checkpoint still builds the request.
+async fn show_compaction_summary(
+    state: &CoreState,
+    events: &crate::BridgeEventTx,
+    session: &SessionId,
+    branch: &BranchId,
+    session_id: &str,
+    summary: &str,
+) {
+    let Ok(opened) = state.service.open(session).await else {
+        return;
+    };
+    let Some(head) = opened
+        .heads
+        .iter()
+        .find(|head| &head.branch_id == branch)
+        .map(|head| head.head.clone())
+    else {
+        return;
+    };
+    let writer = HeadWriter::new(state.service.clone(), session.clone(), branch.clone(), head);
+    publish_visible_summary(&writer, events, session_id, summary).await;
+}
+
+async fn publish_visible_summary(
+    writer: &HeadWriter,
+    events: &crate::BridgeEventTx,
+    session_id: &str,
+    summary: &str,
+) {
+    let payload = crate::compaction::display_summary_text(summary);
+    let Ok(event_id) = writer.write(EventKind::Message, payload.as_bytes()).await else {
+        return;
+    };
+    let entry = crate::protocol::ConversationEntry {
+        event_id,
+        kind: crate::protocol::EntryKind::UserMessage,
+        text: payload.into(),
+        call_id: None,
+        thinking: String::new(),
+    };
+    let _ = events.try_send(BridgeEvent::SummaryShown {
+        session_id: session_id.to_owned(),
+        entry,
     });
 }
 
@@ -98,7 +149,7 @@ async fn compact_session_now(
     expected_head: &HeadStamp,
     provider_id: &str,
     model: &str,
-) -> Result<String, String> {
+) -> Result<(String, Option<String>), String> {
     let home = &state.home;
     let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
     let (bearer, extra_headers) = resolve_request_auth(state, &provider, &stored_key).await?;
@@ -122,7 +173,7 @@ async fn compact_session_now(
         .await
         .map_err(render_error)?;
     if history.len() < 2 {
-        return Ok("empty".to_owned());
+        return Ok(("empty".to_owned(), None));
     }
     let head_stamp_text = head_spelling(&expected_head);
     let context_window = model_context_window(state, &provider, model);
@@ -137,9 +188,9 @@ async fn compact_session_now(
     };
     let compacted = crate::compaction::compact_history(&scope, history, true).await;
     match compacted.status {
-        crate::compaction::CompactStatus::Wrote => Ok("compacted".to_owned()),
-        crate::compaction::CompactStatus::Covered => Ok("covered".to_owned()),
-        crate::compaction::CompactStatus::Unchanged => Ok("empty".to_owned()),
+        crate::compaction::CompactStatus::Wrote => Ok(("compacted".to_owned(), compacted.summary)),
+        crate::compaction::CompactStatus::Covered => Ok(("covered".to_owned(), None)),
+        crate::compaction::CompactStatus::Unchanged => Ok(("empty".to_owned(), None)),
         crate::compaction::CompactStatus::Failed(message) => Err(message),
     }
 }
@@ -359,9 +410,11 @@ async fn run_chat_turn(
         head: &head_stamp_text,
         context_window,
     };
-    let history = crate::compaction::compact_history(&compact_scope, history, false)
-        .await
-        .messages;
+    let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
+    if let Some(summary) = compacted.summary.as_deref() {
+        publish_visible_summary(&writer, events, &session_id, summary).await;
+    }
+    let history = compacted.messages;
 
     let resources = mycode_config::discover_resources(home, &cwd);
     let mut system_prompt = String::from(
@@ -437,6 +490,9 @@ cwd for both script and program mode.",
     let compact_session = session_id.clone();
     let compact_branch = branch.as_str().to_owned();
     let compact_head = head_stamp_text.clone();
+    let hook_writer = writer.clone();
+    let hook_events = events.clone();
+    let hook_session_label = session_id.clone();
     let hooks = HookRunner::default().with_before_request(move |mut request| {
         let home = compact_home.clone();
         let wire = compact_wire.clone();
@@ -444,6 +500,9 @@ cwd for both script and program mode.",
         let session_id = compact_session.clone();
         let branch_id = compact_branch.clone();
         let head = compact_head.clone();
+        let writer = hook_writer.clone();
+        let events = hook_events.clone();
+        let session_label = hook_session_label.clone();
         async move {
             let scope = crate::compaction::CompactScope {
                 home: &home,
@@ -454,9 +513,12 @@ cwd for both script and program mode.",
                 head: &head,
                 context_window,
             };
-            request.messages = crate::compaction::compact_history(&scope, request.messages, false)
-                .await
-                .messages;
+            let compacted =
+                crate::compaction::compact_history(&scope, request.messages, false).await;
+            if let Some(summary) = compacted.summary.as_deref() {
+                publish_visible_summary(&writer, &events, &session_label, summary).await;
+            }
+            request.messages = compacted.messages;
             request
         }
     });

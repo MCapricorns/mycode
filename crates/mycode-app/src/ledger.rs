@@ -241,9 +241,15 @@ pub(crate) async fn ledger_history(
                         // find its user message.
                         history.push(Arc::new(Message::Assistant(assistant)));
                     }
-                    Err(_) => history.push(Arc::new(Message::User(UserMessage::text(
-                        decode_text(payload),
-                    )))),
+                    Err(_) => {
+                        let text = decode_text(payload);
+                        // The transcript copy of a checkpoint summary. Leaving
+                        // it in model history would shift `covered_messages`.
+                        if crate::compaction::is_display_only_summary(&text) {
+                            return Ok(());
+                        }
+                        history.push(Arc::new(Message::User(UserMessage::text(text))));
+                    }
                 }
             }
             EventKind::ToolResult => {
