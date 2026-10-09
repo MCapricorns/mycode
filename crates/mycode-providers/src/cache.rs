@@ -387,6 +387,13 @@ fn carries_replayed_thinking(message: &Value) -> bool {
     {
         return true;
     }
+    if message
+        .get("reasoning_details")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+    {
+        return true;
+    }
     let Some(Value::Array(blocks)) = message.get("content") else {
         return false;
     };
@@ -470,9 +477,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        ANTHROPIC_BREAKPOINT_CAP, apply_prompt_cache_key, clamp_prompt_cache_key,
-        explicit_chat_cache, openrouter_session_header, retry_body_without_prompt_cache_key,
-        usage_log_line, wants_prompt_cache_key,
+        ANTHROPIC_BREAKPOINT_CAP, apply_chat_cache_breakpoints, apply_prompt_cache_key,
+        clamp_prompt_cache_key, explicit_chat_cache, openrouter_session_header,
+        retry_body_without_prompt_cache_key, usage_log_line, wants_prompt_cache_key,
     };
     use crate::anthropic_messages::build_body as anthropic_body;
     use crate::openai_completions::build_body as chat_body;
@@ -770,6 +777,65 @@ mod tests {
             usage: None,
             stop_reason: StopReason::Stop,
         })
+    }
+
+    #[test]
+    fn reasoning_details_are_not_rewritten_by_chat_breakpoints() {
+        let mut body = json!({
+            "model": "MiniMax-M3",
+            "tools": [{"type": "function", "function": {"name": "read"}}],
+            "messages": [
+                {"role": "system", "content": "stable"},
+                {"role": "user", "content": "COMPACTION SUMMARY\n\nkept"},
+                {
+                    "role": "assistant",
+                    "content": "visible answer",
+                    "reasoning_details": [{
+                        "type": "reasoning.text",
+                        "id": "reasoning-text-1",
+                        "text": "plan the edit exactly"
+                    }]
+                },
+                {"role": "user", "content": "continue"}
+            ]
+        });
+        let assistant = body["messages"][2].clone();
+        apply_chat_cache_breakpoints(&mut body);
+        assert_eq!(body["messages"][2], assistant);
+        assert!(body["messages"][2]["content"].as_str().is_some());
+    }
+
+    #[test]
+    fn glm53_max_on_the_anthropic_route_sends_effort_and_keeps_breakpoints() {
+        let request = Request::new()
+            .with_system_prompt("stable rules")
+            .with_reasoning(ReasoningLevel::Max)
+            .with_message(user("go"));
+        for endpoint in [
+            "https://open.bigmodel.cn/api/anthropic/v1/messages",
+            "https://api.z.ai/api/anthropic/v1/messages",
+        ] {
+            let body = anthropic_body("glm-5.3", endpoint, &request);
+            assert_eq!(body["thinking"]["type"], "enabled", "{endpoint}");
+            assert_eq!(body["thinking"]["clear_thinking"], false, "{endpoint}");
+            assert_eq!(body["output_config"]["effort"], "max", "{endpoint}");
+            assert!(body.get("reasoning_effort").is_none(), "{endpoint}");
+            assert!(
+                body["thinking"].get("budget_tokens").is_none(),
+                "{endpoint}"
+            );
+            assert_eq!(
+                cache_type(&body["system"][0]),
+                Some("ephemeral"),
+                "{endpoint}"
+            );
+            assert_eq!(
+                cache_type(&body["messages"][0]["content"][0]),
+                Some("ephemeral"),
+                "{endpoint}"
+            );
+            assert!(count_cache_control(&body) <= ANTHROPIC_BREAKPOINT_CAP);
+        }
     }
 
     #[test]

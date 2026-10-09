@@ -112,21 +112,24 @@ pub(crate) enum ThinkingWire {
 pub(crate) enum ReasoningReplay {
     /// Leave thinking out of the wire history.
     ///
-    /// This is the MiniMax and generic OpenAI shape. MiniMax-M3 with
-    /// thinking on already keeps multi-turn replies without an extra
-    /// reasoning field, so that request is left as it was.
+    /// Generic OpenAI gateways reject an assistant message that is only
+    /// reasoning, so those turns stay omitted.
     Omit,
     /// OpenAI-style `reasoning_content` (GLM, DeepSeek, Kimi/Moonshot).
     Content,
+    /// MiniMax Chat Completions. Replay the original `reasoning_details`
+    /// array when the block stored one, `reasoning_content` when that is
+    /// what arrived, and a synthesized `reasoning_details` array when the
+    /// only source was a `<think>` wrapper.
+    MiniMax,
 }
 
 /// Vendors that reject a follow-up unless prior reasoning is echoed.
 pub(crate) fn reasoning_replay(model: &str, endpoint: &str) -> ReasoningReplay {
-    // MiniMax stays on the omit path even though the name would not match
-    // the GLM/DeepSeek checks. A successful MiniMax turn must not grow a
-    // new reasoning field.
+    // Completions is the only caller. MiniMax Messages replays signed
+    // thinking blocks on its own adapter and never asks for this shape.
     if minimax_target(model, endpoint) {
-        return ReasoningReplay::Omit;
+        return ReasoningReplay::MiniMax;
     }
     let model_lower = model.to_ascii_lowercase();
     let endpoint_lower = endpoint.to_ascii_lowercase();
@@ -213,7 +216,7 @@ fn apply_chat_body(
         return;
     }
     if minimax_target(model, endpoint) {
-        apply_minimax(body, level);
+        apply_minimax(body, level, wire);
         return;
     }
     if kimi_family(&model_id, &host) {
@@ -238,7 +241,7 @@ fn apply_anthropic_body(body: &mut Value, model: &str, endpoint: &str, level: Re
     let model_id = model.to_ascii_lowercase();
     let host = endpoint.to_ascii_lowercase();
     if minimax_target(model, endpoint) {
-        apply_minimax(body, level);
+        apply_minimax(body, level, ThinkingWire::Anthropic);
         return;
     }
     if kimi_family(&model_id, &host) {
@@ -251,12 +254,18 @@ fn apply_anthropic_body(body: &mut Value, model: &str, endpoint: &str, level: Re
         return;
     }
     if zai_host(&host) || model_id.contains("glm") {
-        // Anthropic-compatible Z.AI rejects `budget_tokens` and `clear_thinking`.
+        // Claude Code on Z.AI's Anthropic route uses `thinking.type` and
+        // `output_config.effort` (low / high / max). `reasoning_effort` is the
+        // chat-completions name and is not sent here. `clear_thinking: false`
+        // is preserved thinking: replayed reasoning has to stay byte-identical
+        // or the prefix cache misses. `budget_tokens` is Anthropic's field and
+        // this gateway does not take it.
         if level == ReasoningLevel::Off {
             body["thinking"] = json!({ "type": "disabled" });
-        } else {
-            body["thinking"] = json!({ "type": "enabled" });
+            return;
         }
+        body["thinking"] = json!({ "type": "enabled", "clear_thinking": false });
+        body["output_config"] = json!({ "effort": glm_anthropic_effort(level) });
         return;
     }
     if claude_adaptive(&model_id) {
@@ -323,12 +332,28 @@ fn apply_zai(body: &mut Value, level: ReasoningLevel) {
     }
 }
 
-fn apply_minimax(body: &mut Value, level: ReasoningLevel) {
+fn apply_minimax(body: &mut Value, level: ReasoningLevel, wire: ThinkingWire) {
     if level == ReasoningLevel::Off {
         body["thinking"] = json!({ "type": "disabled" });
         return;
     }
     body["thinking"] = json!({ "type": "adaptive" });
+    // Chat Completions inlines `<think>` unless this is set. The Messages
+    // API already returns thinking blocks; an unknown field there can 400.
+    if wire == ThinkingWire::Completions {
+        body["reasoning_split"] = json!(true);
+    }
+}
+
+/// Coding-plan effort on the Anthropic route. GLM-5.3 only accepts
+/// `low` / `high` / `max`; enabled thinking with no effort token is `max`.
+fn glm_anthropic_effort(level: ReasoningLevel) -> &'static str {
+    match level {
+        ReasoningLevel::Minimal | ReasoningLevel::Low => "low",
+        ReasoningLevel::Medium | ReasoningLevel::High => "high",
+        ReasoningLevel::Off => "low",
+        ReasoningLevel::On | ReasoningLevel::Xhigh | ReasoningLevel::Max => "max",
+    }
 }
 
 fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
@@ -683,9 +708,24 @@ pub(crate) fn assemble_blocks<'a>(
     text: &str,
     calls: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
 ) -> Vec<ContentBlock> {
+    assemble_blocks_with_replay(thinking, text, calls, None)
+}
+
+/// Same as [`assemble_blocks`], plus a MiniMax replay blob on the thinking
+/// block. `replay` is the JSON object stored on [`ThinkingBlock::replay`].
+pub(crate) fn assemble_blocks_with_replay<'a>(
+    thinking: &str,
+    text: &str,
+    calls: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+    replay: Option<&str>,
+) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
-    if !thinking.is_empty() {
-        blocks.push(ContentBlock::Thinking(ThinkingBlock::new(thinking)));
+    if !thinking.is_empty() || replay.is_some_and(|value| !value.is_empty()) {
+        let mut block = ThinkingBlock::new(thinking);
+        if let Some(replay) = replay.filter(|value| !value.is_empty()) {
+            block = block.with_replay(replay);
+        }
+        blocks.push(ContentBlock::Thinking(block));
     }
     if !text.is_empty() {
         blocks.push(ContentBlock::Text(TextBlock::new(text)));
@@ -732,6 +772,7 @@ mod tests {
             ReasoningLevel::On,
         );
         assert_eq!(by_model["thinking"]["type"], "adaptive");
+        assert_eq!(by_model["reasoning_split"], true);
         assert_ne!(by_model["thinking"]["type"], "enabled");
 
         let mut by_host = serde_json::json!({});
@@ -784,6 +825,7 @@ mod tests {
             &on,
         );
         assert_eq!(completions["thinking"]["type"], "adaptive");
+        assert_eq!(completions["reasoning_split"], true);
         assert_ne!(completions["thinking"]["type"], "enabled");
 
         let responses = crate::openai_responses::build_body(
@@ -792,6 +834,7 @@ mod tests {
             &on,
         );
         assert_eq!(responses["thinking"]["type"], "adaptive");
+        assert!(responses.get("reasoning_split").is_none());
 
         let minimax_messages = crate::anthropic_messages::build_body(
             "MiniMax-M2.5",
@@ -800,6 +843,7 @@ mod tests {
         );
         assert_eq!(minimax_messages["thinking"]["type"], "adaptive");
         assert!(minimax_messages["thinking"].get("budget_tokens").is_none());
+        assert!(minimax_messages.get("reasoning_split").is_none());
 
         let claude = crate::anthropic_messages::build_body(
             "claude-sonnet-4-6",
@@ -862,9 +906,53 @@ mod tests {
             &high,
         );
         assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["clear_thinking"], false);
+        assert_eq!(body["output_config"]["effort"], "high");
         assert!(body["thinking"].get("budget_tokens").is_none());
-        assert!(body["thinking"].get("clear_thinking").is_none());
         assert!(body.get("reasoning_effort").is_none());
+
+        let max = Request::new().with_reasoning(ReasoningLevel::Max);
+        for endpoint in [
+            "https://open.bigmodel.cn/api/anthropic/v1/messages",
+            "https://api.z.ai/api/anthropic/v1/messages",
+        ] {
+            let glm53 = crate::anthropic_messages::build_body("glm-5.3", endpoint, &max);
+            assert_eq!(glm53["thinking"]["type"], "enabled", "{endpoint}");
+            assert_eq!(glm53["thinking"]["clear_thinking"], false, "{endpoint}");
+            assert_eq!(glm53["output_config"]["effort"], "max", "{endpoint}");
+            assert!(glm53.get("reasoning_effort").is_none(), "{endpoint}");
+            assert!(
+                glm53["thinking"].get("budget_tokens").is_none(),
+                "{endpoint}"
+            );
+        }
+
+        let off = crate::anthropic_messages::build_body(
+            "glm-5.3",
+            "https://api.z.ai/api/anthropic/v1/messages",
+            &Request::new().with_reasoning(ReasoningLevel::Off),
+        );
+        assert_eq!(off["thinking"]["type"], "disabled");
+        assert!(off["thinking"].get("clear_thinking").is_none());
+        assert!(off.get("output_config").is_none());
+        assert!(off.get("reasoning_effort").is_none());
+
+        let mapped = [
+            (ReasoningLevel::On, "max"),
+            (ReasoningLevel::Minimal, "low"),
+            (ReasoningLevel::Low, "low"),
+            (ReasoningLevel::Medium, "high"),
+            (ReasoningLevel::Xhigh, "max"),
+        ];
+        for (level, effort) in mapped {
+            let body = crate::anthropic_messages::build_body(
+                "glm-5.3",
+                "https://open.bigmodel.cn/api/anthropic/v1/messages",
+                &Request::new().with_reasoning(level),
+            );
+            assert_eq!(body["output_config"]["effort"], effort, "{level:?}");
+            assert_eq!(body["thinking"]["clear_thinking"], false, "{level:?}");
+        }
     }
 
     #[test]

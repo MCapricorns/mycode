@@ -114,7 +114,7 @@ pub(crate) struct WorkspaceState {
     /// it stays put when a send is interrupted.
     pub context_used: u64,
     /// Cache-read tokens on the latest prompt. `0` when the provider reported
-    /// none. Shown on the context meter next to [`Self::context_used`].
+    /// none. Shown on the composer chip row and the inspector context meter.
     pub context_cache: u64,
     /// Active composer mention autocomplete, when a trigger is typed.
     pub mention: Option<ComposerMention>,

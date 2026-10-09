@@ -779,21 +779,12 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             // Summing every tool round or every turn is what painted 1.4M/1.0M.
             let used = vm.context_used;
             let cached = vm.context_cache;
-            let figure = if cached > 0 {
-                format!(
-                    "{} / {} · {} {}",
-                    super::compact_count(used),
-                    super::compact_count(context_window),
-                    super::compact_count(cached),
-                    t("cached", "缓存"),
-                )
-            } else {
-                format!(
-                    "{} / {}",
-                    super::compact_count(used),
-                    super::compact_count(context_window)
-                )
-            };
+            let figure = crate::view_model::format_context_meter(
+                used,
+                context_window,
+                cached,
+                t("cached", "缓存"),
+            );
             this.child(bar_row(
                 "context",
                 used,
@@ -850,7 +841,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         })
 }
 
-fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u64 {
+pub(crate) fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u64 {
     let shown = vm.selected_model.as_deref();
     let provider_id = vm.selected_provider.as_deref();
     let base_url = provider_id.and_then(|id| {

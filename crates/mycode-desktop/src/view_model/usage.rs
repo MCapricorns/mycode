@@ -16,6 +16,62 @@ pub(crate) struct UsageTotal {
     pub requests: u64,
 }
 
+/// Compact token-count spelling: 12.3k / 1.2M.
+#[must_use]
+pub(crate) fn compact_count(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
+}
+
+/// Context-meter text. `cached_word` is the localized "cached" label.
+///
+/// A window of zero omits the ratio. A cache read of zero omits the cache
+/// suffix. Empty when there is neither a ratio nor a cache read.
+#[must_use]
+pub(crate) fn format_context_meter(
+    used: u64,
+    window: u64,
+    cached: u64,
+    cached_word: &str,
+) -> String {
+    let mut label = String::new();
+    if window > 0 {
+        label.push_str(&compact_count(used));
+        label.push_str(" / ");
+        label.push_str(&compact_count(window));
+    }
+    if cached > 0 {
+        if !label.is_empty() {
+            label.push_str(" · ");
+        }
+        label.push_str(&compact_count(cached));
+        label.push(' ');
+        label.push_str(cached_word);
+    }
+    label
+}
+
+/// Composer label for the latest prompt. Hidden until the session has a
+/// prompt size or a cache read, so an empty chat does not show `0 / 1.0M`.
+#[must_use]
+pub(crate) fn context_meter_label(
+    used: u64,
+    window: u64,
+    cached: u64,
+    cached_word: &str,
+) -> Option<String> {
+    if used == 0 && cached == 0 {
+        return None;
+    }
+    let label = format_context_meter(used, window, cached, cached_word);
+    (!label.is_empty()).then_some(label)
+}
+
 /// Share of the prompt served from cache, as a whole percent.
 ///
 /// OpenAI-style usage counts cache reads inside `input`. Anthropic's billed
@@ -99,7 +155,10 @@ pub(crate) struct TurnStats {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_percent, parse_context_cache, parse_context_tokens, parse_usage_text};
+    use super::{
+        cache_percent, context_meter_label, format_context_meter, parse_context_cache,
+        parse_context_tokens, parse_usage_text,
+    };
 
     #[test]
     fn usage_line_round_trips_context_and_cache_read() {
@@ -113,5 +172,26 @@ mod tests {
         assert_eq!(parse_context_cache(text), Some(11800));
         assert_eq!(cache_percent(11800, 545), Some(95));
         assert_eq!(cache_percent(100, 400), Some(25));
+    }
+
+    #[test]
+    fn context_meter_shows_cache_reads_and_hides_an_empty_session() {
+        assert_eq!(context_meter_label(0, 1_000_000, 0, "cached"), None);
+        assert_eq!(
+            context_meter_label(12_000, 1_000_000, 0, "cached").as_deref(),
+            Some("12.0k / 1.0M")
+        );
+        assert_eq!(
+            format_context_meter(12_000, 1_000_000, 11_800, "cached"),
+            "12.0k / 1.0M · 11.8k cached"
+        );
+        assert_eq!(
+            context_meter_label(12_000, 1_000_000, 11_800, "缓存").as_deref(),
+            Some("12.0k / 1.0M · 11.8k 缓存")
+        );
+        assert_eq!(
+            context_meter_label(0, 0, 11_800, "cached").as_deref(),
+            Some("11.8k cached")
+        );
     }
 }

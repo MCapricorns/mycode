@@ -199,6 +199,22 @@ pub(super) fn render_composer(
                                 cx,
                             ))
                         })
+                        .when_some(context_meter(workspace), |this, label| {
+                            this.child(
+                                div()
+                                    .id("composer-context-meter")
+                                    .flex()
+                                    .flex_shrink_1()
+                                    .items_center()
+                                    .min_w_0()
+                                    .max_w(px(220.))
+                                    .px_2()
+                                    .h(px(28.))
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(div().min_w_0().truncate().child(label)),
+                            )
+                        })
                         .child(composer_round_button(sending, can_send, cx)),
                 ),
         )
@@ -381,6 +397,21 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .child(Icon::new(IconName::X).xsmall()),
                 )
         }))
+}
+
+/// Latest prompt size and cache read, shown on the chip row itself.
+///
+/// The inspector has the same figures, but it stays closed until the title
+/// bar opens it. This label is how a cache hit is visible without hovering.
+fn context_meter(workspace: &Workspace) -> Option<SharedString> {
+    let vm = workspace.vm();
+    crate::view_model::context_meter_label(
+        vm.context_used,
+        super::super::context::model_context_window(vm),
+        vm.context_cache,
+        t("cached", "缓存"),
+    )
+    .map(SharedString::from)
 }
 
 fn model_button_label(vm: &WorkspaceState) -> String {

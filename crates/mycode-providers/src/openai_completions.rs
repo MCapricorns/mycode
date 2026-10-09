@@ -12,7 +12,7 @@ use mycode_core::{Request, StreamEvent};
 use crate::driver::FrameReducer;
 use crate::wire_common::{
     MAX_STREAM_INDEX, ReasoningReplay, append_interruption, apply_reasoning_effort,
-    assemble_blocks, assembled_stop_reason, charge_stream, join_text, join_thinking,
+    assemble_blocks_with_replay, assembled_stop_reason, charge_stream, join_text, join_thinking,
     map_stop_reason, merge_usage, provider_error_detail, reasoning_replay, usage_from_value,
 };
 
@@ -93,22 +93,29 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
                 })
                 .collect();
             // A thinking-only assistant becomes `{"role":"assistant"}` with
-            // no content; MiniMax and generic OpenAI gateways reject that.
-            // GLM, DeepSeek, and Kimi need the reasoning echoed instead,
-            // including a thinking-only turn (`content: ""`).
-            let echo_thinking = !thinking.is_empty() && replay == ReasoningReplay::Content;
-            if text.is_empty() && tool_calls.is_empty() && !echo_thinking {
+            // no content; generic OpenAI gateways reject that. GLM, DeepSeek,
+            // and Kimi need `reasoning_content`, including a thinking-only
+            // turn (`content: ""`). MiniMax needs `reasoning_details` (or
+            // `reasoning_content` when that is what the turn stored).
+            let echo = reasoning_echo(replay, &assistant.blocks, &thinking);
+            if text.is_empty() && tool_calls.is_empty() && echo.is_none() {
                 return;
             }
             let mut wire = json!({"role": "assistant"});
-            if !text.is_empty() || echo_thinking {
+            if !text.is_empty() || echo.is_some() {
                 wire["content"] = json!(text);
             }
             if !tool_calls.is_empty() {
                 wire["tool_calls"] = json!(tool_calls);
             }
-            if !thinking.is_empty() && replay == ReasoningReplay::Content {
-                wire["reasoning_content"] = json!(thinking);
+            match echo {
+                Some(ReasoningEcho::Content(value)) => {
+                    wire["reasoning_content"] = json!(value);
+                }
+                Some(ReasoningEcho::Details(details)) => {
+                    wire["reasoning_details"] = details;
+                }
+                None => {}
             }
             messages.push(wire);
         }
@@ -122,6 +129,63 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
         }
         Message::Custom(_) => {}
     }
+}
+
+/// Reasoning attached to one replayed assistant message.
+enum ReasoningEcho {
+    Content(String),
+    Details(Value),
+}
+
+fn reasoning_echo(
+    replay: ReasoningReplay,
+    blocks: &[ContentBlock],
+    thinking: &str,
+) -> Option<ReasoningEcho> {
+    match replay {
+        ReasoningReplay::Omit => None,
+        ReasoningReplay::Content => {
+            (!thinking.is_empty()).then(|| ReasoningEcho::Content(thinking.to_owned()))
+        }
+        ReasoningReplay::MiniMax => minimax_echo(blocks, thinking),
+    }
+}
+
+/// MiniMax wants the original `reasoning_details` array unchanged. A turn
+/// that arrived as `reasoning_content` is echoed that way. `<think>` text
+/// with no vendor blob becomes one `reasoning.text` item.
+fn minimax_echo(blocks: &[ContentBlock], thinking: &str) -> Option<ReasoningEcho> {
+    let mut details = Vec::new();
+    let mut content = false;
+    for block in blocks {
+        let ContentBlock::Thinking(thinking) = block else {
+            continue;
+        };
+        let Some(raw) = thinking.replay.as_deref() else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(raw) else {
+            continue;
+        };
+        if let Some(array) = value.get("reasoning_details").and_then(Value::as_array) {
+            details.extend(array.iter().cloned());
+        } else if value.get("reasoning_content").and_then(Value::as_bool) == Some(true) {
+            content = true;
+        }
+    }
+    if !details.is_empty() {
+        return Some(ReasoningEcho::Details(Value::Array(details)));
+    }
+    if thinking.is_empty() {
+        return None;
+    }
+    if content {
+        return Some(ReasoningEcho::Content(thinking.to_owned()));
+    }
+    Some(ReasoningEcho::Details(json!([{
+        "type": "reasoning.text",
+        "text": thinking,
+    }])))
 }
 
 fn user_content(content: &[ContentBlock]) -> Value {
@@ -145,6 +209,192 @@ fn user_content(content: &[ContentBlock]) -> Value {
     json!(parts)
 }
 
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+enum ThinkPiece {
+    Thinking(String),
+    Text(String),
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ThinkMode {
+    /// Still deciding whether content starts with `<think>`.
+    #[default]
+    Lead,
+    Inside,
+    /// The wrapper is closed, or the content never had one.
+    Body,
+}
+
+#[derive(Default)]
+struct ThinkSplitter {
+    hold: String,
+    mode: ThinkMode,
+    /// A reasoning field already owns the thought, so the wrapper is discarded.
+    suppress: bool,
+}
+
+impl ThinkSplitter {
+    fn is_holding(&self) -> bool {
+        !self.hold.is_empty()
+    }
+
+    fn push(&mut self, chunk: &str, suppress: bool) -> Vec<ThinkPiece> {
+        self.suppress = suppress;
+        self.hold.push_str(chunk);
+        let mut out = Vec::new();
+        loop {
+            match self.mode {
+                ThinkMode::Lead => {
+                    let trimmed = self.hold.trim_start_matches([' ', '\n', '\r', '\t']);
+                    if trimmed.is_empty() {
+                        break;
+                    }
+                    if let Some(rest) = trimmed.strip_prefix(THINK_OPEN) {
+                        self.hold = rest.to_owned();
+                        self.mode = ThinkMode::Inside;
+                        continue;
+                    }
+                    if THINK_OPEN.starts_with(trimmed) {
+                        break;
+                    }
+                    out.push(ThinkPiece::Text(std::mem::take(&mut self.hold)));
+                    self.mode = ThinkMode::Body;
+                    break;
+                }
+                ThinkMode::Inside => {
+                    if let Some(index) = self.hold.find(THINK_CLOSE) {
+                        let thinking = self.hold[..index].to_owned();
+                        let mut after = self.hold[index + THINK_CLOSE.len()..].to_owned();
+                        trim_one_newline(&mut after);
+                        self.hold = after;
+                        self.mode = ThinkMode::Body;
+                        if !thinking.is_empty() && !self.suppress {
+                            out.push(ThinkPiece::Thinking(thinking));
+                        }
+                        continue;
+                    }
+                    let keep = partial_tag_suffix(&self.hold, THINK_CLOSE);
+                    let emit_len = self.hold.len() - keep;
+                    if emit_len > 0 {
+                        let thinking = self.hold[..emit_len].to_owned();
+                        self.hold.drain(..emit_len);
+                        if !thinking.is_empty() && !self.suppress {
+                            out.push(ThinkPiece::Thinking(thinking));
+                        }
+                    }
+                    break;
+                }
+                ThinkMode::Body => {
+                    if !self.hold.is_empty() {
+                        out.push(ThinkPiece::Text(std::mem::take(&mut self.hold)));
+                    }
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn finish(&mut self) -> Vec<ThinkPiece> {
+        if self.hold.is_empty() {
+            return Vec::new();
+        }
+        match self.mode {
+            ThinkMode::Lead | ThinkMode::Body => {
+                vec![ThinkPiece::Text(std::mem::take(&mut self.hold))]
+            }
+            ThinkMode::Inside => {
+                let thinking = std::mem::take(&mut self.hold);
+                if thinking.is_empty() || self.suppress {
+                    Vec::new()
+                } else {
+                    vec![ThinkPiece::Thinking(thinking)]
+                }
+            }
+        }
+    }
+}
+
+fn trim_one_newline(text: &mut String) {
+    if let Some(rest) = text.strip_prefix("\r\n") {
+        *text = rest.to_owned();
+    } else if text.starts_with(['\n', '\r']) {
+        text.remove(0);
+    }
+}
+
+/// Byte length of the longest suffix of `text` that is a prefix of `tag`.
+fn partial_tag_suffix(text: &str, tag: &str) -> usize {
+    let bytes = text.as_bytes();
+    let tag = tag.as_bytes();
+    let max = tag.len().saturating_sub(1).min(bytes.len());
+    for len in (1..=max).rev() {
+        if bytes[bytes.len() - len..] == tag[..len] {
+            return len;
+        }
+    }
+    0
+}
+
+fn detail_item_text(item: &Value) -> String {
+    item.get("text")
+        .or_else(|| item.get("reasoning"))
+        .or_else(|| item.get("summary"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned()
+}
+
+fn detail_text(items: &[Value]) -> String {
+    let mut joined = String::new();
+    for item in items {
+        joined.push_str(&detail_item_text(item));
+    }
+    joined
+}
+
+fn same_detail(left: &Value, right: &Value) -> bool {
+    if let (Some(id), Some(other)) = (
+        left.get("id").and_then(Value::as_str),
+        right.get("id").and_then(Value::as_str),
+    ) {
+        return id == other;
+    }
+    if let (Some(index), Some(other)) = (
+        left.get("index").and_then(Value::as_u64),
+        right.get("index").and_then(Value::as_u64),
+    ) {
+        return index == other;
+    }
+    false
+}
+
+fn merge_detail(existing: &mut Value, incoming: &Value) {
+    let prev = detail_item_text(existing);
+    let next = detail_item_text(incoming);
+    let text = if next.starts_with(&prev) {
+        next
+    } else if prev.starts_with(&next) {
+        prev
+    } else {
+        format!("{prev}{next}")
+    };
+    let Some(src) = incoming.as_object() else {
+        return;
+    };
+    let Some(dest) = existing.as_object_mut() else {
+        return;
+    };
+    for (key, value) in src {
+        if key != "text" {
+            dest.insert(key.clone(), value.clone());
+        }
+    }
+    dest.insert("text".to_owned(), json!(text));
+}
+
 /// One streaming tool call being stitched from argument fragments.
 #[derive(Default)]
 struct ToolCallAccumulator {
@@ -158,8 +408,19 @@ struct ToolCallAccumulator {
 /// Accumulates Chat Completions stream chunks.
 #[derive(Default)]
 pub(crate) struct CompletionsReducer {
-    thinking: String,
+    /// Thinking taken from `reasoning_details`.
+    detail_thinking: String,
+    /// Original `reasoning_details` items, merged across stream chunks.
+    reasoning_details: Vec<Value>,
+    /// Thinking taken from `reasoning_content` or `reasoning`.
+    content_thinking: String,
+    /// The turn's reasoning arrived as `reasoning_content`, not details.
+    from_reasoning_content: bool,
+    /// Thinking parsed out of a leading `<think>` wrapper.
+    inline_thinking: String,
     text: String,
+    /// Splits a leading `<think>` wrapper out of `delta.content`.
+    think: ThinkSplitter,
     tool_calls: Vec<ToolCallAccumulator>,
     usage: Option<Usage>,
     stop_reason: Option<StopReason>,
@@ -188,7 +449,11 @@ impl CompletionsReducer {
     }
 
     fn has_partial(&self) -> bool {
-        !self.thinking.is_empty()
+        !self.detail_thinking.is_empty()
+            || !self.content_thinking.is_empty()
+            || !self.inline_thinking.is_empty()
+            || !self.reasoning_details.is_empty()
+            || self.think.is_holding()
             || !self.text.is_empty()
             || self.tool_calls.iter().any(|call| {
                 call.id.is_some() || !call.name.is_empty() || !call.arguments.is_empty()
@@ -196,6 +461,7 @@ impl CompletionsReducer {
     }
 
     fn assemble(&mut self) -> StreamEvent {
+        self.finish_think();
         for piece in self.xml.finish() {
             if let crate::xml_tool_calls::XmlPiece::Text(text) = piece {
                 self.text.push_str(&text);
@@ -218,7 +484,8 @@ impl CompletionsReducer {
         let has_calls = calls
             .iter()
             .any(|(id, name, _)| !id.is_empty() && !name.is_empty());
-        let blocks = assemble_blocks(&self.thinking, &self.text, calls);
+        let (thinking, replay) = self.thinking_replay();
+        let blocks = assemble_blocks_with_replay(&thinking, &self.text, calls, replay.as_deref());
         // XML-filtered calls arrive without a `tool_calls` finish reason;
         // any dispatched call set must read as tool use (length stays).
         // An interruption is not tool use: the calls were not finished.
@@ -231,6 +498,130 @@ impl CompletionsReducer {
                 stop_reason,
             },
         }
+    }
+
+    /// Pulls a held `<think>` tail into thinking or text before the terminal
+    /// message is built. Events are not emitted; the committed block is the
+    /// record the transcript keeps.
+    fn finish_think(&mut self) {
+        let mut ignored = Vec::new();
+        for piece in self.think.finish() {
+            self.apply_think_piece(piece, &mut ignored);
+        }
+    }
+
+    fn apply_think_piece(&mut self, piece: ThinkPiece, events: &mut Vec<StreamEvent>) {
+        match piece {
+            ThinkPiece::Text(text) => self.absorb_text(&text, events),
+            ThinkPiece::Thinking(text) => {
+                self.inline_thinking.push_str(&text);
+                events.push(StreamEvent::ThinkingDelta(text));
+            }
+        }
+    }
+
+    fn absorb_content(&mut self, text: &str, events: &mut Vec<StreamEvent>) {
+        let suppress = !self.reasoning_details.is_empty() || self.from_reasoning_content;
+        for piece in self.think.push(text, suppress) {
+            self.apply_think_piece(piece, events);
+        }
+    }
+
+    fn thinking_replay(&self) -> (String, Option<String>) {
+        if !self.reasoning_details.is_empty() {
+            let text = detail_text(&self.reasoning_details);
+            let text = if text.is_empty() {
+                self.detail_thinking.clone()
+            } else {
+                text
+            };
+            let replay = json!({"reasoning_details": self.reasoning_details}).to_string();
+            return (text, Some(replay));
+        }
+        if self.from_reasoning_content {
+            return (
+                self.content_thinking.clone(),
+                Some(json!({"reasoning_content": true}).to_string()),
+            );
+        }
+        (self.inline_thinking.clone(), None)
+    }
+
+    fn absorb_reasoning_content(
+        &mut self,
+        text: &str,
+        events: &mut Vec<StreamEvent>,
+    ) -> Result<(), &'static str> {
+        // Details already carry the thought. Appending `reasoning_content`
+        // would show it a second time.
+        if text.is_empty() || !self.reasoning_details.is_empty() {
+            return Ok(());
+        }
+        if !charge_stream(&mut self.accumulated, text.len()) {
+            return Err("stream exceeded the output limit");
+        }
+        self.from_reasoning_content = true;
+        self.content_thinking.push_str(text);
+        events.push(StreamEvent::ThinkingDelta(text.to_owned()));
+        Ok(())
+    }
+
+    fn absorb_reasoning_details(
+        &mut self,
+        value: &Value,
+        events: &mut Vec<StreamEvent>,
+    ) -> Result<(), &'static str> {
+        let incoming = match value {
+            Value::Array(items) => items.clone(),
+            Value::Object(_) => vec![value.clone()],
+            _ => return Ok(()),
+        };
+        if incoming.is_empty() {
+            return Ok(());
+        }
+        let before = detail_text(&self.reasoning_details);
+        let incoming_text = detail_text(&incoming);
+        if !self.reasoning_details.is_empty() && incoming_text.starts_with(&before) {
+            if incoming_text.len() > before.len() {
+                self.reasoning_details = incoming;
+            } else if incoming.len() == self.reasoning_details.len() {
+                for (dest, src) in self.reasoning_details.iter_mut().zip(incoming) {
+                    merge_detail(dest, &src);
+                }
+            }
+        } else if !self.reasoning_details.is_empty() && before.starts_with(&incoming_text) {
+            if incoming_text == before && incoming.len() == self.reasoning_details.len() {
+                for (dest, src) in self.reasoning_details.iter_mut().zip(incoming) {
+                    merge_detail(dest, &src);
+                }
+            }
+        } else {
+            for item in incoming {
+                if let Some(position) = self
+                    .reasoning_details
+                    .iter()
+                    .position(|existing| same_detail(existing, &item))
+                {
+                    merge_detail(&mut self.reasoning_details[position], &item);
+                } else {
+                    self.reasoning_details.push(item);
+                }
+            }
+        }
+        let after = detail_text(&self.reasoning_details);
+        if after.starts_with(&self.detail_thinking) {
+            let delta = after[self.detail_thinking.len()..].to_owned();
+            if !delta.is_empty() {
+                if !charge_stream(&mut self.accumulated, delta.len()) {
+                    return Err("stream exceeded the output limit");
+                }
+                self.detail_thinking.push_str(&delta);
+                events.push(StreamEvent::ThinkingDelta(delta));
+            }
+        } else if !after.is_empty() {
+            self.detail_thinking = after;
+        }
+        Ok(())
     }
 
     /// Runs one streamed content fragment through the XML tool-call filter.
@@ -290,31 +681,47 @@ impl FrameReducer for CompletionsReducer {
         }
         if let Some(choice) = chunk["choices"].get(0) {
             let delta = &choice["delta"];
-            if let Some(text) = delta["content"].as_str()
-                && !text.is_empty()
+            // Reasoning fields first, so a leading `<think>` in the same
+            // chunk is dropped instead of shown twice.
+            if let Some(details) = delta
+                .get("reasoning_details")
+                .filter(|value| !value.is_null())
+                && let Err(message) = self.absorb_reasoning_details(details, &mut events)
             {
-                if !charge_stream(&mut self.accumulated, text.len()) {
-                    self.terminal_sent = true;
-                    return vec![crate::driver::protocol_error(
-                        "stream exceeded the output limit",
-                    )];
-                }
-                self.absorb_text(text, &mut events);
+                self.terminal_sent = true;
+                return vec![crate::driver::protocol_error(message)];
             }
-            let reasoning = delta["reasoning_content"]
-                .as_str()
-                .or_else(|| delta["reasoning"].as_str());
-            if let Some(text) = reasoning
-                && !text.is_empty()
+            if let Some(message) = choice.get("message")
+                && let Some(details) = message
+                    .get("reasoning_details")
+                    .filter(|value| !value.is_null())
+                && let Err(message) = self.absorb_reasoning_details(details, &mut events)
             {
+                self.terminal_sent = true;
+                return vec![crate::driver::protocol_error(message)];
+            }
+            let reasoning = [
+                delta["reasoning_content"].as_str(),
+                delta["reasoning"].as_str(),
+                choice["message"]["reasoning_content"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|text| !text.is_empty());
+            if let Some(text) = reasoning
+                && let Err(message) = self.absorb_reasoning_content(text, &mut events)
+            {
+                self.terminal_sent = true;
+                return vec![crate::driver::protocol_error(message)];
+            }
+            if let Some(text) = delta["content"].as_str().filter(|text| !text.is_empty()) {
                 if !charge_stream(&mut self.accumulated, text.len()) {
                     self.terminal_sent = true;
                     return vec![crate::driver::protocol_error(
                         "stream exceeded the output limit",
                     )];
                 }
-                self.thinking.push_str(text);
-                events.push(StreamEvent::ThinkingDelta(text.to_owned()));
+                self.absorb_content(text, &mut events);
             }
             if let Some(fragments) = delta["tool_calls"].as_array() {
                 for fragment in fragments {
@@ -609,7 +1016,10 @@ mod tests {
         );
         assert_eq!(minimax["messages"][0]["content"], "answer");
         assert!(minimax["messages"][0].get("reasoning_content").is_none());
-        assert!(minimax["messages"][0].get("reasoning_details").is_none());
+        assert_eq!(
+            minimax["messages"][0]["reasoning_details"],
+            serde_json::json!([{ "type": "reasoning.text", "text": "why" }])
+        );
 
         let minimax_thinking_only = build_body(
             "MiniMax-M3",
@@ -623,10 +1033,184 @@ mod tests {
                 ..Request::default()
             },
         );
-        assert!(
-            minimax_thinking_only["messages"]
-                .as_array()
-                .is_some_and(Vec::is_empty)
+        assert_eq!(minimax_thinking_only["messages"][0]["content"], "");
+        assert_eq!(
+            minimax_thinking_only["messages"][0]["reasoning_details"][0]["text"],
+            "why"
         );
+    }
+
+    #[test]
+    fn minimax_replays_reasoning_details_verbatim_and_stays_stable() {
+        let details = serde_json::json!([
+            {
+                "type": "reasoning.text",
+                "id": "reasoning-text-1",
+                "format": "MiniMax-response-v1",
+                "index": 0,
+                "text": "plan the edit exactly"
+            }
+        ]);
+        let replay = serde_json::json!({"reasoning_details": details}).to_string();
+        let request = Request {
+            messages: vec![std::sync::Arc::new(Message::Assistant(AssistantMessage {
+                blocks: vec![
+                    ContentBlock::Thinking(
+                        ThinkingBlock::new("plan the edit exactly").with_replay(replay),
+                    ),
+                    ContentBlock::Text(TextBlock::new("visible answer")),
+                ],
+                usage: None,
+                stop_reason: StopReason::Stop,
+            }))],
+            reasoning: Some(mycode_core::ReasoningLevel::Max),
+            ..Request::default()
+        };
+        let endpoint = "https://api.minimaxi.com/v1/chat/completions";
+        let first = build_body("MiniMax-M3", endpoint, &request);
+        let second = build_body("MiniMax-M3", endpoint, &request);
+        assert_eq!(first["thinking"]["type"], "adaptive");
+        assert_eq!(first["reasoning_split"], true);
+        assert!(first.get("reasoning_effort").is_none());
+        assert_eq!(first["messages"][0]["content"], "visible answer");
+        assert_eq!(first["messages"][0]["reasoning_details"], details);
+        assert!(first["messages"][0].get("reasoning_content").is_none());
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn minimax_reasoning_content_replays_as_content_not_details() {
+        let request = Request {
+            messages: vec![std::sync::Arc::new(Message::Assistant(AssistantMessage {
+                blocks: vec![
+                    ContentBlock::Thinking(
+                        ThinkingBlock::new("hidden").with_replay(r#"{"reasoning_content":true}"#),
+                    ),
+                    ContentBlock::Text(TextBlock::new("answer")),
+                ],
+                usage: None,
+                stop_reason: StopReason::Stop,
+            }))],
+            ..Request::default()
+        };
+        let body = build_body("MiniMax-M3", "https://api.minimax.io/v1", &request);
+        assert_eq!(body["messages"][0]["reasoning_content"], "hidden");
+        assert!(body["messages"][0].get("reasoning_details").is_none());
+        assert_eq!(body["messages"][0]["content"], "answer");
+    }
+
+    #[test]
+    fn leading_think_tag_becomes_a_thinking_block() {
+        let mut reducer = CompletionsReducer::new();
+        let deltas = reducer
+            .feed(r#"{"choices":[{"delta":{"content":"<think>plan the page</think>\nhello"}}]}"#);
+        assert!(deltas.iter().any(|event| matches!(
+            event,
+            mycode_core::StreamEvent::ThinkingDelta(text) if text == "plan the page"
+        )));
+        assert!(deltas.iter().any(|event| matches!(
+            event,
+            mycode_core::StreamEvent::TextDelta(text) if text == "hello"
+        )));
+        let message = take_done(reducer.feed("[DONE]"));
+        assert_eq!(thinking_of(&message), "plan the page");
+        assert_eq!(text_of(&message), "hello");
+        let replay = message.blocks.iter().find_map(|block| match block {
+            ContentBlock::Thinking(thinking) => thinking.replay.clone(),
+            _ => None,
+        });
+        assert!(replay.is_none(), "a parsed tag has no vendor blob");
+    }
+
+    #[test]
+    fn think_tag_split_across_chunks_stays_out_of_the_reply() {
+        let mut reducer = CompletionsReducer::new();
+        assert!(
+            reducer
+                .feed(r#"{"choices":[{"delta":{"content":"<thi"}}]}"#)
+                .iter()
+                .all(|event| !matches!(event, mycode_core::StreamEvent::TextDelta(_)))
+        );
+        reducer.feed(r#"{"choices":[{"delta":{"content":"nk>plan</thi"}}]}"#);
+        reducer.feed(r#"{"choices":[{"delta":{"content":"nk>\nanswer"}}]}"#);
+        let message = take_done(reducer.feed("[DONE]"));
+        assert_eq!(thinking_of(&message), "plan");
+        assert_eq!(text_of(&message), "answer");
+        assert!(!text_of(&message).contains("<think>"));
+    }
+
+    #[test]
+    fn plain_text_is_not_held_for_a_think_tag() {
+        let mut reducer = CompletionsReducer::new();
+        let deltas = reducer.feed(r#"{"choices":[{"delta":{"content":"hello"}}]}"#);
+        assert!(deltas.iter().any(|event| matches!(
+            event,
+            mycode_core::StreamEvent::TextDelta(text) if text == "hello"
+        )));
+    }
+
+    #[test]
+    fn minimax_reasoning_details_map_to_a_thinking_block() {
+        let mut reducer = CompletionsReducer::new();
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_details": [{
+                        "type": "reasoning.text",
+                        "id": "reasoning-text-1",
+                        "format": "MiniMax-response-v1",
+                        "index": 0,
+                        "text": "plan the edit exactly"
+                    }],
+                    "content": "<think>duplicate</think>\nvisible answer"
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let deltas = reducer.feed(&chunk.to_string());
+        assert!(deltas.iter().any(|event| matches!(
+            event,
+            mycode_core::StreamEvent::ThinkingDelta(text) if text == "plan the edit exactly"
+        )));
+        assert!(deltas.iter().all(|event| !matches!(
+            event,
+            mycode_core::StreamEvent::ThinkingDelta(text) if text.contains("duplicate")
+        )));
+        let message = take_done(reducer.feed("[DONE]"));
+        assert_eq!(thinking_of(&message), "plan the edit exactly");
+        assert_eq!(text_of(&message), "visible answer");
+        let replay = message.blocks.iter().find_map(|block| match block {
+            ContentBlock::Thinking(thinking) => thinking.replay.clone(),
+            _ => None,
+        });
+        let replay = replay.expect("details blob");
+        let request = Request {
+            messages: vec![std::sync::Arc::new(Message::Assistant(message))],
+            ..Request::default()
+        };
+        let body = build_body("MiniMax-M3", "https://api.minimax.io/v1", &request);
+        let echoed = &body["messages"][0]["reasoning_details"];
+        assert_eq!(echoed[0]["id"], "reasoning-text-1");
+        assert_eq!(echoed[0]["format"], "MiniMax-response-v1");
+        assert_eq!(echoed[0]["text"], "plan the edit exactly");
+        assert_eq!(body["messages"][0]["content"], "visible answer");
+        let again = build_body("MiniMax-M3", "https://api.minimax.io/v1", &request);
+        assert_eq!(again["messages"][0]["reasoning_details"], *echoed);
+        assert!(replay.contains("reasoning-text-1"));
+    }
+
+    #[test]
+    fn reasoning_details_fragments_with_the_same_id_concatenate() {
+        let mut reducer = CompletionsReducer::new();
+        reducer.feed(
+            r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","id":"reasoning-text-1","index":0,"text":"plan"}]}}]}"#,
+        );
+        reducer.feed(
+            r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","id":"reasoning-text-1","index":0,"text":" the edit"}]}}]}"#,
+        );
+        reducer.feed(r#"{"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}"#);
+        let message = take_done(reducer.feed("[DONE]"));
+        assert_eq!(thinking_of(&message), "plan the edit");
+        assert_eq!(text_of(&message), "answer");
     }
 }

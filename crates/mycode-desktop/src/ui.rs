@@ -233,13 +233,7 @@ fn render_toasts(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEle
 
 /// Compact token-count spelling: 12.3k / 1.2M. Shared by the inspector.
 pub(super) fn compact_count(count: u64) -> String {
-    if count >= 1_000_000 {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    } else if count >= 1_000 {
-        format!("{:.1}k", count as f64 / 1_000.0)
-    } else {
-        count.to_string()
-    }
+    crate::view_model::compact_count(count)
 }
 
 /// A 7px status lamp: the demo's `.lamp` dot.
