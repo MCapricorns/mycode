@@ -139,6 +139,9 @@ pub(crate) fn reasoning_replay(model: &str, endpoint: &str) -> ReasoningReplay {
         || model_lower.contains("kimi")
         || model_lower.contains("moonshot")
         || endpoint_lower.contains("moonshot")
+        || endpoint_lower.contains("api.kimi.com")
+        || endpoint_lower.contains("kimi.ai")
+        || is_k3_model(&model_lower)
     {
         return ReasoningReplay::Content;
     }
@@ -357,12 +360,14 @@ fn glm_anthropic_effort(level: ReasoningLevel) -> &'static str {
 }
 
 fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
-    // Kimi K3 publishes effort values. The rest of the family is a thinking
-    // toggle and rejects `reasoning_effort`.
-    if (model_id.contains("kimi-k3") || model_id.ends_with("/k3") || model_id == "k3")
-        && let Some(token) = effort_token(level)
-    {
-        body["reasoning_effort"] = json!(token);
+    // K3 always thinks and rejects `thinking`. Effort is `low` / `high` /
+    // `max` (default max). Off has no disable switch, so the field is omitted
+    // rather than sending `{type:"disabled"}`, which this model 400s.
+    // https://platform.kimi.com/docs/guide/use-reasoning-effort.md
+    if is_k3_model(model_id) {
+        if let Some(token) = k3_effort(level) {
+            body["reasoning_effort"] = json!(token);
+        }
         return;
     }
     // K2.7 Code rejects `{type:"disabled"}`. Leaving the field off matches
@@ -377,24 +382,57 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     }
 }
 
+/// K3 effort tokens. `minimal` and `xhigh` are not on the K3 list.
+fn k3_effort(level: ReasoningLevel) -> Option<&'static str> {
+    match level {
+        ReasoningLevel::Off | ReasoningLevel::On => None,
+        ReasoningLevel::Minimal | ReasoningLevel::Low => Some("low"),
+        ReasoningLevel::Medium | ReasoningLevel::High => Some("high"),
+        ReasoningLevel::Xhigh | ReasoningLevel::Max => Some("max"),
+    }
+}
+
 fn apply_enable_thinking(body: &mut Value, level: ReasoningLevel) {
     body["enable_thinking"] = json!(level != ReasoningLevel::Off);
 }
 
 fn apply_deepseek(body: &mut Value, model_id: &str, level: ReasoningLevel) {
-    if model_id.contains("deepseek-v4") {
-        let effort = match level {
-            ReasoningLevel::Off => "none",
-            ReasoningLevel::On => "high",
-            other => other.effort_token().unwrap_or("high"),
-        };
-        body["reasoning_effort"] = json!(effort);
+    // Current chat models take the thinking toggle and `reasoning_effort`
+    // `low` / `high` / `max` together. Chat does not accept `none`.
+    // `deepseek-flash` and the legacy alias `deepseek-v4-flash` are one model.
+    // https://api-docs.deepseek.com/guides/thinking_mode
+    if deepseek_effort_model(model_id) {
+        if level == ReasoningLevel::Off {
+            body["thinking"] = json!({ "type": "disabled" });
+            return;
+        }
+        body["thinking"] = json!({ "type": "enabled" });
+        body["reasoning_effort"] = json!(deepseek_effort(level));
         return;
     }
+    // Older ids (chat, reasoner, r1, v3) are the toggle. OpenCode's
+    // `reasoningVariants` returns an empty map for those ids.
     if level == ReasoningLevel::Off {
         body["thinking"] = json!({ "type": "disabled" });
     } else {
         body["thinking"] = json!({ "type": "enabled" });
+    }
+}
+
+fn deepseek_effort_model(model_id: &str) -> bool {
+    model_id.contains("deepseek-flash") || model_id.contains("deepseek-v4")
+}
+
+/// Docs map minimal→low, low→low, medium→high, high→high, xhigh→high, max→max.
+fn deepseek_effort(level: ReasoningLevel) -> &'static str {
+    match level {
+        ReasoningLevel::Minimal | ReasoningLevel::Low => "low",
+        ReasoningLevel::Max => "max",
+        ReasoningLevel::Off
+        | ReasoningLevel::On
+        | ReasoningLevel::Medium
+        | ReasoningLevel::High
+        | ReasoningLevel::Xhigh => "high",
     }
 }
 
@@ -444,14 +482,34 @@ fn zai_host(host: &str) -> bool {
 }
 
 /// Every Kimi and Moonshot model, not a short id list.
+///
+/// `k3` / `k3-256k` contain neither "kimi" nor "moonshot". The coding-plan
+/// proxy is `127.0.0.1`, so the model id has to match on its own.
 fn kimi_family(model_id: &str, host: &str) -> bool {
-    model_id.contains("kimi")
+    is_k3_model(model_id)
+        || model_id.contains("kimi")
         || model_id.contains("moonshot")
         || model_id.contains("k2p")
         || host.contains("api.kimi.com")
         || host.contains("moonshot.ai")
         || host.contains("moonshot.cn")
         || host.contains("moonshotai.cn")
+}
+
+/// K3 ids: `k3`, `k3-*`, `*/k3`, `*/k3-*`, and `kimi-k3` / `kimi-k3-*`.
+///
+/// `k30`, `k3x`, `mk3`, `task-k3`, and `kimi-k30` are not K3.
+fn is_k3_model(model_id: &str) -> bool {
+    model_id
+        .to_ascii_lowercase()
+        .split(['/', '\\'])
+        .any(|segment| {
+            segment == "k3"
+                || segment.starts_with("k3-")
+                || segment
+                    .strip_prefix("kimi-k3")
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+        })
 }
 
 fn gpt5_defaults_medium(model_id: &str) -> bool {
@@ -1082,6 +1140,183 @@ mod tests {
             &Request::new().with_reasoning(ReasoningLevel::Off),
         );
         assert_eq!(kimi_off["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn k3_ids_send_reasoning_effort_from_the_model_id_alone() {
+        let proxy = "http://127.0.0.1:18080/kimi/v1/chat/completions";
+        let coding = "https://api.kimi.com/coding/v1/chat/completions";
+        for endpoint in [proxy, coding] {
+            for model in [
+                "k3",
+                "k3-256k",
+                "K3-256K",
+                "acme/k3",
+                "acme/k3-256k",
+                "kimi-k3",
+            ] {
+                let mut max = serde_json::json!({});
+                apply_reasoning_effort(&mut max, model, endpoint, ReasoningLevel::Max);
+                assert_eq!(max["reasoning_effort"], "max", "{model} {endpoint}");
+                assert!(max.get("thinking").is_none(), "{model} {endpoint}");
+
+                let mut off = serde_json::json!({});
+                apply_reasoning_effort(&mut off, model, endpoint, ReasoningLevel::Off);
+                assert!(off.get("thinking").is_none(), "{model} {endpoint}");
+                assert!(off.get("reasoning_effort").is_none(), "{model} {endpoint}");
+            }
+            for model in ["kimi-for-coding", "kimi-for-coding-highspeed"] {
+                let mut max = serde_json::json!({});
+                apply_reasoning_effort(&mut max, model, endpoint, ReasoningLevel::Max);
+                assert_eq!(max["thinking"]["type"], "enabled", "{model} {endpoint}");
+                assert!(max.get("reasoning_effort").is_none(), "{model} {endpoint}");
+
+                let mut off = serde_json::json!({});
+                apply_reasoning_effort(&mut off, model, endpoint, ReasoningLevel::Off);
+                assert_eq!(off["thinking"]["type"], "disabled", "{model} {endpoint}");
+            }
+        }
+
+        let mut medium = serde_json::json!({});
+        apply_reasoning_effort(&mut medium, "k3-256k", proxy, ReasoningLevel::Medium);
+        assert_eq!(medium["reasoning_effort"], "high");
+        let mut low = serde_json::json!({});
+        apply_reasoning_effort(&mut low, "k3", proxy, ReasoningLevel::Minimal);
+        assert_eq!(low["reasoning_effort"], "low");
+
+        for model in ["k30", "k3x", "mk3", "task-k3"] {
+            let mut off = serde_json::json!({});
+            apply_reasoning_effort(&mut off, model, proxy, ReasoningLevel::Off);
+            assert_eq!(off["reasoning_effort"], "none", "{model}");
+            assert!(off.get("thinking").is_none(), "{model}");
+            assert_eq!(
+                super::reasoning_replay(model, proxy),
+                super::ReasoningReplay::Omit,
+                "{model}"
+            );
+        }
+        let mut kimi_k30 = serde_json::json!({});
+        apply_reasoning_effort(&mut kimi_k30, "kimi-k30", proxy, ReasoningLevel::Off);
+        assert_eq!(kimi_k30["thinking"]["type"], "disabled");
+        assert!(kimi_k30.get("reasoning_effort").is_none());
+        assert_eq!(
+            super::reasoning_replay("k3", proxy),
+            super::ReasoningReplay::Content
+        );
+        assert_eq!(
+            super::reasoning_replay("k3-256k", "https://api.kimi.com/coding/v1/chat/completions"),
+            super::ReasoningReplay::Content
+        );
+        assert_eq!(
+            super::reasoning_replay(
+                "kimi-for-coding",
+                "http://127.0.0.1:18080/kimi/v1/chat/completions"
+            ),
+            super::ReasoningReplay::Content
+        );
+    }
+
+    #[test]
+    fn deepseek_flash_and_v4_flash_share_the_effort_shape() {
+        let endpoint = "https://api.deepseek.com/chat/completions";
+        let mut flash_off = serde_json::json!({});
+        let mut alias_off = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut flash_off,
+            "deepseek-flash",
+            endpoint,
+            ReasoningLevel::Off,
+        );
+        apply_reasoning_effort(
+            &mut alias_off,
+            "deepseek-v4-flash",
+            endpoint,
+            ReasoningLevel::Off,
+        );
+        assert_eq!(flash_off, alias_off);
+        assert_eq!(flash_off["thinking"]["type"], "disabled");
+        assert!(flash_off.get("reasoning_effort").is_none());
+
+        let mut flash_max = serde_json::json!({});
+        let mut alias_max = serde_json::json!({});
+        let mut pro_max = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut flash_max,
+            "deepseek-flash",
+            endpoint,
+            ReasoningLevel::Max,
+        );
+        apply_reasoning_effort(
+            &mut alias_max,
+            "deepseek-v4-flash",
+            endpoint,
+            ReasoningLevel::Max,
+        );
+        apply_reasoning_effort(
+            &mut pro_max,
+            "deepseek-v4-pro",
+            endpoint,
+            ReasoningLevel::Max,
+        );
+        assert_eq!(flash_max, alias_max);
+        assert_eq!(flash_max["thinking"]["type"], "enabled");
+        assert_eq!(flash_max["reasoning_effort"], "max");
+        assert_eq!(pro_max["thinking"]["type"], "enabled");
+        assert_eq!(pro_max["reasoning_effort"], "max");
+
+        let mut pro_off = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut pro_off,
+            "deepseek-v4-pro",
+            endpoint,
+            ReasoningLevel::Off,
+        );
+        assert_eq!(pro_off["thinking"]["type"], "disabled");
+        assert!(pro_off.get("reasoning_effort").is_none());
+
+        let mapped = [
+            (ReasoningLevel::Minimal, "low"),
+            (ReasoningLevel::Low, "low"),
+            (ReasoningLevel::Medium, "high"),
+            (ReasoningLevel::High, "high"),
+            (ReasoningLevel::Xhigh, "high"),
+            (ReasoningLevel::On, "high"),
+            (ReasoningLevel::Max, "max"),
+        ];
+        for (level, effort) in mapped {
+            let mut body = serde_json::json!({});
+            apply_reasoning_effort(&mut body, "deepseek-flash", endpoint, level);
+            assert_eq!(body["reasoning_effort"], effort, "{level:?}");
+            assert_eq!(body["thinking"]["type"], "enabled", "{level:?}");
+        }
+
+        // The server 400s `deepseek-v4.1-flash` as an unknown model name.
+        // The substring still selects the current-model fields.
+        let mut rejected_name = serde_json::json!({});
+        apply_reasoning_effort(
+            &mut rejected_name,
+            "deepseek-v4.1-flash",
+            endpoint,
+            ReasoningLevel::Max,
+        );
+        assert_eq!(rejected_name["reasoning_effort"], "max");
+        assert_eq!(rejected_name["thinking"]["type"], "enabled");
+
+        for model in [
+            "deepseek-chat",
+            "deepseek-reasoner",
+            "deepseek-r1",
+            "deepseek-v3",
+        ] {
+            let mut on = serde_json::json!({});
+            apply_reasoning_effort(&mut on, model, endpoint, ReasoningLevel::Max);
+            assert_eq!(on["thinking"]["type"], "enabled", "{model}");
+            assert!(on.get("reasoning_effort").is_none(), "{model}");
+            let mut off = serde_json::json!({});
+            apply_reasoning_effort(&mut off, model, endpoint, ReasoningLevel::Off);
+            assert_eq!(off["thinking"]["type"], "disabled", "{model}");
+            assert!(off.get("reasoning_effort").is_none(), "{model}");
+        }
     }
 
     #[test]

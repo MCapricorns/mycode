@@ -484,6 +484,7 @@ mod tests {
     use crate::anthropic_messages::build_body as anthropic_body;
     use crate::openai_completions::build_body as chat_body;
     use crate::openai_responses::build_body as responses_body;
+    use crate::wire_common::usage_from_value;
     use mycode_core::{ProviderError, ProviderErrorKind};
 
     fn tool(name: &str) -> ToolSpec {
@@ -1467,5 +1468,335 @@ mod tests {
             line,
             "[usage] provider=minimax model=MiniMax-M2 input=12345 cache_read=11800 cache_write=0 output=420"
         );
+    }
+
+    /// Request-body snapshots for the families this crate sends.
+    ///
+    /// Shapes follow `sst/opencode` `packages/opencode/src/provider/transform.ts`:
+    /// `applyCaching` (up to four `cache_control` breakpoints), `reasoningVariants`
+    /// / `reasoningEffort` / `providerOptions` / `smallOptions` (effort and
+    /// thinking fields). Bedrock and Vertex are not catalog presets; a custom
+    /// Anthropic URL still gets `cache_control`.
+    #[test]
+    fn opencode_family_snapshots_cover_effort_cache_and_usage() {
+        let mut base = Request::new()
+            .with_system_prompt("stable")
+            .with_tool(tool("read"))
+            .with_message(user("hello"));
+        base.prompt_cache_key = Some("session-1".to_owned());
+
+        let off = base.clone().with_reasoning(ReasoningLevel::Off);
+        let max = base.with_reasoning(ReasoningLevel::Max);
+
+        let claude = anthropic_body(
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com/v1/messages",
+            &max,
+        );
+        assert_eq!(claude["thinking"]["type"], "adaptive");
+        assert_eq!(claude["output_config"]["effort"], "max");
+        assert!(claude["thinking"].get("budget_tokens").is_none());
+        assert_eq!(cache_type(&claude["tools"][0]), Some("ephemeral"));
+        assert_eq!(cache_type(&claude["system"][0]), Some("ephemeral"));
+        assert_eq!(
+            cache_type(&claude["messages"][0]["content"][0]),
+            Some("ephemeral")
+        );
+        assert!(count_cache_control(&claude) <= ANTHROPIC_BREAKPOINT_CAP);
+        assert!(claude.get("prompt_cache_key").is_none());
+        let claude_off = anthropic_body(
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com/v1/messages",
+            &off,
+        );
+        assert_eq!(claude_off["thinking"]["type"], "disabled");
+        assert!(claude_off.get("output_config").is_none());
+        assert!(count_cache_control(&claude_off) > 0);
+
+        let older = anthropic_body(
+            "claude-sonnet-4-5",
+            "https://api.anthropic.com/v1/messages",
+            &max,
+        );
+        assert_eq!(older["thinking"]["type"], "enabled");
+        assert!(older["thinking"]["budget_tokens"].as_u64().unwrap_or(0) > 0);
+        assert!(older.get("output_config").is_none());
+        let older_off = anthropic_body(
+            "claude-sonnet-4-5",
+            "https://api.anthropic.com/v1/messages",
+            &off,
+        );
+        assert_eq!(older_off["thinking"]["type"], "disabled");
+
+        let openai = chat_body("gpt-5", "https://api.openai.com/v1/chat/completions", &max);
+        assert_eq!(openai["reasoning_effort"], "max");
+        assert!(openai.get("thinking").is_none());
+        assert_eq!(openai["prompt_cache_key"], "session-1");
+        assert_eq!(count_cache_control(&openai), 0);
+        let openai_off = chat_body("gpt-5", "https://api.openai.com/v1/chat/completions", &off);
+        assert_eq!(openai_off["reasoning_effort"], "none");
+
+        let responses = responses_body("gpt-5", "https://api.openai.com/v1/responses", &max);
+        assert_eq!(responses["reasoning"]["effort"], "max");
+        assert!(responses.get("reasoning_effort").is_none());
+        assert_eq!(responses["prompt_cache_key"], "session-1");
+        assert_eq!(count_cache_control(&responses), 0);
+        let responses_off = responses_body("gpt-5", "https://api.openai.com/v1/responses", &off);
+        assert_eq!(responses_off["reasoning"]["effort"], "none");
+        let codex = responses_body(
+            "gpt-5",
+            "https://chatgpt.com/backend-api/codex/responses",
+            &max,
+        );
+        assert_eq!(codex["reasoning"]["effort"], "max");
+        assert_eq!(codex["prompt_cache_key"], "session-1");
+
+        let router = chat_body(
+            "anthropic/claude-sonnet-4.6",
+            "https://openrouter.ai/api/v1/chat/completions",
+            &max,
+        );
+        assert_eq!(router["reasoning"]["effort"], "max");
+        assert!(router.get("thinking").is_none());
+        assert!(router.get("prompt_cache_key").is_none());
+        assert_eq!(cache_type(&router["tools"][0]), Some("ephemeral"));
+        assert_eq!(
+            cache_type(&router["messages"][0]["content"][0]),
+            Some("ephemeral")
+        );
+        assert_eq!(
+            cache_type(&router["messages"][1]["content"][0]),
+            Some("ephemeral")
+        );
+        assert!(count_cache_control(&router) <= ANTHROPIC_BREAKPOINT_CAP);
+        let router_off = chat_body(
+            "anthropic/claude-sonnet-4.6",
+            "https://openrouter.ai/api/v1/chat/completions",
+            &off,
+        );
+        assert_eq!(router_off["reasoning"]["effort"], "none");
+        let gemini_router = chat_body(
+            "google/gemini-2.5-pro",
+            "https://openrouter.ai/api/v1/chat/completions",
+            &max,
+        );
+        assert_eq!(gemini_router["reasoning"]["effort"], "max");
+        assert!(count_cache_control(&gemini_router) > 0);
+        assert!(gemini_router.get("prompt_cache_key").is_none());
+
+        let gemini = chat_body(
+            "gemini-2.5-pro",
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            &max,
+        );
+        assert_eq!(gemini["reasoning_effort"], "max");
+        assert_eq!(count_cache_control(&gemini), 0);
+        assert!(gemini.get("prompt_cache_key").is_none());
+        let gemini_off = chat_body(
+            "gemini-2.5-pro",
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            &off,
+        );
+        assert_eq!(gemini_off["reasoning_effort"], "none");
+
+        let qwen = chat_body(
+            "qwen3.7-max",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            &max,
+        );
+        assert_eq!(qwen["enable_thinking"], true);
+        assert_eq!(qwen["reasoning_effort"], "max");
+        assert!(qwen.get("thinking").is_none());
+        assert!(qwen.get("prompt_cache_key").is_none());
+        assert_eq!(
+            cache_type(&qwen["messages"][0]["content"][0]),
+            Some("ephemeral")
+        );
+        assert!(count_cache_control(&qwen) <= ANTHROPIC_BREAKPOINT_CAP);
+        let qwen_off = chat_body(
+            "qwen3.7-max",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            &off,
+        );
+        assert_eq!(qwen_off["enable_thinking"], false);
+        assert!(qwen_off.get("reasoning_effort").is_none());
+
+        let glm = chat_body(
+            "glm-5.3",
+            "https://api.z.ai/api/paas/v4/chat/completions",
+            &max,
+        );
+        assert_eq!(glm["thinking"]["type"], "enabled");
+        assert_eq!(glm["thinking"]["clear_thinking"], false);
+        assert_eq!(glm["reasoning_effort"], "max");
+        assert!(glm.get("prompt_cache_key").is_none());
+        assert_eq!(cache_type(&glm["tools"][0]), Some("ephemeral"));
+        assert!(count_cache_control(&glm) <= ANTHROPIC_BREAKPOINT_CAP);
+        let glm_off = chat_body(
+            "glm-5.3",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            &off,
+        );
+        assert_eq!(glm_off["thinking"]["type"], "disabled");
+        assert!(glm_off["thinking"].get("clear_thinking").is_none());
+        assert!(glm_off.get("reasoning_effort").is_none());
+
+        for (model, endpoint, key) in [
+            ("grok-4", "https://api.x.ai/v1/chat/completions", true),
+            (
+                "llama-3.3-70b-versatile",
+                "https://api.groq.com/openai/v1/chat/completions",
+                false,
+            ),
+            (
+                "mistral-large",
+                "https://api.mistral.ai/v1/chat/completions",
+                true,
+            ),
+            (
+                "llama-3.3-70b",
+                "https://llm.example.test/v1/chat/completions",
+                true,
+            ),
+        ] {
+            let body = chat_body(model, endpoint, &max);
+            assert_eq!(body["reasoning_effort"], "max", "{model}");
+            assert!(body.get("thinking").is_none(), "{model}");
+            assert_eq!(count_cache_control(&body), 0, "{model}");
+            assert_eq!(
+                body.get("prompt_cache_key").and_then(Value::as_str),
+                key.then_some("session-1"),
+                "{model}"
+            );
+            let disabled = chat_body(model, endpoint, &off);
+            assert_eq!(disabled["reasoning_effort"], "none", "{model}");
+        }
+
+        let mut flash = chat_body(
+            "deepseek-flash",
+            "https://api.deepseek.com/chat/completions",
+            &max,
+        );
+        let alias = chat_body(
+            "deepseek-v4-flash",
+            "https://api.deepseek.com/chat/completions",
+            &max,
+        );
+        flash["model"] = json!("deepseek-v4-flash");
+        assert_eq!(flash, alias);
+        assert_eq!(alias["thinking"]["type"], "enabled");
+        assert_eq!(alias["reasoning_effort"], "max");
+        assert!(alias.get("prompt_cache_key").is_none());
+        assert_eq!(count_cache_control(&alias), 0);
+        let pro = chat_body(
+            "deepseek-v4-pro",
+            "https://api.deepseek.com/chat/completions",
+            &off,
+        );
+        assert_eq!(pro["thinking"]["type"], "disabled");
+        assert!(pro.get("reasoning_effort").is_none());
+
+        let document = crate::catalog::bundled();
+        for id in ["bedrock", "vertex", "google", "azure"] {
+            assert!(
+                document.provider(id).is_none(),
+                "{id} is not a catalog preset"
+            );
+        }
+        assert!(document.providers.iter().all(|provider| {
+            let id = provider.id.to_ascii_lowercase();
+            !id.contains("bedrock") && !id.contains("vertex")
+        }));
+        let custom = anthropic_body(
+            "claude-sonnet-4-6",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic/v1/messages",
+            &max,
+        );
+        assert!(count_cache_control(&custom) > 0);
+        assert!(custom.get("prompt_cache_key").is_none());
+        assert_eq!(custom["thinking"]["type"], "adaptive");
+        assert_eq!(custom["output_config"]["effort"], "max");
+
+        let anthropic_usage = usage_from_value(&json!({
+            "input_tokens": 100,
+            "cache_read_input_tokens": 80,
+            "cache_creation_input_tokens": 20,
+            "output_tokens": 4,
+        }));
+        assert_eq!(anthropic_usage.cache_read_tokens, Some(80));
+        assert_eq!(anthropic_usage.cache_write_tokens, Some(20));
+        let openai_usage = usage_from_value(&json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 4,
+            "prompt_tokens_details": { "cached_tokens": 80 },
+        }));
+        assert_eq!(openai_usage.cache_read_tokens, Some(80));
+        assert_eq!(openai_usage.cache_write_tokens, None);
+        let deepseek_usage = usage_from_value(&json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 4,
+            "prompt_cache_hit_tokens": 80,
+            "prompt_cache_miss_tokens": 20,
+        }));
+        assert_eq!(deepseek_usage.cache_read_tokens, Some(80));
+        assert_eq!(deepseek_usage.cache_write_tokens, None);
+        assert_eq!(deepseek_usage.prompt_tokens, 100);
+        let gemini_usage = usage_from_value(&json!({
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 4,
+            "cachedContentTokenCount": 80,
+        }));
+        assert_eq!(gemini_usage.cache_read_tokens, Some(80));
+    }
+
+    #[test]
+    fn kimi_coding_plan_models_match_from_the_id_on_a_proxy() {
+        let mut request = Request::new()
+            .with_system_prompt("stable")
+            .with_reasoning(ReasoningLevel::Max)
+            .with_message(assistant("plan the edit", "visible answer", None))
+            .with_message(user("next"));
+        request.prompt_cache_key = Some("session-1".to_owned());
+        let hosts = [
+            "https://api.kimi.com/coding/v1/chat/completions",
+            "http://127.0.0.1:18080/kimi/v1/chat/completions",
+        ];
+        for endpoint in hosts {
+            let on_kimi = endpoint.contains("api.kimi.com");
+            for model in ["k3", "k3-256k"] {
+                let body = chat_body(model, endpoint, &request);
+                assert_eq!(body["reasoning_effort"], "max", "{model} {endpoint}");
+                assert!(body.get("thinking").is_none(), "{model} {endpoint}");
+                assert_eq!(
+                    body["messages"][1]["reasoning_content"], "plan the edit",
+                    "{model} {endpoint}"
+                );
+                assert_eq!(body["messages"][1]["content"], "visible answer");
+                assert_eq!(count_cache_control(&body), 0, "{model}");
+                assert_eq!(
+                    body.get("prompt_cache_key").is_some(),
+                    !on_kimi,
+                    "{model} {endpoint}"
+                );
+            }
+            for model in ["kimi-for-coding", "kimi-for-coding-highspeed"] {
+                let body = chat_body(model, endpoint, &request);
+                assert_eq!(body["thinking"]["type"], "enabled", "{model} {endpoint}");
+                assert!(body.get("reasoning_effort").is_none(), "{model}");
+                assert_eq!(body["messages"][1]["reasoning_content"], "plan the edit");
+                assert_eq!(count_cache_control(&body), 0);
+                assert_eq!(body.get("prompt_cache_key").is_some(), !on_kimi);
+            }
+        }
+
+        let off = Request::new().with_reasoning(ReasoningLevel::Off);
+        let proxy = "http://127.0.0.1:18080/kimi/v1/chat/completions";
+        for model in ["k3", "k3-256k"] {
+            let body = chat_body(model, proxy, &off);
+            assert!(body.get("thinking").is_none(), "{model}");
+            assert!(body.get("reasoning_effort").is_none(), "{model}");
+        }
+        let coding_off = chat_body("kimi-for-coding", proxy, &off);
+        assert_eq!(coding_off["thinking"]["type"], "disabled");
     }
 }
