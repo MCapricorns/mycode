@@ -261,13 +261,20 @@ jobs:
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       # MYCode.app + ad-hoc codesign + hdiutil; writes the .dmg and its
-      # .sha256. The zip stays: the in-app updater downloads it.
+      # .sha256. The zip stays: the in-app updater downloads it. The fat
+      # LTO build leaves a multi-GB target/ that fills the runner's disk
+      # before hdiutil can write, so the binary moves to /tmp and the
+      # build tree plus the cargo registry cache are dropped first.
       - name: Package DMG (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          binary="/tmp/mycode-desktop"
+          mv "target/${{ matrix.target }}/release/${{ matrix.binary }}" "${binary}"
+          rm -rf target ~/.cargo/registry
+          df -h /
           scripts/make_dmg.sh \
-            --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            --binary "${binary}" \
             --version "${MYCODE_PACKAGE_TAG#v}" \
             --output "mycode-desktop-${MYCODE_PACKAGE_TAG}-${{ matrix.target }}.dmg"
 
