@@ -2,8 +2,9 @@
 //!
 //! Relative paths stay on the session cwd. An absolute path under an extra
 //! workspace root is re-anchored to that root so the existing single-root
-//! walk still enforces containment. Paths outside every root stay on the
-//! session cwd and fail the existing escape check.
+//! walk still enforces containment. When several extra roots match, the
+//! deepest prefix wins; equal depths keep the earlier root. Paths outside
+//! every root stay on the session cwd and fail the existing escape check.
 
 use std::path::{Path, PathBuf};
 

@@ -22,7 +22,6 @@ pub enum FileAccess {
 pub struct FileRevision(String);
 
 impl FileRevision {
-    /// Returns the opaque token string.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -103,9 +102,9 @@ impl std::fmt::Debug for FileSnapshot {
 pub const MAX_READ_SCAN_BYTES: u64 = 32 * 1024 * 1024;
 /// Maximum UTF-8 bytes accepted by one write.
 pub const MAX_WRITE_BYTES: usize = 8 * 1024 * 1024;
-/// Display line cap retained from the previous read tool.
+/// Display line cap for one `read` window.
 pub const MAX_LINES: usize = 2000;
-/// Display byte cap retained from the previous read tool.
+/// Display byte cap for one `read` window.
 pub const MAX_BYTES: usize = 50 * 1024;
 /// Write/read chunk size. Cancel is checked between chunks.
 pub(super) const WRITE_CHUNK: usize = 64 * 1024;
@@ -176,7 +175,6 @@ impl PreparedFile {
         &self.key
     }
 
-    /// Access mode retained by this capability.
     #[must_use]
     pub fn access(&self) -> FileAccess {
         self.access
