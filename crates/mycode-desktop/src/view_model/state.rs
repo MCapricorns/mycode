@@ -71,6 +71,13 @@ pub(crate) struct WorkspaceState {
     pub queued: Vec<String>,
     /// A send is in flight.
     pub sending: bool,
+    /// Compaction card held until the in-flight reply is committed.
+    ///
+    /// A mid-turn summary arrives after the tool rows and before `ChatDone`
+    /// appends the final reply. Inserting it immediately paints the card
+    /// above that reply; the ledger has the card after the reply. The card
+    /// stays here until the turn commits, then it is appended last.
+    pub pending_summary: Option<ConversationEntry>,
     /// Per-server tool names from the last listing, keyed by server id.
     pub mcp_tools: Vec<(String, Vec<String>)>,
     /// MCP server ids with a tools probe in flight.
