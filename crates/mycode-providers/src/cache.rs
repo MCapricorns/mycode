@@ -692,6 +692,71 @@ mod tests {
         }
     }
 
+    /// The compaction summary call sets `reasoning = Off`. Breakpoints must
+    /// not turn thinking back on, and the stored summary stays the head
+    /// breakpoint on the resumed turn.
+    #[test]
+    fn summary_off_keeps_disabled_thinking_and_the_summary_breakpoint() {
+        let summary = Request::new()
+            .with_system_prompt("You are performing a CONTEXT CHECKPOINT COMPACTION.")
+            .with_reasoning(ReasoningLevel::Off)
+            .with_message(user(
+                "Summarize the following conversation for continuation:\n\ntranscript",
+            ));
+        let endpoint = "https://api.z.ai/api/paas/v4/chat/completions";
+        let body = chat_body("glm-5.3", endpoint, &summary);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body["thinking"].get("clear_thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("prompt_cache_key").is_none());
+        assert_eq!(
+            cache_type(&body["messages"][0]["content"][0]),
+            Some("ephemeral")
+        );
+        assert_eq!(
+            cache_type(&body["messages"][1]["content"][0]),
+            Some("ephemeral")
+        );
+        assert!(count_cache_control(&body) <= ANTHROPIC_BREAKPOINT_CAP);
+
+        let minimax = anthropic_body(
+            "MiniMax-M3",
+            "https://api.minimax.io/anthropic/v1/messages",
+            &summary,
+        );
+        assert_eq!(minimax["thinking"]["type"], "disabled");
+        assert!(minimax.get("output_config").is_none());
+        assert!(minimax["thinking"].get("budget_tokens").is_none());
+        assert_eq!(
+            cache_type(&minimax["system"][0]),
+            Some("ephemeral"),
+            "system breakpoint survives an Off summary"
+        );
+        assert!(count_cache_control(&minimax) <= ANTHROPIC_BREAKPOINT_CAP);
+
+        let resumed = Request::new()
+            .with_system_prompt("stable rules")
+            .with_reasoning(ReasoningLevel::Max)
+            .with_message(user("COMPACTION SUMMARY\n\ngoals and files"))
+            .with_message(user("continue"));
+        let later = resumed.clone().with_message(user("next"));
+        let first = chat_body("glm-5.3", endpoint, &resumed);
+        let second = chat_body("glm-5.3", endpoint, &later);
+        assert_eq!(first["thinking"]["type"], "enabled");
+        assert_eq!(first["thinking"]["clear_thinking"], false);
+        assert_eq!(first["reasoning_effort"], "max");
+        assert_eq!(
+            cache_type(&first["messages"][1]["content"][0]),
+            Some("ephemeral"),
+            "the summary stays the sticky head breakpoint"
+        );
+        assert_eq!(second["messages"][1], first["messages"][1]);
+        assert!(
+            second["messages"][2]["content"].as_str().is_some(),
+            "the middle user turn is not rewritten when the tail moves"
+        );
+    }
+
     fn assistant(thinking: &str, text: &str, signature: Option<&str>) -> Message {
         let mut block = ThinkingBlock::new(thinking);
         if let Some(signature) = signature {
