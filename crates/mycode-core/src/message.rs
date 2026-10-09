@@ -23,9 +23,6 @@ pub enum Message {
     Assistant(AssistantMessage),
     /// The result of executing a tool call.
     ToolResult(ToolResultMessage),
-    /// Plugin-defined message. `data` is preserved verbatim so a plugin can
-    /// round-trip its own state.
-    Custom(CustomMessage),
 }
 
 /// A user-authored message.
@@ -291,18 +288,6 @@ pub struct ToolResultMessage {
     /// (structured diffs, cwd, …). Splitting `details` from `content` keeps
     /// tokens out of the model loop (pi's ToolResult pattern).
     pub details: Option<serde_json::Value>,
-}
-
-/// A plugin-defined message.
-///
-/// `data` is preserved verbatim, including plugin state such as plan trackers.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CustomMessage {
-    /// Plugin-scoped kind discriminator, e.g. `"plugin:plan"`.
-    pub kind: String,
-    /// Arbitrary plugin payload, preserved verbatim.
-    pub data: serde_json::Value,
 }
 
 /// Why the model stopped generating.

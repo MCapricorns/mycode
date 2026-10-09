@@ -105,7 +105,9 @@ impl HttpChannel {
             body: Some(mycode_providers::PinnedBody::Bytes(body.into())),
             mode: mycode_providers::PinMode::CheckRedirect,
             timeout: Some(self.options.timeout),
+            read_timeout: None,
             user_agent: None,
+            follow_redirects: true,
             cancel: tokio_util::sync::CancellationToken::new(),
         })
         .await

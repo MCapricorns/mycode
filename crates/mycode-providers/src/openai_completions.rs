@@ -125,7 +125,6 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
                 "content": content,
             }));
         }
-        Message::Custom(_) => {}
     }
 }
 

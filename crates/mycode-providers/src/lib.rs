@@ -40,10 +40,10 @@ pub use http_pin::{PinMode, PinnedBody, PinnedRequest, connection_addresses, sen
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
     CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,
-    XAI_PROVIDER_ID, XAI_VERIFICATION_URI, chatgpt_account_id, copilot_bearer, exchange_codex_code,
-    parse_oauth_secret, poll_codex_device_token, poll_device_token, poll_xai_device_token,
-    refresh_codex_token, refresh_xai_token, start_codex_device_flow, start_device_flow,
-    start_xai_device_flow,
+    PinnedCall, XAI_PROVIDER_ID, XAI_VERIFICATION_URI, chatgpt_account_id, copilot_bearer,
+    exchange_codex_code, parse_oauth_secret, poll_codex_device_token, poll_device_token,
+    poll_xai_device_token, refresh_codex_token, refresh_xai_token, start_codex_device_flow,
+    start_device_flow, start_xai_device_flow,
 };
 pub use transport::{ReqwestTransport, SseTransport, TransportCall};
 

@@ -100,7 +100,6 @@ fn convert_message(message: &Message, input: &mut Vec<Value>) {
                 "output": output,
             }));
         }
-        Message::Custom(_) => {}
     }
 }
 

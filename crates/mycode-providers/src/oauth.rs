@@ -4,10 +4,11 @@
 //! MYCode, the resulting token is stored in the secret vault, and Copilot
 //! turns exchange it for a short-lived bearer. Error messages carry statuses
 //! and field names only — never token values. Each request is still sent
-//! through the pinned client (DNS pin, checked addresses, no redirects). The
-//! caller's User-Agent and client timeout are copied onto that request;
-//! otherwise the pin timeout stays 30s. The caller's HTTP proxy is not applied, because pinning dials
-//! only the addresses that passed the public-address check.
+//! through the pinned client (DNS pin, checked addresses, no redirects).
+//! The caller passes the User-Agent and total timeout on [`PinnedCall`];
+//! none of these token endpoints are followed across a redirect. The caller's
+//! HTTP proxy is not applied, because pinning dials only the addresses that
+//! passed the public-address check.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -30,85 +31,37 @@ const DEVICE_SCOPE: &str = "read:user";
 /// Bounded string fields from GitHub responses.
 const MAX_FIELD_BYTES: usize = 8 * 1024;
 
-const PINNED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// User-Agent and timeout taken from `client` for a pinned OAuth request.
+/// Caller-supplied User-Agent and total timeout for one OAuth request.
 ///
-/// reqwest stores both on the client and applies them only inside `execute`.
-/// A built probe request therefore has neither, and executing it would skip
-/// the pin. The client's `Debug` output includes `default_headers` and, when
-/// set, `TotalTimeout`, so those are the observable values we copy. A missing
-/// timeout stays [`PINNED_TIMEOUT`].
-fn pinned_call_hints(client: &reqwest::Client) -> (Option<String>, std::time::Duration) {
-    let rendered = format!("{client:?}");
-    let user_agent = debug_quoted_field(&rendered, "\"user-agent\"");
-    let timeout = debug_duration_field(&rendered, "TotalTimeout").unwrap_or(PINNED_TIMEOUT);
-    (user_agent, timeout)
+/// Pinning builds its own client, so these values cannot be read back off a
+/// `reqwest::Client`. OAuth calls do not follow redirects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedCall {
+    /// User-Agent header. Empty omits the header.
+    pub user_agent: String,
+    /// Total timeout for the JSON exchange.
+    pub timeout: std::time::Duration,
 }
 
-/// Reads one quoted `Debug` field such as `"user-agent": "mycode-caller/1"`.
-fn debug_quoted_field(rendered: &str, key: &str) -> Option<String> {
-    let needle = format!("{key}: \"");
-    let start = rendered.find(&needle)? + needle.len();
-    let bytes = &rendered.as_bytes()[start..];
-    let mut out = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'"' => {
-                return String::from_utf8(out)
-                    .ok()
-                    .filter(|value| !value.is_empty());
-            }
-            b'\\' if index + 1 < bytes.len() && bytes[index + 1] == b'"' => {
-                out.push(b'"');
-                index += 2;
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
+impl PinnedCall {
+    /// Builds a call description.
+    #[must_use]
+    pub fn new(user_agent: impl Into<String>, timeout: std::time::Duration) -> Self {
+        Self {
+            user_agent: user_agent.into(),
+            timeout,
         }
     }
-    None
 }
 
-/// Reads a `Duration` `Debug` field such as `TotalTimeout: 12s`.
-fn debug_duration_field(rendered: &str, key: &str) -> Option<std::time::Duration> {
-    let needle = format!("{key}: ");
-    let start = rendered.find(&needle)? + needle.len();
-    let token = rendered[start..]
-        .split([',', ' ', '}'])
-        .next()
-        .unwrap_or_default();
-    parse_debug_duration(token)
-}
-
-fn parse_debug_duration(text: &str) -> Option<std::time::Duration> {
-    let (value, unit) = if let Some(value) = text.strip_suffix("ms") {
-        (value, 1_000.0)
-    } else if let Some(value) = text.strip_suffix("us") {
-        (value, 1_000_000.0)
-    } else {
-        let value = text.strip_suffix('s')?;
-        (value, 1.0)
-    };
-    let magnitude: f64 = value.parse().ok()?;
-    if !magnitude.is_finite() || magnitude < 0.0 {
-        return None;
-    }
-    std::time::Duration::try_from_secs_f64(magnitude / unit).ok()
-}
-
-async fn pinned(
-    client: &reqwest::Client,
+fn pinned_request(
+    call: &PinnedCall,
     method: reqwest::Method,
     url: &str,
     headers: &[(&str, &str)],
     body: Option<crate::PinnedBody>,
-) -> Result<reqwest::Response, String> {
-    let (user_agent, timeout) = pinned_call_hints(client);
-    crate::send_pinned(crate::PinnedRequest {
+) -> crate::PinnedRequest {
+    crate::PinnedRequest {
         method,
         url: url.to_owned(),
         headers: headers
@@ -117,11 +70,22 @@ async fn pinned(
             .collect(),
         body,
         mode: crate::PinMode::CheckRedirect,
-        timeout: Some(timeout),
-        user_agent,
+        timeout: Some(call.timeout),
+        read_timeout: None,
+        user_agent: (!call.user_agent.is_empty()).then(|| call.user_agent.clone()),
+        follow_redirects: false,
         cancel: tokio_util::sync::CancellationToken::new(),
-    })
-    .await
+    }
+}
+
+async fn pinned(
+    call: &PinnedCall,
+    method: reqwest::Method,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<crate::PinnedBody>,
+) -> Result<reqwest::Response, String> {
+    crate::send_pinned(pinned_request(call, method, url, headers, body)).await
 }
 
 /// A started device authorization: what the user sees and what we poll with.
@@ -180,9 +144,9 @@ fn field<'a>(payload: &'a Value, name: &str) -> Option<&'a str> {
 /// # Errors
 ///
 /// Returns a transport or endpoint-shape failure without embedded secrets.
-pub async fn start_device_flow(client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
+pub async fn start_device_flow(call: &PinnedCall) -> Result<DeviceCodeStart, String> {
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         DEVICE_CODE_URL,
         &[("accept", "application/json")],
@@ -227,11 +191,11 @@ pub fn parse_device_start(payload: &Value) -> Option<DeviceCodeStart> {
 ///
 /// Returns a transport failure; grant states arrive as [`DeviceTokenPoll`].
 pub async fn poll_device_token(
-    client: &reqwest::Client,
+    call: &PinnedCall,
     device_code: &str,
 ) -> Result<DeviceTokenPoll, String> {
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         DEVICE_TOKEN_URL,
         &[("accept", "application/json")],
@@ -279,10 +243,7 @@ pub fn classify_device_poll(payload: &Value) -> DeviceTokenPoll {
 /// # Errors
 ///
 /// Returns a transport failure or a rejection that means "sign in again".
-pub async fn copilot_bearer(
-    client: &reqwest::Client,
-    github_token: &str,
-) -> Result<CopilotToken, String> {
+pub async fn copilot_bearer(call: &PinnedCall, github_token: &str) -> Result<CopilotToken, String> {
     let authorization = format!("Bearer {github_token}");
     let mut headers = vec![
         ("authorization", authorization.as_str()),
@@ -290,7 +251,7 @@ pub async fn copilot_bearer(
     ];
     headers.extend(COPILOT_CHAT_HEADERS);
     let response = pinned(
-        client,
+        call,
         reqwest::Method::GET,
         COPILOT_TOKEN_URL,
         &headers,
@@ -439,9 +400,9 @@ pub const XAI_VERIFICATION_URI: &str = "https://auth.x.ai/device";
 /// # Errors
 ///
 /// Returns a transport or endpoint-shape failure without embedded secrets.
-pub async fn start_xai_device_flow(client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
+pub async fn start_xai_device_flow(call: &PinnedCall) -> Result<DeviceCodeStart, String> {
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         XAI_DEVICE_CODE_URL,
         &[("accept", "application/json")],
@@ -473,11 +434,11 @@ pub async fn start_xai_device_flow(client: &reqwest::Client) -> Result<DeviceCod
 ///
 /// Returns a transport failure; grant states arrive as [`DeviceTokenPoll`].
 pub async fn poll_xai_device_token(
-    client: &reqwest::Client,
+    call: &PinnedCall,
     device_code: &str,
 ) -> Result<DeviceTokenPoll, String> {
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         XAI_TOKEN_URL,
         &[("accept", "application/json")],
@@ -513,11 +474,8 @@ pub async fn poll_xai_device_token(
 /// # Errors
 ///
 /// Returns a transport or grant failure.
-pub async fn refresh_xai_token(
-    client: &reqwest::Client,
-    refresh: &str,
-) -> Result<OAuthSecret, String> {
-    refresh_form_token(client, XAI_TOKEN_URL, XAI_CLIENT_ID, refresh, None).await
+pub async fn refresh_xai_token(call: &PinnedCall, refresh: &str) -> Result<OAuthSecret, String> {
+    refresh_form_token(call, XAI_TOKEN_URL, XAI_CLIENT_ID, refresh, None).await
 }
 
 /// Codex device-auth identifiers returned by the usercode endpoint.
@@ -536,11 +494,11 @@ pub struct CodexDeviceStart {
 /// # Errors
 ///
 /// Returns a transport or endpoint-shape failure.
-pub async fn start_codex_device_flow(client: &reqwest::Client) -> Result<CodexDeviceStart, String> {
+pub async fn start_codex_device_flow(call: &PinnedCall) -> Result<CodexDeviceStart, String> {
     let body = serde_json::to_vec(&serde_json::json!({ "client_id": CODEX_CLIENT_ID }))
         .map_err(|error| format!("Codex device-code request failed: {error}"))?;
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         CODEX_USER_CODE_URL,
         &[("content-type", "application/json")],
@@ -595,7 +553,7 @@ pub enum CodexDevicePoll {
 ///
 /// Returns a transport failure.
 pub async fn poll_codex_device_token(
-    client: &reqwest::Client,
+    call: &PinnedCall,
     start: &CodexDeviceStart,
 ) -> Result<CodexDevicePoll, String> {
     let body = serde_json::to_vec(&serde_json::json!({
@@ -604,7 +562,7 @@ pub async fn poll_codex_device_token(
     }))
     .map_err(|error| format!("Codex device-token poll failed: {error}"))?;
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         CODEX_DEVICE_TOKEN_URL,
         &[("content-type", "application/json")],
@@ -651,12 +609,12 @@ pub async fn poll_codex_device_token(
 ///
 /// Returns a transport or field-shape failure.
 pub async fn exchange_codex_code(
-    client: &reqwest::Client,
+    call: &PinnedCall,
     authorization_code: &str,
     code_verifier: &str,
 ) -> Result<OAuthSecret, String> {
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         CODEX_TOKEN_URL,
         &[("content-type", "application/x-www-form-urlencoded")],
@@ -688,29 +646,19 @@ pub async fn exchange_codex_code(
 /// # Errors
 ///
 /// Returns a transport or grant failure.
-pub async fn refresh_codex_token(
-    client: &reqwest::Client,
-    refresh: &str,
-) -> Result<OAuthSecret, String> {
-    refresh_form_token(
-        client,
-        CODEX_TOKEN_URL,
-        CODEX_CLIENT_ID,
-        refresh,
-        Some(true),
-    )
-    .await
+pub async fn refresh_codex_token(call: &PinnedCall, refresh: &str) -> Result<OAuthSecret, String> {
+    refresh_form_token(call, CODEX_TOKEN_URL, CODEX_CLIENT_ID, refresh, Some(true)).await
 }
 
 async fn refresh_form_token(
-    client: &reqwest::Client,
+    call: &PinnedCall,
     url: &str,
     client_id: &str,
     refresh: &str,
     extract_account: Option<bool>,
 ) -> Result<OAuthSecret, String> {
     let response = pinned(
-        client,
+        call,
         reqwest::Method::POST,
         url,
         &[("content-type", "application/x-www-form-urlencoded")],
@@ -776,34 +724,21 @@ pub fn parse_copilot_token(payload: &Value) -> Option<CopilotToken> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PINNED_TIMEOUT, pinned_call_hints};
+    use super::PinnedCall;
 
     #[test]
-    fn pinned_requests_copy_the_caller_user_agent() {
-        let client = reqwest::Client::builder()
-            .user_agent("mycode-caller/1")
-            .build()
-            .expect("client");
-        let (user_agent, timeout) = pinned_call_hints(&client);
-        assert_eq!(
-            user_agent.as_deref(),
-            Some("mycode-caller/1"),
-            "client debug was {client:?}"
+    fn oauth_requests_use_the_explicit_user_agent_and_do_not_redirect() {
+        let call = PinnedCall::new("mycode-caller/1", std::time::Duration::from_secs(12));
+        let request = super::pinned_request(
+            &call,
+            reqwest::Method::GET,
+            "https://example.invalid/token",
+            &[],
+            None,
         );
-        assert_ne!(user_agent.as_deref(), Some("mycode"));
-        assert_eq!(timeout, PINNED_TIMEOUT);
-
-        let timed = reqwest::Client::builder()
-            .user_agent("mycode-caller/1")
-            .timeout(std::time::Duration::from_secs(12))
-            .build()
-            .expect("timed client");
-        let (user_agent, timeout) = pinned_call_hints(&timed);
-        assert_eq!(user_agent.as_deref(), Some("mycode-caller/1"));
-        assert_eq!(
-            timeout,
-            std::time::Duration::from_secs(12),
-            "client debug was {timed:?}"
-        );
+        assert_eq!(request.user_agent.as_deref(), Some("mycode-caller/1"));
+        assert_eq!(request.timeout, Some(std::time::Duration::from_secs(12)));
+        assert!(request.read_timeout.is_none());
+        assert!(!request.follow_redirects);
     }
 }

@@ -3,14 +3,13 @@
 
 use std::sync::Arc;
 
-use mycode_config::{ProviderSettings, replace_app_settings};
-use mycode_providers::catalog::http_client;
+use mycode_config::{HomeLayout, ProviderSettings, replace_app_settings};
 use mycode_providers::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
-    DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID,
-    copilot_bearer, exchange_codex_code, parse_oauth_secret, poll_codex_device_token,
-    poll_device_token, poll_xai_device_token, refresh_codex_token, refresh_xai_token,
-    start_codex_device_flow, start_device_flow, start_xai_device_flow,
+    DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID, PinnedCall,
+    XAI_PROVIDER_ID, copilot_bearer, exchange_codex_code, parse_oauth_secret,
+    poll_codex_device_token, poll_device_token, poll_xai_device_token, refresh_codex_token,
+    refresh_xai_token, start_codex_device_flow, start_device_flow, start_xai_device_flow,
 };
 
 use crate::settings_io::{load_settings, render_config_error, save_provider_key};
@@ -22,6 +21,10 @@ use crate::{BridgeEvent, BridgeReply, CopilotSignInInfo};
 /// deadline mirrors the documented lifetime.
 const CODEX_FLOW_LIFETIME_SECS: u64 = 15 * 60;
 
+fn oauth_call() -> PinnedCall {
+    PinnedCall::new(UPDATE_USER_AGENT, std::time::Duration::from_secs(30))
+}
+
 // Device flows for Copilot, xAI, and Codex.
 
 /// Starts a device flow, opens the browser, and spawns the poll loop that
@@ -32,13 +35,10 @@ pub(crate) async fn oauth_sign_in(
     provider_id: String,
     models: Vec<String>,
 ) -> BridgeReply {
-    let client = match http_client(UPDATE_USER_AGENT) {
-        Ok(client) => client,
-        Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
-    };
+    let call = oauth_call();
     match provider_id.as_str() {
         XAI_PROVIDER_ID => {
-            let start = match start_xai_device_flow(&client).await {
+            let start = match start_xai_device_flow(&call).await {
                 Ok(start) => start,
                 Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
             };
@@ -48,31 +48,31 @@ pub(crate) async fn oauth_sign_in(
                 start.verification_uri.clone()
             };
             open_browser(&uri);
-            spawn_xai_poll(state, events, client, start.clone(), models);
+            spawn_xai_poll(state, events, call, start.clone(), models);
             BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
                 user_code: start.user_code,
                 verification_uri: uri,
             }))
         }
         OPENAI_CODEX_PROVIDER_ID => {
-            let start = match start_codex_device_flow(&client).await {
+            let start = match start_codex_device_flow(&call).await {
                 Ok(start) => start,
                 Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
             };
             open_browser(CODEX_VERIFICATION_URI);
-            spawn_codex_poll(state, events, client, start.clone(), models);
+            spawn_codex_poll(state, events, call, start.clone(), models);
             BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
                 user_code: start.user_code,
                 verification_uri: CODEX_VERIFICATION_URI.to_owned(),
             }))
         }
         COPILOT_PROVIDER_ID => {
-            let start = match start_device_flow(&client).await {
+            let start = match start_device_flow(&call).await {
                 Ok(start) => start,
                 Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
             };
             open_browser(&start.verification_uri);
-            spawn_copilot_poll(state, events, client, start.clone(), models);
+            spawn_copilot_poll(state, events, call, start.clone(), models);
             BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
                 user_code: start.user_code,
                 verification_uri: start.verification_uri,
@@ -94,14 +94,14 @@ pub(crate) async fn oauth_sign_in(
 fn spawn_device_poll<V, P, PF, X, F, FF>(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
-    client: reqwest::Client,
+    call: PinnedCall,
     start: DeviceCodeStart,
     models: Vec<String>,
     poll: P,
     extract: X,
     finish: F,
 ) where
-    P: Fn(reqwest::Client, String) -> PF + Send + 'static,
+    P: Fn(PinnedCall, String) -> PF + Send + 'static,
     PF: std::future::Future<Output = Result<DeviceTokenPoll, String>> + Send,
     X: Fn(DeviceTokenPoll) -> Option<V> + Send + 'static,
     F: Fn(Arc<CoreState>, V, Vec<String>) -> FF + Send + 'static,
@@ -121,7 +121,7 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
                 });
                 return;
             }
-            match poll(client.clone(), device_code.clone()).await {
+            match poll(call.clone(), device_code.clone()).await {
                 Ok(DeviceTokenPoll::Pending) => {}
                 Ok(DeviceTokenPoll::SlowDown) => interval_secs += 5,
                 Ok(DeviceTokenPoll::Denied(reason)) => {
@@ -155,17 +155,17 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
 fn spawn_copilot_poll(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
-    client: reqwest::Client,
+    call: PinnedCall,
     start: DeviceCodeStart,
     models: Vec<String>,
 ) {
     spawn_device_poll(
         state,
         events,
-        client,
+        call,
         start,
         models,
-        |client, code| async move { poll_device_token(&client, &code).await },
+        |call, code| async move { poll_device_token(&call, &code).await },
         |outcome| match outcome {
             DeviceTokenPoll::Granted(token) => Some(token),
             _ => None,
@@ -179,17 +179,17 @@ fn spawn_copilot_poll(
 fn spawn_xai_poll(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
-    client: reqwest::Client,
+    call: PinnedCall,
     start: DeviceCodeStart,
     models: Vec<String>,
 ) {
     spawn_device_poll(
         state,
         events,
-        client,
+        call,
         start,
         models,
-        |client, code| async move { poll_xai_device_token(&client, &code).await },
+        |call, code| async move { poll_xai_device_token(&call, &code).await },
         |outcome| match outcome {
             DeviceTokenPoll::GrantedOAuth(secret) => Some(secret),
             _ => None,
@@ -203,7 +203,7 @@ fn spawn_xai_poll(
 fn spawn_codex_poll(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
-    client: reqwest::Client,
+    call: PinnedCall,
     start: mycode_providers::CodexDeviceStart,
     models: Vec<String>,
 ) {
@@ -219,14 +219,13 @@ fn spawn_codex_poll(
                 });
                 return;
             }
-            match poll_codex_device_token(&client, &start).await {
+            match poll_codex_device_token(&call, &start).await {
                 Ok(CodexDevicePoll::Ready {
                     authorization_code,
                     code_verifier,
                 }) => {
                     let outcome =
-                        match exchange_codex_code(&client, &authorization_code, &code_verifier)
-                            .await
+                        match exchange_codex_code(&call, &authorization_code, &code_verifier).await
                         {
                             Ok(secret) => {
                                 finish_oauth_sign_in(
@@ -278,8 +277,8 @@ async fn finish_copilot_sign_in(
     github_token: &str,
     models: &[String],
 ) -> Result<(), String> {
-    let client = http_client(UPDATE_USER_AGENT)?;
-    let bearer = copilot_bearer(&client, github_token).await?;
+    let call = oauth_call();
+    let bearer = copilot_bearer(&call, github_token).await?;
     *state.copilot.lock().await = Some((bearer.token, bearer.expires_at_unix));
     save_provider_key(&state.home, COPILOT_PROVIDER_ID, github_token)?;
     upsert_copilot_provider(state, models)
@@ -378,12 +377,13 @@ fn oauth_refresh_kind(provider_id: &str) -> OAuthRefreshKind {
 /// request: Copilot exchanges its long-lived token for a live bearer, OAuth
 /// providers refresh expiring access tokens in place.
 pub(crate) async fn resolve_request_auth(
-    state: &CoreState,
+    home: &HomeLayout,
+    copilot: &tokio::sync::Mutex<Option<(String, u64)>>,
     provider: &ProviderSettings,
     stored_key: &str,
 ) -> Result<(String, Vec<(String, String)>), String> {
     if provider.id == COPILOT_PROVIDER_ID || provider.base_url.contains("githubcopilot.com") {
-        let token = ensure_copilot_bearer(state, stored_key).await?;
+        let token = ensure_copilot_bearer(copilot, stored_key).await?;
         let extra = COPILOT_CHAT_HEADERS
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
@@ -396,19 +396,19 @@ pub(crate) async fn resolve_request_auth(
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
         if secret.expired(now) {
-            let client = http_client(UPDATE_USER_AGENT)?;
+            let call = oauth_call();
             // GitHub Copilot stores a device token, not an OAuth refresh grant.
             // Its short-lived API bearer is already refreshed by
             // `ensure_copilot_bearer` before this match. Unknown provider ids
             // are refused the same way so a stale access token is not reused.
             secret = match oauth_refresh_kind(provider.id.as_str()) {
-                OAuthRefreshKind::Xai => refresh_xai_token(&client, &secret.refresh).await?,
-                OAuthRefreshKind::Codex => refresh_codex_token(&client, &secret.refresh).await?,
+                OAuthRefreshKind::Xai => refresh_xai_token(&call, &secret.refresh).await?,
+                OAuthRefreshKind::Codex => refresh_codex_token(&call, &secret.refresh).await?,
                 OAuthRefreshKind::Excluded => {
                     return Err("saved sign-in cannot be refreshed — sign in again".to_owned());
                 }
             };
-            let _ = save_provider_key(&state.home, &provider.id, &secret.encode());
+            let _ = save_provider_key(home, &provider.id, &secret.encode());
         }
         let mut extra = Vec::new();
         if provider.id == OPENAI_CODEX_PROVIDER_ID {
@@ -432,19 +432,22 @@ pub(crate) async fn resolve_request_auth(
 
 /// Returns a live Copilot bearer, exchanging a fresh one when the cached copy
 /// is stale.
-async fn ensure_copilot_bearer(state: &CoreState, github_token: &str) -> Result<String, String> {
+async fn ensure_copilot_bearer(
+    copilot: &tokio::sync::Mutex<Option<(String, u64)>>,
+    github_token: &str,
+) -> Result<String, String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
-    let mut cache = state.copilot.lock().await;
+    let mut cache = copilot.lock().await;
     if let Some((token, expires_at)) = cache.as_ref()
         && *expires_at > now.saturating_add(60)
     {
         return Ok(token.clone());
     }
-    let client = http_client(UPDATE_USER_AGENT)?;
-    let bearer = copilot_bearer(&client, github_token).await?;
+    let call = oauth_call();
+    let bearer = copilot_bearer(&call, github_token).await?;
     let token = bearer.token;
     *cache = Some((token.clone(), bearer.expires_at_unix));
     Ok(token)

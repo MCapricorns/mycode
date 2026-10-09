@@ -63,10 +63,12 @@ impl CoreState {
                 }
             }
         }
+        let document = Arc::new(cached.document);
+        mycode_providers::catalog::install_active(Arc::clone(&document));
         Self {
             service: SessionService::new(&home),
             catalog: Arc::new(RwLock::new(CatalogInfo {
-                document: Arc::new(cached.document),
+                document,
                 fetched_at: cached.fetched_at,
             })),
             home,
@@ -151,6 +153,7 @@ pub(crate) async fn refresh_catalog(
             let info = catalog_info_from(cache);
             let providers = info.document.providers.len();
             let fetched_at = info.fetched_at;
+            mycode_providers::catalog::install_active(Arc::clone(&info.document));
             if let Ok(mut guard) = state.catalog.write() {
                 *guard = info.clone();
             }
@@ -223,21 +226,28 @@ pub(crate) fn model_context_window(
         .unwrap_or(0)
 }
 
-/// models.dev `limit.output` for this model. `None` when the catalog does
-/// not publish an output cap; callers must not substitute a fixed 4096.
+/// Output-token cap for one turn.
+///
+/// A configured `maxOutput` wins, then models.dev `limit.output`, then the
+/// Messages fallback of 32_000 (`OUTPUT_TOKEN_MAX` in OpenCode).
 pub(crate) fn model_output_limit(
     state: &CoreState,
     provider: &ProviderSettings,
     model: &str,
 ) -> Option<u64> {
-    let Ok(catalog) = state.catalog.read() else {
-        return None;
-    };
-    let document = &catalog.document;
-    document
-        .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
-        .map(|entry| entry.output)
-        .filter(|output| *output > 0)
+    if let Some(limit) = provider.max_output.filter(|tokens| *tokens > 0) {
+        return Some(limit);
+    }
+    if let Ok(catalog) = state.catalog.read()
+        && let Some(limit) = catalog
+            .document
+            .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
+            .map(|entry| entry.output)
+            .filter(|output| *output > 0)
+    {
+        return Some(limit);
+    }
+    Some(32_000)
 }
 
 #[cfg(test)]
@@ -358,6 +368,77 @@ mod tests {
         );
         let event = rx.try_recv().expect("catalog event");
         assert!(matches!(event, crate::BridgeEvent::CatalogUpdated { .. }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn max_output_prefers_the_setting_then_the_catalog_then_32000() {
+        use mycode_config::{HomeLayout, ProviderSettings};
+        use mycode_providers::catalog::{
+            CachedCatalog, CatalogDocument, CatalogModel, CatalogProvider,
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "mycode-max-output-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let home = HomeLayout::from_root(&root).expect("home");
+        let state = super::CoreState::new(
+            home,
+            CachedCatalog {
+                document: CatalogDocument {
+                    providers: vec![CatalogProvider {
+                        id: "lab".to_owned(),
+                        models: vec![CatalogModel {
+                            id: "listed".to_owned(),
+                            output: 8_000,
+                            ..CatalogModel::default()
+                        }],
+                        ..CatalogProvider::default()
+                    }],
+                },
+                fetched_at: 0,
+                etag: None,
+            },
+            Vec::new(),
+        );
+        let mut provider = ProviderSettings {
+            id: "lab".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://lab.example/v1".to_owned(),
+            models: vec!["listed".to_owned(), "custom".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: Some(4_096),
+        };
+        assert_eq!(
+            super::model_output_limit(&state, &provider, "listed"),
+            Some(4_096)
+        );
+        provider.max_output = None;
+        assert_eq!(
+            super::model_output_limit(&state, &provider, "listed"),
+            Some(8_000)
+        );
+        assert_eq!(
+            super::model_output_limit(&state, &provider, "custom"),
+            Some(32_000)
+        );
+        provider.max_output = Some(0);
+        assert_eq!(
+            super::model_output_limit(&state, &provider, "custom"),
+            Some(32_000)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

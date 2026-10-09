@@ -198,7 +198,8 @@ async fn compact_session_now(
         .ok_or_else(|| "could not open the session".to_owned())?;
     let home = &state.home;
     let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
-    let (bearer, extra_headers) = resolve_request_auth(state, &provider, &stored_key).await?;
+    let (bearer, extra_headers) =
+        resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
     let mut resolved =
         ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
@@ -403,7 +404,8 @@ async fn run_chat_turn(
     let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
     // Copilot stores its long-lived OAuth token where other providers keep
     // an API key; each turn exchanges it for a short-lived bearer.
-    let (bearer, extra_headers) = resolve_request_auth(state, &provider, &stored_key).await?;
+    let (bearer, extra_headers) =
+        resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
     let mut resolved =
         ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
@@ -516,6 +518,7 @@ async fn run_chat_turn_on(
                     session_id.to_owned(),
                     state.subagent_cancels.clone(),
                     state.mcp_pool.clone(),
+                    state.copilot.clone(),
                 ),
             ))));
         }

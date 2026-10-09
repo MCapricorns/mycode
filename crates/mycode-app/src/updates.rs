@@ -114,7 +114,9 @@ pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, Str
         body: None,
         mode: mycode_providers::PinMode::PublicHttps,
         timeout: Some(std::time::Duration::from_secs(30)),
+        read_timeout: None,
         user_agent: Some(user_agent.to_owned()),
+        follow_redirects: true,
         cancel: tokio_util::sync::CancellationToken::new(),
     })
     .await
@@ -286,7 +288,9 @@ async fn fetch_to_file(
         body: None,
         mode: mycode_providers::PinMode::PublicHttps,
         timeout: Some(std::time::Duration::from_secs(30)),
+        read_timeout: None,
         user_agent: Some(user_agent.to_owned()),
+        follow_redirects: true,
         cancel: tokio_util::sync::CancellationToken::new(),
     })
     .await

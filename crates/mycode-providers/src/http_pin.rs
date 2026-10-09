@@ -83,10 +83,18 @@ pub struct PinnedRequest {
     pub body: Option<PinnedBody>,
     /// Pin policy.
     pub mode: PinMode,
-    /// Overall request timeout.
+    /// Overall request timeout. Streaming calls leave this unset and use
+    /// [`Self::read_timeout`] so a long generation is not cut off.
     pub timeout: Option<Duration>,
+    /// Idle ceiling while waiting for headers and between body chunks.
+    ///
+    /// This is not a total-request deadline. A stream that keeps delivering
+    /// bytes resets it.
+    pub read_timeout: Option<Duration>,
     /// User-Agent, when the caller has one.
     pub user_agent: Option<String>,
+    /// When false, a 3xx response is returned instead of followed.
+    pub follow_redirects: bool,
     /// Cancellation for the redirect loop.
     pub cancel: CancellationToken,
 }
@@ -245,16 +253,20 @@ pub async fn send_pinned(request: PinnedRequest) -> Result<reqwest::Response, St
         let response = tokio::select! {
             biased;
             () = request.cancel.cancelled() => return Err("request cancelled".to_owned()),
-            sent = send_once(
-                method.clone(),
-                &url,
-                &request.headers,
-                body.as_ref(),
-                &addrs,
-                request.timeout,
-                request.user_agent.as_deref(),
-            ) => sent?,
+            sent = send_once(OnceCall {
+                method: &method,
+                url: &url,
+                headers: &request.headers,
+                body: body.as_ref(),
+                addrs: &addrs,
+                timeout: request.timeout,
+                read_timeout: request.read_timeout,
+                user_agent: request.user_agent.as_deref(),
+            }) => sent?,
         };
+        if !request.follow_redirects {
+            return Ok(response);
+        }
         let status = response.status().as_u16();
         let location = response
             .headers()
@@ -299,25 +311,35 @@ async fn lookup_addresses(url: &str) -> Result<Vec<IpAddr>, String> {
     Ok(addrs)
 }
 
-async fn send_once(
-    method: reqwest::Method,
-    url: &str,
-    headers: &[(String, String)],
-    body: Option<&PinnedBody>,
-    addrs: &[IpAddr],
+/// One pinned hop. Grouped so the idle timeout can sit beside the total
+/// timeout without growing `send_once`'s argument list.
+struct OnceCall<'a> {
+    method: &'a reqwest::Method,
+    url: &'a str,
+    headers: &'a [(String, String)],
+    body: Option<&'a PinnedBody>,
+    addrs: &'a [IpAddr],
     timeout: Option<Duration>,
-    user_agent: Option<&str>,
-) -> Result<reqwest::Response, String> {
-    let parsed = reqwest::Url::parse(url).map_err(|_| format!("url is invalid: {url}"))?;
+    read_timeout: Option<Duration>,
+    user_agent: Option<&'a str>,
+}
+
+async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, String> {
+    let parsed =
+        reqwest::Url::parse(call.url).map_err(|_| format!("url is invalid: {}", call.url))?;
     let host = parsed
         .host_str()
         .ok_or_else(|| "url has no host".to_owned())?;
     let port = parsed.port_or_known_default().unwrap_or(80);
-    let sockets: Vec<SocketAddr> = addrs.iter().map(|ip| SocketAddr::new(*ip, port)).collect();
+    let sockets: Vec<SocketAddr> = call
+        .addrs
+        .iter()
+        .map(|ip| SocketAddr::new(*ip, port))
+        .collect();
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(crate::transport::CONNECT_TIMEOUT);
-    if let Some(user_agent) = user_agent {
+    if let Some(user_agent) = call.user_agent {
         builder = builder.user_agent(user_agent);
     }
     if !sockets.is_empty() {
@@ -326,22 +348,28 @@ async fn send_once(
     let client = builder
         .build()
         .map_err(|error| format!("http client unavailable: {error}"))?;
-    let mut request = client.request(method, url);
-    for (name, value) in headers {
+    let mut request = client.request(call.method.clone(), call.url);
+    for (name, value) in call.headers {
         request = request.header(name, value);
     }
-    if let Some(timeout) = timeout {
+    if let Some(timeout) = call.timeout {
         request = request.timeout(timeout);
     }
-    request = match body {
+    request = match call.body {
         Some(PinnedBody::Bytes(bytes)) => request.body(bytes.clone()),
         Some(PinnedBody::Form(fields)) => request.form(fields),
         None => request,
     };
-    request
-        .send()
-        .await
-        .map_err(|error| format!("request failed: {error}"))
+    let pending = request.send();
+    let sent = if let Some(idle) = call.read_timeout {
+        match tokio::time::timeout(idle, pending).await {
+            Ok(result) => result,
+            Err(_) => return Err("request failed: read timed out".to_owned()),
+        }
+    } else {
+        pending.await
+    };
+    sent.map_err(|error| format!("request failed: {error}"))
 }
 
 fn public_host(host: &str) -> bool {

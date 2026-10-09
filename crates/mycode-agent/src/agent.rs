@@ -644,7 +644,6 @@ mod tests {
                         _ => None,
                     })
                     .collect::<String>(),
-                Message::Custom(_) => String::new(),
             })
             .collect::<Vec<_>>()
             .join("\n")

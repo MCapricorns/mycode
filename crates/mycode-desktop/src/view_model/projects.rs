@@ -60,16 +60,7 @@ pub(crate) fn task_surface_visible(state: &WorkspaceState) -> bool {
 /// Compare project paths the way the sidebar groups them.
 #[must_use]
 pub(crate) fn same_project_path(left: &str, right: &str) -> bool {
-    normalize_project_key(left) == normalize_project_key(right)
-}
-
-fn normalize_project_key(path: &str) -> String {
-    let trimmed = path.trim().trim_end_matches(['/', '\\']);
-    if cfg!(windows) {
-        trimmed.replace('/', "\\").to_ascii_lowercase()
-    } else {
-        trimmed.to_owned()
-    }
+    mycode_config::same_project_path(left, right)
 }
 
 /// The folder bound to one session, if it has one.

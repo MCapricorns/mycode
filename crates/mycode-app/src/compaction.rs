@@ -199,7 +199,6 @@ pub(crate) async fn compact_history(
     let summary = match summarized {
         Ok(Ok(summary)) => summary,
         Ok(Err(message)) => {
-            eprintln!("[mycode-compaction] skipped: {message}");
             return Compacted {
                 messages: history,
                 status: CompactStatus::Failed(message),
@@ -207,7 +206,6 @@ pub(crate) async fn compact_history(
             };
         }
         Err(_) => {
-            eprintln!("[mycode-compaction] skipped: summary timed out");
             return Compacted {
                 messages: history,
                 status: CompactStatus::Failed("summary timed out".to_owned()),
@@ -220,10 +218,6 @@ pub(crate) async fn compact_history(
     // replay. Persisting `head_end` would store an index into that shorter
     // vector, and the next open of this head would slice the ledger with it.
     if already_summarized {
-        eprintln!(
-            "[mycode-compaction] shrunk an already summarized history in memory ({} remain)",
-            compacted.len()
-        );
         return Compacted {
             messages: compacted,
             status: CompactStatus::Unchanged,
@@ -246,17 +240,12 @@ pub(crate) async fn compact_history(
             .unwrap_or_default(),
     };
     if let Err(error) = mycode_config::write_compaction(scope.home, scope.session_id, &checkpoint) {
-        eprintln!("[mycode-compaction] checkpoint write failed: {error:?}");
         return Compacted {
             messages: history,
             status: CompactStatus::Failed(format!("checkpoint write failed: {error:?}")),
             summary: None,
         };
     }
-    eprintln!(
-        "[mycode-compaction] replaced {head_end} messages with a checkpoint ({} remain)",
-        compacted.len()
-    );
     Compacted {
         messages: compacted,
         status: CompactStatus::Wrote,
@@ -288,7 +277,6 @@ fn message_chars(message: &Message) -> usize {
                 + 1
                 + blocks_chars(&result.content)
         }
-        Message::Custom(custom) => "custom ".chars().count() + custom.kind.chars().count(),
     }
 }
 
@@ -344,7 +332,6 @@ fn message_text(message: &Message) -> String {
             let body = blocks_text(&result.content);
             format!("tool_result {} {body}", result.tool_call_id)
         }
-        Message::Custom(custom) => format!("custom {}", custom.kind),
     }
 }
 
@@ -498,7 +485,6 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> 
             Message::User(_) => "user",
             Message::Assistant(_) => "assistant",
             Message::ToolResult(_) => "tool",
-            Message::Custom(_) => "custom",
         };
         let text = excerpt(&message_text(message));
         transcript.push_str(&format!("[{role}] {text}\n\n"));
@@ -570,16 +556,10 @@ async fn summarize_transcript(
     let first = summary_max_output(model);
     match request_summary(wire, transcript, first).await? {
         SummaryAttempt::Complete(summary) => Ok(summary),
-        SummaryAttempt::Truncated => {
-            eprintln!(
-                "[mycode-compaction] summary hit the output limit at {first} tokens; retrying at {SUMMARY_OUTPUT_RETRY_TOKENS}"
-            );
-            finish_summary_retry(
-                request_summary(wire, transcript, SUMMARY_OUTPUT_RETRY_TOKENS).await?,
-            )
-        }
+        SummaryAttempt::Truncated => finish_summary_retry(
+            request_summary(wire, transcript, SUMMARY_OUTPUT_RETRY_TOKENS).await?,
+        ),
         SummaryAttempt::TooShort => {
-            eprintln!("[mycode-compaction] summary was too short; retrying once");
             finish_summary_retry(request_summary(wire, transcript, first).await?)
         }
     }

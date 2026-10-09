@@ -525,8 +525,11 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     // `max` (default max). Off has no disable switch, so the field is omitted
     // rather than sending `{type:"disabled"}`, which this model 400s.
     // https://platform.kimi.com/docs/guide/use-reasoning-effort.md
+    // A published models.dev list still gates the token. An id the active
+    // catalog and the bundled snapshot both omit keeps the id-based token so
+    // coding-plan ids such as `k3` and `k3-256k` keep working.
     if is_k3_model(model_id) {
-        if let Some(token) = k3_effort(level) {
+        if let Some(token) = kimi_effort_token(model_id, level, true) {
             body["reasoning_effort"] = json!(token);
         }
         return;
@@ -547,33 +550,84 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     // list, `reasoningVariants` → `effortVariants` → `reasoningEffort` does.
     // `@ai-sdk/openai-compatible` returns `{ reasoningEffort }`, the wire
     // field `reasoning_effort`. The K2 toggle stays; the effort token is
-    // sent beside it.
-    if let Some(token) = published_kimi_effort(model_id, level) {
+    // sent beside it. The live or cached catalog is consulted first, then
+    // the vendored snapshot.
+    if let Some(token) = kimi_effort_token(model_id, level, false) {
         body["reasoning_effort"] = json!(token);
     }
 }
 
-/// Effort token for a Kimi chat model whose bundled catalog row publishes one.
+/// Effort token for a Kimi chat model.
 ///
-/// The first catalog row that publishes a toggle or an effort list wins, the
-/// same preference as `CatalogDocument::model_for_endpoint`. A later gateway
-/// that lists extra efforts does not override a toggle-only row. The id
-/// matches in full, or as the last slash, colon, or backslash segment, so a
-/// capture proxy can prefix the model.
-fn published_kimi_effort(model_id: &str, level: ReasoningLevel) -> Option<&'static str> {
-    let token = k3_effort(level)?;
-    let model = catalog_kimi_row(model_id)?;
-    model
-        .reasoning_efforts
-        .iter()
-        .any(|effort| effort.eq_ignore_ascii_case(token))
-        .then_some(token)
+/// `keep_unpublished` is the K3 path: when neither catalog lists the id, the
+/// mapped `low` / `high` / `max` token is still sent. A row that publishes a
+/// toggle or an effort list gates the token the same way as every other Kimi
+/// model.
+fn kimi_effort_token(
+    model_id: &str,
+    level: ReasoningLevel,
+    keep_unpublished: bool,
+) -> Option<&'static str> {
+    let active = crate::catalog::active();
+    effort_against(
+        active.as_deref(),
+        crate::catalog::bundled(),
+        model_id,
+        level,
+        keep_unpublished,
+    )
 }
 
-fn catalog_kimi_row(model_id: &str) -> Option<&'static crate::catalog::CatalogModel> {
-    let catalog = crate::catalog::bundled();
+fn effort_against(
+    active: Option<&crate::catalog::CatalogDocument>,
+    bundled: &crate::catalog::CatalogDocument,
+    model_id: &str,
+    level: ReasoningLevel,
+    keep_unpublished: bool,
+) -> Option<&'static str> {
+    let token = k3_effort(level)?;
+    let publication = kimi_publication_from(active, bundled, model_id);
+    match publication {
+        Some(publication) if publication.published => publication
+            .efforts
+            .iter()
+            .any(|effort| effort.eq_ignore_ascii_case(token))
+            .then_some(token),
+        _ if keep_unpublished => Some(token),
+        _ => None,
+    }
+}
+
+struct KimiPublication {
+    efforts: Vec<String>,
+    published: bool,
+}
+
+/// Active catalog row when it names the model, otherwise the bundled row.
+///
+/// The first row that publishes a toggle or an effort list wins, the same
+/// preference as `CatalogDocument::model_for_endpoint`. The id matches in
+/// full, or as the last slash, colon, or backslash segment, so a capture
+/// proxy can prefix the model.
+fn kimi_publication_from(
+    active: Option<&crate::catalog::CatalogDocument>,
+    bundled: &crate::catalog::CatalogDocument,
+    model_id: &str,
+) -> Option<KimiPublication> {
+    if let Some(active) = active
+        && let Some(publication) = publication_in(active, model_id)
+    {
+        return Some(publication);
+    }
+    publication_in(bundled, model_id)
+}
+
+fn publication_in(
+    catalog: &crate::catalog::CatalogDocument,
+    model_id: &str,
+) -> Option<KimiPublication> {
     let leaf = model_id.rsplit(['/', ':', '\\']).next().unwrap_or(model_id);
-    let mut exact_options = None;
+    let mut exact_options: Option<&crate::catalog::CatalogModel> = None;
     let mut leaf_options = None;
     let mut exact_any = None;
     let mut leaf_any = None;
@@ -603,7 +657,11 @@ fn catalog_kimi_row(model_id: &str) -> Option<&'static crate::catalog::CatalogMo
             }
         }
     }
-    exact_options.or(leaf_options).or(exact_any).or(leaf_any)
+    let model = exact_options.or(leaf_options).or(exact_any).or(leaf_any)?;
+    Some(KimiPublication {
+        published: model.reasoning_toggle || !model.reasoning_efforts.is_empty(),
+        efforts: model.reasoning_efforts.clone(),
+    })
 }
 
 fn apply_kimi_anthropic(body: &mut Value, level: ReasoningLevel) {
@@ -939,5 +997,99 @@ mod tests {
         );
         assert!(!super::explicit_chat_cache("brand-new-model", endpoint));
         assert!(!super::omits_prompt_cache_key(endpoint));
+    }
+
+    fn catalog_with(model_id: &str, efforts: &[&str]) -> crate::catalog::CatalogDocument {
+        use crate::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+        CatalogDocument {
+            providers: vec![CatalogProvider {
+                id: "moonshot".to_owned(),
+                name: "Moonshot".to_owned(),
+                models: vec![CatalogModel {
+                    id: model_id.to_owned(),
+                    reasoning: true,
+                    reasoning_toggle: true,
+                    reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
+                    ..CatalogModel::default()
+                }],
+                ..CatalogProvider::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn kimi_effort_prefers_the_active_catalog_and_keeps_unpublished_k3() {
+        let active = catalog_with("kimi-active-probe", &["low"]);
+        let bundled = catalog_with("kimi-active-probe", &["low", "high", "max"]);
+        let empty = crate::catalog::CatalogDocument::default();
+        assert_eq!(
+            super::effort_against(
+                Some(&active),
+                &bundled,
+                "kimi-active-probe",
+                ReasoningLevel::Low,
+                false,
+            ),
+            Some("low")
+        );
+        assert!(
+            super::effort_against(
+                Some(&active),
+                &bundled,
+                "kimi-active-probe",
+                ReasoningLevel::High,
+                false,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            super::effort_against(
+                None,
+                &bundled,
+                "kimi-active-probe",
+                ReasoningLevel::High,
+                false,
+            ),
+            Some("high")
+        );
+        assert_eq!(
+            super::effort_against(None, &empty, "k3-256k", ReasoningLevel::Max, true),
+            Some("max")
+        );
+        let narrowed = catalog_with("k3-256k", &["low"]);
+        assert!(
+            super::effort_against(
+                Some(&narrowed),
+                &empty,
+                "k3-256k",
+                ReasoningLevel::Max,
+                true,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            super::effort_against(
+                Some(&narrowed),
+                &empty,
+                "k3-256k",
+                ReasoningLevel::Low,
+                true
+            ),
+            Some("low")
+        );
+        crate::catalog::store::install_active(std::sync::Arc::new(catalog_with(
+            "kimi-installed-probe",
+            &["max"],
+        )));
+        let mut body = json!({});
+        super::apply_chat_thinking(
+            &mut body,
+            "kimi-installed-probe",
+            "http://127.0.0.1:9/v1/chat/completions",
+            ReasoningLevel::Max,
+            ThinkingWire::Completions,
+        );
+        assert_eq!(body["reasoning_effort"], "max");
+        crate::catalog::store::clear_active();
     }
 }
