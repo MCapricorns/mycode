@@ -40,6 +40,8 @@ pub struct AgentConfig {
     pub max_output_tokens: Option<u64>,
     /// Published effort spelling that is not a built-in level.
     pub reasoning_token: Option<String>,
+    /// Session id forwarded as a provider prompt-cache key.
+    pub prompt_cache_key: Option<String>,
 }
 
 impl AgentConfig {
@@ -74,6 +76,13 @@ impl AgentConfig {
     #[must_use]
     pub fn with_reasoning_token(mut self, token: impl Into<Option<String>>) -> Self {
         self.reasoning_token = token.into();
+        self
+    }
+
+    /// Sets the session key providers use for prompt-cache affinity.
+    #[must_use]
+    pub fn with_prompt_cache_key(mut self, key: impl Into<Option<String>>) -> Self {
+        self.prompt_cache_key = key.into().filter(|key| !key.trim().is_empty());
         self
     }
 }

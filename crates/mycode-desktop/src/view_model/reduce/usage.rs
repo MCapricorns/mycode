@@ -42,14 +42,26 @@ pub(super) fn include_usage_entries(
     }
 }
 
+/// Drops the previous session's meter, totals, and turn stats.
+///
+/// A new task replaces `active` and then opens that same session, so
+/// [`rebuild_session_usage`] does not run. The composer would otherwise
+/// keep painting the previous prompt size and cache read.
+pub(super) fn clear_session_usage(state: &mut WorkspaceState) {
+    state.usage_totals.clear();
+    state.last_turn = None;
+    state.live_turn = None;
+    state.context_used = 0;
+    state.context_cache = 0;
+}
+
 pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
     let Some(entries) = state
         .active
         .as_ref()
         .map(|conversation| &conversation.entries)
     else {
-        state.usage_totals.clear();
-        state.last_turn = None;
+        clear_session_usage(state);
         return;
     };
     let mut totals: Vec<UsageTotal> = Vec::new();
@@ -97,15 +109,15 @@ pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
     }
     state.usage_totals = totals;
     state.last_turn = last;
-    state.context_used = entries
-        .iter()
-        .rev()
-        .find_map(|entry| {
-            if entry.kind != EntryKind::Usage {
-                return None;
-            }
-            crate::view_model::parse_context_tokens(&entry.text)
-        })
+    let latest_context = entries.iter().rev().find(|entry| {
+        entry.kind == EntryKind::Usage
+            && crate::view_model::parse_context_tokens(&entry.text).is_some()
+    });
+    state.context_used = latest_context
+        .and_then(|entry| crate::view_model::parse_context_tokens(&entry.text))
+        .unwrap_or(0);
+    state.context_cache = latest_context
+        .and_then(|entry| crate::view_model::parse_context_cache(&entry.text))
         .unwrap_or(0);
 }
 

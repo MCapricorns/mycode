@@ -526,11 +526,12 @@ impl BridgeAgentHost {
 
         let path = run_dir.display().to_string();
         let _ = progress.progress(agent_progress(&role.name, "path", &path));
-        let extra_roots = if lease.is_some() {
+        let mut extra_roots = if lease.is_some() {
             Vec::new()
         } else {
             crate::turn::workspace_extra_roots(&self.home, &self.cwd)
         };
+        extra_roots.sort();
         let mut system = String::from(SUBAGENT_SYSTEM_PROMPT);
         system.push_str("\n\n# Role: ");
         system.push_str(&role.name);
@@ -551,7 +552,9 @@ impl BridgeAgentHost {
         }
         system.push_str("\n\n");
         system.push_str(&mycode_agent::build_system_prompt(&registry));
-        let mut config = AgentConfig::new().with_system_prompt(system);
+        let mut config = AgentConfig::new()
+            .with_system_prompt(system)
+            .with_prompt_cache_key(Some(self.session_id.clone()));
         if let Some(level) = thinking_for(role, &self.settings.subagents).effort()
             && let Some(level) = mycode_core::ReasoningLevel::parse(level)
         {
@@ -648,16 +651,19 @@ fn append_child_skills(system: &mut String, cwd: &Path, extras: &[PathBuf]) {
     let mut skills = mycode_config::discover_skills(cwd, user_home.as_deref());
     for extra in extras {
         for skill in mycode_config::discover_skills(extra, None) {
-            if !skills.iter().any(|existing| existing.path == skill.path) {
-                skills.push(skill);
+            if skills.iter().any(|existing| existing.slug == skill.slug) {
+                continue;
             }
+            skills.push(skill);
         }
     }
-    skills.truncate(32);
-    if let Some(catalog) = mycode_config::render_skill_catalog(&skills) {
-        system.push_str("\n\n");
-        system.push_str(&catalog);
-    }
+    skills.sort_by(|left, right| {
+        left.slug
+            .cmp(&right.slug)
+            .then_with(|| left.global.cmp(&right.global))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    crate::turn::push_skill_catalog(system, skills);
 }
 
 fn child_registry(home: &HomeLayout, allowed: &[String]) -> ToolRegistry {

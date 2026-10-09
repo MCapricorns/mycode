@@ -140,6 +140,14 @@ pub struct ThinkingBlock {
     /// Provider reasoning-integrity signature, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Vendor replay blob for the next Chat Completions request.
+    ///
+    /// MiniMax stores either `{"reasoning_details":[...]}` (the original
+    /// array, replayed verbatim) or `{"reasoning_content":true}` when `text`
+    /// itself is `reasoning_content`. Absent on older turns and on providers
+    /// that do not use this field. Anthropic signatures stay on `signature`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<String>,
 }
 
 impl ThinkingBlock {
@@ -148,6 +156,7 @@ impl ThinkingBlock {
         Self {
             text: text.into(),
             signature: None,
+            replay: None,
         }
     }
 
@@ -155,6 +164,14 @@ impl ThinkingBlock {
     #[must_use]
     pub fn with_signature(mut self, signature: impl Into<String>) -> Self {
         self.signature = Some(signature.into());
+        self
+    }
+
+    /// Attaches a Chat Completions replay blob. An empty blob is ignored.
+    #[must_use]
+    pub fn with_replay(mut self, replay: impl Into<String>) -> Self {
+        let replay = replay.into();
+        self.replay = (!replay.is_empty()).then_some(replay);
         self
     }
 }
@@ -349,7 +366,7 @@ pub fn interrupted_response_text(detail: &str) -> String {
 }
 
 /// Token usage reported by a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Usage {
     pub input_tokens: u64,
@@ -357,6 +374,15 @@ pub struct Usage {
     /// Prompt tokens served from the provider cache, when reported.
     #[serde(default)]
     pub cache_read_tokens: Option<u64>,
+    /// Prompt tokens written into the provider cache, when reported.
+    #[serde(default)]
+    pub cache_write_tokens: Option<u64>,
+    /// Prompt size for the context meter.
+    ///
+    /// OpenAI-style `prompt_tokens` already includes cache reads. Anthropic
+    /// `input_tokens` excludes them, so adapters set this to the sum.
+    #[serde(default)]
+    pub prompt_tokens: u64,
 }
 
 /// Binary content (base64) with its MIME type.

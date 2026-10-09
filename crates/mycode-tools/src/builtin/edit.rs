@@ -332,3 +332,20 @@ mod engine;
 mod fuzzy;
 mod line;
 use engine::*;
+
+#[cfg(test)]
+mod schema_tests {
+    use super::EditTool;
+    use crate::tool::ToolDyn;
+
+    #[test]
+    fn edit_schema_inlines_refs_and_drops_defs() {
+        let schema = ToolDyn::spec(&EditTool).params_schema;
+        let text = schema.to_string();
+        assert!(!text.contains("\"$ref\""), "{text}");
+        assert!(!text.contains("\"$defs\""), "{text}");
+        assert!(!text.contains("\"definitions\""), "{text}");
+        assert!(text.contains("operations"), "{text}");
+        assert!(text.contains("unique"), "{text}");
+    }
+}

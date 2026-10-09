@@ -76,9 +76,13 @@ pub(crate) fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry
         format!("{provider}/{model}")
     };
     let context = value["context"].as_u64().unwrap_or(0);
+    let context_cache = value["context_cache"].as_u64().unwrap_or(0);
     let mut text = format!("{key}: {input} in / {output} out");
     if context > 0 {
         text.push_str(&format!(" \u{b7} ctx {context}"));
+    }
+    if context_cache > 0 {
+        text.push_str(&format!(" \u{b7} hit {context_cache}"));
     }
     if let Some(cache) = cache {
         text.push_str(&format!(" \u{b7} cache {cache}"));
@@ -185,5 +189,28 @@ pub(crate) fn project_assistant_message(
         text: text.into(),
         call_id: None,
         thinking,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_usage;
+
+    #[test]
+    fn usage_projection_keeps_the_latest_cache_read() {
+        let payload = serde_json::json!({
+            "provider": "zai",
+            "model": "glm-5.3",
+            "input": 100,
+            "context": 12000,
+            "context_cache": 11800,
+            "output": 20,
+            "cache": 11800,
+        });
+        let bytes = serde_json::to_vec(&payload).unwrap();
+        let entry = project_usage("evt", &bytes);
+        assert!(entry.text.contains("ctx 12000"));
+        assert!(entry.text.contains("hit 11800"));
+        assert!(entry.text.contains("cache 11800"));
     }
 }

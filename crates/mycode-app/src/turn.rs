@@ -275,13 +275,92 @@ pub(crate) fn workspace_extra_roots(
         return Vec::new();
     };
     let cwd_text = cwd.display().to_string();
-    state
+    let mut roots: Vec<std::path::PathBuf> = state
         .workspace_roots
         .into_iter()
         .filter(|root| !same_dir(root, &cwd_text))
         .map(std::path::PathBuf::from)
-        .take(mycode_config::MAX_WORKSPACE_ROOTS)
-        .collect()
+        .collect();
+    roots.sort();
+    roots.truncate(mycode_config::MAX_WORKSPACE_ROOTS);
+    roots
+}
+
+/// System prompt for one session. Skill order, the skill cap, and extra-root
+/// order are stable across calls that see the same files.
+pub(crate) fn session_system_prompt(
+    home: &HomeLayout,
+    cwd: &std::path::Path,
+    registry: &ToolRegistry,
+    mcp_note: Option<&str>,
+    extra_roots: &[std::path::PathBuf],
+    directive: &str,
+    user_home: Option<&std::path::Path>,
+) -> String {
+    let resources = mycode_config::discover_resources(home, cwd);
+    let mut system_prompt = String::from(
+        "You are MYCode, a coding agent. Complete the user's request with the tools you have.",
+    );
+    for part in mycode_config::render_resource_prompt(&resources) {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&part);
+    }
+    push_skill_catalog(
+        &mut system_prompt,
+        mycode_config::discover_skills(cwd, user_home),
+    );
+    if let Some(note) = mcp_note {
+        system_prompt.push_str("\n\n<mcp>\n");
+        system_prompt.push_str(note);
+        system_prompt.push_str(
+            "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
+call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
+guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
+response as `agent`.\n</mcp>",
+        );
+    }
+    system_prompt.push_str(
+        "\n\nFor current facts, call `web_search`, then `fetch_content` on the URLs you will cite. Snippets are not evidence.",
+    );
+    let mut roots: Vec<&std::path::Path> = extra_roots.iter().map(PathBuf::as_path).collect();
+    roots.sort();
+    if !roots.is_empty() {
+        system_prompt.push_str("\n\nWorkspace folders besides the session cwd:\n");
+        for root in &roots {
+            system_prompt.push_str(&format!("- {}\n", root.display()));
+        }
+        system_prompt.push_str(
+            "Relative paths stay in the session cwd. For the other folders, pass an \
+absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
+path inside a `shell` script (`mode` `script`). `shell` starts in the session \
+cwd for both script and program mode.",
+        );
+    }
+    system_prompt.push_str("\n\n");
+    system_prompt.push_str(&mycode_agent::build_system_prompt(registry));
+    if !directive.is_empty() {
+        system_prompt.push_str(directive);
+    }
+    system_prompt
+}
+
+/// Appends the skill catalog, keeping at most [`mycode_config::MAX_SKILLS`].
+pub(crate) fn push_skill_catalog(prompt: &mut String, mut skills: Vec<mycode_config::SkillFile>) {
+    let hidden = skills.len().saturating_sub(mycode_config::MAX_SKILLS);
+    skills.truncate(mycode_config::MAX_SKILLS);
+    let Some(mut catalog) = mycode_config::render_skill_catalog(&skills) else {
+        return;
+    };
+    if hidden > 0
+        && let Some(close) = catalog.rfind("\n</skills>")
+    {
+        catalog.insert_str(
+            close,
+            &format!("\n- and {hidden} more; read the matching SKILL.md by path"),
+        );
+    }
+    prompt.push_str("\n\n");
+    prompt.push_str(&catalog);
 }
 
 fn same_dir(left: &str, right: &str) -> bool {
@@ -484,71 +563,25 @@ async fn run_chat_turn_on(
     }
     let history = compacted.messages;
 
-    let resources = mycode_config::discover_resources(home, &cwd);
-    let mut system_prompt = String::from(
-        "You are MYCode, a coding agent. Complete the user's request with the tools you have.",
-    );
-    for part in mycode_config::render_resource_prompt(&resources) {
-        system_prompt.push_str(
-            "
-
-",
-        );
-        system_prompt.push_str(&part);
-    }
     // Grok Build call pattern: a short index, then the model loads the
     // body or schema itself. Full skill text and MCP schemas stay off this
-    // prompt.
+    // prompt. Skill order and extra-root order are sorted so two turns share
+    // a byte-identical prefix.
     let user_home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from);
-    let mut skills = mycode_config::discover_skills(&cwd, user_home.as_deref());
-    let hidden_skills = skills.len().saturating_sub(32);
-    skills.truncate(32);
-    if let Some(mut catalog) = mycode_config::render_skill_catalog(&skills) {
-        if hidden_skills > 0
-            && let Some(close) = catalog.rfind("\n</skills>")
-        {
-            catalog.insert_str(
-                close,
-                &format!("\n- and {hidden_skills} more; read the matching SKILL.md by path"),
-            );
-        }
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&catalog);
-    }
-    if let Some(catalog) = mcp_catalog.as_ref() {
-        system_prompt.push_str("\n\n<mcp>\n");
-        system_prompt.push_str(&catalog.prompt_note());
-        system_prompt.push_str(
-            "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
-call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
-guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
-response as `agent`.\n</mcp>",
-        );
-    }
-    system_prompt.push_str(
-        "\n\nFor current facts, call `web_search`, then `fetch_content` on the URLs you will cite. Snippets are not evidence.",
-    );
     let extra_roots = workspace_extra_roots(home, &cwd);
-    if !extra_roots.is_empty() {
-        system_prompt.push_str("\n\nWorkspace folders besides the session cwd:\n");
-        for root in &extra_roots {
-            system_prompt.push_str(&format!("- {}\n", root.display()));
-        }
-        system_prompt.push_str(
-            "Relative paths stay in the session cwd. For the other folders, pass an \
-absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
-path inside a `shell` script (`mode` `script`). `shell` starts in the session \
-cwd for both script and program mode.",
-        );
-    }
-    system_prompt.push_str("\n\n");
-    system_prompt.push_str(&mycode_agent::build_system_prompt(&registry));
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
-    if !directive.is_empty() {
-        system_prompt.push_str(&directive);
-    }
+    let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
+    let system_prompt = session_system_prompt(
+        home,
+        &cwd,
+        &registry,
+        mcp_note.as_deref(),
+        &extra_roots,
+        &directive,
+        user_home.as_deref(),
+    );
 
     let turn_started = std::time::Instant::now();
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
@@ -593,6 +626,7 @@ cwd for both script and program mode.",
     let _cancel_guard = CancelGuard::register(state.turn_cancels.clone(), &session_id, &cancel);
     let mut config = AgentConfig::new()
         .with_system_prompt(system_prompt)
+        .with_prompt_cache_key(Some(session_id.clone()))
         .with_max_output_tokens(model_output_limit(state, &provider, model));
     if let Some(token) = reasoning {
         if let Some(level) = mycode_core::ReasoningLevel::parse(token) {
@@ -713,6 +747,7 @@ cwd for both script and program mode.",
                             model: usage_model.clone(),
                             input: turn_usage.input,
                             context: turn_usage.latest_input,
+                            context_cache: turn_usage.latest_cache,
                             output: turn_usage.output,
                             cache: turn_usage.cache,
                             elapsed_ms: turn_started.elapsed().as_millis() as u64,
@@ -803,6 +838,7 @@ cwd for both script and program mode.",
                                             "model": usage_model,
                                             "input": turn_usage.input,
                                             "context": turn_usage.latest_input,
+                                            "context_cache": turn_usage.latest_cache,
                                             "output": turn_usage.output,
                                             "cache": turn_usage.cache,
                                             "elapsed_ms": elapsed_ms,
@@ -818,6 +854,7 @@ cwd for both script and program mode.",
                                                     model: usage_model.clone(),
                                                     input: turn_usage.input,
                                                     context: turn_usage.latest_input,
+                                                    context_cache: turn_usage.latest_cache,
                                                     output: turn_usage.output,
                                                     cache: turn_usage.cache,
                                                     elapsed_ms,
@@ -953,14 +990,23 @@ struct TurnUsage {
     latest_input: u64,
     output: u64,
     cache: Option<u64>,
+    /// Cache-read tokens on the latest prompt. The context meter shows this
+    /// beside the window, separate from [`Self::cache`], which is the sum.
+    latest_cache: u64,
 }
 
 impl TurnUsage {
     fn fold(&mut self, usage: &mycode_core::Usage) {
         self.seen = true;
         self.input = self.input.saturating_add(usage.input_tokens);
-        if usage.input_tokens > 0 {
-            self.latest_input = usage.input_tokens;
+        let prompt = if usage.prompt_tokens > 0 {
+            usage.prompt_tokens
+        } else {
+            usage.input_tokens
+        };
+        if prompt > 0 {
+            self.latest_input = prompt;
+            self.latest_cache = usage.cache_read_tokens.unwrap_or(0);
         }
         self.output = self.output.saturating_add(usage.output_tokens);
         if let Some(cache) = usage.cache_read_tokens {
@@ -1006,6 +1052,8 @@ fn user_has_text(user: &mycode_core::UserMessage) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     use mycode_agent::session::{EventKind, HeadStamp, SessionId};
@@ -1015,7 +1063,9 @@ mod tests {
     };
     use mycode_core::ProviderError;
     use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
+    use mycode_tools::ToolRegistry;
 
+    use super::session_system_prompt;
     use crate::protocol::EntryKind;
     use crate::state::CoreState;
 
@@ -1319,5 +1369,51 @@ mod tests {
             "second read result missing"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn session_system_prompt_is_identical_across_calls() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-prompt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _guard = TempDir(root.clone());
+        fs::create_dir_all(root.join(".agents")).unwrap();
+        for slug in ["zebra", "alpha", "middle"] {
+            let dir = root.join(".agents").join(slug);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("SKILL.md"), format!("# {slug}\n")).unwrap();
+        }
+        let home = HomeLayout::from_root(&root).unwrap();
+        let registry = ToolRegistry::new();
+        mycode_tools::register_builtins(&registry);
+        let forward = vec![root.join("b"), root.join("a")];
+        let reverse = vec![root.join("a"), root.join("b")];
+        let first = session_system_prompt(&home, &root, &registry, None, &forward, "", None);
+        let second = session_system_prompt(&home, &root, &registry, None, &reverse, "", None);
+        assert_eq!(first, second);
+        let alpha = first.find("/alpha").unwrap();
+        let middle = first.find("/middle").unwrap();
+        let zebra = first.find("/zebra").unwrap();
+        assert!(alpha < middle && middle < zebra);
+        let a = first
+            .find(&format!("- {}", root.join("a").display()))
+            .unwrap();
+        let b = first
+            .find(&format!("- {}", root.join("b").display()))
+            .unwrap();
+        assert!(a < b);
     }
 }

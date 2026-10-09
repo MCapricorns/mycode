@@ -16,13 +16,96 @@ pub(crate) struct UsageTotal {
     pub requests: u64,
 }
 
-/// Share of prompt tokens served from cache, as a whole percent.
+/// Compact token-count spelling: 12.3k / 1.2M.
+#[must_use]
+pub(crate) fn compact_count(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
+}
+
+/// The two pieces of a context meter. Either string may be empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContextMeterParts {
+    /// `12.0k / 1.0M`. Empty when the context window is unknown.
+    pub ratio: String,
+    /// `11.8k cached`. Empty when the latest prompt reported no cache read.
+    pub cache: String,
+}
+
+/// Splits the latest prompt into a window ratio and a cache-hit count.
 ///
-/// Providers report cache reads as a subset of the input count, so the ratio
-/// is only meaningful once input tokens exist.
+/// A window of zero omits the ratio. A cache read of zero omits the cache
+/// piece. The composer hides the whole meter when both the prompt and the
+/// cache read are zero; the inspector still shows `0 / window`.
+#[must_use]
+pub(crate) fn context_meter_parts(
+    used: u64,
+    window: u64,
+    cached: u64,
+    cached_word: &str,
+) -> ContextMeterParts {
+    let ratio = if window > 0 {
+        format!("{} / {}", compact_count(used), compact_count(window))
+    } else {
+        String::new()
+    };
+    let cache = if cached > 0 {
+        format!("{} {cached_word}", compact_count(cached))
+    } else {
+        String::new()
+    };
+    ContextMeterParts { ratio, cache }
+}
+
+/// Context-meter text. `cached_word` is the localized "cached" label.
+///
+/// A window of zero omits the ratio. A cache read of zero omits the cache
+/// suffix. Empty when there is neither a ratio nor a cache read.
+#[cfg(test)]
+#[must_use]
+fn format_context_meter(used: u64, window: u64, cached: u64, cached_word: &str) -> String {
+    let parts = context_meter_parts(used, window, cached, cached_word);
+    match (parts.ratio.is_empty(), parts.cache.is_empty()) {
+        (false, false) => format!("{} · {}", parts.ratio, parts.cache),
+        (false, true) => parts.ratio,
+        (true, false) => parts.cache,
+        (true, true) => String::new(),
+    }
+}
+
+/// Composer label for the latest prompt. Hidden until the session has a
+/// prompt size or a cache read, so an empty chat does not show `0 / 1.0M`.
+#[cfg(test)]
+#[must_use]
+fn context_meter_label(used: u64, window: u64, cached: u64, cached_word: &str) -> Option<String> {
+    if used == 0 && cached == 0 {
+        return None;
+    }
+    let label = format_context_meter(used, window, cached, cached_word);
+    (!label.is_empty()).then_some(label)
+}
+
+/// Share of the prompt served from cache, as a whole percent.
+///
+/// OpenAI-style usage counts cache reads inside `input`. Anthropic's billed
+/// input excludes them, so a cache read larger than `input` is measured
+/// against `input + cache`.
 #[must_use]
 pub(crate) fn cache_percent(cache: u64, input: u64) -> Option<u64> {
-    (input > 0 && cache > 0).then(|| (cache.min(input) * 100) / input)
+    if cache == 0 {
+        return None;
+    }
+    let base = if cache > input {
+        input.saturating_add(cache)
+    } else {
+        input
+    };
+    (base > 0).then_some((cache.min(base) * 100) / base)
 }
 
 /// Whether a `provider/model` usage key belongs to `model`.
@@ -64,6 +147,15 @@ pub(crate) fn parse_context_tokens(text: &str) -> Option<u64> {
         .filter(|tokens| *tokens > 0)
 }
 
+/// Cache-read tokens on the latest prompt (`· hit N`). Absent on older lines.
+#[must_use]
+pub(crate) fn parse_context_cache(text: &str) -> Option<u64> {
+    text.split('\u{b7}')
+        .find_map(|part| part.trim().strip_prefix("hit "))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+}
+
 /// Metrics for one completed model turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TurnStats {
@@ -77,4 +169,55 @@ pub(crate) struct TurnStats {
     pub cache: Option<u64>,
     /// Wall-clock duration in milliseconds.
     pub elapsed_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        cache_percent, context_meter_label, context_meter_parts, format_context_meter,
+        parse_context_cache, parse_context_tokens, parse_usage_text,
+    };
+
+    #[test]
+    fn usage_line_round_trips_context_and_cache_read() {
+        let text = "zai/glm-5.3: 100 in / 20 out · ctx 12000 · hit 11800 · cache 11800 · 40 tok/s · 95% cached";
+        let (key, input, output, cache) = parse_usage_text(text).unwrap();
+        assert_eq!(key, "zai/glm-5.3");
+        assert_eq!(input, 100);
+        assert_eq!(output, 20);
+        assert_eq!(cache, Some(11800));
+        assert_eq!(parse_context_tokens(text), Some(12000));
+        assert_eq!(parse_context_cache(text), Some(11800));
+        assert_eq!(cache_percent(11800, 545), Some(95));
+        assert_eq!(cache_percent(100, 400), Some(25));
+    }
+
+    #[test]
+    fn context_meter_shows_cache_reads_and_hides_an_empty_session() {
+        assert_eq!(context_meter_label(0, 1_000_000, 0, "cached"), None);
+        assert_eq!(
+            context_meter_label(12_000, 1_000_000, 0, "cached").as_deref(),
+            Some("12.0k / 1.0M")
+        );
+        assert_eq!(
+            format_context_meter(12_000, 1_000_000, 11_800, "cached"),
+            "12.0k / 1.0M · 11.8k cached"
+        );
+        let parts = context_meter_parts(12_000, 1_000_000, 11_800, "cached");
+        assert_eq!(parts.ratio, "12.0k / 1.0M");
+        assert_eq!(parts.cache, "11.8k cached");
+        assert!(
+            context_meter_parts(12_000, 1_000_000, 0, "cached")
+                .cache
+                .is_empty()
+        );
+        assert_eq!(
+            context_meter_label(12_000, 1_000_000, 11_800, "缓存").as_deref(),
+            Some("12.0k / 1.0M · 11.8k 缓存")
+        );
+        assert_eq!(
+            context_meter_label(0, 0, 11_800, "cached").as_deref(),
+            Some("11.8k cached")
+        );
+    }
 }

@@ -105,3 +105,22 @@ impl Default for ToolRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ToolRegistry;
+
+    #[test]
+    fn specs_stay_sorted_and_byte_identical() {
+        let registry = ToolRegistry::new();
+        crate::builtin::register_builtins(&registry);
+        let specs = registry.specs();
+        let names: Vec<_> = specs.iter().map(|spec| spec.name.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+        let first = serde_json::to_string(&*specs).unwrap();
+        let second = serde_json::to_string(&*registry.specs()).unwrap();
+        assert_eq!(first, second);
+    }
+}

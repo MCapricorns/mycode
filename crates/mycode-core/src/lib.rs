@@ -33,4 +33,4 @@ pub use provider::{
     EventStream, EventStreamSender, MAX_REQUEST_ENCODED_BYTES, Provider, ProviderError,
     ProviderErrorKind, ReasoningLevel, Request, StreamEvent,
 };
-pub use tool::ToolSpec;
+pub use tool::{ToolSpec, inline_schema_refs};

@@ -10,6 +10,7 @@
 //! reaches them. The drag region and the caption buttons are siblings: only
 //! the title strip is `Drag`. Windows `zoom()` only maximizes, so the max
 //! button uses `WindowControlArea::Max` and lets the caption proc toggle.
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Sizable as _,
@@ -224,17 +225,23 @@ fn title_controls(
         .flex_shrink_0()
         .gap_2()
         .pr(px(CAPTION_EDGE))
+        // The drag strip is a sibling, and a normal hitbox does not block it.
+        // On Windows the first `window_control_area` that contains the pointer
+        // wins, so a Drag region under this strip becomes HTCAPTION. On Linux
+        // the same overlap arms `start_window_move`, and the client-side
+        // resize band is an ancestor `on_mouse_down`. Either one takes the
+        // pointer before mouse-up, so a plain `on_click` never opens the
+        // inspector. Occlude drops the drag region out of the hit test.
+        .occlude()
         .when(show_inspector, |this| {
-            this.child(super::icon_button_marked(
-                "toggle-inspector",
-                IconName::PanelRight.into(),
+            this.child(inspector_toggle_button(
                 inspector_open,
+                cx.theme(),
                 cx.listener(|workspace, _, _, cx| {
                     let open = !workspace.vm().inspector_open;
                     let pinned = workspace.vm().inspector_pinned;
                     workspace.on_set_inspector(open, pinned, cx);
                 }),
-                cx,
             ))
         })
         .when_some(update_label, |this, label| {
@@ -252,6 +259,46 @@ fn title_controls(
             )
         })
         .child(window_controls(window, cx))
+}
+
+/// Panel toggle in the title strip.
+///
+/// Caption buttons already consume the press. This button has to do the same,
+/// or Linux delivers the press to the drag region or the resize backdrop and
+/// the click never completes. GPUI registers `on_mouse_down` listeners before
+/// the click's internal press handler and then runs the bubble phase in
+/// reverse, so the click arms and this guard then stops the ancestor.
+fn inspector_toggle_button(
+    open: bool,
+    theme: &gpui_kit::component::theme::Theme,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+) -> impl IntoElement {
+    let hover = theme.secondary_hover;
+    div()
+        .id("toggle-inspector")
+        .occlude()
+        .size(px(30.))
+        .rounded(px(10.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_color(if open {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+        .when(open, |this| this.bg(theme.accent.opacity(0.55)))
+        .hover(move |this| this.bg(hover))
+        .when(cfg!(not(target_os = "windows")), |this| {
+            this.on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+        })
+        .on_click(on_click)
+        .child(Icon::new(IconName::PanelRight).with_size(px(15.)))
+        .test_support()
 }
 
 fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl IntoElement {
@@ -370,5 +417,108 @@ mod tests {
                 WindowControlArea::Min | WindowControlArea::Max | WindowControlArea::Close
             )
         }));
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod hit_test {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::test::{TestSupportExt as _, TestWindowExt};
+    use gpui_kit::{
+        AppContext as _, Context, InteractiveElement, IntoElement, MouseButton, ParentElement,
+        Render, Styled, TestAppContext, Window, div, px, size,
+    };
+
+    #[derive(Clone, Copy, Default)]
+    struct Presses {
+        opened: bool,
+        drag_press: bool,
+        ancestor_press: bool,
+    }
+
+    /// The toggle sits on top of a full-size drag target, under a parent that
+    /// also sees presses. A click has to open the panel without either of
+    /// those handlers running.
+    struct InspectorProbe {
+        presses: Rc<Cell<Presses>>,
+    }
+
+    impl Render for InspectorProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let presses = self.presses.clone();
+            let drag = presses.clone();
+            let ancestor = presses.clone();
+            div()
+                .id("backdrop")
+                .size_full()
+                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                    let mut presses = ancestor.get();
+                    presses.ancestor_press = true;
+                    ancestor.set(presses);
+                })
+                .child(
+                    div()
+                        .id("title-drag")
+                        .absolute()
+                        .inset_0()
+                        .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                            let mut presses = drag.get();
+                            presses.drag_press = true;
+                            drag.set(presses);
+                        })
+                        .test_support(),
+                )
+                .child(
+                    div()
+                        .id("title-controls")
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .w(px(40.))
+                        .h(px(34.))
+                        .occlude()
+                        .child(super::inspector_toggle_button(false, &theme, {
+                            let presses = presses.clone();
+                            move |_, _, _| {
+                                let mut flags = presses.get();
+                                flags.opened = true;
+                                presses.set(flags);
+                            }
+                        })),
+                )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn inspector_toggle_click_does_not_fall_through(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let presses = Rc::new(Cell::new(Presses::default()));
+        let flags = presses.clone();
+        let handle = cx.open_window(size(px(800.), px(200.)), move |_, _| InspectorProbe {
+            presses: flags,
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let button = window.find("toggle-inspector").bounds();
+            let drag = window.find("title-drag").bounds();
+            assert!(button.size.width > px(0.) && button.size.height > px(0.));
+            assert!(
+                drag.origin.x <= button.origin.x
+                    && drag.origin.y <= button.origin.y
+                    && drag.right() >= button.right()
+                    && drag.bottom() >= button.bottom(),
+                "the drag region should cover the button so the test can see a fall-through: button {button:?} drag {drag:?}"
+            );
+            window.click("toggle-inspector", cx);
+        })
+        .unwrap();
+        let presses = presses.get();
+        assert!(presses.opened);
+        assert!(!presses.drag_press);
+        assert!(!presses.ancestor_press);
     }
 }

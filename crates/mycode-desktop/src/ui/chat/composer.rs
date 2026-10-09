@@ -199,6 +199,43 @@ pub(super) fn render_composer(
                                 cx,
                             ))
                         })
+                        .when_some(context_meter(workspace), |this, meter| {
+                            this.child(
+                                div()
+                                    .id("composer-context-meter")
+                                    .flex()
+                                    .flex_shrink_1()
+                                    .items_center()
+                                    .gap_1()
+                                    .min_w_0()
+                                    .max_w(px(280.))
+                                    .px_2()
+                                    .h(px(28.))
+                                    .text_xs()
+                                    .when(!meter.ratio.is_empty(), |row| {
+                                        row.child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(theme.muted_foreground)
+                                                .child(meter.ratio.clone()),
+                                        )
+                                    })
+                                    .when(!meter.cache.is_empty(), |row| {
+                                        let cache = if meter.ratio.is_empty() {
+                                            meter.cache.clone()
+                                        } else {
+                                            format!("· {}", meter.cache)
+                                        };
+                                        row.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_color(theme.foreground)
+                                                .child(cache),
+                                        )
+                                    }),
+                            )
+                        })
                         .child(composer_round_button(sending, can_send, cx)),
                 ),
         )
@@ -381,6 +418,27 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .child(Icon::new(IconName::X).xsmall()),
                 )
         }))
+}
+
+/// Latest prompt size and cache read, shown on the chip row itself.
+///
+/// The inspector has the same figures, but it stays closed until the title
+/// bar opens it. The cache piece does not shrink, so a non-zero hit stays
+/// readable when the model chip takes the row.
+fn context_meter(workspace: &Workspace) -> Option<crate::view_model::ContextMeterParts> {
+    let vm = workspace.vm();
+    let used = vm.context_used;
+    let cached = vm.context_cache;
+    if used == 0 && cached == 0 {
+        return None;
+    }
+    let parts = crate::view_model::context_meter_parts(
+        used,
+        super::super::context::model_context_window(vm),
+        cached,
+        t("cached", "缓存"),
+    );
+    (!parts.ratio.is_empty() || !parts.cache.is_empty()).then_some(parts)
 }
 
 fn model_button_label(vm: &WorkspaceState) -> String {

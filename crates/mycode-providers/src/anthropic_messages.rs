@@ -21,9 +21,14 @@ use crate::wire_common::{
 
 /// Output ceiling used only when models.dev publishes no `limit.output`.
 ///
-/// The Messages API requires `max_tokens`. A published model uses its own
-/// output cap; this fallback is not a guess about any particular model.
-const MAX_TOKENS_WHEN_UNPUBLISHED: u64 = 8192;
+/// The Messages API requires `max_tokens`. This is `OUTPUT_TOKEN_MAX` from
+/// `sst/opencode` `packages/opencode/src/provider/transform.ts`.
+/// `maxOutputTokens` there is
+/// `Math.min(model.limit.output, OUTPUT_TOKEN_MAX) || OUTPUT_TOKEN_MAX`.
+/// That minimum is not applied: a published `limit.output` (glm's 131072,
+/// for example) is sent as-is. The compaction summary request has its own
+/// ceiling and does not use this fallback.
+const MAX_TOKENS_WHEN_UNPUBLISHED: u64 = 32_000;
 
 /// Converts one provider-neutral request into a Messages body.
 #[must_use]
@@ -44,7 +49,15 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         "stream": true,
     });
     if !request.system_prompt.is_empty() {
-        body["system"] = json!(request.system_prompt.join("\n\n"));
+        let blocks: Vec<Value> = request
+            .system_prompt
+            .iter()
+            .filter(|part| !part.is_empty())
+            .map(|part| json!({"type": "text", "text": part}))
+            .collect();
+        if !blocks.is_empty() {
+            body["system"] = json!(blocks);
+        }
     }
     if !tools.is_empty() {
         body["tools"] = json!(tools);
@@ -54,6 +67,7 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
     } else if let Some(token) = request.reasoning_token.as_deref() {
         body["output_config"] = json!({ "effort": token });
     }
+    crate::cache::apply_anthropic_message_breakpoints(&mut body);
     body
 }
 
@@ -61,7 +75,7 @@ fn convert_tool(tool: &ToolSpec) -> Value {
     json!({
         "name": tool.name,
         "description": tool.description,
-        "input_schema": tool.params_schema,
+        "input_schema": crate::wire_common::tool_parameters(tool),
     })
 }
 
@@ -174,6 +188,8 @@ pub(crate) struct MessagesReducer {
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+    prompt_tokens: u64,
     stop_reason: Option<StopReason>,
     /// Detail for [`StopReason::Error`] when the stream fails after bytes.
     interrupt: Option<String>,
@@ -292,14 +308,28 @@ impl MessagesReducer {
         StreamEvent::Done {
             message: AssistantMessage {
                 blocks,
-                usage: Some(Usage {
-                    input_tokens: self.input_tokens,
-                    output_tokens: self.output_tokens,
-                    cache_read_tokens: self.cache_read_tokens,
-                }),
+                usage: Some(self.snapshot()),
                 stop_reason,
             },
         }
+    }
+
+    fn snapshot(&self) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_read_tokens: self.cache_read_tokens,
+            cache_write_tokens: self.cache_write_tokens,
+            prompt_tokens: self.prompt_tokens,
+        }
+    }
+
+    fn apply_usage(&mut self, usage: Usage) {
+        self.input_tokens = usage.input_tokens;
+        self.output_tokens = usage.output_tokens;
+        self.cache_read_tokens = usage.cache_read_tokens;
+        self.cache_write_tokens = usage.cache_write_tokens;
+        self.prompt_tokens = usage.prompt_tokens;
     }
 }
 
@@ -322,17 +352,8 @@ impl FrameReducer for MessagesReducer {
         match event_type {
             "message_start" => {
                 let parsed = usage_from_value(&event["message"]["usage"]);
-                let merged = merge_usage(
-                    Some(Usage {
-                        input_tokens: self.input_tokens,
-                        output_tokens: self.output_tokens,
-                        cache_read_tokens: self.cache_read_tokens,
-                    }),
-                    parsed,
-                );
-                self.input_tokens = merged.input_tokens;
-                self.output_tokens = merged.output_tokens;
-                self.cache_read_tokens = merged.cache_read_tokens;
+                let merged = merge_usage(Some(self.snapshot()), parsed);
+                self.apply_usage(merged);
             }
             "content_block_start" => {
                 let index = event["index"].as_u64().unwrap_or_default();
@@ -500,17 +521,8 @@ impl FrameReducer for MessagesReducer {
                 }
                 if event.get("usage").is_some() {
                     let parsed = usage_from_value(&event["usage"]);
-                    let merged = merge_usage(
-                        Some(Usage {
-                            input_tokens: self.input_tokens,
-                            output_tokens: self.output_tokens,
-                            cache_read_tokens: self.cache_read_tokens,
-                        }),
-                        parsed,
-                    );
-                    self.input_tokens = merged.input_tokens;
-                    self.output_tokens = merged.output_tokens;
-                    self.cache_read_tokens = merged.cache_read_tokens;
+                    let merged = merge_usage(Some(self.snapshot()), parsed);
+                    self.apply_usage(merged);
                 }
             }
             "message_stop" => {

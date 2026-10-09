@@ -778,21 +778,25 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             // The meter is the latest prompt, kept across an interrupt.
             // Summing every tool round or every turn is what painted 1.4M/1.0M.
             let used = vm.context_used;
+            let cached = vm.context_cache;
+            let parts = crate::view_model::context_meter_parts(
+                used,
+                context_window,
+                cached,
+                t("cached", "缓存"),
+            );
+            let cache = (!parts.cache.is_empty()).then_some(parts.cache.as_str());
             this.child(bar_row(
                 "context",
                 used,
                 context_window,
                 theme.cyan,
-                &format!(
-                    "{} / {}",
-                    super::compact_count(used),
-                    super::compact_count(context_window)
-                ),
+                &parts.ratio,
+                cache,
                 theme,
             ))
         })
         .when_some(usage, |this, row| {
-            let share = cache_percent(row.cache, row.input);
             this.child(stat_line(
                 t("Input", "输入"),
                 &super::compact_count(row.input),
@@ -803,8 +807,12 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 &super::compact_count(row.output),
                 theme,
             ))
-            .when_some(share, |this, share| {
-                this.child(stat_line(t("Cache", "缓存"), &format!("{share}%"), theme))
+            .when(row.cache > 0, |this| {
+                let value = match cache_percent(row.cache, row.input) {
+                    Some(share) => format!("{} · {share}%", super::compact_count(row.cache)),
+                    None => super::compact_count(row.cache),
+                };
+                this.child(stat_line(t("Cache", "缓存"), &value, theme))
             })
             .child(stat_line(
                 t("Turns", "轮次"),
@@ -835,7 +843,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         })
 }
 
-fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u64 {
+pub(crate) fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u64 {
     let shown = vm.selected_model.as_deref();
     let provider_id = vm.selected_provider.as_deref();
     let base_url = provider_id.and_then(|id| {
@@ -899,7 +907,8 @@ fn bar_row(
     value: u64,
     total: u64,
     color: gpui_kit::Hsla,
-    figure: &str,
+    ratio: &str,
+    cache: Option<&str>,
     theme: &Theme,
 ) -> impl IntoElement {
     let fill = if total == 0 {
@@ -925,9 +934,26 @@ fn bar_row(
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(figure.to_owned()),
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(ratio.to_owned()),
+                        )
+                        .when_some(cache, |this, cache| {
+                            this.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(theme.foreground)
+                                    .child(format!("· {cache}")),
+                            )
+                        }),
                 ),
         )
         .child(

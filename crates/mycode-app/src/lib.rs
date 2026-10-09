@@ -322,6 +322,8 @@ pub enum BridgeEvent {
         input: u64,
         /// Latest prompt size, not the sum of tool rounds.
         context: u64,
+        /// Cache-read tokens on that latest prompt.
+        context_cache: u64,
         /// Output tokens summed so far this turn.
         output: u64,
         /// Prompt tokens served from the provider cache, when reported.
@@ -341,6 +343,8 @@ pub enum BridgeEvent {
         input: u64,
         /// Latest prompt size for the context meter.
         context: u64,
+        /// Cache-read tokens on that latest prompt.
+        context_cache: u64,
         /// Output tokens.
         output: u64,
         /// Prompt tokens served from the provider cache, when reported.

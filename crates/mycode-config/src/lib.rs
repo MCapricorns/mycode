@@ -47,8 +47,8 @@ pub use mcp_import::{normalize_api_key, parse_mcp_import};
 pub use project_mcp::project_mcp_servers;
 #[doc(inline)]
 pub use resources::{
-    ResourceFile, SkillFile, discover_resources, discover_skills, render_resource_prompt,
-    render_skill_catalog,
+    MAX_SKILLS, ResourceFile, SkillFile, discover_resources, discover_skills,
+    render_resource_prompt, render_skill_catalog,
 };
 pub use secrets::{
     MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_KIND, SECRETS_PATH,
