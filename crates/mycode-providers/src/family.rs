@@ -559,14 +559,14 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
 
 /// Effort token for a Kimi chat model.
 ///
-/// `keep_unpublished` is the K3 path: when neither catalog lists the id, the
-/// mapped `low` / `high` / `max` token is still sent. A row that publishes a
+/// `fallback_when_absent`: when neither the active nor bundled catalog lists
+/// this model id, still send the id-based effort token. A row that lists a
 /// toggle or an effort list gates the token the same way as every other Kimi
 /// model.
 fn kimi_effort_token(
     model_id: &str,
     level: ReasoningLevel,
-    keep_unpublished: bool,
+    fallback_when_absent: bool,
 ) -> Option<&'static str> {
     let active = crate::catalog::active();
     effort_against(
@@ -574,7 +574,7 @@ fn kimi_effort_token(
         crate::catalog::bundled(),
         model_id,
         level,
-        keep_unpublished,
+        fallback_when_absent,
     )
 }
 
@@ -583,7 +583,7 @@ fn effort_against(
     bundled: &crate::catalog::CatalogDocument,
     model_id: &str,
     level: ReasoningLevel,
-    keep_unpublished: bool,
+    fallback_when_absent: bool,
 ) -> Option<&'static str> {
     let token = k3_effort(level)?;
     let publication = kimi_publication_from(active, bundled, model_id);
@@ -593,7 +593,7 @@ fn effort_against(
             .iter()
             .any(|effort| effort.eq_ignore_ascii_case(token))
             .then_some(token),
-        _ if keep_unpublished => Some(token),
+        _ if fallback_when_absent => Some(token),
         _ => None,
     }
 }
@@ -1018,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_effort_prefers_the_active_catalog_and_keeps_unpublished_k3() {
+    fn kimi_effort_prefers_the_active_catalog_and_falls_back_when_absent() {
         let active = catalog_with("kimi-active-probe", &["low"]);
         let bundled = catalog_with("kimi-active-probe", &["low", "high", "max"]);
         let empty = crate::catalog::CatalogDocument::default();
