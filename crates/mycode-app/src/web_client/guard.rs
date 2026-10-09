@@ -4,7 +4,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Maximum accepted response body bytes per request.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-/// Maximum one page body may contribute to the aggregate contents payload.
+/// Per-page character cap applied before the aggregate byte budget.
+/// Callers compare this to `chars().count()`, not to UTF-8 byte length.
 pub const MAX_PAGE_BYTES: usize = 1024 * 1024;
 /// Maximum results accepted from one search response.
 pub const MAX_SEARCH_RESULTS: usize = 32;

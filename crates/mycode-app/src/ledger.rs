@@ -46,7 +46,6 @@ pub(crate) fn render_error(error: SessionError) -> String {
 /// message, so the listing does not open logs or read payloads. A corrupt
 /// index row stays visible so the UI can offer deletion.
 pub(crate) async fn inspect_summaries(
-    _service: &SessionService,
     home: HomeLayout,
 ) -> Result<Vec<SessionSummary>, SessionError> {
     let listing = tokio::task::spawn_blocking(move || session::inspect_sessions(&home))

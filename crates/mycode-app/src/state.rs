@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::settings_io::render_config_error;
 use crate::{BridgeEvent, BridgeReply, CatalogInfo};
 
-/// Update checks identify the app to GitHub's API.
+/// User-Agent for GitHub update checks and provider OAuth HTTP clients.
 pub(crate) const UPDATE_USER_AGENT: &str = concat!("mycode-updates/", env!("CARGO_PKG_VERSION"));
 
 /// Shared per-process core state owned by the bridge thread.
@@ -263,7 +263,6 @@ mod tests {
             version: "0.9.18".to_owned(),
             notes_url: "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18".to_owned(),
             asset_url: "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip".to_owned(),
-            asset_size: 1,
             checksum_url: "https://github.com/example/app.zip.sha256".to_owned(),
         };
         assert!(matches!(

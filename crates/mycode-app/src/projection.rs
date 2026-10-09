@@ -139,15 +139,12 @@ pub(crate) fn project_tool_result_message(
     event_id: &str,
     result: &ToolResultMessage,
 ) -> ConversationEntry {
-    let text: String = result
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    let mut text = String::new();
+    for block in &result.content {
+        if let ContentBlock::Text(block) = block {
+            text.push_str(&block.text);
+        }
+    }
     let text = attach_ui_diff(&text, result.details.as_ref());
     ConversationEntry {
         event_id: event_id.to_owned(),

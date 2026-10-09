@@ -219,6 +219,16 @@ pub(crate) fn run_core(
     });
 }
 
+fn push_unique_repair(
+    repairs: &mut Vec<mycode_config::DocumentRepair>,
+    repair: mycode_config::DocumentRepair,
+) {
+    if repairs.iter().any(|existing| existing.path == repair.path) {
+        return;
+    }
+    repairs.push(repair);
+}
+
 fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
     let message = message.to_owned();
     match command {
@@ -297,7 +307,7 @@ fn cancel_session_work(state: &CoreState, session_id: &str) {
 async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
     match command {
         BridgeCommand::ListSessions => BridgeReply::Sessions(
-            inspect_summaries(&state.service, state.home.clone())
+            inspect_summaries(state.home.clone())
                 .await
                 .map_err(render_error),
         ),
@@ -343,13 +353,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                     .await
                     .map(|mut loaded| {
                         for repair in pending {
-                            if !loaded
-                                .repairs
-                                .iter()
-                                .any(|existing| existing.path == repair.path)
-                            {
-                                loaded.repairs.push(repair);
-                            }
+                            push_unique_repair(&mut loaded.repairs, repair);
                         }
                         crate::SettingsSnapshot {
                             settings: loaded.settings,
@@ -529,10 +533,8 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                     let (ui_state, repair) = mycode_config::read_ui_state_with_repair(&home)
                         .map_err(|error| render_config_error(&error))?;
                     let mut repairs = pending;
-                    if let Some(repair) = repair
-                        && !repairs.iter().any(|existing| existing.path == repair.path)
-                    {
-                        repairs.push(repair);
+                    if let Some(repair) = repair {
+                        push_unique_repair(&mut repairs, repair);
                     }
                     Ok((ui_state, repairs))
                 })

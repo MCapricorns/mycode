@@ -302,10 +302,11 @@ pub enum BridgeEvent {
         /// Committed assistant entry projection.
         entry: ConversationEntry,
     },
-    /// Something the user should read that does not end the turn.
+    /// A one-line notice that does not end the turn.
     ///
-    /// History compaction and other background housekeeping report through
-    /// here; the turn keeps running.
+    /// Nothing in the core emits this. Compaction uses [`BridgeEvent::SummaryShown`]
+    /// and [`BridgeEvent::CompactFinished`]. The variant stays so a frontend
+    /// can keep matching it.
     Notice {
         /// Session identity spelling.
         session_id: String,
@@ -390,7 +391,7 @@ pub enum BridgeEvent {
         /// Committed tool-result entry projection.
         entry: ConversationEntry,
     },
-    /// The turn failed; nothing was committed.
+    /// The turn failed. Earlier steps in the same turn may already be committed.
     ChatFailed {
         /// Session identity spelling.
         session_id: String,
@@ -414,9 +415,9 @@ pub enum BridgeEvent {
         /// Short failure text. Not drawn as a full-width error in About.
         message: String,
     },
-    /// The Copilot device-flow sign-in completed; the provider is ready.
+    /// A device-flow sign-in (Copilot, xAI, or Codex) completed.
     CopilotSignedIn,
-    /// The Copilot device-flow sign-in failed or expired.
+    /// A device-flow sign-in failed or expired.
     CopilotSignInFailed {
         /// Rendered failure for the sign-in panel.
         message: String,
@@ -477,7 +478,8 @@ pub enum BridgeReply {
     ProviderKeySaved(Result<(Vec<String>, Vec<String>), String>),
     /// Chat turn acceptance; streaming continues over the event channel.
     ChatStarted(Result<(), String>),
-    /// Chat cancel acceptance; the turn unwinds with a `cancelled` event.
+    /// Chat cancel acceptance. The turn ends with [`BridgeEvent::ChatFailed`]
+    /// whose message is [`protocol::CHAT_CANCELLED`].
     ChatCancelled(Result<(), String>),
     /// One subagent cancel was delivered. The parent turn keeps running.
     SubagentCancelled(Result<(), String>),

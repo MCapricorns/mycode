@@ -60,8 +60,6 @@ pub struct UpdateOffer {
     pub notes_url: String,
     /// Asset download URL.
     pub asset_url: String,
-    /// Asset size in bytes.
-    pub asset_size: u64,
     /// Checksum sidecar URL.
     pub checksum_url: String,
 }
@@ -92,15 +90,19 @@ struct AssetJson {
     name: String,
     #[serde(rename = "browserDownloadUrl", alias = "browser_download_url")]
     browser_download_url: String,
-    #[serde(default)]
-    size: u64,
 }
 
-/// Resolves the latest release; `Ok(None)` means the app is current.
+/// Resolves the latest installable release for this target.
+///
+/// `Ok(None)` means there is nothing to install: the app is current, the
+/// target has no published archive, GitHub returned 404, or the tag is
+/// not a newer semver version. A supported target whose zip is missing
+/// is `Err`, not `None`.
 ///
 /// # Errors
 ///
-/// Returns the transport, parse, version-parse, or HTTP failure message.
+/// Returns the transport, parse, or HTTP failure message. An unparsable
+/// tag is `Ok(None)`, not an error.
 pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, String> {
     let response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
         method: reqwest::Method::GET,
@@ -136,7 +138,7 @@ pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, Str
 }
 
 /// First line of a transport error, bounded, so reqwest's full error chain
-/// (URL,TLS, and retry diagnostics) cannot stretch a toast across the screen.
+/// (URL, TLS, and retry diagnostics) cannot stretch a toast across the screen.
 pub fn brief_error(message: &str) -> String {
     let first = message.lines().next().unwrap_or(message);
     let mut chars = first.chars();
@@ -211,7 +213,6 @@ fn resolve_asset_for(
         version,
         notes_url: notes_url.to_owned(),
         asset_url: asset.browser_download_url.clone(),
-        asset_size: asset.size,
         checksum_url: format!("{}.sha256", asset.browser_download_url),
     }))
 }
@@ -329,8 +330,7 @@ fn verify_checksum(asset: &Path, checksum_file: &Path) -> Result<(), String> {
         return Err("checksum sidecar malformed".to_owned());
     }
     let bytes = std::fs::read(asset).map_err(|error| format!("asset read: {error}"))?;
-    let digest = sha2::Sha256::digest(&bytes);
-    let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let actual = sha256_hex(&bytes);
     if actual != expected {
         return Err("downloaded update failed its checksum verification".to_owned());
     }
@@ -941,7 +941,6 @@ mod tests {
                 browser_download_url: format!(
                     "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/{name}"
                 ),
-                size: 1024,
             })
             .collect()
     }
@@ -985,7 +984,6 @@ mod tests {
             &[super::AssetJson {
                 name: "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
                 browser_download_url: "https://github.com/example/app.zip".to_owned(),
-                size: 1,
             }],
         )
         .unwrap_err();

@@ -1,8 +1,8 @@
 //! Bridges enabled MCP servers into the agent's tool registry.
 //!
-//! Servers are connected at turn start. Their tools are not inlined into
-//! the model tool list. The model calls `search_tool` for one schema, then
-//! `use_tool` with arguments that match it. A failed server is skipped.
+//! Servers are connected at turn start. A small server is registered on
+//! the model tool list. Larger servers stay behind `search_tool` and
+//! `use_tool`. A failed server is skipped.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -441,7 +441,7 @@ fn arg_name(args: &Value) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError::InvalidArgs("name is required".to_owned()))
 }
 
-/// Grok-style schema lookup. The model must call this before `use_tool`.
+/// Schema lookup for MCP tools that are not registered directly.
 pub(crate) struct SearchTool {
     catalog: Arc<McpCatalog>,
 }
@@ -494,7 +494,10 @@ impl ToolDyn for SearchTool {
     }
 }
 
-/// Calls one MCP tool whose schema was retrieved with `search_tool`.
+/// Calls one connected MCP tool by name.
+///
+/// Deferred tools are expected to go through `search_tool` first. This
+/// call does not check that the schema was fetched.
 pub(crate) struct UseTool {
     catalog: Arc<McpCatalog>,
 }

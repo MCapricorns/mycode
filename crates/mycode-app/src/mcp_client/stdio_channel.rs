@@ -175,10 +175,14 @@ impl StdioChannel {
         if tail.is_empty() {
             return String::new();
         }
-        format!(
-            "; stderr: {}",
-            tail.iter().cloned().collect::<Vec<_>>().join(" | ")
-        )
+        let mut joined = String::new();
+        for (index, line) in tail.iter().enumerate() {
+            if index > 0 {
+                joined.push_str(" | ");
+            }
+            joined.push_str(line);
+        }
+        format!("; stderr: {joined}")
     }
 
     /// Describes why stdout closed: exit status plus the stderr tail.

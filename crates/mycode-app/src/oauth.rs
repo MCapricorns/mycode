@@ -22,7 +22,7 @@ use crate::{BridgeEvent, BridgeReply, CopilotSignInInfo};
 /// deadline mirrors the documented lifetime.
 const CODEX_FLOW_LIFETIME_SECS: u64 = 15 * 60;
 
-// ---- GitHub Copilot OAuth device flow ----
+// Device flows for Copilot, xAI, and Codex.
 
 /// Starts a device flow, opens the browser, and spawns the poll loop that
 /// finishes the sign-in (or reports failure) over the event channel.
@@ -428,7 +428,8 @@ async fn ensure_copilot_bearer(state: &CoreState, github_token: &str) -> Result<
     Ok(token)
 }
 
-/// Opens one verification page in the default browser, best-effort.
+/// Opens the verification page on Windows and macOS. Other targets leave
+/// the URL for the sign-in panel; this function does not launch a browser.
 fn open_browser(url: &str) {
     #[cfg(windows)]
     {

@@ -64,8 +64,6 @@ pub struct ExportSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportSummary {
-    pub settings: bool,
-    pub ui_state: bool,
     pub sessions: usize,
 }
 
@@ -227,17 +225,14 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
 /// written.
 pub fn export_to_file(home: &HomeLayout, path: &Path) -> Result<ExportSummary, String> {
     let bundle = build_bundle(home)?;
-    let summary = ExportSummary {
-        sessions: bundle.sessions.len(),
-        bytes: 0,
-    };
+    let sessions = bundle.sessions.len();
     let mut body =
         serde_json::to_vec_pretty(&bundle).map_err(|error| format!("encode: {error}"))?;
     body.push(b'\n');
     std::fs::write(path, &body).map_err(|error| format!("write: {error}"))?;
     Ok(ExportSummary {
+        sessions,
         bytes: body.len(),
-        ..summary
     })
 }
 
@@ -331,8 +326,6 @@ pub fn import_from_file_with(
     }
 
     Ok(ImportSummary {
-        settings: true,
-        ui_state: true,
         sessions: sessions_applied,
     })
 }
@@ -488,7 +481,7 @@ mod tests {
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let summary = import_from_file(&home, &bundle_path).unwrap();
-        assert!(summary.settings);
+        assert_eq!(summary.sessions, 1);
         let log = root.join("sessions").join("sess").join("foo.jsonl");
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "line\n");
         let _ = std::fs::remove_dir_all(&root);

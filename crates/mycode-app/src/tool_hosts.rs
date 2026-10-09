@@ -45,7 +45,7 @@ impl AskRouter {
 /// Process-wide ask router; one pending ask per session.
 static ASK_ROUTER: std::sync::OnceLock<AskRouter> = std::sync::OnceLock::new();
 
-/// Registers the turn's ask channel, or waits for an already-registered one.
+/// Registers a new answer channel for this session, replacing any previous one.
 pub(crate) fn register_ask(session_id: &str) -> tokio::sync::oneshot::Receiver<Vec<String>> {
     ASK_ROUTER
         .get_or_init(AskRouter::default)
