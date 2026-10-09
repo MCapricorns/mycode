@@ -21,9 +21,14 @@ use crate::wire_common::{
 
 /// Output ceiling used only when models.dev publishes no `limit.output`.
 ///
-/// The Messages API requires `max_tokens`. A published model uses its own
-/// output cap; this fallback is not a guess about any particular model.
-const MAX_TOKENS_WHEN_UNPUBLISHED: u64 = 8192;
+/// The Messages API requires `max_tokens`. This is `OUTPUT_TOKEN_MAX` from
+/// `sst/opencode` `packages/opencode/src/provider/transform.ts`.
+/// `maxOutputTokens` there is
+/// `Math.min(model.limit.output, OUTPUT_TOKEN_MAX) || OUTPUT_TOKEN_MAX`.
+/// That minimum is not applied: a published `limit.output` (glm's 131072,
+/// for example) is sent as-is. The compaction summary request has its own
+/// ceiling and does not use this fallback.
+const MAX_TOKENS_WHEN_UNPUBLISHED: u64 = 32_000;
 
 /// Converts one provider-neutral request into a Messages body.
 #[must_use]

@@ -1445,6 +1445,8 @@ mod tests {
         assert_eq!(claude["thinking"]["type"], "adaptive");
         assert_eq!(claude["output_config"]["effort"], "max");
         assert!(claude["thinking"].get("budget_tokens").is_none());
+        // Unpublished adaptive Messages uses OUTPUT_TOKEN_MAX. No budget raise.
+        assert_eq!(claude["max_tokens"], 32_000);
         assert_eq!(cache_type(&claude["tools"][0]), Some("ephemeral"));
         assert_eq!(cache_type(&claude["system"][0]), Some("ephemeral"));
         assert_eq!(
@@ -1468,7 +1470,10 @@ mod tests {
             &max,
         );
         assert_eq!(older["thinking"]["type"], "enabled");
-        assert!(older["thinking"]["budget_tokens"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(older["thinking"]["budget_tokens"], 32_768);
+        // Max budget is 32768. The 32000 fallback is not larger, so the
+        // budget row still raises max_tokens to budget + 4096.
+        assert_eq!(older["max_tokens"], 36_864);
         assert!(older.get("output_config").is_none());
         let older_off = anthropic_body(
             "claude-sonnet-4-5",
@@ -1480,6 +1485,7 @@ mod tests {
         let openai = chat_body("gpt-5", "https://api.openai.com/v1/chat/completions", &max);
         assert_eq!(openai["reasoning_effort"], "max");
         assert!(openai.get("thinking").is_none());
+        assert!(openai.get("max_tokens").is_none());
         assert_eq!(openai["prompt_cache_key"], "session-1");
         assert_eq!(count_cache_control(&openai), 0);
         let openai_off = chat_body("gpt-5", "https://api.openai.com/v1/chat/completions", &off);
@@ -1488,6 +1494,7 @@ mod tests {
         let responses = responses_body("gpt-5", "https://api.openai.com/v1/responses", &max);
         assert_eq!(responses["reasoning"]["effort"], "max");
         assert!(responses.get("reasoning_effort").is_none());
+        assert!(responses.get("max_output_tokens").is_none());
         assert_eq!(responses["prompt_cache_key"], "session-1");
         assert_eq!(count_cache_control(&responses), 0);
         let responses_off = responses_body("gpt-5", "https://api.openai.com/v1/responses", &off);
@@ -1696,6 +1703,61 @@ mod tests {
             "cachedContentTokenCount": 80,
         }));
         assert_eq!(gemini_usage.cache_read_tokens, Some(80));
+    }
+
+    /// `OUTPUT_TOKEN_MAX` fills a missing Messages limit. A published
+    /// `limit.output` is not passed through `maxOutputTokens`'s
+    /// `Math.min(..., 32000)`. Chat and Responses still omit the field
+    /// when the catalog publishes nothing.
+    #[test]
+    fn unpublished_messages_max_tokens_follows_output_token_max_without_a_cap() {
+        let endpoint = "https://api.anthropic.com/v1/messages";
+        let high = Request::new().with_reasoning(ReasoningLevel::High);
+        let high_body = anthropic_body("claude-sonnet-4-5", endpoint, &high);
+        assert_eq!(high_body["thinking"]["budget_tokens"], 16_384);
+        // 32000 is already above the High budget, so it stays 32000
+        // (the old 8192 fallback was raised to 20480).
+        assert_eq!(high_body["max_tokens"], 32_000);
+
+        let mut zero = Request::new().with_reasoning(ReasoningLevel::Max);
+        zero.max_output_tokens = Some(0);
+        let zero_body = anthropic_body("claude-sonnet-4-6", endpoint, &zero);
+        assert_eq!(zero_body["max_tokens"], 32_000);
+        assert_eq!(zero_body["thinking"]["type"], "adaptive");
+
+        let mut published = Request::new().with_reasoning(ReasoningLevel::Max);
+        published.max_output_tokens = Some(131_072);
+        let glm = anthropic_body(
+            "glm-5.3",
+            "https://api.z.ai/api/anthropic/v1/messages",
+            &published,
+        );
+        assert_eq!(glm["max_tokens"], 131_072);
+        let older = anthropic_body("claude-sonnet-4-5", endpoint, &published);
+        assert_eq!(older["max_tokens"], 131_072);
+        assert_eq!(older["thinking"]["budget_tokens"], 32_768);
+
+        let chat = "https://api.openai.com/v1/chat/completions";
+        let responses = "https://api.openai.com/v1/responses";
+        let bare = Request::new();
+        assert!(chat_body("gpt-5", chat, &bare).get("max_tokens").is_none());
+        assert!(
+            responses_body("gpt-5", responses, &bare)
+                .get("max_output_tokens")
+                .is_none()
+        );
+        assert_eq!(chat_body("gpt-5", chat, &published)["max_tokens"], 131_072);
+        assert_eq!(
+            responses_body("gpt-5", responses, &published)["max_output_tokens"],
+            131_072
+        );
+        let mut unpublished_zero = published.clone();
+        unpublished_zero.max_output_tokens = Some(0);
+        assert!(
+            chat_body("gpt-5", chat, &unpublished_zero)
+                .get("max_tokens")
+                .is_none()
+        );
     }
 
     #[test]
