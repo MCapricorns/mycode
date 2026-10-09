@@ -15,7 +15,7 @@ BridgeCommand → CoreBridge
 再 reduce 一次，元素按新状态重画
 ```
 
-视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口；它在四个平台上编译发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）。
+视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口；它在四个平台上编译发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）。macOS 构建另外把二进制装进 `MYCode.app` 并产出 dmg 安装镜像（`scripts/make_dmg.sh`）。
 
 ## 模块
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generates crates/mycode-desktop/assets/icon.ico for MYCode.
+"""Generates crates/mycode-desktop/assets/icon.ico and icon.icns for MYCode.
 
 Pure-python rasterizer: no PIL/imaging dependency. Draws the M-mark (black
 stroke "M" over a white rounded square — matching the in-app logo tiles)
 with 4x supersampling, then packs a multi-size .ico (uncompressed BMP
 entries for 16/24/32/48 px, PNG entry for 256 px) that Windows loads as
-resource id 1.
+resource id 1, plus an .icns (PNG entries) that the macOS bundle's
+Info.plist names as CFBundleIconFile.
 """
 
 import struct
@@ -136,15 +137,44 @@ def write_ico(path, entries):
     path.write_bytes(header + directory + blobs)
 
 
+def write_icns(path):
+    """Packs an .icns as PNG entries only (valid since macOS 10.7).
+
+    Types cover every square size including the @2x variants: ic07 is
+    128x128, ic11 is 16x16@2x (32 px), ic12 is 32x32@2x (64 px), ic08 is
+    256x256, ic13 is 128x128@2x (256 px), ic09 is 512x512, ic14 is
+    256x256@2x (512 px), and ic10 is 512x512@2x (1024 px).
+    """
+    types = (
+        ("ic11", 32),
+        ("ic12", 64),
+        ("ic07", 128),
+        ("ic08", 256),
+        ("ic13", 256),
+        ("ic14", 512),
+        ("ic09", 512),
+        ("ic10", 1024),
+    )
+    body = b""
+    for tag, size in types:
+        payload = png_bytes(render(size), size)
+        body += tag.encode("ascii") + struct.pack(">I", len(payload) + 8) + payload
+    path.write_bytes(b"icns" + struct.pack(">I", len(body) + 8) + body)
+
+
 def main():
-    out = Path(__file__).resolve().parents[1] / "crates/mycode-desktop/assets/icon.ico"
-    out.parent.mkdir(parents=True, exist_ok=True)
+    assets = Path(__file__).resolve().parents[1] / "crates/mycode-desktop/assets"
+    assets.mkdir(parents=True, exist_ok=True)
     entries = []
     for size in (16, 24, 32, 48):
         entries.append((size, bmp_entry(render(size), size)))
     entries.append((256, png_bytes(render(256), 256)))
-    write_ico(out, entries)
-    print(f"wrote {out} ({out.stat().st_size} bytes)")
+    ico = assets / "icon.ico"
+    write_ico(ico, entries)
+    print(f"wrote {ico} ({ico.stat().st_size} bytes)")
+    icns = assets / "icon.icns"
+    write_icns(icns)
+    print(f"wrote {icns} ({icns.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

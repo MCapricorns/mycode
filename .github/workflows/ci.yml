@@ -16,6 +16,7 @@
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-apple-darwin.dmg        (+ .sha256)
 #   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
 #
 # Publishing is not in this file. A push to main runs
@@ -149,6 +150,17 @@ jobs:
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
+      # MYCode.app + ad-hoc codesign + hdiutil; writes the .dmg and its
+      # .sha256. The zip stays: the in-app updater downloads it.
+      - name: Package DMG (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          scripts/make_dmg.sh \
+            --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            --version "${MYCODE_PACKAGE_TAG#v}" \
+            --output "mycode-desktop-${MYCODE_PACKAGE_TAG}-${{ matrix.target }}.dmg"
+
       - name: Package (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -172,5 +184,7 @@ jobs:
           path: |
             *.zip
             *.zip.sha256
+            *.dmg
+            *.dmg.sha256
           retention-days: 3
           if-no-files-found: error
