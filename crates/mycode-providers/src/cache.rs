@@ -1,13 +1,16 @@
 //! Prompt-cache markers.
 //!
-//! Anthropic Messages bodies (Anthropic, MiniMax `/anthropic`, and any other
-//! Anthropic-compatible endpoint) get at most four
-//! `cache_control: {type: "ephemeral"}` breakpoints: the last tool, the last
-//! system text block, then up to two trailing cacheable message blocks.
-//! OpenRouter Anthropic and Gemini models, DashScope Qwen, and Z.AI / Zhipu
-//! GLM get the same budget on a chat-completions body. OpenAI, Azure, xAI,
-//! Mistral, Cerebras, DeepInfra, and Venice get a stable `prompt_cache_key`.
-//! DeepSeek and OpenAI-compatible MiniMax stay on implicit caching.
+//! Every `anthropic-messages` body gets at most four
+//! `cache_control: {type: "ephemeral"}` breakpoints, including MiniMax, Kimi,
+//! DeepSeek, Bedrock, and Vertex when the caller uses that protocol. Chat
+//! completions add the same marker only where the host accepts it: OpenRouter
+//! Anthropic and Gemini, DashScope Qwen, and Z.AI / Zhipu.
+//!
+//! `prompt_cache_key` is the session id, clamped to 64 scalars. Hosts that
+//! publish the field always get it. Hosts that reject unknown fields never
+//! get it. Every other OpenAI-compatible host gets it once; a 400 that names
+//! `prompt_cache_key` is retried without the field, and that host is skipped
+//! for the rest of the process.
 //!
 //! Z.AI's implicit cache is per API key and per backend. A compaction summary
 //! replaces the message prefix (one expected miss) and the summary request
@@ -17,9 +20,12 @@
 //! endpoints accept and that pins the new prefix; `prompt_cache_key` is not
 //! part of Z.AI's published schema and is not sent.
 
+use std::collections::HashSet;
+use std::sync::Mutex;
+
 use serde_json::{Value, json};
 
-use mycode_core::{StreamEvent, Usage};
+use mycode_core::{ProviderError, ProviderErrorKind, StreamEvent, Usage};
 
 /// Anthropic allows four `cache_control` breakpoints on one request.
 pub(crate) const ANTHROPIC_BREAKPOINT_CAP: usize = 4;
@@ -36,15 +42,39 @@ const CACHEABLE_BLOCKS: &[&str] = &[
     "document",
 ];
 
-const PROMPT_CACHE_KEY_HOSTS: &[&str] = &[
-    "api.openai.com",
-    "openai.azure.com",
-    "cognitiveservices.azure.com",
-    "api.x.ai",
-    "api.mistral.ai",
-    "api.cerebras.ai",
-    "api.deepinfra.com",
-    "venice.ai",
+/// Hosts that reject `prompt_cache_key` or cache by some other mechanism.
+///
+/// A substring match on the lowercased endpoint. Known-good hosts are absent
+/// on purpose: OpenAI, Azure OpenAI, xAI, Mistral, Cerebras, DeepInfra, and
+/// Venice. Everyone else is probed and remembered if the host returns 400.
+const PROMPT_CACHE_KEY_OMIT_HOSTS: &[&str] = &[
+    "openrouter.ai",
+    "api.z.ai",
+    "bigmodel.cn",
+    "zhipu",
+    "deepseek.com",
+    "minimax",
+    "dashscope",
+    "aliyuncs.com",
+    "moonshot.ai",
+    "moonshot.cn",
+    "kimi.com",
+    "kimi.ai",
+    "api.groq.com",
+    "api.together.ai",
+    "api.together.xyz",
+    "volces.com",
+    "volcengine.com",
+    "qianfan",
+    "baidubce.com",
+    "generativelanguage.googleapis.com",
+    // Messages hosts reject unknown chat fields. The Messages builder never
+    // writes prompt_cache_key; this keeps a completions-shaped call on the
+    // same host from probing it.
+    "api.anthropic.com",
+    "freemodel.dev",
+    "subconscious.dev",
+    "thinkingmachines.dev",
 ];
 
 fn ephemeral() -> Value {
@@ -125,13 +155,20 @@ pub(crate) fn explicit_chat_cache(model: &str, endpoint: &str) -> bool {
     dashscope && (model.contains("qwen") || model.contains("qwq"))
 }
 
-/// Hosts that honor a stable `prompt_cache_key` on the JSON body.
+/// Whether this endpoint should carry `prompt_cache_key` on the next request.
+///
+/// Known rejectors stay off. A host that already returned 400 naming the
+/// field stays off for the rest of the process. Every other host is on.
 #[must_use]
 pub(crate) fn wants_prompt_cache_key(endpoint: &str) -> bool {
-    let endpoint = endpoint.to_ascii_lowercase();
-    PROMPT_CACHE_KEY_HOSTS
+    let endpoint_lower = endpoint.to_ascii_lowercase();
+    if PROMPT_CACHE_KEY_OMIT_HOSTS
         .iter()
-        .any(|host| endpoint.contains(host))
+        .any(|host| endpoint_lower.contains(host))
+    {
+        return false;
+    }
+    !prompt_cache_key_rejected(&endpoint_host(endpoint))
 }
 
 /// Writes `prompt_cache_key` when this endpoint uses one and the session key
@@ -144,6 +181,71 @@ pub(crate) fn apply_prompt_cache_key(body: &mut Value, endpoint: &str, key: Opti
         return;
     };
     body["prompt_cache_key"] = json!(clamp_prompt_cache_key(key));
+}
+
+/// Hosts that answered 400 naming `prompt_cache_key` during this process.
+fn rejected_prompt_cache_keys() -> &'static Mutex<HashSet<String>> {
+    static REJECTED: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
+    REJECTED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn prompt_cache_key_rejected(host: &str) -> bool {
+    rejected_prompt_cache_keys()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(host)
+}
+
+fn remember_prompt_cache_key_rejected(host: &str) {
+    rejected_prompt_cache_keys()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(host.to_owned());
+}
+
+/// Hostname used as the per-provider memory key, without the path.
+fn endpoint_host(endpoint: &str) -> String {
+    let lower = endpoint.to_ascii_lowercase();
+    let after_scheme = lower
+        .split_once("://")
+        .map_or(lower.as_str(), |(_, rest)| rest);
+    after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme)
+        .to_owned()
+}
+
+/// True when a rejected response names `prompt_cache_key` and the body still
+/// carries it. Removes the field, remembers the host, and returns the retry
+/// bytes. Any other 400 is left alone.
+pub(crate) fn retry_body_without_prompt_cache_key(
+    endpoint: &str,
+    error: &ProviderError,
+    body: &[u8],
+) -> Option<Vec<u8>> {
+    if error.kind() != ProviderErrorKind::Rejected {
+        return None;
+    }
+    let names_field = error
+        .message()
+        .is_some_and(|message| message.to_ascii_lowercase().contains("prompt_cache_key"));
+    if !names_field {
+        return None;
+    }
+    let mut value: Value = serde_json::from_slice(body).ok()?;
+    let object = value.as_object_mut()?;
+    object.remove("prompt_cache_key")?;
+    remember_prompt_cache_key_rejected(&endpoint_host(endpoint));
+    serde_json::to_vec(&value).ok()
+}
+
+/// Whether the serialized body includes a cache key, so the driver can keep
+/// a retry copy only for those requests.
+#[must_use]
+pub(crate) fn body_has_prompt_cache_key(body: &[u8]) -> bool {
+    body.windows(b"prompt_cache_key".len())
+        .any(|window| window == b"prompt_cache_key")
 }
 
 /// Clamps a cache key to [`PROMPT_CACHE_KEY_MAX_CHARS`] Unicode scalars.
@@ -369,11 +471,13 @@ mod tests {
 
     use super::{
         ANTHROPIC_BREAKPOINT_CAP, apply_prompt_cache_key, clamp_prompt_cache_key,
-        explicit_chat_cache, openrouter_session_header, usage_log_line, wants_prompt_cache_key,
+        explicit_chat_cache, openrouter_session_header, retry_body_without_prompt_cache_key,
+        usage_log_line, wants_prompt_cache_key,
     };
     use crate::anthropic_messages::build_body as anthropic_body;
     use crate::openai_completions::build_body as chat_body;
     use crate::openai_responses::build_body as responses_body;
+    use mycode_core::{ProviderError, ProviderErrorKind};
 
     fn tool(name: &str) -> ToolSpec {
         ToolSpec {
@@ -768,6 +872,451 @@ mod tests {
         assert!(body.get("prompt_cache_key").is_none());
         assert!(openrouter_session_header("https://api.openai.com/v1", Some("session")).is_none());
         assert!(openrouter_session_header("https://openrouter.ai/api/v1", Some("  ")).is_none());
+    }
+
+    #[test]
+    fn each_provider_family_gets_its_cache_fields() {
+        let mut request = Request::new()
+            .with_system_prompt("stable")
+            .with_tool(tool("read"))
+            .with_message(user("hello"));
+        request.prompt_cache_key = Some("session-1".to_owned());
+
+        // Anthropic-protocol presets and the Anthropic-compatible URLs a
+        // custom provider can point at. Bedrock and Vertex are not catalog
+        // presets; the Messages adapter still marks them.
+        let anthropic_endpoints = [
+            ("claude-sonnet-4-6", "https://api.anthropic.com/v1/messages"),
+            ("claude-sonnet-4-6", "https://cc.freemodel.dev/v1/messages"),
+            (
+                "claude-sonnet-4-6",
+                "https://api.subconscious.dev/v1/messages",
+            ),
+            (
+                "claude-sonnet-4-6",
+                "https://tinker.thinkingmachines.dev/services/tinker-prod/anthropic/api/v1/messages",
+            ),
+            ("MiniMax-M3", "https://api.minimax.io/anthropic/v1/messages"),
+            ("kimi-k2.6", "https://api.moonshot.cn/anthropic/v1/messages"),
+            (
+                "deepseek-v4-pro",
+                "https://api.deepseek.com/anthropic/v1/messages",
+            ),
+            (
+                "claude-sonnet-4-6",
+                "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic/v1/messages",
+            ),
+            (
+                "claude-sonnet-4-6",
+                "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude:streamRawPredict",
+            ),
+        ];
+        for (model, endpoint) in anthropic_endpoints {
+            let body = anthropic_body(model, endpoint, &request);
+            assert!(
+                count_cache_control(&body) > 0,
+                "{model} {endpoint} should carry cache_control"
+            );
+            assert!(body.get("prompt_cache_key").is_none(), "{endpoint}");
+            assert!(count_cache_control(&body) <= ANTHROPIC_BREAKPOINT_CAP);
+        }
+
+        // Chat families: (model, endpoint, cache_control, prompt_cache_key).
+        let chat = [
+            (
+                "gpt-5",
+                "https://api.openai.com/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "gpt-5",
+                "https://example.openai.azure.com/openai/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "grok-4",
+                "https://api.x.ai/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "mistral-large",
+                "https://api.mistral.ai/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "llama-3.3-70b",
+                "https://api.cerebras.ai/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "meta-llama/Llama-3.3-70B",
+                "https://api.deepinfra.com/v1/openai/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "llama-3.3-70b",
+                "https://api.venice.ai/api/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "anthropic/claude-sonnet-4.6",
+                "https://openrouter.ai/api/v1/chat/completions",
+                true,
+                false,
+            ),
+            (
+                "google/gemini-2.5-pro",
+                "https://openrouter.ai/api/v1/chat/completions",
+                true,
+                false,
+            ),
+            (
+                "z-ai/glm-5.3",
+                "https://openrouter.ai/api/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "deepseek/deepseek-v4-pro",
+                "https://openrouter.ai/api/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "qwen3.7-max",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                true,
+                false,
+            ),
+            (
+                "qwen3-coder-plus",
+                "https://coding.dashscope.aliyuncs.com/v1/chat/completions",
+                true,
+                false,
+            ),
+            (
+                "qwen-plus",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+                true,
+                false,
+            ),
+            (
+                "glm-4.7",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "glm-5.3",
+                "https://api.z.ai/api/coding/paas/v4/chat/completions",
+                true,
+                false,
+            ),
+            (
+                "glm-5.3",
+                "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                true,
+                false,
+            ),
+            (
+                "deepseek-v4-pro",
+                "https://api.deepseek.com/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "kimi-k2.6",
+                "https://api.moonshot.cn/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "kimi-k2.6",
+                "https://api.moonshot.ai/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "kimi-for-coding",
+                "https://api.kimi.com/coding/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "llama-3.3-70b-versatile",
+                "https://api.groq.com/openai/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "meta-llama/Llama-3.3-70B",
+                "https://api.together.xyz/v1/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "accounts/fireworks/routers/kimi-latest",
+                "https://api.fireworks.ai/inference/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "deepseek-ai/DeepSeek-V4-Pro",
+                "https://api.siliconflow.cn/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "doubao-seed-2-0-pro",
+                "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "ernie-4.5",
+                "https://qianfan.baidubce.com/v2/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "gemini-2.5-pro",
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                false,
+                false,
+            ),
+            (
+                "qwen3:8b",
+                "https://ollama.com/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "qwen3:8b",
+                "http://127.0.0.1:11434/v1/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "gpt-4o",
+                "https://api.githubcopilot.com/chat/completions",
+                false,
+                true,
+            ),
+            (
+                "sonar",
+                "https://api.perplexity.ai/v1/chat/completions",
+                false,
+                true,
+            ),
+        ];
+        for (model, endpoint, cache, key) in chat {
+            let body = chat_body(model, endpoint, &request);
+            assert_eq!(
+                count_cache_control(&body) > 0,
+                cache,
+                "{model} {endpoint} cache_control"
+            );
+            assert_eq!(
+                body.get("prompt_cache_key").and_then(Value::as_str),
+                key.then_some("session-1"),
+                "{model} {endpoint} prompt_cache_key"
+            );
+            assert!(count_cache_control(&body) <= ANTHROPIC_BREAKPOINT_CAP);
+        }
+
+        let responses = responses_body(
+            "gpt-5",
+            "https://chatgpt.com/backend-api/codex/responses",
+            &request,
+        );
+        assert!(responses.get("cache_control").is_none());
+        assert_eq!(responses["prompt_cache_key"], "session-1");
+    }
+
+    #[test]
+    fn every_catalog_preset_body_matches_its_family() {
+        let document = crate::catalog::bundled();
+        assert!(
+            document.providers.len() >= 193,
+            "vendored catalog shrank: {}",
+            document.providers.len()
+        );
+        let mut request = Request::new()
+            .with_system_prompt("stable")
+            .with_tool(tool("read"))
+            .with_message(user("hello"));
+        request.prompt_cache_key = Some("session-1".to_owned());
+
+        let mut anthropic = 0usize;
+        let mut completions = 0usize;
+        let mut responses = 0usize;
+        for provider in &document.providers {
+            let endpoint = provider.base_url.as_str();
+            let kind = provider.kind.as_str();
+            match kind {
+                "anthropic-messages" => anthropic += 1,
+                "openai-completions" => completions += 1,
+                "openai-responses" => responses += 1,
+                other => panic!("{} has unknown kind {other}", provider.id),
+            }
+            assert!(!provider.models.is_empty(), "{} has no models", provider.id);
+            for model in &provider.models {
+                let body = match kind {
+                    "anthropic-messages" => anthropic_body(&model.id, endpoint, &request),
+                    "openai-responses" => responses_body(&model.id, endpoint, &request),
+                    _ => chat_body(&model.id, endpoint, &request),
+                };
+                let marked = count_cache_control(&body);
+                assert!(
+                    marked <= ANTHROPIC_BREAKPOINT_CAP,
+                    "{} {} has {marked} breakpoints",
+                    provider.id,
+                    model.id
+                );
+                let expect_cache = kind == "anthropic-messages"
+                    || (kind == "openai-completions" && explicit_chat_cache(&model.id, endpoint));
+                assert_eq!(
+                    marked > 0,
+                    expect_cache,
+                    "{} {} {endpoint} cache_control",
+                    provider.id,
+                    model.id
+                );
+                let expect_key = (kind != "anthropic-messages" && wants_prompt_cache_key(endpoint))
+                    .then_some("session-1");
+                assert_eq!(
+                    body.get("prompt_cache_key").and_then(Value::as_str),
+                    expect_key,
+                    "{} {} {endpoint} prompt_cache_key",
+                    provider.id,
+                    model.id
+                );
+            }
+            let header = openrouter_session_header(endpoint, Some("session-1"));
+            if endpoint.to_ascii_lowercase().contains("openrouter.ai") {
+                assert_eq!(
+                    header
+                        .as_ref()
+                        .map(|(name, value)| (name.as_str(), value.as_str())),
+                    Some(("x-session-id", "session-1")),
+                    "{}",
+                    provider.id
+                );
+            } else {
+                assert!(header.is_none(), "{}", provider.id);
+            }
+        }
+        assert_eq!(anthropic, 8);
+        assert_eq!(completions, 185);
+        assert_eq!(responses, 1);
+        assert!(document.provider("openai-codex").is_some());
+
+        // Pinned families, independent of the predicate the loop calls.
+        let pinned = [
+            ("anthropic", "claude", true, false),
+            ("minimax", "MiniMax-M3", true, false),
+            ("minimax-cn", "MiniMax-M3", true, false),
+            ("freemodel", "", true, false),
+            ("subconscious", "", true, false),
+            ("thinkingmachines", "", true, false),
+            ("openrouter", "anthropic/claude", true, false),
+            ("openrouter", "google/gemini", true, false),
+            ("openrouter", "qwen/", false, false),
+            ("alibaba", "qwen", true, false),
+            ("alibaba", "deepseek", false, false),
+            ("alibaba-cn", "qwen", true, false),
+            ("alibaba-coding-plan", "qwen", true, false),
+            ("alibaba-token-plan-cn", "qwen", true, false),
+            ("zai", "glm", true, false),
+            ("zai-coding-plan", "glm", true, false),
+            ("zhipuai", "glm", true, false),
+            ("zhipuai-coding-plan", "glm", true, false),
+            ("deepseek", "deepseek", false, false),
+            ("groq", "", false, false),
+            ("moonshotai", "kimi", false, false),
+            ("moonshotai-cn", "kimi", false, false),
+            ("kimi-code-plan-cn", "", false, false),
+            ("kimi-code-plan-global", "", false, false),
+            ("volcengine", "doubao", false, false),
+            ("volcengine-coding-plan", "doubao", false, false),
+            ("openai", "", false, true),
+            ("xai", "", false, true),
+            ("mistral", "", false, true),
+            ("cerebras", "", false, true),
+            ("github-copilot", "", false, true),
+            ("perplexity", "", false, true),
+            ("fireworks-ai", "", false, true),
+            ("siliconflow", "", false, true),
+            ("siliconflow-cn", "", false, true),
+            ("ollama-cloud", "", false, true),
+            ("openai-codex", "", false, true),
+        ];
+        for (id, model_needle, cache, key) in pinned {
+            let provider = document
+                .provider(id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            let model = provider
+                .models
+                .iter()
+                .find(|model| model.id.contains(model_needle))
+                .unwrap_or_else(|| panic!("{id} has no model containing {model_needle:?}"));
+            let body = match provider.kind.as_str() {
+                "anthropic-messages" => anthropic_body(&model.id, &provider.base_url, &request),
+                "openai-responses" => responses_body(&model.id, &provider.base_url, &request),
+                _ => chat_body(&model.id, &provider.base_url, &request),
+            };
+            assert_eq!(
+                count_cache_control(&body) > 0,
+                cache,
+                "{id} {} cache_control",
+                model.id
+            );
+            assert_eq!(
+                body.get("prompt_cache_key").is_some(),
+                key,
+                "{id} {} prompt_cache_key",
+                model.id
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_cache_key_rejection_is_remembered_for_the_host() {
+        let endpoint = "https://probe.example.test/v1/chat/completions";
+        let error = ProviderError::with_message(
+            ProviderErrorKind::Rejected,
+            "HTTP 400: unknown field prompt_cache_key",
+        );
+        let original = br#"{"model":"x","prompt_cache_key":"session-1"}"#;
+        let stripped = retry_body_without_prompt_cache_key(endpoint, &error, original)
+            .expect("named 400 retries");
+        let value: Value = serde_json::from_slice(&stripped).unwrap();
+        assert!(value.get("prompt_cache_key").is_none());
+        assert!(!wants_prompt_cache_key(endpoint));
+        let mut body = json!({});
+        apply_prompt_cache_key(&mut body, endpoint, Some("session-1"));
+        assert!(body.get("prompt_cache_key").is_none());
+
+        let unnamed =
+            ProviderError::with_message(ProviderErrorKind::Rejected, "HTTP 400: invalid request");
+        assert!(
+            retry_body_without_prompt_cache_key(
+                "https://other.example.test/v1/chat/completions",
+                &unnamed,
+                original
+            )
+            .is_none()
+        );
+        assert!(wants_prompt_cache_key(
+            "https://other.example.test/v1/chat/completions"
+        ));
     }
 
     #[test]

@@ -41,11 +41,47 @@ pub(crate) async fn drive(
     provider_id: String,
     model: String,
 ) {
+    let prepared = crate::cache::body_has_prompt_cache_key(&call.body).then(|| {
+        (
+            call.endpoint.clone(),
+            call.headers.clone(),
+            call.body.clone(),
+        )
+    });
     let body = match transport.post(call, cancel.clone()).await {
         Ok(body) => body,
         Err(error) => {
-            let _ = sender.send(StreamEvent::Error(error)).await;
-            return;
+            let Some((endpoint, headers, original)) = prepared else {
+                let _ = sender.send(StreamEvent::Error(error)).await;
+                return;
+            };
+            let Some(stripped) =
+                crate::cache::retry_body_without_prompt_cache_key(&endpoint, &error, &original)
+            else {
+                let _ = sender.send(StreamEvent::Error(error)).await;
+                return;
+            };
+            if cancel.is_cancelled() {
+                let _ = sender.send(StreamEvent::Error(error)).await;
+                return;
+            }
+            match transport
+                .post(
+                    TransportCall {
+                        endpoint,
+                        headers,
+                        body: stripped,
+                    },
+                    cancel.clone(),
+                )
+                .await
+            {
+                Ok(body) => body,
+                Err(error) => {
+                    let _ = sender.send(StreamEvent::Error(error)).await;
+                    return;
+                }
+            }
         }
     };
 
@@ -152,4 +188,121 @@ pub(crate) fn protocol_error(message: &'static str) -> StreamEvent {
         mycode_core::ProviderErrorKind::Protocol,
         message,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use bytes::Bytes;
+    use mycode_core::{ProviderError, ProviderErrorKind, StreamEvent};
+    use tokio_util::sync::CancellationToken;
+
+    use super::drive;
+    use crate::openai_completions::CompletionsReducer;
+    use crate::transport::{ByteStream, SseTransport, TransportCall};
+
+    struct Scripted {
+        bodies: Mutex<Vec<Vec<u8>>>,
+        steps: Mutex<Vec<Result<&'static [u8], &'static str>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SseTransport for Scripted {
+        async fn post(
+            &self,
+            call: TransportCall,
+            _cancel: CancellationToken,
+        ) -> Result<ByteStream, ProviderError> {
+            self.bodies.lock().expect("bodies").push(call.body);
+            let step = self.steps.lock().expect("steps").remove(0);
+            match step {
+                Ok(bytes) => {
+                    let stream = futures_util::stream::iter(vec![Ok(Bytes::from(bytes.to_vec()))]);
+                    Ok(Box::pin(stream))
+                }
+                Err(message) => Err(ProviderError::with_message(
+                    ProviderErrorKind::Rejected,
+                    message,
+                )),
+            }
+        }
+    }
+
+    fn call(endpoint: &str) -> TransportCall {
+        TransportCall {
+            endpoint: endpoint.to_owned(),
+            headers: Vec::new(),
+            body: br#"{"model":"x","prompt_cache_key":"session-1"}"#.to_vec(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_named_prompt_cache_key_400_is_retried_once() {
+        let endpoint = "https://retry.example.test/v1/chat/completions";
+        let transport = Arc::new(Scripted {
+            bodies: Mutex::new(Vec::new()),
+            steps: Mutex::new(vec![
+                Err("HTTP 400: unknown parameter prompt_cache_key"),
+                Ok(b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),
+            ]),
+        });
+        let cancel = CancellationToken::new();
+        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        drive(
+            transport.clone(),
+            call(endpoint),
+            Box::new(CompletionsReducer::new()),
+            sender,
+            cancel,
+            "probe".to_owned(),
+            "x".to_owned(),
+        )
+        .await;
+        let bodies = transport.bodies.lock().expect("bodies").clone();
+        assert_eq!(bodies.len(), 2);
+        assert!(
+            bodies[0]
+                .windows(16)
+                .any(|window| window == b"prompt_cache_key")
+        );
+        assert!(
+            !bodies[1]
+                .windows(16)
+                .any(|window| window == b"prompt_cache_key")
+        );
+        let mut saw_done = false;
+        while let Some(event) = stream.next().await {
+            if matches!(event, StreamEvent::Done { .. }) {
+                saw_done = true;
+            }
+        }
+        assert!(saw_done);
+        assert!(!crate::cache::wants_prompt_cache_key(endpoint));
+    }
+
+    #[tokio::test]
+    async fn an_unnamed_400_is_not_retried() {
+        let endpoint = "https://noretry.example.test/v1/chat/completions";
+        let transport = Arc::new(Scripted {
+            bodies: Mutex::new(Vec::new()),
+            steps: Mutex::new(vec![Err("HTTP 400: invalid request")]),
+        });
+        let cancel = CancellationToken::new();
+        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        drive(
+            transport.clone(),
+            call(endpoint),
+            Box::new(CompletionsReducer::new()),
+            sender,
+            cancel,
+            "probe".to_owned(),
+            "x".to_owned(),
+        )
+        .await;
+        assert_eq!(transport.bodies.lock().expect("bodies").len(), 1);
+        let event = stream.next().await.expect("terminal");
+        assert!(matches!(event, StreamEvent::Error(_)));
+        assert!(crate::cache::wants_prompt_cache_key(endpoint));
+    }
 }

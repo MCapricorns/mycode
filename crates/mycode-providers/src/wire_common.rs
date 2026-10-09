@@ -1076,6 +1076,41 @@ mod tests {
         assert_eq!(gemini.output_tokens, 20);
         assert_eq!(gemini.cache_read_tokens, Some(800));
         assert_eq!(gemini.prompt_tokens, 1000);
+
+        // Groq, Moonshot, Fireworks, SiliconFlow, and Volcengine report the
+        // same nested cached_tokens field. Ollama usually omits it.
+        for (label, usage) in [
+            (
+                "groq",
+                serde_json::json!({"prompt_tokens": 50, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 40}}),
+            ),
+            (
+                "moonshot",
+                serde_json::json!({"prompt_tokens": 50, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 40}}),
+            ),
+            (
+                "fireworks",
+                serde_json::json!({"prompt_tokens": 50, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 40}}),
+            ),
+            (
+                "siliconflow",
+                serde_json::json!({"prompt_tokens": 50, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 40}}),
+            ),
+            (
+                "volcengine",
+                serde_json::json!({"prompt_tokens": 50, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 40}}),
+            ),
+        ] {
+            let parsed = super::usage_from_value(&usage);
+            assert_eq!(parsed.cache_read_tokens, Some(40), "{label}");
+            assert_eq!(parsed.prompt_tokens, 50, "{label}");
+        }
+        let ollama = super::usage_from_value(&serde_json::json!({
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+        }));
+        assert_eq!(ollama.cache_read_tokens, None);
+        assert_eq!(ollama.prompt_tokens, 12);
     }
 
     #[test]
