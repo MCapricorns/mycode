@@ -82,17 +82,6 @@ fn unix_now() -> u64 {
         .unwrap_or_default()
 }
 
-/// Reads the cached catalog from the owned home, when present and valid.
-///
-/// An older copy of the same kind is replaced with the bundled snapshot so
-/// newly added option fields are present, then refresh can update it. A
-/// document that cannot be parsed is backed up and replaced; see
-/// [`load_cache_with_repair`].
-#[must_use]
-pub fn load_cache(home: &HomeLayout) -> Option<CachedCatalog> {
-    load_cache_with_repair(home).0
-}
-
 /// Reads the catalog cache and reports a quarantine when the file was damaged.
 ///
 /// A missing file is `(None, None)`. A readable but unusable file is copied
@@ -100,7 +89,7 @@ pub fn load_cache(home: &HomeLayout) -> Option<CachedCatalog> {
 /// so the next launch does not quarantine it again. I/O failures leave the
 /// file alone and report no repair.
 #[must_use]
-pub fn load_cache_with_repair(
+fn load_cache_with_repair(
     home: &HomeLayout,
 ) -> (Option<CachedCatalog>, Option<mycode_config::DocumentRepair>) {
     let bytes = match read_owned_file(home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES) {

@@ -4,9 +4,10 @@
 //! [`Provider`] over one of three wire protocols (`anthropic-messages`,
 //! `openai-completions`, `openai-responses`). Vendor differences are data in
 //! `settings.json`; credentials never enter settings — the caller supplies a
-//! key when resolving. All egress flows through the injectable
-//! [`SseTransport`] seam, and the configured User-Agent header rides every
-//! request (the pi agent default when unset).
+//! key when resolving. Streaming completions egress through the injectable
+//! [`SseTransport`] seam. Catalog refresh and OAuth use the pinned HTTP
+//! client. The configured User-Agent rides provider requests (the pi agent
+//! default when unset).
 //!
 //! [`catalog`] carries the vendor data this runtime is configured from: the
 //! vendored models.dev snapshot, its cached cloud refresh, and the provider
@@ -35,10 +36,7 @@ use tokio_util::sync::CancellationToken;
 use mycode_config::ProviderSettings;
 use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Request};
 
-pub use http_pin::{
-    AddressClass, PinMode, PinnedBody, PinnedRequest, RedirectStep, classify_addresses,
-    connection_addresses, decide_redirect, send_pinned, validate_hop,
-};
+pub use http_pin::{PinMode, PinnedBody, PinnedRequest, connection_addresses, send_pinned};
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
     CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,
