@@ -1,0 +1,140 @@
+# Weekly refresh of the vendored models.dev catalog snapshot.
+#
+# Fetches https://models.dev/api.json and runs the documented generator:
+#   python scripts/generate_catalog.py <models.dev api.json> <output snapshot.json>
+# The output path is crates/mycode-providers/src/catalog/snapshot.json.
+# When that file is unchanged the job exits successfully and does not open
+# a pull request. scripts/generate_catalog.py stamps generatedAt with the
+# UTC date. A difference that is only that date is not a catalog change:
+# the committed file is restored and the job exits with changed=false.
+# When provider or model data changes, cargo test -p mycode-providers runs
+# on the Linux runner. peter-evans/create-pull-request then opens or updates
+# one pull request on the fixed branch chore/models-dev-snapshot.
+#
+# The pull request is created with GITHUB_TOKEN. The repository setting
+# "Allow GitHub Actions to create and approve pull requests" must be
+# enabled. Pull requests opened with GITHUB_TOKEN do not trigger ci.yml.
+
+name: models-snapshot
+
+on:
+  schedule:
+    # Monday 02:17 UTC.
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One refresh at a time so the fixed branch is not updated concurrently.
+concurrency:
+  group: models-snapshot-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  refresh:
+    name: refresh snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Fetch models.dev api.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 2 \
+            -o "${RUNNER_TEMP}/models-dev-api.json" \
+            https://models.dev/api.json
+
+      - name: Generate vendored snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/generate_catalog.py \
+            "${RUNNER_TEMP}/models-dev-api.json" \
+            crates/mycode-providers/src/catalog/snapshot.json
+
+      - name: Compare snapshot
+        id: snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          path="crates/mycode-providers/src/catalog/snapshot.json"
+          git diff --stat -- "${path}"
+          if git diff --quiet -- "${path}"; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "Vendored snapshot is unchanged."
+            exit 0
+          fi
+          # generatedAt is today's UTC date. Ignore it so a weekly run does
+          # not open a pull request when no provider or model data changed.
+          if python3 - "${path}" << 'PY'
+          import json
+          import subprocess
+          import sys
+
+          path = sys.argv[1]
+          old = json.loads(subprocess.check_output(["git", "show", f"HEAD:{path}"]))
+          with open(path, encoding="utf-8") as handle:
+              new = json.load(handle)
+          old.pop("generatedAt", None)
+          new.pop("generatedAt", None)
+          sys.exit(0 if old == new else 1)
+          PY
+          then
+            git checkout -- "${path}"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "Only generatedAt differs; restored the vendored snapshot."
+            exit 0
+          fi
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Install test packages
+        if: steps.snapshot.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Rust toolchain
+        if: steps.snapshot.outputs.changed == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test mycode-providers
+        if: steps.snapshot.outputs.changed == 'true'
+        run: cargo test -p mycode-providers
+
+      - name: Summarize snapshot diff
+        if: steps.snapshot.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          path="crates/mycode-providers/src/catalog/snapshot.json"
+          git show "HEAD:${path}" > "${RUNNER_TEMP}/snapshot-old.json"
+          python3 .github/scripts/catalog_snapshot_diff.py \
+            "${RUNNER_TEMP}/snapshot-old.json" \
+            "${path}" \
+            "${RUNNER_TEMP}/models-snapshot-pr-body.md"
+
+      - name: Create pull request
+        if: steps.snapshot.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/models-dev-snapshot
+          base: main
+          delete-branch: false
+          draft: false
+          add-paths: crates/mycode-providers/src/catalog/snapshot.json
+          commit-message: "chore: refresh models.dev snapshot"
+          title: "chore: refresh models.dev snapshot"
+          body-path: ${{ runner.temp }}/models-snapshot-pr-body.md
