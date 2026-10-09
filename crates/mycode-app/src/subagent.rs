@@ -43,10 +43,14 @@ pub(crate) struct BridgeAgentHost {
     /// Child cancel tokens keyed by `session_id:call_id`.
     cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
     mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
+    /// Shared Copilot bearer cache. A role routed at Copilot refreshes
+    /// through the same slot as the parent turn.
+    copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
 }
 
 impl BridgeAgentHost {
     /// Binds the turn's provider, home, and subagent settings.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         resolved: ResolvedProvider,
         home: HomeLayout,
@@ -55,6 +59,7 @@ impl BridgeAgentHost {
         session_id: String,
         cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
+        copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
     ) -> Self {
         let slots = settings.subagents.effective_concurrency() as usize;
         Self {
@@ -66,6 +71,7 @@ impl BridgeAgentHost {
             session_id,
             cancels,
             mcp_pool,
+            copilot,
         }
     }
 
@@ -459,7 +465,7 @@ impl BridgeAgentHost {
         let run_dir = lease
             .map(|lease| lease.path.clone())
             .unwrap_or_else(|| self.cwd.clone());
-        let resolved = self.resolve_route(&role.name).map_err(fail)?;
+        let resolved = self.resolve_route(&role.name).await.map_err(fail)?;
         let transport =
             ReqwestTransport::new().map_err(|_| fail("HTTP transport unavailable".to_owned()))?;
         let wire = WireProvider::new(resolved, Arc::new(transport));
@@ -612,7 +618,10 @@ impl BridgeAgentHost {
     }
 
     /// Resolves a per-role provider/model override, or inherits the turn.
-    fn resolve_route(&self, role: &str) -> Result<ResolvedProvider, String> {
+    ///
+    /// A routed role uses the same OAuth refresh and Copilot bearer exchange
+    /// as the parent turn. The stored vault value is not sent as a bearer.
+    async fn resolve_route(&self, role: &str) -> Result<ResolvedProvider, String> {
         let Some(entry) = self.settings.subagents.role(role) else {
             return Ok(self.resolved.clone());
         };
@@ -631,8 +640,19 @@ impl BridgeAgentHost {
         let key = secrets
             .key(provider_id)
             .ok_or_else(|| format!("role '{role}' has no API key for '{provider_id}'"))?;
-        ResolvedProvider::resolve(provider, model, key, &self.settings.effective_user_agent())
-            .map_err(|error| format!("role '{role}' provider setup failed: {error:?}"))
+        let (bearer, extra_headers) =
+            crate::oauth::resolve_request_auth(&self.home, &self.copilot, provider, key)
+                .await
+                .map_err(|error| format!("role '{role}' auth: {error}"))?;
+        let mut resolved = ResolvedProvider::resolve(
+            provider,
+            model,
+            &bearer,
+            &self.settings.effective_user_agent(),
+        )
+        .map_err(|error| format!("role '{role}' provider setup failed: {error:?}"))?;
+        resolved.headers.extend(extra_headers);
+        Ok(resolved)
     }
 }
 
@@ -779,5 +799,111 @@ mod tests {
         let mut explicit = settings;
         explicit.max_concurrent = 2;
         assert_eq!(explicit.effective_concurrency(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_routed_role_sends_the_oauth_access_token_not_the_vault_blob() {
+        use std::sync::Arc;
+
+        use mycode_config::{
+            AppSettings, AuthorityRevision, HomeLayout, ProviderSecrets, ProviderSettings,
+            SubagentRoleSettings, SubagentSettings, replace_provider_secrets,
+        };
+        use mycode_providers::{OAuthSecret, OPENAI_CODEX_PROVIDER_ID, ResolvedProvider};
+
+        let root = std::env::temp_dir().join(format!(
+            "mycode-subagent-auth-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let home = HomeLayout::from_root(&root).unwrap();
+        let blob = OAuthSecret {
+            kind: "oauth".to_owned(),
+            access: "live-access-token".to_owned(),
+            refresh: "refresh-token".to_owned(),
+            expires: u64::MAX / 2,
+            account_id: Some("acct_123".to_owned()),
+        }
+        .encode();
+        replace_provider_secrets(
+            &home,
+            AuthorityRevision::ABSENT,
+            &ProviderSecrets::new().with_key(OPENAI_CODEX_PROVIDER_ID, Some(&blob)),
+        )
+        .unwrap();
+        let parent = ProviderSettings {
+            id: "openai".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://api.openai.com/v1".to_owned(),
+            models: vec!["gpt-parent".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+        };
+        let codex = ProviderSettings {
+            id: OPENAI_CODEX_PROVIDER_ID.to_owned(),
+            kind: "openai-responses".to_owned(),
+            base_url: "https://chatgpt.com/backend-api/codex".to_owned(),
+            models: vec!["gpt-5.5".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+        };
+        let mut subagents = SubagentSettings::default();
+        subagents.roles.push(SubagentRoleSettings {
+            role: "scout".to_owned(),
+            enabled: true,
+            provider: Some(OPENAI_CODEX_PROVIDER_ID.to_owned()),
+            model: Some("gpt-5.5".to_owned()),
+            thinking: None,
+        });
+        let settings = AppSettings {
+            providers: vec![parent.clone(), codex],
+            subagents,
+            ..AppSettings::default()
+        };
+        let resolved =
+            ResolvedProvider::resolve(&parent, "gpt-parent", "parent-key", "ua").unwrap();
+        let host = super::BridgeAgentHost::new(
+            resolved,
+            home,
+            std::path::PathBuf::from("/tmp"),
+            &settings,
+            "session".to_owned(),
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            Arc::new(tokio::sync::Mutex::new(None)),
+            Arc::new(tokio::sync::Mutex::new(None)),
+        );
+        let routed = host.resolve_route("scout").await.expect("route");
+        let authorization = routed
+            .headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_default();
+        assert_eq!(authorization, "Bearer live-access-token");
+        assert!(!authorization.contains("refresh-token"));
+        assert!(
+            routed
+                .headers
+                .iter()
+                .any(|(name, value)| name == "originator" && value == "pi")
+        );
+        assert!(
+            routed
+                .headers
+                .iter()
+                .any(|(name, value)| { name == "chatgpt-account-id" && value == "acct_123" })
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

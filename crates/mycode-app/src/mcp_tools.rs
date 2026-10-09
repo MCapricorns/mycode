@@ -301,7 +301,7 @@ fn merged_mcp_servers(
             state
                 .trusted_projects
                 .iter()
-                .any(|item| item == text.as_ref())
+                .any(|item| mycode_config::same_project_path(item, text.as_ref()))
         });
     match mycode_config::project_mcp_servers(project, trusted) {
         Ok(extra) => {

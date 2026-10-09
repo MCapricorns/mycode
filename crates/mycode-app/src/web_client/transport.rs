@@ -95,7 +95,9 @@ impl WebTransport for ReqwestWebTransport {
                 body: Some(mycode_providers::PinnedBody::Bytes(body.to_vec().into())),
                 mode: mycode_providers::PinMode::PublicHttps,
                 timeout: Some(timeout),
+                read_timeout: None,
                 user_agent: None,
+                follow_redirects: true,
                 cancel: cancel.clone(),
             }) => sent.map_err(|message| pinned_transport_error(&message))?,
         };

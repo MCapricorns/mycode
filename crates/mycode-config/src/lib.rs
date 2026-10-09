@@ -78,7 +78,7 @@ pub use ui_state::{
     MAX_RECENT_MODELS, MAX_RECENT_PROJECTS, MAX_SESSION_MODELS, MAX_SESSION_PROJECTS,
     MAX_SESSION_WORKSPACES, MAX_STARRED_MODELS, MAX_TRUSTED_PROJECTS, MAX_WORKSPACE_NAME_CHARS,
     MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UI_STATE_FORMAT_VERSION,
-    UI_STATE_KIND, UI_STATE_PATH, UiState, WorkspaceDef, read_ui_state, read_ui_state_with_repair,
-    remember_model, replace_ui_state, revoke_project_trust, session_model, toggle_star,
-    trust_project, upsert_session_model,
+    UI_STATE_KIND, UI_STATE_PATH, UiState, WorkspaceDef, normalize_project_path, read_ui_state,
+    read_ui_state_with_repair, remember_model, replace_ui_state, revoke_project_trust,
+    same_project_path, session_model, toggle_star, trust_project, upsert_session_model,
 };

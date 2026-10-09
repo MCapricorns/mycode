@@ -184,7 +184,6 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
 }
 
 fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
-    const MAX_EFFORTS: usize = 16;
     let mut toggle = false;
     let mut efforts = Vec::new();
     for option in &model.reasoning_options {
@@ -208,6 +207,11 @@ fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
     }
     (toggle, efforts)
 }
+
+/// Published effort tokens kept per model.
+///
+/// `scripts/generate_catalog.py` uses this same cap (`MAX_EFFORTS`).
+pub(crate) const MAX_EFFORTS: usize = 16;
 
 /// Keeps one published effort token. Unknown spellings stay; nothing is
 /// invented to fill a ladder, and tokens that are not identifiers are dropped.

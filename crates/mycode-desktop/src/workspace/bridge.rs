@@ -62,15 +62,6 @@ impl Workspace {
                 }
                 return;
             }
-            BridgeEvent::Notice {
-                session_id,
-                message,
-            } => {
-                if !matches_active(&session_id) {
-                    return;
-                }
-                DesktopAction::Failed(message)
-            }
             BridgeEvent::UsageSnapshot {
                 session_id,
                 model,

@@ -449,6 +449,33 @@ fn valid_project_path(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
+/// Canonical project path for trust and sidebar comparison.
+///
+/// Trims surrounding whitespace, drops a trailing slash, and on Windows
+/// folds slash direction and ASCII case. An empty result means the path was
+/// only slashes.
+#[must_use]
+pub fn normalize_project_path(path: &str) -> String {
+    let trimmed = path.trim().trim_end_matches(['/', '\\']);
+    if cfg!(windows) {
+        trimmed.replace('/', "\\").to_ascii_lowercase()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Whether two project paths name the same folder.
+///
+/// The sidebar, MCP project trust, and the trusted-project list all use this
+/// so a trailing slash (and, on Windows, letter case) cannot split one folder
+/// into two.
+#[must_use]
+pub fn same_project_path(left: &str, right: &str) -> bool {
+    let left = normalize_project_path(left);
+    let right = normalize_project_path(right);
+    !left.is_empty() && left == right
+}
+
 /// Records `path` as allowed to contribute `.mycode/mcp.json`.
 ///
 /// Opening a folder does not call this. An invalid path, or a new path when
@@ -456,14 +483,15 @@ fn valid_project_path(value: &str) -> Option<String> {
 /// path that is already trusted moves to the front.
 #[must_use]
 pub fn trust_project(projects: &mut Vec<String>, path: &str) -> bool {
-    let Some(path) = valid_project_path(path) else {
+    let Some(path) = canonical_trusted_project(path) else {
         return false;
     };
-    if let Some(index) = projects.iter().position(|existing| existing == &path) {
-        if index != 0 {
-            let existing = projects.remove(index);
-            projects.insert(0, existing);
-        }
+    if let Some(index) = projects
+        .iter()
+        .position(|existing| same_project_path(existing, &path))
+    {
+        projects.remove(index);
+        projects.insert(0, path);
         return true;
     }
     if projects.len() >= MAX_TRUSTED_PROJECTS {
@@ -478,12 +506,18 @@ pub fn trust_project(projects: &mut Vec<String>, path: &str) -> bool {
 /// Returns whether the path was present. An invalid path returns false.
 #[must_use]
 pub fn revoke_project_trust(projects: &mut Vec<String>, path: &str) -> bool {
-    let Some(path) = valid_project_path(path) else {
+    let Some(path) = canonical_trusted_project(path) else {
         return false;
     };
     let before = projects.len();
-    projects.retain(|existing| existing != &path);
+    projects.retain(|existing| !same_project_path(existing, &path));
     projects.len() != before
+}
+
+fn canonical_trusted_project(path: &str) -> Option<String> {
+    let path = valid_project_path(path)?;
+    let path = normalize_project_path(&path);
+    (!path.is_empty()).then_some(path)
 }
 
 fn valid_session_id(value: &str) -> bool {
@@ -696,6 +730,45 @@ mod tests {
             vec!["/tmp/mycode-trust-b".to_owned()]
         );
         let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn trusted_project_collapses_a_trailing_slash() {
+        assert!(super::same_project_path("/tmp/app/", "/tmp/app"));
+        assert!(!super::same_project_path("/tmp/app", "/tmp/other"));
+        let mut projects = Vec::new();
+        assert!(super::trust_project(
+            &mut projects,
+            "/tmp/mycode-trust-slash/"
+        ));
+        assert_eq!(projects, vec!["/tmp/mycode-trust-slash".to_owned()]);
+        assert!(super::trust_project(
+            &mut projects,
+            "/tmp/mycode-trust-slash"
+        ));
+        assert_eq!(projects.len(), 1);
+        assert!(super::revoke_project_trust(
+            &mut projects,
+            "/tmp/mycode-trust-slash/"
+        ));
+        assert!(projects.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn trusted_project_matches_windows_drive_case() {
+        assert!(super::same_project_path("C:\\Work\\App\\", "c:/work/app"));
+        assert_eq!(
+            super::normalize_project_path("C:/Work/App/"),
+            "c:\\work\\app"
+        );
+        let mut projects = Vec::new();
+        assert!(super::trust_project(&mut projects, "C:\\Work\\App\\"));
+        assert_eq!(projects, vec!["c:\\work\\app".to_owned()]);
+        assert!(super::trust_project(&mut projects, "c:/work/app"));
+        assert_eq!(projects.len(), 1);
+        assert!(super::revoke_project_trust(&mut projects, "C:/Work/App"));
+        assert!(projects.is_empty());
     }
 
     #[cfg(unix)]

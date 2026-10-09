@@ -4,8 +4,9 @@
 Usage: python scripts/generate_catalog.py <models.dev api.json> <output snapshot.json>
 
 The snapshot keeps only providers MYCode can serve with its three first-party
-wire protocols (anthropic-messages, openai-completions) and normalizes every
-entry to the compact camelCase schema the mycode-providers crate embeds.
+wire protocols (anthropic-messages, openai-completions, openai-responses) and
+normalizes every entry to the compact camelCase schema the mycode-providers
+crate embeds.
 """
 import json
 import sys
@@ -13,6 +14,8 @@ from datetime import date, datetime, timezone
 
 MAX_STRING_BYTES = 8 * 1024
 MAX_MODELS_PER_PROVIDER = 512
+# Keep in sync with mycode-providers `catalog/modelsdev.rs` MAX_EFFORTS.
+MAX_EFFORTS = 16
 
 # Known base URLs for first-party labs that models.dev lists without an `api`
 # field because the AI SDK package embeds the endpoint.
@@ -24,11 +27,18 @@ ENDPOINT_FIXES = {
     "xai": ("openai-completions", "https://api.x.ai/v1"),
     "cerebras": ("openai-completions", "https://api.cerebras.ai/v1"),
     "perplexity": ("openai-completions", "https://api.perplexity.ai"),
+    "github-copilot": ("openai-completions", "https://api.githubcopilot.com"),
+    "openai-codex": ("openai-responses", "https://chatgpt.com/backend-api/codex"),
 }
 
-# Providers that authenticate with an OAuth device flow instead of a pasted
-# API key; the settings UI renders a sign-in button for these.
-DEVICE_CODE_PROVIDERS = {"github-copilot"}
+# Sign-in providers. A device or OAuth vendor always uses ENDPOINT_FIXES,
+# never the console URL the cloud document happens to carry. Matches
+# `device_code_auth` in catalog/modelsdev.rs.
+DEVICE_AUTH = {
+    "github-copilot": "device-code",
+    "openai-codex": "device-code",
+    "xai": "oauth",
+}
 
 # Providers excluded from presets: cloud consoles with non-portable auth
 # (cloud SDKs) rather than a plain API key or a supported OAuth flow.
@@ -39,6 +49,8 @@ def resolve_wire(provider_id: str, raw: dict) -> tuple[str, str] | None:
     """Returns (wire kind, base URL) for one models.dev provider entry."""
     if provider_id in EXCLUDED_PROVIDERS:
         return None
+    if provider_id in DEVICE_AUTH:
+        return ENDPOINT_FIXES.get(provider_id)
     npm = clean_text(raw.get("npm"))
     api = clean_text(raw.get("api"))
     if "anthropic" in npm:
@@ -47,9 +59,6 @@ def resolve_wire(provider_id: str, raw: dict) -> tuple[str, str] | None:
         return None
     else:
         kind = "openai-completions"
-    if provider_id == "github-copilot":
-        # The chat completions host; models.dev lists the console host.
-        return (kind, "https://api.githubcopilot.com")
     if api.startswith("https://"):
         return (kind, api)
     fix = ENDPOINT_FIXES.get(provider_id)
@@ -102,44 +111,55 @@ def build_model(model_id: str, raw: dict) -> dict | None:
     return model
 
 
-REASONING_TOKENS = {
-    "off",
-    "none",
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-    "on",
-    "default",
-}
+def effort_token_ok(token: str) -> bool:
+    """Identifier tokens only. Matches `effort_token_ok` in modelsdev.rs."""
+    if not 1 <= len(token) <= 32:
+        return False
+    return all(
+        (character.isascii() and character.isalnum()) or character in "-_"
+        for character in token
+    )
+
+
+def push_effort(efforts: list[str], value) -> None:
+    """Keeps one published effort. Unknown identifiers stay; `default` is dropped."""
+    token = clean_text(value).lower()
+    if (
+        not token
+        or token == "default"
+        or not effort_token_ok(token)
+        or len(efforts) >= MAX_EFFORTS
+        or token in efforts
+    ):
+        return
+    efforts.append(token)
 
 
 def reasoning_options(raw: dict) -> tuple[bool, list[str]]:
-    """Extract models.dev toggle / effort rows. Unknown tokens are dropped."""
+    """Extract models.dev toggle / effort rows, then variant keys when the list is empty."""
     options = raw.get("reasoning_options")
-    if not isinstance(options, list):
-        return False, []
     toggle = False
     efforts: list[str] = []
-    for option in options:
-        if not isinstance(option, dict):
-            continue
-        kind = option.get("type")
-        if kind == "toggle":
-            toggle = True
-            continue
-        if kind != "effort":
-            continue
-        values = option.get("values")
-        if not isinstance(values, list):
-            continue
-        for value in values:
-            token = clean_text(value).lower()
-            if token not in REASONING_TOKENS or token in efforts or len(efforts) >= 8:
+    if isinstance(options, list):
+        for option in options:
+            if not isinstance(option, dict):
                 continue
-            efforts.append(token)
+            kind = option.get("type")
+            if kind == "toggle":
+                toggle = True
+                continue
+            if kind != "effort":
+                continue
+            values = option.get("values")
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                push_effort(efforts, value)
+    if not efforts:
+        variants = raw.get("variants")
+        if isinstance(variants, dict):
+            for key in variants:
+                push_effort(efforts, key)
     return toggle, efforts
 
 
@@ -172,8 +192,9 @@ def build_provider(provider_id: str, raw: dict) -> dict | None:
         "doc": clean_text(raw.get("doc")) or None,
         "models": models,
     }
-    if provider_id in DEVICE_CODE_PROVIDERS:
-        provider["auth"] = "device-code"
+    auth = DEVICE_AUTH.get(provider_id)
+    if auth:
+        provider["auth"] = auth
     return provider
 
 

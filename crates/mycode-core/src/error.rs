@@ -22,9 +22,6 @@ pub enum MycodeError {
     /// Tool execution failure.
     #[error("tool error: {0}")]
     Tool(String),
-    /// Plugin loading or hook failure.
-    #[error("plugin error: {0}")]
-    Plugin(String),
 }
 
 impl From<std::io::Error> for MycodeError {

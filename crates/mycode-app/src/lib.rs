@@ -302,17 +302,6 @@ pub enum BridgeEvent {
         /// Committed assistant entry projection.
         entry: ConversationEntry,
     },
-    /// A one-line notice that does not end the turn.
-    ///
-    /// Nothing in the core emits this. Compaction uses [`BridgeEvent::SummaryShown`]
-    /// and [`BridgeEvent::CompactFinished`]. The variant stays so a frontend
-    /// can keep matching it.
-    Notice {
-        /// Session identity spelling.
-        session_id: String,
-        /// One-line message.
-        message: String,
-    },
     /// In-progress token counts for the open turn. Not a ledger write.
     UsageSnapshot {
         /// Session identity spelling.

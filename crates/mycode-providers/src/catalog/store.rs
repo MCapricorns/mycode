@@ -4,7 +4,7 @@
 //! otherwise one conditional GET revalidates the cloud document and rewrites
 //! the cache; on any failure the cached or vendored snapshot keeps the
 //! product fully functional offline.
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mycode_config::{HomeLayout, locked_update_owned_file, read_owned_file};
@@ -73,6 +73,31 @@ struct CacheDocument {
 pub fn bundled() -> &'static CatalogDocument {
     static SNAPSHOT: OnceLock<CatalogDocument> = OnceLock::new();
     SNAPSHOT.get_or_init(|| parse_snapshot(include_bytes!("snapshot.json")))
+}
+
+/// Live or cached catalog installed by the process. Empty until startup
+/// loads the cache or a refresh replaces it.
+static ACTIVE: RwLock<Option<Arc<CatalogDocument>>> = RwLock::new(None);
+
+/// Publishes the catalog turns should consult before [`bundled`].
+pub fn install_active(document: Arc<CatalogDocument>) {
+    if let Ok(mut slot) = ACTIVE.write() {
+        *slot = Some(document);
+    }
+}
+
+/// The installed live or cached catalog, when one has been published.
+#[must_use]
+pub fn active() -> Option<Arc<CatalogDocument>> {
+    ACTIVE.read().ok().and_then(|slot| slot.clone())
+}
+
+/// Drops the installed catalog so lookups use [`bundled`] again.
+#[cfg(test)]
+pub(crate) fn clear_active() {
+    if let Ok(mut slot) = ACTIVE.write() {
+        *slot = None;
+    }
 }
 
 fn unix_now() -> u64 {
@@ -249,7 +274,9 @@ pub async fn refresh(
         body: None,
         mode: crate::PinMode::CheckRedirect,
         timeout: Some(std::time::Duration::from_secs(30)),
+        read_timeout: None,
         user_agent: Some(user_agent.to_owned()),
+        follow_redirects: true,
         cancel: tokio_util::sync::CancellationToken::new(),
     })
     .await
