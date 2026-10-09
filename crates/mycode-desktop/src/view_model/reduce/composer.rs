@@ -2,10 +2,42 @@
 //! command autocomplete. A leading `/` lists built-in commands, discovered
 //! skills, and enabled MCP servers without waiting for a longer prefix.
 
-use super::super::settings::SkillEntry;
-use crate::view_model::{
+use super::super::chat::{
     COMPOSER_COMMANDS, ComposerMention, MentionGroup, MentionItem, MentionKind,
 };
+use super::super::projects::has_open_folder;
+use super::super::settings::SkillEntry;
+use super::super::state::WorkspaceState;
+
+/// What Enter or the send arrow should do with the current draft.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ComposerSubmit {
+    /// An open session can take the text.
+    Send,
+    /// No session yet, and a folder is open. Create one, then send `text`.
+    StartTask(String),
+    /// A new task needs an open folder.
+    NeedFolder,
+    /// Nothing to send.
+    Ignore,
+}
+
+/// Decides Enter / send. The welcome desk has no session, so a non-empty
+/// draft starts a task instead of being dropped.
+#[must_use]
+pub(crate) fn composer_submit(state: &WorkspaceState, draft: &str) -> ComposerSubmit {
+    if state.active.is_some() {
+        return ComposerSubmit::Send;
+    }
+    if draft.trim().is_empty() {
+        return ComposerSubmit::Ignore;
+    }
+    if has_open_folder(state) {
+        ComposerSubmit::StartTask(draft.to_owned())
+    } else {
+        ComposerSubmit::NeedFolder
+    }
+}
 
 /// How many slash rows the menu keeps. Commands and matching skills stay;
 /// extra MCP tool rows are the first to drop.

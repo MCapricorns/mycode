@@ -56,6 +56,11 @@ pub(super) fn render_composer(
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
     let queued = workspace.vm().queued.clone();
     let has_queue = !queued.is_empty();
+    let can_send = if has_session {
+        has_draft || has_queue
+    } else {
+        has_draft && crate::view_model::has_open_folder(workspace.vm())
+    };
     let queue_panel = if has_queue {
         Some(render_queued_followups(queued, cx).into_any_element())
     } else {
@@ -194,13 +199,7 @@ pub(super) fn render_composer(
                                 cx,
                             ))
                         })
-                        .child(composer_round_button(
-                            sending,
-                            has_session,
-                            has_draft,
-                            has_queue,
-                            cx,
-                        )),
+                        .child(composer_round_button(sending, can_send, cx)),
                 ),
         )
 }
@@ -211,13 +210,10 @@ pub(super) fn render_composer(
 /// arrow sits.
 fn composer_round_button(
     sending: bool,
-    has_session: bool,
-    has_draft: bool,
-    has_queue: bool,
+    can_send: bool,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let can_send = has_session && (has_draft || has_queue);
     let fill = super::super::desk::primary_fill(theme.accent, theme.primary);
     let hover = super::super::desk::deepen(fill);
     let edge = super::super::desk::primary_edge(theme.primary);

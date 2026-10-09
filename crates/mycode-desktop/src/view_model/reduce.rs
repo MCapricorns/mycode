@@ -21,7 +21,7 @@ pub(crate) use self::models::{
     reasoning_levels_for, selected_model_supports_reasoning, selected_reasoning_levels,
 };
 
-pub(crate) use self::composer::preferred_slash_index;
+pub(crate) use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
 use self::composer::{parse_mention, slash_items};
 use self::jobs::{finish_live_job, tool_progress, tool_started};
 use self::models::{
@@ -121,6 +121,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.pending_ask = None;
             state.error = None;
             state.history_loading = false;
+            state.pending_welcome_send = None;
         }
         DesktopAction::ConversationParked => {
             state.active = None;
@@ -137,6 +138,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.history_loading = false;
             state.composer_draft.clear();
             state.mention = None;
+            state.pending_welcome_send = None;
             state.resources.clear();
             state.live_turn = None;
         }
@@ -196,6 +198,19 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
             state.mention = parse_mention(&bounded);
             state.composer_draft = bounded;
+        }
+        DesktopAction::WelcomeSendHeld(text) => {
+            if state.pending_welcome_send.is_none()
+                && let ComposerSubmit::StartTask(text) = composer_submit(state, &text)
+            {
+                let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
+                if !bounded.trim().is_empty() {
+                    state.pending_welcome_send = Some(bounded);
+                }
+            }
+        }
+        DesktopAction::WelcomeSendConsumed => {
+            state.pending_welcome_send = None;
         }
         DesktopAction::MentionFiles(files) => {
             if let Some(mention) = state.mention.as_mut()
@@ -1319,5 +1334,111 @@ mod tests {
         assert!(mycode_app::is_compaction_summary(&entries[3].text));
         assert!(state.pending_summary.is_none());
         assert!(!state.sending);
+    }
+
+    #[test]
+    fn welcome_enter_holds_the_draft_until_the_new_session_opens() {
+        let mut state = WorkspaceState {
+            project_dir: Some("/tmp/app".to_owned()),
+            composer_draft: "explain the build".to_owned(),
+            ..WorkspaceState::default()
+        };
+        assert_eq!(
+            super::composer_submit(&state, &state.composer_draft),
+            super::ComposerSubmit::StartTask("explain the build".to_owned())
+        );
+        reduce(
+            &mut state,
+            DesktopAction::WelcomeSendHeld("explain the build".to_owned()),
+        );
+        assert_eq!(
+            state.pending_welcome_send.as_deref(),
+            Some("explain the build")
+        );
+        assert_eq!(state.composer_draft, "explain the build");
+        reduce(
+            &mut state,
+            DesktopAction::SessionCreated(mycode_app::SessionSummary {
+                session_id: "new".to_owned(),
+                root_branch_id: "branch".to_owned(),
+                title: String::new(),
+                event_count: 0,
+                active: false,
+                corrupt: false,
+            }),
+        );
+        assert_eq!(
+            state.pending_welcome_send.as_deref(),
+            Some("explain the build")
+        );
+        assert_eq!(state.composer_draft, "explain the build");
+        assert!(state.active.is_some());
+        reduce(
+            &mut state,
+            DesktopAction::ConversationOpened(ActiveConversation {
+                session_id: "new".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+        );
+        assert_eq!(state.composer_draft, "explain the build");
+        assert_eq!(
+            state.pending_welcome_send.as_deref(),
+            Some("explain the build")
+        );
+        assert_eq!(
+            super::composer_submit(&state, &state.composer_draft),
+            super::ComposerSubmit::Send
+        );
+        reduce(&mut state, DesktopAction::WelcomeSendConsumed);
+        assert!(state.pending_welcome_send.is_none());
+    }
+
+    #[test]
+    fn welcome_enter_without_a_folder_does_not_start_a_task() {
+        let mut state = WorkspaceState {
+            composer_draft: "hello".to_owned(),
+            ..WorkspaceState::default()
+        };
+        assert_eq!(
+            super::composer_submit(&state, "hello"),
+            super::ComposerSubmit::NeedFolder
+        );
+        reduce(
+            &mut state,
+            DesktopAction::WelcomeSendHeld("hello".to_owned()),
+        );
+        assert!(state.pending_welcome_send.is_none());
+        assert_eq!(state.composer_draft, "hello");
+        let open = WorkspaceState {
+            project_dir: Some("/tmp/app".to_owned()),
+            composer_draft: "  ".to_owned(),
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        assert_eq!(
+            super::composer_submit(&open, "still here"),
+            super::ComposerSubmit::Send
+        );
+        assert_eq!(
+            super::composer_submit(
+                &WorkspaceState {
+                    project_dir: Some("/tmp/app".to_owned()),
+                    ..WorkspaceState::default()
+                },
+                "   ",
+            ),
+            super::ComposerSubmit::Ignore
+        );
     }
 }
