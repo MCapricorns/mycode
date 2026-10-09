@@ -919,8 +919,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsReasoningChanged(level) => {
             state.reasoning_menu_open = false;
-            // The pick belongs to this session. It is not written into the
-            // shared settings document, which every other session would load.
+            // Stored on the session pin. The live projection is updated so the
+            // chip matches, and the document is left clean so this action does
+            // not schedule a save.
             if state.settings.is_none() {
                 return;
             }
@@ -945,11 +946,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.preset_models.push(model);
             }
         }
-        DesktopAction::PresetModelMenuToggled(open) => state.preset_model_menu_open = open,
         DesktopAction::ShowModelsSubview(view) => {
             state.models_subview = view;
             state.active_preset = None;
-            state.preset_model_menu_open = false;
             state.preset_model_query.clear();
             state.provider_kind_menu_open = false;
             state.mcp_transport_menu_open = false;
@@ -1039,7 +1038,6 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.model_menu_open
         || state.reasoning_menu_open
         || state.subagent_menu.is_some()
-        || state.preset_model_menu_open
         || state.provider_kind_menu_open
         || state.mcp_transport_menu_open
         || state.shell_kind_menu_open
@@ -1054,7 +1052,6 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.picker_query.clear();
     state.reasoning_menu_open = false;
     state.subagent_menu = None;
-    state.preset_model_menu_open = false;
     state.provider_kind_menu_open = false;
     state.mcp_transport_menu_open = false;
     state.shell_kind_menu_open = false;
