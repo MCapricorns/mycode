@@ -56,7 +56,7 @@ impl SessionCore {
         let created = self.store_mut()?.create_session(session, branch);
         drop(commit);
         created.map_err(map_store)?;
-        let mut ledger = SessionLedger::empty();
+        let mut ledger = SessionLedger::default();
         ledger.branches.insert(branch.clone(), BranchLedger::root());
         self.sessions.insert(session.clone(), ledger);
         Ok(SessionPull::Complete(SessionResult::Created(
@@ -442,15 +442,13 @@ impl SessionCore {
             return;
         };
         match prepared.kind {
-            EventKind::ToolCall => {
-                branch_state
-                    .open_calls
-                    .insert(prepared.call_id.clone().expect("tool call carries an id"));
-            }
-            EventKind::ToolResult => {
-                branch_state
-                    .open_calls
-                    .remove(&prepared.call_id.clone().expect("tool result carries an id"));
+            EventKind::ToolCall | EventKind::ToolResult => {
+                let call_id = prepared.call_id.clone().expect("tool event carries an id");
+                if prepared.kind == EventKind::ToolCall {
+                    branch_state.open_calls.insert(call_id);
+                } else {
+                    branch_state.open_calls.remove(&call_id);
+                }
             }
             EventKind::Message | EventKind::Usage | EventKind::Task => {}
         }

@@ -17,14 +17,14 @@ use crate::hooks::HookRunner;
 /// The agent itself stays UI-free and session-free: all ambient
 /// dependencies flow in through this struct, freshly borrowable per
 /// `prompt()` call. `cancel` is the *caller's* token; the agent derives
-/// a child token from it per turn so its own `abort()` can fire the same
-/// cancellation without owning the parent.
+/// a child token from it per turn so cancelling that child does not
+/// cancel the parent.
 pub struct TurnEnv<'a> {
     /// Host-backed provider port to stream from.
     pub provider: &'a dyn Provider,
     /// Tool registry the model's calls dispatch through.
     pub tools: &'a ToolRegistry,
-    /// Plugin hook runner (loop-node notify / transform / gate).
+    /// Request hook. Compaction rewrites the provider request before send.
     pub hooks: &'a HookRunner,
     /// Cooperative turn cancellation. Firing it aborts the in-flight
     /// turn: the current stream terminates with `Cancelled`, the turn

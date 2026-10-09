@@ -1,9 +1,9 @@
 //! First-party session service facade.
 //!
 //! [`SessionService`] owns one publication generation: the actor runs on the
-//! T8 typed task runtime, durable work is admitted through the Host
-//! generation fence, and every facade call drives its operation to exactly
-//! one terminal pull under a bounded deadline.
+//! typed task runtime, durable work is admitted through the generation
+//! fence, and every facade call drives its operation to exactly one
+//! terminal pull under a bounded deadline.
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -404,28 +404,19 @@ impl SessionService {
             .invoke(request, deadline, close)
             .await
             .map_err(map_task_error)?;
-        loop {
-            // Each pull gets a fresh deadline. The actor returns a terminal
-            // result in one pull; a progress observation, if any, is ignored.
-            let deadline = Instant::now() + DEFAULT_DEADLINE;
-            match self.client().pull(operation, deadline).await {
-                Ok(pull) => match pull {
-                    super::dto::SessionPull::Complete(result) => {
-                        self.client().close(operation);
-                        return Ok(result);
-                    }
-                    super::dto::SessionPull::Failed(error) => {
-                        self.client().close(operation);
-                        return Err(error);
-                    }
-                    super::dto::SessionPull::Progress(_) => {
-                        continue;
-                    }
-                },
-                Err(error) => {
-                    self.client().close(operation);
-                    return Err(map_task_error(error));
-                }
+        let deadline = Instant::now() + DEFAULT_DEADLINE;
+        match self.client().pull(operation, deadline).await {
+            Ok(super::dto::SessionPull::Complete(result)) => {
+                self.client().close(operation);
+                Ok(result)
+            }
+            Ok(super::dto::SessionPull::Failed(error)) => {
+                self.client().close(operation);
+                Err(error)
+            }
+            Err(error) => {
+                self.client().close(operation);
+                Err(map_task_error(error))
             }
         }
     }

@@ -6,6 +6,8 @@
 //! new-branch-id`; every string is `u32be byte-length || UTF-8`, the kind is a
 //! zero-based `u8`, and a head is a zero-based `u8` tag where `event` is
 //! followed by the framed event ID. All length conversions are checked.
+use std::fmt::Write;
+
 use sha2::{Digest, Sha256};
 
 use super::dto::{BranchMutationKind, HeadStamp};
@@ -35,7 +37,7 @@ pub fn format_digest(raw: &[u8; 32]) -> String {
     let mut spelling = String::with_capacity(DIGEST_PREFIX.len() + DIGEST_HEX_BYTES);
     spelling.push_str(DIGEST_PREFIX);
     for byte in raw {
-        spelling.push_str(&format!("{byte:02x}"));
+        write!(spelling, "{byte:02x}").expect("writing to a String cannot fail");
     }
     spelling
 }

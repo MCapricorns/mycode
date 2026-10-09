@@ -11,9 +11,8 @@
 //! Firing `TurnEnv::cancel` cancels the turn's cancellation token — a
 //! child of the caller's token. The in-flight provider stream terminates
 //! with `Cancelled`, partial assistant messages are *not* kept (only
-//! completed messages enter history), `is_streaming` resets, and
-//! `prompt()` returns [`TurnOutcome::Aborted`] — never a half
-//! `TurnEnded::Completed`.
+//! completed messages enter history), and `prompt()` returns
+//! [`TurnOutcome::Aborted`] — never a half `TurnEnded::Completed`.
 //!
 //! A provider or transport failure is different: thinking and text that
 //! already arrived stay in history, with one visible interruption line.
@@ -85,8 +84,6 @@ pub struct AgentState {
     /// results. Only completed messages live here — a response aborted
     /// mid-stream never enters. Entries are shared with provider requests.
     pub messages: Vec<Arc<Message>>,
-    /// Whether a turn is currently streaming.
-    pub is_streaming: bool,
 }
 
 impl AgentState {
@@ -104,7 +101,7 @@ impl AgentState {
 /// ├─ loop: while tool calls
 /// │    stream response (MessageDelta …) → history
 /// │    dispatch tool calls (registry → ToolResult → hist.)
-/// │  would-stop: stop_gate → else break
+/// │  break when the response has no tool calls or stop reason Error
 /// └─ TurnEnded(Completed | Aborted)
 /// ```
 pub struct Agent {
@@ -121,19 +118,14 @@ impl Agent {
         }
     }
 
-    /// Read-only access to the conversation state.
-    /// Loads replay history before the first prompt.
+    /// Appends replayed messages before the first prompt.
     pub fn seed_history(&mut self, messages: impl IntoIterator<Item = Arc<Message>>) {
         self.state.messages.extend(messages);
     }
 
+    /// Read-only access to the conversation state.
     pub fn state(&self) -> &AgentState {
         &self.state
-    }
-
-    /// The static agent config.
-    pub fn config(&self) -> &AgentConfig {
-        &self.config
     }
 
     /// Run one turn: push `msg` (a user message) into the history,
@@ -144,8 +136,6 @@ impl Agent {
     /// A provider failure keeps the partial assistant message and
     /// completes the turn. Tool-level failures never end the turn
     /// (they become `is_error` tool results the model can react to).
-    /// A missing `git` binary is one of those tool failures when a
-    /// worktree lease cannot be created; it does not rewind the turn.
     pub async fn prompt(
         &mut self,
         msg: Message,
@@ -154,12 +144,7 @@ impl Agent {
         // Child token: a cancelled child never leaks into the parent or
         // the next turn.
         let token = env.cancel.child_token();
-        self.state.is_streaming = true;
-
-        let result = run_turn(&self.config, &mut self.state, msg, env, &token).await;
-
-        self.state.is_streaming = false;
-        result
+        run_turn(&self.config, &mut self.state, msg, env, &token).await
     }
 }
 
@@ -244,10 +229,10 @@ async fn agent_loop(
             }
             has_tool_calls = true;
         } else {
-            // `agent` calls overlap everything else in this response, so a
-            // scout and an MCP lookup requested together actually run
-            // together. Other tools stay in order (`search_tool` before
-            // `use_tool`). Results are written back in call order.
+            // `agent` calls overlap the rest of this response, so a child
+            // and another tool requested together actually run together.
+            // Non-agent tools run one after another in model order.
+            // Results are written back in call order.
             if token.is_cancelled() {
                 for call in &calls {
                     let message = turn::fail_cancelled_call(env, call);

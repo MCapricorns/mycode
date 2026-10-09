@@ -18,8 +18,6 @@ macro_rules! session_id_type {
         impl $name {
             /// Generates a fresh identifier from the operating-system CSPRNG.
             ///
-            /// # Errors
-            ///
             /// Returns `None` when the operating-system random source cannot
             /// fill the required 16-byte buffer. Callers must treat failure as
             /// fail-closed and must not fall back to a weaker source.
