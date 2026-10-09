@@ -69,13 +69,3 @@ pub(crate) fn rank_model_ids(ids: impl IntoIterator<Item = String>) -> Vec<Strin
     });
     indexed.into_iter().map(|(_, id)| id).collect()
 }
-
-/// The strongest non-compact models, capped for a suggestion row.
-#[must_use]
-pub fn suggested_model_ids(ids: impl IntoIterator<Item = String>) -> Vec<String> {
-    rank_model_ids(ids)
-        .into_iter()
-        .filter(|id| model_strength(id) > 0 && !compact_model(&id.to_ascii_lowercase()))
-        .take(8)
-        .collect()
-}

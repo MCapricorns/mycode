@@ -41,7 +41,8 @@ pub(super) fn ambient(theme: &Theme) -> Background {
     )
 }
 
-/// Title bar.
+/// Translucent rail fill for the title bar, the settings header, and the
+/// preset sign-in code card.
 pub(super) fn glass(theme: &Theme) -> Hsla {
     with_alpha(theme.title_bar, RAIL_ALPHA)
 }
@@ -66,7 +67,6 @@ pub(super) fn toast_fill(theme: &Theme) -> Hsla {
     lifted(theme.popover, 0.03, OVERLAY_ALPHA)
 }
 
-/// Hover fill.
 pub(super) fn frost_hover(theme: &Theme) -> Hsla {
     theme.secondary_hover
 }

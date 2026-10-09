@@ -222,14 +222,14 @@ impl Workspace {
     }
 
     /// Rewinds the chat to just before the user message at `index` and
-    /// prefills the composer with its text (编辑). Workspace files stay as
-    /// they are. The first message has no prior event to rewind to and is
-    /// ignored.
+    /// prefills the composer with its text (edit-and-resend). Workspace files
+    /// stay as they are. The first message has no prior event to rewind to
+    /// and is ignored.
     pub(crate) fn on_edit_message(&mut self, index: usize, cx: &mut Context<Self>) {
         self.recall_at(index, true, cx);
     }
 
-    /// Rewinds the chat to just before the user message at `index` (撤回).
+    /// Rewinds the chat to just before the user message at `index` (recall).
     /// Workspace files stay as they are.
     pub(crate) fn on_recall_message(&mut self, index: usize, cx: &mut Context<Self>) {
         self.recall_at(index, false, cx);

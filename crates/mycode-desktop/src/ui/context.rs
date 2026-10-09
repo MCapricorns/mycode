@@ -434,9 +434,9 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
         })
 }
 
-/// The full changes drawer: every dirty file plus the selected file's diff.
-/// The inspector panel is a short preview; this is where a large working
-/// tree stays browsable.
+/// The full changes drawer lists the dirty files the snapshot holds. The
+/// selected file's diff opens in its own panel. The inspector panel is a
+/// short preview; this is where a large working tree stays browsable.
 pub(super) fn render_changes_drawer(
     workspace: &mut Workspace,
     inspector_span: f32,

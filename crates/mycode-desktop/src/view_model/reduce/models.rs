@@ -83,7 +83,6 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
 /// The `ActivePresetChanged` transition: a preset form opened or closed.
 pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<String>) {
     state.active_preset = preset.clone();
-    state.preset_model_menu_open = false;
     state.preset_model_query.clear();
     // Opening a provider pre-checks its model list, strongest first,
     // so a long catalog does not bury o3 / gpt-5 under the cap.

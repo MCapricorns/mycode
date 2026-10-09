@@ -212,8 +212,6 @@ pub(crate) struct WorkspaceState {
     /// Models checked in the active preset form; empty means the catalog's
     /// first model is used as the sole default.
     pub preset_models: Vec<String>,
-    /// Whether the preset form's model dropdown is open.
-    pub preset_model_menu_open: bool,
     /// The Models settings sub-page.
     pub models_subview: ModelsSubview,
     /// The Web search settings sub-page.
@@ -300,7 +298,7 @@ pub enum DesktopAction {
     SettingsSubagentsChanged(mycode_config::SubagentSettings),
     /// The settings editor changed the platform shell.
     SettingsToolsChanged(mycode_config::ToolsSettings),
-    /// The Agents-page provider/model/thinking dropdown opened or closed.
+    /// The Agents-page model dropdown opened or closed.
     SubagentMenuToggled(Option<(String, String)>),
     /// The Shell-page shell-kind dropdown opened or closed.
     ShellKindMenuToggled(bool),
@@ -308,7 +306,6 @@ pub enum DesktopAction {
     LanguageMenuToggled(bool),
     /// The General-page font-family dropdown opened or closed.
     FontFamilyMenuToggled(bool),
-    /// Unbound sessions inherit the active project (repairs the missing bind).
     /// The settings editor toggled durable usage records.
     SettingsUsageToggled(bool),
     /// The settings editor added an MCP server.
@@ -570,7 +567,9 @@ pub enum DesktopAction {
     PresetModelQueryChanged(String),
     /// The thinking-effort submenu opened or closed.
     ReasoningMenuToggled(bool),
-    /// The composer's thinking-effort pick; persists through settings.
+    /// The composer's thinking-effort pick. Stored on the open session's
+    /// model pin and mirrored into the in-memory settings projection so the
+    /// chip matches. This action does not mark the document dirty.
     SettingsReasoningChanged(String),
     /// The preset picker filter changed.
     PresetSearchChanged(String),
@@ -578,8 +577,6 @@ pub enum DesktopAction {
     ActivePresetChanged(Option<String>),
     /// The active preset form toggled one model's checkbox.
     PresetModelToggled(String),
-    /// The preset form's model dropdown opened or closed.
-    PresetModelMenuToggled(bool),
     /// The Models settings sub-page changed.
     ShowModelsSubview(ModelsSubview),
     /// The Web search settings sub-page changed.

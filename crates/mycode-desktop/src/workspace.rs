@@ -122,7 +122,6 @@ struct ScrollHold {
     content_height: Pixels,
 }
 
-/// The main workspace view.
 pub struct Workspace {
     vm: WorkspaceState,
     /// Owned home the process opened with. Role discovery reads `agents/` here.
@@ -181,12 +180,12 @@ pub struct Workspace {
     /// Rename editor for the active workspace; lives only while the
     /// workspace menu is in rename mode.
     pub(crate) workspace_rename_input: Option<Entity<InputState>>,
-    /// Session id of the conversation open currently in flight.
+    /// Session whose conversation-open is in flight.
     pending_open: Option<String>,
     /// Drop conversation replies until the next explicit open. Set when the
     /// user leaves a folder's chat without asking for another one.
     suppress_open: bool,
-    /// Draft restored by 撤回修改, applied on the next render (needs a window).
+    /// Draft restored by edit-and-resend, applied on the next render (needs a window).
     pending_composer_prefill: Option<String>,
     /// Settings edit epoch captured when the in-flight save was dispatched.
     settings_save_epoch: u64,
@@ -208,7 +207,7 @@ pub struct Workspace {
     repair_toast_armed: bool,
     toasts: Vec<Toast>,
     next_toast_id: u64,
-    /// In-app folder browser. `None` while the native dialog is not used.
+    /// In-app folder browser. `None` while the picker is closed.
     pub(crate) project_picker: Option<crate::ui::project_picker::ProjectPicker>,
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
@@ -1044,7 +1043,7 @@ impl Workspace {
     /// Rewrites placeholders that were captured when the input was created.
     ///
     /// `t()` is live, but `InputState` stores the placeholder string. Switching
-    /// to English left "搜索设置" in the settings search box.
+    /// to English left the Chinese settings-search placeholder in the box.
     pub(crate) fn sync_localized_placeholders(
         &mut self,
         window: &mut Window,

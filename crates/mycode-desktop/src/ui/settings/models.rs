@@ -565,7 +565,7 @@ fn preset_model_row(
         .into_any_element()
 }
 
-/// The expanded preset form: model picker plus the API key input.
+/// The expanded preset form: model checklist plus the API key input.
 fn render_preset_form(
     workspace: &mut Workspace,
     provider_id: &str,

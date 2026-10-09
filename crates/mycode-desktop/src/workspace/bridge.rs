@@ -708,8 +708,10 @@ impl Workspace {
         }
     }
 
-    /// Starts one model turn over the active conversation using the picked
-    /// provider/model, falling back to the first enabled provider.
+    /// Compacts the active conversation with the picked provider and model.
+    ///
+    /// A model missing from that provider's list uses the provider's first
+    /// model. Unlike a chat turn, this does not fall back to another provider.
     pub(super) fn on_compact(&mut self, cx: &mut Context<Self>) {
         if self.vm.sending {
             self.push_toast(

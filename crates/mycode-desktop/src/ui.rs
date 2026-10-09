@@ -236,7 +236,7 @@ pub(super) fn compact_count(count: u64) -> String {
     crate::view_model::compact_count(count)
 }
 
-/// A 7px status lamp: the demo's `.lamp` dot.
+/// A 7px status lamp.
 pub(super) fn lamp(color: gpui_kit::Hsla) -> impl IntoElement {
     div().size(px(7.)).rounded_full().bg(color)
 }

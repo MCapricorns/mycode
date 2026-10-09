@@ -1,6 +1,6 @@
 //! Composer and transcript vocabulary: mention autocomplete and live
 //! subagent cards. The transcript window itself lives on disk; this module
-//! only names the composer triggers.
+//! names the composer triggers and the live job cards.
 
 /// Composer mention autocomplete: `@` files or `/` commands, skills, and MCP.
 #[derive(Clone, Debug, PartialEq, Eq)]

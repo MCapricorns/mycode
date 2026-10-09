@@ -50,8 +50,9 @@ pub(super) fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta
             &mut streaming.text
         };
         // Take the remaining room once instead of re-counting the buffer per
-        // pushed character; the buffer can grow to 256 KiB, which made the
-        // per-char check quadratic over a long turn.
+        // pushed character. The buffer can grow to `MAX_STREAMING_CHARS`
+        // (256 * 1024 characters), which made the per-char check quadratic
+        // over a long turn.
         let room = MAX_STREAMING_CHARS.saturating_sub(buffer.chars().count());
         buffer.extend(delta.chars().take(room));
     }

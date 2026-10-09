@@ -40,10 +40,7 @@ pub(crate) use self::usage::{
 };
 
 // Kept public API: the `DesktopAction` vocabulary is `pub`, so its payload
-// types must be too (`private_interfaces`), and the suggestion projection is
-// exercised today only by render code outside this module, where a
-// restricted visibility would trip `dead_code` in non-test builds.
-pub use self::models::suggested_model_ids;
+// types must be too (`private_interfaces`).
 pub use self::settings::{
     CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
     WebSubview,

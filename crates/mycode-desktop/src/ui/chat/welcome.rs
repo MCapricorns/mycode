@@ -18,9 +18,8 @@ use crate::ui::{element_id, hover_delete_button, project_label, skin};
 use crate::view_model::has_open_folder;
 use crate::workspace::Workspace;
 
-/// Interim label for a new task: the empty-desk action, the sidebar
-/// control, and an untitled session row. ui/ux may replace this pair
-/// (for example "Ask MYCode").
+/// Shared label for a new task: the empty-desk action, the sidebar
+/// control, and an untitled session row.
 const NEW_TASK_LABEL: (&str, &str) = ("New task", "新建任务");
 
 const TAGLINE_NO_FOLDER: (&str, &str) = ("Open a folder to get started.", "打开一个目录即可开始。");
