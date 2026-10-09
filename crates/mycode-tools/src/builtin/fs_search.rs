@@ -24,10 +24,14 @@
 //!
 //! Linux opens each child with `openat2(RESOLVE_BENEATH | RESOLVE_NO_XDEV |
 //! RESOLVE_NO_SYMLINKS)` so bind mounts cannot be crossed, including at
-//! find confirmation. Find confirmation on Linux/Android uses `O_PATH` so a
-//! mode-`000` name can be reported without content-read permission; other
-//! Unix confirms with no-follow metadata (`fstatat`) and the same `st_dev` /
-//! type / `nlink` checks, and fails closed when that proof is unavailable.
+//! find confirmation. After that open, Linux proves the mount with
+//! `STATX_MNT_ID`: an overlay directory and a file in it may differ in
+//! `st_dev` while staying on one mount, and a bind mount is still a boundary
+//! when the mount id changes. Find confirmation on Linux/Android uses
+//! `O_PATH` so a mode-`000` name can be reported without content-read
+//! permission; other Unix confirms with no-follow metadata (`fstatat`) and
+//! the same `st_dev` / type / `nlink` checks, and fails closed when that
+//! proof is unavailable.
 //! Other Unix descent still uses `openat(O_NOFOLLOW)` plus `st_dev`; that is
 //! the mount identity on Darwin/BSD, which have no Linux-style same-`st_dev`
 //! bind mounts. Platforms without handle-relative open fail closed. Regular
