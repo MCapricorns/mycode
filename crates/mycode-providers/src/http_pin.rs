@@ -7,8 +7,9 @@
 //! `*.githubusercontent.com`) may also return a non-public extra (DNS64, a
 //! ULA, or a link-local address beside the real A/AAAA record). Those hops
 //! connect only to the public addresses. An answer that is entirely the
-//! benchmarking range `198.18.0.0/15` (local fake-ip DNS) may connect to
-//! those addresses. Loopback, RFC1918, link-local, and ULA are still refused.
+//! benchmarking range `198.18.0.0/15` (local fake-ip DNS, including Clash
+//! TUN) may connect to those addresses, for any host. Loopback, RFC1918,
+//! link-local, and ULA are still refused, including a mix that contains one.
 //! [`PinMode::CheckRedirect`] allows a first hop that is entirely public or
 //! entirely private (local models and localhost MCP). Later hops must resolve
 //! to public addresses, including a different host.
@@ -22,9 +23,9 @@ use tokio_util::sync::CancellationToken;
 /// How strictly each hop is checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinMode {
-    /// https, port 443, public host. The whole answer must be public,
-    /// except GitHub release hosts, which may drop non-public extras or
-    /// connect to a pure `198.18.0.0/15` fake-ip answer.
+    /// https, port 443, public host. The whole answer must be public.
+    /// GitHub release hosts may drop non-public extras. Any host may connect
+    /// to a pure `198.18.0.0/15` fake-ip answer.
     PublicHttps,
     /// First hop all-public or all-private. Redirects must be all-public.
     CheckRedirect,
@@ -120,9 +121,9 @@ pub fn validate_hop(mode: PinMode, hop: u32, url: &str, addrs: &[IpAddr]) -> Res
 /// Addresses this hop may connect to.
 ///
 /// GitHub release hosts drop non-public extras and keep the public ones.
-/// If none are public, a fake-ip (`198.18.0.0/15`) answer may still connect.
-/// Every other public hop still requires the whole answer to be public.
-/// Private and link-local addresses are never returned.
+/// An answer that is entirely fake-ip (`198.18.0.0/15`) may connect, for any
+/// host. Loopback, RFC1918, link-local, and a mix that includes them are
+/// never returned.
 ///
 /// # Errors
 ///
@@ -159,16 +160,16 @@ pub fn connection_addresses(
                 if !public.is_empty() {
                     return Ok(public);
                 }
-                // Local fake-ip resolvers answer only from 198.18.0.0/15.
-                // That is not a routable private LAN. Loopback, RFC1918, and
-                // link-local still fail closed below.
-                let fake: Vec<IpAddr> =
-                    addrs.iter().copied().filter(|ip| is_fake_ip(*ip)).collect();
-                if !fake.is_empty() && fake.len() == addrs.len() {
-                    return Ok(fake);
-                }
             }
-            Err("resolved addresses are not all public".to_owned())
+            // Clash TUN and similar resolvers answer only from 198.18.0.0/15.
+            // That is not a routable private LAN, so an all-fake-ip answer may
+            // connect for any host. Loopback, RFC1918, link-local, and a mix
+            // that includes one of them still fail closed.
+            let fake: Vec<IpAddr> = addrs.iter().copied().filter(|ip| is_fake_ip(*ip)).collect();
+            if !fake.is_empty() && fake.len() == addrs.len() {
+                return Ok(fake);
+            }
+            Err(format!("resolved addresses are not all public: {host}"))
         }
         PinMode::CheckRedirect => {
             if hop == 0 {
@@ -185,7 +186,6 @@ pub fn connection_addresses(
 
 /// Hosts that publish MYCode release bytes. A mixed DNS answer for one of
 /// these still connects, but only to addresses [`is_public_ip`] accepts.
-/// An answer that is entirely `198.18.0.0/15` may connect to those addresses.
 fn github_release_host(host: &str) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     matches!(
@@ -646,14 +646,113 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("not all public"), "{error}");
-        let error = connection_addresses(
+        let selected = connection_addresses(
             PinMode::PublicHttps,
             0,
             "https://example.com/search",
             &[ip([198, 18, 0, 1])],
         )
+        .unwrap();
+        assert_eq!(selected, vec![ip([198, 18, 0, 1])]);
+    }
+
+    #[test]
+    fn public_https_allows_an_all_fake_ip_answer_for_any_host() {
+        let selected = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://api.anysearch.com/v1/search",
+            &[ip([198, 18, 0, 1]), ip([198, 19, 255, 9])],
+        )
+        .unwrap();
+        assert_eq!(selected, vec![ip([198, 18, 0, 1]), ip([198, 19, 255, 9])]);
+        let selected = connection_addresses(
+            PinMode::PublicHttps,
+            1,
+            "https://cdn.example/page",
+            &[ip([198, 18, 0, 1])],
+        )
+        .unwrap();
+        assert_eq!(selected, vec![ip([198, 18, 0, 1])]);
+    }
+
+    #[test]
+    fn public_https_still_rejects_loopback_rfc1918_and_link_local() {
+        for (url, addrs) in [
+            (
+                "https://api.anysearch.com/v1/search",
+                vec![ip([127, 0, 0, 1])],
+            ),
+            (
+                "https://api.anysearch.com/v1/search",
+                vec![ip([10, 1, 2, 3])],
+            ),
+            (
+                "https://api.anysearch.com/v1/search",
+                vec![ip([172, 16, 0, 4])],
+            ),
+            (
+                "https://api.anysearch.com/v1/search",
+                vec![ip([192, 168, 0, 8])],
+            ),
+            ("https://example.com/search", vec![ip([169, 254, 1, 1])]),
+            ("https://example.com/search", vec![v6("fe80::1")]),
+            ("https://example.com/search", vec![v6("fd00::1")]),
+        ] {
+            let error = connection_addresses(PinMode::PublicHttps, 0, url, &addrs).unwrap_err();
+            assert!(
+                error.starts_with("resolved addresses are not all public:"),
+                "{url} {error}"
+            );
+            let host = url
+                .trim_start_matches("https://")
+                .split('/')
+                .next()
+                .unwrap_or("");
+            assert!(error.contains(host), "{error}");
+        }
+    }
+
+    #[test]
+    fn public_https_rejects_a_mixed_answer_that_includes_a_private_address() {
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://api.anysearch.com/v1/search",
+            &[ip([198, 18, 0, 1]), ip([10, 0, 0, 1])],
+        )
         .unwrap_err();
-        assert!(error.contains("not all public"), "{error}");
+        assert_eq!(
+            error,
+            "resolved addresses are not all public: api.anysearch.com"
+        );
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://api.anysearch.com/v1/search",
+            &[ip([198, 18, 0, 1]), ip([127, 0, 0, 1])],
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("not all public: api.anysearch.com"),
+            "{error}"
+        );
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://example.com/search",
+            &[ip([1, 1, 1, 1]), ip([192, 168, 1, 1])],
+        )
+        .unwrap_err();
+        assert_eq!(error, "resolved addresses are not all public: example.com");
+        let error = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://example.com/search",
+            &[ip([1, 1, 1, 1]), ip([169, 254, 9, 9])],
+        )
+        .unwrap_err();
+        assert!(error.contains("not all public: example.com"), "{error}");
     }
 
     #[test]
