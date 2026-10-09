@@ -270,7 +270,8 @@ pub(super) fn render_tool_block(
     } else {
         desk.green
     };
-    let status = tool_status(result);
+    let tool = tool_name(call.text.as_ref());
+    let status = tool_status(tool, result);
     let event_id = call.event_id.clone();
     let row = div()
         .id(format!("tool-{}", call.event_id))
@@ -307,19 +308,19 @@ pub(super) fn render_tool_block(
                 .child(tool_status_node(&status, failed, theme)),
         );
     let row = if let (true, Some(result)) = (expanded, result) {
-        row.child(div().pt_1().pl(px(16.)).child(result_body(
-            tool_name(call.text.as_ref()),
-            result,
-            theme,
-            &desk,
-        )))
+        row.child(
+            div()
+                .pt_1()
+                .pl(px(16.))
+                .child(result_body(tool, result, theme, &desk)),
+        )
     } else {
         row
     };
     row.into_any_element()
 }
 
-fn tool_status(result: Option<&ConversationEntry>) -> String {
+fn tool_status(tool: &str, result: Option<&ConversationEntry>) -> String {
     let Some(result) = result else {
         return t("in progress", "进行中").to_owned();
     };
@@ -327,10 +328,12 @@ fn tool_status(result: Option<&ConversationEntry>) -> String {
     if text.starts_with("failed:") {
         return t("failed", "失败").to_owned();
     }
-    let added = text.lines().filter(|line| diff_added_line(line)).count();
-    let removed = text.lines().filter(|line| diff_removed_line(line)).count();
-    if added + removed > 0 {
-        return format!("++{added} --{removed}");
+    if tool_paints_diff(tool) {
+        let added = text.lines().filter(|line| diff_added_line(line)).count();
+        let removed = text.lines().filter(|line| diff_removed_line(line)).count();
+        if added + removed > 0 {
+            return format!("++{added} --{removed}");
+        }
     }
     let first = text
         .lines()
@@ -341,6 +344,20 @@ fn tool_status(result: Option<&ConversationEntry>) -> String {
     } else {
         ellipsis(first, 48)
     }
+}
+
+/// Edit results use `++ ` / `-- ` markers. Page text from `fetch_content` and
+/// `web_search` often starts lines with `- ` (a list), which is not a deletion.
+/// Counting those lines painted a successful fetch as `DIFF ++0 --11`.
+fn tool_paints_diff(tool: &str) -> bool {
+    !matches!(tool, "fetch_content" | "web_search")
+}
+
+fn shows_diff_preview(tool: &str, text: &str) -> bool {
+    tool_paints_diff(tool)
+        && text.lines().any(|line| {
+            diff_added_line(line) || diff_removed_line(line) || line.starts_with("[diff truncated]")
+        })
 }
 
 /// The first token of a tool label is the tool name. The rest is the target.
@@ -406,13 +423,7 @@ fn result_body(
     let text = result.text.to_string();
     let failed = text.starts_with("failed:");
     let lines: Vec<&str> = text.lines().collect();
-    let diff_lines = lines
-        .iter()
-        .filter(|line| {
-            diff_added_line(line) || diff_removed_line(line) || line.starts_with("[diff truncated]")
-        })
-        .count();
-    if diff_lines > 0 {
+    if shows_diff_preview(tool, &text) {
         diff_preview(&lines, theme, desk).into_any_element()
     } else if matches!(tool, "grep" | "find" | "search") && !failed {
         search_preview(tool, &lines, theme, desk).into_any_element()
@@ -677,4 +688,56 @@ pub(super) fn render_user_entry(
         .group("user-entry")
         .child(desk_shell(short_stamp(&entry.event_id), theme, column))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{shows_diff_preview, tool_status};
+    use crate::view_model::{ConversationEntry, EntryKind};
+
+    fn result_entry(text: &str) -> ConversationEntry {
+        ConversationEntry {
+            event_id: "evt".into(),
+            kind: EntryKind::ToolResult,
+            text: text.into(),
+            call_id: Some("call".into()),
+            thinking: String::new(),
+        }
+    }
+
+    /// Eleven markdown list lines are what QA saw as `DIFF ++0 --11`.
+    fn eleven_list_lines(header: &str) -> String {
+        let mut page = format!("{header}\n");
+        for n in 1..=11 {
+            page.push_str(&format!("- line {n}\n"));
+        }
+        page
+    }
+
+    #[test]
+    fn fetch_content_list_lines_are_not_a_diff() {
+        let page = eleven_list_lines("[https://example.com/a]");
+        let status = tool_status("fetch_content", Some(&result_entry(&page)));
+        assert_eq!(status, "[https://example.com/a]");
+        assert_ne!(status, "++0 --11");
+        assert!(!shows_diff_preview("fetch_content", &page));
+    }
+
+    #[test]
+    fn web_search_snippets_are_not_a_diff() {
+        let text = "[https://example.com] Docs\n- alpha\n- beta\n";
+        let status = tool_status("web_search", Some(&result_entry(text)));
+        assert_eq!(status, "[https://example.com] Docs");
+        assert!(!shows_diff_preview("web_search", text));
+    }
+
+    #[test]
+    fn edit_removals_still_summarize_as_a_diff() {
+        let mut text = String::from("edited src/lib.rs\n");
+        for n in 1..=11 {
+            text.push_str(&format!("-- line {n}\n"));
+        }
+        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "++0 --11");
+        assert!(shows_diff_preview("edit", &text));
+    }
 }
