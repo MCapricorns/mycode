@@ -205,10 +205,8 @@ impl Provider for WireProvider {
         let reducer = self.reducer_for();
         let (sender, stream) = EventStream::channel(cancel.clone());
         let transport = Arc::clone(&self.transport);
-        let provider_id = self.resolved.id.clone();
-        let model = self.resolved.model.clone();
         tokio::spawn(async move {
-            driver::drive(transport, call, reducer, sender, cancel, provider_id, model).await;
+            driver::drive(transport, call, reducer, sender, cancel).await;
         });
         Ok(stream)
     }

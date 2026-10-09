@@ -38,8 +38,6 @@ pub(crate) async fn drive(
     reducer: Box<dyn FrameReducer + Send>,
     sender: EventStreamSender,
     cancel: tokio_util::sync::CancellationToken,
-    provider_id: String,
-    model: String,
 ) {
     let prepared = crate::cache::body_has_prompt_cache_key(&call.body).then(|| {
         (
@@ -97,13 +95,7 @@ pub(crate) async fn drive(
         let chunk = match chunk {
             Some(Ok(chunk)) => chunk,
             Some(Err(error)) => {
-                let _ = emit(
-                    &sender,
-                    &provider_id,
-                    &model,
-                    reducer.interrupt(&error.to_string()),
-                )
-                .await;
+                let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
                 return;
             }
             None => break,
@@ -111,18 +103,12 @@ pub(crate) async fn drive(
         let frames = match parser.feed(&chunk) {
             Ok(frames) => frames,
             Err(error) => {
-                let _ = emit(
-                    &sender,
-                    &provider_id,
-                    &model,
-                    reducer.interrupt(&error.to_string()),
-                )
-                .await;
+                let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
                 return;
             }
         };
         for frame in frames {
-            let terminal = send_all(&sender, &provider_id, &model, reducer.feed(&frame)).await;
+            let terminal = send_all(&sender, reducer.feed(&frame)).await;
             if terminal {
                 return;
             }
@@ -131,50 +117,33 @@ pub(crate) async fn drive(
 
     match parser.finish() {
         Ok(Some(trailing)) => {
-            if send_all(&sender, &provider_id, &model, reducer.feed(&trailing)).await {
+            if send_all(&sender, reducer.feed(&trailing)).await {
                 return;
             }
         }
         Ok(None) => {}
         Err(error) => {
-            let _ = emit(
-                &sender,
-                &provider_id,
-                &model,
-                reducer.interrupt(&error.to_string()),
-            )
-            .await;
+            let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
             return;
         }
     }
-    let _ = emit(&sender, &provider_id, &model, reducer.finish()).await;
+    let _ = emit(&sender, reducer.finish()).await;
 }
 
 /// Sends events in order; returns `true` when a terminal was sent.
-async fn send_all(
-    sender: &EventStreamSender,
-    provider_id: &str,
-    model: &str,
-    events: Vec<StreamEvent>,
-) -> bool {
+async fn send_all(sender: &EventStreamSender, events: Vec<StreamEvent>) -> bool {
     for event in events {
-        if emit(sender, provider_id, model, event).await {
+        if emit(sender, event).await {
             return true;
         }
     }
     false
 }
 
-/// Logs usage for a completed response, then forwards the event.
+/// Forwards one event.
 ///
 /// Returns `true` when the consumer is gone or the event is terminal.
-async fn emit(
-    sender: &EventStreamSender,
-    provider_id: &str,
-    model: &str,
-    event: StreamEvent,
-) -> bool {
-    crate::cache::log_done_usage(provider_id, model, &event);
+async fn emit(sender: &EventStreamSender, event: StreamEvent) -> bool {
     let terminal = matches!(event, StreamEvent::Done { .. } | StreamEvent::Error(_));
     if !sender.send(event).await {
         return true;
@@ -255,8 +224,6 @@ mod tests {
             Box::new(CompletionsReducer::new()),
             sender,
             cancel,
-            "probe".to_owned(),
-            "x".to_owned(),
         )
         .await;
         let bodies = transport.bodies.lock().expect("bodies").clone();
@@ -296,8 +263,6 @@ mod tests {
             Box::new(CompletionsReducer::new()),
             sender,
             cancel,
-            "probe".to_owned(),
-            "x".to_owned(),
         )
         .await;
         assert_eq!(transport.bodies.lock().expect("bodies").len(), 1);

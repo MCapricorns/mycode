@@ -25,7 +25,7 @@ use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
-use mycode_core::{ProviderError, ProviderErrorKind, StreamEvent, Usage};
+use mycode_core::{ProviderError, ProviderErrorKind};
 
 /// Anthropic allows four `cache_control` breakpoints on one request.
 pub(crate) const ANTHROPIC_BREAKPOINT_CAP: usize = 4;
@@ -217,27 +217,6 @@ pub(crate) fn openrouter_session_header(
     Some(("x-session-id".to_owned(), key.to_owned()))
 }
 
-/// One stderr line a QA run can grep after a model response.
-#[must_use]
-pub(crate) fn usage_log_line(provider: &str, model: &str, usage: &Usage) -> String {
-    format!(
-        "[usage] provider={provider} model={model} input={} cache_read={} cache_write={} output={}",
-        usage.input_tokens,
-        usage.cache_read_tokens.unwrap_or(0),
-        usage.cache_write_tokens.unwrap_or(0),
-        usage.output_tokens,
-    )
-}
-
-/// Prints [`usage_log_line`] for a terminal assistant message.
-pub(crate) fn log_done_usage(provider: &str, model: &str, event: &StreamEvent) {
-    let StreamEvent::Done { message } = event else {
-        return;
-    };
-    let usage = message.usage.unwrap_or_default();
-    eprintln!("{}", usage_log_line(provider, model, &usage));
-}
-
 fn mark_last_object(items: Option<&mut Value>) -> bool {
     let Some(Value::Array(items)) = items else {
         return false;
@@ -421,14 +400,14 @@ fn mark_content(content: Option<&mut Value>) -> bool {
 mod tests {
     use mycode_core::{
         AssistantMessage, ContentBlock, Message, ReasoningLevel, Request, StopReason, TextBlock,
-        ThinkingBlock, ToolSpec, Usage, UserMessage,
+        ThinkingBlock, ToolSpec, UserMessage,
     };
     use serde_json::{Value, json};
 
     use super::{
         ANTHROPIC_BREAKPOINT_CAP, apply_chat_cache_breakpoints, apply_prompt_cache_key,
         clamp_prompt_cache_key, explicit_chat_cache, openrouter_session_header,
-        retry_body_without_prompt_cache_key, usage_log_line, wants_prompt_cache_key,
+        retry_body_without_prompt_cache_key, wants_prompt_cache_key,
     };
     use crate::anthropic_messages::build_body as anthropic_body;
     use crate::openai_completions::build_body as chat_body;
@@ -1398,25 +1377,6 @@ mod tests {
         assert!(wants_prompt_cache_key(
             "https://other.example.test/v1/chat/completions"
         ));
-    }
-
-    #[test]
-    fn usage_log_line_matches_the_qa_shape() {
-        let line = usage_log_line(
-            "minimax",
-            "MiniMax-M2",
-            &Usage {
-                input_tokens: 12345,
-                output_tokens: 420,
-                cache_read_tokens: Some(11800),
-                cache_write_tokens: None,
-                prompt_tokens: 12345,
-            },
-        );
-        assert_eq!(
-            line,
-            "[usage] provider=minimax model=MiniMax-M2 input=12345 cache_read=11800 cache_write=0 output=420"
-        );
     }
 
     /// Request-body snapshots for the families this crate sends.
