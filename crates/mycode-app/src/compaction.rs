@@ -94,14 +94,46 @@ pub(crate) struct Compacted {
 /// original history so a turn never dies on housekeeping.
 pub(crate) async fn compact_history(
     scope: &CompactScope<'_>,
-    history: Vec<Arc<Message>>,
+    mut history: Vec<Arc<Message>>,
     force: bool,
 ) -> Compacted {
-    let threshold = if force {
-        0
-    } else {
-        compaction_threshold(scope.context_window)
-    };
+    let auto_threshold = compaction_threshold(scope.context_window);
+    let threshold = if force { 0 } else { auto_threshold };
+    let prior = mycode_config::read_compaction(scope.home, scope.session_id)
+        .ok()
+        .flatten()
+        .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
+    // `/compact` writes a checkpoint the next request must use even while the
+    // raw ledger is still under the auto threshold. Apply that checkpoint
+    // before the threshold check, then judge the threshold on the stitched
+    // history. A forced compact still summarizes (or reports that this head
+    // is already covered) instead of stopping at the previous stitch.
+    let mut stitched_over_threshold = false;
+    let starts_with_summary = history
+        .first()
+        .is_some_and(|message| is_summary_message(message));
+    if !force
+        && !starts_with_summary
+        && let Some(checkpoint) = prior.as_ref()
+        && checkpoint_matches(&history, checkpoint, scope.head, auto_threshold)
+    {
+        let stitched = with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
+        if compaction_split(&stitched, threshold, TAIL_TOKEN_BUDGET).is_none() {
+            return Compacted {
+                messages: stitched,
+                status: CompactStatus::Unchanged,
+                summary: None,
+            };
+        }
+        // Summary + uncovered tail is still over the window. When the raw
+        // ledger itself splits, fall through and persist a new checkpoint
+        // against that ledger. When only the stitched copy is over, shrink
+        // it in memory: its indexes are not ledger indexes.
+        if compaction_split(&history, threshold, TAIL_TOKEN_BUDGET).is_none() {
+            history = stitched;
+            stitched_over_threshold = true;
+        }
+    }
     let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
         return Compacted {
             messages: history,
@@ -109,12 +141,10 @@ pub(crate) async fn compact_history(
             summary: None,
         };
     };
-    let prior = mycode_config::read_compaction(scope.home, scope.session_id)
-        .ok()
-        .flatten()
-        .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
     // `/compact` on a head this checkpoint already covers would summarize the
     // same prefix again (same replaced count, same tail). Say so instead.
+    // A short session that fits in the tail returns above, before this, so
+    // it still reports nothing to compact.
     if force
         && let Some(checkpoint) = prior.as_ref()
         && checkpoint.covered_head == scope.head
@@ -132,34 +162,11 @@ pub(crate) async fn compact_history(
     let already_summarized = history
         .first()
         .is_some_and(|message| is_summary_message(message));
-    // A checkpoint still applies after the head moves by appends, while the
-    // uncovered tail fits. `/compact` writes that checkpoint; the next turn
-    // uses it instead of waiting for the automatic threshold. A forced
-    // compact summarizes again only when this head is not already covered.
-    if !force
-        && !already_summarized
-        && let Some(checkpoint) = prior.as_ref()
-        && checkpoint.covered_messages > 0
-        && checkpoint.covered_messages < history.len()
-        && !is_tool_result(&history[checkpoint.covered_messages])
-    {
-        let tail_tokens: usize = history[checkpoint.covered_messages..]
-            .iter()
-            .map(|message| message_tokens(message))
-            .sum();
-        let same_head = checkpoint.covered_head == scope.head;
-        if same_head || tail_tokens <= compaction_threshold(scope.context_window) {
-            return Compacted {
-                messages: with_summary(
-                    &checkpoint.summary,
-                    &history[checkpoint.covered_messages..],
-                ),
-                status: CompactStatus::Unchanged,
-                summary: None,
-            };
-        }
-    }
-    let covered = prior.as_ref().map(|checkpoint| checkpoint.covered_messages);
+    let covered = if stitched_over_threshold {
+        None
+    } else {
+        prior.as_ref().map(|checkpoint| checkpoint.covered_messages)
+    };
     let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
     // The previous summary already stands in for `history[..covered]`.
     // Sending that prefix again makes a later `/compact` re-bill the same
@@ -339,6 +346,31 @@ fn blocks_text(blocks: &[mycode_core::ContentBlock]) -> String {
 
 fn is_tool_result(message: &Message) -> bool {
     matches!(message, Message::ToolResult(_))
+}
+
+/// Whether `checkpoint` still names a prefix of this ledger replay.
+///
+/// `covered_messages` has to land on a real message, must not split a tool
+/// result off its call, and the uncovered tail has to be the same head or
+/// still fit under the auto threshold. A moved head with a tail that no
+/// longer fits is summarized again instead of reused.
+fn checkpoint_matches(
+    history: &[Arc<Message>],
+    checkpoint: &mycode_config::CompactionCheckpoint,
+    head: &str,
+    auto_threshold: usize,
+) -> bool {
+    if checkpoint.covered_messages == 0 || checkpoint.covered_messages >= history.len() {
+        return false;
+    }
+    if is_tool_result(&history[checkpoint.covered_messages]) {
+        return false;
+    }
+    let tail_tokens: usize = history[checkpoint.covered_messages..]
+        .iter()
+        .map(|message| message_tokens(message))
+        .sum();
+    checkpoint.covered_head == head || tail_tokens <= auto_threshold
 }
 
 fn is_summary_message(message: &Message) -> bool {
@@ -544,5 +576,201 @@ mod tests {
         assert!(is_display_only_summary(&manual_text));
         assert!(manual_text.contains(body));
         assert!(super::summary_body(&manual_text).contains("src/main.rs"));
+    }
+
+    fn user_text(message: &Message) -> String {
+        match message {
+            Message::User(user) => user
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            _ => String::new(),
+        }
+    }
+
+    fn padded(marker: &str, chars: usize) -> String {
+        let mut text = marker.to_owned();
+        let extra = chars.saturating_sub(marker.chars().count());
+        text.push_str(&"x".repeat(extra));
+        text
+    }
+
+    struct SummaryTransport {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl mycode_providers::SseTransport for SummaryTransport {
+        async fn post(
+            &self,
+            call: mycode_providers::TransportCall,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<bytes::Bytes, mycode_core::ProviderError>,
+                        > + Send,
+                >,
+            >,
+            mycode_core::ProviderError,
+        > {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let body = String::from_utf8_lossy(&call.body);
+            let text = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                "handoff notes"
+            } else {
+                "unexpected summary request"
+            };
+            let chunk = serde_json::json!({
+                "choices": [{
+                    "delta": {"content": text},
+                    "finish_reason": "stop"
+                }]
+            });
+            let sse = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+            Ok(Box::pin(futures_util::stream::once(async move {
+                Ok(bytes::Bytes::from(sse))
+            })))
+        }
+    }
+
+    fn scratch_home() -> (std::path::PathBuf, mycode_config::HomeLayout) {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-compact-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).expect("scratch");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+        (root, home)
+    }
+
+    fn summary_wire(
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> mycode_providers::WireProvider {
+        let settings = mycode_config::ProviderSettings {
+            id: "local".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://example.com/v1".to_owned(),
+            models: vec!["model-a".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+        };
+        let resolved = mycode_providers::ResolvedProvider::resolve(
+            &settings,
+            "model-a",
+            "test-key",
+            "test-agent",
+        )
+        .expect("provider");
+        mycode_providers::WireProvider::new(
+            resolved,
+            std::sync::Arc::new(SummaryTransport { calls }),
+        )
+    }
+
+    #[tokio::test]
+    async fn manual_compact_is_the_next_request_while_under_the_auto_threshold() {
+        let (root, home) = scratch_home();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let wire = summary_wire(calls.clone());
+        let head = padded("HEAD-MARKER-", 100_000);
+        let history = vec![user(&head), user("TAIL-ONE"), user("TAIL-TWO")];
+        let scope = super::CompactScope {
+            home: &home,
+            wire: &wire,
+            model: "model-a",
+            session_id: "session-a",
+            branch_id: "branch-a",
+            head: "head-1",
+            // Large window: this history is over the ~20k tail, under the
+            // auto threshold, which is the case that used to skip the checkpoint.
+            context_window: 200_000,
+        };
+        let manual = super::compact_history(&scope, history.clone(), true).await;
+        assert_eq!(manual.status, CompactStatus::Wrote);
+        assert_eq!(manual.summary.as_deref(), Some("handoff notes"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(user_text(&manual.messages[0]).contains("handoff notes"));
+        assert!(user_text(&manual.messages[0]).contains("COMPACTION SUMMARY"));
+        assert_eq!(user_text(&manual.messages[1]), "TAIL-ONE");
+        assert_eq!(user_text(&manual.messages[2]), "TAIL-TWO");
+        assert!(
+            manual
+                .messages
+                .iter()
+                .all(|message| !user_text(message).contains("HEAD-MARKER-"))
+        );
+
+        let mut later = history;
+        later.push(user("NEW-TURN"));
+        let next_scope = super::CompactScope {
+            head: "head-2",
+            ..scope
+        };
+        let next = super::compact_history(&next_scope, later, false).await;
+        assert_eq!(next.status, CompactStatus::Unchanged);
+        assert!(next.summary.is_none());
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an under-threshold replay must reuse the checkpoint"
+        );
+        assert_eq!(
+            next.messages
+                .iter()
+                .filter(|message| super::is_summary_message(message))
+                .count(),
+            1
+        );
+        assert!(user_text(&next.messages[0]).contains("handoff notes"));
+        assert_eq!(user_text(&next.messages[1]), "TAIL-ONE");
+        assert_eq!(user_text(&next.messages[2]), "TAIL-TWO");
+        assert_eq!(user_text(&next.messages[3]), "NEW-TURN");
+        assert!(
+            next.messages
+                .iter()
+                .all(|message| !user_text(message).contains("HEAD-MARKER-"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_short_session_still_has_nothing_to_compact() {
+        let (root, home) = scratch_home();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let wire = summary_wire(calls.clone());
+        let history = vec![user("hi"), user("there")];
+        let scope = super::CompactScope {
+            home: &home,
+            wire: &wire,
+            model: "model-a",
+            session_id: "session-b",
+            branch_id: "branch-b",
+            head: "head-1",
+            context_window: 200_000,
+        };
+        let manual = super::compact_history(&scope, history, true).await;
+        assert_eq!(manual.status, CompactStatus::Unchanged);
+        assert!(manual.summary.is_none());
+        assert_eq!(manual.messages.len(), 2);
+        assert_eq!(user_text(&manual.messages[0]), "hi");
+        assert_eq!(user_text(&manual.messages[1]), "there");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
