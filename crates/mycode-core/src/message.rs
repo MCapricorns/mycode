@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// events. Cloning bumps a refcount instead of copying tool output.
 pub type SharedMessage = Arc<Message>;
 
-/// A message in the conversation tree.
+/// One entry in a conversation history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Message {
@@ -23,9 +23,8 @@ pub enum Message {
     Assistant(AssistantMessage),
     /// The result of executing a tool call.
     ToolResult(ToolResultMessage),
-    /// Plugin-defined message. The `data` payload passes through
-    /// serialization untouched so plugins can persist arbitrary state —
-    /// the Rust replacement for pi's declaration merging.
+    /// Plugin-defined message. `data` is preserved verbatim so a plugin can
+    /// round-trip its own state.
     Custom(CustomMessage),
 }
 
@@ -103,12 +102,6 @@ impl From<String> for TextBlock {
     }
 }
 
-impl From<&str> for TextBlock {
-    fn from(text: &str) -> Self {
-        Self::new(text)
-    }
-}
-
 impl Serialize for TextBlock {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -173,18 +166,6 @@ impl ThinkingBlock {
         let replay = replay.into();
         self.replay = (!replay.is_empty()).then_some(replay);
         self
-    }
-}
-
-impl From<String> for ThinkingBlock {
-    fn from(text: String) -> Self {
-        Self::new(text)
-    }
-}
-
-impl From<&str> for ThinkingBlock {
-    fn from(text: &str) -> Self {
-        Self::new(text)
     }
 }
 
@@ -312,10 +293,9 @@ pub struct ToolResultMessage {
     pub details: Option<serde_json::Value>,
 }
 
-/// A plugin-defined message; serialized transparently.
+/// A plugin-defined message.
 ///
-/// The `data` field passes through verbatim to preserve plugin state such as
-/// plan trackers.
+/// `data` is preserved verbatim, including plugin state such as plan trackers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomMessage {

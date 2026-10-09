@@ -1,7 +1,7 @@
 //! Implements the bounded, cancellation-aware provider event stream.
 
 use std::fmt;
-use std::future::{Future, poll_fn};
+use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -74,11 +74,6 @@ impl EventStreamSender {
         }
         permit.send(event);
         true
-    }
-
-    /// Resolves when the receiving stream is closed or dropped.
-    pub fn closed(&self) -> impl Future<Output = ()> + '_ {
-        self.tx.closed()
     }
 }
 

@@ -69,21 +69,6 @@ impl ReasoningLevel {
         }
     }
 
-    /// Settings and OpenAI-style effort spelling.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Minimal => "minimal",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Xhigh => "xhigh",
-            Self::Max => "max",
-            Self::On => "on",
-        }
-    }
-
     /// `reasoning_effort` wire token; `None` for toggle-on (no effort field).
     #[must_use]
     pub const fn effort_token(self) -> Option<&'static str> {
@@ -237,10 +222,10 @@ impl StreamEvent {
 
 /// Streams provider-neutral completions for the agent.
 ///
-/// Production implementations belong in future Host adapters. Tests may inject
-/// test-local implementations directly. Producers must honor both `cancel` and
-/// [`EventStreamSender::closed`](EventStreamSender::closed), stop
-/// producing promptly, and release all upstream resources.
+/// Adapters live outside this crate. Tests may inject their own
+/// implementations. Producers must honor `cancel`, stop when
+/// [`EventStreamSender::send`] returns `false`, and release upstream
+/// resources.
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
     /// Starts one completion stream.
