@@ -84,6 +84,8 @@ pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String>
     if filled_agent {
         settings.user_agent = mycode_config::default_user_agent();
     }
+    // Persist a discovered shell or user-agent so the next load and the
+    // editor see the stored values instead of filling them again.
     if (filled_shell || filled_agent)
         && let Ok(next) = replace_app_settings(home, revision, &settings)
     {

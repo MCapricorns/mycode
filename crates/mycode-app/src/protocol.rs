@@ -38,15 +38,10 @@ pub struct SessionSummary {
 /// What one conversation entry represents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
-    /// A user-authored message.
     UserMessage,
-    /// An assistant message.
     AssistantMessage,
-    /// An issued tool call.
     ToolCall,
-    /// A completed tool result.
     ToolResult,
-    /// A usage record.
     Usage,
 }
 

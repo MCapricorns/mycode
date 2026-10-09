@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::settings_io::render_config_error;
 use crate::{BridgeEvent, BridgeReply, CatalogInfo};
 
-/// Update checks identify the app to GitHub's API.
+/// User-Agent for GitHub update checks and provider OAuth HTTP clients.
 pub(crate) const UPDATE_USER_AGENT: &str = concat!("mycode-updates/", env!("CARGO_PKG_VERSION"));
 
 /// Shared per-process core state owned by the bridge thread.

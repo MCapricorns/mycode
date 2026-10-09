@@ -190,7 +190,8 @@ fn sse_reply(bytes: &[u8]) -> Result<Option<Value>, McpError> {
 
 fn finish_reply(value: Option<Value>, id: u64) -> Result<Value, McpError> {
     let Some(value) = value else {
-        // HTTP notifications return 202 with no body.
+        // No JSON-RPC object. `notify` treats that as success and drops this
+        // value. `request` also lands here on an empty body and returns Null.
         return Ok(Value::Null);
     };
     if let Some(error) = value.get("error").filter(|error| error.is_object()) {

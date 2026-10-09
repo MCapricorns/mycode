@@ -80,8 +80,8 @@ impl WebTransport for ReqwestWebTransport {
             ("accept".to_owned(), "application/json".to_owned()),
         ];
         if let Some(key) = bearer {
-            // Shared sanitizer: strip a pasted `Bearer <scheme> <key>` down
-            // to the raw key before it rides bearer_auth.
+            // Strip a leading `Bearer` prefix from a pasted key before
+            // sending `Authorization: Bearer …`.
             let key = crate::mcp_client::strip_bearer_prefix(key);
             headers.push(("authorization".to_owned(), format!("Bearer {key}")));
         }

@@ -544,10 +544,11 @@ async fn run_chat_turn_on(
 
     let context_window = model_context_window(state, &provider, model);
     // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
-    // Also installed as a before-request hook so tool-heavy mid-turn
-    // cycles re-estimate after each durable tool result. The hook only
-    // rewrites the in-memory request; the transcript card is published
-    // after this turn's tool results and final reply commit.
+    // This pre-turn pass publishes its transcript card immediately. The
+    // before-request hook later in this function only rewrites the
+    // in-memory request; that card is published after the turn's tool
+    // results and final reply commit, so a mid-turn summary cannot split
+    // a tool call from its result.
     let compact_scope = crate::compaction::CompactScope {
         home,
         wire: &wire,
