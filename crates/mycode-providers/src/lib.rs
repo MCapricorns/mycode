@@ -18,6 +18,7 @@ mod anthropic_messages;
 mod cache;
 pub mod catalog;
 mod driver;
+mod family;
 mod http_pin;
 mod oauth;
 mod openai_completions;

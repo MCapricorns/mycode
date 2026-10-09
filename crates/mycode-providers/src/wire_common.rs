@@ -76,23 +76,9 @@ pub(crate) fn charge_stream(used: &mut usize, extra: usize) -> bool {
     }
 }
 
-/// MiniMax (including minimaxi.com) rejects `thinking.type = "enabled"`.
-///
-/// Model ids such as `MiniMax-M2.5` and hosts such as `api.minimax.cn` /
-/// `api.minimaxi.com` select this vendor. Other providers keep `enabled`.
-pub(crate) fn minimax_target(model: &str, endpoint: &str) -> bool {
-    model.to_ascii_lowercase().contains("minimax")
-        || endpoint.to_ascii_lowercase().contains("minimax")
-}
-
 /// Zhipu / Z.AI / BigModel, including a model id that contains `glm`.
 pub(crate) fn glm_target(model: &str, endpoint: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    let endpoint = endpoint.to_ascii_lowercase();
-    model.contains("glm")
-        || endpoint.contains("bigmodel")
-        || endpoint.contains("z.ai")
-        || endpoint.contains("zhipu")
+    crate::family::glm_target(model, endpoint)
 }
 
 /// Which chat API the body is for. Responses uses `reasoning.effort`; chat
@@ -128,24 +114,7 @@ pub(crate) enum ReasoningReplay {
 pub(crate) fn reasoning_replay(model: &str, endpoint: &str) -> ReasoningReplay {
     // Completions is the only caller. MiniMax Messages replays signed
     // thinking blocks on its own adapter and never asks for this shape.
-    if minimax_target(model, endpoint) {
-        return ReasoningReplay::MiniMax;
-    }
-    let model_lower = model.to_ascii_lowercase();
-    let endpoint_lower = endpoint.to_ascii_lowercase();
-    if glm_target(model, endpoint)
-        || model_lower.contains("deepseek")
-        || endpoint_lower.contains("deepseek")
-        || model_lower.contains("kimi")
-        || model_lower.contains("moonshot")
-        || endpoint_lower.contains("moonshot")
-        || endpoint_lower.contains("api.kimi.com")
-        || endpoint_lower.contains("kimi.ai")
-        || is_k3_model(&model_lower)
-    {
-        return ReasoningReplay::Content;
-    }
-    ReasoningReplay::Omit
+    crate::family::reasoning_replay(model, endpoint)
 }
 
 /// Applies the requested reasoning effort to an OpenAI-style body.
@@ -191,393 +160,12 @@ fn apply_thinking_request(
     wire: ThinkingWire,
 ) {
     if wire == ThinkingWire::Anthropic {
-        apply_anthropic_body(body, model, endpoint, level);
+        crate::family::apply_anthropic_thinking_policy(body, model, endpoint, level);
         return;
     }
-    apply_chat_body(body, model, endpoint, level, wire);
+    crate::family::apply_chat_thinking(body, model, endpoint, level, wire);
 }
 
-fn apply_chat_body(
-    body: &mut Value,
-    model: &str,
-    endpoint: &str,
-    level: ReasoningLevel,
-    wire: ThinkingWire,
-) {
-    let model_id = model.to_ascii_lowercase();
-    let host = endpoint.to_ascii_lowercase();
-    if host.contains("openrouter.ai") {
-        apply_openrouter(body, level);
-        return;
-    }
-    if dashscope_host(&host) {
-        apply_dashscope(body, &model_id, level);
-        return;
-    }
-    if zai_host(&host) || model_id.contains("glm") {
-        apply_zai(body, level);
-        return;
-    }
-    if minimax_target(model, endpoint) {
-        apply_minimax(body, level, wire);
-        return;
-    }
-    if kimi_family(&model_id, &host) {
-        apply_kimi_chat(body, &model_id, level);
-        return;
-    }
-    if model_id.contains("qwen") || model_id.contains("qwq") {
-        apply_enable_thinking(body, level);
-        if let Some(token) = effort_token(level) {
-            body["reasoning_effort"] = json!(token);
-        }
-        return;
-    }
-    if model_id.contains("deepseek") || host.contains("deepseek") {
-        apply_deepseek(body, &model_id, level);
-        return;
-    }
-    apply_openai_effort(body, &model_id, level, wire);
-}
-
-fn apply_anthropic_body(body: &mut Value, model: &str, endpoint: &str, level: ReasoningLevel) {
-    let model_id = model.to_ascii_lowercase();
-    let host = endpoint.to_ascii_lowercase();
-    if minimax_target(model, endpoint) {
-        apply_minimax(body, level, ThinkingWire::Anthropic);
-        return;
-    }
-    if kimi_family(&model_id, &host) {
-        if level == ReasoningLevel::Off {
-            body["thinking"] = json!({ "type": "disabled" });
-            return;
-        }
-        body["thinking"] = json!({ "type": "adaptive", "display": "summarized" });
-        body["output_config"] = json!({ "effort": adaptive_effort(level) });
-        return;
-    }
-    if zai_host(&host) || model_id.contains("glm") {
-        // Claude Code on Z.AI's Anthropic route uses `thinking.type` and
-        // `output_config.effort` (low / high / max). `reasoning_effort` is the
-        // chat-completions name and is not sent here. `clear_thinking: false`
-        // is preserved thinking: replayed reasoning has to stay byte-identical
-        // or the prefix cache misses. `budget_tokens` is Anthropic's field and
-        // this gateway does not take it.
-        if level == ReasoningLevel::Off {
-            body["thinking"] = json!({ "type": "disabled" });
-            return;
-        }
-        body["thinking"] = json!({ "type": "enabled", "clear_thinking": false });
-        body["output_config"] = json!({ "effort": glm_anthropic_effort(level) });
-        return;
-    }
-    if claude_adaptive(&model_id) {
-        if level == ReasoningLevel::Off {
-            body["thinking"] = json!({ "type": "disabled" });
-            return;
-        }
-        let mut thinking = json!({ "type": "adaptive" });
-        if claude_summarized_display(&model_id) {
-            thinking["display"] = json!("summarized");
-        }
-        body["thinking"] = thinking;
-        body["output_config"] = json!({ "effort": adaptive_effort(level) });
-        return;
-    }
-    if level == ReasoningLevel::Off {
-        body["thinking"] = json!({ "type": "disabled" });
-        return;
-    }
-    let budget = match level {
-        ReasoningLevel::Minimal | ReasoningLevel::Low => 1_024,
-        ReasoningLevel::On | ReasoningLevel::Medium => 4_096,
-        ReasoningLevel::High => 16_384,
-        ReasoningLevel::Xhigh | ReasoningLevel::Max => 32_768,
-        ReasoningLevel::Off => 0,
-    };
-    let max_tokens = body["max_tokens"].as_u64().unwrap_or(4_096);
-    if max_tokens <= budget {
-        body["max_tokens"] = json!(budget + 4_096);
-    }
-    body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
-}
-
-fn apply_openrouter(body: &mut Value, level: ReasoningLevel) {
-    let effort = match level {
-        ReasoningLevel::Off => "none",
-        ReasoningLevel::On => "high",
-        other => other.effort_token().unwrap_or("high"),
-    };
-    body["reasoning"] = json!({ "effort": effort });
-}
-
-fn apply_dashscope(body: &mut Value, model_id: &str, level: ReasoningLevel) {
-    // DashScope defaults `kimi-k2-thinking` on. Every other reasoning model
-    // on this host, including Kimi, GLM, Qwen, and DeepSeek, needs the flag.
-    if level == ReasoningLevel::Off {
-        body["enable_thinking"] = json!(false);
-    } else if !model_id.contains("kimi-k2-thinking") {
-        body["enable_thinking"] = json!(true);
-    }
-    if let Some(token) = effort_token(level) {
-        body["reasoning_effort"] = json!(token);
-    }
-}
-
-fn apply_zai(body: &mut Value, level: ReasoningLevel) {
-    if level == ReasoningLevel::Off {
-        body["thinking"] = json!({ "type": "disabled" });
-        return;
-    }
-    body["thinking"] = json!({ "type": "enabled", "clear_thinking": false });
-    if let Some(token) = effort_token(level) {
-        body["reasoning_effort"] = json!(token);
-    }
-}
-
-fn apply_minimax(body: &mut Value, level: ReasoningLevel, wire: ThinkingWire) {
-    if level == ReasoningLevel::Off {
-        body["thinking"] = json!({ "type": "disabled" });
-        return;
-    }
-    body["thinking"] = json!({ "type": "adaptive" });
-    // Chat Completions inlines `<think>` unless this is set. The Messages
-    // API already returns thinking blocks; an unknown field there can 400.
-    if wire == ThinkingWire::Completions {
-        body["reasoning_split"] = json!(true);
-    }
-}
-
-/// Coding-plan effort on the Anthropic route. GLM-5.3 only accepts
-/// `low` / `high` / `max`; enabled thinking with no effort token is `max`.
-fn glm_anthropic_effort(level: ReasoningLevel) -> &'static str {
-    match level {
-        ReasoningLevel::Minimal | ReasoningLevel::Low => "low",
-        ReasoningLevel::Medium | ReasoningLevel::High => "high",
-        ReasoningLevel::Off => "low",
-        ReasoningLevel::On | ReasoningLevel::Xhigh | ReasoningLevel::Max => "max",
-    }
-}
-
-fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
-    // K3 always thinks and rejects `thinking`. Effort is `low` / `high` /
-    // `max` (default max). Off has no disable switch, so the field is omitted
-    // rather than sending `{type:"disabled"}`, which this model 400s.
-    // https://platform.kimi.com/docs/guide/use-reasoning-effort.md
-    if is_k3_model(model_id) {
-        if let Some(token) = k3_effort(level) {
-            body["reasoning_effort"] = json!(token);
-        }
-        return;
-    }
-    // K2.7 Code rejects `{type:"disabled"}`. Leaving the field off matches
-    // that API and OpenCode, which has no off variant for it.
-    if level == ReasoningLevel::Off && model_id.contains("kimi-k2.7-code") {
-        return;
-    }
-    if level == ReasoningLevel::Off {
-        body["thinking"] = json!({ "type": "disabled" });
-    } else {
-        body["thinking"] = json!({ "type": "enabled" });
-    }
-}
-
-/// K3 effort tokens. `minimal` and `xhigh` are not on the K3 list.
-fn k3_effort(level: ReasoningLevel) -> Option<&'static str> {
-    match level {
-        ReasoningLevel::Off | ReasoningLevel::On => None,
-        ReasoningLevel::Minimal | ReasoningLevel::Low => Some("low"),
-        ReasoningLevel::Medium | ReasoningLevel::High => Some("high"),
-        ReasoningLevel::Xhigh | ReasoningLevel::Max => Some("max"),
-    }
-}
-
-fn apply_enable_thinking(body: &mut Value, level: ReasoningLevel) {
-    body["enable_thinking"] = json!(level != ReasoningLevel::Off);
-}
-
-fn apply_deepseek(body: &mut Value, model_id: &str, level: ReasoningLevel) {
-    // Current chat models take the thinking toggle and `reasoning_effort`
-    // `low` / `high` / `max` together. Chat does not accept `none`.
-    // `deepseek-flash` and the legacy alias `deepseek-v4-flash` are one model.
-    // https://api-docs.deepseek.com/guides/thinking_mode
-    if deepseek_effort_model(model_id) {
-        if level == ReasoningLevel::Off {
-            body["thinking"] = json!({ "type": "disabled" });
-            return;
-        }
-        body["thinking"] = json!({ "type": "enabled" });
-        body["reasoning_effort"] = json!(deepseek_effort(level));
-        return;
-    }
-    // Older ids (chat, reasoner, r1, v3) are the toggle. OpenCode's
-    // `reasoningVariants` returns an empty map for those ids.
-    if level == ReasoningLevel::Off {
-        body["thinking"] = json!({ "type": "disabled" });
-    } else {
-        body["thinking"] = json!({ "type": "enabled" });
-    }
-}
-
-fn deepseek_effort_model(model_id: &str) -> bool {
-    model_id.contains("deepseek-flash") || model_id.contains("deepseek-v4")
-}
-
-/// Docs map minimal→low, low→low, medium→high, high→high, xhigh→high, max→max.
-fn deepseek_effort(level: ReasoningLevel) -> &'static str {
-    match level {
-        ReasoningLevel::Minimal | ReasoningLevel::Low => "low",
-        ReasoningLevel::Max => "max",
-        ReasoningLevel::Off
-        | ReasoningLevel::On
-        | ReasoningLevel::Medium
-        | ReasoningLevel::High
-        | ReasoningLevel::Xhigh => "high",
-    }
-}
-
-fn apply_openai_effort(
-    body: &mut Value,
-    model_id: &str,
-    level: ReasoningLevel,
-    wire: ThinkingWire,
-) {
-    let effort = match level {
-        ReasoningLevel::Off => "none",
-        ReasoningLevel::On if gpt5_defaults_medium(model_id) => "medium",
-        ReasoningLevel::On => return,
-        other => other.effort_token().unwrap_or("medium"),
-    };
-    if wire == ThinkingWire::Responses {
-        body["reasoning"] = json!({ "effort": effort });
-    } else {
-        body["reasoning_effort"] = json!(effort);
-    }
-}
-
-fn effort_token(level: ReasoningLevel) -> Option<&'static str> {
-    match level {
-        ReasoningLevel::Off | ReasoningLevel::On => None,
-        other => other.effort_token(),
-    }
-}
-
-fn adaptive_effort(level: ReasoningLevel) -> &'static str {
-    match level {
-        ReasoningLevel::Off => "low",
-        ReasoningLevel::On | ReasoningLevel::High => "high",
-        ReasoningLevel::Minimal | ReasoningLevel::Low => "low",
-        ReasoningLevel::Medium => "medium",
-        ReasoningLevel::Xhigh => "xhigh",
-        ReasoningLevel::Max => "max",
-    }
-}
-
-fn dashscope_host(host: &str) -> bool {
-    host.contains("dashscope") || host.contains("aliyuncs")
-}
-
-fn zai_host(host: &str) -> bool {
-    host.contains("z.ai") || host.contains("bigmodel") || host.contains("zhipu")
-}
-
-/// Every Kimi and Moonshot model, not a short id list.
-///
-/// `k3` / `k3-256k` contain neither "kimi" nor "moonshot". The coding-plan
-/// proxy is `127.0.0.1`, so the model id has to match on its own.
-fn kimi_family(model_id: &str, host: &str) -> bool {
-    is_k3_model(model_id)
-        || model_id.contains("kimi")
-        || model_id.contains("moonshot")
-        || model_id.contains("k2p")
-        || host.contains("api.kimi.com")
-        || host.contains("moonshot.ai")
-        || host.contains("moonshot.cn")
-        || host.contains("moonshotai.cn")
-}
-
-/// K3 ids: `k3`, `k3-*`, `*/k3`, `*/k3-*`, and `kimi-k3` / `kimi-k3-*`.
-///
-/// `k30`, `k3x`, `mk3`, `task-k3`, and `kimi-k30` are not K3.
-fn is_k3_model(model_id: &str) -> bool {
-    model_id
-        .to_ascii_lowercase()
-        .split(['/', '\\'])
-        .any(|segment| {
-            segment == "k3"
-                || segment.starts_with("k3-")
-                || segment
-                    .strip_prefix("kimi-k3")
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
-        })
-}
-
-fn gpt5_defaults_medium(model_id: &str) -> bool {
-    model_id.contains("gpt-5")
-        && !model_id.contains("gpt-5-chat")
-        && !model_id.contains("gpt-5-pro")
-}
-
-fn claude_adaptive(model_id: &str) -> bool {
-    const MARKERS: &[&str] = &[
-        "opus-4-6",
-        "opus-4.6",
-        "4-6-opus",
-        "4.6-opus",
-        "sonnet-4-6",
-        "sonnet-4.6",
-        "4-6-sonnet",
-        "4.6-sonnet",
-    ];
-    if MARKERS.iter().any(|marker| model_id.contains(marker)) {
-        return true;
-    }
-    claude_summarized_display(model_id)
-}
-
-fn claude_summarized_display(model_id: &str) -> bool {
-    let Some((major, minor)) = claude_version(model_id) else {
-        return false;
-    };
-    major > 4 || (major == 4 && minor >= 7)
-}
-
-/// `claude-opus-4.7` and `claude-4.7-opus` both parse. An 8-digit release
-/// date after the major is not a minor version.
-fn claude_version(model_id: &str) -> Option<(u32, u32)> {
-    let rest = model_id.split("claude-").nth(1)?;
-    let rest = if rest.starts_with(|ch: char| ch.is_ascii_digit()) {
-        rest
-    } else {
-        rest.split_once('-').map(|(_, after)| after)?
-    };
-    let major_len = rest
-        .find(|ch: char| !ch.is_ascii_digit())
-        .unwrap_or(rest.len());
-    if major_len == 0 {
-        return None;
-    }
-    let major = rest[..major_len].parse().ok()?;
-    let rest = &rest[major_len..];
-    let minor = if let Some(digits) = rest.strip_prefix(['.', '-']) {
-        let len = digits
-            .find(|ch: char| !ch.is_ascii_digit())
-            .unwrap_or(digits.len());
-        if (1..=2).contains(&len) {
-            digits[..len].parse().unwrap_or(0)
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    Some((major, minor))
-}
-
-/// Reads a token count from the first present alias.
-///
-/// Gateways disagree on names (`prompt_tokens` vs `input_tokens`) and on
-/// whether the number is a JSON number or a string. A missing field is 0.
 pub(crate) fn token_count(value: &Value, keys: &[&str]) -> u64 {
     for key in keys {
         let Some(field) = value.get(*key) else {
@@ -611,26 +199,8 @@ pub(crate) fn token_count(value: &Value, keys: &[&str]) -> u64 {
 /// `input_tokens` does not, so a payload that carries Anthropic cache fields
 /// sums the uncached input with cache reads and cache writes.
 pub(crate) fn usage_from_value(usage: &Value) -> Usage {
-    let input_tokens = token_count(
-        usage,
-        &[
-            "input_tokens",
-            "prompt_tokens",
-            "input",
-            "promptTokenCount",
-            "prompt_token_count",
-        ],
-    );
-    let output_tokens = token_count(
-        usage,
-        &[
-            "output_tokens",
-            "completion_tokens",
-            "output",
-            "candidatesTokenCount",
-            "candidates_token_count",
-        ],
-    );
+    let input_tokens = token_count(usage, crate::family::USAGE_INPUT_KEYS);
+    let output_tokens = token_count(usage, crate::family::USAGE_OUTPUT_KEYS);
     let cache_read = cache_read_count(usage);
     let cache_write = cache_write_count(usage);
     let anthropic_split = usage.get("cache_read_input_tokens").is_some()
@@ -654,49 +224,30 @@ pub(crate) fn usage_from_value(usage: &Value) -> Usage {
 }
 
 fn cache_read_count(usage: &Value) -> u64 {
-    let direct = token_count(
-        usage,
-        &[
-            "cache_read_tokens",
-            "cache_read_input_tokens",
-            "cached_tokens",
-            "prompt_cache_hit_tokens",
-            "cachedContentTokenCount",
-            "cached_content_token_count",
-        ],
-    );
+    let direct = token_count(usage, crate::family::USAGE_CACHE_READ_KEYS);
     let nested = usage
         .get("prompt_tokens_details")
         .or_else(|| usage.get("input_tokens_details"))
-        .map(|details| token_count(details, &["cached_tokens", "cache_read_tokens"]))
+        .map(|details| token_count(details, crate::family::USAGE_CACHE_READ_NESTED_KEYS))
         .unwrap_or(0);
     direct.max(nested)
 }
 
 fn cache_write_count(usage: &Value) -> u64 {
-    let direct = token_count(
-        usage,
-        &[
-            "cache_creation_input_tokens",
-            "cache_write_input_tokens",
-            "cache_write_tokens",
-        ],
-    );
+    let direct = token_count(usage, crate::family::USAGE_CACHE_WRITE_KEYS);
     let nested_details = usage
         .get("prompt_tokens_details")
         .or_else(|| usage.get("input_tokens_details"))
-        .map(|details| {
-            token_count(
-                details,
-                &["cache_write_tokens", "cache_creation_input_tokens"],
-            )
-        })
+        .map(|details| token_count(details, crate::family::USAGE_CACHE_WRITE_NESTED_KEYS))
         .unwrap_or(0);
     let nested_creation = usage
         .get("cache_creation")
         .map(|creation| {
-            token_count(creation, &["ephemeral_5m_input_tokens"])
-                .saturating_add(token_count(creation, &["ephemeral_1h_input_tokens"]))
+            crate::family::USAGE_CACHE_WRITE_EPHEMERAL_KEYS
+                .iter()
+                .fold(0u64, |sum, key| {
+                    sum.saturating_add(token_count(creation, &[key]))
+                })
         })
         .unwrap_or(0);
     direct.max(nested_details).max(nested_creation)
@@ -818,7 +369,8 @@ pub(crate) fn assembled_stop_reason(
 mod tests {
     use mycode_core::{ReasoningLevel, Request};
 
-    use super::{apply_reasoning_effort, minimax_target};
+    use super::apply_reasoning_effort;
+    use crate::family::minimax_target;
 
     #[test]
     fn minimax_thinking_on_is_adaptive_not_enabled() {

@@ -42,41 +42,6 @@ const CACHEABLE_BLOCKS: &[&str] = &[
     "document",
 ];
 
-/// Hosts that reject `prompt_cache_key` or cache by some other mechanism.
-///
-/// A substring match on the lowercased endpoint. Known-good hosts are absent
-/// on purpose: OpenAI, Azure OpenAI, xAI, Mistral, Cerebras, DeepInfra, and
-/// Venice. Everyone else is probed and remembered if the host returns 400.
-const PROMPT_CACHE_KEY_OMIT_HOSTS: &[&str] = &[
-    "openrouter.ai",
-    "api.z.ai",
-    "bigmodel.cn",
-    "zhipu",
-    "deepseek.com",
-    "minimax",
-    "dashscope",
-    "aliyuncs.com",
-    "moonshot.ai",
-    "moonshot.cn",
-    "kimi.com",
-    "kimi.ai",
-    "api.groq.com",
-    "api.together.ai",
-    "api.together.xyz",
-    "volces.com",
-    "volcengine.com",
-    "qianfan",
-    "baidubce.com",
-    "generativelanguage.googleapis.com",
-    // Messages hosts reject unknown chat fields. The Messages builder never
-    // writes prompt_cache_key; this keeps a completions-shaped call on the
-    // same host from probing it.
-    "api.anthropic.com",
-    "freemodel.dev",
-    "subconscious.dev",
-    "thinkingmachines.dev",
-];
-
 fn ephemeral() -> Value {
     json!({"type": "ephemeral"})
 }
@@ -101,7 +66,7 @@ pub(crate) fn apply_anthropic_message_breakpoints(body: &mut Value) {
     // unchanged. A sliding breakpoint rewrites the message that holds the
     // thinking block, so the next turn misses. Pin the head and the tail
     // instead, and do not write cache_control into a thinking message.
-    if model.to_ascii_lowercase().contains("minimax") {
+    if crate::family::anthropic_pins_stable_ends(model) {
         mark_stable_ends(body.get_mut("messages"), remaining, &[], true);
     } else {
         mark_trailing_messages(body.get_mut("messages"), remaining.min(2), &[]);
@@ -137,22 +102,10 @@ pub(crate) fn apply_chat_cache_breakpoints(body: &mut Value) {
 /// explicit `cache_control`. DeepSeek, OpenRouter GLM, and DashScope GLM do not.
 #[must_use]
 pub(crate) fn explicit_chat_cache(model: &str, endpoint: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    let endpoint = endpoint.to_ascii_lowercase();
-    if endpoint.contains("openrouter.ai") {
-        return model.contains("anthropic") || model.contains("claude") || model.contains("gemini");
-    }
     // api.z.ai and open.bigmodel.cn (including coding-plan paths) accept
     // Anthropic-style breakpoints on the OpenAI-compatible body. That is what
     // keeps a post-compaction prefix cached when implicit cache was evicted.
-    if endpoint.contains("api.z.ai")
-        || endpoint.contains("bigmodel.cn")
-        || endpoint.contains("zhipu")
-    {
-        return true;
-    }
-    let dashscope = endpoint.contains("dashscope") || endpoint.contains("aliyuncs.com");
-    dashscope && (model.contains("qwen") || model.contains("qwq"))
+    crate::family::explicit_chat_cache(model, endpoint)
 }
 
 /// Whether this endpoint should carry `prompt_cache_key` on the next request.
@@ -161,11 +114,7 @@ pub(crate) fn explicit_chat_cache(model: &str, endpoint: &str) -> bool {
 /// field stays off for the rest of the process. Every other host is on.
 #[must_use]
 pub(crate) fn wants_prompt_cache_key(endpoint: &str) -> bool {
-    let endpoint_lower = endpoint.to_ascii_lowercase();
-    if PROMPT_CACHE_KEY_OMIT_HOSTS
-        .iter()
-        .any(|host| endpoint_lower.contains(host))
-    {
+    if crate::family::omits_prompt_cache_key(endpoint) {
         return false;
     }
     !prompt_cache_key_rejected(&endpoint_host(endpoint))
