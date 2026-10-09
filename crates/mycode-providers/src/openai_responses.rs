@@ -12,7 +12,7 @@ use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    MAX_STREAM_INDEX, append_interruption, apply_responses_thinking, assemble_blocks,
+    MAX_STREAM_INDEX, SYSTEM_JOIN, append_interruption, apply_responses_thinking, assemble_blocks,
     assembled_stop_reason, charge_stream, join_text, merge_usage, provider_error_detail,
     usage_from_value,
 };
@@ -31,7 +31,7 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         "stream": true,
     });
     if !request.system_prompt.is_empty() {
-        body["instructions"] = json!(request.system_prompt.join("\n\n"));
+        body["instructions"] = json!(request.system_prompt.join(SYSTEM_JOIN));
     }
     if !tools.is_empty() {
         body["tools"] = json!(tools);
@@ -109,7 +109,6 @@ struct FunctionCallAccumulator {
     id: String,
     name: String,
     arguments: String,
-    text_emitted: bool,
 }
 
 /// Accumulates Responses SSE events.
@@ -152,8 +151,8 @@ impl ResponsesReducer {
 
     fn assemble(&mut self) -> StreamEvent {
         self.terminal_sent = true;
-        if let Some(detail) = self.interrupt.clone() {
-            append_interruption(&mut self.text, &detail);
+        if let Some(detail) = self.interrupt.as_deref() {
+            append_interruption(&mut self.text, detail);
         }
         let blocks = assemble_blocks(
             &self.thinking,
@@ -251,7 +250,6 @@ impl FrameReducer for ResponsesReducer {
                         id: id.to_owned(),
                         name: name.to_owned(),
                         arguments: String::new(),
-                        text_emitted: false,
                     });
                 }
             }
@@ -266,7 +264,6 @@ impl FrameReducer for ResponsesReducer {
                 if let Some(call) = self.function_calls.last_mut() {
                     call.arguments.push_str(part);
                     if !part.is_empty() && !call.id.is_empty() {
-                        call.text_emitted = true;
                         return vec![StreamEvent::ToolCallDelta {
                             id: call.id.clone(),
                             partial_json: part.to_owned(),

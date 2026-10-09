@@ -3,7 +3,8 @@
 //!
 //! [`PinMode::PublicHttps`] is for web search and update downloads. Every hop
 //! must be https on port 443. A normal host must resolve to public addresses
-//! only. GitHub release hosts (`api.github.com`, `github.com`,
+//! only. GitHub release hosts (`github.com`, `www.github.com`,
+//! `api.github.com`, `codeload.github.com`, `uploads.github.com`, and
 //! `*.githubusercontent.com`) may also return a non-public extra (DNS64, a
 //! ULA, or a link-local address beside the real A/AAAA record). Those hops
 //! connect only to the public addresses. An answer that is entirely the
@@ -23,9 +24,9 @@ use tokio_util::sync::CancellationToken;
 /// How strictly each hop is checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinMode {
-    /// https, port 443, public host. The whole answer must be public.
-    /// GitHub release hosts may drop non-public extras. Any host may connect
-    /// to a pure `198.18.0.0/15` fake-ip answer.
+    /// https on port 443. A normal answer must be all public. GitHub release
+    /// hosts may drop non-public extras. Any host may connect to a pure
+    /// `198.18.0.0/15` fake-ip answer.
     PublicHttps,
     /// First hop all-public or all-private. Redirects must be all-public.
     CheckRedirect,
@@ -33,7 +34,7 @@ pub enum PinMode {
 
 /// Classification of one DNS answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AddressClass {
+enum AddressClass {
     /// Every address is public.
     AllPublic,
     /// Every address is non-public.
@@ -46,7 +47,7 @@ pub enum AddressClass {
 
 /// What to do with one HTTP status.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RedirectStep {
+enum RedirectStep {
     /// This response is not a redirect the client should follow.
     Stop,
     /// Follow `url`. `become_get` drops the body and switches to GET.
@@ -92,9 +93,9 @@ pub struct PinnedRequest {
 
 const MAX_REDIRECTS: u32 = 5;
 
-/// Classifies resolved addresses. Mixed and empty answers are refused.
+/// Classifies one DNS answer as all public, all non-public, mixed, or empty.
 #[must_use]
-pub fn classify_addresses(addrs: &[IpAddr]) -> AddressClass {
+fn classify_addresses(addrs: &[IpAddr]) -> AddressClass {
     if addrs.is_empty() {
         return AddressClass::Empty;
     }
@@ -114,7 +115,8 @@ pub fn classify_addresses(addrs: &[IpAddr]) -> AddressClass {
 /// # Errors
 ///
 /// Returns a visible reason when the URL or addresses violate `mode`.
-pub fn validate_hop(mode: PinMode, hop: u32, url: &str, addrs: &[IpAddr]) -> Result<(), String> {
+#[cfg(test)]
+fn validate_hop(mode: PinMode, hop: u32, url: &str, addrs: &[IpAddr]) -> Result<(), String> {
     connection_addresses(mode, hop, url, addrs).map(|_| ())
 }
 
@@ -203,7 +205,7 @@ fn github_release_host(host: &str) -> bool {
 /// # Errors
 ///
 /// Returns a message when a redirect status has no usable location.
-pub fn decide_redirect(
+fn decide_redirect(
     status: u16,
     location: Option<&str>,
     current: &str,
@@ -314,7 +316,7 @@ async fn send_once(
     let sockets: Vec<SocketAddr> = addrs.iter().map(|ip| SocketAddr::new(*ip, port)).collect();
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10));
+        .connect_timeout(crate::transport::CONNECT_TIMEOUT);
     if let Some(user_agent) = user_agent {
         builder = builder.user_agent(user_agent);
     }

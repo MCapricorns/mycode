@@ -73,9 +73,9 @@ impl FrameParser {
         }
     }
 
-    /// Joins multi-line data payloads per the SSE spec once a blank line is
-    /// seen. This parser handles single-line `data:` records, which every
-    /// supported provider emits; continuation lines are appended with `\n`.
+    /// Extracts one `data:` payload from a single line. Blank lines and
+    /// non-data fields are ignored. Supported providers emit one payload per
+    /// line, so this does not join multi-line data events.
     fn take_data_line(&self, line: &[u8]) -> Option<String> {
         let mut trimmed = line;
         if trimmed.last() == Some(&b'\n') {

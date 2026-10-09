@@ -13,7 +13,7 @@ pub mod store;
 
 pub use store::{
     CachedCatalog, DEFAULT_MAX_AGE_SECS, RefreshOutcome, bundled, current, current_with_repair,
-    http_client, load_cache, refresh,
+    http_client, refresh,
 };
 
 /// Wire protocol: Anthropic Messages.
@@ -28,14 +28,14 @@ pub const AUTH_DEVICE_CODE: &str = "device-code";
 /// Auth: subscription OAuth plus an optional pasted API key (xAI).
 pub const AUTH_OAUTH: &str = "oauth";
 
-/// Whether the settings preset should offer a device-flow sign-in button.
+/// Whether the settings preset should offer a sign-in button.
+///
+/// True for device-code (Copilot, Codex) and subscription OAuth (xAI).
 #[must_use]
 pub fn uses_oauth_login(auth: &str) -> bool {
     auth == AUTH_DEVICE_CODE || auth == AUTH_OAUTH
 }
 
-/// Upper bound for provider entries in one catalog.
-pub const MAX_PROVIDERS: usize = 1024;
 /// Upper bound for model entries in one provider.
 pub const MAX_MODELS_PER_PROVIDER: usize = 512;
 /// Upper bound for one catalog string field.
@@ -116,8 +116,8 @@ pub struct CatalogProvider {
     pub base_url: String,
     /// Documentation URL, when published.
     pub doc: Option<String>,
-    /// Credential mode: `""` (default) pastes an API key; `device-code`
-    /// signs in with an OAuth device flow.
+    /// Credential mode: `""` pastes an API key, `device-code` is a device
+    /// flow, and `oauth` is subscription OAuth (an API key may still be pasted).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub auth: String,
     /// Model presets, sorted by id.

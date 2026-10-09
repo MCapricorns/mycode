@@ -189,7 +189,7 @@ fn parse_call_body(body: &str) -> Option<Vec<(String, String)>> {
     None
 }
 
-/// Parses `{"name": "...", "arguments": ...}` (and the `parameters` alias).
+/// Parses `{"name"|"tool": "...", "arguments"|"parameters"|"params": ...}`.
 fn parse_json_body(body: &str) -> Option<(String, String)> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     let name = value

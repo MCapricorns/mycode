@@ -2,7 +2,7 @@
 //!
 //! Covers every OpenAI-compatible endpoint (OpenAI, DeepSeek, Kimi/Moonshot,
 //! Z.AI gateways, custom `…/v1` bases). Vendor differences are data; this
-//! adapter only owns the wire shape.
+//! adapter owns the wire shape and the stream reduction.
 
 use serde_json::{Value, json};
 
@@ -11,14 +11,11 @@ use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    MAX_STREAM_INDEX, ReasoningReplay, append_interruption, apply_reasoning_effort,
+    MAX_STREAM_INDEX, ReasoningReplay, SYSTEM_JOIN, append_interruption, apply_reasoning_effort,
     assemble_blocks_with_replay, assembled_stop_reason, charge_stream, join_text, join_thinking,
-    map_stop_reason, merge_usage, provider_error_detail, reasoning_replay, tool_parameters,
+    merge_usage, provider_error_detail, reasoning_replay, record_provider_stop, tool_parameters,
     usage_from_value,
 };
-
-/// Concatenation separator for multi-part system prompts.
-const SYSTEM_JOIN: &str = "\n\n";
 
 /// Converts one provider-neutral request into a completions body.
 #[must_use]
@@ -468,8 +465,8 @@ impl CompletionsReducer {
                 self.text.push_str(&text);
             }
         }
-        if let Some(detail) = self.interrupt.clone() {
-            append_interruption(&mut self.text, &detail);
+        if let Some(detail) = self.interrupt.as_deref() {
+            append_interruption(&mut self.text, detail);
         }
         let calls: Vec<(&str, &str, &str)> = self
             .tool_calls
@@ -733,12 +730,7 @@ impl FrameReducer for CompletionsReducer {
                 }
             }
             if let Some(finish) = choice["finish_reason"].as_str() {
-                let reason = map_stop_reason(finish);
-                if reason == StopReason::Error {
-                    self.begin_interrupt(finish);
-                } else if self.stop_reason != Some(StopReason::Error) {
-                    self.stop_reason = Some(reason);
-                }
+                record_provider_stop(&mut self.stop_reason, &mut self.interrupt, finish);
             }
         }
         if let Some(usage) = chunk.get("usage").filter(|usage| !usage.is_null()) {
