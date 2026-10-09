@@ -31,9 +31,10 @@ blake3.workspace = true
 sha2.workspace = true
 uuid.workspace = true
 # Grammars come from gpui-kit's registry. This pin is the same tree-sitter
-# gpui-component links (`links = "tree-sitter"`); gpui does not re-export
-# Parser or Query, so the runtime crate stays a direct dependency.
-gpui-kit = { version = "0.6", default-features = false, features = [
+# gpui-component links (`links = "tree-sitter"`). gpui-component 0.7.1 still
+# requires `tree-sitter ^0.26.13`, so 0.27 cannot be linked beside it. gpui
+# does not re-export Parser or Query, so the runtime crate stays direct.
+gpui-kit = { version = "0.7.1", default-features = false, features = [
     "tree-sitter-languages",
 ] }
 tree-sitter = "=0.26.13"
