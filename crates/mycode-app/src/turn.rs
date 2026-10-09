@@ -12,7 +12,7 @@ use mycode_config::{
 };
 use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
-use mycode_tools::ToolRegistry;
+use mycode_tools::{ToolDyn, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
