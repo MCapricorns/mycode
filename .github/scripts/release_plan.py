@@ -853,8 +853,16 @@ def _expect_split_workflows(ci: str, release: str) -> None:
     """Pull requests build four targets. Only a main push publishes."""
 
     names = sorted(path.name for path in (ROOT / ".github/workflows").glob("*.y*ml"))
-    _expect(names == ["ci.yml", "release.yml"], f"workflow files are {names}")
+    _expect(
+        names == ["ci.yml", "models-snapshot.yml", "release.yml"],
+        f"workflow files are {names}",
+    )
     _expect(not (ROOT / ".github/workflows/pr.yml").exists(), "pr.yml is still present")
+
+    snapshot_path = ROOT / ".github/workflows/models-snapshot.yml"
+    _expect(snapshot_path.is_file(), "models-snapshot.yml is missing")
+    snapshot_trigger = _trigger_block(snapshot_path.read_text(encoding="utf-8"))
+    _expect("schedule:" in snapshot_trigger, "models-snapshot.yml has no schedule")
 
     ci_trigger = _trigger_block(ci)
     _expect("pull_request:" in ci_trigger, "ci.yml does not trigger on pull_request")
