@@ -851,6 +851,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.recents.insert(0, project);
             state.recents.truncate(mycode_config::MAX_RECENT_PROJECTS);
         }
+        DesktopAction::ProjectTrustChanged { project, trusted } => {
+            if trusted {
+                let _ = mycode_config::trust_project(&mut state.trusted_projects, &project);
+            } else {
+                let _ = mycode_config::revoke_project_trust(&mut state.trusted_projects, &project);
+            }
+        }
         DesktopAction::SessionProjectBound {
             session_id,
             project,
@@ -1214,6 +1221,7 @@ mod tests {
         );
         let settings = state.settings.expect("settings");
         assert_eq!(settings.reasoning.as_deref(), Some("high"));
+        assert_eq!(settings.to_settings().reasoning_effort, None);
         assert!(!settings.dirty);
         assert!(settings.saving);
         assert_eq!(

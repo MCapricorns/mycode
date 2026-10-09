@@ -293,8 +293,12 @@ pub(super) fn clamp_reasoning_to_catalog(state: &mut WorkspaceState) {
         return;
     };
     if !levels.iter().any(|level| level == current) {
+        let document_rejected = settings.saved_reasoning.as_deref() == Some(current);
         settings.reasoning = None;
-        super::mark_settings_dirty(settings);
+        if document_rejected {
+            settings.saved_reasoning = None;
+            super::mark_settings_dirty(settings);
+        }
     }
 }
 
@@ -327,6 +331,41 @@ mod tests {
         assert!(levels.iter().any(|item| item == "default"));
         assert!(levels.iter().any(|item| item == "high"));
         assert!(!levels.iter().any(|item| item == "xhigh"));
+    }
+
+    #[test]
+    fn a_session_overlay_does_not_dirty_the_saved_effort() {
+        use std::sync::Arc;
+
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+
+        let mut state = WorkspaceState::default();
+        state.settings = Some(SettingsState::from_settings(
+            &mycode_config::AppSettings::default(),
+            1,
+            Vec::new(),
+        ));
+        state.settings.as_mut().expect("settings").reasoning = Some("high".to_owned());
+        state.catalog = Some(Arc::new(CatalogDocument {
+            providers: vec![CatalogProvider {
+                id: "zai".to_owned(),
+                models: vec![CatalogModel {
+                    id: "glm".to_owned(),
+                    reasoning: true,
+                    reasoning_efforts: vec!["low".to_owned()],
+                    ..CatalogModel::default()
+                }],
+                ..CatalogProvider::default()
+            }],
+        }));
+        state.selected_provider = Some("zai".to_owned());
+        state.selected_model = Some("glm".to_owned());
+        clamp_reasoning_to_catalog(&mut state);
+        let settings = state.settings.expect("settings");
+        assert!(settings.reasoning.is_none());
+        assert!(settings.saved_reasoning.is_none());
+        assert!(!settings.dirty);
+        assert!(settings.to_settings().reasoning_effort.is_none());
     }
 
     #[test]

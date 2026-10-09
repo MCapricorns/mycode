@@ -25,7 +25,9 @@ pub struct ReadArgs {
     /// session cwd.
     pub path: String,
     /// 1-based line number to start reading from (default: the first
-    /// line).
+    /// line). Values below 1 are rejected.
+    #[serde(default)]
+    #[schemars(range(min = 1))]
     pub offset: Option<usize>,
     /// Maximum number of lines to return (default: all, up to the
     /// tool's output cap).
@@ -78,5 +80,21 @@ impl Tool for ReadTool {
             "truncated": outcome.truncated,
             "revision": outcome.revision.as_str(),
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReadArgs;
+    use crate::tool::{ToolError, validate_args};
+    use serde_json::json;
+
+    #[test]
+    fn offset_below_one_is_rejected_by_the_schema() {
+        let error = validate_args::<ReadArgs>(&json!({"path": "a.txt", "offset": 0}))
+            .expect_err("offset 0");
+        assert!(matches!(error, ToolError::InvalidArgs(_)), "{error}");
+        validate_args::<ReadArgs>(&json!({"path": "a.txt", "offset": 1})).expect("offset 1");
+        validate_args::<ReadArgs>(&json!({"path": "a.txt"})).expect("omitted offset");
     }
 }

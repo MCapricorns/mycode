@@ -125,7 +125,7 @@ pub fn read_provider_secrets_with_repair(
         |bytes| {
             let parsed = decode_secrets(bytes)?;
             if parsed.migrated {
-                let _ = replace_provider_secrets(home, parsed.revision, &parsed.secrets);
+                replace_provider_secrets(home, parsed.revision, &parsed.secrets)?;
             }
             Ok(parsed.secrets)
         },
@@ -231,4 +231,47 @@ fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
         revision,
         migrated: decoded.migrated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn trailing_comma_repair_surfaces_a_rewrite_failure() {
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-secrets-comma-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&parent).expect("temp parent");
+        let root = parent.join("home");
+        std::fs::create_dir(&root).expect("home");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                .expect("private home");
+        }
+        let home = crate::HomeLayout::from_root(&root).expect("layout");
+        let body = br#"{"formatVersion":1,"kind":"mycode-provider-secrets","revision":9223372036854775807,}"#;
+        let path = root.join("secrets.json");
+        std::fs::write(&path, body).expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+        }
+        let error = super::read_provider_secrets(&home).expect_err("rewrite must fail");
+        assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionExhausted);
+        let kept = std::fs::read(&path).expect("original remains");
+        assert!(kept.windows(2).any(|window| window == b",}"), "{kept:?}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+        }
+        let _ = std::fs::remove_dir_all(&parent);
+    }
 }

@@ -431,7 +431,9 @@ pub enum BridgeEvent {
         /// Transcript row for the summary.
         entry: ConversationEntry,
     },
-    /// `/compact` finished. `ok` is false when the provider could not run.
+    /// `/compact` finished. `ok` is false when the session could not be opened,
+    /// a claimed summary was not written, or the provider could not run.
+    /// `empty` and `covered` stay `ok`.
     CompactFinished {
         /// Session identity spelling.
         session_id: String,

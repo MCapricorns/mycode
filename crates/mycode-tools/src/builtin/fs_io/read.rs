@@ -180,6 +180,11 @@ pub fn read_file(
     limit: Option<usize>,
     cancel: &CancellationToken,
 ) -> Result<FileRead, ToolError> {
+    if offset.is_some_and(|start| start < 1) {
+        return Err(ToolError::InvalidArgs(
+            "offset must be a 1-based line number".to_owned(),
+        ));
+    }
     let raw = read_raw_file(prepared, cwd, path, cancel)?;
     let text = reject_encoding(&raw.raw)?;
     let displayed = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -260,4 +265,28 @@ pub async fn read_file_async(
         )
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::read_file;
+    use crate::tool::ToolError;
+
+    #[test]
+    fn offset_zero_is_rejected_before_any_io() {
+        let error = read_file(
+            None,
+            Path::new("/no/such"),
+            "missing.txt",
+            Some(0),
+            None,
+            &CancellationToken::new(),
+        )
+        .expect_err("offset 0");
+        assert!(matches!(error, ToolError::InvalidArgs(message) if message.contains("1-based")));
+    }
 }

@@ -345,7 +345,7 @@ pub fn read_app_settings_with_repair(
         |bytes| {
             let parsed = decode_settings(bytes)?;
             if parsed.migrated {
-                let _ = replace_app_settings(home, parsed.revision, &parsed.settings);
+                replace_app_settings(home, parsed.revision, &parsed.settings)?;
             }
             Ok(parsed.settings)
         },
@@ -640,6 +640,42 @@ mod tests {
         assert_eq!(restored.effective_font_family(), "system");
         assert_eq!(restored.appearance.palette, "slate");
         assert_eq!(restored.appearance.font_size, "m");
+    }
+
+    #[test]
+    fn trailing_comma_repair_surfaces_a_rewrite_failure() {
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-settings-comma-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&parent).expect("temp parent");
+        let guard = TempDir(parent);
+        let root = guard.0.join("home");
+        std::fs::create_dir(&root).expect("home");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                .expect("private home");
+        }
+        let home = crate::HomeLayout::from_root(&root).expect("layout");
+        let body =
+            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":9223372036854775807,}"#;
+        let path = root.join("settings.json");
+        std::fs::write(&path, body).expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+        }
+        let error = super::read_app_settings(&home).expect_err("rewrite must fail");
+        assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionExhausted);
+        let kept = std::fs::read(&path).expect("original remains");
+        assert!(kept.windows(2).any(|window| window == b",}"), "{kept:?}");
     }
 
     struct TempDir(std::path::PathBuf);

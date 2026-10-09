@@ -51,9 +51,13 @@ pub struct SettingsState {
     /// `mycode_config::VALID_FONT_FAMILIES`. This is the stored value, not the
     /// concrete family GPUI paints.
     pub font_family: String,
-    /// Requested reasoning effort from the selected model's catalog options;
-    /// `None` keeps the provider default.
+    /// Live reasoning effort for the open session's thinking chip.
+    /// Session picks write this field and the session pin. They do not
+    /// change [`Self::saved_reasoning`], so a later settings save cannot
+    /// copy a session overlay into shared `settings.json`.
     pub reasoning: Option<String>,
+    /// Reasoning effort stored in the settings document.
+    pub saved_reasoning: Option<String>,
     /// Provider ids that have a stored API key.
     pub providers_with_keys: Vec<String>,
     /// MCP key ids (form `mcp-<server>`) that have a stored key.
@@ -95,6 +99,7 @@ impl SettingsState {
             font_size: settings.effective_font_size().to_owned(),
             font_family: settings.appearance.font_family.clone(),
             reasoning: settings.reasoning_effort.clone(),
+            saved_reasoning: settings.reasoning_effort.clone(),
             providers_with_keys,
             mcp_with_keys: Vec::new(),
             usage_enabled: settings.usage.enabled,
@@ -126,7 +131,7 @@ impl SettingsState {
                 font_size: self.font_size.clone(),
                 font_family: self.font_family.clone(),
             },
-            reasoning_effort: self.reasoning.clone(),
+            reasoning_effort: self.saved_reasoning.clone(),
             subagents: self.subagents.clone(),
             tools: self.tools.clone(),
         }
