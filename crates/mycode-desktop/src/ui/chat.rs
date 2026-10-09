@@ -149,18 +149,7 @@ pub(super) fn render_chat(
                             .flex_col()
                             .child(
                                 probe.child(
-                                    div()
-                                        .id("conversation-inner")
-                                        .w_full()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .max_w(COLUMN_MAX)
-                                        .mx_auto()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_3()
-                                        .py_4()
-                                        .px_4()
+                                    transcript::transcript_stack()
                                         .when(show_welcome, |this| {
                                             this.child(welcome::render_welcome(workspace, cx))
                                         })

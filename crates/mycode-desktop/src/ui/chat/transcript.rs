@@ -7,7 +7,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px, rems,
+    StatefulInteractiveElement, Styled, TestSupportExt as _, div, px, rems,
 };
 
 use crate::i18n::t;
@@ -37,8 +37,10 @@ pub(super) fn render_streaming_entry(
         t("live", "实时").to_owned(),
         theme,
         div()
-            .flex_1()
+            .w_full()
             .min_w_0()
+            .h_auto()
+            .flex_none()
             .flex()
             .flex_col()
             .gap_2()
@@ -50,7 +52,16 @@ pub(super) fn render_streaming_entry(
             .when(show_reasoning && !streaming.thinking.is_empty(), |this| {
                 let id: SharedString = "streaming-thinking".into();
                 let open = workspace.thinking_open(&id);
-                this.child(thinking_box(id, &streaming.thinking, open, theme, cx))
+                let toggle_id = id.to_string();
+                this.child(thinking_box(
+                    id,
+                    &streaming.thinking,
+                    open,
+                    theme,
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_toggle_thinking(&toggle_id, cx);
+                    }),
+                ))
             })
             .when(!streaming.text.trim().is_empty(), |this| {
                 this.child(status_line(t("AGENT", "代理"), desk.green, theme))
@@ -87,30 +98,25 @@ pub(super) fn render_entry(
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     match entry.kind {
-        EntryKind::AssistantMessage => desk_block(entry, theme, {
-            let desk = Desk::of(theme);
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .w_full()
-                .min_w_0()
-                .when(show_reasoning && !entry.thinking.is_empty(), |this| {
-                    let id: SharedString = format!("thinking-{}", entry.event_id).into();
-                    let open = workspace.thinking_open(&id);
-                    this.child(thinking_box(id, &entry.thinking, open, theme, cx))
-                })
-                .when(!entry.text.trim().is_empty(), |this| {
-                    this.child(status_line(t("AGENT", "代理"), desk.green, theme))
-                        .child(agent_text(
-                            format!("agent-md-{}", entry.event_id).into(),
-                            SharedString::from(entry.text.trim()),
-                            theme,
-                            false,
-                        ))
-                })
-        })
-        .into_any_element(),
+        EntryKind::AssistantMessage => {
+            let id = format!("thinking-{}", entry.event_id);
+            let open = workspace.thinking_open(&id);
+            let toggle_id = id;
+            desk_block(
+                entry,
+                theme,
+                assistant_block(
+                    entry,
+                    open,
+                    show_reasoning,
+                    theme,
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_toggle_thinking(&toggle_id, cx);
+                    }),
+                ),
+            )
+            .into_any_element()
+        }
         EntryKind::ToolResult => {
             let desk = Desk::of(theme);
             let failed = entry.text.starts_with("failed:");
@@ -154,22 +160,31 @@ fn desk_block(
         theme,
         div()
             .id(format!("entry-{}", entry.event_id))
-            .flex_1()
+            .w_full()
             .min_w_0()
+            .h_auto()
+            .flex_none()
             .flex()
             .flex_col()
-            .child(content),
+            .child(content)
+            .test_support(),
     )
 }
 
 fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl IntoElement {
+    // `overflow_hidden` on this row, or on the `flex_1` column, collapses the
+    // row inside the conversation scroller: the reply clips away and the
+    // gutter paints as an empty separator. Wrapping text stays in the column
+    // through `min_w_0`; the scroller clips the horizontal axis.
     div()
         .flex()
         .flex_row()
+        .items_start()
         .gap_3()
         .w_full()
         .min_w_0()
-        .overflow_hidden()
+        .h_auto()
+        .flex_none()
         .child(
             div()
                 .w(px(64.))
@@ -181,7 +196,7 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
                 .whitespace_nowrap()
                 .child(stamp),
         )
-        .child(div().flex_1().min_w_0().overflow_hidden().child(content))
+        .child(div().flex_1().min_w_0().h_auto().child(content))
 }
 
 fn status_line(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoElement {
@@ -199,24 +214,110 @@ fn status_line(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoEl
         )
 }
 
-/// Thinking trace. Distinct from the answer: amber rail, tinted fill, and
-/// smaller muted type. The header toggles the body. Collapsed, only the
-/// header remains. The trace itself stays on the entry.
+/// Assistant text plus an optional thinking trace. The trace header and the
+/// reply are siblings: closing the trace does not wrap the reply.
+fn assistant_block(
+    entry: &ConversationEntry,
+    open: bool,
+    show_reasoning: bool,
+    theme: &Theme,
+    on_toggle: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
+) -> impl IntoElement {
+    let desk = Desk::of(theme);
+    let thinking_id: SharedString = format!("thinking-{}", entry.event_id).into();
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .min_w_0()
+        .h_auto()
+        .flex_none()
+        .when(show_reasoning && !entry.thinking.is_empty(), |this| {
+            this.child(thinking_box(
+                thinking_id,
+                &entry.thinking,
+                open,
+                theme,
+                on_toggle,
+            ))
+        })
+        .when(!entry.text.trim().is_empty(), |this| {
+            this.child(status_line(t("AGENT", "代理"), desk.green, theme))
+                .child(agent_text(
+                    format!("agent-md-{}", entry.event_id).into(),
+                    SharedString::from(entry.text.trim()),
+                    theme,
+                    false,
+                ))
+        })
+}
+
+/// The centered transcript column inside the conversation scroller.
+///
+/// `flex_none` keeps the column at the height of its rows. A shrinkable
+/// `overflow_hidden` child of the scroller is given a minimum height of zero
+/// and compressed to the viewport, so the rows overlap and the reply is
+/// clipped to an empty separator.
+pub(super) fn transcript_stack() -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id("conversation-inner")
+        .w_full()
+        .min_w_0()
+        .h_auto()
+        .flex_none()
+        .max_w(super::COLUMN_MAX)
+        .mx_auto()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .py_4()
+        .px_4()
+}
+
+/// One collapsed header, `思考 · <summary> ▸`, or the same row with the trace open.
+fn thinking_headline(label: &str, open: bool, text: &str) -> String {
+    let marker = if open { "▾" } else { "▸" };
+    let summary = thinking_summary(text);
+    if summary.is_empty() {
+        format!("{label} {marker}")
+    } else {
+        format!("{label} · {summary} {marker}")
+    }
+}
+
+fn thinking_summary(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    ellipsis(line, 42)
+}
+
+/// Thinking trace. Distinct from the answer: a single header row toggles the
+/// body. Collapsed, the header stays and the reply (a sibling) does not fold
+/// with it.
+///
+/// The box is content-sized. `overflow_hidden` here lets the scroller treat
+/// the row as a zero-minimum flex item and clip it down to a bar.
 fn thinking_box(
     id: SharedString,
     text: &str,
     open: bool,
     theme: &Theme,
-    cx: &Context<Workspace>,
+    on_toggle: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
 ) -> impl IntoElement {
     let desk = Desk::of(theme);
     let toggle_id = id.to_string();
-    let marker = if open { "▾" } else { "▸" };
+    let headline = thinking_headline(t("Thinking", "思考"), open, text);
+    let body_id = SharedString::from(format!("thinking-body-{toggle_id}"));
     div()
         .id(id)
         .w_full()
         .min_w_0()
-        .overflow_hidden()
+        .h_auto()
+        .flex_none()
         .flex()
         .flex_col()
         .gap_1()
@@ -232,40 +333,42 @@ fn thinking_box(
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_2()
                 .w_full()
                 .min_w_0()
+                .h_auto()
+                .flex_none()
+                .min_h(px(22.))
                 .cursor_pointer()
                 .rounded(px(6.))
                 .hover(|row| row.bg(theme.secondary_hover.opacity(0.45)))
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_toggle_thinking(&toggle_id, cx);
-                }))
+                .on_click(on_toggle)
                 .child(
                     div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(desk.amber)
-                        .child(marker),
-                )
-                .child(
-                    div()
+                        .id(SharedString::from(format!("thinking-label-{toggle_id}")))
                         .min_w_0()
+                        .h_auto()
+                        .flex_none()
                         .text_xs()
+                        .whitespace_nowrap()
                         .text_color(theme.muted_foreground)
-                        .child(t("Thinking", "思考")),
-                ),
+                        .child(headline)
+                        .test_support(),
+                )
+                .test_support(),
         )
         .when(open, |this| {
             this.child(
                 div()
+                    .id(body_id)
                     .w_full()
                     .min_w_0()
-                    .overflow_hidden()
+                    .h_auto()
+                    .flex_none()
                     .whitespace_normal()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(text.to_owned()),
+                    .child(text.to_owned())
+                    .test_support(),
             )
         })
 }
@@ -286,12 +389,20 @@ fn agent_text(
     // The theme default leaves a full rem between paragraphs, which paints
     // as a tall empty slab when a reply is short or still streaming.
     let style = TextViewStyle::default().paragraph_gap(rems(0.35));
-    div().w_full().min_w_0().text_sm().child(
-        TextView::markdown(id, text)
-            .style(style)
-            .selectable(true)
-            .stream_fade(stream_fade),
-    )
+    div()
+        .id(SharedString::from(format!("reply-shell-{id}")))
+        .w_full()
+        .min_w_0()
+        .h_auto()
+        .flex_none()
+        .text_sm()
+        .child(
+            TextView::markdown(id, text)
+                .style(style)
+                .selectable(true)
+                .stream_fade(stream_fade),
+        )
+        .test_support()
 }
 
 /// Gutter stamp: the last 8 characters of the entry id. The id is a ledger
@@ -829,5 +940,268 @@ mod tests {
         }
         assert_eq!(tool_status("edit", Some(&result_entry(&text))), "++0 --11");
         assert!(shows_diff_preview("edit", &text));
+    }
+
+    #[test]
+    fn collapsed_thinking_headline_is_one_summary_row() {
+        let trace = "reasoning step 0 weighs the next edit\nsecond line";
+        assert_eq!(
+            super::thinking_headline("思考", false, trace),
+            "思考 · reasoning step 0 weighs the next edit ▸"
+        );
+        assert_eq!(
+            super::thinking_headline("Thinking", true, trace),
+            "Thinking · reasoning step 0 weighs the next edit ▾"
+        );
+        assert_eq!(super::thinking_headline("思考", false, "   "), "思考 ▸");
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod layout {
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+    use std::rc::Rc;
+
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::test::{TestSupportExt as _, TestWindowExt as _};
+    use gpui_kit::{
+        AppContext as _, Context, InteractiveElement, IntoElement, ParentElement, Render,
+        StatefulInteractiveElement, Styled, TestAppContext, Window, div, px, size,
+    };
+
+    use super::{assistant_block, desk_block, transcript_stack};
+    use crate::view_model::{ConversationEntry, EntryKind};
+
+    struct TranscriptProbe {
+        viewport: f32,
+        entries: Vec<ConversationEntry>,
+        open: Rc<RefCell<BTreeSet<String>>>,
+    }
+
+    fn assistant(id: &str, text: &str) -> ConversationEntry {
+        let thinking = (0..40)
+            .map(|n| format!("reasoning step {n} weighs the next edit"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        ConversationEntry {
+            event_id: id.into(),
+            kind: EntryKind::AssistantMessage,
+            text: text.into(),
+            call_id: None,
+            thinking,
+        }
+    }
+
+    impl Render for TranscriptProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let open = self.open.borrow().clone();
+            let rows: Vec<gpui_kit::AnyElement> = self
+                .entries
+                .iter()
+                .map(|entry| {
+                    let key = format!("thinking-{}", entry.event_id);
+                    let expanded = open.contains(&key);
+                    let toggle_key = key.clone();
+                    desk_block(
+                        entry,
+                        &theme,
+                        assistant_block(
+                            entry,
+                            expanded,
+                            true,
+                            &theme,
+                            cx.listener(move |probe, _, _, cx| {
+                                {
+                                    let mut open = probe.open.borrow_mut();
+                                    if !open.remove(&toggle_key) {
+                                        open.insert(toggle_key.clone());
+                                    }
+                                }
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .into_any_element()
+                })
+                .collect();
+            div().size_full().child(
+                div()
+                    .id("conversation")
+                    .w(px(760.))
+                    .h(px(self.viewport))
+                    .overflow_x_hidden()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .child(transcript_stack().children(rows).test_support())
+                    .test_support(),
+            )
+        }
+    }
+
+    fn open_probe(
+        cx: &mut TestAppContext,
+        viewport: f32,
+        count: usize,
+    ) -> (
+        gpui_kit::WindowHandle<TranscriptProbe>,
+        Rc<RefCell<BTreeSet<String>>>,
+    ) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let entries = (1..=count)
+            .map(|n| {
+                assistant(
+                    &format!("e{n}"),
+                    &format!("Visible reply {n} stays in the transcript."),
+                )
+            })
+            .collect();
+        let open = Rc::new(RefCell::new(BTreeSet::new()));
+        let probe_open = open.clone();
+        let handle = cx.open_window(size(px(900.), px(1400.)), move |_, _| TranscriptProbe {
+            viewport,
+            entries,
+            open: probe_open,
+        });
+        (handle, open)
+    }
+
+    #[gpui_kit::test]
+    fn collapsed_thinking_keeps_one_header_and_the_reply(cx: &mut TestAppContext) {
+        let (handle, open) = open_probe(cx, 1200., 1);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let header = window.find("thinking-toggle-thinking-e1");
+            let reply = window.find("reply-shell-agent-md-e1");
+            let entry = window.find("entry-e1").bounds();
+            let header_bounds = header.bounds();
+            let reply_bounds = reply.bounds();
+            assert!(
+                window.try_find("thinking-body-thinking-e1").is_none(),
+                "collapsed thinking must not mount the trace"
+            );
+            assert!(
+                header.visible()
+                    && header_bounds.size.height >= px(16.)
+                    && header_bounds.size.height <= px(40.)
+                    && header_bounds.size.width >= px(48.),
+                "collapsed thinking should be one header row, got {header_bounds:?} visible {}",
+                header.visible()
+            );
+            assert!(
+                reply.visible()
+                    && reply_bounds.size.height >= px(14.)
+                    && reply_bounds.size.height <= px(90.)
+                    && reply_bounds.size.width >= px(80.)
+                    && reply_bounds.origin.y >= header_bounds.bottom()
+                    && reply_bounds.origin.y - header_bounds.bottom() < px(80.),
+                "the reply stays under the header and does not collapse with it: header {header_bounds:?} reply {reply_bounds:?} visible {}",
+                reply.visible()
+            );
+            assert!(
+                entry.size.height >= px(48.) && entry.size.height <= px(200.),
+                "a collapsed reply should be a short row, not an empty line or the whole trace: {entry:?}"
+            );
+
+            window.click("thinking-toggle-thinking-e1", cx);
+            window.render_frame(cx);
+            assert!(open.borrow().contains("thinking-e1"));
+            let body = window.find("thinking-body-thinking-e1");
+            let header = window.find("thinking-toggle-thinking-e1").bounds();
+            let reply = window.find("reply-shell-agent-md-e1");
+            let body_bounds = body.bounds();
+            let reply_bounds = reply.bounds();
+            let expanded = window.find("entry-e1").bounds();
+            assert!(
+                body.visible()
+                    && body_bounds.origin.y >= header.bottom()
+                    && body_bounds.size.height >= px(80.),
+                "opening the header reveals the trace under it: header {header:?} body {body_bounds:?}"
+            );
+            assert!(
+                reply.visible()
+                    && reply_bounds.origin.y >= body_bounds.bottom()
+                    && reply_bounds.size.height >= px(14.),
+                "the reply stays below the opened trace: body {body_bounds:?} reply {reply_bounds:?}"
+            );
+            assert!(
+                expanded.size.height > entry.size.height + px(60.),
+                "opening thinking grows the row below the collapsed height: collapsed {entry:?} expanded {expanded:?}"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn collapsed_replies_do_not_shrink_into_separator_lines(cx: &mut TestAppContext) {
+        let (handle, _) = open_probe(cx, 150., 6);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let scroller = window.find("conversation").bounds();
+            let stack = window
+                .find("conversation-inner")
+                .bounds();
+            assert!(
+                stack.size.height > scroller.size.height + px(40.),
+                "the transcript column should grow past the viewport instead of shrinking into it: stack {stack:?} scroller {scroller:?}"
+            );
+            let mut previous_bottom = scroller.origin.y;
+            for n in 1..=6 {
+                let id = format!("e{n}");
+                let entry = window.find(format!("entry-{id}")).bounds();
+                let header = window.find(format!("thinking-toggle-thinking-{id}"));
+                let reply = window.find(format!("reply-shell-agent-md-{id}"));
+                let header_bounds = header.bounds();
+                let reply_bounds = reply.bounds();
+                assert!(
+                    window
+                        .try_find(format!("thinking-body-thinking-{id}"))
+                        .is_none(),
+                    "entry {id} should stay collapsed"
+                );
+                assert!(
+                    entry.size.height >= px(48.) && entry.size.height <= px(200.),
+                    "entry {id} collapsed into an empty separator: {entry:?} stack {stack:?}"
+                );
+                assert!(
+                    header_bounds.size.height >= px(16.)
+                        && header_bounds.size.height <= px(40.)
+                        && reply_bounds.size.height >= px(14.)
+                        && reply_bounds.size.height <= px(90.)
+                        && reply_bounds.origin.y >= header_bounds.bottom(),
+                    "entry {id} hid its header or reply: header {header_bounds:?} reply {reply_bounds:?}"
+                );
+                assert!(
+                    entry.origin.y >= previous_bottom - px(1.),
+                    "entry {id} overlaps the previous row: {entry:?} after {previous_bottom:?}"
+                );
+                let fully_on_screen = header_bounds.origin.y >= scroller.origin.y
+                    && reply_bounds.bottom() <= scroller.bottom();
+                if fully_on_screen {
+                    assert!(
+                        header.visible() && reply.visible(),
+                        "on-screen entry {id} clipped its header or reply: header {header_bounds:?} reply {reply_bounds:?}"
+                    );
+                }
+                previous_bottom = entry.bottom();
+            }
+            let first_reply = window.find("reply-shell-agent-md-e1");
+            assert!(
+                first_reply.visible()
+                    && first_reply.bounds().size.height >= px(14.)
+                    && window.find("thinking-toggle-thinking-e1").visible(),
+                "the first collapsed reply should paint its header and text, not an empty line: {:?}",
+                first_reply.bounds()
+            );
+            let last = window.find("entry-e6").bounds();
+            assert!(
+                last.bottom() > scroller.bottom() + px(8.),
+                "rows should keep their height and scroll, not shrink into the viewport: last {last:?} scroller {scroller:?}"
+            );
+        })
+        .unwrap();
     }
 }
