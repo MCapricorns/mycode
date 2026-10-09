@@ -284,6 +284,45 @@ pub(crate) fn unix_clear_errno() {
     }
 }
 
+/// True when `left` and `right` are not the same mount.
+///
+/// Linux uses `STATX_MNT_ID` when both ids are present, so a bind mount is a
+/// boundary even if `st_dev` matches, and an overlay device split is not.
+/// Other Unix uses `st_dev`, which is the mount identity there.
+#[cfg(unix)]
+pub(crate) fn unix_mounts_differ(left: &File, right: &File) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let left_dev = left.metadata()?.dev();
+    let right_dev = right.metadata()?.dev();
+    match (unix_mount_id(left), unix_mount_id(right)) {
+        (Some(left_id), Some(right_id)) => Ok(left_id != right_id),
+        _ => Ok(left_dev != right_dev),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn unix_mount_id(file: &File) -> Option<u64> {
+    use std::ffi::OsStr;
+    use std::os::fd::AsFd;
+
+    let stat = rustix::fs::statx(
+        file.as_fd(),
+        OsStr::new(""),
+        rustix::fs::AtFlags::EMPTY_PATH,
+        rustix::fs::StatxFlags::MNT_ID,
+    )
+    .ok()?;
+    rustix::fs::StatxFlags::from_bits_truncate(stat.stx_mask)
+        .contains(rustix::fs::StatxFlags::MNT_ID)
+        .then_some(stat.stx_mnt_id)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn unix_mount_id(_file: &File) -> Option<u64> {
+    None
+}
+
 #[cfg(unix)]
 pub(crate) fn stable_from_file(file: File) -> io::Result<StableHandle> {
     let (identity, kind) = identity_and_kind(&file)?;

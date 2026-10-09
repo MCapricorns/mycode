@@ -14,7 +14,8 @@
 //! discovered; directories and grep request content access, and a
 //! metadata-then-content pair must share identity. Windows hidden bits are
 //! re-read from the opened handle before read, confirm, descent, and
-//! reporting. Ignore parse/build/load failures are terminating; ordinary
+//! reporting. Ignore parse/build/load failures are terminating. Ancestor
+//! ignore discovery that stops at a mount boundary is not a failure; ordinary
 //! per-path I/O is a model-visible incomplete lower bound. Unix uses
 //! root-relative `openat` calls with no-follow traversal. Windows opens
 //! every component relative to retained directory handles with `NtOpenFile`,
@@ -385,3 +386,6 @@ pub(crate) fn bind_search_root_with_access(
     }
     resolve_search_root_with_access(cwd, path_arg, cancel, limits, access)
 }
+
+#[cfg(test)]
+mod ancestor_mount;

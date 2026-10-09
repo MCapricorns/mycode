@@ -51,6 +51,17 @@ pub(crate) fn map_target_or_ignore_error(
     }
 }
 
+/// Mount-boundary refusal from no-follow opens (`NO_XDEV` / `st_dev`).
+///
+/// Ancestor ignore discovery treats this as “stop at the boundary”, not as a
+/// failed search. Callers that must stay inside the workspace still propagate
+/// it.
+pub(crate) fn is_mount_traversal(error: &io::Error) -> bool {
+    error
+        .to_string()
+        .contains("mount traversal is not permitted")
+}
+
 pub(crate) fn is_ignore_load_error(error: &io::Error) -> bool {
     let message = error.to_string();
     message.contains("ignore file exceeds size limit")

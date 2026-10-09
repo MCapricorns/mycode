@@ -58,15 +58,18 @@ impl IgnoreStack {
     /// Discovers the Git boundary above `allowed` and seeds ancestor layers.
     ///
     /// Walks parent directories through handle-relative `..` until a `.git`
-    /// entry, the filesystem root, or [`MAX_GIT_PARENT_HOPS`]. A `.git` file
-    /// is parsed for `gitdir:` and `commondir`. Failure to establish a
-    /// boundary after a `.git` entry is seen, or after a parent hop is
-    /// refused, is terminating.
+    /// entry, the filesystem root, a mount boundary, or [`MAX_GIT_PARENT_HOPS`].
+    /// Parents beyond a mount boundary are skipped: their ignore files are not
+    /// loaded, and the search continues inside the workspace. A `.git` file is
+    /// parsed for `gitdir:` and `commondir`. Failure to establish a boundary
+    /// after a `.git` entry is seen, or after a parent hop is refused for a
+    /// reason other than a mount boundary, is terminating.
     ///
     /// # Errors
     ///
-    /// Returns an I/O error when a parent cannot be opened, a `.git` file
-    /// cannot be parsed, or `commondir` / `info/exclude` cannot be loaded.
+    /// Returns an I/O error when a parent cannot be opened (other than a mount
+    /// boundary), a `.git` file cannot be parsed, or `commondir` /
+    /// `info/exclude` cannot be loaded.
     pub(crate) fn seed_git_boundary(
         &mut self,
         allowed: &File,
@@ -79,6 +82,7 @@ impl IgnoreStack {
         match probe_git_entry(allowed) {
             Ok(Some(_)) => return Ok(()),
             Ok(None) => {}
+            Err(error) if is_mount_traversal(&error) => return Ok(()),
             Err(error) if is_not_found(&error) => {}
             Err(error) => return Err(error),
         }
@@ -93,22 +97,50 @@ impl IgnoreStack {
                     "search ignore files cannot be loaded: git boundary is too deep",
                 ));
             }
-            let parent = match open_parent_directory(&current)? {
-                ParentDirectory::FilesystemRoot => return Ok(()),
-                ParentDirectory::Parent(parent) => parent,
+            let parent = match open_parent_directory(&current) {
+                Ok(ParentDirectory::FilesystemRoot) => return Ok(()),
+                Ok(ParentDirectory::Parent(parent)) => parent,
+                Err(error) if is_mount_traversal(&error) => return Ok(()),
+                Err(error) => return Err(error),
             };
             if files_same_identity(&parent, &current)? {
                 return Ok(());
             }
-            let child_name = child_name_in_parent(&parent, &current, limiter, cancel)?;
+            // The workspace may itself be a mount (Linux `/tmp` on tmpfs).
+            // Ignore files above that boundary are unreachable without a
+            // cross-mount open, which search containment rejects. Stopping
+            // here keeps the walk inside the workspace.
+            if ancestor_crosses_mount(&current, &parent)? {
+                return Ok(());
+            }
+            let child_name = match child_name_in_parent(&parent, &current, limiter, cancel) {
+                Ok(name) => name,
+                Err(error) if is_mount_traversal(&error) => return Ok(()),
+                Err(error) => return Err(error),
+            };
             names_to_cwd.insert(0, child_name);
             match probe_git_entry(&parent) {
                 Ok(Some(kind)) => {
-                    apply_git_root(self, &parent, kind, &names_to_cwd, limiter, cancel)?;
-                    return load_ancestor_gitignores(self, &parent, &names_to_cwd, limiter, cancel);
+                    if let Err(error) =
+                        apply_git_root(self, &parent, kind, &names_to_cwd, limiter, cancel)
+                    {
+                        if is_mount_traversal(&error) {
+                            return Ok(());
+                        }
+                        return Err(error);
+                    }
+                    if let Err(error) =
+                        load_ancestor_gitignores(self, &parent, &names_to_cwd, limiter, cancel)
+                    {
+                        if is_mount_traversal(&error) {
+                            return Ok(());
+                        }
+                        return Err(error);
+                    }
+                    return Ok(());
                 }
                 Ok(None) => {}
-                Err(error) if is_not_found(&error) => {}
+                Err(error) if is_not_found(&error) || is_mount_traversal(&error) => {}
                 Err(error) => return Err(error),
             }
             current = parent;
@@ -132,10 +164,16 @@ impl IgnoreStack {
                     // exclude at this boundary. `.ignore` layers keep stacking.
                     self.git_head = None;
                 }
-                apply_git_root(self, dir, kind, &[], limiter, cancel)?;
+                if let Err(error) = apply_git_root(self, dir, kind, &[], limiter, cancel) {
+                    // A gitdir/commondir on another mount is not a reason to
+                    // fail the search. Local `.gitignore` / `.ignore` still load.
+                    if !is_mount_traversal(&error) {
+                        return Err(error);
+                    }
+                }
             }
             Ok(None) => {}
-            Err(error) if is_not_found(&error) => {}
+            Err(error) if is_not_found(&error) || is_mount_traversal(&error) => {}
             Err(error) => return Err(error),
         }
         if self.git_enabled

@@ -501,6 +501,81 @@ pub(crate) enum ParentDirectory {
     FilesystemRoot,
 }
 
+/// Whether ancestor ignore discovery must stop before reading `parent`.
+///
+/// `child` is the directory already inside the workspace side of the walk.
+/// A different mount means ignore files above `child` are not loaded. Tests
+/// can force this for one directory identity so grep/find stay covered
+/// without a real mount.
+pub(crate) fn ancestor_crosses_mount(child: &File, parent: &File) -> io::Result<bool> {
+    #[cfg(test)]
+    if forced_ancestor_boundary(child)? {
+        return Ok(true);
+    }
+    mounts_differ(child, parent)
+}
+
+fn mounts_differ(left: &File, right: &File) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        unix_mounts_differ(left, right)
+    }
+    #[cfg(windows)]
+    {
+        let (left_id, _, _, _) = windows_identity_kind_reparse(left)?;
+        let (right_id, _, _, _) = windows_identity_kind_reparse(right)?;
+        Ok(left_id.volume != right_id.volume)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (left, right);
+        Ok(false)
+    }
+}
+
+#[cfg(test)]
+static FORCED_ANCESTOR_BOUNDARY: std::sync::Mutex<Option<FileIdentity>> =
+    std::sync::Mutex::new(None);
+
+/// Forces the next ancestor hop from `dir` to look like a mount boundary.
+///
+/// The guard clears the force on drop. Other directories keep the real
+/// mount check, so parallel tests are unaffected.
+#[cfg(test)]
+pub(crate) struct ForcedAncestorMountBoundary;
+
+#[cfg(test)]
+impl Drop for ForcedAncestorMountBoundary {
+    fn drop(&mut self) {
+        *ancestor_boundary_slot() = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn force_ancestor_mount_boundary(dir: &Path) -> io::Result<ForcedAncestorMountBoundary> {
+    let file = File::open(dir)?;
+    let (identity, _) = identity_and_kind(&file)?;
+    *ancestor_boundary_slot() = Some(identity);
+    Ok(ForcedAncestorMountBoundary)
+}
+
+#[cfg(test)]
+fn ancestor_boundary_slot() -> std::sync::MutexGuard<'static, Option<FileIdentity>> {
+    FORCED_ANCESTOR_BOUNDARY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+fn forced_ancestor_boundary(child: &File) -> io::Result<bool> {
+    let forced = *ancestor_boundary_slot();
+    let Some(forced) = forced else {
+        return Ok(false);
+    };
+    let (identity, _) = identity_and_kind(child)?;
+    Ok(identity == forced)
+}
+
 /// Opens the parent directory of `dir` via handle-relative `..`.
 ///
 /// Used only for Git-boundary discovery. Does not follow the final link

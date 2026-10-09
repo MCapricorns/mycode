@@ -22,9 +22,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::builtin::fs_search::{
     FsEntryKind, HandleLease, IoErrors, MAX_GIT_PARENT_HOPS, NameMatch, ParentDirectory,
-    PathOrderKey, ResolvedRoot, WalkLimiter, child_name_in_parent, files_same_identity,
-    is_hidden_skip, lossy_component, open_child_file, open_directory_nofollow,
-    open_parent_directory, to_posix,
+    PathOrderKey, ResolvedRoot, WalkLimiter, ancestor_crosses_mount, child_name_in_parent,
+    files_same_identity, is_hidden_skip, is_mount_traversal, lossy_component, open_child_file,
+    open_directory_nofollow, open_parent_directory, to_posix,
 };
 
 mod ignores;
