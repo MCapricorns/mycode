@@ -1,0 +1,21 @@
+[package]
+name = "mycode-providers"
+description = "First-party provider runtime: wire-protocol adapters over an injectable SSE transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mycode-core = { path = "../mycode-core" }
+mycode-config = { path = "../mycode-config" }
+async-trait.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+reqwest = { workspace = true, features = ["json", "form"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

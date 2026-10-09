@@ -1,0 +1,386 @@
+# Push to main, build four platforms, then tag and publish.
+#
+# This workflow runs only on a push to main. It does not run for pull
+# requests. release-plan chooses the tag first. The tag is
+# `v<workspace version>` when that tag is free. When the tag already
+# exists, release-plan bumps the patch in Cargo.toml, Cargo.lock, and
+# CHANGELOG.md on a temporary commit and pushes only
+# `ci/release-<version>-<run id>`. The four product builds check out
+# that commit, so the version compiled into the binaries is the version
+# that will be tagged.
+#
+# Targets:
+#   windows-latest  -> x86_64-pc-windows-msvc
+#   windows-11-arm  -> aarch64-pc-windows-msvc
+#   macos-latest    -> aarch64-apple-darwin
+#   ubuntu-latest   -> x86_64-unknown-linux-gnu
+# windows-latest is x64. Windows ARM64 uses the native windows-11-arm
+# image; it is not a cross-compile from windows-latest. The Ubuntu runner
+# installs the GPUI system packages, then compiles the Linux x86_64
+# product. There is no fmt or clippy job.
+#
+# After those four builds succeed, release-publish creates the tag and
+# uploads the archives from that commit, then advances main. The advance
+# fast-forwards when it can. When main moved during the build, the
+# version bump is replayed onto current main and pushed without force.
+# The temporary ref is deleted after success or failure. The body is the
+# matching CHANGELOG section, not generated commit notes. Archives
+# already uploaded for the previous tag do not skip the release. The
+# version ref and the later main update are pushed with GITHUB_TOKEN,
+# which does not start another workflow run.
+# release-plan, release-publish, and release-cleanup run on ubuntu-latest.
+# They do not compile the product.
+#
+# Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon, Linux x86_64):
+#   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-apple-darwin.dmg        (+ .sha256)
+#   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
+
+name: release
+
+on:
+  push:
+    branches: [main]
+
+# Pushes to main wait, so a release tag and the binaries uploaded for it
+# stay on one commit.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  release-plan:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: release-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # contents: write lets this job push the patch bump to a temporary
+    # ref. It does not update main. The push uses GITHUB_TOKEN, so it
+    # does not start a second workflow run.
+    permissions:
+      contents: write
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      tag: ${{ steps.plan.outputs.tag }}
+      notes: ${{ steps.plan.outputs.notes }}
+      sha: ${{ steps.plan.outputs.sha }}
+      cleanup_ref: ${{ steps.plan.outputs.cleanup_ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Check release planner
+        run: |
+          python3 .github/scripts/release_plan.py --self-test
+          python3 .github/scripts/advance_main.py --self-test
+
+      - name: Choose a new release tag
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote --tags origin 'refs/tags/v*' > /tmp/remote-tags.txt
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[].tag_name' > /tmp/release-tags.txt
+          # Pass the subject through the environment. A commit subject can
+          # contain quotes or command substitutions; the shell must not
+          # expand it again on the python command line.
+          export MYCODE_RELEASE_SUBJECT MYCODE_RELEASE_SHA MYCODE_RELEASE_DATE
+          MYCODE_RELEASE_SUBJECT=$(git log -1 --format=%s)
+          MYCODE_RELEASE_SHA="${GITHUB_SHA}"
+          MYCODE_RELEASE_DATE=$(date -u +%Y-%m-%d)
+          python3 .github/scripts/release_plan.py \
+            --apply \
+            --remote-tags /tmp/remote-tags.txt \
+            --release-tags /tmp/release-tags.txt \
+            --plan-env /tmp/release-plan.env \
+            --notes-file /tmp/release-notes.md
+          # shellcheck disable=SC1091
+          source /tmp/release-plan.env
+          cleanup_ref=""
+          if [[ "${PUBLISH}" == "true" && "${BUMPED}" == "true" ]]; then
+            if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "unexpected version ${VERSION}" >&2
+              exit 1
+            fi
+            if [[ -z "$(git status --porcelain -- Cargo.toml Cargo.lock CHANGELOG.md)" ]]; then
+              echo "bump to ${VERSION} did not change version files" >&2
+              exit 1
+            fi
+            export GIT_AUTHOR_NAME="github-actions[bot]"
+            export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+            export GIT_COMMITTER_NAME="${GIT_AUTHOR_NAME}"
+            export GIT_COMMITTER_EMAIL="${GIT_AUTHOR_EMAIL}"
+            git add Cargo.toml Cargo.lock CHANGELOG.md
+            git commit \
+              -m "chore(release): bump to ${VERSION}" \
+              -m "Record the version published for this qualified main push."
+            # Build this commit before main moves. release-publish tags
+            # it after the four platform archives exist, then
+            # fast-forwards main or replays the bump onto current main.
+            cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
+            git push origin "HEAD:refs/heads/${cleanup_ref}"
+          fi
+          # Outputs are written only after a required version commit is on
+          # the temporary ref. If that push fails, this step stops before
+          # publish is set.
+          python3 .github/scripts/release_plan.py \
+            --emit-output \
+            --plan-env /tmp/release-plan.env \
+            --notes-file /tmp/release-notes.md \
+            --sha "$(git rev-parse HEAD)" \
+            --cleanup-ref="${cleanup_ref}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+  release-build:
+    # The four builds run only after a plan that decided to publish.
+    # They check out that planned commit.
+    needs: release-plan
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true'
+    name: release-build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: mycode-desktop.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary: mycode-desktop.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: mycode-desktop
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: mycode-desktop
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-plan.outputs.sha }}
+
+      - name: Resolve package tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(tr -d '\r' < Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "unexpected version ${version}" >&2
+            exit 1
+          fi
+          echo "MYCODE_PACKAGE_TAG=v${version}" >> "${GITHUB_ENV}"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxcb1-dev \
+            libxcb-composite0-dev \
+            libxcb-cursor-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-util-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xkb-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libssl-dev \
+            clang \
+            libclang-dev \
+            zip
+
+      - name: Build release binary
+        run: cargo build --release --locked -p mycode-desktop --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tag = $env:MYCODE_PACKAGE_TAG
+          $stage = "mycode-desktop-$tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          Copy-Item README.md "$stage/" -ErrorAction SilentlyContinue
+          Copy-Item LICENSE "$stage/" -ErrorAction SilentlyContinue
+          $zip = "mycode-desktop-$tag-${{ matrix.target }}.zip"
+          Compress-Archive -Path $stage -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          tag="${MYCODE_PACKAGE_TAG}"
+          stage="mycode-desktop-$tag-${{ matrix.target }}"
+          mkdir -p "$stage"
+          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE "$stage/" 2>/dev/null || true
+          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
+          zip -r "$zip" "$stage"
+          hash=$(shasum -a 256 "$zip" | awk '{print $1}')
+          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
+
+      # MYCode.app + ad-hoc codesign + hdiutil; writes the .dmg and its
+      # .sha256. The zip stays: the in-app updater downloads it.
+      - name: Package DMG (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          scripts/make_dmg.sh \
+            --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            --version "${MYCODE_PACKAGE_TAG#v}" \
+            --output "mycode-desktop-${MYCODE_PACKAGE_TAG}-${{ matrix.target }}.dmg"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tag="${MYCODE_PACKAGE_TAG}"
+          stage="mycode-desktop-$tag-${{ matrix.target }}"
+          mkdir -p "$stage"
+          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE "$stage/" 2>/dev/null || true
+          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
+          zip -r "$zip" "$stage"
+          hash=$(sha256sum "$zip" | awk '{print $1}')
+          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
+
+      - name: Upload assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            *.zip
+            *.zip.sha256
+            *.dmg
+            *.dmg.sha256
+          retention-days: 3
+          if-no-files-found: error
+
+  release-publish:
+    needs: [release-plan, release-build]
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success'
+    name: release-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-plan.outputs.sha }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Verify tag matches workspace version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          head=$(git rev-parse HEAD)
+          echo "tag=${{ needs.release-plan.outputs.tag }} workspace=${version} head=${head}"
+          test "${{ needs.release-plan.outputs.tag }}" = "v${version}"
+          test "${head}" = "${{ needs.release-plan.outputs.sha }}"
+
+      - name: Download assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attach assets to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-plan.outputs.tag }}
+          target_commitish: ${{ needs.release-plan.outputs.sha }}
+          body: ${{ needs.release-plan.outputs.notes }}
+          files: |
+            dist/*.zip
+            dist/*.zip.sha256
+            dist/*.dmg
+            dist/*.dmg.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+
+      - name: Advance main to the built commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The tag and archives already point at this commit. Fast-forward
+          # main when it still can. When main moved during the build, replay
+          # the version bump onto current main. Never force-push.
+          python3 .github/scripts/advance_main.py \
+            --built-sha "${{ needs.release-plan.outputs.sha }}"
+
+  release-cleanup:
+    name: release-cleanup
+    needs: [release-plan, release-build, release-publish]
+    if: always() && needs.release-plan.result == 'success' && needs.release-plan.outputs.cleanup_ref != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Delete temporary release ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="${{ needs.release-plan.outputs.cleanup_ref }}"
+          if [[ ! "${ref}" =~ ^ci/release-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]; then
+            echo "unexpected cleanup ref: ${ref}" >&2
+            exit 1
+          fi
+          if git push origin --delete "${ref}"; then
+            echo "deleted ${ref}"
+          elif git ls-remote --exit-code --heads origin "${ref}" >/dev/null; then
+            echo "failed to delete ${ref}" >&2
+            exit 1
+          else
+            echo "temporary ref ${ref} is already gone"
+          fi
