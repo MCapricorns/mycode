@@ -119,6 +119,33 @@ async fn show_compaction_summary(
     publish_visible_summary(&writer, events, session_id, summary).await;
 }
 
+/// Summaries produced inside `before_request`. The hook must not append a
+/// ledger row: that write lands between the turn's tool calls and their
+/// results and breaks the head the turn writer is committing. The pump
+/// publishes the card after the assistant message (and usage) commit.
+#[derive(Clone, Default)]
+struct DeferredSummaries {
+    pending: Arc<tokio::sync::Mutex<Vec<String>>>,
+}
+
+impl DeferredSummaries {
+    async fn stash(&self, summary: Option<String>) {
+        if let Some(summary) = summary {
+            self.pending.lock().await.push(summary);
+        }
+    }
+
+    async fn publish(&self, writer: &HeadWriter, events: &crate::BridgeEventTx, session_id: &str) {
+        let summaries = {
+            let mut pending = self.pending.lock().await;
+            std::mem::take(&mut *pending)
+        };
+        for summary in summaries {
+            publish_visible_summary(writer, events, session_id, &summary).await;
+        }
+    }
+}
+
 async fn publish_visible_summary(
     writer: &HeadWriter,
     events: &crate::BridgeEventTx,
@@ -294,7 +321,46 @@ async fn run_chat_turn(
     resolved.headers.extend(extra_headers);
     let transport: Arc<dyn SseTransport> =
         Arc::new(ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?);
-    let wire = WireProvider::new(resolved.clone(), transport.clone());
+    run_chat_turn_on(
+        state,
+        events,
+        session_id,
+        session,
+        branch,
+        expected_head,
+        provider_id,
+        model,
+        reasoning,
+        cwd,
+        resolved,
+        settings,
+        provider,
+        transport,
+    )
+    .await
+}
+
+/// Runs one prepared turn on `transport`. Tests pass a scripted transport;
+/// production uses [`ReqwestTransport`].
+#[allow(clippy::too_many_arguments)]
+async fn run_chat_turn_on(
+    state: &CoreState,
+    events: &crate::BridgeEventTx,
+    session_id: &str,
+    session: SessionId,
+    branch: BranchId,
+    expected_head: HeadStamp,
+    provider_id: &str,
+    model: &str,
+    reasoning: Option<&str>,
+    cwd: PathBuf,
+    resolved: ResolvedProvider,
+    settings: AppSettings,
+    provider: ProviderSettings,
+    transport: Arc<dyn SseTransport>,
+) -> Result<(), String> {
+    let home = &state.home;
+    let wire = WireProvider::new(resolved.clone(), transport);
 
     // The tool working directory is the bound project (created on demand).
     let cwd_for_mkdir = cwd.clone();
@@ -400,7 +466,9 @@ async fn run_chat_turn(
     let context_window = model_context_window(state, &provider, model);
     // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
     // Also installed as a before-request hook so tool-heavy mid-turn
-    // cycles re-estimate after each durable tool result.
+    // cycles re-estimate after each durable tool result. The hook only
+    // rewrites the in-memory request; the transcript card is published
+    // after this turn's tool results and final reply commit.
     let compact_scope = crate::compaction::CompactScope {
         home,
         wire: &wire,
@@ -490,9 +558,8 @@ cwd for both script and program mode.",
     let compact_session = session_id.clone();
     let compact_branch = branch.as_str().to_owned();
     let compact_head = head_stamp_text.clone();
-    let hook_writer = writer.clone();
-    let hook_events = events.clone();
-    let hook_session_label = session_id.clone();
+    let deferred = DeferredSummaries::default();
+    let hook_deferred = deferred.clone();
     let hooks = HookRunner::default().with_before_request(move |mut request| {
         let home = compact_home.clone();
         let wire = compact_wire.clone();
@@ -500,9 +567,7 @@ cwd for both script and program mode.",
         let session_id = compact_session.clone();
         let branch_id = compact_branch.clone();
         let head = compact_head.clone();
-        let writer = hook_writer.clone();
-        let events = hook_events.clone();
-        let session_label = hook_session_label.clone();
+        let deferred = hook_deferred.clone();
         async move {
             let scope = crate::compaction::CompactScope {
                 home: &home,
@@ -515,9 +580,9 @@ cwd for both script and program mode.",
             };
             let compacted =
                 crate::compaction::compact_history(&scope, request.messages, false).await;
-            if let Some(summary) = compacted.summary.as_deref() {
-                publish_visible_summary(&writer, &events, &session_label, summary).await;
-            }
+            // Stash only. A ledger append here sits between this turn's
+            // tool calls and their results.
+            deferred.stash(compacted.summary).await;
             request.messages = compacted.messages;
             request
         }
@@ -542,6 +607,7 @@ cwd for both script and program mode.",
     // complete, the final assistant message commits at turn end.
     let pump_events = events.clone();
     let pump_session_id = session_id.to_owned();
+    let pump_deferred = deferred;
     let pump = tokio::spawn(async move {
         let mut pending_assistant: Option<std::sync::Arc<mycode_core::Message>> = None;
         let mut last_step: Option<crate::protocol::ConversationEntry> = None;
@@ -706,6 +772,9 @@ cwd for both script and program mode.",
                         // assistant message" used to clear the live bubble
                         // after the step was the whole turn.
                         if let Some(entry) = last_step {
+                            pump_deferred
+                                .publish(&writer, &pump_events, &pump_session_id)
+                                .await;
                             let _ = pump_events.try_send(BridgeEvent::ChatDone {
                                 session_id: pump_session_id.clone(),
                                 head: writer.head().await,
@@ -756,10 +825,13 @@ cwd for both script and program mode.",
                                                 });
                                         }
                                     }
-                                    // Sent after the trailing usage write so the
-                                    // head the UI receives is the ledger's final
-                                    // head; a stale head fails the next append's
-                                    // compare-and-swap as "session unavailable".
+                                    // The summary card follows the assistant
+                                    // message and the usage row, so it cannot
+                                    // split a tool call from its result. ChatDone
+                                    // then carries the head that includes it.
+                                    pump_deferred
+                                        .publish(&writer, &pump_events, &pump_session_id)
+                                        .await;
                                     let _ = pump_events.try_send(BridgeEvent::ChatDone {
                                         session_id: pump_session_id.clone(),
                                         head: writer.head().await,
@@ -930,4 +1002,318 @@ fn user_has_text(user: &mycode_core::UserMessage) -> bool {
         mycode_core::ContentBlock::Text(text) => !text.text.trim().is_empty(),
         _ => false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use mycode_agent::session::{EventKind, HeadStamp, SessionId};
+    use mycode_config::{
+        AppSettings, AuthorityRevision, HomeLayout, ProviderSecrets, ProviderSettings,
+        replace_app_settings, replace_provider_secrets,
+    };
+    use mycode_core::ProviderError;
+    use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
+
+    use crate::protocol::EntryKind;
+    use crate::state::CoreState;
+
+    struct TurnTransport {
+        kinds: Mutex<Vec<&'static str>>,
+        /// How many times `COMPACTION SUMMARY` appears in the final model request.
+        final_summaries: Mutex<Option<usize>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SseTransport for TurnTransport {
+        async fn post(
+            &self,
+            call: TransportCall,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<
+            std::pin::Pin<
+                Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, ProviderError>> + Send>,
+            >,
+            ProviderError,
+        > {
+            let body = String::from_utf8_lossy(&call.body);
+            let (kind, sse) = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                ("summary", text_sse("handoff notes", 1))
+            } else if body.contains("\"role\":\"tool\"") {
+                ("final", {
+                    *self.final_summaries.lock().expect("summaries") =
+                        Some(body.matches("COMPACTION SUMMARY").count());
+                    text_sse("ok", 3)
+                })
+            } else {
+                ("tools", tool_sse())
+            };
+            self.kinds.lock().expect("kinds").push(kind);
+            Ok(Box::pin(futures_util::stream::once(async move {
+                Ok(bytes::Bytes::from(sse))
+            })))
+        }
+    }
+
+    fn text_sse(text: &str, output_tokens: u64) -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {"content": text},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": output_tokens}
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    fn tool_sse() -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_read_a",
+                            "function": {
+                                "name": "read",
+                                "arguments": serde_json::json!({"path": "a.txt"}).to_string()
+                            }
+                        },
+                        {
+                            "index": 1,
+                            "id": "call_read_b",
+                            "function": {
+                                "name": "read",
+                                "arguments": serde_json::json!({"path": "b.txt"}).to_string()
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    fn scratch() -> (std::path::PathBuf, HomeLayout) {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-turn-compact-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).expect("scratch");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let home = HomeLayout::from_root(&root).expect("home");
+        (root, home)
+    }
+
+    #[tokio::test]
+    async fn hook_compaction_waits_until_the_turn_commits() {
+        let (root, home) = scratch();
+        let mut settings = AppSettings::default();
+        settings.providers.push(ProviderSettings {
+            id: "local".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://example.com/v1".to_owned(),
+            models: vec!["test-model".to_owned()],
+            enabled: true,
+            // ~22k token auto threshold. The seeded prompt stays under it;
+            // the two read results push the next hook over it.
+            context_limit: Some(26_000),
+            max_output: None,
+        });
+        replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
+        replace_provider_secrets(
+            &home,
+            AuthorityRevision::ABSENT,
+            &ProviderSecrets::new().with_key("local", Some("test-key")),
+        )
+        .expect("secrets");
+        let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::write(
+            cwd.join("a.txt"),
+            format!("alpha-body\n{}", "a".repeat(20_000)),
+        )
+        .expect("a");
+        std::fs::write(
+            cwd.join("b.txt"),
+            format!("beta-body\n{}", "b".repeat(20_000)),
+        )
+        .expect("b");
+
+        let catalog = mycode_providers::catalog::current(&home);
+        let state = CoreState::new(home, catalog, Vec::new());
+        let created = state.service.create().await.expect("session");
+        let mut head = HeadStamp::Empty;
+        for text in ["prior work", &"P".repeat(72_000)] {
+            let reservation = state
+                .service
+                .reserve_event(
+                    &created.session_id,
+                    &created.branch_id,
+                    EventKind::Message,
+                    None,
+                    text.as_bytes(),
+                )
+                .await
+                .expect("reserve");
+            head = state
+                .service
+                .append(&created.session_id, &created.branch_id, &head, &reservation)
+                .await
+                .expect("append")
+                .head;
+        }
+
+        let scripted = Arc::new(TurnTransport {
+            kinds: Mutex::new(Vec::new()),
+            final_summaries: Mutex::new(None),
+        });
+        let transport: Arc<dyn SseTransport> = scripted.clone();
+        let provider = settings.providers[0].clone();
+        let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
+            .expect("resolve");
+
+        let (tx, rx) = async_channel::unbounded();
+        let collected = tokio::spawn(async move {
+            let mut events = Vec::new();
+            while let Ok(event) = rx.recv().await {
+                let done = matches!(
+                    event,
+                    crate::BridgeEvent::ChatDone { .. } | crate::BridgeEvent::ChatFailed { .. }
+                );
+                events.push(event);
+                if done {
+                    break;
+                }
+            }
+            events
+        });
+        let session_id = created.session_id.as_str().to_owned();
+        super::run_chat_turn_on(
+            &state,
+            &tx,
+            &session_id,
+            created.session_id.clone(),
+            created.branch_id.clone(),
+            head,
+            "local",
+            "test-model",
+            None,
+            cwd,
+            resolved,
+            settings,
+            provider,
+            transport,
+        )
+        .await
+        .expect("turn");
+        let kinds = scripted.kinds.lock().expect("kinds").clone();
+        assert_eq!(
+            kinds,
+            ["tools", "summary", "final"],
+            "compaction must fire in the hook, between the tool round and the final reply"
+        );
+        assert_eq!(
+            *scripted.final_summaries.lock().expect("summaries"),
+            Some(1),
+            "the compacted request must carry the summary once"
+        );
+        drop(tx);
+        let events = tokio::time::timeout(std::time::Duration::from_secs(20), collected)
+            .await
+            .expect("turn events timed out")
+            .expect("collector");
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, crate::BridgeEvent::ChatDone { .. })),
+            "final reply was not committed: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, crate::BridgeEvent::ChatFailed { .. })),
+            "turn failed: {events:?}"
+        );
+
+        // Reopen reads the ledger, the same path a restarted session uses.
+        let opened = crate::ledger::open_conversation(
+            &state.service,
+            &SessionId::parse(&session_id).expect("session id"),
+        )
+        .await
+        .expect("reopen");
+        let entries = &opened.entries;
+        let summary_at = entries
+            .iter()
+            .position(|entry| crate::compaction::is_display_only_summary(&entry.text))
+            .expect("summary card");
+        let reply_at = entries
+            .iter()
+            .position(|entry| {
+                entry.kind == EntryKind::AssistantMessage && entry.text.contains("ok")
+            })
+            .expect("final reply");
+        assert!(
+            summary_at > reply_at,
+            "summary card landed before the final reply"
+        );
+        let tool_calls: Vec<_> = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.kind == EntryKind::ToolCall)
+            .collect();
+        assert_eq!(
+            tool_calls.len(),
+            2,
+            "both read calls should be on the ledger"
+        );
+        for (index, call) in tool_calls {
+            let call_id = call.call_id.as_deref().expect("call id");
+            let result_at = entries[index + 1..]
+                .iter()
+                .position(|entry| {
+                    entry.kind == EntryKind::ToolResult && entry.call_id.as_deref() == Some(call_id)
+                })
+                .map(|offset| index + 1 + offset)
+                .expect("tool result");
+            assert!(
+                result_at < summary_at,
+                "summary card split the tool call from its result"
+            );
+            assert!(
+                entries[index + 1..result_at]
+                    .iter()
+                    .all(|entry| !crate::compaction::is_display_only_summary(&entry.text)),
+                "a summary row was written between a tool call and its result"
+            );
+            let result = &entries[result_at];
+            assert!(
+                !result.text.starts_with("failed:"),
+                "read did not finish: {}",
+                result.text
+            );
+        }
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.text.contains("alpha-body")),
+            "first read result missing"
+        );
+        assert!(
+            entries.iter().any(|entry| entry.text.contains("beta-body")),
+            "second read result missing"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

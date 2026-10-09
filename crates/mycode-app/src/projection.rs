@@ -27,7 +27,17 @@ pub(crate) fn project_replayed_entry(
                 }),
             }
         }
-        EventKind::ToolResult => Some(project_tool_result(event.event_id.as_str(), payload)),
+        EventKind::ToolResult => {
+            let mut entry = project_tool_result(event.event_id.as_str(), payload);
+            // Pair with the ToolCall row, which is keyed by the ledger call
+            // identity. The payload's tool_call_id is the provider id, a
+            // different namespace, so using it left every reopened tool row
+            // in progress.
+            if let Some(call) = event.call_id.as_ref() {
+                entry.call_id = Some(call.as_str().to_owned());
+            }
+            Some(entry)
+        }
         EventKind::ToolCall => {
             let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
             let name = value["name"]
