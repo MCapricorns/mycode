@@ -105,13 +105,19 @@ codesign --force --deep --sign - "${app}"
 
 ln -s /Applications "${stage}/Applications"
 mkdir -p "$(dirname "${output}")"
-hdiutil create \
-  -volname "MYCode" \
-  -srcfolder "${stage}" \
-  -ov \
-  -format UDZO \
-  -imagekey zlib-level=9 \
-  "${output}"
+
+# hdiutil's one-shot -srcfolder auto-sizing under-provisions the scratch
+# image and dies mid-copy with "No space left on device" on large apps.
+# create-dmg's sequence instead: size a scratch HFS+ image explicitly,
+# mount it, ditto the payload (preserves the Applications symlink),
+# detach, and convert the scratch to the final UDZO image.
+size_mb="$(du -sm "${stage}" | awk '{print $1}')"
+scratch="${work}/scratch.dmg"
+hdiutil create -size "$(( size_mb * 2 + 128 ))m" -fs HFS+ -volname "MYCode" -ov "${scratch}"
+hdiutil attach -readwrite -noverify "${scratch}" >/dev/null
+ditto "${stage}" "/Volumes/MYCode"
+hdiutil detach "/Volumes/MYCode" >/dev/null
+hdiutil convert "${scratch}" -format UDZO -imagekey zlib-level=9 -ov -o "${output}"
 
 hash="$(shasum -a 256 "${output}" | awk '{print $1}')"
 printf '%s  %s\n' "${hash}" "$(basename "${output}")" > "${output}.sha256"
