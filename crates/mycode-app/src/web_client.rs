@@ -75,9 +75,68 @@ impl WebError {
 /// Text `web_search` / `fetch_content` return when the client fails.
 ///
 /// `action` is `search` or `fetch`, matching the tool the model called.
+/// A permanent extract failure tells the model not to sleep-retry that URL.
 #[must_use]
 pub(crate) fn tool_failure(action: &str, error: &WebError) -> String {
-    format!("{action} failed: {error}")
+    let mut text = format!("{action} failed: {error}");
+    if action == "fetch" && permanent_extract_failure(&text) {
+        text.push(' ');
+        text.push_str(PERMANENT_EXTRACT_NOTE);
+    }
+    text
+}
+
+/// Shown when AnySearch cannot extract a page. Retrying the same URL does not help.
+const PERMANENT_EXTRACT_NOTE: &str = "Permanent failure for this URL: do not sleep-retry; try a different URL or continue without this page.";
+
+fn permanent_extract_failure(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("extract_failed")
+        || lower.contains("http 422")
+        || lower.contains("unable to extract")
+}
+
+/// `error_code` and `message` from an AnySearch error object, as one line.
+///
+/// Missing or blank fields are omitted. Whitespace is collapsed and each
+/// field is capped so the tool error stays a single short sentence.
+fn anysearch_error_detail(payload: &serde_json::Value) -> Option<String> {
+    let error_code = json_text(payload, "error_code", 80);
+    let message = json_text(payload, "message", 240);
+    match (error_code, message) {
+        (Some(code), Some(message)) => Some(format!("{code}: {message}")),
+        (Some(code), None) => Some(code),
+        (None, Some(message)) => Some(message),
+        (None, None) => None,
+    }
+}
+
+fn json_text(payload: &serde_json::Value, key: &str, max_chars: usize) -> Option<String> {
+    let raw = payload.get(key)?.as_str()?;
+    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return None;
+    }
+    let mut chars = flat.chars();
+    let mut text: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        text.push('…');
+    }
+    Some(text)
+}
+
+/// AnySearch answers `code != 0` for an application failure, including on HTTP 200.
+fn anysearch_rejected(payload: &serde_json::Value) -> Option<WebError> {
+    let failed = payload
+        .get("code")
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|code| code != 0);
+    if !failed {
+        return None;
+    }
+    Some(WebError::unavailable(
+        anysearch_error_detail(payload).unwrap_or_default(),
+    ))
 }
 
 /// Outbound POST seam for the web client.
@@ -235,8 +294,8 @@ impl WebClient {
         let raw = self.post("/v1/search", &body, self.timeout, cancel).await?;
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
-        if payload["code"].as_i64().is_some_and(|code| code != 0) {
-            return Err(WebError::unavailable(""));
+        if let Some(error) = anysearch_rejected(&payload) {
+            return Err(error);
         }
         let hits = payload["data"]["results"]
             .as_array()
@@ -356,8 +415,8 @@ impl WebClient {
                 .await?;
             let payload: serde_json::Value =
                 serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
-            if payload["code"].as_i64().is_some_and(|code| code != 0) {
-                return Err(WebError::unavailable(""));
+            if let Some(error) = anysearch_rejected(&payload) {
+                return Err(error);
             }
             let data = &payload["data"];
             let returned = data["url"].as_str().unwrap_or(url);
@@ -450,7 +509,7 @@ mod tests {
     use mycode_providers::{PinMode, connection_addresses};
     use tokio_util::sync::CancellationToken;
 
-    use super::transport::pinned_transport_error;
+    use super::transport::{http_error_reason, pinned_transport_error};
     use super::{SearchKind, WebClient, WebError, WebTransport, tool_failure};
 
     struct StaticFailure {
@@ -514,6 +573,136 @@ mod tests {
             fetch_tool
                 .to_string()
                 .contains("resolved addresses are not all public: api.anysearch.com"),
+            "{fetch_tool}"
+        );
+    }
+
+    struct StaticJson {
+        body: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl WebTransport for StaticJson {
+        async fn post_json(
+            &self,
+            _endpoint: &str,
+            _bearer: Option<&str>,
+            _body: &[u8],
+            _timeout: Duration,
+            _cancel: CancellationToken,
+        ) -> Result<Vec<u8>, WebError> {
+            Ok(self.body.clone())
+        }
+    }
+
+    const EXTRACT_FAILED: &[u8] = br#"{"code":-1,"error_code":"extract_failed","message":"Unable to extract content from the URL."}"#;
+
+    #[test]
+    fn anysearch_422_body_reaches_the_fetch_tool_error() {
+        let reason = http_error_reason(reqwest::StatusCode::UNPROCESSABLE_ENTITY, EXTRACT_FAILED);
+        assert_eq!(
+            reason,
+            "HTTP 422 Unprocessable Entity (extract_failed: Unable to extract content from the URL.)"
+        );
+        let error = WebError::unavailable(reason);
+        assert_eq!(
+            tool_failure("fetch", &error),
+            "fetch failed: search backend is unavailable: HTTP 422 Unprocessable Entity (extract_failed: Unable to extract content from the URL.) Permanent failure for this URL: do not sleep-retry; try a different URL or continue without this page."
+        );
+        let search = tool_failure("search", &error);
+        assert!(
+            search.contains("HTTP 422") && search.contains("extract_failed"),
+            "{search}"
+        );
+        assert!(
+            search.contains("Unable to extract content from the URL."),
+            "{search}"
+        );
+        assert!(
+            !search.contains("sleep-retry"),
+            "search keeps the body without the extract retry note: {search}"
+        );
+    }
+
+    #[test]
+    fn http_error_body_keeps_status_when_json_is_partial_or_absent() {
+        let html = http_error_reason(reqwest::StatusCode::BAD_GATEWAY, b"<html>nope</html>");
+        assert_eq!(html, "HTTP 502 Bad Gateway");
+        assert!(!tool_failure("fetch", &WebError::unavailable(html)).contains("sleep-retry"));
+
+        let code_only = http_error_reason(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            br#"{"code":-1,"error_code":"extract_failed"}"#,
+        );
+        assert_eq!(code_only, "HTTP 422 Unprocessable Entity (extract_failed)");
+
+        let message_only = http_error_reason(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            br#"{"message":"Unable to extract content from the URL."}"#,
+        );
+        assert_eq!(
+            message_only,
+            "HTTP 422 Unprocessable Entity (Unable to extract content from the URL.)"
+        );
+
+        let blank = http_error_reason(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            br#"{"error_code":"  ","message":""}"#,
+        );
+        assert_eq!(blank, "HTTP 422 Unprocessable Entity");
+
+        let wrapped = http_error_reason(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            br#"{"error_code":"backend_down","message":"try later"}"#,
+        );
+        assert_eq!(
+            wrapped,
+            "HTTP 503 Service Unavailable (backend_down: try later)"
+        );
+        let collapsed = http_error_reason(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            br#"{"error_code":"extract_failed","message":"Unable to extract\ncontent from the URL."}"#,
+        );
+        assert_eq!(
+            collapsed,
+            "HTTP 422 Unprocessable Entity (extract_failed: Unable to extract content from the URL.)"
+        );
+    }
+
+    #[tokio::test]
+    async fn anysearch_error_object_reaches_search_and_fetch_tool_errors() {
+        let client = WebClient::new(
+            "https://api.anysearch.com",
+            None,
+            Arc::new(StaticJson {
+                body: EXTRACT_FAILED.to_vec(),
+            }),
+        )
+        .unwrap()
+        .with_kind(SearchKind::Anysearch);
+        let search_error = client
+            .search("rust extract", 3, CancellationToken::new())
+            .await
+            .unwrap_err();
+        let search_tool = tool_failure("search", &search_error);
+        assert!(
+            search_tool.contains("extract_failed")
+                && search_tool.contains("Unable to extract content from the URL."),
+            "{search_tool}"
+        );
+        assert!(!search_tool.contains("sleep-retry"), "{search_tool}");
+        let fetch_error = client
+            .contents(
+                &["https://example.com/docs".to_owned()],
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        let fetch_tool = tool_failure("fetch", &fetch_error);
+        assert!(
+            fetch_tool.contains("extract_failed")
+                && fetch_tool.contains("Unable to extract content from the URL.")
+                && fetch_tool.contains("do not sleep-retry"),
             "{fetch_tool}"
         );
     }
