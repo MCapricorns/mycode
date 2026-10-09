@@ -125,7 +125,8 @@ impl PreparedInvocation {
         })
     }
 
-    /// SHA-256 invocation digest over path, identity, image, argv, cwd, and env.
+    /// SHA-256 over the canonical path, file identity, image digest, `argv0`,
+    /// arguments, cwd, and environment.
     #[must_use]
     pub(super) fn invocation_digest(&self) -> &[u8; 32] {
         &self.invocation_digest
@@ -155,9 +156,6 @@ impl PreparedInvocation {
         &self.pinned.canonical_path
     }
 
-    /// Effective `argv[0]` captured at preparation.
-    /// Argument vector captured at preparation.
-    /// Working directory captured at preparation.
     /// Sorted allowlisted environment captured at preparation.
     #[must_use]
     pub(super) fn env(&self) -> &[(OsString, OsString)] {

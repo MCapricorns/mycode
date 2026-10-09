@@ -444,7 +444,8 @@ fn remember_preview(preview: &mut Vec<PreviewCandidate>, candidate: PreviewCandi
     preview.truncate(MAX_FUZZY_PREVIEW);
 }
 
-/// Character (ASCII byte) Levenshtein using an `O(k * n)` distance band.
+/// Levenshtein over ASCII bytes, or Unicode scalars when either side is
+/// non-ASCII, using an `O(k * n)` distance band.
 ///
 /// Returns `None` when the distance would exceed `max_distance`. The needle is
 /// capped by [`MAX_FUZZY_NORM_CHARS`], and the length-difference check bounds

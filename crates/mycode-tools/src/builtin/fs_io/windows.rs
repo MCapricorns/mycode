@@ -2,9 +2,9 @@
 //!
 //! Child opens use relative `NtOpenFile`/`NtCreateFile` with
 //! `FILE_OPEN_REPARSE_POINT`, reject reparse points and ADS names, and prove
-//! identity with the 128-bit `FILE_ID_128` plus volume serial. NTSTATUS is
-//! mapped with `RtlNtStatusToDosError`; `GetLastError` is never consulted
-//! after an NT call.
+//! identity with the 128-bit `FILE_ID_128` plus volume serial. NTSTATUS from
+//! `Nt*` calls is mapped with `RtlNtStatusToDosError`. Those calls do not
+//! set `GetLastError`; Win32 calls in this module still use it.
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read, Write};

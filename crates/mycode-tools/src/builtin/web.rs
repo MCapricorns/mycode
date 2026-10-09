@@ -24,18 +24,14 @@ const MAX_PAGE_EXCERPT_CHARS: usize = 8_000;
 /// One search hit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebHit {
-    /// Result URL.
     pub url: String,
-    /// Result title.
     pub title: String,
-    /// Result snippet.
     pub snippet: String,
 }
 
 /// One fetched page.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebPage {
-    /// Page URL.
     pub url: String,
     /// Extracted plain text.
     pub content: String,

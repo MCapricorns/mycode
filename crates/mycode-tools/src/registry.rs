@@ -44,7 +44,6 @@ impl ToolRegistry {
         inner.specs = None;
     }
 
-    /// Look up a tool by name.
     pub fn get(&self, name: &str) -> Option<Arc<dyn ToolDyn>> {
         self.read().tools.get(name).cloned()
     }

@@ -85,10 +85,6 @@ impl ProcessTree {
         Self { job }
     }
 
-    /// Process-tree storage for a fixture `LiveSpawn` that never terminates.
-    ///
-    /// Fixture cleanup never calls [`Self::terminate`], so this tree must not
-    /// name a live process group or Job members.
     /// Terminates the platform process-containment boundary synchronously.
     ///
     /// # Errors

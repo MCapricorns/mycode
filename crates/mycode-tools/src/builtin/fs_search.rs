@@ -92,10 +92,11 @@ pub(crate) const MAX_WALK_ENTRIES: u64 = 100_000;
 
 /// Maximum directory-entry names buffered for sorted traversal.
 ///
-/// A directory wider than this stops the traversal with the
-/// `directory width limit reached` stop reason; the tool result is a
-/// successful lower-bound report whose details carry `stopped_early`,
-/// not a hard failure.
+/// A directory wider than this stops the walk with
+/// `directory width limit reached`; the tool result is a successful
+/// lower-bound report whose details carry `stopped_early`, not a hard
+/// failure. On-disk component spelling scans use the same cap and fail
+/// closed with a distinct error instead of that stop reason.
 pub(crate) const MAX_DIR_WIDTH: usize = 16_384;
 
 /// Total bytes loaded from ignore files in one invocation.
@@ -131,7 +132,7 @@ pub(crate) const MAX_PATTERN_BYTES: usize = 16 * 1024;
 ///
 /// Output is already cut at [`OUTPUT_BYTES_CAP`]. This separate heap bound
 /// stops 10_000 long handle-relative paths from pinning a gigabyte before
-/// the renderer truncates. Tests inject a smaller value.
+/// the renderer truncates.
 pub(crate) const MAX_RESULT_STORE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Parent directories examined when locating a Git boundary above cwd.
@@ -140,10 +141,10 @@ pub(crate) const MAX_RESULT_STORE_BYTES: usize = 4 * 1024 * 1024;
 /// monorepos, and a larger value would let a hostile layout walk to `/`.
 pub(crate) const MAX_GIT_PARENT_HOPS: usize = 256;
 
-/// Approximate compiled-NFA ceiling passed to grep-regex (default ~10 MiB).
+/// Compiled-NFA ceiling passed to grep-regex (1 MiB).
 pub(crate) const REGEX_SIZE_LIMIT: usize = 1024 * 1024;
 
-/// Per-thread DFA cache ceiling passed to grep-regex (default ~10 MiB).
+/// Per-thread DFA cache ceiling passed to grep-regex (1 MiB).
 pub(crate) const REGEX_DFA_SIZE_LIMIT: usize = 1024 * 1024;
 
 /// Access requested when opening a child from a retained parent handle.
@@ -340,16 +341,17 @@ pub(crate) fn prepare_search_with_limits_access(
 
 /// Binds the grep/find root for execution.
 ///
-/// A preflight [`PreparedSearch`] is always a ready retained root. Execution
-/// takes that root once and never re-resolves, even when the root is missing
-/// or already consumed. Only the internal tool path without dispatch
-/// preparation may resolve once here.
+/// A preflight [`PreparedSearch`] is a ready retained root. Execution takes
+/// that root once and does not resolve it again. A prepared root that is
+/// already consumed is an error. Only the path with no dispatch preparation
+/// resolves a root here.
 ///
 /// # Errors
 ///
-/// Returns [`ToolError::Execution`] when a prepared root is absent, already
-/// consumed, or does not match its path key. The no-preflight path returns the
-/// same errors as [`resolve_search_root_cancel`].
+/// Returns [`ToolError::Execution`] when a prepared root is already consumed,
+/// does not match its path key, or was prepared for a different access mode.
+/// The no-preflight path returns the same errors as
+/// [`resolve_search_root_with_access`].
 pub(crate) fn bind_search_root_with_access(
     prepared: Option<&PreparedSearch>,
     cwd: &Path,

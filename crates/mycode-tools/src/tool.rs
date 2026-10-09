@@ -196,7 +196,10 @@ pub trait ToolDyn: Send + Sync {
 /// Generate the JSON Schema of `A`'s arguments (schemars single source).
 ///
 /// Providers reject a root schema that is `true` or carries a draft
-/// `$schema` URL, so the advertised parameters are always an object schema.
+/// `$schema` or `$id`. Boolean `true` becomes an object schema. A root
+/// object with no `type`, `oneOf`, `anyOf`, or `$ref` is marked
+/// `type: object`. Any other root shape is left as schemars emitted it,
+/// after `$schema` and `$id` are removed.
 pub(crate) fn args_schema<A: JsonSchema>() -> Value {
     let mut value = serde_json::to_value(schemars::schema_for!(A))
         .expect("schemars schemas always serialize to JSON");
@@ -323,6 +326,8 @@ fn fold_camel_keys(value: Value) -> Value {
                 if !out.contains_key(&snake) {
                     out.insert(snake, folded);
                 } else if snake != key {
+                    // An explicit snake_case field already occupies the slot.
+                    // Keep the original camelCase key instead of dropping it.
                     out.entry(key).or_insert(folded);
                 }
             }

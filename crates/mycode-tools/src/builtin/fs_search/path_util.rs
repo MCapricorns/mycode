@@ -59,7 +59,6 @@ pub(crate) fn is_within(root: &Path, candidate: &Path) -> bool {
     components_within(root, candidate, |a: &OsStr, b: &OsStr| a == b)
 }
 
-/// Lexical containment is `strip_prefix_lexical` succeeding.
 /// Windows user-path equality: NT ordinal case-insensitive UTF-16.
 ///
 /// Each UTF-16 code unit is mapped with `RtlUpcaseUnicodeChar` and
@@ -186,7 +185,7 @@ pub(crate) fn strip_verbatim_prefix(path: &Path) -> PathBuf {
             }
             Prefix::Verbatim(name) => {
                 // Keep generic verbatim paths absolute. A bare
-                // `Volume{GUID}\...` is relative, and `resolve_search_root`
+                // `Volume{GUID}\...` is relative, and `normalize_session_cwd`
                 // would join it onto the process cwd.
                 let mut raw = OsString::from(r"\\.\");
                 raw.push(name);

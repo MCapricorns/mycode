@@ -56,7 +56,6 @@ use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
 use crate::tool::{Tool, ToolError, ToolResult};
 
-/// Default command timeout (seconds).
 pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Maximum `CreateProcessW` command-line length, including its terminator.
@@ -880,7 +879,7 @@ fn display_exit(status: &std::process::ExitStatus) -> i32 {
 /// Encode the user script itself as PowerShell's UTF-16LE Base64 transport.
 ///
 /// Besides the single-line UTF-8 console-encoding prelude that
-/// [`powershell_script`] inserts after the statement-ordering prologue, no
+/// [`powershell_script_for`] inserts after the statement-ordering prologue, no
 /// launcher script or .NET decoding API is inserted, so a leading `using`
 /// statement remains the first statement and ConstrainedLanguage can execute
 /// its permitted cmdlets. The exact `CreateProcessW` budget includes the

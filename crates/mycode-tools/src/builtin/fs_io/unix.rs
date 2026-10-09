@@ -651,10 +651,9 @@ pub(super) fn current_meta(file: &File) -> io::Result<FileMeta> {
 ///
 /// Runs on the published inode through the retained temp handle after the
 /// rename, so the payload is never exposed at the temp name with the
-/// source's readable mode. Owner is applied only when `fchown` succeeds.
-/// Failure is returned rather than publishing a silently widened owner.
-/// Setuid/setgid/sticky bits are copied only after ownership has been
-/// preserved.
+/// source's readable mode. `fchown` runs before `fchmod`. Either failure is
+/// returned, so a widened owner or mode is never reported as success.
+/// Setuid/setgid/sticky bits are applied only after that owner call.
 ///
 /// # Errors
 ///

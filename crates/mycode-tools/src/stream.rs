@@ -92,17 +92,7 @@ impl ToolStream {
         self.send(ToolStreamItem::Terminal(result))
     }
 
-    /// Whether the stream has terminated (or has no receiver): further
-    /// sends would be dropped.
-    pub fn is_done(&self) -> bool {
-        *self.state.lock().expect("tool stream state lock poisoned") || self.tx.is_closed()
-    }
-
     fn send(&self, item: ToolStreamItem) -> bool {
-        // One critical section across all clones: the check, the
-        // terminal claim, and the channel send are indivisible, so a
-        // racing terminal() can't double-deliver and a progress() that
-        // passed the check can't be enqueued after a Terminal.
         let mut terminated = self.state.lock().expect("tool stream state lock poisoned");
         if *terminated {
             return false;
