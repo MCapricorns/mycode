@@ -62,11 +62,31 @@ pub(crate) fn apply_anthropic_message_breakpoints(body: &mut Value) {
     if mark_last_system_text(body.get_mut("system")) {
         remaining = remaining.saturating_sub(1);
     }
-    mark_trailing_messages(body.get_mut("messages"), remaining.min(2), &[]);
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    // MiniMax-M3 (and the rest of the MiniMax Messages models) keep a
+    // passive prefix cache and require prior thinking blocks to be replayed
+    // unchanged. A sliding breakpoint rewrites the message that holds the
+    // thinking block, so the next turn misses. Pin the head and the tail
+    // instead, and do not write cache_control into a thinking message.
+    if model.to_ascii_lowercase().contains("minimax") {
+        mark_stable_ends(body.get_mut("messages"), remaining, &[], true);
+    } else {
+        mark_trailing_messages(body.get_mut("messages"), remaining.min(2), &[]);
+    }
 }
 
 /// Chat-completions shape of the same four-breakpoint budget: last tool,
-/// first system or developer message, then up to two later messages.
+/// first system or developer message, then the first and last later messages.
+///
+/// The head message stays marked on every later turn, so a compaction
+/// summary does not fall out of the cached prefix. Messages that carry
+/// replayed reasoning are left untouched: GLM preserved thinking (glm-5.3
+/// included) requires `reasoning_content` and the assistant content string
+/// to stay byte-identical, and rewriting one of those messages on the next
+/// turn changes the prefix.
 pub(crate) fn apply_chat_cache_breakpoints(body: &mut Value) {
     let mut remaining = ANTHROPIC_BREAKPOINT_CAP;
     if mark_last_object(body.get_mut("tools")) {
@@ -75,10 +95,11 @@ pub(crate) fn apply_chat_cache_breakpoints(body: &mut Value) {
     if mark_first_system_message(body.get_mut("messages")) {
         remaining = remaining.saturating_sub(1);
     }
-    mark_trailing_messages(
+    mark_stable_ends(
         body.get_mut("messages"),
-        remaining.min(2),
+        remaining,
         &["system", "developer"],
+        true,
     );
 }
 
@@ -205,6 +226,87 @@ fn mark_first_system_message(messages: Option<&mut Value>) -> bool {
     false
 }
 
+/// Marks the first and last eligible message and leaves replayed reasoning
+/// messages byte-for-byte alone.
+///
+/// `budget` is the number of message breakpoints still available. The head
+/// is preferred when only one slot remains, because that message (often the
+/// compaction summary) is the stable prefix. The tail is marked as well
+/// when a second slot remains and it is a different message.
+fn mark_stable_ends(
+    messages: Option<&mut Value>,
+    budget: usize,
+    skip_roles: &[&str],
+    preserve_thinking: bool,
+) {
+    let Some(Value::Array(messages)) = messages else {
+        return;
+    };
+    if budget == 0 {
+        return;
+    }
+    let eligible: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+            if skip_roles.contains(&role) {
+                return false;
+            }
+            if preserve_thinking && carries_replayed_thinking(message) {
+                return false;
+            }
+            content_is_markable(message.get("content"))
+        })
+        .map(|(index, _)| index)
+        .collect();
+    let Some(&head) = eligible.first() else {
+        return;
+    };
+    let mut chosen = vec![head];
+    if budget >= 2
+        && let Some(&tail) = eligible.last()
+        && tail != head
+    {
+        chosen.push(tail);
+    }
+    for index in chosen.into_iter().rev() {
+        mark_content(messages[index].get_mut("content"));
+    }
+}
+
+/// True when this message replays provider reasoning that the next request
+/// must send unchanged.
+fn carries_replayed_thinking(message: &Value) -> bool {
+    if message
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.is_empty())
+    {
+        return true;
+    }
+    let Some(Value::Array(blocks)) = message.get("content") else {
+        return false;
+    };
+    blocks.iter().any(|block| {
+        matches!(
+            block.get("type").and_then(Value::as_str),
+            Some("thinking" | "redacted_thinking")
+        )
+    })
+}
+
+fn content_is_markable(content: Option<&Value>) -> bool {
+    match content {
+        Some(Value::String(text)) => !text.is_empty(),
+        Some(Value::Array(blocks)) => blocks.iter().any(|block| {
+            let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
+            CACHEABLE_BLOCKS.contains(&kind)
+        }),
+        _ => false,
+    }
+}
+
 fn mark_trailing_messages(messages: Option<&mut Value>, budget: usize, skip_roles: &[&str]) {
     let Some(Value::Array(messages)) = messages else {
         return;
@@ -260,8 +362,8 @@ fn mark_content(content: Option<&mut Value>) -> bool {
 #[cfg(test)]
 mod tests {
     use mycode_core::{
-        AssistantMessage, ContentBlock, Message, Request, StopReason, TextBlock, ThinkingBlock,
-        ToolSpec, Usage, UserMessage,
+        AssistantMessage, ContentBlock, Message, ReasoningLevel, Request, StopReason, TextBlock,
+        ThinkingBlock, ToolSpec, Usage, UserMessage,
     };
     use serde_json::{Value, json};
 
@@ -312,7 +414,7 @@ mod tests {
             .with_message(user("three"))
             .with_message(Message::Assistant(AssistantMessage {
                 blocks: vec![
-                    ContentBlock::Thinking(ThinkingBlock::new("hidden")),
+                    ContentBlock::Thinking(ThinkingBlock::new("hidden").with_signature("sig-1")),
                     ContentBlock::Text(TextBlock::new("visible")),
                 ],
                 usage: None,
@@ -393,19 +495,19 @@ mod tests {
                 Some("ephemeral")
             );
             assert_eq!(body["messages"][0]["content"][0]["text"], "stable");
-            assert!(
-                body["messages"][1]["content"]
-                    .get("cache_control")
-                    .is_none()
-            );
-            assert!(
-                body["messages"][1]["content"].as_array().unwrap()[0]
-                    .get("cache_control")
-                    .is_none()
-            );
             assert_eq!(
-                cache_type(&body["messages"][2]["content"][0]),
+                cache_type(&body["messages"][1]["content"][0]),
                 Some("ephemeral")
+            );
+            assert_eq!(body["messages"][1]["content"][0]["text"], "one");
+            assert!(
+                body["messages"][2]["content"].as_str().is_some(),
+                "a middle message stays a string so the next turn does not rewrite it"
+            );
+            assert!(
+                body["messages"][2]["content"]
+                    .get("cache_control")
+                    .is_none()
             );
             assert_eq!(
                 cache_type(&body["messages"][3]["content"][0]),
@@ -467,15 +569,14 @@ mod tests {
                 "{endpoint}"
             );
             assert_eq!(cache_type(&body["tools"][0]), Some("ephemeral"));
-            assert!(
-                body["messages"][1]["content"][0]
-                    .get("cache_control")
-                    .is_none(),
-                "the summary stays inside the prefix of the later breakpoint"
-            );
             assert_eq!(
-                cache_type(&body["messages"][2]["content"][0]),
-                Some("ephemeral")
+                cache_type(&body["messages"][1]["content"][0]),
+                Some("ephemeral"),
+                "the compaction summary stays the sticky head breakpoint"
+            );
+            assert!(
+                body["messages"][2]["content"].as_str().is_some(),
+                "the middle turn stays a string"
             );
             assert_eq!(
                 cache_type(&body["messages"][3]["content"][0]),
@@ -484,6 +585,100 @@ mod tests {
             assert!(count_cache_control(&body) <= ANTHROPIC_BREAKPOINT_CAP);
             assert!(body.get("prompt_cache_key").is_none());
             assert!(explicit_chat_cache("glm-5.3", endpoint));
+        }
+    }
+
+    fn assistant(thinking: &str, text: &str, signature: Option<&str>) -> Message {
+        let mut block = ThinkingBlock::new(thinking);
+        if let Some(signature) = signature {
+            block = block.with_signature(signature);
+        }
+        Message::Assistant(AssistantMessage {
+            blocks: vec![
+                ContentBlock::Thinking(block),
+                ContentBlock::Text(TextBlock::new(text)),
+            ],
+            usage: None,
+            stop_reason: StopReason::Stop,
+        })
+    }
+
+    #[test]
+    fn glm53_max_thinking_keeps_reasoning_content_byte_stable() {
+        let history = Request::new()
+            .with_system_prompt("stable rules")
+            .with_reasoning(ReasoningLevel::Max)
+            .with_tool(tool("read"))
+            .with_message(user("COMPACTION SUMMARY\n\nkept goals"))
+            .with_message(assistant("plan the edit exactly", "visible answer", None))
+            .with_message(user("continue"));
+        let follow_up = history.clone().with_message(user("and the next step"));
+        for endpoint in [
+            "https://api.z.ai/api/coding/paas/v4/chat/completions",
+            "https://api.z.ai/api/paas/v4/chat/completions",
+            "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        ] {
+            let first = chat_body("glm-5.3", endpoint, &history);
+            let second = chat_body("glm-5.3", endpoint, &follow_up);
+            assert_eq!(first["thinking"]["type"], "enabled", "{endpoint}");
+            assert_eq!(first["thinking"]["clear_thinking"], false, "{endpoint}");
+            assert_eq!(first["reasoning_effort"], "max", "{endpoint}");
+            assert!(first.get("prompt_cache_key").is_none(), "{endpoint}");
+            assert_eq!(cache_type(&first["tools"][0]), Some("ephemeral"));
+            let replayed = &first["messages"][2];
+            assert_eq!(replayed["reasoning_content"], "plan the edit exactly");
+            assert_eq!(replayed["content"], "visible answer");
+            assert!(replayed.get("cache_control").is_none());
+            assert!(replayed["content"].get("cache_control").is_none());
+            assert_eq!(
+                &second["messages"][2], replayed,
+                "the next turn must resend the same reasoning_content"
+            );
+            assert_eq!(second["messages"][1], first["messages"][1]);
+            assert_eq!(second["thinking"], first["thinking"]);
+            assert_eq!(second["reasoning_effort"], first["reasoning_effort"]);
+            assert!(count_cache_control(&first) <= ANTHROPIC_BREAKPOINT_CAP);
+            assert_eq!(chat_body("glm-5.3", endpoint, &history), first);
+        }
+    }
+
+    #[test]
+    fn minimax_m3_max_thinking_keeps_thinking_blocks_byte_stable() {
+        let history = Request::new()
+            .with_system_prompt("stable rules")
+            .with_reasoning(ReasoningLevel::Max)
+            .with_tool(tool("read"))
+            .with_message(user("COMPACTION SUMMARY\n\nkept goals"))
+            .with_message(assistant(
+                "plan the edit exactly",
+                "visible answer",
+                Some("sig-stable"),
+            ))
+            .with_message(user("continue"));
+        let follow_up = history.clone().with_message(user("and the next step"));
+        for endpoint in [
+            "https://api.minimax.io/anthropic/v1/messages",
+            "https://api.minimax.cn/anthropic/v1/messages",
+        ] {
+            let first = anthropic_body("MiniMax-M3", endpoint, &history);
+            let second = anthropic_body("MiniMax-M3", endpoint, &follow_up);
+            assert_eq!(first["thinking"]["type"], "adaptive", "{endpoint}");
+            assert!(first["thinking"].get("budget_tokens").is_none());
+            assert!(first.get("output_config").is_none());
+            assert!(first.get("prompt_cache_key").is_none());
+            let replayed = &first["messages"][1]["content"];
+            assert_eq!(replayed[0]["type"], "thinking");
+            assert_eq!(replayed[0]["thinking"], "plan the edit exactly");
+            assert_eq!(replayed[0]["signature"], "sig-stable");
+            assert!(replayed[0].get("cache_control").is_none());
+            assert!(replayed[1].get("cache_control").is_none());
+            assert_eq!(replayed[1]["text"], "visible answer");
+            assert_eq!(&second["messages"][1], &first["messages"][1]);
+            assert_eq!(second["system"], first["system"]);
+            assert_eq!(second["thinking"], first["thinking"]);
+            assert!(count_cache_control(&first) <= ANTHROPIC_BREAKPOINT_CAP);
+            assert_eq!(anthropic_body("MiniMax-M3", endpoint, &history), first);
         }
     }
 
