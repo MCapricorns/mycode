@@ -209,6 +209,13 @@ impl Workspace {
                 self.on_download_update(cx);
                 return;
             }
+            BridgeEvent::SummaryShown { session_id, entry } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                self.apply_action(DesktopAction::SummaryShown(entry), cx);
+                return;
+            }
             BridgeEvent::CompactFinished {
                 session_id,
                 message,

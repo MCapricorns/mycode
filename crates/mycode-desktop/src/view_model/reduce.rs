@@ -37,6 +37,30 @@ use self::projects::{
 use self::streaming::{append_streaming, set_streaming_status};
 use self::usage::{include_usage_entries, rebuild_session_usage};
 
+/// A mid-turn summary arrives while the final reply is still only in the
+/// streaming bubble. Inserting it then paints the card above that reply.
+/// Hold it until `ChatDone` appends the reply. A manual `/compact`, or an
+/// automatic checkpoint taken before this turn has streamed anything, is
+/// inserted where it arrives, which is also where the ledger stores it.
+fn summary_waits_for_the_reply(state: &WorkspaceState) -> bool {
+    state.sending
+        && state.active.as_ref().is_some_and(|active| {
+            active.streaming.as_ref().is_some_and(|reply| {
+                !reply.text.trim().is_empty() || !reply.thinking.trim().is_empty()
+            })
+        })
+}
+
+fn push_entry_once(conversation: &mut ActiveConversation, entry: mycode_app::ConversationEntry) {
+    let already = conversation
+        .entries
+        .iter()
+        .any(|existing| existing.event_id == entry.event_id);
+    if !already {
+        conversation.entries.push(entry);
+    }
+}
+
 /// Applies one action to the state.
 pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
     let touches_providers = matches!(
@@ -104,6 +128,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 session.active = false;
             }
             state.sending = false;
+            state.pending_summary = None;
             state.queued.clear();
             state.live_jobs.clear();
             state.subagent_window = None;
@@ -140,6 +165,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.subagent_window = None;
                 state.changes_panel_open = false;
                 state.pending_ask = None;
+                state.pending_summary = None;
                 state.sending = false;
                 state.history_loading = false;
             }
@@ -369,6 +395,19 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);
         }
+        DesktopAction::SummaryShown(entry) => {
+            if summary_waits_for_the_reply(state) {
+                if state
+                    .pending_summary
+                    .as_ref()
+                    .is_none_or(|pending| pending.event_id != entry.event_id)
+                {
+                    state.pending_summary = Some(entry);
+                }
+            } else if let Some(conversation) = state.active.as_mut() {
+                push_entry_once(conversation, entry);
+            }
+        }
         DesktopAction::AssistantStepCommitted(entry) => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);
@@ -385,16 +424,16 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ChatDone { head, entry } => {
+            let summary = state.pending_summary.take();
             if let Some(conversation) = state.active.as_mut() {
                 conversation.head = head;
                 // A turn that ended on a committed tool step reports that
                 // step again as its last message; it is already listed.
-                let already_listed = conversation
-                    .entries
-                    .iter()
-                    .any(|existing| existing.event_id == entry.event_id);
-                if !already_listed {
-                    conversation.entries.push(entry);
+                push_entry_once(conversation, entry);
+                // The summary follows the reply, matching the ledger order
+                // a reopen projects.
+                if let Some(summary) = summary {
+                    push_entry_once(conversation, summary);
                 }
                 conversation.streaming = None;
             }
@@ -403,7 +442,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sending = false;
         }
         DesktopAction::ChatFailed(message) => {
+            let summary = state.pending_summary.take();
             if let Some(conversation) = state.active.as_mut() {
+                if let Some(summary) = summary {
+                    push_entry_once(conversation, summary);
+                }
                 conversation.streaming = None;
             }
             // A user-initiated cancel resets the turn without an error
@@ -1164,5 +1207,117 @@ mod tests {
         assert_eq!(inherited.reasoning.as_deref(), Some("on"));
         let previous = mycode_config::session_model(&state.session_models, "old").expect("old");
         assert_eq!(previous.model, "glm-4.7");
+    }
+
+    #[test]
+    fn manual_and_auto_compaction_show_the_summary_in_the_chat() {
+        use mycode_app::protocol::{ConversationEntry, EntryKind};
+
+        let mut state = WorkspaceState {
+            active: Some(mycode_app::ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "e1".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        let text = mycode_app::display_summary_text("files: src/main.rs");
+        let entry = ConversationEntry {
+            event_id: "sum-1".to_owned(),
+            kind: EntryKind::UserMessage,
+            text: text.into(),
+            call_id: None,
+            thinking: String::new(),
+        };
+        // Both triggers emit this action with the written summary.
+        reduce(&mut state, DesktopAction::SummaryShown(entry.clone()));
+        reduce(&mut state, DesktopAction::SummaryShown(entry));
+        let entries = &state.active.expect("open").entries;
+        assert_eq!(entries.len(), 1);
+        assert!(mycode_app::is_compaction_summary(&entries[0].text));
+        assert!(mycode_app::summary_body(&entries[0].text).contains("src/main.rs"));
+    }
+
+    #[test]
+    fn a_mid_turn_summary_lands_after_the_final_reply() {
+        use mycode_app::protocol::{ConversationEntry, EntryKind};
+
+        let tool = ConversationEntry {
+            event_id: "call-1".to_owned(),
+            kind: EntryKind::ToolCall,
+            text: "grep  src".into(),
+            call_id: Some("c1".into()),
+            thinking: String::new(),
+        };
+        let result = ConversationEntry {
+            event_id: "res-1".to_owned(),
+            kind: EntryKind::ToolResult,
+            text: "src/main.rs:1:fn main".into(),
+            call_id: Some("c1".into()),
+            thinking: String::new(),
+        };
+        let mut state = WorkspaceState {
+            sending: true,
+            active: Some(mycode_app::ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "e1".to_owned(),
+                entries: vec![tool, result],
+                older_before: None,
+                streaming: Some(mycode_app::StreamingReply {
+                    text: String::new(),
+                    thinking: "weigh the matches".to_owned(),
+                    status: String::new(),
+                }),
+            }),
+            ..WorkspaceState::default()
+        };
+        let summary = ConversationEntry {
+            event_id: "sum-1".to_owned(),
+            kind: EntryKind::UserMessage,
+            text: mycode_app::display_summary_text("files: src/main.rs").into(),
+            call_id: None,
+            thinking: String::new(),
+        };
+        reduce(&mut state, DesktopAction::SummaryShown(summary.clone()));
+        let held = state.active.as_ref().expect("open");
+        assert!(
+            held.entries
+                .iter()
+                .all(|entry| !mycode_app::is_compaction_summary(&entry.text)),
+            "the card must not sit above the still-streaming reply"
+        );
+        assert_eq!(
+            state
+                .pending_summary
+                .as_ref()
+                .map(|entry| entry.event_id.as_str()),
+            Some("sum-1")
+        );
+        let reply = ConversationEntry {
+            event_id: "reply-1".to_owned(),
+            kind: EntryKind::AssistantMessage,
+            text: "done".into(),
+            call_id: None,
+            thinking: "weigh the matches".to_owned(),
+        };
+        reduce(
+            &mut state,
+            DesktopAction::ChatDone {
+                head: "reply-1".to_owned(),
+                entry: reply,
+            },
+        );
+        let entries = &state.active.expect("open").entries;
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].kind, EntryKind::ToolCall);
+        assert_eq!(entries[1].kind, EntryKind::ToolResult);
+        assert_eq!(entries[2].event_id, "reply-1");
+        assert!(mycode_app::is_compaction_summary(&entries[3].text));
+        assert!(state.pending_summary.is_none());
+        assert!(!state.sending);
     }
 }

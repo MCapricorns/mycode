@@ -545,6 +545,38 @@ fn preview_caption(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl In
         .font_family(theme.mono_font_family.clone())
 }
 
+/// Compaction summary card. The text is the checkpoint summary, shown after
+/// both `/compact` and automatic compaction.
+pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> impl IntoElement {
+    let body = mycode_app::summary_body(&entry.text);
+    div()
+        .id(format!("summary-{}", entry.event_id))
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.muted.opacity(0.65))
+        .px_3()
+        .py_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.primary)
+                .child(t("SUMMARY", "摘要")),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.foreground)
+                .whitespace_normal()
+                .child(body.to_owned()),
+        )
+}
+
 /// One user bubble with hover actions: edit-and-resend (rewinds to before
 /// this message and prefills the composer) and recall (drops this message
 /// and everything after). Neither action restores or deletes workspace

@@ -52,7 +52,13 @@ pub(super) fn render_chat(
         for item in items {
             match item {
                 TranscriptItem::User { entry, index } => {
-                    elements.push(transcript::render_user_entry(entry, index > 0, index, cx));
+                    if mycode_app::is_compaction_summary(&entry.text) {
+                        elements.push(
+                            transcript::render_summary_entry(entry, cx.theme()).into_any_element(),
+                        );
+                    } else {
+                        elements.push(transcript::render_user_entry(entry, index > 0, index, cx));
+                    }
                 }
                 TranscriptItem::Tool { call, result } => {
                     let expanded = workspace.tool_row_open(&call.event_id);

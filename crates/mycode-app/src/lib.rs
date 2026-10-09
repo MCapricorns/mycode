@@ -38,6 +38,10 @@ mod mcp_tools;
 mod oauth;
 mod projection;
 pub mod protocol;
+
+pub use compaction::{
+    display_summary_text, is_display_only_summary as is_compaction_summary, summary_body,
+};
 mod search;
 mod settings_io;
 mod state;
@@ -412,6 +416,15 @@ pub enum BridgeEvent {
     CopilotSignInFailed {
         /// Rendered failure for the sign-in panel.
         message: String,
+    },
+    /// A compaction summary was written and should appear in the transcript.
+    /// Manual `/compact` and automatic compaction both emit this. The text
+    /// is the display copy; the model request still uses the checkpoint.
+    SummaryShown {
+        /// Session identity spelling.
+        session_id: String,
+        /// Transcript row for the summary.
+        entry: ConversationEntry,
     },
     /// `/compact` finished. `ok` is false when the provider could not run.
     CompactFinished {

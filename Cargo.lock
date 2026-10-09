@@ -4319,6 +4319,8 @@ version = "0.9.21"
 dependencies = [
  "async-channel",
  "async-trait",
+ "bytes",
+ "futures-util",
  "jsonschema",
  "libc",
  "mycode-agent",
