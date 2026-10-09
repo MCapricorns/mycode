@@ -4,9 +4,10 @@
 //! newline-delimited stdio for local commands and the MCP Streamable-HTTP
 //! wire for remote endpoints.
 //!
-//! Bounds: one MiB per message, 128 tools per server, per-request timeouts,
-//! and strict https for HTTP endpoints. The [`JsonRpcChannel`] seam
-//! abstracts the byte transport shared by both.
+//! Bounds: one MiB per message, 128 tools per server, and per-request
+//! timeouts. HTTPS for HTTP endpoints is required by settings validation,
+//! not by this client. The [`JsonRpcChannel`] seam abstracts the byte
+//! transport shared by both.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,7 +92,7 @@ pub enum McpError {
     /// The server returned a JSON-RPC error object.
     #[error("server error: {0}")]
     Server(String),
-    /// The response exceeded the message bound.
+    /// A request, response, or `tools/list` result exceeded its size or count bound.
     #[error("response exceeded the size bound")]
     Oversized,
 }
@@ -130,7 +131,13 @@ impl McpError {
 
 /// Trims one detail string to [`MAX_DETAIL_CHARS`] and a single line.
 fn bound_detail(detail: String) -> String {
-    let collapsed: String = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut collapsed = String::new();
+    for (index, word) in detail.split_whitespace().enumerate() {
+        if index > 0 {
+            collapsed.push(' ');
+        }
+        collapsed.push_str(word);
+    }
     if collapsed.chars().count() <= MAX_DETAIL_CHARS {
         collapsed
     } else {
@@ -143,11 +150,8 @@ fn bound_detail(detail: String) -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTool {
-    /// Tool name, unique per server.
     pub name: String,
-    /// Human-readable description, when provided.
     pub description: Option<String>,
-    /// JSON Schema for the tool arguments.
     pub input_schema: Value,
 }
 

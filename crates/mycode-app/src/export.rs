@@ -225,17 +225,14 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
 /// written.
 pub fn export_to_file(home: &HomeLayout, path: &Path) -> Result<ExportSummary, String> {
     let bundle = build_bundle(home)?;
-    let summary = ExportSummary {
-        sessions: bundle.sessions.len(),
-        bytes: 0,
-    };
+    let sessions = bundle.sessions.len();
     let mut body =
         serde_json::to_vec_pretty(&bundle).map_err(|error| format!("encode: {error}"))?;
     body.push(b'\n');
     std::fs::write(path, &body).map_err(|error| format!("write: {error}"))?;
     Ok(ExportSummary {
+        sessions,
         bytes: body.len(),
-        ..summary
     })
 }
 

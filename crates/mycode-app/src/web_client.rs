@@ -21,11 +21,9 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SearchResult {
-    /// Page URL (https only).
+    /// Page URL. Hits that fail [`guard::is_fetchable_url`] are dropped.
     pub url: String,
-    /// Page title.
     pub title: String,
-    /// Short snippet.
     pub snippet: String,
 }
 
@@ -33,11 +31,9 @@ pub struct SearchResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageContent {
-    /// Page URL.
     pub url: String,
-    /// Extracted plain text.
     pub content: String,
-    /// True when the extraction was cut off at the per-page cap.
+    /// Set when the extractor or [`bound_page`] cut the body.
     pub truncated: bool,
 }
 
@@ -424,22 +420,16 @@ impl WebClient {
                 return Err(WebError::Protocol);
             }
             let content = guard::sanitize_remote_text(data["content"].as_str().unwrap_or_default());
-            let mut page = PageContent {
+            let page = PageContent {
                 url: url.clone(),
                 content,
                 truncated: false,
             };
-            if page.content.chars().count() > guard::MAX_PAGE_BYTES {
-                page.content = page.content.chars().take(guard::MAX_PAGE_BYTES).collect();
-                page.truncated = true;
-            }
-            total += page.content.len();
-            if total > guard::MAX_RESPONSE_BYTES {
-                page.truncated = true;
-                pages.push(page);
+            let (page, stop) = bound_page(page, &mut total);
+            pages.push(page);
+            if stop {
                 return Ok(pages);
             }
-            pages.push(page);
         }
         Ok(pages)
     }
@@ -458,22 +448,16 @@ impl WebClient {
                 return Err(WebError::Protocol);
             }
             let content = guard::sanitize_remote_text(wire["content"].as_str().unwrap_or_default());
-            let mut page = PageContent {
+            let page = PageContent {
                 url,
                 content,
                 truncated: wire["truncated"].as_bool().unwrap_or(false),
             };
-            if page.content.chars().count() > guard::MAX_PAGE_BYTES {
-                page.content = page.content.chars().take(guard::MAX_PAGE_BYTES).collect();
-                page.truncated = true;
-            }
-            total += page.content.len();
-            if total > guard::MAX_RESPONSE_BYTES {
-                page.truncated = true;
-                pages.push(page);
+            let (page, stop) = bound_page(page, &mut total);
+            pages.push(page);
+            if stop {
                 return Ok(pages);
             }
-            pages.push(page);
         }
         Ok(pages)
     }
@@ -498,6 +482,22 @@ impl WebClient {
         }
         Ok(raw)
     }
+}
+
+/// Applies the per-page character cap, then the aggregate byte budget.
+///
+/// `true` means this page filled the budget and the caller should stop.
+fn bound_page(mut page: PageContent, total: &mut usize) -> (PageContent, bool) {
+    if page.content.chars().count() > guard::MAX_PAGE_BYTES {
+        page.content = page.content.chars().take(guard::MAX_PAGE_BYTES).collect();
+        page.truncated = true;
+    }
+    *total += page.content.len();
+    if *total > guard::MAX_RESPONSE_BYTES {
+        page.truncated = true;
+        return (page, true);
+    }
+    (page, false)
 }
 
 #[cfg(test)]
