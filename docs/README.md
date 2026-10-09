@@ -12,7 +12,7 @@
 | [mycode-providers](providers.md) | 三种协议、目录、OAuth、流式传输 |
 | [mycode-tools](tools.md) | 工具契约，以及文件、搜索、进程工具怎么做 |
 | [mycode-agent](agent.md) | 回合循环，以及可崩溃恢复的会话账本 |
-| [mycode-app](app.md) | 无界面的应用核：桥接、回合装配、MCP、网页、更新 |
+| [mycode-app](app.md) | 无界面的应用核：桥接、回合装配、压缩、用量、子代理、MCP、OAuth、网页、更新 |
 | [mycode-desktop](desktop.md) | GPUI 窗口：纯状态机、渲染、和工作区 |
 
-crate 的模块注释指向对应文档。改行为时先改代码，再改这里。
+`mycode-core`、`mycode-tools`、`mycode-agent` 的模块注释直接指向对应文档。改行为时先改代码，再改这里。

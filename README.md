@@ -9,24 +9,36 @@ English notes are [below](#english).
 ## 功能
 
 - **命名工作区。** 一个工作区挂多个文件夹（例如前端和后端）。会话属于工作区；当前文件夹解析相对路径，其它文件夹用绝对路径。
-- **对话。** 输入框旁切换模型和思考强度。
-- **改动。** 右侧是当前模型和该文件夹的 git 改动，点文件看 diff。
-- **模型。** 内置 [models.dev](https://models.dev) 目录，粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。支持 Copilot、Codex、xAI 的设备码登录。
-- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，可以用 Python heredoc 或短脚本改文件；`program` 直接启动钉住的程序映像）。这些改动都没有文件撤销。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
+- **对话。** 输入框旁切换模型和思考强度。思考选项来自 models.dev 为该模型公布的档位；没有公布时只有「默认」。每个会话各自记住模型和思考强度（存在 `ui.json`），不写进 `settings.json`。输入 `/` 可选命令（`/new`、`/compact`、`/settings`）、技能和 MCP。
+- **上下文压缩。** 上下文用到模型窗口约 85% 时自动压缩，也可以手动 `/compact`。最近约 2 万 token 原样保留，更早的部分由当前模型写成摘要（摘要请求关闭思考），在对话里显示为摘要卡片（英文界面标 SUMMARY）。会话太短时提示没有可压缩的内容；摘要失败或过短时保留原历史。会话账本不改写。
+- **缓存与用量。** `anthropic-messages` 请求带 `cache_control` 断点；OpenAI 兼容端点走自动前缀缓存。各家返回的缓存命中都会解析。输入框的上下文计量显示 `已用 / 窗口 · N 缓存`。标题栏右侧按钮打开「详情」面板（可固定），显示模型、思考、上下文、输入、输出、缓存（总量与占比）和轮次。
+- **改动。** 详情面板里是当前文件夹的 git 改动，点文件看 diff。列表最多 80 个路径，超出时提示「还有更多改动未列出。」
+- **模型。** 内置 [models.dev](https://models.dev) 目录：启动时从 `models.dev/api.json` 更新（缓存 6 小时），取不到就用内置快照；「关于」页可以手动刷新。仓库每周由 CI 刷新内置快照。粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。GitHub Copilot、OpenAI Codex（ChatGPT）和 xAI（SuperGrok / X）在服务商页用设备码登录；xAI 与 Codex 的令牌过期后自动刷新，Copilot 用登录令牌换取短期 bearer。
+- **按服务商调整请求。** 思考参数参照 opencode 按服务商和模型发送：GLM / 智谱走 Anthropic 接口时发 `thinking` 和 `output_config.effort`；MiniMax 用 adaptive thinking（chat 接口另加 `reasoning_split`）；DeepSeek 发 `reasoning_effort`；Kimi 优先用运行时目录（再退回内置快照）里公布的 `reasoning_effort` 档位；目录里没有该模型 id 时，K3 仍按 id 映射发送。输出上限顺序：设置 `maxOutput` → models.dev `limit.output` → 32000。
+- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，可以用 Python heredoc 或短脚本改文件；`program` 直接启动钉住的程序映像）。`shell` 没有沙箱，也不逐条确认。这些改动都没有文件撤销。`grep` / `find` 不跟随符号链接，也不跨挂载点（overlay 按挂载 ID 判断，同一挂载不算跨越）。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
+- **网页搜索。** `web_search` 和 `fetch_content` 使用 Querit 或 AnySearch，也可以加 Querit / AnySearch 兼容的 https 端点；最多启用一个。密钥在「网页搜索」设置页填写（存进 `secrets.json`），或用环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`。
+- **MCP。** 全局 MCP 服务器在设置里配置。项目里的 `.mycode/mcp.json` 只在信任该项目后读取：点侧栏「添加目录」打开菜单，选「信任项目 MCP」或「不再信任项目 MCP」。信任列表存在 `ui.json` 的 `trusted_projects`（与侧栏、MCP 加载同一套路径比较）；打开文件夹不等于信任。
+- **技能。** 项目 `.agents/skills/` 或 `~/.agents/skills/` 下的 `SKILL.md` 成为 `/` 技能，设置的「技能」页列出它们。
 - **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。委派工具是 `agent`。并发默认 4 个；设置里的 `0` 表示这个默认值，不是零个子代理。子代理没有墙钟超时。
-- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。状态栏版本为 **v0.9.20**。没有打开工作区时，空工作台只有「打开目录」；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、沙丘、玫瑰、墨色、苔原、余烬、冰川、梅紫、铜绿、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载校验，确认后再重启安装。读不了的 `settings.json`、`ui.json`、`secrets.json` 和模型目录缓存会先备份再恢复默认，会话账本不动。
+- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。侧栏底部显示版本 **v0.9.23**。没有打开工作区时，空工作台只有「打开目录」和最近目录；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、余烬、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载并校验 `.sha256`，确认后再重启安装。读不了的 `settings.json`、`ui.json`、`secrets.json` 和模型目录缓存会先备份再恢复默认，会话账本不动。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
 ## 界面
 
-v0.9.20。标题栏由客户端绘制。没有打开工作区时，空工作台只有「打开目录」。
+以下为 v0.9.23 的截图。
 
-![主窗口：v0.9.20，CSD 标题栏，空工作台只有打开目录](docs/images/readme-main.png)
+![主窗口：对话中的压缩摘要（SUMMARY）卡片，输入框上下文计量显示缓存 token，右侧打开详情面板](docs/images/readme-main.png)
+
+主窗口：压缩后的摘要（SUMMARY）卡片、带缓存数的上下文计量，以及详情面板（上下文、输入、输出、缓存、轮次）。
+
+![输入框思考强度芯片展开的思考档位菜单](docs/images/readme-thinking.png)
+
+思考菜单：档位来自 models.dev，选择只对当前会话生效。
+
+![设置 → 外观：语言、色板、界面字体、界面字号 S–XL](docs/images/readme-appearance.png)
 
 外观页：语言、色板、界面字体、界面字号 S–XL。
-
-![外观：语言、色板、界面字体、S–XL](docs/images/readme-appearance.png)
 
 ## 下载
 
@@ -58,12 +70,13 @@ cargo build --release -p mycode-desktop
 
 ```text
 ~/.mycode/
-├─ settings.json          提供商、MCP、网页、外观。不含密钥
-├─ secrets.json           API 密钥
-├─ ui.json                工作区、文件夹、会话归属
+├─ settings.json          提供商、MCP、网页搜索、外观。不含密钥
+├─ secrets.json           API 密钥、登录令牌、搜索密钥
+├─ ui.json                工作区、文件夹、会话归属、每个会话的模型与思考强度、受信任项目
 ├─ catalog-cache.json     模型目录缓存
 ├─ sessions.db            会话索引（SQLite：标题、分支头、JSONL 偏移）
 ├─ sessions/<id>/         `<branch>.jsonl`、载荷与压缩检查点
+├─ agents/                自定义子代理角色（Markdown）
 └─ scratch/               未绑定文件夹时的工作目录
 ```
 
@@ -104,19 +117,65 @@ You bring the API keys. Follow [@M_Capricorns](https://x.com/M_Capricorns) on X.
 - **Named workspaces.** One workspace mounts several folders. Sessions
   belong to the workspace. The current folder resolves relative paths;
   the others are absolute.
-- **Chat.** Switch model and thinking effort beside the composer.
-- **Changes.** The right-hand pane shows the session model and the
-  current folder's git diff.
-- **Models.** The built-in [models.dev](https://models.dev) catalog
-  covers common providers. Custom endpoints speak
-  `anthropic-messages`, `openai-completions`, or `openai-responses`.
-  Copilot, Codex, and xAI can sign in with a device code.
+- **Chat.** Switch model and thinking effort beside the composer. The
+  thinking options are the levels models.dev publishes for that model;
+  with none published, the menu offers Default only. Each session keeps
+  its own model and thinking level (in `ui.json`, not `settings.json`).
+  Type `/` for commands (`/new`, `/compact`, `/settings`), skills, and MCP.
+- **Compaction.** Context is compacted automatically at about 85% of the
+  model window, or by hand with `/compact`. The last ~20k tokens stay
+  verbatim; the older part is summarized by the current model (thinking
+  off for that request) and shown in the chat as a SUMMARY card. A short
+  session reports nothing to compact. A failed or too-short summary keeps
+  the history as it was. The session ledger is never rewritten.
+- **Caching and usage.** `anthropic-messages` requests carry
+  `cache_control` breakpoints; OpenAI-compatible endpoints use automatic
+  prefix caching. Cache hits are parsed for each provider. The composer
+  context meter reads `used / window · N cached`. The title-bar button on
+  the right opens the Details panel (it can be pinned): model, thinking,
+  Context, Input, Output, Cache (total and %), and Turns.
+- **Changes.** The Details panel lists the current folder's git changes;
+  click a file for its diff. The list stops at 80 paths and then says
+  "More changes are not listed."
+- **Models.** The built-in [models.dev](https://models.dev) catalog is
+  updated from `models.dev/api.json` at startup (cached for 6 hours) and
+  falls back to the bundled snapshot. About has a manual Refresh. A weekly
+  CI job refreshes the bundled snapshot. Paste a key and go. Custom
+  endpoints speak `anthropic-messages`, `openai-completions`, or
+  `openai-responses`. GitHub Copilot, OpenAI Codex (ChatGPT), and xAI
+  (SuperGrok / X) sign in with a device code from the provider page.
+  Expired xAI and Codex tokens refresh on their own; Copilot exchanges its
+  sign-in token for a short-lived bearer.
+- **Per-provider requests.** Thinking fields follow opencode, per provider
+  and model: GLM / Zhipu on the Anthropic route sends `thinking` and
+  `output_config.effort`; MiniMax uses adaptive thinking (plus
+  `reasoning_split` on chat completions); DeepSeek sends
+  `reasoning_effort`; Kimi prefers live/cached catalog effort levels
+  (then the bundled snapshot); if that model id is missing from the
+  catalog, K3 still sends effort by id.
+  Output limit order: setting `maxOutput` → models.dev `limit.output` →
+  32000.
 - **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`.
   `shell` is the only process tool: `mode` `program` launches a pinned
-  executable with no shell, and `mode` `script` uses your shell profile,
-  including a Python heredoc or short script that edits files. Those edits
-  are not undone.
+  executable with no shell, and `mode` `script` uses the platform shell,
+  including a Python heredoc or short script that edits files. `shell` is
+  not sandboxed and does not ask per call. Those edits are not undone.
+  `grep` and `find` do not follow symlinks or cross mounts (overlay is
+  judged by mount ID, so one mount is not a crossing).
   Web search, questions, the `agent` tool, and MCP share one registry.
+- **Web search.** `web_search` and `fetch_content` use Querit or
+  AnySearch, or an https endpoint compatible with either; at most one is
+  enabled. Enter the key on the Web search settings page (stored in
+  `secrets.json`) or set `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`.
+- **MCP.** Global MCP servers live in Settings. A project's
+  `.mycode/mcp.json` is read only after you trust that project: the menu
+  behind the sidebar's Add folder button has Trust project MCP and Revoke
+  project MCP trust. Trusted paths are kept in `ui.json`
+  (`trusted_projects`; same path compare as the sidebar and MCP load);
+  opening a folder does not trust it.
+- **Skills.** `SKILL.md` files under the project's `.agents/skills/` or
+  `~/.agents/skills/` become `/` skills, listed on the Skills settings
+  page.
 - **Subagents.** Built-in scout and artisan roles,
   or custom Markdown roles under `agents/`. The delegation tool is
   `agent`. Concurrent sub-agents default to 4; a setting of `0` uses
@@ -124,16 +183,16 @@ You bring the API keys. Follow [@M_Capricorns](https://x.com/M_Capricorns) on X.
   wall-clock timeout.
 - **UI.** English and Chinese, a dark theme, and a client-drawn title
   bar (CSD) on every platform: the system title bar stays hidden, and
-  minimize, zoom, and close sit on the right.   The status badge reads
-  **v0.9.20**. With no workspace open, the empty desk offers Open folder
-  only; New task appears after a folder is open. Appearance has
-  Language, then the palettes slate, ocean, forest, dusk, sand, rose,
-  ink, moss, ember, glacier, plum, copper, and aurora, plus Interface
-  font and sizes S–XL. Fenced code in the transcript is highlighted
-  with gpui-kit's Tree-sitter grammars. Updates download and verify,
-  then wait for a restart confirmation. Unreadable `settings.json`,
-  `ui.json`, `secrets.json`, and the model catalog cache are backed up
-  and reset to defaults. Session ledgers are left alone.
+  minimize, zoom, and close sit on the right. The sidebar footer reads
+  **v0.9.23**. With no workspace open, the empty desk offers Open folder
+  and recent folders only; New task appears after a folder is open.
+  Appearance has Language, then the palettes slate, ocean, forest, dusk,
+  ember, and aurora, plus Interface font and sizes S–XL. Fenced code in
+  the transcript is highlighted with gpui-kit's Tree-sitter grammars.
+  Updates download and verify the `.sha256`, then wait for a restart
+  confirmation. Unreadable `settings.json`, `ui.json`, `secrets.json`,
+  and the model catalog cache are backed up and reset to defaults.
+  Session ledgers are left alone.
 
 A tool line names its target: which file was read, what was searched,
 which command ran. Keys live only in `secrets.json`. Saved keys show as
@@ -141,13 +200,19 @@ a lock in Settings.
 
 ### Screenshots
 
-v0.9.20. The title bar is client-side (CSD). With no workspace open, the empty desk offers Open folder.
+Screenshots of v0.9.23.
 
-![Main window: v0.9.20, CSD title bar, empty desk with Open folder](docs/images/readme-main.png)
+![Main window: a conversation with a SUMMARY compaction card, the composer context meter showing cached tokens, and the Details panel open](docs/images/readme-main.png)
+
+Main window: a SUMMARY card after compaction, the context meter with cached tokens, and the Details panel (Context, Input, Output, Cache, Turns).
+
+![Thinking level menu open on the composer chip](docs/images/readme-thinking.png)
+
+Thinking menu: levels come from models.dev; a pick applies to the current session only.
+
+![Settings → Appearance: Language, palette, Interface font, and size S–XL](docs/images/readme-appearance.png)
 
 Appearance: Language, palette, Interface font, and S–XL.
-
-![Appearance: Language, palette, Interface font, and S–XL](docs/images/readme-appearance.png)
 
 ### Download
 
@@ -191,11 +256,17 @@ debuginfo stays small.
 ├─ catalog-cache.json
 ├─ sessions.db
 ├─ sessions/<id>/
+├─ agents/
 └─ scratch/
 ```
 
-`sessions.db` is the SQLite index. `sessions/<id>/` holds `<branch>.jsonl`,
-payloads, and compaction checkpoints. Older installs may still have
+`settings.json` holds providers, MCP, web search, and appearance, never
+keys. `secrets.json` holds API keys, sign-in tokens, and search keys.
+`ui.json` holds workspaces, folders, session ownership, each session's
+model and thinking level, and trusted projects. `sessions.db` is the
+SQLite index. `sessions/<id>/` holds `<branch>.jsonl`,
+payloads, and compaction checkpoints. `agents/` holds custom subagent
+roles (Markdown). Older installs may still have
 `checkpoints/<id>/`. Deleting a session removes that directory. New turns
 do not write file snapshots.
 
