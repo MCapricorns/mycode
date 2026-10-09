@@ -23,14 +23,6 @@ pub enum HeadStamp {
     Event(SessionEventId),
 }
 
-impl HeadStamp {
-    /// Returns `true` only for the empty head.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
-    }
-}
-
 /// Classifies one session event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EventKind {
@@ -292,28 +284,12 @@ pub enum SessionRequest {
     },
 }
 
-/// Recovery phase reported while an operation makes progress.
-///
-/// The index load finishes in one pull, so these phases are not emitted.
-/// They stay on the pull protocol for callers that already match them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum SessionProgress {
-    /// Discarding torn tails and orphan staged payloads.
-    Recovering,
-    /// Re-verifying committed records and rebuilding the in-memory index.
-    Replaying,
-}
-
 /// One `pull` observation of a running session operation.
+///
+/// The actor returns exactly one terminal pull. Index load finishes inside
+/// that pull, so there is no separate progress observation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionPull {
-    /// The operation advanced through one recovery phase.
-    ///
-    /// Retained so existing pull loops keep compiling. The actor does not
-    /// emit it.
-    #[allow(dead_code)]
-    Progress(SessionProgress),
     /// The operation finished successfully.
     Complete(SessionResult),
     /// The operation failed; the error is terminal for this operation.

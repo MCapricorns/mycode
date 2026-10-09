@@ -29,7 +29,7 @@ use crate::prompt::build_system_prompt;
 
 /// Why an in-flight response cycle ended unsuccessfully.
 pub(crate) enum TurnFailure {
-    /// The turn's cancellation token fired (`abort()` or `env.cancel`).
+    /// The turn's cancellation token fired (`env.cancel` or a child of it).
     Aborted,
     /// A provider-level failure. The [`AgentEvent::Error`] event has
     /// already been emitted at the failure site.
@@ -232,18 +232,8 @@ fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> Ass
 /// so none of them are safe to run (pi parity). The model re-issues the
 /// call with complete arguments.
 pub(crate) fn fail_truncated_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
-    let call_id = CallId::from(call.id.as_str());
-    emit(
+    unexecuted_call(
         env,
-        AgentEvent::ToolStarted {
-            call_id: call_id.clone(),
-            name: call.name.clone(),
-            target: call.target(),
-        },
-    );
-    completed_error(
-        env,
-        &call_id,
         call,
         "tool call was not executed: the response hit the output token limit, so its \
             arguments may be truncated; re-issue the call with complete arguments"
@@ -251,29 +241,12 @@ pub(crate) fn fail_truncated_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
     )
 }
 
-/// Synthesize an `is_error` tool result for a call that was never
-/// dispatched because the turn aborted mid-dispatch of a multi-call
-/// response. The assistant message carrying *all* the calls is already
-/// in the history, and the OpenAI wire format requires every assistant
-/// `tool_call` id to be answered by a following tool message — so the
-/// loop writes cancellation results for the undispatched remainder
-/// before unwinding (pi parity; keeps state consistent on abort).
 /// Synthesize an `is_error` tool result for a call that arrived on a
 /// failed provider turn. The call is not executed. The result keeps the
 /// assistant `tool_call` id paired for the next request.
 pub(crate) fn fail_interrupted_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
-    let call_id = CallId::from(call.id.as_str());
-    emit(
+    unexecuted_call(
         env,
-        AgentEvent::ToolStarted {
-            call_id: call_id.clone(),
-            name: call.name.clone(),
-            target: call.target(),
-        },
-    );
-    completed_error(
-        env,
-        &call_id,
         call,
         "tool call was not executed: the response was interrupted before the call \
             could run"
@@ -281,7 +254,22 @@ pub(crate) fn fail_interrupted_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolR
     )
 }
 
+/// Synthesize an `is_error` tool result for a call that was never
+/// dispatched because the turn aborted mid-dispatch of a multi-call
+/// response. The assistant message carrying every call is already in
+/// history, and the wire format requires every assistant `tool_call` id
+/// to be answered, so the loop writes these results before unwinding.
 pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
+    unexecuted_call(
+        env,
+        call,
+        "tool call was not executed: the turn was aborted before this call \
+            was dispatched"
+            .into(),
+    )
+}
+
+fn unexecuted_call(env: &TurnEnv<'_>, call: &ToolCall, reason: String) -> ToolResultMessage {
     let call_id = CallId::from(call.id.as_str());
     emit(
         env,
@@ -291,14 +279,7 @@ pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
             target: call.target(),
         },
     );
-    completed_error(
-        env,
-        &call_id,
-        call,
-        "tool call was not executed: the turn was aborted before this call \
-            was dispatched"
-            .into(),
-    )
+    completed_error(env, &call_id, call, reason)
 }
 
 fn canonical_tool_name(name: &str) -> &str {
@@ -425,8 +406,8 @@ pub(crate) async fn dispatch_tool_call(
             result: message.clone(),
         },
     );
-    // Let abort/steer observers scheduled on ToolCompleted run before
-    // the next dispatch in a multi-call response.
+    // Yield so a ToolCompleted subscriber can commit the result before the
+    // next call in this response is dispatched.
     tokio::task::yield_now().await;
     message
 }

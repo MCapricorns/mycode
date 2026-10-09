@@ -31,6 +31,14 @@ use super::ids::{BranchId, SessionCallId, SessionEventId, SessionId};
 use super::ledger::SessionLedger;
 use super::store::SessionStore;
 
+fn reject_bad_read_limit(limit: u16) -> Result<(), SessionError> {
+    if limit == 0 || limit > MAX_READ_LIMIT {
+        Err(SessionError::Limit)
+    } else {
+        Ok(())
+    }
+}
+
 /// Infrastructure-level actor failures; domain failures travel inside
 /// [`SessionPull::Failed`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,8 +286,8 @@ impl SessionCore {
                 after,
                 limit,
             } => {
-                if *limit == 0 || *limit > MAX_READ_LIMIT {
-                    return failed(admission, SessionError::Limit);
+                if let Err(error) = reject_bad_read_limit(*limit) {
+                    return failed(admission, error);
                 }
                 self.stage_for(
                     session.clone(),
@@ -365,8 +373,8 @@ impl SessionCore {
                 after,
                 limit,
             } => {
-                if *limit == 0 || *limit > MAX_READ_LIMIT {
-                    return failed(admission, SessionError::Limit);
+                if let Err(error) = reject_bad_read_limit(*limit) {
+                    return failed(admission, error);
                 }
                 self.stage_for(
                     session.clone(),
@@ -386,8 +394,8 @@ impl SessionCore {
                 before,
                 limit,
             } => {
-                if *limit == 0 || *limit > MAX_READ_LIMIT {
-                    return failed(admission, SessionError::Limit);
+                if let Err(error) = reject_bad_read_limit(*limit) {
+                    return failed(admission, error);
                 }
                 self.stage_for(
                     session.clone(),
@@ -437,7 +445,6 @@ impl SessionCore {
                     operation.stage = match &pull {
                         SessionPull::Complete(_) => Stage::Terminal(pull.clone()),
                         SessionPull::Failed(error) => Stage::Failed(error.clone()),
-                        _ => unreachable!("execute always returns a terminal"),
                     };
                     Ok(pull)
                 }

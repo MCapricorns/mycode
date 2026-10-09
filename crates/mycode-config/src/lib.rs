@@ -35,7 +35,7 @@ pub use authority::AuthorityRevision;
 #[doc(inline)]
 pub use compaction::{
     COMPACTION_FORMAT_VERSION, COMPACTION_KIND, CompactionCheckpoint, MAX_SUMMARY_CHARS,
-    estimate_token_count, estimate_tokens, read_compaction, write_compaction,
+    estimate_token_count, read_compaction, write_compaction,
 };
 pub use document_repair::{DocumentRepair, quarantine_owned_bytes};
 pub use error::{ConfigError, ConfigErrorKind};
@@ -55,9 +55,7 @@ pub use secrets::{
     read_provider_secrets, read_provider_secrets_with_repair, replace_provider_secrets,
 };
 #[doc(inline)]
-pub use secure_fs::owned_file::{
-    ensure_owned_directory, locked_update_owned_file, read_owned_file,
-};
+pub use secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
 #[doc(inline)]
 pub use settings::{
     AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, MAX_AUTHORITY_DOCUMENT_BYTES,
@@ -72,8 +70,8 @@ pub use settings::{
 };
 #[doc(inline)]
 pub use subagents::{
-    MAX_ROLE_BYTES, MAX_ROLES, ROLE_DIR_NAME, RoleCatalog, RoleIsolation, RoleOrigin, RoleThinking,
-    SubagentRole, builtin_roles, discover_roles,
+    RoleCatalog, RoleIsolation, RoleOrigin, RoleThinking, SubagentRole, builtin_roles,
+    discover_roles,
 };
 #[doc(inline)]
 pub use ui_state::{

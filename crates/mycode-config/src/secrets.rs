@@ -92,7 +92,8 @@ impl std::fmt::Debug for ProviderSecrets {
 
 /// Reads `secrets.json`; a missing document yields an empty store.
 ///
-/// A recoverable older copy (trailing commas) is rewritten in canonical form.
+/// A recoverable older copy (trailing commas) is accepted and a canonical
+/// rewrite is attempted.
 /// A document that cannot be parsed or validated is backed up and replaced
 /// with an empty store so startup can continue. The backup keeps the old
 /// bytes; this function never logs them.

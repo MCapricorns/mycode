@@ -124,11 +124,6 @@ pub(crate) struct BranchReservationRow {
 }
 
 impl SessionLedger {
-    /// Creates one empty ledger skeleton.
-    pub(crate) fn empty() -> Self {
-        Self::default()
-    }
-
     /// Returns every branch head in branch-ID byte order.
     pub(crate) fn heads(&self) -> Vec<BranchHead> {
         self.branches
@@ -219,13 +214,7 @@ impl SessionLedger {
             return Err(SessionError::Limit);
         }
         let branch_state = self.branches.get(branch).ok_or(SessionError::NotFound)?;
-        let boundary = match snapshot_head {
-            HeadStamp::Empty if branch_state.events.is_empty() => 0,
-            HeadStamp::Empty => return Err(SessionError::InvalidArgument),
-            HeadStamp::Event(event) => {
-                Self::index_of(branch_state, event).ok_or(SessionError::InvalidArgument)? + 1
-            }
-        };
+        let boundary = snapshot_boundary(branch_state, snapshot_head)?;
         let start = match after {
             None => 0,
             Some(event) => Self::index_of(branch_state, event).ok_or(SessionError::NotFound)? + 1,
@@ -256,13 +245,7 @@ impl SessionLedger {
             return Err(SessionError::Limit);
         }
         let branch_state = self.branches.get(branch).ok_or(SessionError::NotFound)?;
-        let boundary = match snapshot_head {
-            HeadStamp::Empty if branch_state.events.is_empty() => 0,
-            HeadStamp::Empty => return Err(SessionError::InvalidArgument),
-            HeadStamp::Event(event) => {
-                Self::index_of(branch_state, event).ok_or(SessionError::InvalidArgument)? + 1
-            }
-        };
+        let boundary = snapshot_boundary(branch_state, snapshot_head)?;
         let end = match before {
             None => boundary,
             Some(event) => {
@@ -284,5 +267,20 @@ impl SessionLedger {
 
     fn index_of(branch: &BranchLedger, event: &SessionEventId) -> Option<usize> {
         branch.events.iter().position(|row| &row.event_id == event)
+    }
+}
+
+/// Exclusive end index of the snapshot, or `InvalidArgument` when the head
+/// is not the empty branch or a committed event on it.
+fn snapshot_boundary(
+    branch_state: &BranchLedger,
+    snapshot_head: &HeadStamp,
+) -> Result<usize, SessionError> {
+    match snapshot_head {
+        HeadStamp::Empty if branch_state.events.is_empty() => Ok(0),
+        HeadStamp::Empty => Err(SessionError::InvalidArgument),
+        HeadStamp::Event(event) => SessionLedger::index_of(branch_state, event)
+            .map(|index| index + 1)
+            .ok_or(SessionError::InvalidArgument),
     }
 }

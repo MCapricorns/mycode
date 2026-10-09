@@ -22,11 +22,11 @@ pub(crate) use index::{
 pub(crate) use jsonl::{charge, encoded_record_len};
 
 /// Session family data root below the owned home.
-pub const SESSIONS_RELATIVE_DIR: &str = mycode_config::SESSIONS_DIR;
+const SESSIONS_RELATIVE_DIR: &str = mycode_config::SESSIONS_DIR;
 /// SQLite index file name at the owned home root.
 pub(crate) const SESSIONS_DB_FILE: &str = "sessions.db";
 /// Maximum committed charge across one session: 512 MiB.
-pub const MAX_SESSION_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_SESSION_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 /// Payloads at or above this size are written beside the JSONL log.
 pub(crate) const EXTERNAL_PAYLOAD_THRESHOLD: usize = 64 * 1024;
 /// JSONL file suffix.

@@ -39,8 +39,7 @@ const QUARANTINE_MAX_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) fn is_document_damage(error: &ConfigError) -> bool {
     matches!(
         error.kind(),
-        ConfigErrorKind::InvalidJson
-            | ConfigErrorKind::AuthorityValidation
+        ConfigErrorKind::AuthorityValidation
             | ConfigErrorKind::NonUtf8
             | ConfigErrorKind::Oversized
     )

@@ -83,16 +83,6 @@ pub struct HomeLayout {
 }
 
 impl HomeLayout {
-    /// Resolves the owned home from process environment values.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConfigErrorKind::InvalidHome`] when no valid absolute home can
-    /// be resolved.
-    pub fn from_process() -> Result<Self, ConfigError> {
-        Self::from_env(HomeEnv::from_process())
-    }
-
     /// Resolves the owned home from explicit environment values.
     ///
     /// Empty values are ignored. A nonempty `MYCODE_HOME` completely replaces
@@ -287,7 +277,7 @@ fn is_safe_path_component(name: &OsStr) -> bool {
         && !is_windows_device_name(text)
 }
 
-pub(crate) fn is_windows_device_name(name: &str) -> bool {
+fn is_windows_device_name(name: &str) -> bool {
     // Windows strips trailing dots and spaces before reserved-device matching.
     let stripped = name.trim_end_matches([' ', '.']);
     if stripped.is_empty() {

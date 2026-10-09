@@ -85,7 +85,7 @@ impl SessionCore {
             SessionLedger {
                 branches,
                 total_bytes: total,
-                ..SessionLedger::empty()
+                ..SessionLedger::default()
             },
         );
         Ok(())

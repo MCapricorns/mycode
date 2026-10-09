@@ -12,11 +12,11 @@
 use std::path::{Path, PathBuf};
 
 /// Maximum bytes read per role file.
-pub const MAX_ROLE_BYTES: usize = 32 * 1024;
+pub(crate) const MAX_ROLE_BYTES: usize = 32 * 1024;
 /// Maximum roles in one resolved catalog.
-pub const MAX_ROLES: usize = 32;
+pub(crate) const MAX_ROLES: usize = 32;
 /// Directory holding role files, under both the home and a workspace's dot dir.
-pub const ROLE_DIR_NAME: &str = "agents";
+pub(crate) const ROLE_DIR_NAME: &str = "agents";
 
 /// Built-in role definitions, embedded so a fresh install has a full team.
 const BUILTIN_ROLES: [(&str, &str); 2] = [
@@ -99,22 +99,6 @@ impl RoleThinking {
         }
     }
 
-    /// Returns the level spelling.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Off => "off",
-            Self::Minimal => "minimal",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Xhigh => "xhigh",
-            Self::Max => "max",
-            Self::On => "on",
-        }
-    }
-
     /// Returns the wire reasoning token, or `None` for the provider default.
     #[must_use]
     pub fn effort(self) -> Option<&'static str> {
@@ -141,18 +125,6 @@ pub enum RoleOrigin {
     User,
     /// `<workspace>/.mycode/agents/<name>.md`.
     Project,
-}
-
-impl RoleOrigin {
-    /// Returns the label the settings page shows.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Builtin => "built-in",
-            Self::User => "user",
-            Self::Project => "project",
-        }
-    }
 }
 
 /// Tools a child may keep even when the parent has more.
@@ -190,18 +162,16 @@ impl SubagentRole {
     /// reach a child, so depth stays at one.
     #[must_use]
     pub fn resolve_tools(&self, parent_tools: &[String]) -> Vec<String> {
-        let parent: Vec<String> = parent_tools
-            .iter()
-            .filter(|name| !PARENT_ONLY_TOOLS.contains(&name.as_str()))
-            .cloned()
-            .collect();
-        let declared = match &self.tools {
-            Some(tools) => tools
+        let live = |name: &str| {
+            !PARENT_ONLY_TOOLS.contains(&name) && parent_tools.iter().any(|parent| parent == name)
+        };
+        let declared: Vec<String> = match &self.tools {
+            Some(tools) => tools.iter().filter(|name| live(name)).cloned().collect(),
+            None => parent_tools
                 .iter()
-                .filter(|name| parent.iter().any(|live| live == *name))
+                .filter(|name| !PARENT_ONLY_TOOLS.contains(&name.as_str()))
                 .cloned()
                 .collect(),
-            None => parent,
         };
         if self.name == "scout" {
             declared

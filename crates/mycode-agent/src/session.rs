@@ -27,8 +27,6 @@ pub use dto::{
 pub use ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
 #[doc(inline)]
 pub use service::SessionService;
-#[doc(inline)]
-pub use store::MAX_SESSION_TOTAL_BYTES;
 
 /// Read-only branch snapshot for session listing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,7 +55,7 @@ pub struct SessionSnapshot {
 /// Read-only session listing for session discovery.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionsListing {
-    /// Every strictly valid session snapshot, ordered by session ID.
+    /// Every strictly valid session snapshot, newest first, then session ID.
     pub sessions: Vec<SessionSnapshot>,
     /// Index rows marked corrupt, or rows whose identities failed validation.
     /// They stay visible so a frontend can offer deletion instead of losing

@@ -68,12 +68,6 @@ impl CompactionCheckpoint {
     }
 }
 
-/// Rough token estimate: four characters per token plus a small constant.
-#[must_use]
-pub fn estimate_tokens(text: &str) -> usize {
-    estimate_token_count(text.chars().count())
-}
-
 /// Token estimate from an already-counted character length.
 ///
 /// Callers that already walk message text use this so compaction does not

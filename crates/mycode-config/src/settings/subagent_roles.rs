@@ -32,7 +32,9 @@ pub struct SubagentRoleSettings {
     /// Model id this role runs on; absent inherits the session model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Reasoning effort override: `default`, `low`, `medium`, or `high`.
+    /// Reasoning effort override. Absent inherits the role definition.
+    /// A stored value is a [`crate::RoleThinking`] spelling, including
+    /// `default`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
 }

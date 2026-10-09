@@ -1,10 +1,10 @@
 //! Durable UI state for the desktop: advisory, disposable, never a source
 //! of truth for credentials or product behavior.
 //!
-//! Holds the recent project list, the last opened project, the update
-//! preference, the last selected provider/model, and the model picker's
-//! recent and starred pins so the desktop reopens where the user left off.
-//! Missing or invalid documents reset to defaults.
+//! Holds recent projects, workspace folders, session bindings, the update
+//! preference, trusted project paths, and the model picker's recent,
+//! starred, and per-session pins so the desktop reopens where the user
+//! left off. Missing or invalid documents reset to defaults.
 use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
@@ -276,97 +276,14 @@ impl Default for UiState {
 }
 
 impl UiState {
-    /// Records one project directory as the most recent.
-    ///
-    /// Invalid, duplicate, or overflowing entries are dropped silently; the
-    /// state is advisory and must never fail product flows.
-    pub fn touch_project(&mut self, project: &str) {
-        let Some(project) = valid_project_path(project) else {
-            return;
-        };
-        self.recent_projects.retain(|existing| existing != &project);
-        self.recent_projects.insert(0, project.clone());
-        self.recent_projects.truncate(MAX_RECENT_PROJECTS);
-        self.last_project = Some(project);
-    }
-
-    /// Records that `project` may contribute project MCP configuration.
-    ///
-    /// This is not called from project open. Trust stays explicit.
-    pub fn trust_project(&mut self, project: &str) {
-        let Some(project) = valid_project_path(project) else {
-            return;
-        };
-        self.trusted_projects
-            .retain(|existing| existing != &project);
-        self.trusted_projects.insert(0, project);
-        self.trusted_projects.truncate(MAX_TRUSTED_PROJECTS);
-    }
-
-    /// Binds one session to a project directory (upsert, most recent first).
-    ///
-    /// Invalid ids or paths are dropped silently, like `touch_project`.
-    /// Drops one directory from the remembered projects (and last-project
-    /// pin when it matches).
+    /// Drops one directory from the remembered projects, and clears the
+    /// last-project pin when it matches. The next recent project, if any,
+    /// becomes the pin.
     pub fn remove_recent(&mut self, project: &str) {
         self.recent_projects.retain(|existing| existing != project);
         if self.last_project.as_deref() == Some(project) {
             self.last_project = self.recent_projects.first().cloned();
         }
-    }
-
-    /// Upserts one session's project binding at the front of the list.
-    pub fn set_session_project(&mut self, session_id: &str, project: &str) {
-        let Some(project) = valid_project_path(project) else {
-            return;
-        };
-        if !valid_session_id(session_id) {
-            return;
-        }
-        let session_id = session_id.to_owned();
-        self.session_projects
-            .retain(|(existing, _)| *existing != session_id);
-        self.session_projects.insert(0, (session_id, project));
-        self.session_projects.truncate(MAX_SESSION_PROJECTS);
-    }
-
-    /// The project bound to one session, when remembered.
-    #[must_use]
-    pub fn project_for_session(&self, session_id: &str) -> Option<&str> {
-        self.session_projects
-            .iter()
-            .find(|(existing, _)| existing == session_id)
-            .map(|(_, project)| project.as_str())
-    }
-
-    /// Upserts one session's workspace binding at the front of the list.
-    ///
-    /// Like `set_session_project`, invalid ids or unknown workspaces are
-    /// dropped silently.
-    pub fn set_session_workspace(&mut self, session_id: &str, workspace_id: &str) {
-        if !valid_session_id(session_id)
-            || !self
-                .workspaces
-                .iter()
-                .any(|workspace| workspace.id == workspace_id)
-        {
-            return;
-        }
-        let session_id = session_id.to_owned();
-        self.session_workspaces
-            .retain(|(existing, _)| *existing != session_id);
-        self.session_workspaces
-            .insert(0, (session_id, workspace_id.to_owned()));
-        self.session_workspaces.truncate(MAX_SESSION_WORKSPACES);
-    }
-
-    /// The workspace bound to one session, when remembered.
-    #[must_use]
-    pub fn workspace_for_session(&self, session_id: &str) -> Option<&str> {
-        self.session_workspaces
-            .iter()
-            .find(|(existing, _)| existing == session_id)
-            .map(|(_, workspace)| workspace.as_str())
     }
 
     /// Drops every remembered binding for one session (project and
@@ -538,8 +455,9 @@ fn valid_session_id(value: &str) -> bool {
 
 /// Reads the UI state.
 ///
-/// A missing document yields the defaults. A document that cannot be parsed
-/// or validated is backed up and replaced with defaults.
+/// A missing document yields the defaults. A trailing comma is accepted and
+/// a canonical rewrite is attempted. A document that cannot be parsed or
+/// validated is backed up and replaced with defaults.
 ///
 /// # Errors
 ///
