@@ -863,3 +863,64 @@ fn compile_glob(glob: Option<&str>, label: &str) -> Result<Option<GlobMatcher>, 
         Some(pattern) => Ok(Some(compile_glob_labeled(pattern, label)?)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::{GrepArgs, GrepTool};
+    use crate::ctx::ToolCtx;
+    use crate::stream::ToolStream;
+    use crate::tool::Tool;
+
+    #[tokio::test]
+    async fn grep_finds_lf_text_without_an_external_rg() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-grep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(root.join("sub")).expect("dir");
+        std::fs::write(root.join("sub/a.txt"), "alpha needle\nsecond line\n").expect("file");
+        let prepared = crate::builtin::blocking::prepare_search_async(
+            root.clone(),
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("prepare");
+        let ctx = ToolCtx::new(&root).with_prepared_search(Arc::new(prepared));
+        let (mut out, _rx) = ToolStream::channel();
+        let result = GrepTool
+            .execute(
+                GrepArgs {
+                    pattern: "needle".to_owned(),
+                    is_regex: false,
+                    path: Some("sub".to_owned()),
+                    include: None,
+                    exclude: None,
+                    max_results: None,
+                },
+                &ctx,
+                &mut out,
+            )
+            .await
+            .expect("grep");
+        let text: String = result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(!result.is_error, "grep failed on LF files: {text}");
+        assert!(text.contains("needle"), "expected the LF match, got {text}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
