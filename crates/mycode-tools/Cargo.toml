@@ -33,7 +33,7 @@ uuid.workspace = true
 # Grammars come from gpui-kit's registry. This pin is the same tree-sitter
 # gpui-component links (`links = "tree-sitter"`); gpui does not re-export
 # Parser or Query, so the runtime crate stays a direct dependency.
-gpui-kit = { version = "0.6", default-features = false, features = [
+gpui-kit = { version = "0.7", default-features = false, features = [
     "tree-sitter-languages",
 ] }
 tree-sitter = "=0.26.13"
