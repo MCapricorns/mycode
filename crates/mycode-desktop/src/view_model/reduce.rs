@@ -1093,6 +1093,40 @@ mod tests {
     }
 
     #[test]
+    fn inspector_changed_toggles_open_and_keeps_the_pin() {
+        let mut state = WorkspaceState::default();
+        assert!(!state.inspector_open);
+        assert!(!state.inspector_pinned);
+        reduce(
+            &mut state,
+            DesktopAction::InspectorChanged {
+                open: true,
+                pinned: false,
+            },
+        );
+        assert!(state.inspector_open);
+        assert!(!state.inspector_pinned);
+        reduce(
+            &mut state,
+            DesktopAction::InspectorChanged {
+                open: true,
+                pinned: true,
+            },
+        );
+        assert!(state.inspector_open);
+        assert!(state.inspector_pinned);
+        reduce(
+            &mut state,
+            DesktopAction::InspectorChanged {
+                open: false,
+                pinned: true,
+            },
+        );
+        assert!(!state.inspector_open);
+        assert!(state.inspector_pinned);
+    }
+
+    #[test]
     fn older_page_prepends_when_the_cursor_still_matches() {
         let mut state = open(vec![user("e5", "new")], Some("e5"));
         reduce(
