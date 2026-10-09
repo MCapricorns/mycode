@@ -145,10 +145,9 @@ pub(crate) async fn refresh_catalog(
     )
     .await;
     match outcome {
-        RefreshOutcome::Fresh(cache) | RefreshOutcome::NotModified(cache) => {
-            BridgeReply::Catalog(Ok(catalog_info_from(cache)))
-        }
-        RefreshOutcome::Updated(cache) => {
+        RefreshOutcome::Fresh(cache)
+        | RefreshOutcome::NotModified(cache)
+        | RefreshOutcome::Updated(cache) => {
             let info = catalog_info_from(cache);
             let providers = info.document.providers.len();
             let fetched_at = info.fetched_at;
@@ -269,5 +268,96 @@ mod tests {
             startup_update_event(Ok(Some(offer))),
             Some(BridgeEvent::UpdateAvailable { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_refresh_replaces_the_in_memory_catalog() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use mycode_config::{HomeLayout, locked_update_owned_file};
+        use mycode_providers::catalog::store::{
+            CACHE_FORMAT_VERSION, CACHE_KIND, CATALOG_CACHE_PATH, MAX_CACHE_BYTES,
+        };
+        use mycode_providers::catalog::{CachedCatalog, bundled};
+
+        use super::{CoreState, refresh_catalog};
+
+        let root = std::env::temp_dir().join(format!(
+            "mycode-catalog-fresh-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let home = HomeLayout::from_root(&root).expect("home");
+        let fetched_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(1)
+            .max(1);
+        let body = serde_json::json!({
+            "formatVersion": CACHE_FORMAT_VERSION,
+            "kind": CACHE_KIND,
+            "fetchedAt": fetched_at,
+            "etag": null,
+            "document": {
+                "providers": [{
+                    "id": "marker-fresh",
+                    "name": "Marker",
+                    "kind": "openai-completions",
+                    "baseUrl": "https://example.invalid/v1",
+                    "models": []
+                }]
+            }
+        });
+        let mut bytes = serde_json::to_vec(&body).expect("json");
+        bytes.push(b'\n');
+        locked_update_owned_file(&home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES, |_| {
+            Ok(bytes.clone())
+        })
+        .expect("cache");
+        let state = CoreState::new(
+            home,
+            CachedCatalog {
+                document: bundled().clone(),
+                fetched_at: 0,
+                etag: None,
+            },
+            Vec::new(),
+        );
+        assert!(
+            state
+                .catalog
+                .read()
+                .expect("catalog")
+                .document
+                .provider("marker-fresh")
+                .is_none()
+        );
+        let (tx, rx) = async_channel::unbounded();
+        let reply = refresh_catalog(&state, &tx, false).await;
+        let crate::BridgeReply::Catalog(Ok(info)) = reply else {
+            panic!("fresh refresh failed: {reply:?}");
+        };
+        assert!(info.document.provider("marker-fresh").is_some());
+        assert!(
+            state
+                .catalog
+                .read()
+                .expect("catalog")
+                .document
+                .provider("marker-fresh")
+                .is_some()
+        );
+        let event = rx.try_recv().expect("catalog event");
+        assert!(matches!(event, crate::BridgeEvent::CatalogUpdated { .. }));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

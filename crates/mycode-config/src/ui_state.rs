@@ -449,6 +449,43 @@ fn valid_project_path(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
+/// Records `path` as allowed to contribute `.mycode/mcp.json`.
+///
+/// Opening a folder does not call this. An invalid path, or a new path when
+/// the list is already full, returns false and leaves the list unchanged. A
+/// path that is already trusted moves to the front.
+#[must_use]
+pub fn trust_project(projects: &mut Vec<String>, path: &str) -> bool {
+    let Some(path) = valid_project_path(path) else {
+        return false;
+    };
+    if let Some(index) = projects.iter().position(|existing| existing == &path) {
+        if index != 0 {
+            let existing = projects.remove(index);
+            projects.insert(0, existing);
+        }
+        return true;
+    }
+    if projects.len() >= MAX_TRUSTED_PROJECTS {
+        return false;
+    }
+    projects.insert(0, path);
+    true
+}
+
+/// Removes `path` from the trusted project list.
+///
+/// Returns whether the path was present. An invalid path returns false.
+#[must_use]
+pub fn revoke_project_trust(projects: &mut Vec<String>, path: &str) -> bool {
+    let Some(path) = valid_project_path(path) else {
+        return false;
+    };
+    let before = projects.len();
+    projects.retain(|existing| existing != &path);
+    projects.len() != before
+}
+
 fn valid_session_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_SESSION_ID_BYTES && !value.chars().any(char::is_control)
 }
@@ -487,7 +524,7 @@ pub fn read_ui_state_with_repair(
         |bytes| {
             let (state, migrated) = decode_ui_state(bytes)?;
             if migrated {
-                let _ = replace_ui_state(home, &state);
+                replace_ui_state(home, &state)?;
             }
             Ok(state)
         },
@@ -604,5 +641,90 @@ mod tests {
                 .push(ModelPin::new("openai", format!("m{index}")));
         }
         assert!(state.validate().is_err());
+    }
+
+    #[test]
+    fn trust_project_round_trips_and_rejects_a_relative_path() {
+        let mut projects = Vec::new();
+        assert!(!super::trust_project(&mut projects, "relative/path"));
+        assert!(projects.is_empty());
+        assert!(super::trust_project(&mut projects, "/tmp/mycode-trust-a"));
+        assert!(super::trust_project(&mut projects, "/tmp/mycode-trust-b"));
+        assert_eq!(
+            projects,
+            vec![
+                "/tmp/mycode-trust-b".to_owned(),
+                "/tmp/mycode-trust-a".to_owned()
+            ]
+        );
+        assert!(super::revoke_project_trust(
+            &mut projects,
+            "/tmp/mycode-trust-a"
+        ));
+        assert!(!super::revoke_project_trust(
+            &mut projects,
+            "/tmp/mycode-trust-a"
+        ));
+        assert_eq!(projects, vec!["/tmp/mycode-trust-b".to_owned()]);
+
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-ui-trust-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&parent).expect("temp parent");
+        let root = parent.join("home");
+        std::fs::create_dir(&root).expect("home");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let home = crate::HomeLayout::from_root(&root).expect("layout");
+        let mut state = super::UiState::default();
+        assert!(super::trust_project(
+            &mut state.trusted_projects,
+            "/tmp/mycode-trust-b"
+        ));
+        super::replace_ui_state(&home, &state).expect("write");
+        let loaded = super::read_ui_state(&home).expect("read");
+        assert_eq!(
+            loaded.trusted_projects,
+            vec!["/tmp/mycode-trust-b".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trailing_comma_repair_surfaces_a_rewrite_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-ui-comma-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&parent).expect("temp parent");
+        let root = parent.join("home");
+        std::fs::create_dir(&root).expect("home");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        let home = crate::HomeLayout::from_root(&root).expect("layout");
+        let path = root.join("ui.json");
+        std::fs::write(&path, br#"{"formatVersion":1,"kind":"mycode-ui-state",}"#).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("file mode");
+        std::fs::create_dir(root.join("ui.json.lock")).expect("lock dir");
+        let error = super::read_ui_state(&home).expect_err("rewrite must fail");
+        assert_ne!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
+        let kept = std::fs::read(&path).expect("original remains");
+        assert!(kept.windows(2).any(|window| window == b",}"), "{kept:?}");
+        let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::remove_dir_all(&parent);
     }
 }

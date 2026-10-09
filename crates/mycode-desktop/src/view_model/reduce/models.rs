@@ -293,8 +293,12 @@ pub(super) fn clamp_reasoning_to_catalog(state: &mut WorkspaceState) {
         return;
     };
     if !levels.iter().any(|level| level == current) {
+        let document_rejected = settings.saved_reasoning.as_deref() == Some(current);
         settings.reasoning = None;
-        super::mark_settings_dirty(settings);
+        if document_rejected {
+            settings.saved_reasoning = None;
+            super::mark_settings_dirty(settings);
+        }
     }
 }
 
@@ -327,6 +331,83 @@ mod tests {
         assert!(levels.iter().any(|item| item == "default"));
         assert!(levels.iter().any(|item| item == "high"));
         assert!(!levels.iter().any(|item| item == "xhigh"));
+    }
+
+    #[test]
+    fn a_session_overlay_does_not_dirty_the_saved_effort() {
+        use std::sync::Arc;
+
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+
+        let document = mycode_config::AppSettings {
+            reasoning_effort: Some("low".to_owned()),
+            ..mycode_config::AppSettings::default()
+        };
+        let mut settings = SettingsState::from_settings(&document, 1, Vec::new());
+        settings.reasoning = Some("high".to_owned());
+        let mut state = WorkspaceState {
+            settings: Some(settings),
+            catalog: Some(Arc::new(CatalogDocument {
+                providers: vec![CatalogProvider {
+                    id: "zai".to_owned(),
+                    models: vec![CatalogModel {
+                        id: "glm".to_owned(),
+                        reasoning: true,
+                        reasoning_efforts: vec!["low".to_owned()],
+                        ..CatalogModel::default()
+                    }],
+                    ..CatalogProvider::default()
+                }],
+            })),
+            selected_provider: Some("zai".to_owned()),
+            selected_model: Some("glm".to_owned()),
+            ..WorkspaceState::default()
+        };
+        clamp_reasoning_to_catalog(&mut state);
+        let settings = state.settings.expect("settings");
+        assert!(settings.reasoning.is_none());
+        assert_eq!(settings.saved_reasoning.as_deref(), Some("low"));
+        assert!(!settings.dirty);
+        assert_eq!(
+            settings.to_settings().reasoning_effort.as_deref(),
+            Some("low")
+        );
+    }
+
+    #[test]
+    fn an_invalid_saved_effort_is_cleared_and_marked_dirty() {
+        use std::sync::Arc;
+
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+
+        let document = mycode_config::AppSettings {
+            reasoning_effort: Some("high".to_owned()),
+            ..mycode_config::AppSettings::default()
+        };
+        let mut state = WorkspaceState {
+            settings: Some(SettingsState::from_settings(&document, 1, Vec::new())),
+            catalog: Some(Arc::new(CatalogDocument {
+                providers: vec![CatalogProvider {
+                    id: "zai".to_owned(),
+                    models: vec![CatalogModel {
+                        id: "glm".to_owned(),
+                        reasoning: true,
+                        reasoning_efforts: vec!["low".to_owned()],
+                        ..CatalogModel::default()
+                    }],
+                    ..CatalogProvider::default()
+                }],
+            })),
+            selected_provider: Some("zai".to_owned()),
+            selected_model: Some("glm".to_owned()),
+            ..WorkspaceState::default()
+        };
+        clamp_reasoning_to_catalog(&mut state);
+        let settings = state.settings.expect("settings");
+        assert!(settings.reasoning.is_none());
+        assert!(settings.saved_reasoning.is_none());
+        assert!(settings.dirty);
+        assert!(settings.to_settings().reasoning_effort.is_none());
     }
 
     #[test]

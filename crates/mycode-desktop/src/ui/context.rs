@@ -343,7 +343,12 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(format!("{} {}", git.files.len(), t("files", "个文件"))),
+                            .child(format!(
+                                "{}{} {}",
+                                git.files.len(),
+                                if git.stopped_early { "+" } else { "" },
+                                t("files", "个文件")
+                            )),
                     )
                 }),
         )
@@ -403,7 +408,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                         .min_w_0()
                         .text_xs()
                         .truncate()
-                        .child(file.path.clone()),
+                        .child(git_file_label(file)),
                 )
         }))
         .when(!git.files.is_empty(), |this| {
@@ -425,9 +430,10 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                         workspace.on_toggle_changes_panel(true, cx);
                     }))
                     .child(div().flex_1().min_w_0().truncate().child(format!(
-                        "{} {}",
+                        "{} {}{}",
                         t("View all", "查看全部"),
-                        git.files.len()
+                        git.files.len(),
+                        if git.stopped_early { "+" } else { "" }
                     )))
                     .child(Icon::new(IconName::ChevronRight).xsmall()),
             )
@@ -447,6 +453,7 @@ pub(super) fn render_changes_drawer(
     let selected = workspace.git_diff_path();
     let diff = workspace.git_diff().to_owned();
     let files = git.files.clone();
+    let stopped_early = git.stopped_early;
     let (drawer_right, _) = panel_rights(inspector_span, true);
     div()
         .id("changes-drawer-layer")
@@ -564,8 +571,26 @@ pub(super) fn render_changes_drawer(
                                         .text_color(theme.primary)
                                         .child(file.status.clone()),
                                 )
-                                .child(div().flex_1().min_w_0().truncate().child(file.path.clone()))
-                        })),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .child(git_file_label(&file)),
+                                )
+                        }))
+                        .when(stopped_early, |list| {
+                            list.child(
+                                div()
+                                    .px_2()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(t(
+                                        "More changes are not listed.",
+                                        "还有更多改动未列出。",
+                                    )),
+                            )
+                        }),
                 )
                 .child(
                     div()
@@ -1111,6 +1136,13 @@ pub(super) fn render_subagent_window(
                 })),
         )
         .into_any_element()
+}
+
+fn git_file_label(file: &crate::git_status::GitFile) -> String {
+    match &file.previous {
+        Some(previous) => format!("{previous} -> {}", file.path),
+        None => file.path.clone(),
+    }
 }
 
 #[cfg(test)]

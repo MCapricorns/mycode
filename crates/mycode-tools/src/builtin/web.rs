@@ -187,11 +187,13 @@ impl Tool for FetchContentTool {
         let pages = self.host.fetch_content(&args.urls, &ctx.cancel).await?;
         let mut rendered = String::new();
         for page in pages {
+            let cut = page.content.chars().count() > MAX_PAGE_EXCERPT_CHARS;
             let excerpt: String = page.content.chars().take(MAX_PAGE_EXCERPT_CHARS).collect();
+            let truncated = page.truncated || cut;
             rendered.push_str(&format!(
                 "[{}]{}\n{}\n\n",
                 page.url,
-                if page.truncated { " (truncated)" } else { "" },
+                if truncated { " (truncated)" } else { "" },
                 excerpt
             ));
         }
@@ -204,7 +206,15 @@ impl Tool for FetchContentTool {
 
 #[cfg(test)]
 mod tests {
-    use super::{FETCH_CONTENT_DESCRIPTION, FETCH_CONTENT_SNIPPET};
+    use std::sync::Arc;
+
+    use super::{
+        FETCH_CONTENT_DESCRIPTION, FETCH_CONTENT_SNIPPET, FetchContentArgs, FetchContentTool,
+        MAX_PAGE_EXCERPT_CHARS, WebHit, WebHost, WebPage,
+    };
+    use crate::ctx::ToolCtx;
+    use crate::stream::ToolStream;
+    use crate::tool::{Tool, ToolError, ToolResult};
 
     #[test]
     fn fetch_content_treats_extract_failure_as_permanent() {
@@ -214,5 +224,83 @@ mod tests {
             assert!(text.contains("422"), "{text}");
             assert!(text.contains("Unable to extract"), "{text}");
         }
+    }
+
+    struct StaticPages(Vec<WebPage>);
+
+    #[async_trait::async_trait]
+    impl WebHost for StaticPages {
+        async fn search(
+            &self,
+            _query: &str,
+            _max_results: usize,
+            _cancel: &tokio_util::sync::CancellationToken,
+        ) -> Result<Vec<WebHit>, ToolError> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch_content(
+            &self,
+            _urls: &[String],
+            _cancel: &tokio_util::sync::CancellationToken,
+        ) -> Result<Vec<WebPage>, ToolError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn result_text(result: &ToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                mycode_core::message::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn render(pages: Vec<WebPage>) -> String {
+        let tool = FetchContentTool::new(Arc::new(StaticPages(pages)));
+        let mut stream = ToolStream::closed();
+        let ctx = ToolCtx::new(".");
+        let result = tool
+            .execute(
+                FetchContentArgs {
+                    urls: vec!["https://example.com/a".to_owned()],
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("fetch");
+        result_text(&result)
+    }
+
+    #[tokio::test]
+    async fn fetch_content_marks_truncated_when_the_tool_cuts_the_excerpt() {
+        let long = "x".repeat(MAX_PAGE_EXCERPT_CHARS + 10);
+        let cut = render(vec![WebPage {
+            url: "https://example.com/a".to_owned(),
+            content: long,
+            truncated: false,
+        }])
+        .await;
+        assert!(cut.contains("(truncated)"), "{cut}");
+
+        let short = render(vec![WebPage {
+            url: "https://example.com/a".to_owned(),
+            content: "hello".to_owned(),
+            truncated: false,
+        }])
+        .await;
+        assert!(!short.contains("(truncated)"), "{short}");
+
+        let host_cut = render(vec![WebPage {
+            url: "https://example.com/a".to_owned(),
+            content: "hello".to_owned(),
+            truncated: true,
+        }])
+        .await;
+        assert!(host_cut.contains("(truncated)"), "{host_cut}");
     }
 }

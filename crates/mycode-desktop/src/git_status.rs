@@ -29,6 +29,8 @@ fn git_command() -> Command {
 pub(crate) struct GitFile {
     pub path: String,
     pub status: String,
+    /// Previous path for a rename or copy. Diffs use [`Self::path`].
+    pub previous: Option<String>,
 }
 
 /// Branch plus dirty files for the open folder.
@@ -37,6 +39,8 @@ pub(crate) struct GitSnapshot {
     pub branch: String,
     pub files: Vec<GitFile>,
     pub note: Option<String>,
+    /// True when another dirty path existed past the file cap.
+    pub stopped_early: bool,
 }
 
 impl GitSnapshot {
@@ -45,6 +49,7 @@ impl GitSnapshot {
             branch: String::new(),
             files: Vec::new(),
             note: Some(note.into()),
+            stopped_early: false,
         }
     }
 }
@@ -53,8 +58,8 @@ impl GitSnapshot {
 ///
 /// `--no-optional-locks` keeps a refresh from taking `.git/index.lock` and
 /// opportunistically rewriting the index, which would contend with the user's
-/// own git commands and subagent worktree updates. The file list stops after
-/// 80 dirty paths.
+/// own git commands and subagent worktree updates. The file list keeps 80
+/// dirty paths and sets [`GitSnapshot::stopped_early`] when another remains.
 pub(crate) fn read_status(root: &Path) -> GitSnapshot {
     let output = git_command()
         .arg("--no-optional-locks")
@@ -69,9 +74,21 @@ pub(crate) fn read_status(root: &Path) -> GitSnapshot {
     if !output.status.success() {
         return GitSnapshot::empty(t("Not a git repository", "不是 git 仓库"));
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    parse_porcelain(&String::from_utf8_lossy(&output.stdout))
+}
+
+const STATUS_CAP: usize = 80;
+
+/// Parses `git status --porcelain=v1 -b` text.
+///
+/// Rename and copy rows (`R` or `C` in the two-character status) use
+/// `old -> new`. The new path is [`GitFile::path`] so diffs open the
+/// destination. Exactly [`STATUS_CAP`] files with no further file row is
+/// complete; another file row sets [`GitSnapshot::stopped_early`].
+fn parse_porcelain(text: &str) -> GitSnapshot {
     let mut branch = String::new();
     let mut files = Vec::new();
+    let mut stopped_early = false;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("## ") {
             branch = rest.split("...").next().unwrap_or(rest).trim().to_owned();
@@ -80,21 +97,115 @@ pub(crate) fn read_status(root: &Path) -> GitSnapshot {
         if line.len() < 4 {
             continue;
         }
-        let status = line[..2].trim().to_owned();
-        let path = line[3..].trim().to_owned();
+        if files.len() == STATUS_CAP {
+            stopped_early = true;
+            break;
+        }
+        let status_xy = &line[..2];
+        let status = status_xy.trim().to_owned();
+        let (path, previous) = split_rename(status_xy, line[3..].trim());
         if path.is_empty() {
             continue;
         }
-        files.push(GitFile { path, status });
-        if files.len() == 80 {
-            break;
-        }
+        files.push(GitFile {
+            path,
+            status,
+            previous,
+        });
     }
     GitSnapshot {
         branch,
         files,
         note: None,
+        stopped_early,
     }
+}
+
+fn split_rename(status_xy: &str, payload: &str) -> (String, Option<String>) {
+    let renamed = status_xy.chars().any(|ch| ch == 'R' || ch == 'C');
+    if renamed && let Some((old, new)) = split_arrow(payload) {
+        let path = unquote_path(new);
+        if !path.is_empty() {
+            return (path, Some(unquote_path(old)));
+        }
+    }
+    (unquote_path(payload), None)
+}
+
+fn split_arrow(payload: &str) -> Option<(&str, &str)> {
+    let bytes = payload.as_bytes();
+    let mut quoted = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'"' && (index == 0 || bytes[index - 1] != b'\\') {
+            quoted = !quoted;
+            index += 1;
+            continue;
+        }
+        if !quoted && bytes[index..].starts_with(b" -> ") {
+            return Some((payload[..index].trim(), payload[index + 4..].trim()));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn unquote_path(raw: &str) -> String {
+    let raw = raw.trim();
+    let Some(inner) = raw
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return raw.to_owned();
+    };
+    let mut bytes = Vec::new();
+    let source = inner.as_bytes();
+    let mut index = 0;
+    while index < source.len() {
+        if source[index] == b'\\' && index + 1 < source.len() {
+            match source[index + 1] {
+                b'n' => {
+                    bytes.push(b'\n');
+                    index += 2;
+                }
+                b't' => {
+                    bytes.push(b'\t');
+                    index += 2;
+                }
+                b'\\' | b'"' => {
+                    bytes.push(source[index + 1]);
+                    index += 2;
+                }
+                b'0'..=b'7' => {
+                    let mut value = 0u16;
+                    let mut consumed = 0;
+                    while consumed < 3 && index + 1 + consumed < source.len() {
+                        let digit = source[index + 1 + consumed];
+                        if !digit.is_ascii_digit() || digit > b'7' {
+                            break;
+                        }
+                        value = value * 8 + u16::from(digit - b'0');
+                        consumed += 1;
+                    }
+                    if consumed == 0 {
+                        bytes.push(b'\\');
+                        index += 1;
+                    } else {
+                        bytes.push(value as u8);
+                        index += 1 + consumed;
+                    }
+                }
+                _ => {
+                    bytes.push(source[index + 1]);
+                    index += 2;
+                }
+            }
+        } else {
+            bytes.push(source[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Unified diff for one path.
@@ -241,5 +352,40 @@ mod diff_tests {
             snapshot.files
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn porcelain_rename_splits_old_and_new_paths() {
+        let snapshot = super::parse_porcelain("## main\nR  old.txt -> new.txt\n");
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].path, "new.txt");
+        assert_eq!(snapshot.files[0].previous.as_deref(), Some("old.txt"));
+        assert_eq!(snapshot.files[0].status, "R");
+        assert!(!snapshot.stopped_early);
+
+        let quoted = super::parse_porcelain("C  \"old file.txt\" -> \"new file.txt\"\n");
+        assert_eq!(quoted.files[0].path, "new file.txt");
+        assert_eq!(quoted.files[0].previous.as_deref(), Some("old file.txt"));
+
+        let plain = super::parse_porcelain(" M keep -> name.txt\n");
+        assert_eq!(plain.files[0].path, "keep -> name.txt");
+        assert!(plain.files[0].previous.is_none());
+    }
+
+    #[test]
+    fn porcelain_marks_the_list_incomplete_only_past_the_cap() {
+        let mut eighty = String::from("## main\n");
+        for index in 0..80 {
+            eighty.push_str(&format!(" M file{index}.txt\n"));
+        }
+        let complete = super::parse_porcelain(&eighty);
+        assert_eq!(complete.files.len(), 80);
+        assert!(!complete.stopped_early);
+
+        eighty.push_str(" M extra.txt\n");
+        let truncated = super::parse_porcelain(&eighty);
+        assert_eq!(truncated.files.len(), 80);
+        assert!(truncated.stopped_early);
+        assert_eq!(truncated.files[0].path, "file0.txt");
     }
 }

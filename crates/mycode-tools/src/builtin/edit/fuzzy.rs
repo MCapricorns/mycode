@@ -41,7 +41,8 @@ pub(super) const MAX_FUZZY_TOKENS: usize = 262_144;
 /// The distance band can grow with the uniqueness margin, so this cap bounds
 /// total CPU independently of how many windows happen to be near matches.
 const MAX_FUZZY_WINDOWS: usize = 8_192;
-/// Byte interval between cancellation checks while tokenizing.
+/// Byte interval between cancellation checks while tokenizing and while
+/// scanning haystack tokens for candidate windows.
 const FUZZY_CANCEL_INTERVAL: usize = 4 * 1024;
 
 pub(super) fn prepare(
@@ -388,9 +389,21 @@ fn candidate_starts(
     // word count remains.
     if needle_words.len() > ranking_distance.saturating_mul(2) {
         let mut starts = BTreeSet::new();
+        let mut next_cancel_check = FUZZY_CANCEL_INTERVAL;
         for (index, tok) in haystack.tokens.iter().enumerate() {
-            if index.is_multiple_of(FUZZY_CANCEL_INTERVAL) {
+            if tok.orig_end >= next_cancel_check {
                 check_cancel(Some(cancel))?;
+                // Test hook only. Production cancel still uses the token above.
+                // The threshold defaults to `usize::MAX`, so a real search never
+                // takes this arm. It lets a test prove the byte checkpoint runs
+                // before the token index would have been a multiple of the interval.
+                #[cfg(test)]
+                if tok.orig_end >= fuzzy_test_cancel_at() {
+                    return Err(ToolError::Execution(
+                        "file operation cancelled before completion".to_owned(),
+                    ));
+                }
+                next_cancel_check = tok.orig_end.saturating_add(FUZZY_CANCEL_INTERVAL);
             }
             if !tok.is_word {
                 continue;
@@ -584,4 +597,70 @@ fn preview_excerpt(
         excerpt.insert(0, '…');
     }
     excerpt
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static FUZZY_TEST_CANCEL_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+#[cfg(test)]
+fn fuzzy_test_cancel_at() -> usize {
+    FUZZY_TEST_CANCEL_AT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+struct FuzzyCancelGuard(usize);
+
+#[cfg(test)]
+impl FuzzyCancelGuard {
+    fn set(at: usize) -> Self {
+        let previous = FUZZY_TEST_CANCEL_AT.with(|cell| cell.replace(at));
+        Self(previous)
+    }
+}
+
+#[cfg(test)]
+impl Drop for FuzzyCancelGuard {
+    fn drop(&mut self) {
+        let restore = self.0;
+        FUZZY_TEST_CANCEL_AT.with(|cell| cell.set(restore));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FUZZY_CANCEL_INTERVAL, FuzzyCancelGuard, FuzzyPlan, plan_fuzzy};
+    use crate::tool::ToolError;
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn fuzzy_cancel_checks_bytes_during_candidate_scan() {
+        let _guard = FuzzyCancelGuard::set(FUZZY_CANCEL_INTERVAL);
+        let body = "zzzz ".repeat(900);
+        assert!(body.len() > FUZZY_CANCEL_INTERVAL);
+        assert!(body.split_whitespace().count() < FUZZY_CANCEL_INTERVAL);
+        let cancel = CancellationToken::new();
+        let mut planned = Vec::new();
+        let mut replacement_bytes = 0usize;
+        let error = plan_fuzzy(
+            &body,
+            FuzzyPlan {
+                pattern: "a b c d e f g h i j",
+                replacement: "x",
+                max_distance: 1,
+            },
+            0,
+            &mut planned,
+            &mut replacement_bytes,
+            &cancel,
+        )
+        .expect_err("byte checkpoint");
+        match error {
+            ToolError::Execution(message) => {
+                assert!(message.contains("cancelled"), "{message}");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }

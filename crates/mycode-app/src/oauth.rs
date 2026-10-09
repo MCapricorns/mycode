@@ -356,6 +356,24 @@ fn upsert_catalog_provider(
     Ok(())
 }
 
+/// Which expired OAuth blob this crate can refresh in place.
+enum OAuthRefreshKind {
+    Xai,
+    Codex,
+    /// Copilot has no refresh grant. Any other id is refused too.
+    Excluded,
+}
+
+fn oauth_refresh_kind(provider_id: &str) -> OAuthRefreshKind {
+    if provider_id == XAI_PROVIDER_ID {
+        OAuthRefreshKind::Xai
+    } else if provider_id == OPENAI_CODEX_PROVIDER_ID {
+        OAuthRefreshKind::Codex
+    } else {
+        OAuthRefreshKind::Excluded
+    }
+}
+
 /// Resolves the Authorization credential and extra headers for one provider
 /// request: Copilot exchanges its long-lived token for a live bearer, OAuth
 /// providers refresh expiring access tokens in place.
@@ -379,12 +397,16 @@ pub(crate) async fn resolve_request_auth(
             .unwrap_or_default();
         if secret.expired(now) {
             let client = http_client(UPDATE_USER_AGENT)?;
-            secret = match provider.id.as_str() {
-                id if id == XAI_PROVIDER_ID => refresh_xai_token(&client, &secret.refresh).await?,
-                id if id == OPENAI_CODEX_PROVIDER_ID => {
-                    refresh_codex_token(&client, &secret.refresh).await?
+            // GitHub Copilot stores a device token, not an OAuth refresh grant.
+            // Its short-lived API bearer is already refreshed by
+            // `ensure_copilot_bearer` before this match. Unknown provider ids
+            // are refused the same way so a stale access token is not reused.
+            secret = match oauth_refresh_kind(provider.id.as_str()) {
+                OAuthRefreshKind::Xai => refresh_xai_token(&client, &secret.refresh).await?,
+                OAuthRefreshKind::Codex => refresh_codex_token(&client, &secret.refresh).await?,
+                OAuthRefreshKind::Excluded => {
+                    return Err("saved sign-in cannot be refreshed — sign in again".to_owned());
                 }
-                _ => secret,
             };
             let _ = save_provider_key(&state.home, &provider.id, &secret.encode());
         }
@@ -448,5 +470,31 @@ fn open_browser(url: &str) {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = url;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OAuthRefreshKind, oauth_refresh_kind};
+    use mycode_providers::{COPILOT_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID};
+
+    #[test]
+    fn expired_oauth_refresh_covers_xai_and_codex_only() {
+        assert!(matches!(
+            oauth_refresh_kind(XAI_PROVIDER_ID),
+            OAuthRefreshKind::Xai
+        ));
+        assert!(matches!(
+            oauth_refresh_kind(OPENAI_CODEX_PROVIDER_ID),
+            OAuthRefreshKind::Codex
+        ));
+        assert!(matches!(
+            oauth_refresh_kind(COPILOT_PROVIDER_ID),
+            OAuthRefreshKind::Excluded
+        ));
+        assert!(matches!(
+            oauth_refresh_kind("unknown-provider"),
+            OAuthRefreshKind::Excluded
+        ));
     }
 }

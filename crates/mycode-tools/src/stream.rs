@@ -4,12 +4,15 @@
 //! Stream invariant: any number of [`ToolStreamItem::Progress`] items
 //! followed by **exactly one** [`ToolStreamItem::Terminal`]. The producer
 //! side enforces "at most one terminal" atomically across clones: the
-//! check→claim→send sequence is one critical section, so two clones racing
+//! check→send→claim sequence is one critical section, so two clones racing
 //! `terminal()` cannot both deliver and a `progress()` that passed the check
-//! can never land after a `Terminal`. Once a terminal item has been sent,
-//! every further item is *silently ignored* (returns `false`). This follows
-//! the general single-terminal stream principle, so a tool that already
-//! finished can never corrupt the stream.
+//! can never land after a `Terminal`. The terminal flag latches only after
+//! that send succeeds. A closed receiver makes the send fail and must not
+//! latch: later items then fail because the channel is disconnected, not
+//! because a terminal that never arrived swallowed them. Once a terminal
+//! item has been sent, every further item is *silently ignored* (returns
+//! `false`). This follows the general single-terminal stream principle, so
+//! a tool that already finished can never corrupt the stream.
 //!
 //! Builtin tools return their final result from `Tool::execute`; the
 //! dispatcher sends that result as the terminal item unless the tool already
@@ -51,11 +54,12 @@ pub enum ToolStreamItem {
 #[derive(Clone)]
 pub struct ToolStream {
     tx: UnboundedSender<ToolStreamItem>,
-    /// `true` once a [`ToolStreamItem::Terminal`] has been sent. Guarded
-    /// by a mutex (not a bare atomic) so check→claim→send is one
+    /// `true` once a [`ToolStreamItem::Terminal`] has been queued. Guarded
+    /// by a mutex (not a bare atomic) so check→send→claim is one
     /// critical section shared by every clone: exactly one `terminal()`
     /// wins, and no in-flight `progress()` can be enqueued after the
     /// terminal — an atomic claim alone cannot order channel sends.
+    /// A failed send (receiver already dropped) leaves this `false`.
     state: Arc<Mutex<bool>>,
 }
 
@@ -97,10 +101,42 @@ impl ToolStream {
         if *terminated {
             return false;
         }
-        if matches!(item, ToolStreamItem::Terminal(_)) {
+        let is_terminal = matches!(item, ToolStreamItem::Terminal(_));
+        // Latch only after the terminal is queued. A closed receiver makes
+        // send fail and must not latch: later items then fail because the
+        // channel is disconnected, not because a terminal that never arrived
+        // swallowed them.
+        let sent = self.tx.send(item).is_ok();
+        if is_terminal && sent {
             *terminated = true;
         }
-        self.tx.send(item).is_ok()
+        sent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolStream, ToolStreamItem};
+    use crate::tool::ToolResult;
+
+    #[test]
+    fn a_closed_receiver_does_not_latch_the_terminal() {
+        let stream = ToolStream::closed();
+        assert!(!stream.terminal(ToolResult::text("done")));
+        assert!(!*stream.state.lock().expect("lock"));
+        assert!(!stream.progress("later"));
+        assert!(!*stream.state.lock().expect("lock"));
+    }
+
+    #[test]
+    fn a_delivered_terminal_rejects_later_items() {
+        let (stream, mut rx) = ToolStream::channel();
+        assert!(stream.terminal(ToolResult::text("done")));
+        assert!(*stream.state.lock().expect("lock"));
+        assert!(!stream.progress("later"));
+        let item = rx.rx.try_recv().expect("terminal queued");
+        assert!(matches!(item, ToolStreamItem::Terminal(_)));
+        assert!(rx.rx.try_recv().is_err());
     }
 }
 

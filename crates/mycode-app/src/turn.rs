@@ -80,13 +80,19 @@ pub(crate) async fn manual_compact(
         &model,
     )
     .await;
-    let (ok, message, summary) = match outcome {
-        Ok((message, summary)) => (true, message, summary),
-        Err(message) => (false, message, None),
+    let (ok, message) = match outcome {
+        Ok((message, Some(summary))) => {
+            match show_compaction_summary(&state, &events, &session, &branch, &session_id, &summary)
+                .await
+            {
+                Ok(()) => (true, message),
+                Err(error) => (false, error),
+            }
+        }
+        Ok((message, None)) if message == "empty" || message == "covered" => (true, message),
+        Ok((_, None)) => (false, "compaction finished without a summary".to_owned()),
+        Err(message) => (false, message),
     };
-    if let Some(summary) = summary.as_deref() {
-        show_compaction_summary(&state, &events, &session, &branch, &session_id, summary).await;
-    }
     let _ = events.try_send(BridgeEvent::CompactFinished {
         session_id,
         message,
@@ -103,20 +109,20 @@ async fn show_compaction_summary(
     branch: &BranchId,
     session_id: &str,
     summary: &str,
-) {
-    let Ok(opened) = state.service.open(session).await else {
-        return;
-    };
-    let Some(head) = opened
+) -> Result<(), String> {
+    let opened = state
+        .service
+        .open(session)
+        .await
+        .map_err(|_| "could not open the session".to_owned())?;
+    let head = opened
         .heads
         .iter()
         .find(|head| &head.branch_id == branch)
         .map(|head| head.head.clone())
-    else {
-        return;
-    };
+        .ok_or_else(|| "could not open the session".to_owned())?;
     let writer = HeadWriter::new(state.service.clone(), session.clone(), branch.clone(), head);
-    publish_visible_summary(&writer, events, session_id, summary).await;
+    publish_visible_summary(&writer, events, session_id, summary).await
 }
 
 /// Summaries produced inside `before_request`. The hook must not append a
@@ -141,7 +147,7 @@ impl DeferredSummaries {
             std::mem::take(&mut *pending)
         };
         for summary in summaries {
-            publish_visible_summary(writer, events, session_id, &summary).await;
+            let _ = publish_visible_summary(writer, events, session_id, &summary).await;
         }
     }
 }
@@ -151,11 +157,12 @@ async fn publish_visible_summary(
     events: &crate::BridgeEventTx,
     session_id: &str,
     summary: &str,
-) {
+) -> Result<(), String> {
     let payload = crate::compaction::display_summary_text(summary);
-    let Ok(event_id) = writer.write(EventKind::Message, payload.as_bytes()).await else {
-        return;
-    };
+    let event_id = writer
+        .write(EventKind::Message, payload.as_bytes())
+        .await
+        .map_err(|_| "could not write the compaction summary".to_owned())?;
     let entry = crate::protocol::ConversationEntry {
         event_id,
         kind: crate::protocol::EntryKind::UserMessage,
@@ -167,16 +174,28 @@ async fn publish_visible_summary(
         session_id: session_id.to_owned(),
         entry,
     });
+    Ok(())
 }
 
 async fn compact_session_now(
     state: &CoreState,
     session: &SessionId,
     branch: &BranchId,
-    expected_head: &HeadStamp,
+    _expected_head: &HeadStamp,
     provider_id: &str,
     model: &str,
 ) -> Result<(String, Option<String>), String> {
+    let opened = state
+        .service
+        .open(session)
+        .await
+        .map_err(|_| "could not open the session".to_owned())?;
+    let expected_head = opened
+        .heads
+        .iter()
+        .find(|head| &head.branch_id == branch)
+        .map(|head| head.head.clone())
+        .ok_or_else(|| "could not open the session".to_owned())?;
     let home = &state.home;
     let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
     let (bearer, extra_headers) = resolve_request_auth(state, &provider, &stored_key).await?;
@@ -187,15 +206,6 @@ async fn compact_session_now(
     let transport: Arc<dyn SseTransport> =
         Arc::new(ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?);
     let wire = WireProvider::new(resolved, transport);
-    let expected_head = match state.service.open(session).await {
-        Ok(opened) => opened
-            .heads
-            .iter()
-            .find(|head| &head.branch_id == branch)
-            .map(|head| head.head.clone())
-            .unwrap_or_else(|| expected_head.clone()),
-        Err(_) => expected_head.clone(),
-    };
     let history = ledger_history(&state.service, session, branch, &expected_head)
         .await
         .map_err(render_error)?;
@@ -560,7 +570,7 @@ async fn run_chat_turn_on(
     };
     let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
     if let Some(summary) = compacted.summary.as_deref() {
-        publish_visible_summary(&writer, events, &session_id, summary).await;
+        let _ = publish_visible_summary(&writer, events, &session_id, summary).await;
     }
     let history = compacted.messages;
 
@@ -1416,5 +1426,36 @@ mod tests {
             .find(&format!("- {}", root.join("b").display()))
             .unwrap();
         assert!(a < b);
+    }
+
+    #[tokio::test]
+    async fn manual_compact_fails_when_the_session_cannot_open() {
+        use mycode_agent::session::{BranchId, HeadStamp, SessionId};
+
+        use super::manual_compact;
+
+        let (root, home) = scratch();
+        let catalog = mycode_providers::catalog::current(&home);
+        let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+        let (tx, rx) = async_channel::unbounded();
+        manual_compact(
+            state,
+            tx,
+            SessionId::generate().expect("session id"),
+            BranchId::generate().expect("branch id"),
+            HeadStamp::Empty,
+            "missing".to_owned(),
+            "missing-model".to_owned(),
+        )
+        .await;
+        let event = rx.recv().await.expect("compact event");
+        match event {
+            crate::BridgeEvent::CompactFinished { message, ok, .. } => {
+                assert!(!ok);
+                assert!(message.contains("could not open the session"), "{message}");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 }

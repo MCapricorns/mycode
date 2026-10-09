@@ -651,6 +651,14 @@ pub(super) fn render_project_menu_layer(
     let theme = cx.theme();
     let recents = workspace.vm().recents.clone();
     let roots = workspace.vm().workspace_roots.clone();
+    let project = workspace.vm().project_dir.clone();
+    let trusted = project.as_deref().is_some_and(|path| {
+        workspace
+            .vm()
+            .trusted_projects
+            .iter()
+            .any(|item| crate::view_model::same_project_path(item, path))
+    });
     div()
         .id("project-menu-layer")
         .absolute()
@@ -690,6 +698,25 @@ pub(super) fn render_project_menu_layer(
                     IconName::FolderOpen,
                     theme,
                 ))
+                .when(project.is_some(), |menu| {
+                    let path = project.clone().expect("project");
+                    let label = if trusted {
+                        t("Revoke project MCP trust", "不再信任项目 MCP")
+                    } else {
+                        t("Trust project MCP", "信任项目 MCP")
+                    };
+                    let next_trusted = !trusted;
+                    menu.child(menu_row(
+                        "project-menu-trust",
+                        label,
+                        cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_toggle_project_menu(false, cx);
+                            workspace.on_set_project_trust(&path, next_trusted, cx);
+                        }),
+                        IconName::Check,
+                        theme,
+                    ))
+                })
                 .when(!recents.is_empty(), |this| {
                     this.child(
                         div()

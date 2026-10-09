@@ -568,9 +568,18 @@ pub enum DesktopAction {
     /// The thinking-effort submenu opened or closed.
     ReasoningMenuToggled(bool),
     /// The composer's thinking-effort pick. Stored on the open session's
-    /// model pin and mirrored into the in-memory settings projection so the
-    /// chip matches. This action does not mark the document dirty.
+    /// model pin and mirrored into the live settings projection so the
+    /// chip matches. This action does not mark the document dirty and does
+    /// not change the reasoning effort that a later settings save writes.
     SettingsReasoningChanged(String),
+    /// The user trusted or revoked project MCP for one absolute folder.
+    /// Opening a folder does not emit this.
+    ProjectTrustChanged {
+        /// Absolute project path.
+        project: String,
+        /// Whether `.mycode/mcp.json` in that folder may load.
+        trusted: bool,
+    },
     /// The preset picker filter changed.
     PresetSearchChanged(String),
     /// A preset form opened or closed.

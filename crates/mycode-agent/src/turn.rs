@@ -34,6 +34,9 @@ pub(crate) enum TurnFailure {
     /// A provider-level failure. The [`AgentEvent::Error`] event has
     /// already been emitted at the failure site.
     Error(MycodeError),
+    /// Request validation failed before this turn emitted [`AgentEvent::TurnStarted`].
+    /// The prompt must not stay in history and the turn must not end as aborted.
+    NotStarted(MycodeError),
 }
 
 /// Publish an Agent event; receiver errors (nobody listening, lagged)
@@ -61,6 +64,8 @@ pub(crate) async fn stream_assistant(
     token: &CancellationToken,
     config: &AgentConfig,
     state: &mut AgentState,
+    started: &mut bool,
+    pending_user: &mut Option<Arc<Message>>,
 ) -> Result<AssistantMessage, TurnFailure> {
     let system_prompt = if config.system_prompt.is_empty() {
         vec![build_system_prompt(env.tools)]
@@ -88,7 +93,18 @@ pub(crate) async fn stream_assistant(
     if let Err(error) = request.validate() {
         let error = MycodeError::from(error);
         emit(env, AgentEvent::Error(error.clone()));
-        return Err(TurnFailure::Error(error));
+        return Err(if *started {
+            TurnFailure::Error(error)
+        } else {
+            TurnFailure::NotStarted(error)
+        });
+    }
+    if !*started {
+        emit(env, AgentEvent::TurnStarted);
+        *started = true;
+        if let Some(message) = pending_user.take() {
+            emit(env, AgentEvent::MessageAdded(message));
+        }
     }
     if token.is_cancelled() {
         return Err(TurnFailure::Aborted);
@@ -266,6 +282,20 @@ pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
         "tool call was not executed: the turn was aborted before this call \
             was dispatched"
             .into(),
+    )
+}
+
+/// An `agent` call that already started, then the turn cancelled.
+///
+/// Dispatch already emitted [`AgentEvent::ToolStarted`]. This emits only
+/// [`AgentEvent::ToolCompleted`] so the nested answer cannot be appended.
+pub(crate) fn discard_running_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
+    let call_id = CallId::from(call.id.as_str());
+    completed_error(
+        env,
+        &call_id,
+        call,
+        "tool call was aborted and its result was discarded".into(),
     )
 }
 
