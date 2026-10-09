@@ -282,6 +282,9 @@ impl Workspace {
             BridgeReply::Created(Ok(summary)) => {
                 let session_id = summary.session_id.clone();
                 self.apply_action(DesktopAction::SessionCreated(summary), cx);
+                if self.vm.pending_welcome_send.is_some() {
+                    self.welcome_send_session = Some(session_id.clone());
+                }
                 // A fresh session belongs to the workspace the sidebar shows.
                 self.bind_session_workspace(&session_id, cx);
                 self.request_open_session(&session_id, cx);
@@ -293,6 +296,10 @@ impl Workspace {
             BridgeReply::Conversation(Ok(conversation)) => {
                 let session_id = conversation.session_id.clone();
                 if self.suppress_open {
+                    if self.welcome_send_session.as_deref() == Some(session_id.as_str()) {
+                        self.welcome_send_session = None;
+                        self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                    }
                     return;
                 }
                 if self
@@ -309,6 +316,7 @@ impl Workspace {
                     )
                     .is_some_and(|bound| crate::view_model::same_project_path(bound, &focus));
                     if !belongs {
+                        self.flush_welcome_send(&session_id, cx);
                         return;
                     }
                 }
@@ -324,8 +332,14 @@ impl Workspace {
                     self.mention_query = None;
                 }
                 self.follow_session_project(&session_id, cx);
-                self.dispatch(BridgeCommand::ListResources { session_id }, cx);
+                self.dispatch(
+                    BridgeCommand::ListResources {
+                        session_id: session_id.clone(),
+                    },
+                    cx,
+                );
                 self.refresh_skills(cx);
+                self.flush_welcome_send(&session_id, cx);
             }
             BridgeReply::Older(Ok(page)) => {
                 let applicable = self.vm.active.as_ref().is_some_and(|active| {
@@ -665,9 +679,19 @@ impl Workspace {
                 self.dispatch(BridgeCommand::ListSessions, cx);
                 self.dispatch(BridgeCommand::LoadUiState, cx);
             }
+            BridgeReply::Created(Err(message)) => {
+                self.welcome_send_session = None;
+                self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+            BridgeReply::Conversation(Err(message)) => {
+                if self.welcome_send_session.is_some() {
+                    self.welcome_send_session = None;
+                    self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                }
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
             BridgeReply::Sessions(Err(message))
-            | BridgeReply::Created(Err(message))
-            | BridgeReply::Conversation(Err(message))
             | BridgeReply::Sent(Err(message))
             | BridgeReply::Settings(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
@@ -865,6 +889,30 @@ impl Workspace {
         let draft = self.vm.queued[0].clone();
         self.apply_action(DesktopAction::QueuedMessageTaken, cx);
         self.send_text(draft, false, None, cx);
+    }
+
+    /// Sends the welcome-desk draft once its new session is the open one.
+    fn flush_welcome_send(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        if self.welcome_send_session.as_deref() != Some(session_id) {
+            return;
+        }
+        let Some(text) = self.vm.pending_welcome_send.clone() else {
+            self.welcome_send_session = None;
+            return;
+        };
+        let ready = self.vm.active.as_ref().is_some_and(|conversation| {
+            conversation.session_id == session_id
+                && SessionId::parse(&conversation.session_id).is_some()
+                && BranchId::parse(&conversation.branch_id).is_some()
+        });
+        if !ready {
+            return;
+        }
+        self.welcome_send_session = None;
+        self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+        self.apply_action(DesktopAction::ComposerChanged(String::new()), cx);
+        self.pending_composer_prefill = Some(String::new());
+        self.send_text(text, true, None, cx);
     }
 
     fn send_text(

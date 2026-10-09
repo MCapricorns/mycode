@@ -464,11 +464,11 @@ impl Workspace {
         self.apply_action(DesktopAction::RecentRemoved(project.to_owned()), cx);
     }
 
-    pub(crate) fn on_new_session(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_new_session(&mut self, cx: &mut Context<Self>) -> bool {
         // A session needs a folder. The empty desk and sidebar hide this
         // action until one is open; the slash command uses the same gate.
         if !crate::view_model::has_open_folder(&self.vm) {
-            return;
+            return false;
         }
         // New sessions inherit the active project so the sidebar grouping and
         // the tool working directory follow the project switcher.
@@ -476,6 +476,7 @@ impl Workspace {
             self.pending_project = self.vm.project_dir.clone();
         }
         self.dispatch(BridgeCommand::CreateSession, cx);
+        true
     }
 
     /// Opens one session and ignores any conversation reply that is not it.

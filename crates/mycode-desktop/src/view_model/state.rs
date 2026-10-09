@@ -67,6 +67,8 @@ pub(crate) struct WorkspaceState {
     pub history_loading: bool,
     /// Composer draft text.
     pub composer_draft: String,
+    /// Text typed on the welcome desk, sent once the new session is open.
+    pub pending_welcome_send: Option<String>,
     /// Follow-ups waiting for the in-flight turn to finish.
     pub queued: Vec<String>,
     /// A send is in flight.
@@ -236,6 +238,10 @@ pub enum DesktopAction {
     ConversationParked,
     /// The composer text changed.
     ComposerChanged(String),
+    /// Hold welcome-desk text until the new session can take it.
+    WelcomeSendHeld(String),
+    /// The held welcome text was sent, or the create failed.
+    WelcomeSendConsumed,
     /// The composer sent; the entry was durably committed.
     MessageSent {
         /// New head spelling.

@@ -128,7 +128,7 @@ fn web_client(home: &HomeLayout) -> Result<crate::web_client::WebClient, String>
         ));
     }
     let transport = crate::web_client::transport::ReqwestWebTransport::new()
-        .map_err(|_| "web transport unavailable".to_owned())?;
+        .map_err(|error| error.to_string())?;
     crate::web_client::WebClient::new(&backend.endpoint, key, std::sync::Arc::new(transport))
         .map_err(|_| "the search backend endpoint violates the URL policy".to_owned())
         .map(|client| client.with_kind(kind))
@@ -200,7 +200,7 @@ impl mycode_tools::builtin::WebHost for BridgeWebHost {
         let results = client
             .search(query, max_results, cancel.clone())
             .await
-            .map_err(|error| fail(format!("search failed: {error}")))?;
+            .map_err(|error| fail(crate::web_client::tool_failure("search", &error)))?;
         Ok(results
             .into_iter()
             .map(|result| mycode_tools::builtin::WebHit {
@@ -221,7 +221,7 @@ impl mycode_tools::builtin::WebHost for BridgeWebHost {
         let pages = client
             .contents(urls, cancel.clone())
             .await
-            .map_err(|error| fail(format!("fetch failed: {error}")))?;
+            .map_err(|error| fail(crate::web_client::tool_failure("fetch", &error)))?;
         Ok(pages
             .into_iter()
             .map(|page| mycode_tools::builtin::WebPage {

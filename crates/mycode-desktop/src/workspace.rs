@@ -174,6 +174,8 @@ pub struct Workspace {
     picker_focus_pending: bool,
     ask_input: Option<Entity<InputState>>,
     pending_project: Option<String>,
+    /// Session created to carry [`crate::view_model::WorkspaceState::pending_welcome_send`].
+    welcome_send_session: Option<String>,
     /// Folder the user last chose. Opens for other folders are ignored.
     focused_project: Option<String>,
     /// Rename editor for the active workspace; lives only while the
@@ -295,6 +297,7 @@ impl Workspace {
             picker_focus_pending: false,
             ask_input: None,
             pending_project: None,
+            welcome_send_session: None,
             focused_project: None,
             workspace_rename_input: None,
             pending_open: None,
@@ -703,6 +706,13 @@ impl Workspace {
         if draft != self.vm.composer_draft {
             self.apply_action(DesktopAction::ComposerChanged(draft.clone()), cx);
         }
+        if self.welcome_send_session.is_some() || self.vm.pending_welcome_send.is_some() {
+            return;
+        }
+        if self.vm.active.is_none() {
+            self.submit_from_welcome(&draft, cx);
+            return;
+        }
         if self.vm.sending {
             if !draft.trim().is_empty() {
                 self.enqueue_follow_up(draft, window, cx);
@@ -714,6 +724,33 @@ impl Workspace {
             return;
         }
         self.pump_queued_send(cx);
+    }
+
+    /// Enter or send on the welcome desk starts a task with that text.
+    ///
+    /// The session is created the same way as New task. The draft is sent
+    /// once that session's conversation is open.
+    fn submit_from_welcome(&mut self, draft: &str, cx: &mut Context<Self>) {
+        if self.vm.pending_welcome_send.is_some() {
+            return;
+        }
+        match crate::view_model::composer_submit(&self.vm, draft) {
+            crate::view_model::ComposerSubmit::StartTask(text) => {
+                self.apply_action(DesktopAction::WelcomeSendHeld(text), cx);
+                if !self.on_new_session(cx) {
+                    self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                }
+            }
+            crate::view_model::ComposerSubmit::NeedFolder => {
+                self.push_toast(
+                    crate::i18n::t("Open a folder to get started.", "打开一个目录即可开始。"),
+                    crate::workspace::ToastKind::Info,
+                    cx,
+                );
+            }
+            crate::view_model::ComposerSubmit::Send | crate::view_model::ComposerSubmit::Ignore => {
+            }
+        }
     }
 
     pub(crate) fn on_remove_queued(&mut self, index: usize, cx: &mut Context<Self>) {

@@ -42,7 +42,7 @@ pub struct PageContent {
 }
 
 /// Errors surfaced by the web client.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WebError {
     /// The request or a response URL violated the guard rules.
     #[error("blocked by URL policy")]
@@ -50,12 +50,34 @@ pub enum WebError {
     /// The backend response violated the bounded contract.
     #[error("backend response is malformed or oversized")]
     Protocol,
-    /// The backend could not be reached.
-    #[error("search backend is unavailable")]
-    Unavailable,
+    /// The backend could not be reached. The string is the visible reason
+    /// (pin rejection, DNS, TLS, or connect failure) when one is known.
+    #[error("{0}")]
+    Unavailable(String),
     /// The caller cancelled the request.
     #[error("cancelled")]
     Cancelled,
+}
+
+impl WebError {
+    /// A reachability failure. An empty reason keeps the generic sentence.
+    #[must_use]
+    pub(crate) fn unavailable(reason: impl AsRef<str>) -> Self {
+        let reason = reason.as_ref().trim();
+        if reason.is_empty() {
+            Self::Unavailable("search backend is unavailable".to_owned())
+        } else {
+            Self::Unavailable(format!("search backend is unavailable: {reason}"))
+        }
+    }
+}
+
+/// Text `web_search` / `fetch_content` return when the client fails.
+///
+/// `action` is `search` or `fetch`, matching the tool the model called.
+#[must_use]
+pub(crate) fn tool_failure(action: &str, error: &WebError) -> String {
+    format!("{action} failed: {error}")
 }
 
 /// Outbound POST seam for the web client.
@@ -214,7 +236,7 @@ impl WebClient {
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
         if payload["code"].as_i64().is_some_and(|code| code != 0) {
-            return Err(WebError::Unavailable);
+            return Err(WebError::unavailable(""));
         }
         let hits = payload["data"]["results"]
             .as_array()
@@ -335,7 +357,7 @@ impl WebClient {
             let payload: serde_json::Value =
                 serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
             if payload["code"].as_i64().is_some_and(|code| code != 0) {
-                return Err(WebError::Unavailable);
+                return Err(WebError::unavailable(""));
             }
             let data = &payload["data"];
             let returned = data["url"].as_str().unwrap_or(url);
@@ -416,5 +438,83 @@ impl WebClient {
             return Err(WebError::Protocol);
         }
         Ok(raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::IpAddr;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use mycode_providers::{PinMode, connection_addresses};
+    use tokio_util::sync::CancellationToken;
+
+    use super::transport::pinned_transport_error;
+    use super::{SearchKind, WebClient, WebError, WebTransport, tool_failure};
+
+    struct StaticFailure {
+        reason: String,
+    }
+
+    #[async_trait::async_trait]
+    impl WebTransport for StaticFailure {
+        async fn post_json(
+            &self,
+            _endpoint: &str,
+            _bearer: Option<&str>,
+            _body: &[u8],
+            _timeout: Duration,
+            _cancel: CancellationToken,
+        ) -> Result<Vec<u8>, WebError> {
+            Err(pinned_transport_error(&self.reason))
+        }
+    }
+
+    #[tokio::test]
+    async fn pin_rejection_reaches_the_web_tool_error() {
+        let reason = connection_addresses(
+            PinMode::PublicHttps,
+            0,
+            "https://api.anysearch.com/v1/search",
+            &[IpAddr::from([127, 0, 0, 1])],
+        )
+        .unwrap_err();
+        assert_eq!(
+            reason,
+            "resolved addresses are not all public: api.anysearch.com"
+        );
+        let client = WebClient::new(
+            "https://api.anysearch.com",
+            None,
+            Arc::new(StaticFailure { reason }),
+        )
+        .unwrap()
+        .with_kind(SearchKind::Anysearch);
+        let search_error = client
+            .search("rust fake-ip", 3, CancellationToken::new())
+            .await
+            .unwrap_err();
+        let search_tool = mycode_tools::ToolError::Execution(tool_failure("search", &search_error));
+        assert!(
+            search_tool
+                .to_string()
+                .contains("resolved addresses are not all public: api.anysearch.com"),
+            "{search_tool}"
+        );
+        let fetch_error = client
+            .contents(
+                &["https://example.com/docs".to_owned()],
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        let fetch_tool = mycode_tools::ToolError::Execution(tool_failure("fetch", &fetch_error));
+        assert!(
+            fetch_tool
+                .to_string()
+                .contains("resolved addresses are not all public: api.anysearch.com"),
+            "{fetch_tool}"
+        );
     }
 }

@@ -20,8 +20,20 @@ impl ReqwestWebTransport {
         reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| WebError::Unavailable)?;
+            .map_err(|error| WebError::unavailable(format!("http client unavailable: {error}")))?;
         Ok(Self)
+    }
+}
+
+/// Maps a [`mycode_providers::send_pinned`] failure onto the web client error.
+///
+/// Cancellation stays a distinct variant. Every other failure keeps its
+/// reason so `web_search` and `fetch_content` can show it.
+pub(super) fn pinned_transport_error(message: &str) -> WebError {
+    if message == "request cancelled" {
+        WebError::Cancelled
+    } else {
+        WebError::unavailable(message)
     }
 }
 
@@ -57,10 +69,10 @@ impl WebTransport for ReqwestWebTransport {
                 timeout: Some(timeout),
                 user_agent: None,
                 cancel: cancel.clone(),
-            }) => sent.map_err(|_| WebError::Unavailable)?,
+            }) => sent.map_err(|message| pinned_transport_error(&message))?,
         };
         if !response.status().is_success() {
-            return Err(WebError::Unavailable);
+            return Err(WebError::unavailable(format!("HTTP {}", response.status())));
         }
         let bytes = tokio::select! {
             biased;
