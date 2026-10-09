@@ -37,7 +37,8 @@ pub(crate) struct StableHandle {
     pub(crate) file: File,
     pub(crate) identity: FileIdentity,
     pub(crate) kind: FsEntryKind,
-    /// When set, `file` is the parent directory and identity is `name`.
+    /// When set, `file` is the parent directory, `identity` is the child's,
+    /// and this string is the on-disk spelling.
     ///
     /// Used on Unix platforms without `O_PATH` so find can retain a
     /// metadata-only capability for a mode-`000` file.

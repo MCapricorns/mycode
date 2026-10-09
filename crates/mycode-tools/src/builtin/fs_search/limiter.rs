@@ -182,6 +182,8 @@ impl WalkLimiter {
     }
 
     /// Charges one live handle against the invocation budget.
+    ///
+    /// Stops the walk and returns an error when the budget is already full.
     pub fn acquire_handle(&self) -> io::Result<()> {
         let previous = self.handles.fetch_add(1, Ordering::AcqRel);
         if previous >= self.max_open_handles {
@@ -192,7 +194,6 @@ impl WalkLimiter {
         Ok(())
     }
 
-    /// Releases one live handle charge.
     pub fn release_handle(&self) {
         self.handles.fetch_sub(1, Ordering::AcqRel);
     }
@@ -330,7 +331,6 @@ impl IoErrors {
         }
     }
 
-    /// Records one path-specific error.
     pub fn record(&self, rel: &str, err: &io::Error) {
         self.count.fetch_add(1, Ordering::Relaxed);
         let mut samples = self.samples.lock().expect("io error samples poisoned");

@@ -41,9 +41,10 @@ pub(super) const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 /// Lower than the crate default so pathological nesting fails at compile
 /// instead of during search.
 pub(super) const REGEX_NEST_LIMIT: u32 = 32;
-/// Maximum characters of a single diff side.
+/// Maximum UTF-8 bytes of one fuzzy near-miss excerpt.
 ///
-/// Keeps the UI summary small so it cannot echo a secret file.
+/// Passed to [`crate::builtin::truncate_bytes`]. The diff summary uses a
+/// separate line cap and [`MAX_DIFF_SUMMARY_BYTES`].
 pub(super) const MAX_DIFF_SNIPPET: usize = 80;
 /// Maximum bytes of the aggregated diff summary.
 ///

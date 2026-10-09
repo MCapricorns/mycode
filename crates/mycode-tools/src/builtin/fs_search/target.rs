@@ -14,31 +14,24 @@ use super::*;
 /// Resolves `cwd` and `path_arg` to a handle-backed search root.
 ///
 /// Relative `cwd` is made absolute against the process cwd; an already
-/// absolute `cwd` does not consult the process cwd. An omitted
-/// path or any argument that lexically normalizes to `cwd` denotes the allowed
-/// root. Relative arguments are normalized with an anchored component stack,
-/// so a leading parent can never leave and later re-enter the root. Unix and
+/// absolute `cwd` does not consult the process cwd. An omitted path or any
+/// argument that lexically normalizes to `cwd` denotes the allowed root.
+/// Relative arguments are normalized with an anchored component stack, so a
+/// leading parent can never leave and later re-enter the root. Unix and
 /// Windows target traversal is handle-relative and no-follow. Windows also
 /// validates final Unicode paths and stores on-disk component spelling after
 /// an alias open so anchored ignore matching sees `Visible`, not `visible`.
+/// `access` selects a content or metadata capability. Ignore files loaded
+/// during resolution share `cancel` and the [`WalkLimiter`] the walker will
+/// use, so a timeout cannot keep reading and ignore/handle budgets cannot be
+/// spent twice.
 ///
 /// # Errors
 ///
 /// Returns [`ToolError::InvalidArgs`] for lexical escapes, symlink/reparse
 /// targets, or handle-proven containment failures. Missing or inaccessible
-/// roots, cancelled or overdue ignore reads, and oversized ignore files
-/// return [`ToolError::Execution`].
-/// Resolves a search root while honouring `cancel` and `limits`.
-///
-/// Ignore files loaded during resolution use the same cancel token and
-/// [`WalkLimiter`] the walker will share, so a timeout cannot keep reading
-/// and ignore/handle budgets cannot be spent twice.
-///
-/// # Errors
-///
-/// Same as [`resolve_search_root`], plus cancellation and deadline expiry
-/// while reading ignore files.
-/// Resolves a search root with an explicit content/metadata capability.
+/// roots, cancelled or overdue ignore reads, oversized ignore files, and
+/// deadline expiry return [`ToolError::Execution`].
 pub(crate) fn resolve_search_root_with_access(
     cwd: &Path,
     path_arg: Option<&str>,

@@ -177,9 +177,10 @@ impl Drop for TempName {
 /// replacement already happened. A final cancel gate runs immediately before
 /// the irreversible publish rename, and the published name is verified to
 /// still be the just-published inode carrying exactly the written content.
-/// Mandatory cleanups (the never-written mode probe, the post-`linkat` temp
-/// name) must succeed before success is reported, so residue is never
-/// silently presented as a successful write.
+/// Mandatory cleanups must succeed before success is reported: the
+/// never-written mode probe, and on the Unix `linkat` create path the
+/// temporary name left after the link. Residue is never silently presented
+/// as a successful write.
 ///
 /// # Errors
 ///

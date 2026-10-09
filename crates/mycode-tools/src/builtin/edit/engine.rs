@@ -551,8 +551,9 @@ fn literal_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolEr
         return Ok(exact);
     }
     // Windows files are often CRLF while the model sends LF (or the reverse).
-    // An exact miss retries with CR stripped in front of LF, then the
-    // replacement is written with the file's own line ending.
+    // An exact miss retries on a copy with the CR of each CRLF dropped, and
+    // the matched span is mapped back onto the original bytes. The
+    // replacement is then rewritten to the file's dominant line ending.
     if body.contains('\r') || patterns.iter().any(|pattern| pattern.contains('\r')) {
         return newline_insensitive_matches(body, patterns);
     }
