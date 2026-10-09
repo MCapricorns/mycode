@@ -4295,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-agent"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4315,7 +4315,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-app"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -4342,7 +4342,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-config"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "rustix",
  "serde",
@@ -4354,7 +4354,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-core"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "async-trait",
  "serde",
@@ -4367,7 +4367,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "async-channel",
  "gpui-kit",
@@ -4383,7 +4383,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-providers"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4399,7 +4399,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-tools"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "aho-corasick",
  "async-trait",
