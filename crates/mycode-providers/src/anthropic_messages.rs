@@ -75,7 +75,7 @@ fn convert_tool(tool: &ToolSpec) -> Value {
     json!({
         "name": tool.name,
         "description": tool.description,
-        "input_schema": tool.params_schema,
+        "input_schema": crate::wire_common::tool_parameters(tool),
     })
 }
 

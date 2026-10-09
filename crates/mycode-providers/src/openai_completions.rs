@@ -13,7 +13,8 @@ use crate::driver::FrameReducer;
 use crate::wire_common::{
     MAX_STREAM_INDEX, ReasoningReplay, append_interruption, apply_reasoning_effort,
     assemble_blocks_with_replay, assembled_stop_reason, charge_stream, join_text, join_thinking,
-    map_stop_reason, merge_usage, provider_error_detail, reasoning_replay, usage_from_value,
+    map_stop_reason, merge_usage, provider_error_detail, reasoning_replay, tool_parameters,
+    usage_from_value,
 };
 
 /// Concatenation separator for multi-part system prompts.
@@ -63,7 +64,7 @@ fn convert_tool(tool: &ToolSpec) -> Value {
         "function": {
             "name": tool.name,
             "description": tool.description,
-            "parameters": tool.params_schema,
+            "parameters": tool_parameters(tool),
         },
     })
 }

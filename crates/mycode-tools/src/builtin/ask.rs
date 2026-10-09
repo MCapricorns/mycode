@@ -714,10 +714,9 @@ mod tests {
         let text = schema.to_string();
         assert!(text.contains("multiple"), "{text}");
         let question = schema
-            .pointer("/$defs/AskQuestion/required")
-            .or_else(|| schema.pointer("/definitions/AskQuestion/required"))
+            .pointer("/properties/questions/items/required")
             .and_then(|value| value.as_array())
-            .expect("AskQuestion required");
+            .expect("inlined question required");
         assert!(
             question.iter().all(|item| item != "multiple"),
             "{question:?}"

@@ -152,6 +152,21 @@ pub(crate) fn apply_anthropic_thinking(
     apply_thinking_request(body, model, endpoint, level, ThinkingWire::Anthropic);
 }
 
+/// Parameters object placed on a tool definition.
+///
+/// Every provider gets the same expansion. OpenCode `schema()` in
+/// `packages/opencode/src/provider/transform.ts` does not: `sanitizeMoonshot`
+/// keeps a bare `$ref` (Moonshot expands it and rejects sibling keywords),
+/// and `sanitizeGemini` copies `$ref` through. Moonshot's coding-plan
+/// validator still reports infinite recursion on schemars `$ref` + `$defs`
+/// at `operations.items`, so the refs are inlined and the def buckets are
+/// dropped before the body is sent.
+pub(crate) fn tool_parameters(tool: &mycode_core::ToolSpec) -> Value {
+    let mut schema = tool.params_schema.clone();
+    mycode_core::inline_schema_refs(&mut schema);
+    schema
+}
+
 fn apply_thinking_request(
     body: &mut Value,
     model: &str,

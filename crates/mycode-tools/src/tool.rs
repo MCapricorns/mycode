@@ -209,39 +209,19 @@ fn normalize_tool_schema(value: &mut Value) {
         *value = serde_json::json!({"type": "object", "additionalProperties": true});
         return;
     }
-    let Some(object) = value.as_object_mut() else {
-        return;
-    };
-    object.remove("$schema");
-    object.remove("$id");
-    if let Some(reference) = object
-        .get("$ref")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-    {
-        let name = reference.rsplit('/').next().unwrap_or("");
-        if let Some(target) = object
-            .get("$defs")
-            .and_then(Value::as_object)
-            .and_then(|defs| defs.get(name))
-            .cloned()
-        {
-            let defs = object.get("$defs").cloned();
-            *value = target;
-            if let Some(object) = value.as_object_mut() {
-                object.remove("$schema");
-                if let Some(defs) = defs {
-                    object.entry("$defs".to_owned()).or_insert(defs);
-                }
-            }
-        }
+    if let Some(object) = value.as_object_mut() {
+        object.remove("$schema");
+        object.remove("$id");
     }
+    // Same expansion the wire adapters apply, so a builtin spec and the
+    // request body agree. See `mycode_core::inline_schema_refs`.
+    mycode_core::inline_schema_refs(value);
     if let Some(object) = value.as_object_mut() {
         object.remove("$schema");
         if !object.contains_key("type")
             && !object.contains_key("oneOf")
             && !object.contains_key("anyOf")
-            && !object.contains_key("$ref")
+            && !object.contains_key("allOf")
         {
             object.insert("type".to_owned(), Value::String("object".to_owned()));
         }

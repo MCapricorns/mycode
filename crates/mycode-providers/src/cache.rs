@@ -1810,4 +1810,63 @@ mod tests {
         let coding_off = chat_body("kimi-for-coding", proxy, &off);
         assert_eq!(coding_off["thinking"]["type"], "disabled");
     }
+
+    /// Moonshot rejects schemars `$ref` + `$defs` as infinite recursion.
+    /// OpenCode `sanitizeMoonshot` keeps a bare `$ref` and `sanitizeGemini`
+    /// copies `$ref` through. Every wire inlines the refs instead.
+    #[test]
+    fn tool_schemas_inline_refs_on_every_wire() {
+        let spec = ToolSpec {
+            name: "edit".to_owned(),
+            description: "edit a file".to_owned(),
+            params_schema: json!({
+                "type": "object",
+                "$defs": {
+                    "EditOp": {
+                        "type": "object",
+                        "properties": {
+                            "occurrence": {
+                                "$ref": "#/$defs/Occurrence",
+                                "description": "which match"
+                            }
+                        }
+                    },
+                    "Occurrence": { "type": "string", "enum": ["unique", "all", "nth"] }
+                },
+                "properties": {
+                    "operations": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/EditOp" }
+                    }
+                }
+            }),
+        };
+        let request = Request::new().with_tool(spec);
+        let bodies = [
+            chat_body(
+                "kimi-for-coding",
+                "https://api.kimi.com/coding/v1/chat/completions",
+                &request,
+            ),
+            chat_body(
+                "gpt-5",
+                "https://api.openai.com/v1/chat/completions",
+                &request,
+            ),
+            responses_body("gpt-5", "https://api.openai.com/v1/responses", &request),
+            anthropic_body(
+                "claude-sonnet-4-6",
+                "https://api.anthropic.com/v1/messages",
+                &request,
+            ),
+        ];
+        for body in &bodies {
+            let text = body.to_string();
+            assert!(!text.contains("\"$ref\""), "{text}");
+            assert!(!text.contains("\"$defs\""), "{text}");
+            assert!(!text.contains("\"definitions\""), "{text}");
+            assert!(text.contains("unique"), "{text}");
+            assert!(text.contains("which match"), "{text}");
+        }
+    }
 }

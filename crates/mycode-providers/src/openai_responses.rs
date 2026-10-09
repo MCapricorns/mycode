@@ -53,7 +53,7 @@ fn convert_tool(tool: &ToolSpec) -> Value {
         "type": "function",
         "name": tool.name,
         "description": tool.description,
-        "parameters": tool.params_schema,
+        "parameters": crate::wire_common::tool_parameters(tool),
     })
 }
 
