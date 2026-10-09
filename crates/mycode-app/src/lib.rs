@@ -147,6 +147,17 @@ pub enum BridgeCommand {
         /// Model id that writes the summary.
         model: String,
     },
+    /// Inject text into the running turn without cancelling it or its subagents.
+    ///
+    /// The core pushes into that session's steer inbox and replies at once.
+    /// A missing inbox means the turn already ended; the desktop then queues
+    /// the text so it is not lost.
+    Steer {
+        /// Session identity spelling.
+        session_id: String,
+        /// Composer text. Blank text is ignored by the inbox.
+        text: String,
+    },
     /// Abort the in-flight turn of one session (Escape in the chat).
     CancelChat {
         /// Session identity spelling.
@@ -384,8 +395,21 @@ pub enum BridgeEvent {
     ChatFailed {
         /// Session identity spelling.
         session_id: String,
-        /// Rendered failure for the banner.
+        /// Rendered failure for the banner. [`protocol::CHAT_CANCELLED`] is a
+        /// quiet cancel: the desktop clears the turn and may send the queue.
         message: String,
+        /// Ledger head after this turn's writes. Empty means the UI must
+        /// leave `conversation.head` unchanged.
+        head: String,
+    },
+    /// A steer was written into the ledger while the turn kept running.
+    SteerCommitted {
+        /// Session identity spelling.
+        session_id: String,
+        /// Branch head after the steer message.
+        head: String,
+        /// Transcript row for the steered user message.
+        entry: ConversationEntry,
     },
     /// The provider catalog changed after a cloud refresh.
     CatalogUpdated {
@@ -470,8 +494,11 @@ pub enum BridgeReply {
     /// Chat turn acceptance; streaming continues over the event channel.
     ChatStarted(Result<(), String>),
     /// Chat cancel acceptance. The turn ends with [`BridgeEvent::ChatFailed`]
-    /// whose message is [`protocol::CHAT_CANCELLED`].
+    /// whose message is [`protocol::CHAT_CANCELLED`] and whose head is the
+    /// ledger head after the partial was written.
     ChatCancelled(Result<(), String>),
+    /// Steer acceptance. `Err` means no live inbox (the turn already ended).
+    Steered(Result<(), String>),
     /// One subagent cancel was delivered. The parent turn keeps running.
     SubagentCancelled(Result<(), String>),
     /// File matches for the composer's `@` mention.

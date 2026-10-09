@@ -28,16 +28,22 @@ pub(crate) fn compact_count(count: u64) -> String {
     }
 }
 
-/// The two pieces of a context meter. Either string may be empty.
+/// The pieces of a context meter. Any string may be empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ContextMeterParts {
     /// `12.0k / 1.0M`. Empty when the context window is unknown.
     pub ratio: String,
     /// `11.8k cached`. Empty when the latest prompt reported no cache read.
     pub cache: String,
+    /// `98%`. Empty when [`cache_percent`] has no share to report.
+    ///
+    /// The share is `cache_percent(cached, used)` for this prompt, not the
+    /// lifetime token sum.
+    pub hit: String,
 }
 
-/// Splits the latest prompt into a window ratio and a cache-hit count.
+/// Splits the latest prompt into a window ratio, a cache-hit percent, and a
+/// cache-read count.
 ///
 /// A window of zero omits the ratio. A cache read of zero omits the cache
 /// piece. The composer hides the whole meter when both the prompt and the
@@ -59,7 +65,10 @@ pub(crate) fn context_meter_parts(
     } else {
         String::new()
     };
-    ContextMeterParts { ratio, cache }
+    let hit = cache_percent(cached, used)
+        .map(|share| format!("{share}%"))
+        .unwrap_or_default();
+    ContextMeterParts { ratio, cache, hit }
 }
 
 /// Context-meter text. `cached_word` is the localized "cached" label.
@@ -70,12 +79,11 @@ pub(crate) fn context_meter_parts(
 #[must_use]
 fn format_context_meter(used: u64, window: u64, cached: u64, cached_word: &str) -> String {
     let parts = context_meter_parts(used, window, cached, cached_word);
-    match (parts.ratio.is_empty(), parts.cache.is_empty()) {
-        (false, false) => format!("{} · {}", parts.ratio, parts.cache),
-        (false, true) => parts.ratio,
-        (true, false) => parts.cache,
-        (true, true) => String::new(),
-    }
+    [parts.ratio, parts.hit, parts.cache]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// Composer label for the latest prompt. Hidden until the session has a
@@ -201,23 +209,26 @@ mod tests {
         );
         assert_eq!(
             format_context_meter(12_000, 1_000_000, 11_800, "cached"),
-            "12.0k / 1.0M · 11.8k cached"
+            "12.0k / 1.0M · 98% · 11.8k cached"
         );
         let parts = context_meter_parts(12_000, 1_000_000, 11_800, "cached");
         assert_eq!(parts.ratio, "12.0k / 1.0M");
         assert_eq!(parts.cache, "11.8k cached");
-        assert!(
-            context_meter_parts(12_000, 1_000_000, 0, "cached")
-                .cache
-                .is_empty()
+        assert_eq!(parts.hit, "98%");
+        let uncached = context_meter_parts(12_000, 1_000_000, 0, "cached");
+        assert!(uncached.cache.is_empty());
+        assert!(uncached.hit.is_empty());
+        assert_eq!(
+            context_meter_parts(545, 1_000_000, 11_800, "cached").hit,
+            "95%"
         );
         assert_eq!(
             context_meter_label(12_000, 1_000_000, 11_800, "缓存").as_deref(),
-            Some("12.0k / 1.0M · 11.8k 缓存")
+            Some("12.0k / 1.0M · 98% · 11.8k 缓存")
         );
         assert_eq!(
             context_meter_label(0, 0, 11_800, "cached").as_deref(),
-            Some("11.8k cached")
+            Some("100% · 11.8k cached")
         );
     }
 }

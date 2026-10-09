@@ -22,11 +22,11 @@ use crate::workspace::Workspace;
 /// panel; the transcript itself stays free of per-child rows.
 pub(super) fn render_streaming_entry(
     streaming: &StreamingReply,
+    workspace: &Workspace,
     theme: &Theme,
     show_reasoning: bool,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
-    let _ = cx;
     let desk = Desk::of(theme);
     let status = if streaming.status.is_empty() {
         t("Working", "工作中").to_owned()
@@ -48,11 +48,9 @@ pub(super) fn render_streaming_entry(
                 theme,
             ))
             .when(show_reasoning && !streaming.thinking.is_empty(), |this| {
-                this.child(thinking_box(
-                    "streaming-thinking".into(),
-                    &streaming.thinking,
-                    theme,
-                ))
+                let id: SharedString = "streaming-thinking".into();
+                let open = workspace.thinking_open(&id);
+                this.child(thinking_box(id, &streaming.thinking, open, theme, cx))
             })
             .when(!streaming.text.trim().is_empty(), |this| {
                 this.child(status_line(t("AGENT", "代理"), desk.green, theme))
@@ -83,8 +81,10 @@ pub(super) fn render_streaming_entry(
 /// their own builders.
 pub(super) fn render_entry(
     entry: &ConversationEntry,
+    workspace: &Workspace,
     theme: &Theme,
     show_reasoning: bool,
+    cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     match entry.kind {
         EntryKind::AssistantMessage => desk_block(entry, theme, {
@@ -93,12 +93,12 @@ pub(super) fn render_entry(
                 .flex()
                 .flex_col()
                 .gap_2()
+                .w_full()
+                .min_w_0()
                 .when(show_reasoning && !entry.thinking.is_empty(), |this| {
-                    this.child(thinking_box(
-                        format!("thinking-{}", entry.event_id).into(),
-                        &entry.thinking,
-                        theme,
-                    ))
+                    let id: SharedString = format!("thinking-{}", entry.event_id).into();
+                    let open = workspace.thinking_open(&id);
+                    this.child(thinking_box(id, &entry.thinking, open, theme, cx))
                 })
                 .when(!entry.text.trim().is_empty(), |this| {
                     this.child(status_line(t("AGENT", "代理"), desk.green, theme))
@@ -118,6 +118,10 @@ pub(super) fn render_entry(
                 entry,
                 theme,
                 div()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_normal()
                     .text_xs()
                     .font_family(theme.mono_font_family.clone())
                     .text_color(if failed {
@@ -164,6 +168,8 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
         .flex_row()
         .gap_3()
         .w_full()
+        .min_w_0()
+        .overflow_hidden()
         .child(
             div()
                 .w(px(64.))
@@ -175,7 +181,7 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
                 .whitespace_nowrap()
                 .child(stamp),
         )
-        .child(content)
+        .child(div().flex_1().min_w_0().overflow_hidden().child(content))
 }
 
 fn status_line(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoElement {
@@ -193,23 +199,75 @@ fn status_line(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoEl
         )
 }
 
-fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement {
+/// Thinking trace. Distinct from the answer: amber rail, tinted fill, and
+/// smaller muted type. The header toggles the body. Collapsed, only the
+/// header remains. The trace itself stays on the entry.
+fn thinking_box(
+    id: SharedString,
+    text: &str,
+    open: bool,
+    theme: &Theme,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
     let desk = Desk::of(theme);
+    let toggle_id = id.to_string();
+    let marker = if open { "▾" } else { "▸" };
     div()
         .id(id)
         .w_full()
         .min_w_0()
+        .overflow_hidden()
         .flex()
         .flex_col()
         .gap_1()
-        .child(status_line(t("REASONING", "推理"), desk.amber, theme))
+        .rounded(px(8.))
+        .border_l(px(2.))
+        .border_color(desk.amber)
+        .bg(desk.amber.opacity(0.10))
+        .px_2()
+        .py_1()
         .child(
             div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .whitespace_normal()
-                .child(text.to_owned()),
+                .id(SharedString::from(format!("thinking-toggle-{toggle_id}")))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .min_w_0()
+                .cursor_pointer()
+                .rounded(px(6.))
+                .hover(|row| row.bg(theme.secondary_hover.opacity(0.45)))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_toggle_thinking(&toggle_id, cx);
+                }))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(desk.amber)
+                        .child(marker),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t("Thinking", "思考")),
+                ),
         )
+        .when(open, |this| {
+            this.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_normal()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(text.to_owned()),
+            )
+        })
 }
 
 /// Assistant reply bubble: Markdown via gpui-kit's TextView.
@@ -250,8 +308,8 @@ fn short_stamp(event_id: &str) -> String {
     tail
 }
 
-/// One tool row: a single summary line. Clicking it reveals the same result
-/// body the card used to show, without changing the tool call itself.
+/// One tool row. The summary wraps inside the column instead of widening it.
+/// Clicking it reveals the result body without changing the tool call itself.
 pub(super) fn render_tool_block(
     call: &ConversationEntry,
     result: Option<&ConversationEntry>,
@@ -278,27 +336,39 @@ pub(super) fn render_tool_block(
         .flex_col()
         .w_full()
         .min_w_0()
+        .overflow_hidden()
         .child(
             div()
                 .id(format!("tool-summary-{}", call.event_id))
                 .flex()
                 .flex_row()
-                .items_center()
+                .items_start()
                 .gap_2()
-                .h(px(28.))
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .min_h(px(28.))
                 .px_2()
+                .py(px(4.))
                 .rounded(px(8.))
                 .cursor_pointer()
                 .hover(|row| row.bg(theme.secondary_hover.opacity(0.55)))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_toggle_tool_row(&event_id, cx);
                 }))
-                .child(crate::ui::lamp(lamp_color))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .pt(px(4.))
+                        .child(crate::ui::lamp(lamp_color)),
+                )
                 .child(
                     div()
                         .min_w_0()
                         .flex_1()
-                        .truncate()
+                        .w_full()
+                        .overflow_hidden()
+                        .whitespace_normal()
                         .text_xs()
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.foreground)
@@ -309,6 +379,9 @@ pub(super) fn render_tool_block(
     let row = if let (true, Some(result)) = (expanded, result) {
         row.child(
             div()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
                 .pt_1()
                 .pl(px(16.))
                 .child(result_body(tool, result, theme, &desk)),
@@ -430,6 +503,7 @@ fn result_body(
         div()
             .w_full()
             .min_w_0()
+            .overflow_hidden()
             .px_2()
             .py_1()
             .text_xs()
@@ -441,6 +515,10 @@ fn result_body(
             .into_any_element()
     } else {
         div()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_normal()
             .px_2()
             .py_1()
             .text_xs()
@@ -456,6 +534,9 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
     let removed = lines.iter().filter(|line| diff_removed_line(line)).count();
     let shown = lines.len().min(80);
     div()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
         .flex()
         .flex_col()
         .py_1()
@@ -488,6 +569,10 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
                 (theme.muted_foreground, theme.transparent)
             };
             div()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_normal()
                 .px_2()
                 .text_color(color)
                 .bg(bg)
@@ -511,6 +596,9 @@ fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> imp
     };
     let shown = lines.len().min(40);
     div()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
         .flex()
         .flex_col()
         .py_1()
@@ -524,6 +612,10 @@ fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> imp
         .children(lines.iter().take(shown).map(|line| {
             let notice = line.starts_with('[');
             div()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_normal()
                 .px_2()
                 .text_color(if notice {
                     theme.muted_foreground

@@ -35,6 +35,6 @@ pub mod session;
 mod turn;
 
 pub use agent::{Agent, AgentConfig};
-pub use env::TurnEnv;
+pub use env::{SteerInbox, TurnEnv};
 pub use hooks::HookRunner;
 pub use prompt::build_system_prompt;

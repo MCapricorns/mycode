@@ -36,6 +36,8 @@ pub(crate) struct CoreState {
     pub(crate) turn_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
     /// One token per running subagent, keyed by `session_id:call_id`.
     pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Steer inbox for the live turn of each session. Removed when the turn ends.
+    pub(crate) steer_inboxes: Arc<Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
     /// Live MCP clients, reused until settings change or a connection dies.
     pub(crate) mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     /// Documents reset before the UI asked for settings or UI state.
@@ -76,6 +78,7 @@ impl CoreState {
             copilot: Arc::new(tokio::sync::Mutex::new(None)),
             turn_cancels: Arc::new(Mutex::new(HashMap::new())),
             subagent_cancels: Arc::new(Mutex::new(HashMap::new())),
+            steer_inboxes: Arc::new(Mutex::new(HashMap::new())),
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),
             startup_repairs: Mutex::new(startup_repairs),
         }

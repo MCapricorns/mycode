@@ -220,12 +220,26 @@ pub(super) fn render_composer(
                                                 .child(meter.ratio.clone()),
                                         )
                                     })
-                                    .when(!meter.cache.is_empty(), |row| {
-                                        let cache = if meter.ratio.is_empty() {
-                                            meter.cache.clone()
+                                    .when(!meter.hit.is_empty(), |row| {
+                                        let hit = if meter.ratio.is_empty() {
+                                            meter.hit.clone()
                                         } else {
-                                            format!("· {}", meter.cache)
+                                            format!("· {}", meter.hit)
                                         };
+                                        row.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_color(theme.foreground)
+                                                .child(hit),
+                                        )
+                                    })
+                                    .when(!meter.cache.is_empty(), |row| {
+                                        let cache =
+                                            if meter.ratio.is_empty() && meter.hit.is_empty() {
+                                                meter.cache.clone()
+                                            } else {
+                                                format!("· {}", meter.cache)
+                                            };
                                         row.child(
                                             div()
                                                 .flex_shrink_0()
