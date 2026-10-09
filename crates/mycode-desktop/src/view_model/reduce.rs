@@ -35,7 +35,7 @@ use self::projects::{
     workspace_renamed, workspace_root_added, workspace_root_removed, workspace_switched,
 };
 use self::streaming::{append_streaming, set_streaming_status};
-use self::usage::{include_usage_entries, rebuild_session_usage};
+use self::usage::{clear_session_usage, include_usage_entries, rebuild_session_usage};
 
 /// A mid-turn summary arrives while the final reply is still only in the
 /// streaming bubble. Inserting it then paints the card above that reply.
@@ -110,6 +110,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.subagent_window = None;
             state.changes_panel_open = false;
             state.history_loading = false;
+            // The composer meter reads these fields directly. The open that
+            // follows targets this same new session, so it does not rebuild.
+            clear_session_usage(state);
         }
         DesktopAction::SessionDeleted => {
             state.active = None;
@@ -122,6 +125,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.error = None;
             state.history_loading = false;
             state.pending_welcome_send = None;
+            clear_session_usage(state);
         }
         DesktopAction::ConversationParked => {
             state.active = None;
@@ -140,7 +144,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.mention = None;
             state.pending_welcome_send = None;
             state.resources.clear();
-            state.live_turn = None;
+            clear_session_usage(state);
         }
         DesktopAction::ConversationOpened(conversation) => {
             let had_other = state
@@ -1064,7 +1068,8 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
 mod tests {
     use super::reduce;
     use crate::view_model::{
-        ActiveConversation, ConversationEntry, DesktopAction, EntryKind, WorkspaceState,
+        ActiveConversation, ConversationEntry, DesktopAction, EntryKind, TurnStats, UsageTotal,
+        WorkspaceState,
     };
 
     fn user(id: &str, text: &str) -> ConversationEntry {
@@ -1219,6 +1224,99 @@ mod tests {
                 .and_then(|pin| pin.reasoning.as_deref()),
             Some("high")
         );
+    }
+
+    #[test]
+    fn a_new_session_clears_the_previous_context_meter() {
+        let usage = ConversationEntry {
+            event_id: "use-1".to_owned(),
+            kind: EntryKind::Usage,
+            text: "deepseek/deepseek-v4-flash: 25000 in / 100 out · ctx 25000 · hit 24300 · cache 24300"
+                .into(),
+            call_id: None,
+            thinking: String::new(),
+        };
+        let turn = TurnStats {
+            model: "deepseek-v4-flash".to_owned(),
+            input: 25_000,
+            output: 100,
+            cache: Some(24_300),
+            elapsed_ms: 10,
+        };
+        let mut state = WorkspaceState {
+            context_used: 25_000,
+            context_cache: 24_300,
+            usage_totals: vec![UsageTotal {
+                key: "deepseek/deepseek-v4-flash".to_owned(),
+                input: 25_000,
+                output: 100,
+                cache: 24_300,
+                requests: 1,
+            }],
+            last_turn: Some(turn.clone()),
+            live_turn: Some(turn),
+            active: Some(ActiveConversation {
+                session_id: "old".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "use-1".to_owned(),
+                entries: vec![usage.clone()],
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            DesktopAction::SessionCreated(mycode_app::SessionSummary {
+                session_id: "new".to_owned(),
+                root_branch_id: "branch".to_owned(),
+                title: String::new(),
+                event_count: 0,
+                active: false,
+                corrupt: false,
+            }),
+        );
+        assert_eq!(
+            state
+                .active
+                .as_ref()
+                .map(|active| active.session_id.as_str()),
+            Some("new")
+        );
+        assert_eq!(state.context_used, 0);
+        assert_eq!(state.context_cache, 0);
+        assert!(state.usage_totals.is_empty());
+        assert!(state.last_turn.is_none());
+        assert!(state.live_turn.is_none());
+
+        reduce(
+            &mut state,
+            DesktopAction::ConversationOpened(ActiveConversation {
+                session_id: "old".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "use-1".to_owned(),
+                entries: vec![usage],
+                older_before: None,
+                streaming: None,
+            }),
+        );
+        assert_eq!(state.context_used, 25_000);
+        assert_eq!(state.context_cache, 24_300);
+        assert_eq!(state.usage_totals.len(), 1);
+        assert!(state.last_turn.is_some());
+
+        reduce(&mut state, DesktopAction::ConversationParked);
+        assert!(state.active.is_none());
+        assert_eq!(state.context_used, 0);
+        assert_eq!(state.context_cache, 0);
+        assert!(state.usage_totals.is_empty());
+        assert!(state.last_turn.is_none());
+
+        state.context_used = 25_000;
+        state.context_cache = 24_300;
+        reduce(&mut state, DesktopAction::SessionDeleted);
+        assert_eq!(state.context_used, 0);
+        assert_eq!(state.context_cache, 0);
     }
 
     #[test]

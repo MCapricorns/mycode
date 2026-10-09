@@ -42,15 +42,26 @@ pub(super) fn include_usage_entries(
     }
 }
 
+/// Drops the previous session's meter, totals, and turn stats.
+///
+/// A new task replaces `active` and then opens that same session, so
+/// [`rebuild_session_usage`] does not run. The composer would otherwise
+/// keep painting the previous prompt size and cache read.
+pub(super) fn clear_session_usage(state: &mut WorkspaceState) {
+    state.usage_totals.clear();
+    state.last_turn = None;
+    state.live_turn = None;
+    state.context_used = 0;
+    state.context_cache = 0;
+}
+
 pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
     let Some(entries) = state
         .active
         .as_ref()
         .map(|conversation| &conversation.entries)
     else {
-        state.usage_totals.clear();
-        state.last_turn = None;
-        state.context_cache = 0;
+        clear_session_usage(state);
         return;
     };
     let mut totals: Vec<UsageTotal> = Vec::new();
