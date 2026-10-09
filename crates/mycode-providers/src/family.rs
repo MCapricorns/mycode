@@ -538,9 +538,72 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     }
     if level == ReasoningLevel::Off {
         body["thinking"] = json!({ "type": "disabled" });
-    } else {
-        body["thinking"] = json!({ "type": "enabled" });
+        return;
     }
+    body["thinking"] = json!({ "type": "enabled" });
+    // OpenCode `variants()` returns `{}` for an id containing `kimi`
+    // (`packages/opencode/src/provider/transform.ts`) before the npm switch,
+    // so that map never adds effort. When models.dev publishes an effort
+    // list, `reasoningVariants` → `effortVariants` → `reasoningEffort` does.
+    // `@ai-sdk/openai-compatible` returns `{ reasoningEffort }`, the wire
+    // field `reasoning_effort`. The K2 toggle stays; the effort token is
+    // sent beside it.
+    if let Some(token) = published_kimi_effort(model_id, level) {
+        body["reasoning_effort"] = json!(token);
+    }
+}
+
+/// Effort token for a Kimi chat model whose bundled catalog row publishes one.
+///
+/// The first catalog row that publishes a toggle or an effort list wins, the
+/// same preference as `CatalogDocument::model_for_endpoint`. A later gateway
+/// that lists extra efforts does not override a toggle-only row. The id
+/// matches in full, or as the last slash, colon, or backslash segment, so a
+/// capture proxy can prefix the model.
+fn published_kimi_effort(model_id: &str, level: ReasoningLevel) -> Option<&'static str> {
+    let token = k3_effort(level)?;
+    let model = catalog_kimi_row(model_id)?;
+    model
+        .reasoning_efforts
+        .iter()
+        .any(|effort| effort.eq_ignore_ascii_case(token))
+        .then_some(token)
+}
+
+fn catalog_kimi_row(model_id: &str) -> Option<&'static crate::catalog::CatalogModel> {
+    let catalog = crate::catalog::bundled();
+    let leaf = model_id.rsplit(['/', ':', '\\']).next().unwrap_or(model_id);
+    let mut exact_options = None;
+    let mut leaf_options = None;
+    let mut exact_any = None;
+    let mut leaf_any = None;
+    for provider in &catalog.providers {
+        for model in &provider.models {
+            let exact = model.id.eq_ignore_ascii_case(model_id);
+            let leaf_hit = model.id.eq_ignore_ascii_case(leaf);
+            if !exact && !leaf_hit {
+                continue;
+            }
+            let published = model.reasoning_toggle || !model.reasoning_efforts.is_empty();
+            if exact {
+                if published && exact_options.is_none() {
+                    exact_options = Some(model);
+                }
+                if exact_any.is_none() {
+                    exact_any = Some(model);
+                }
+            }
+            if leaf_hit {
+                if published && leaf_options.is_none() {
+                    leaf_options = Some(model);
+                }
+                if leaf_any.is_none() {
+                    leaf_any = Some(model);
+                }
+            }
+        }
+    }
+    exact_options.or(leaf_options).or(exact_any).or(leaf_any)
 }
 
 fn apply_kimi_anthropic(body: &mut Value, level: ReasoningLevel) {

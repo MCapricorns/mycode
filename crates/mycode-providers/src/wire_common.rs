@@ -732,16 +732,60 @@ mod tests {
                 assert!(off.get("thinking").is_none(), "{model} {endpoint}");
                 assert!(off.get("reasoning_effort").is_none(), "{model} {endpoint}");
             }
-            for model in ["kimi-for-coding", "kimi-for-coding-highspeed"] {
-                let mut max = serde_json::json!({});
-                apply_reasoning_effort(&mut max, model, endpoint, ReasoningLevel::Max);
-                assert_eq!(max["thinking"]["type"], "enabled", "{model} {endpoint}");
-                assert!(max.get("reasoning_effort").is_none(), "{model} {endpoint}");
+            let mut coding_max = serde_json::json!({});
+            apply_reasoning_effort(
+                &mut coding_max,
+                "kimi-for-coding",
+                endpoint,
+                ReasoningLevel::Max,
+            );
+            assert_eq!(coding_max["thinking"]["type"], "enabled", "{endpoint}");
+            assert_eq!(coding_max["reasoning_effort"], "max", "{endpoint}");
+            let mut coding_high = serde_json::json!({});
+            apply_reasoning_effort(
+                &mut coding_high,
+                "vendor/kimi-for-coding",
+                endpoint,
+                ReasoningLevel::High,
+            );
+            assert_eq!(coding_high["thinking"]["type"], "enabled", "{endpoint}");
+            assert_eq!(coding_high["reasoning_effort"], "high", "{endpoint}");
+            let mut coding_low = serde_json::json!({});
+            apply_reasoning_effort(
+                &mut coding_low,
+                "kimi-for-coding",
+                endpoint,
+                ReasoningLevel::Low,
+            );
+            assert_eq!(coding_low["reasoning_effort"], "low", "{endpoint}");
+            let mut coding_off = serde_json::json!({});
+            apply_reasoning_effort(
+                &mut coding_off,
+                "kimi-for-coding",
+                endpoint,
+                ReasoningLevel::Off,
+            );
+            assert_eq!(coding_off["thinking"]["type"], "disabled", "{endpoint}");
+            assert!(coding_off.get("reasoning_effort").is_none(), "{endpoint}");
 
-                let mut off = serde_json::json!({});
-                apply_reasoning_effort(&mut off, model, endpoint, ReasoningLevel::Off);
-                assert_eq!(off["thinking"]["type"], "disabled", "{model} {endpoint}");
-            }
+            let mut fast = serde_json::json!({});
+            apply_reasoning_effort(
+                &mut fast,
+                "kimi-for-coding-highspeed",
+                endpoint,
+                ReasoningLevel::Max,
+            );
+            assert_eq!(fast["thinking"]["type"], "enabled", "{endpoint}");
+            assert!(fast.get("reasoning_effort").is_none(), "{endpoint}");
+            let mut fast_off = serde_json::json!({});
+            apply_reasoning_effort(
+                &mut fast_off,
+                "kimi-for-coding-highspeed",
+                endpoint,
+                ReasoningLevel::Off,
+            );
+            assert_eq!(fast_off["thinking"]["type"], "disabled", "{endpoint}");
+            assert!(fast_off.get("reasoning_effort").is_none(), "{endpoint}");
         }
 
         let mut medium = serde_json::json!({});

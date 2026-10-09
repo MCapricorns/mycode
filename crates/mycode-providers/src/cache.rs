@@ -1790,14 +1790,18 @@ mod tests {
                     "{model} {endpoint}"
                 );
             }
-            for model in ["kimi-for-coding", "kimi-for-coding-highspeed"] {
-                let body = chat_body(model, endpoint, &request);
-                assert_eq!(body["thinking"]["type"], "enabled", "{model} {endpoint}");
-                assert!(body.get("reasoning_effort").is_none(), "{model}");
-                assert_eq!(body["messages"][1]["reasoning_content"], "plan the edit");
-                assert_eq!(count_cache_control(&body), 0);
-                assert_eq!(body.get("prompt_cache_key").is_some(), !on_kimi);
-            }
+            let coding = chat_body("kimi-for-coding", endpoint, &request);
+            assert_eq!(coding["thinking"]["type"], "enabled", "{endpoint}");
+            assert_eq!(coding["reasoning_effort"], "max", "{endpoint}");
+            assert_eq!(coding["messages"][1]["reasoning_content"], "plan the edit");
+            assert_eq!(count_cache_control(&coding), 0);
+            assert_eq!(coding.get("prompt_cache_key").is_some(), !on_kimi);
+            let fast = chat_body("kimi-for-coding-highspeed", endpoint, &request);
+            assert_eq!(fast["thinking"]["type"], "enabled", "{endpoint}");
+            assert!(fast.get("reasoning_effort").is_none(), "{endpoint}");
+            assert_eq!(fast["messages"][1]["reasoning_content"], "plan the edit");
+            assert_eq!(count_cache_control(&fast), 0);
+            assert_eq!(fast.get("prompt_cache_key").is_some(), !on_kimi);
         }
 
         let off = Request::new().with_reasoning(ReasoningLevel::Off);
@@ -1809,6 +1813,50 @@ mod tests {
         }
         let coding_off = chat_body("kimi-for-coding", proxy, &off);
         assert_eq!(coding_off["thinking"]["type"], "disabled");
+        assert!(coding_off.get("reasoning_effort").is_none());
+    }
+
+    /// models.dev publishes `low` / `high` / `max` for `kimi-for-coding`.
+    /// OpenCode sends that as `reasoningEffort` on `@ai-sdk/openai-compatible`
+    /// (`reasoningEffort` in `transform.ts`), which is wire `reasoning_effort`,
+    /// in addition to the K2 `thinking` toggle. `kimi-for-coding-highspeed`
+    /// publishes no effort list.
+    #[test]
+    fn kimi_for_coding_sends_published_effort_beside_thinking() {
+        let hosts = [
+            "https://api.kimi.com/coding/v1/chat/completions",
+            "http://127.0.0.1:18080/kimi/v1/chat/completions",
+        ];
+        let cases = [
+            (ReasoningLevel::Low, Some("low"), "enabled"),
+            (ReasoningLevel::High, Some("high"), "enabled"),
+            (ReasoningLevel::Max, Some("max"), "enabled"),
+            (ReasoningLevel::Off, None, "disabled"),
+        ];
+        for endpoint in hosts {
+            for (level, effort, thinking) in cases {
+                let body = chat_body(
+                    "kimi-for-coding",
+                    endpoint,
+                    &Request::new().with_reasoning(level),
+                );
+                assert_eq!(body["thinking"]["type"], thinking, "{level:?} {endpoint}");
+                assert_eq!(
+                    body.get("reasoning_effort").and_then(Value::as_str),
+                    effort,
+                    "{level:?} {endpoint}"
+                );
+                let fast = chat_body(
+                    "kimi-for-coding-highspeed",
+                    endpoint,
+                    &Request::new().with_reasoning(level),
+                );
+                assert!(
+                    fast.get("reasoning_effort").is_none(),
+                    "{level:?} {endpoint}"
+                );
+            }
+        }
     }
 
     /// Moonshot rejects schemars `$ref` + `$defs` as infinite recursion.
