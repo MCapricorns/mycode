@@ -37,8 +37,7 @@ use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_le
 use crate::workspace::Workspace;
 
 /// Bottom composer: a rounded card inset from the edges, with the model
-/// and thinking controls as quiet text buttons. Matches the OpenCode
-/// desktop prompt, not a full-bleed toolbar.
+/// and thinking controls as quiet text buttons.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
     window: &mut Window,

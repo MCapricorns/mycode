@@ -14,7 +14,6 @@ fn git_command() -> Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
-        // CREATE_NO_WINDOW: do not allocate a console for this child.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let mut command = Command::new("git");
         command.creation_flags(CREATE_NO_WINDOW);
@@ -26,7 +25,6 @@ fn git_command() -> Command {
     }
 }
 
-/// One dirty path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GitFile {
     pub path: String,
@@ -51,11 +49,12 @@ impl GitSnapshot {
     }
 }
 
-/// `git status --porcelain=v1 -b` for one directory.
+/// `git status --porcelain=v1 -b --untracked-files=all` for one directory.
 ///
 /// `--no-optional-locks` keeps a refresh from taking `.git/index.lock` and
 /// opportunistically rewriting the index, which would contend with the user's
-/// own git commands and subagent worktree updates.
+/// own git commands and subagent worktree updates. The file list stops after
+/// 80 dirty paths.
 pub(crate) fn read_status(root: &Path) -> GitSnapshot {
     let output = git_command()
         .arg("--no-optional-locks")
@@ -159,7 +158,6 @@ fn added_file_diff(root: &Path, path: &str) -> String {
     cap_diff(&added_lines(path, &body))
 }
 
-/// Unified diff that adds every line of `body`.
 fn added_lines(path: &str, body: &str) -> String {
     let mut lines: Vec<&str> = body.split('\n').collect();
     if body.ends_with('\n') {

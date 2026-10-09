@@ -13,7 +13,7 @@ use gpui_kit::{
 
 use crate::workspace::Workspace;
 
-/// One settings card: a hairline border, a solid fill, and a short title.
+/// One settings card: a hairline border, a frosted fill, and a short title.
 pub(super) fn settings_card(
     id: &str,
     title: &str,

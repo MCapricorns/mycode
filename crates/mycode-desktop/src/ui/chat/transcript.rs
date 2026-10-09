@@ -77,10 +77,10 @@ pub(super) fn render_streaming_entry(
     )
 }
 
-/// Desk transcript entries: the demo's timeline blocks — a mono stamp gutter
-/// plus a ledger row per entry. Assistant text is bare (`.msg-agent`); user
-/// rows and tool blocks arrive pre-routed by the caller's transcript
-/// collection and render through their own builders.
+/// Desk transcript entries: a mono stamp gutter plus a ledger row per
+/// entry. Assistant text is bare. User rows and tool blocks arrive
+/// pre-routed by the caller's transcript collection and render through
+/// their own builders.
 pub(super) fn render_entry(
     entry: &ConversationEntry,
     theme: &Theme,
@@ -139,8 +139,7 @@ pub(super) fn render_entry(
     }
 }
 
-/// The timeline block shell: stamp gutter + content, matching the demo's
-/// `.block` (left stamp, hover anchor omitted — no interaction change).
+/// Timeline block shell: a stamp gutter beside the entry content.
 fn desk_block(
     entry: &ConversationEntry,
     theme: &Theme,
@@ -216,8 +215,8 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
 /// Assistant reply bubble: Markdown via gpui-kit's TextView.
 ///
 /// Fenced code is highlighted by the kit's tree-sitter grammars
-/// (`tree-sitter-languages`). The highlighter is installed with the theme
-/// (`install_text_view_defaults` on `Theme::change` and `Theme::sync_base`).
+/// (`tree-sitter-languages`). `apply_palette` installs that highlighter
+/// (`install_highlight`); the caller then publishes it with `Theme::sync_base`.
 /// The id must be unique per entry — `ElementId::CodeLocation` would collide
 /// across blocks since all bubbles render from the same call site.
 fn agent_text(
@@ -237,8 +236,8 @@ fn agent_text(
     )
 }
 
-/// Stable short stamp for the gutter: the entry id is a ledger identity, not
-/// a clock time, so show its tail (mirrors `short_id`, 8 chars, mono).
+/// Gutter stamp: the last 8 characters of the entry id. The id is a ledger
+/// identity, not a clock time.
 fn short_stamp(event_id: &str) -> String {
     let tail: String = event_id
         .chars()
@@ -601,9 +600,8 @@ pub(super) fn render_user_entry(
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
     let desk = Desk::of(theme);
-    // Desk `.msg-user`: plain left-aligned ledger row with a cyan ▸ arrow.
-    // The hover edit/recall actions are unchanged — they now sit inline to
-    // the right of the text instead of under a right-aligned bubble.
+    // Left-aligned ledger row. Hover edit/recall actions sit inline to the
+    // right of the text.
     let mut column = div()
         .flex_1()
         .min_w_0()

@@ -130,7 +130,7 @@ pub const PALETTE_COLUMNS: u16 = 6;
 pub const PALETTE_CELL_PX: f32 = 52.;
 
 /// Gap between palette cells, in pixels. Fixed so a font-size change cannot
-/// push the seventh cell onto the next line.
+/// wrap a cell that still fits the six-across row.
 pub const PALETTE_GAP_PX: f32 = 6.;
 
 /// Side length of the color square inside a palette cell, in pixels.

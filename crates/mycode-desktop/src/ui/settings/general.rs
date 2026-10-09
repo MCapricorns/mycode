@@ -305,7 +305,8 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     palette_swatches(cells)
 }
 
-/// Fixed cells on a wrapping row. Seven fit the row; the rest wrap left.
+/// Fixed cells on a wrapping row. Six fill one row; a narrower card wraps
+/// the rest left.
 ///
 /// No grid. GPUI row tracks, including max-content, still absorbed the
 /// settings scrollport and pushed the font controls off the first screen.
