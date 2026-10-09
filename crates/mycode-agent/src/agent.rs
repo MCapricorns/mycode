@@ -672,7 +672,7 @@ mod tests {
                     },
                 }],
             };
-            let mut tools = ToolRegistry::new();
+            let tools = ToolRegistry::new();
             tools.register(std::sync::Arc::new(HangAgent {
                 started: flag,
                 release: release_for_tool,

@@ -5,9 +5,8 @@
 //! turns exchange it for a short-lived bearer. Error messages carry statuses
 //! and field names only — never token values. Each request is still sent
 //! through the pinned client (DNS pin, checked addresses, no redirects). The
-//! caller's User-Agent is copied onto that request, and a per-request timeout
-//! is honored when the built request carries one; otherwise the pin timeout
-//! stays 30s. The caller's HTTP proxy is not applied, because pinning dials
+//! caller's User-Agent and client timeout are copied onto that request;
+//! otherwise the pin timeout stays 30s. The caller's HTTP proxy is not applied, because pinning dials
 //! only the addresses that passed the public-address check.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,21 +34,70 @@ const PINNED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// User-Agent and timeout taken from `client` for a pinned OAuth request.
 ///
-/// Building a probe request applies the client's default headers. The client
-/// timeout is not copied onto that request unless the caller set one on the
-/// request itself, so a missing timeout stays [`PINNED_TIMEOUT`].
+/// reqwest stores both on the client and applies them only inside `execute`.
+/// A built probe request therefore has neither, and executing it would skip
+/// the pin. The client's `Debug` output includes `default_headers` and, when
+/// set, `TotalTimeout`, so those are the observable values we copy. A missing
+/// timeout stays [`PINNED_TIMEOUT`].
 fn pinned_call_hints(client: &reqwest::Client) -> (Option<String>, std::time::Duration) {
-    let Ok(request) = client.get("https://pinned.invalid/").build() else {
-        return (None, PINNED_TIMEOUT);
-    };
-    let user_agent = request
-        .headers()
-        .get(reqwest::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    let timeout = request.timeout().copied().unwrap_or(PINNED_TIMEOUT);
+    let rendered = format!("{client:?}");
+    let user_agent = debug_quoted_field(&rendered, "\"user-agent\"");
+    let timeout = debug_duration_field(&rendered, "TotalTimeout").unwrap_or(PINNED_TIMEOUT);
     (user_agent, timeout)
+}
+
+/// Reads one quoted `Debug` field such as `"user-agent": "mycode-caller/1"`.
+fn debug_quoted_field(rendered: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}: \"");
+    let start = rendered.find(&needle)? + needle.len();
+    let bytes = &rendered.as_bytes()[start..];
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                return String::from_utf8(out)
+                    .ok()
+                    .filter(|value| !value.is_empty());
+            }
+            b'\\' if index + 1 < bytes.len() && bytes[index + 1] == b'"' => {
+                out.push(b'"');
+                index += 2;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    None
+}
+
+/// Reads a `Duration` `Debug` field such as `TotalTimeout: 12s`.
+fn debug_duration_field(rendered: &str, key: &str) -> Option<std::time::Duration> {
+    let needle = format!("{key}: ");
+    let start = rendered.find(&needle)? + needle.len();
+    let token = rendered[start..]
+        .split([',', ' ', '}'])
+        .next()
+        .unwrap_or_default();
+    parse_debug_duration(token)
+}
+
+fn parse_debug_duration(text: &str) -> Option<std::time::Duration> {
+    let (value, unit) = if let Some(value) = text.strip_suffix("ms") {
+        (value, 1_000.0)
+    } else if let Some(value) = text.strip_suffix("us") {
+        (value, 1_000_000.0)
+    } else {
+        let value = text.strip_suffix('s')?;
+        (value, 1.0)
+    };
+    let magnitude: f64 = value.parse().ok()?;
+    if !magnitude.is_finite() || magnitude < 0.0 {
+        return None;
+    }
+    std::time::Duration::try_from_secs_f64(magnitude / unit).ok()
 }
 
 async fn pinned(
@@ -737,8 +785,25 @@ mod tests {
             .build()
             .expect("client");
         let (user_agent, timeout) = pinned_call_hints(&client);
-        assert_eq!(user_agent.as_deref(), Some("mycode-caller/1"));
+        assert_eq!(
+            user_agent.as_deref(),
+            Some("mycode-caller/1"),
+            "client debug was {client:?}"
+        );
         assert_ne!(user_agent.as_deref(), Some("mycode"));
         assert_eq!(timeout, PINNED_TIMEOUT);
+
+        let timed = reqwest::Client::builder()
+            .user_agent("mycode-caller/1")
+            .timeout(std::time::Duration::from_secs(12))
+            .build()
+            .expect("timed client");
+        let (user_agent, timeout) = pinned_call_hints(&timed);
+        assert_eq!(user_agent.as_deref(), Some("mycode-caller/1"));
+        assert_eq!(
+            timeout,
+            std::time::Duration::from_secs(12),
+            "client debug was {timed:?}"
+        );
     }
 }
