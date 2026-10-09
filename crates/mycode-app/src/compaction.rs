@@ -23,6 +23,12 @@ const TRIGGER_PERCENT: u64 = 90;
 const SUMMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 const TRANSCRIPT_CAP_CHARS: usize = 300_000;
 const EXCERPT_CHARS: usize = 4_000;
+/// Output cap for a summary whose thinking is disabled.
+const SUMMARY_OUTPUT_TOKENS: u64 = 8_192;
+/// Output cap when the model keeps thinking on (it rejects an off switch).
+const SUMMARY_OUTPUT_WITH_THINKING: u64 = 32_768;
+/// One retry after `length` / `max_tokens`. A second truncation is a failure.
+const SUMMARY_OUTPUT_RETRY_TOKENS: u64 = 65_536;
 const SUMMARY_PREFIX: &str = "COMPACTION SUMMARY";
 
 /// Ledger text for the summary the user sees. The model request still uses
@@ -175,7 +181,7 @@ pub(crate) async fn compact_history(
         compaction_transcript(prior_summary, transcript_head(&history, head_end, covered));
     let summarized = tokio::time::timeout(
         SUMMARY_TIMEOUT,
-        summarize_transcript(scope.wire, &transcript),
+        summarize_transcript(scope.wire, scope.model, &transcript),
     )
     .await;
     let summary = match summarized {
@@ -445,13 +451,8 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> 
             Message::ToolResult(_) => "tool",
             Message::Custom(_) => "custom",
         };
-        let text = message_text(message);
-        let cut = text
-            .char_indices()
-            .nth(EXCERPT_CHARS)
-            .map(|(index, _)| index)
-            .unwrap_or(text.len());
-        transcript.push_str(&format!("[{role}] {}\n\n", &text[..cut]));
+        let text = excerpt(&message_text(message));
+        transcript.push_str(&format!("[{role}] {text}\n\n"));
     }
     let count = transcript.chars().count();
     if count > TRANSCRIPT_CAP_CHARS {
@@ -466,8 +467,73 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> 
     }
 }
 
-async fn summarize_transcript(wire: &WireProvider, transcript: &str) -> Result<String, String> {
-    let request = Request::new()
+/// Keeps the first and last half of the excerpt budget.
+///
+/// The kept text is still [`EXCERPT_CHARS`] characters. A longer message
+/// records how many characters were dropped between the two halves.
+fn excerpt(text: &str) -> String {
+    let count = text.chars().count();
+    if count <= EXCERPT_CHARS {
+        return text.to_owned();
+    }
+    let head_chars = EXCERPT_CHARS / 2;
+    let tail_chars = EXCERPT_CHARS - head_chars;
+    let head_end = text
+        .char_indices()
+        .nth(head_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len());
+    let tail_start = text
+        .char_indices()
+        .nth(count - tail_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let omitted = count - head_chars - tail_chars;
+    format!(
+        "{}\n...{omitted} characters omitted...\n{}",
+        &text[..head_end],
+        &text[tail_start..]
+    )
+}
+
+/// Models that reject an explicit thinking disable keep the provider
+/// default. The wire `Off` mapping already omits the rejected field; the
+/// summary needs a larger output cap so thinking cannot consume it all.
+fn summary_max_output(model: &str) -> u64 {
+    if model.to_ascii_lowercase().contains("kimi-k2.7-code") {
+        SUMMARY_OUTPUT_WITH_THINKING
+    } else {
+        SUMMARY_OUTPUT_TOKENS
+    }
+}
+
+enum SummaryAttempt {
+    Complete(String),
+    Truncated,
+}
+
+async fn summarize_transcript(
+    wire: &WireProvider,
+    model: &str,
+    transcript: &str,
+) -> Result<String, String> {
+    let first = summary_max_output(model);
+    match request_summary(wire, transcript, first).await? {
+        SummaryAttempt::Complete(summary) => Ok(summary),
+        SummaryAttempt::Truncated => {
+            eprintln!(
+                "[mycode-compaction] summary hit the output limit at {first} tokens; retrying at {SUMMARY_OUTPUT_RETRY_TOKENS}"
+            );
+            match request_summary(wire, transcript, SUMMARY_OUTPUT_RETRY_TOKENS).await? {
+                SummaryAttempt::Complete(summary) => Ok(summary),
+                SummaryAttempt::Truncated => Err("summary was truncated".to_owned()),
+            }
+        }
+    }
+}
+
+fn summary_request(transcript: &str, max_output_tokens: u64) -> Request {
+    let mut request = Request::new()
         .with_system_prompt(
             "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a \
 handoff summary for another coding-agent model that will resume the task.\n\
@@ -483,22 +549,47 @@ Preserve names, paths, and error text. Do not invent work that did not happen.",
         .with_message(Message::User(mycode_core::UserMessage::text(format!(
             "Summarize the following conversation for continuation:\n\n{transcript}"
         ))));
+    // `Off` is applied by the provider adapter: Anthropic and GLM/Z.AI send
+    // `thinking.type = disabled`, Qwen sends `enable_thinking: false`, and
+    // the other families use their own off or lowest-effort field.
+    request.reasoning = Some(mycode_core::ReasoningLevel::Off);
+    request.max_output_tokens = Some(max_output_tokens);
+    request
+}
+
+async fn request_summary(
+    wire: &WireProvider,
+    transcript: &str,
+    max_output_tokens: u64,
+) -> Result<SummaryAttempt, String> {
+    let request = summary_request(transcript, max_output_tokens);
     let cancel = CancellationToken::new();
     let mut stream = wire
         .stream(&request, cancel)
         .await
         .map_err(|error| format!("summary request failed: {error:?}"))?;
     let mut summary = String::new();
-    loop {
+    let stop = loop {
         let Some(event) = stream.next().await else {
             return Err("summary stream ended without completion".to_owned());
         };
         match event {
             StreamEvent::TextDelta(delta) => summary.push_str(&delta),
-            StreamEvent::Done { .. } => break,
+            StreamEvent::Done { message } => {
+                if summary.is_empty() {
+                    summary = message.text();
+                }
+                break message.stop_reason;
+            }
             StreamEvent::Error(error) => return Err(format!("summary stream failed: {error:?}")),
             _ => {}
         }
+    };
+    if stop == mycode_core::StopReason::Length {
+        return Ok(SummaryAttempt::Truncated);
+    }
+    if stop == mycode_core::StopReason::Error {
+        return Err("summary stream failed".to_owned());
     }
     let chars: Vec<char> = summary.chars().collect();
     if chars.len() > mycode_config::MAX_SUMMARY_CHARS {
@@ -507,7 +598,7 @@ Preserve names, paths, and error text. Do not invent work that did not happen.",
     if summary.trim().is_empty() {
         return Err("summary was empty".to_owned());
     }
-    Ok(summary)
+    Ok(SummaryAttempt::Complete(summary))
 }
 
 #[cfg(test)]
@@ -771,6 +862,243 @@ mod tests {
         assert_eq!(user_text(&manual.messages[0]), "hi");
         assert_eq!(user_text(&manual.messages[1]), "there");
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_model_that_cannot_disable_thinking_gets_a_larger_summary_cap() {
+        assert_eq!(super::summary_max_output("glm-5.3"), 8_192);
+        assert_eq!(super::summary_max_output("kimi-k2.7-code"), 32_768);
+    }
+
+    #[test]
+    fn a_long_message_keeps_its_head_and_tail() {
+        let mut text = "HEAD-".to_owned();
+        text.push_str(&"m".repeat(5_000));
+        text.push_str("-TAIL");
+        let kept = super::excerpt(&text);
+        assert!(kept.starts_with("HEAD-"), "{kept}");
+        assert!(kept.ends_with("-TAIL"), "{kept}");
+        let omitted = text.chars().count() - super::EXCERPT_CHARS;
+        assert!(
+            kept.contains(&format!("{omitted} characters omitted")),
+            "{kept}"
+        );
+        let marker = format!("\n...{omitted} characters omitted...\n");
+        let (head, tail) = kept.split_once(&marker).expect("marker");
+        assert_eq!(
+            head.chars().count() + tail.chars().count(),
+            super::EXCERPT_CHARS
+        );
+    }
+
+    struct ScriptedSummary {
+        bodies: std::sync::Mutex<Vec<String>>,
+        /// `(finish_reason, content)` for each summary call, in order.
+        script: Vec<(&'static str, &'static str)>,
+        index: std::sync::atomic::AtomicUsize,
+        /// `openai` or `anthropic`. The request body is what the test checks;
+        /// the scripted stream only has to complete in that protocol.
+        protocol: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl mycode_providers::SseTransport for ScriptedSummary {
+        async fn post(
+            &self,
+            call: mycode_providers::TransportCall,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<bytes::Bytes, mycode_core::ProviderError>,
+                        > + Send,
+                >,
+            >,
+            mycode_core::ProviderError,
+        > {
+            self.bodies
+                .lock()
+                .expect("bodies")
+                .push(String::from_utf8_lossy(&call.body).into_owned());
+            let index = self.index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (finish, content) = self
+                .script
+                .get(index)
+                .copied()
+                .unwrap_or(("stop", "handoff notes"));
+            let sse = if self.protocol == "anthropic" {
+                let stop = if finish == "length" {
+                    "max_tokens"
+                } else {
+                    "end_turn"
+                };
+                let text = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_owned());
+                format!(
+                    "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
+                     data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{text}}}}}\n\n\
+                     data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
+                     data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"{stop}\"}}}}\n\n\
+                     data: {{\"type\":\"message_stop\"}}\n\n"
+                )
+            } else {
+                let chunk = serde_json::json!({
+                    "choices": [{
+                        "delta": {"content": content},
+                        "finish_reason": finish
+                    }]
+                });
+                format!("data: {chunk}\n\ndata: [DONE]\n\n")
+            };
+            Ok(Box::pin(futures_util::stream::once(async move {
+                Ok(bytes::Bytes::from(sse))
+            })))
+        }
+    }
+
+    fn scripted_wire(
+        kind: &str,
+        base_url: &str,
+        model: &str,
+        script: Vec<(&'static str, &'static str)>,
+    ) -> (
+        mycode_providers::WireProvider,
+        std::sync::Arc<ScriptedSummary>,
+    ) {
+        let protocol = if kind == "anthropic-messages" {
+            "anthropic"
+        } else {
+            "openai"
+        };
+        let transport = std::sync::Arc::new(ScriptedSummary {
+            bodies: std::sync::Mutex::new(Vec::new()),
+            script,
+            index: std::sync::atomic::AtomicUsize::new(0),
+            protocol,
+        });
+        let settings = mycode_config::ProviderSettings {
+            id: "local".to_owned(),
+            kind: kind.to_owned(),
+            base_url: base_url.to_owned(),
+            models: vec![model.to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+        };
+        let resolved =
+            mycode_providers::ResolvedProvider::resolve(&settings, model, "test-key", "test-agent")
+                .expect("provider");
+        let wire = mycode_providers::WireProvider::new(resolved, transport.clone());
+        (wire, transport)
+    }
+
+    fn large_history() -> Vec<Arc<Message>> {
+        vec![
+            user(&padded("HEAD-MARKER-", 100_000)),
+            user("TAIL-ONE"),
+            user("TAIL-TWO"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn summary_request_disables_glm_thinking_and_retries_a_truncated_summary() {
+        let (root, home) = scratch_home();
+        let (wire, transport) = scripted_wire(
+            "openai-completions",
+            "https://api.z.ai/api/paas/v4",
+            "glm-5.3",
+            vec![("length", "partial"), ("stop", "full handoff")],
+        );
+        let scope = super::CompactScope {
+            home: &home,
+            wire: &wire,
+            model: "glm-5.3",
+            session_id: "session-glm",
+            branch_id: "branch-glm",
+            head: "head-1",
+            context_window: 200_000,
+        };
+        let compacted = super::compact_history(&scope, large_history(), true).await;
+        assert_eq!(compacted.status, CompactStatus::Wrote);
+        assert_eq!(compacted.summary.as_deref(), Some("full handoff"));
+        let bodies = transport.bodies.lock().expect("bodies");
+        assert_eq!(bodies.len(), 2, "a length finish must retry once");
+        let first: serde_json::Value = serde_json::from_str(&bodies[0]).expect("json");
+        let second: serde_json::Value = serde_json::from_str(&bodies[1]).expect("json");
+        assert_eq!(first["thinking"]["type"], "disabled");
+        assert!(first.get("reasoning_effort").is_none());
+        assert_eq!(first["max_tokens"], 8_192);
+        assert_eq!(second["max_tokens"], 65_536);
+        assert_eq!(second["thinking"]["type"], "disabled");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_still_truncated_summary_is_not_stored() {
+        let (root, home) = scratch_home();
+        let (wire, transport) = scripted_wire(
+            "openai-completions",
+            "https://api.z.ai/api/paas/v4",
+            "glm-5.3",
+            vec![("length", "partial"), ("length", "still partial")],
+        );
+        let scope = super::CompactScope {
+            home: &home,
+            wire: &wire,
+            model: "glm-5.3",
+            session_id: "session-cut",
+            branch_id: "branch-cut",
+            head: "head-1",
+            context_window: 200_000,
+        };
+        let compacted = super::compact_history(&scope, large_history(), true).await;
+        match compacted.status {
+            CompactStatus::Failed(message) => assert!(message.contains("truncated"), "{message}"),
+            other => panic!("truncated summary was accepted: {other:?}"),
+        }
+        assert!(compacted.summary.is_none());
+        assert_eq!(transport.index.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(
+            mycode_config::read_compaction(&home, "session-cut")
+                .expect("read")
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn an_empty_summary_is_an_error() {
+        let (root, home) = scratch_home();
+        let (wire, transport) = scripted_wire(
+            "anthropic-messages",
+            "https://api.z.ai",
+            "glm-5.3",
+            vec![("end_turn", "")],
+        );
+        let scope = super::CompactScope {
+            home: &home,
+            wire: &wire,
+            model: "glm-5.3",
+            session_id: "session-empty",
+            branch_id: "branch-empty",
+            head: "head-1",
+            context_window: 200_000,
+        };
+        let compacted = super::compact_history(&scope, large_history(), true).await;
+        match compacted.status {
+            CompactStatus::Failed(message) => assert!(message.contains("empty"), "{message}"),
+            other => panic!("empty summary was accepted: {other:?}"),
+        }
+        let bodies = transport.bodies.lock().expect("bodies");
+        let body: serde_json::Value = serde_json::from_str(&bodies[0]).expect("json");
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert_eq!(body["max_tokens"], 8_192);
+        assert!(
+            mycode_config::read_compaction(&home, "session-empty")
+                .expect("read")
+                .is_none()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }
