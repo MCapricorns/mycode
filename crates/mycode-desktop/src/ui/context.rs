@@ -779,18 +779,20 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             // Summing every tool round or every turn is what painted 1.4M/1.0M.
             let used = vm.context_used;
             let cached = vm.context_cache;
-            let figure = crate::view_model::format_context_meter(
+            let parts = crate::view_model::context_meter_parts(
                 used,
                 context_window,
                 cached,
                 t("cached", "缓存"),
             );
+            let cache = (!parts.cache.is_empty()).then_some(parts.cache.as_str());
             this.child(bar_row(
                 "context",
                 used,
                 context_window,
                 theme.cyan,
-                &figure,
+                &parts.ratio,
+                cache,
                 theme,
             ))
         })
@@ -905,7 +907,8 @@ fn bar_row(
     value: u64,
     total: u64,
     color: gpui_kit::Hsla,
-    figure: &str,
+    ratio: &str,
+    cache: Option<&str>,
     theme: &Theme,
 ) -> impl IntoElement {
     let fill = if total == 0 {
@@ -931,9 +934,26 @@ fn bar_row(
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(figure.to_owned()),
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(ratio.to_owned()),
+                        )
+                        .when_some(cache, |this, cache| {
+                            this.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(theme.foreground)
+                                    .child(format!("· {cache}")),
+                            )
+                        }),
                 ),
         )
         .child(

@@ -28,43 +28,61 @@ pub(crate) fn compact_count(count: u64) -> String {
     }
 }
 
+/// The two pieces of a context meter. Either string may be empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContextMeterParts {
+    /// `12.0k / 1.0M`. Empty when the context window is unknown.
+    pub ratio: String,
+    /// `11.8k cached`. Empty when the latest prompt reported no cache read.
+    pub cache: String,
+}
+
+/// Splits the latest prompt into a window ratio and a cache-hit count.
+///
+/// A window of zero omits the ratio. A cache read of zero omits the cache
+/// piece. The composer hides the whole meter when both the prompt and the
+/// cache read are zero; the inspector still shows `0 / window`.
+#[must_use]
+pub(crate) fn context_meter_parts(
+    used: u64,
+    window: u64,
+    cached: u64,
+    cached_word: &str,
+) -> ContextMeterParts {
+    let ratio = if window > 0 {
+        format!("{} / {}", compact_count(used), compact_count(window))
+    } else {
+        String::new()
+    };
+    let cache = if cached > 0 {
+        format!("{} {cached_word}", compact_count(cached))
+    } else {
+        String::new()
+    };
+    ContextMeterParts { ratio, cache }
+}
+
 /// Context-meter text. `cached_word` is the localized "cached" label.
 ///
 /// A window of zero omits the ratio. A cache read of zero omits the cache
 /// suffix. Empty when there is neither a ratio nor a cache read.
+#[cfg(test)]
 #[must_use]
-pub(crate) fn format_context_meter(
-    used: u64,
-    window: u64,
-    cached: u64,
-    cached_word: &str,
-) -> String {
-    let mut label = String::new();
-    if window > 0 {
-        label.push_str(&compact_count(used));
-        label.push_str(" / ");
-        label.push_str(&compact_count(window));
+fn format_context_meter(used: u64, window: u64, cached: u64, cached_word: &str) -> String {
+    let parts = context_meter_parts(used, window, cached, cached_word);
+    match (parts.ratio.is_empty(), parts.cache.is_empty()) {
+        (false, false) => format!("{} · {}", parts.ratio, parts.cache),
+        (false, true) => parts.ratio,
+        (true, false) => parts.cache,
+        (true, true) => String::new(),
     }
-    if cached > 0 {
-        if !label.is_empty() {
-            label.push_str(" · ");
-        }
-        label.push_str(&compact_count(cached));
-        label.push(' ');
-        label.push_str(cached_word);
-    }
-    label
 }
 
 /// Composer label for the latest prompt. Hidden until the session has a
 /// prompt size or a cache read, so an empty chat does not show `0 / 1.0M`.
+#[cfg(test)]
 #[must_use]
-pub(crate) fn context_meter_label(
-    used: u64,
-    window: u64,
-    cached: u64,
-    cached_word: &str,
-) -> Option<String> {
+fn context_meter_label(used: u64, window: u64, cached: u64, cached_word: &str) -> Option<String> {
     if used == 0 && cached == 0 {
         return None;
     }
@@ -156,8 +174,8 @@ pub(crate) struct TurnStats {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_percent, context_meter_label, format_context_meter, parse_context_cache,
-        parse_context_tokens, parse_usage_text,
+        cache_percent, context_meter_label, context_meter_parts, format_context_meter,
+        parse_context_cache, parse_context_tokens, parse_usage_text,
     };
 
     #[test]
@@ -184,6 +202,14 @@ mod tests {
         assert_eq!(
             format_context_meter(12_000, 1_000_000, 11_800, "cached"),
             "12.0k / 1.0M · 11.8k cached"
+        );
+        let parts = context_meter_parts(12_000, 1_000_000, 11_800, "cached");
+        assert_eq!(parts.ratio, "12.0k / 1.0M");
+        assert_eq!(parts.cache, "11.8k cached");
+        assert!(
+            context_meter_parts(12_000, 1_000_000, 0, "cached")
+                .cache
+                .is_empty()
         );
         assert_eq!(
             context_meter_label(12_000, 1_000_000, 11_800, "缓存").as_deref(),

@@ -35,7 +35,7 @@ pub(crate) use self::reduce::{
 };
 pub(crate) use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
 pub(crate) use self::usage::{
-    TurnStats, UsageTotal, cache_percent, compact_count, context_meter_label, format_context_meter,
+    ContextMeterParts, TurnStats, UsageTotal, cache_percent, compact_count, context_meter_parts,
     parse_context_cache, parse_context_tokens, parse_usage_text, usage_key_matches,
 };
 
