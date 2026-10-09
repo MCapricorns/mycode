@@ -649,15 +649,17 @@ fn enforce_unix_child_containment(
 ) -> io::Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    let parent_meta = parent.metadata()?;
-    let child_meta = child.metadata()?;
-    let child_dev = child_meta.dev();
-    if parent_meta.dev() != child_dev {
+    // Same mount id is one mount even when overlay `st_dev` differs (directory
+    // on the overlay device, file on the upper/lower device). Same `st_dev`
+    // is one mount when mount ids are unavailable. A different mount id is a
+    // real cross, including a bind mount that keeps `st_dev`.
+    if unix_mounts_differ(parent, child)? {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "mount traversal is not permitted",
         ));
     }
+    let child_meta = child.metadata()?;
     let (_, kind) = identity_and_kind(child)?;
     if let Some(expected) = expected
         && kind != expected
