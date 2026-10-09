@@ -297,7 +297,7 @@ fn cancel_session_work(state: &CoreState, session_id: &str) {
 async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
     match command {
         BridgeCommand::ListSessions => BridgeReply::Sessions(
-            inspect_summaries(&state.service, state.home.clone())
+            inspect_summaries(state.home.clone())
                 .await
                 .map_err(render_error),
         ),

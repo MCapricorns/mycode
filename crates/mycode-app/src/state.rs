@@ -263,7 +263,6 @@ mod tests {
             version: "0.9.18".to_owned(),
             notes_url: "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18".to_owned(),
             asset_url: "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip".to_owned(),
-            asset_size: 1,
             checksum_url: "https://github.com/example/app.zip.sha256".to_owned(),
         };
         assert!(matches!(

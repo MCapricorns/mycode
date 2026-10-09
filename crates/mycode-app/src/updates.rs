@@ -60,8 +60,6 @@ pub struct UpdateOffer {
     pub notes_url: String,
     /// Asset download URL.
     pub asset_url: String,
-    /// Asset size in bytes.
-    pub asset_size: u64,
     /// Checksum sidecar URL.
     pub checksum_url: String,
 }
@@ -92,8 +90,6 @@ struct AssetJson {
     name: String,
     #[serde(rename = "browserDownloadUrl", alias = "browser_download_url")]
     browser_download_url: String,
-    #[serde(default)]
-    size: u64,
 }
 
 /// Resolves the latest release; `Ok(None)` means the app is current.
@@ -211,7 +207,6 @@ fn resolve_asset_for(
         version,
         notes_url: notes_url.to_owned(),
         asset_url: asset.browser_download_url.clone(),
-        asset_size: asset.size,
         checksum_url: format!("{}.sha256", asset.browser_download_url),
     }))
 }
@@ -941,7 +936,6 @@ mod tests {
                 browser_download_url: format!(
                     "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/{name}"
                 ),
-                size: 1024,
             })
             .collect()
     }
@@ -985,7 +979,6 @@ mod tests {
             &[super::AssetJson {
                 name: "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
                 browser_download_url: "https://github.com/example/app.zip".to_owned(),
-                size: 1,
             }],
         )
         .unwrap_err();

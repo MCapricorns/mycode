@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use super::{WebError, WebTransport};
 
 /// Production transport for the bounded web client.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ReqwestWebTransport;
 
 impl ReqwestWebTransport {
