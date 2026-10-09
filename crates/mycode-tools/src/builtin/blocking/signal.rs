@@ -45,9 +45,10 @@ pub(super) fn handler_is_default(handler: usize) -> bool {
 ///
 /// Fails closed when another component already owns `SIGURG`. The last guard
 /// restores the previous disposition only while the current handler is still
-/// this crate's. Cancellation uses [`CancellationToken`]; a per-worker socket
-/// wakes pollable reads, while `SIGURG` is a best-effort wake for other Unix
-/// syscalls only while this crate still owns the disposition.
+/// this crate's. The worker cancel token (see `blocking`) ends the wait; a
+/// per-worker socket wakes pollable reads, while `SIGURG` is a best-effort
+/// wake for other Unix syscalls only while this crate still owns the
+/// disposition.
 ///
 /// # Errors
 ///

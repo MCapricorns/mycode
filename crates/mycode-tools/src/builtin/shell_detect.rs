@@ -217,15 +217,15 @@ fn pick_windows_shell(mut candidates: Vec<(ShellKind, PathBuf)>) -> Option<Detec
         .map(|(kind, program)| DetectedShell { kind, program })
 }
 
-/// A regular file large enough that it is not a 0-byte Store execution alias.
+/// A regular file larger than a Store execution alias (at most 64 bytes).
 #[cfg(windows)]
 fn image_is_regular_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 64)
 }
 
-/// A 0-byte `pwsh.exe` under `WindowsApps`.
+/// A Store execution alias `pwsh.exe` under `WindowsApps` (at most 64 bytes).
 ///
-/// The Store publishes these as execution aliases. They are not PE images,
+/// The Store publishes these as non-directory files. They are not PE images,
 /// but launching them starts the real package, so they are usable when the
 /// package directory itself is not readable.
 #[cfg(windows)]

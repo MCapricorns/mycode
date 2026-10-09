@@ -95,17 +95,17 @@ pub(super) fn encode_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Resolves, opens, classifies, and hashes `program` against the session cwd.
+/// Resolves `program` against an already-snapshotted PATH value, then opens,
+/// classifies, and hashes the image.
+///
+/// A path-shaped `program` is resolved against `session_cwd`. A basename is
+/// searched only in `path_var`.
 ///
 /// # Errors
 ///
-/// Returns [`ToolError::InvalidArgs`] when the program cannot be resolved
-/// fail-closed and [`ToolError::Execution`] when the call is cancelled.
-/// Resolves `program` against an already-snapshotted PATH value.
-///
-/// # Errors
-///
-/// Same as [`pin_program`].
+/// Returns [`ResolveError::NotFound`] when PATH or path lookup misses the
+/// executable, and [`ResolveError::Other`] for every fail-closed rejection,
+/// including cancellation.
 pub(super) fn pin_program_with_path(
     session_cwd: &Path,
     program: &str,

@@ -236,11 +236,6 @@ pub async fn prepare_search_async_with_access(
     .await
 }
 
-/// Same as [`prepare_search_async`], with a per-call blocking I/O hook.
-///
-/// # Errors
-///
-/// Same as [`prepare_search_async`].
 #[cfg(windows)]
 struct SendHandle {
     handle: windows_sys::Win32::Foundation::HANDLE,
