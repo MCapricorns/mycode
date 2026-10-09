@@ -4,8 +4,8 @@
 //! schema module: it probes the environment instead of describing document
 //! grammar.
 
-/// Builds the default outbound User-Agent, matching the pi agent identity
-/// `pi (<platform> <release>; <arch>)` (pinned to pi-mono 0.85.1).
+/// Builds the default outbound User-Agent in the pi agent shape
+/// `pi (<platform> <release>; <arch>)`.
 #[must_use]
 pub fn default_user_agent() -> String {
     let platform = match std::env::consts::OS {

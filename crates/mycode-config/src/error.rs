@@ -24,8 +24,6 @@ pub enum ConfigErrorKind {
     NonUtf8,
     /// A byte bound was exceeded.
     Oversized,
-    /// Input was not strict JSON, was partial, or had trailing content.
-    InvalidJson,
     /// An owned authority document or value failed strict validation.
     AuthorityValidation,
     /// An authority document revision did not match the expected revision.
@@ -50,9 +48,9 @@ struct ConfigErrorInner {
 
 /// Describes a configuration failure without retaining offending values.
 ///
-/// Parse messages and input snippets are intentionally discarded. Callers can
-/// branch on [`Self::kind`], inspect the path, and render the bounded summary
-/// from [`Display`].
+/// Parse messages and input snippets are intentionally discarded. Callers
+/// branch on [`Self::kind`] and render the bounded summary from [`Display`].
+/// A path, when one was recorded, is visible in [`Debug`] only.
 pub struct ConfigError {
     // Keeping contextual fields behind one allocation makes Result's error path
     // small while retaining a captured backtrace and native path information.
@@ -109,21 +107,10 @@ impl ConfigError {
         self.inner.kind
     }
 
-    /// Returns the affected path, if the operation had one.
-    #[must_use]
-    pub fn path(&self) -> Option<&Path> {
-        self.inner.path.as_deref()
-    }
-
     /// Returns the operating-system error category, if one was recorded.
     #[must_use]
     pub fn io_kind(&self) -> Option<io::ErrorKind> {
         self.inner.io_kind
-    }
-
-    /// Returns the backtrace captured where the error was classified.
-    pub fn backtrace(&self) -> &Backtrace {
-        &self.inner.backtrace
     }
 
     /// Renders the bounded summary without a captured backtrace.
@@ -140,7 +127,6 @@ impl ConfigError {
             ConfigErrorKind::Io => "configuration file I/O failed",
             ConfigErrorKind::NonUtf8 => "configuration JSON is not UTF-8",
             ConfigErrorKind::Oversized => "configuration size limit was exceeded",
-            ConfigErrorKind::InvalidJson => "configuration is not strict complete JSON",
             ConfigErrorKind::AuthorityValidation => "owned authority document is invalid",
             ConfigErrorKind::RevisionConflict => "owned authority revision conflict",
             ConfigErrorKind::RevisionExhausted => "owned authority revision is exhausted",

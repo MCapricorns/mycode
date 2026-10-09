@@ -20,13 +20,6 @@ use super::windows::windows_file as platform;
 mod fallback {
     use super::{ConfigError, ConfigErrorKind, OsString, Path, Zeroizing};
 
-    pub(super) fn ensure_directory(
-        _root: &Path,
-        _components: &[OsString],
-    ) -> Result<(), ConfigError> {
-        Err(unavailable())
-    }
-
     pub(super) fn read_file(
         _root: &Path,
         _components: &[OsString],
@@ -65,23 +58,6 @@ mod fallback {
 
 #[cfg(not(any(unix, windows)))]
 use fallback as platform;
-
-/// Creates only the owned directories named by `relative`.
-///
-/// Every component is created no-follow and private, so callers can
-/// materialize authority directories below the owned root on demand.
-///
-/// # Errors
-///
-/// Returns [`ConfigErrorKind::PathEscape`] for unsafe components and native
-/// security, access, identity, or durability failures otherwise.
-pub fn ensure_owned_directory(
-    home: &HomeLayout,
-    relative: impl AsRef<Path>,
-) -> Result<(), ConfigError> {
-    let path = OwnedPath::new(home, relative.as_ref())?;
-    platform::ensure_directory(&path.root, &path.components)
-}
 
 /// Reads a private regular file without creating any filesystem object.
 ///

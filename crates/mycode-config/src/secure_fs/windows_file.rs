@@ -30,17 +30,6 @@ const TEMP_FILE_ACCESS: u32 =
     GENERIC_READ | GENERIC_WRITE | READ_CONTROL | WRITE_DAC | DELETE | SYNCHRONIZE;
 const MAX_TEMPORARY_ATTEMPTS: usize = 16;
 
-pub(in crate::secure_fs) fn ensure_directory(
-    root: &Path,
-    components: &[OsString],
-) -> Result<(), ConfigError> {
-    let mut directory = open_or_create_root(root)?;
-    for component in components {
-        directory = open_or_create_directory(&directory, component)?;
-    }
-    Ok(())
-}
-
 pub(in crate::secure_fs) fn read_file(
     root: &Path,
     components: &[OsString],

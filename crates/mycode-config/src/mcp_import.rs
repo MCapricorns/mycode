@@ -2,8 +2,8 @@
 //!
 //! Accepts Claude Desktop / Cursor `mcpServers` maps, VS Code `servers`
 //! maps, a single server object, or an array of those objects. HTTP
-//! `Authorization` / `x-api-key` header values are lifted into the vault
-//! key; a leading `Bearer ` is stripped so the user can paste either form.
+//! `Authorization` / `x-api-key` header values are lifted into the secret
+//! store; a leading `Bearer ` is stripped so the user can paste either form.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +16,7 @@ use crate::settings::McpServerSettings;
 pub struct ImportedMcpServer {
     /// The settings row to add.
     pub server: McpServerSettings,
-    /// Vault key, already run through [`normalize_api_key`].
+    /// Secret-store key, already run through [`normalize_api_key`].
     pub api_key: Option<String>,
 }
 

@@ -174,8 +174,9 @@ fn push_skill(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] for IO failures, oversized files, or non-UTF-8
-/// content.
+/// Returns [`ConfigError`] when the file cannot be read, exceeds the resource
+/// byte cap, or is not UTF-8. A read failure is an authority rejection so a
+/// prompt resource never surfaces a raw operating-system error.
 pub(crate) fn read_resource(path: &Path) -> Result<String, ConfigError> {
     let bytes = std::fs::read(path).map_err(|_| ConfigError::authority_rejection())?;
     if bytes.len() > MAX_RESOURCE_BYTES {

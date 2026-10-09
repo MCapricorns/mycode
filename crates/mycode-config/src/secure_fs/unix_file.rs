@@ -17,18 +17,6 @@ use crate::{ConfigError, ConfigErrorKind};
 const FILE_MODE: rfs::RawMode = 0o600;
 const MAX_CREATE_ATTEMPTS: usize = 16;
 
-pub(in crate::secure_fs) fn ensure_directory(
-    root: &Path,
-    components: &[OsString],
-) -> Result<(), ConfigError> {
-    let mut directory = open_or_create_root(root)?;
-    for component in components {
-        reject_wrong_case(&directory, component)?;
-        directory = unix::create_or_open_directory(&directory, component, true)?;
-    }
-    Ok(())
-}
-
 pub(in crate::secure_fs) fn read_file(
     root: &Path,
     components: &[OsString],

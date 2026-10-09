@@ -3,7 +3,7 @@
 //! [`AppSettings`] is the single settings document at `settings.json`: the
 //! desktop settings page edits it through typed APIs and it is published with
 //! revision compare-and-swap through the hardened owned-file transaction.
-//! Secrets never live here; credentials stay in the Host vault.
+//! Secrets never live here; credentials stay in the secret store.
 //!
 //! A trailing comma from an earlier writer is repaired and the canonical
 //! document is rewritten. Missing fields take their defaults. A document that
@@ -130,7 +130,8 @@ pub fn canonical_font_family(value: &str) -> Option<&'static str> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceSettings {
-    /// Always `dark`. A stored `light` is rewritten on read.
+    /// Must be `dark`. Any other stored value fails validation, and startup
+    /// replaces the whole document with defaults.
     pub theme: String,
     /// One of [`VALID_PALETTES`]. Slate is the default.
     #[serde(default = "default_palette")]
@@ -311,9 +312,10 @@ impl AppSettings {
 
 /// Reads and validates `settings.json`.
 ///
-/// A missing document yields the defaults. A trailing comma is rewritten in
-/// place. A document that cannot be parsed or validated is backed up and
-/// replaced with defaults; see [`read_app_settings_with_repair`].
+/// A missing document yields the defaults. A trailing comma is accepted and
+/// a canonical rewrite is attempted. A document that cannot be parsed or
+/// validated is backed up and replaced with defaults; see
+/// [`read_app_settings_with_repair`].
 ///
 /// # Errors
 ///
