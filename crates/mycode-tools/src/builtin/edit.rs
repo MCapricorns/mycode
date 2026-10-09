@@ -58,7 +58,9 @@ pub struct EditTool;
 /// Arguments for [`EditTool`].
 ///
 /// The legacy `{path, old_string, new_string}` unique replace is accepted
-/// and treated as one literal unique operation.
+/// when `operations` is omitted, and treated as one literal unique
+/// operation. When `operations` is also present it is the edit that runs;
+/// `old_string` and `new_string` are ignored.
 #[derive(Deserialize, JsonSchema)]
 pub struct EditArgs {
     /// Path of the file to edit. Relative paths resolve against the
@@ -68,12 +70,15 @@ pub struct EditArgs {
     /// snapshot; the publish always compare-and-swaps the snapshot
     /// revision.
     pub expected_revision: Option<String>,
-    /// Exact text to replace once. Legacy unique-replace field; cannot be
-    /// combined with `operations`.
+    /// Exact text to replace once. Legacy unique-replace field. Used only
+    /// when `operations` is omitted; ignored when `operations` is set.
     pub old_string: Option<String>,
-    /// Replacement for `old_string`.
+    /// Replacement for `old_string`. Used only when `operations` is omitted;
+    /// ignored when `operations` is set.
     pub new_string: Option<String>,
     /// Bounded batch of literal, regex, line-range, fuzzy, and ast operations.
+    /// When set, this list is the whole edit and `old_string`/`new_string`
+    /// are ignored.
     pub operations: Option<Vec<EditOp>>,
 }
 
@@ -192,9 +197,11 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Atomically edit an existing UTF-8 file. Prefer a unique literal \
-         replace (`old_string`/`new_string`, or `operations` with type \
-         `literal`). Batch literal (memmem / Aho-Corasick), fuzzy \
+        "Atomically edit an existing UTF-8 file. Send either \
+         {path, old_string, new_string} or {path, operations:[...]}. \
+         Example: {\"path\":\"a.rs\",\"operations\":[{\"type\":\"literal\",\"pattern\":\"foo\",\"replacement\":\"bar\"}]}. \
+         When `operations` is present it is applied and `old_string`/`new_string` \
+         are ignored. Batch literal (memmem / Aho-Corasick), fuzzy \
          (unique-best normalized Levenshtein), bounded regex, line-range, \
          and ast (tree-sitter capture) ops all match one snapshot and \
          publish once. `old_string` must match exactly once. Hidden files \
@@ -204,9 +211,11 @@ impl Tool for EditTool {
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "edit: unique string replace (path, old_string, new_string) or \
-             operations[] (literal/regex/line_range/fuzzy/ast) with optional \
-             expected_revision.",
+            "edit: unique replace is {path, old_string, new_string}. Batch \
+             edits are {path, operations:[...]} (literal, regex, line_range, \
+             fuzzy, ast) with optional expected_revision. When operations is \
+             present it is the whole edit and old_string/new_string are \
+             ignored. Example: {\"path\":\"a.rs\",\"operations\":[{\"type\":\"literal\",\"pattern\":\"foo\",\"replacement\":\"bar\"}]}",
         )
     }
 

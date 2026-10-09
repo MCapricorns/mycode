@@ -104,29 +104,14 @@ pub(super) struct Applied {
 }
 
 pub(super) fn normalize_args(args: &EditArgs) -> Result<Vec<PreparedOp>, ToolError> {
-    match (&args.operations, &args.old_string, &args.new_string) {
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(ToolError::InvalidArgs(
-            "cannot combine old_string/new_string with operations".to_owned(),
-        )),
-        (Some(operations), None, None) => {
-            if operations.is_empty() {
-                return Err(ToolError::InvalidArgs(
-                    "operations must not be empty".to_owned(),
-                ));
-            }
-            if operations.len() > MAX_OPERATIONS {
-                return Err(ToolError::InvalidArgs(format!(
-                    "at most {MAX_OPERATIONS} operations are allowed"
-                )));
-            }
-            let ops: Vec<PreparedOp> = operations
-                .iter()
-                .map(|op| prepare_op(op, &args.path))
-                .collect::<Result<_, _>>()?;
-            super::ast::reject_mixed_languages(&ops)?;
-            Ok(ops)
-        }
-        (None, Some(old), Some(new)) => {
+    // Models often send `old_string`/`new_string` together with `operations`.
+    // The batch is authoritative: legacy fields are not validated and do not
+    // apply. An operations-only call is the same path.
+    if let Some(operations) = args.operations.as_deref() {
+        return prepare_operations(operations, &args.path);
+    }
+    match (&args.old_string, &args.new_string) {
+        (Some(old), Some(new)) => {
             if old.is_empty() {
                 return Err(ToolError::InvalidArgs(
                     "old_string must not be empty; provide the text to replace".into(),
@@ -140,16 +125,35 @@ pub(super) fn normalize_args(args: &EditArgs) -> Result<Vec<PreparedOp>, ToolErr
                 pick: Pick::Unique,
             }])
         }
-        (None, Some(_), None) => Err(ToolError::InvalidArgs(
+        (Some(_), None) => Err(ToolError::InvalidArgs(
             "new_string is required when old_string is set".to_owned(),
         )),
-        (None, None, Some(_)) => Err(ToolError::InvalidArgs(
+        (None, Some(_)) => Err(ToolError::InvalidArgs(
             "old_string is required when new_string is set".to_owned(),
         )),
-        (None, None, None) => Err(ToolError::InvalidArgs(
+        (None, None) => Err(ToolError::InvalidArgs(
             "provide old_string/new_string or operations".to_owned(),
         )),
     }
+}
+
+fn prepare_operations(operations: &[EditOp], path: &str) -> Result<Vec<PreparedOp>, ToolError> {
+    if operations.is_empty() {
+        return Err(ToolError::InvalidArgs(
+            "operations must not be empty".to_owned(),
+        ));
+    }
+    if operations.len() > MAX_OPERATIONS {
+        return Err(ToolError::InvalidArgs(format!(
+            "at most {MAX_OPERATIONS} operations are allowed"
+        )));
+    }
+    let ops: Vec<PreparedOp> = operations
+        .iter()
+        .map(|op| prepare_op(op, path))
+        .collect::<Result<_, _>>()?;
+    super::ast::reject_mixed_languages(&ops)?;
+    Ok(ops)
 }
 
 fn bound_pattern(label: &str, value: &str) -> Result<(), ToolError> {
@@ -1165,5 +1169,74 @@ mod newline_tests {
         let body = "one\r\ntwo\r\n";
         let updated = apply(body, "one\ntwo", "ONE\nTWO").expect("edit");
         assert_eq!(updated, "ONE\r\nTWO\r\n");
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::{apply_planned, normalize_args, plan_edits};
+    use crate::builtin::edit::EditArgs;
+    use crate::tool::validate_args;
+    use serde_json::{Value, json};
+    use tokio_util::sync::CancellationToken;
+
+    fn apply_json(body: &str, raw: Value) -> Result<String, String> {
+        validate_args::<EditArgs>(&raw).map_err(|err| err.to_string())?;
+        let args: EditArgs = serde_json::from_value(raw).map_err(|err| err.to_string())?;
+        let ops = normalize_args(&args).map_err(|err| err.to_string())?;
+        let cancel = CancellationToken::new();
+        let planned = plan_edits(body, &ops, None, &cancel).map_err(|err| err.to_string())?;
+        apply_planned(body, &planned, &cancel)
+            .map(|applied| applied.text)
+            .map_err(|err| err.to_string())
+    }
+
+    fn mixed_call(old_string: &str, new_string: &str) -> Value {
+        json!({
+            "path": "src/plane.rs",
+            "old_string": old_string,
+            "new_string": new_string,
+            "operations": [{
+                "type": "literal",
+                "pattern": "lives -= 1",
+                "replacement": "lives -= 2"
+            }]
+        })
+    }
+
+    #[test]
+    fn mixed_legacy_fields_and_operations_apply_operations_only() {
+        let body = "score += 1;\nlives -= 1;\n";
+        let updated = apply_json(body, mixed_call("score += 1", "score += 10")).expect("edit");
+        assert_eq!(updated, "score += 1;\nlives -= 2;\n");
+    }
+
+    #[test]
+    fn mixed_call_does_not_fall_back_to_legacy_fields() {
+        let err = apply_json("score += 1;\n", mixed_call("score += 1", "score += 10"))
+            .expect_err("operations needle is absent");
+        assert!(err.contains("pattern not found"), "{err}");
+        assert!(!err.to_ascii_lowercase().contains("combine"), "{err}");
+    }
+
+    #[test]
+    fn mixed_call_ignores_invalid_legacy_fields() {
+        let body = "score += 1;\nlives -= 1;\n";
+        let updated = apply_json(body, mixed_call("", "score += 10")).expect("edit");
+        assert_eq!(updated, "score += 1;\nlives -= 2;\n");
+    }
+
+    #[test]
+    fn legacy_replace_still_applies_when_operations_are_omitted() {
+        let updated = apply_json(
+            "score += 1;\n",
+            json!({
+                "path": "src/plane.rs",
+                "old_string": "score += 1",
+                "new_string": "score += 10"
+            }),
+        )
+        .expect("edit");
+        assert_eq!(updated, "score += 10;\n");
     }
 }
