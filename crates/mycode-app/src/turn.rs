@@ -1039,7 +1039,11 @@ mod tests {
         > {
             let body = String::from_utf8_lossy(&call.body);
             let (kind, sse) = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
-                ("summary", text_sse("handoff notes", 1))
+                let summary = format!(
+                    "handoff notes. {}",
+                    "The covered prefix is replaced by this checkpoint. ".repeat(6)
+                );
+                ("summary", text_sse(&summary, 80))
             } else if body.contains("\"role\":\"tool\"") {
                 ("final", {
                     *self.final_summaries.lock().expect("summaries") =
