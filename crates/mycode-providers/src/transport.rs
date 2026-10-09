@@ -60,7 +60,8 @@ pub trait SseTransport: Send + Sync + 'static {
 /// reqwest-backed production transport.
 ///
 /// Each request builds a client that does not follow redirects and pins the
-/// resolved addresses. The stored builder probe only checks that TLS starts.
+/// resolved addresses. [`ReqwestTransport::new`] builds a throwaway client to
+/// check that TLS can start; nothing is stored on the unit struct.
 #[derive(Clone)]
 pub struct ReqwestTransport;
 

@@ -16,7 +16,7 @@ use mycode_core::{Request, StreamEvent};
 use crate::driver::FrameReducer;
 use crate::wire_common::{
     MAX_STREAM_INDEX, append_interruption, assembled_stop_reason, charge_stream, glm_target,
-    map_stop_reason, merge_usage, provider_error_detail, usage_from_value,
+    merge_usage, provider_error_detail, record_provider_stop, usage_from_value,
 };
 
 /// Output ceiling used only when models.dev publishes no `limit.output`.
@@ -209,13 +209,6 @@ impl MessagesReducer {
         Self::default()
     }
 
-    fn current_id(&self) -> Option<String> {
-        match self.blocks.get(self.current)? {
-            BlockAccumulator::ToolUse { id, .. } => Some(id.clone()),
-            _ => None,
-        }
-    }
-
     fn begin_interrupt(&mut self, detail: &str) {
         if self.interrupt.is_none() {
             self.interrupt = Some(detail.to_owned());
@@ -253,17 +246,15 @@ impl MessagesReducer {
             }
         }
         let mut blocks = Vec::new();
-        for block in &self.blocks {
+        for block in std::mem::take(&mut self.blocks) {
             match block {
                 BlockAccumulator::Thinking { text, signature } => {
-                    let mut thinking = ThinkingBlock::new(text.clone());
-                    thinking.signature = signature.clone();
+                    let mut thinking = ThinkingBlock::new(text);
+                    thinking.signature = signature;
                     blocks.push(ContentBlock::Thinking(thinking));
                 }
                 BlockAccumulator::Text { text } => {
-                    blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(
-                        text.clone(),
-                    )));
+                    blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
                 }
                 BlockAccumulator::ToolUse {
                     id,
@@ -274,26 +265,24 @@ impl MessagesReducer {
                         continue;
                     }
                     let arguments =
-                        serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
+                        serde_json::from_str::<Value>(&arguments).unwrap_or_else(|_| json!({}));
                     blocks.push(ContentBlock::ToolCall(mycode_core::ToolCall::new(
-                        id.clone(),
-                        name.clone(),
-                        arguments,
+                        id, name, arguments,
                     )));
                 }
                 BlockAccumulator::Empty => {}
             }
         }
-        if let Some(detail) = self.interrupt.clone() {
+        if let Some(detail) = self.interrupt.as_deref() {
             let note_target = blocks.iter_mut().rev().find_map(|block| match block {
                 ContentBlock::Text(text) => Some(&mut text.text),
                 _ => None,
             });
             if let Some(text) = note_target {
-                append_interruption(text, &detail);
+                append_interruption(text, detail);
             } else {
                 let mut text = String::new();
-                append_interruption(&mut text, &detail);
+                append_interruption(&mut text, detail);
                 blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
             }
         }
@@ -333,12 +322,188 @@ impl MessagesReducer {
     }
 }
 
-impl FrameReducer for MessagesReducer {
-    fn feed(&mut self, data: &str) -> Vec<StreamEvent> {
-        if self.terminal_sent {
+impl MessagesReducer {
+    fn start_block(&mut self, event: &Value) -> Vec<StreamEvent> {
+        let index = event["index"].as_u64().unwrap_or_default();
+        if index > MAX_STREAM_INDEX {
+            self.terminal_sent = true;
+            return vec![crate::driver::protocol_error(
+                "content block index exceeds the stream limit",
+            )];
+        }
+        let block = &event["content_block"];
+        let accumulator = match block["type"].as_str().unwrap_or_default() {
+            "thinking" | "redacted_thinking" => BlockAccumulator::Thinking {
+                text: block["thinking"].as_str().unwrap_or_default().to_owned(),
+                signature: block["signature"].as_str().map(str::to_owned),
+            },
+            "tool_use" => BlockAccumulator::ToolUse {
+                id: block["id"].as_str().unwrap_or_default().to_owned(),
+                name: block["name"].as_str().unwrap_or_default().to_owned(),
+                arguments: String::new(),
+            },
+            _ => BlockAccumulator::Text {
+                text: block["text"].as_str().unwrap_or_default().to_owned(),
+            },
+        };
+        let weight = match &accumulator {
+            BlockAccumulator::Thinking { text, signature } => {
+                text.len() + signature.as_ref().map_or(0, String::len)
+            }
+            BlockAccumulator::ToolUse {
+                id,
+                name,
+                arguments,
+            } => id.len() + name.len() + arguments.len(),
+            BlockAccumulator::Text { text } => text.len(),
+            BlockAccumulator::Empty => 0,
+        };
+        if !charge_stream(&mut self.accumulated, weight) {
+            self.terminal_sent = true;
+            return vec![crate::driver::protocol_error(
+                "stream exceeded the output limit",
+            )];
+        }
+        let index = index as usize;
+        while self.blocks.len() <= index {
+            self.blocks.push(BlockAccumulator::Empty);
+        }
+        self.blocks[index] = accumulator;
+        self.current = index;
+        Vec::new()
+    }
+
+    fn apply_delta(&mut self, event: &Value) -> Vec<StreamEvent> {
+        let delta = &event["delta"];
+        match delta["type"].as_str().unwrap_or_default() {
+            "text_delta" => self.apply_text_delta(delta["text"].as_str().unwrap_or_default()),
+            "thinking_delta" => {
+                self.apply_thinking_delta(delta["thinking"].as_str().unwrap_or_default())
+            }
+            "signature_delta" => {
+                if let BlockAccumulator::Thinking { signature, .. } = self
+                    .blocks
+                    .get_mut(self.current)
+                    .unwrap_or(&mut BlockAccumulator::Empty)
+                    && let Some(value) = delta["signature"].as_str()
+                {
+                    *signature = Some(value.to_owned());
+                }
+                Vec::new()
+            }
+            "input_json_delta" => {
+                self.apply_input_json(delta["partial_json"].as_str().unwrap_or_default())
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn apply_text_delta(&mut self, part: &str) -> Vec<StreamEvent> {
+        if part.is_empty() {
             return Vec::new();
         }
-        if data.trim().is_empty() {
+        if !charge_stream(&mut self.accumulated, part.len()) {
+            self.terminal_sent = true;
+            return vec![crate::driver::protocol_error(
+                "stream exceeded the output limit",
+            )];
+        }
+        let mut events = Vec::new();
+        for piece in self.xml.feed(part) {
+            match piece {
+                crate::xml_tool_calls::XmlPiece::Text(text) => {
+                    if let BlockAccumulator::Text { text: block } = self
+                        .blocks
+                        .get_mut(self.current)
+                        .unwrap_or(&mut BlockAccumulator::Empty)
+                    {
+                        block.push_str(&text);
+                    }
+                    events.push(StreamEvent::TextDelta(text));
+                }
+                crate::xml_tool_calls::XmlPiece::ToolCall { name, arguments } => {
+                    self.xml_calls += 1;
+                    let id = format!("toolu-xml-{}", self.xml_calls);
+                    events.push(StreamEvent::ToolCallDelta {
+                        id: id.clone(),
+                        partial_json: arguments.clone(),
+                    });
+                    self.blocks.push(BlockAccumulator::ToolUse {
+                        id,
+                        name,
+                        arguments,
+                    });
+                }
+            }
+        }
+        events
+    }
+
+    fn apply_thinking_delta(&mut self, part: &str) -> Vec<StreamEvent> {
+        if part.is_empty() {
+            return Vec::new();
+        }
+        if !charge_stream(&mut self.accumulated, part.len()) {
+            self.terminal_sent = true;
+            return vec![crate::driver::protocol_error(
+                "stream exceeded the output limit",
+            )];
+        }
+        if !matches!(
+            self.blocks.get(self.current),
+            Some(BlockAccumulator::Thinking { .. })
+        ) {
+            self.blocks.push(BlockAccumulator::Thinking {
+                text: String::new(),
+                signature: None,
+            });
+            self.current = self.blocks.len() - 1;
+        }
+        if let BlockAccumulator::Thinking { text, .. } = &mut self.blocks[self.current] {
+            text.push_str(part);
+            return vec![StreamEvent::ThinkingDelta(part.to_owned())];
+        }
+        Vec::new()
+    }
+
+    fn apply_input_json(&mut self, part: &str) -> Vec<StreamEvent> {
+        if !part.is_empty() && !charge_stream(&mut self.accumulated, part.len()) {
+            self.terminal_sent = true;
+            return vec![crate::driver::protocol_error(
+                "stream exceeded the output limit",
+            )];
+        }
+        let Some(BlockAccumulator::ToolUse { id, arguments, .. }) =
+            self.blocks.get_mut(self.current)
+        else {
+            return Vec::new();
+        };
+        let id = (!part.is_empty()).then(|| id.clone());
+        arguments.push_str(part);
+        id.map(|id| {
+            vec![StreamEvent::ToolCallDelta {
+                id,
+                partial_json: part.to_owned(),
+            }]
+        })
+        .unwrap_or_default()
+    }
+
+    fn apply_message_delta(&mut self, event: &Value) {
+        if let Some(stop) = event["delta"]["stop_reason"].as_str() {
+            record_provider_stop(&mut self.stop_reason, &mut self.interrupt, stop);
+        }
+        if event.get("usage").is_some() {
+            let parsed = usage_from_value(&event["usage"]);
+            let merged = merge_usage(Some(self.snapshot()), parsed);
+            self.apply_usage(merged);
+        }
+    }
+}
+
+impl FrameReducer for MessagesReducer {
+    fn feed(&mut self, data: &str) -> Vec<StreamEvent> {
+        if self.terminal_sent || data.trim().is_empty() {
             return Vec::new();
         }
         let Ok(event) = serde_json::from_str::<Value>(data) else {
@@ -348,186 +513,22 @@ impl FrameReducer for MessagesReducer {
             }
             return vec![crate::driver::protocol_error("invalid messages frame")];
         };
-        let event_type = event["type"].as_str().unwrap_or_default();
-        match event_type {
+        match event["type"].as_str().unwrap_or_default() {
             "message_start" => {
                 let parsed = usage_from_value(&event["message"]["usage"]);
                 let merged = merge_usage(Some(self.snapshot()), parsed);
                 self.apply_usage(merged);
+                Vec::new()
             }
-            "content_block_start" => {
-                let index = event["index"].as_u64().unwrap_or_default();
-                if index > MAX_STREAM_INDEX {
-                    self.terminal_sent = true;
-                    return vec![crate::driver::protocol_error(
-                        "content block index exceeds the stream limit",
-                    )];
-                }
-                let block = &event["content_block"];
-                let accumulator = match block["type"].as_str().unwrap_or_default() {
-                    "thinking" | "redacted_thinking" => BlockAccumulator::Thinking {
-                        text: block["thinking"].as_str().unwrap_or_default().to_owned(),
-                        signature: block["signature"].as_str().map(str::to_owned),
-                    },
-                    "tool_use" => BlockAccumulator::ToolUse {
-                        id: block["id"].as_str().unwrap_or_default().to_owned(),
-                        name: block["name"].as_str().unwrap_or_default().to_owned(),
-                        arguments: String::new(),
-                    },
-                    _ => BlockAccumulator::Text {
-                        text: block["text"].as_str().unwrap_or_default().to_owned(),
-                    },
-                };
-                let weight = match &accumulator {
-                    BlockAccumulator::Thinking { text, signature } => {
-                        text.len() + signature.as_ref().map_or(0, String::len)
-                    }
-                    BlockAccumulator::ToolUse {
-                        id,
-                        name,
-                        arguments,
-                    } => id.len() + name.len() + arguments.len(),
-                    BlockAccumulator::Text { text } => text.len(),
-                    BlockAccumulator::Empty => 0,
-                };
-                if !charge_stream(&mut self.accumulated, weight) {
-                    self.terminal_sent = true;
-                    return vec![crate::driver::protocol_error(
-                        "stream exceeded the output limit",
-                    )];
-                }
-                let index = index as usize;
-                while self.blocks.len() <= index {
-                    self.blocks.push(BlockAccumulator::Empty);
-                }
-                self.blocks[index] = accumulator;
-                self.current = index;
-            }
-            "content_block_delta" => {
-                let delta = &event["delta"];
-                match delta["type"].as_str().unwrap_or_default() {
-                    "text_delta" => {
-                        let part = delta["text"].as_str().unwrap_or_default();
-                        if part.is_empty() {
-                            return Vec::new();
-                        }
-                        if !charge_stream(&mut self.accumulated, part.len()) {
-                            self.terminal_sent = true;
-                            return vec![crate::driver::protocol_error(
-                                "stream exceeded the output limit",
-                            )];
-                        }
-                        let mut events = Vec::new();
-                        for piece in self.xml.feed(part) {
-                            match piece {
-                                crate::xml_tool_calls::XmlPiece::Text(text) => {
-                                    if let BlockAccumulator::Text { text: block } = self
-                                        .blocks
-                                        .get_mut(self.current)
-                                        .unwrap_or(&mut BlockAccumulator::Empty)
-                                    {
-                                        block.push_str(&text);
-                                    }
-                                    events.push(StreamEvent::TextDelta(text));
-                                }
-                                crate::xml_tool_calls::XmlPiece::ToolCall { name, arguments } => {
-                                    self.xml_calls += 1;
-                                    let id = format!("toolu-xml-{}", self.xml_calls);
-                                    events.push(StreamEvent::ToolCallDelta {
-                                        id: id.clone(),
-                                        partial_json: arguments.clone(),
-                                    });
-                                    self.blocks.push(BlockAccumulator::ToolUse {
-                                        id,
-                                        name,
-                                        arguments,
-                                    });
-                                }
-                            }
-                        }
-                        return events;
-                    }
-                    "thinking_delta" => {
-                        let part = delta["thinking"].as_str().unwrap_or_default();
-                        if !part.is_empty() {
-                            if !charge_stream(&mut self.accumulated, part.len()) {
-                                self.terminal_sent = true;
-                                return vec![crate::driver::protocol_error(
-                                    "stream exceeded the output limit",
-                                )];
-                            }
-                            if !matches!(
-                                self.blocks.get(self.current),
-                                Some(BlockAccumulator::Thinking { .. })
-                            ) {
-                                self.blocks.push(BlockAccumulator::Thinking {
-                                    text: String::new(),
-                                    signature: None,
-                                });
-                                self.current = self.blocks.len() - 1;
-                            }
-                            if let BlockAccumulator::Thinking { text, .. } =
-                                &mut self.blocks[self.current]
-                            {
-                                text.push_str(part);
-                                return vec![StreamEvent::ThinkingDelta(part.to_owned())];
-                            }
-                        }
-                    }
-                    "signature_delta" => {
-                        if let BlockAccumulator::Thinking { signature, .. } = self
-                            .blocks
-                            .get_mut(self.current)
-                            .unwrap_or(&mut BlockAccumulator::Empty)
-                            && let Some(value) = delta["signature"].as_str()
-                        {
-                            *signature = Some(value.to_owned());
-                        }
-                    }
-                    "input_json_delta" => {
-                        let part = delta["partial_json"].as_str().unwrap_or_default();
-                        if !part.is_empty() && !charge_stream(&mut self.accumulated, part.len()) {
-                            self.terminal_sent = true;
-                            return vec![crate::driver::protocol_error(
-                                "stream exceeded the output limit",
-                            )];
-                        }
-                        if let Some(id) = self.current_id() {
-                            if let BlockAccumulator::ToolUse { arguments, .. } =
-                                &mut self.blocks[self.current]
-                            {
-                                arguments.push_str(part);
-                            }
-                            if !part.is_empty() {
-                                return vec![StreamEvent::ToolCallDelta {
-                                    id,
-                                    partial_json: part.to_owned(),
-                                }];
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            "content_block_stop" => {}
+            "content_block_start" => self.start_block(&event),
+            "content_block_delta" => self.apply_delta(&event),
             "message_delta" => {
-                if let Some(stop) = event["delta"]["stop_reason"].as_str() {
-                    let reason = map_stop_reason(stop);
-                    if reason == StopReason::Error {
-                        self.begin_interrupt(stop);
-                    } else if self.stop_reason != Some(StopReason::Error) {
-                        self.stop_reason = Some(reason);
-                    }
-                }
-                if event.get("usage").is_some() {
-                    let parsed = usage_from_value(&event["usage"]);
-                    let merged = merge_usage(Some(self.snapshot()), parsed);
-                    self.apply_usage(merged);
-                }
+                self.apply_message_delta(&event);
+                Vec::new()
             }
             "message_stop" => {
                 self.message_stopped = true;
-                return vec![self.assemble()];
+                vec![self.assemble()]
             }
             "error" => {
                 let detail = provider_error_detail(&event).unwrap_or_else(|| {
@@ -537,12 +538,10 @@ impl FrameReducer for MessagesReducer {
                         .to_owned()
                 });
                 self.begin_interrupt(&detail);
-                return vec![self.assemble()];
+                vec![self.assemble()]
             }
-            "ping" => {}
-            _ => {}
+            _ => Vec::new(),
         }
-        Vec::new()
     }
 
     fn finish(&mut self) -> StreamEvent {

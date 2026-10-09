@@ -1,10 +1,10 @@
-//! GitHub Copilot OAuth: device-code sign-in and bearer-token exchange.
+//! Device-code and subscription OAuth for GitHub Copilot, xAI, and Codex.
 //!
-//! Copilot is an OpenAI-compatible endpoint whose credential is not a pasted
-//! API key: the user authorizes MYCode through GitHub's device flow, the
-//! resulting OAuth token is stored in the secret vault, and each turn
-//! exchanges it for a short-lived Copilot bearer token. Error messages carry
-//! statuses and field names only — never token values.
+//! These providers do not take only a pasted API key. The user authorizes
+//! MYCode, the resulting token is stored in the secret vault, and Copilot
+//! turns exchange it for a short-lived bearer. Error messages carry statuses
+//! and field names only — never token values. The `reqwest::Client` argument
+//! is retained for callers; each request is sent through the pinned client.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -105,8 +105,7 @@ fn field<'a>(payload: &'a Value, name: &str) -> Option<&'a str> {
 /// # Errors
 ///
 /// Returns a transport or endpoint-shape failure without embedded secrets.
-pub async fn start_device_flow(client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
-    let _ = client;
+pub async fn start_device_flow(_client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
     let response = pinned(
         reqwest::Method::POST,
         DEVICE_CODE_URL,
@@ -152,10 +151,9 @@ pub fn parse_device_start(payload: &Value) -> Option<DeviceCodeStart> {
 ///
 /// Returns a transport failure; grant states arrive as [`DeviceTokenPoll`].
 pub async fn poll_device_token(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     device_code: &str,
 ) -> Result<DeviceTokenPoll, String> {
-    let _ = client;
     let response = pinned(
         reqwest::Method::POST,
         DEVICE_TOKEN_URL,
@@ -205,26 +203,18 @@ pub fn classify_device_poll(payload: &Value) -> DeviceTokenPoll {
 ///
 /// Returns a transport failure or a rejection that means "sign in again".
 pub async fn copilot_bearer(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     github_token: &str,
 ) -> Result<CopilotToken, String> {
-    let _ = client;
     let authorization = format!("Bearer {github_token}");
-    let response = pinned(
-        reqwest::Method::GET,
-        COPILOT_TOKEN_URL,
-        &[
-            ("authorization", authorization.as_str()),
-            ("accept", "application/vnd.github+json"),
-            ("user-agent", "GitHubCopilotChat/0.35.0"),
-            ("editor-version", "vscode/1.107.0"),
-            ("editor-plugin-version", "copilot-chat/0.35.0"),
-            ("copilot-integration-id", "vscode-chat"),
-        ],
-        None,
-    )
-    .await
-    .map_err(|error| format!("copilot token request failed: {error}"))?;
+    let mut headers = vec![
+        ("authorization", authorization.as_str()),
+        ("accept", "application/vnd.github+json"),
+    ];
+    headers.extend(COPILOT_CHAT_HEADERS);
+    let response = pinned(reqwest::Method::GET, COPILOT_TOKEN_URL, &headers, None)
+        .await
+        .map_err(|error| format!("copilot token request failed: {error}"))?;
     if let Some(reason) = match response.status().as_u16() {
         401 | 403 => Some("copilot rejected the saved sign-in — sign in again".to_owned()),
         404 => Some("copilot token exchange is unavailable for this account".to_owned()),
@@ -366,8 +356,7 @@ pub const XAI_VERIFICATION_URI: &str = "https://auth.x.ai/device";
 /// # Errors
 ///
 /// Returns a transport or endpoint-shape failure without embedded secrets.
-pub async fn start_xai_device_flow(client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
-    let _ = client;
+pub async fn start_xai_device_flow(_client: &reqwest::Client) -> Result<DeviceCodeStart, String> {
     let response = pinned(
         reqwest::Method::POST,
         XAI_DEVICE_CODE_URL,
@@ -400,10 +389,9 @@ pub async fn start_xai_device_flow(client: &reqwest::Client) -> Result<DeviceCod
 ///
 /// Returns a transport failure; grant states arrive as [`DeviceTokenPoll`].
 pub async fn poll_xai_device_token(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     device_code: &str,
 ) -> Result<DeviceTokenPoll, String> {
-    let _ = client;
     let response = pinned(
         reqwest::Method::POST,
         XAI_TOKEN_URL,
@@ -441,10 +429,10 @@ pub async fn poll_xai_device_token(
 ///
 /// Returns a transport or grant failure.
 pub async fn refresh_xai_token(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     refresh: &str,
 ) -> Result<OAuthSecret, String> {
-    refresh_form_token(client, XAI_TOKEN_URL, XAI_CLIENT_ID, refresh, None).await
+    refresh_form_token(XAI_TOKEN_URL, XAI_CLIENT_ID, refresh, None).await
 }
 
 /// Codex device-auth identifiers returned by the usercode endpoint.
@@ -463,8 +451,9 @@ pub struct CodexDeviceStart {
 /// # Errors
 ///
 /// Returns a transport or endpoint-shape failure.
-pub async fn start_codex_device_flow(client: &reqwest::Client) -> Result<CodexDeviceStart, String> {
-    let _ = client;
+pub async fn start_codex_device_flow(
+    _client: &reqwest::Client,
+) -> Result<CodexDeviceStart, String> {
     let body = serde_json::to_vec(&serde_json::json!({ "client_id": CODEX_CLIENT_ID }))
         .map_err(|error| format!("Codex device-code request failed: {error}"))?;
     let response = pinned(
@@ -522,10 +511,9 @@ pub enum CodexDevicePoll {
 ///
 /// Returns a transport failure.
 pub async fn poll_codex_device_token(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     start: &CodexDeviceStart,
 ) -> Result<CodexDevicePoll, String> {
-    let _ = client;
     let body = serde_json::to_vec(&serde_json::json!({
         "device_auth_id": start.device_auth_id,
         "user_code": start.user_code,
@@ -578,11 +566,10 @@ pub async fn poll_codex_device_token(
 ///
 /// Returns a transport or field-shape failure.
 pub async fn exchange_codex_code(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     authorization_code: &str,
     code_verifier: &str,
 ) -> Result<OAuthSecret, String> {
-    let _ = client;
     let response = pinned(
         reqwest::Method::POST,
         CODEX_TOKEN_URL,
@@ -616,27 +603,18 @@ pub async fn exchange_codex_code(
 ///
 /// Returns a transport or grant failure.
 pub async fn refresh_codex_token(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     refresh: &str,
 ) -> Result<OAuthSecret, String> {
-    refresh_form_token(
-        client,
-        CODEX_TOKEN_URL,
-        CODEX_CLIENT_ID,
-        refresh,
-        Some(true),
-    )
-    .await
+    refresh_form_token(CODEX_TOKEN_URL, CODEX_CLIENT_ID, refresh, Some(true)).await
 }
 
 async fn refresh_form_token(
-    client: &reqwest::Client,
     url: &str,
     client_id: &str,
     refresh: &str,
     extract_account: Option<bool>,
 ) -> Result<OAuthSecret, String> {
-    let _ = client;
     let response = pinned(
         reqwest::Method::POST,
         url,

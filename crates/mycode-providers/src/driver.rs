@@ -130,7 +130,10 @@ pub(crate) async fn drive(
     let _ = emit(&sender, reducer.finish()).await;
 }
 
-/// Sends events in order; returns `true` when a terminal was sent.
+/// Sends events in order.
+///
+/// Returns `true` when the driver should stop: a terminal event was accepted,
+/// or the sender rejected the event.
 async fn send_all(sender: &EventStreamSender, events: Vec<StreamEvent>) -> bool {
     for event in events {
         if emit(sender, event).await {
@@ -151,7 +154,7 @@ async fn emit(sender: &EventStreamSender, event: StreamEvent) -> bool {
     terminal
 }
 
-/// Converts a parser failure into a terminal error event.
+/// Builds a terminal protocol-error event.
 pub(crate) fn protocol_error(message: &'static str) -> StreamEvent {
     StreamEvent::Error(ProviderError::with_message(
         mycode_core::ProviderErrorKind::Protocol,

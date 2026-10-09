@@ -36,8 +36,9 @@ fn endpoint_fix(provider_id: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// Providers that authenticate with an OAuth device flow instead of a pasted
-/// API key; the settings UI renders a sign-in button for these.
+/// Providers that sign in instead of only pasting an API key. Copilot and
+/// Codex use a device code; xAI uses subscription OAuth. The settings UI
+/// renders a sign-in button for these.
 fn device_code_auth(provider_id: &str) -> &'static str {
     match provider_id {
         "github-copilot" | "openai-codex" => AUTH_DEVICE_CODE,

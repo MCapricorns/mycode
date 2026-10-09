@@ -1,9 +1,8 @@
 //! Helpers shared by the wire-protocol adapters.
 //!
-//! One place for the fragments every OpenAI-family adapter repeats: the
-//! reasoning-effort body fields, text-block concatenation, and terminal
-//! block assembly. Adapter-specific shapes (Anthropic's budgeted thinking,
-//! per-index block accumulators) stay with their adapters.
+//! Reasoning-effort body fields (including Anthropic's budgeted thinking),
+//! text-block concatenation, and terminal block assembly live here.
+//! Per-index block accumulators stay with their adapters.
 
 use serde_json::{Value, json};
 
@@ -11,6 +10,9 @@ use mycode_core::{
     ContentBlock, ReasoningLevel, StopReason, TextBlock, ThinkingBlock, ToolCall, Usage,
     interrupted_response_text,
 };
+
+/// Separator between ordered system-prompt parts.
+pub(crate) const SYSTEM_JOIN: &str = "\n\n";
 
 /// Ceiling for one streamed assistant payload (text, thinking, and tool JSON).
 ///
@@ -23,6 +25,25 @@ pub(crate) const MAX_STREAM_ACCUMULATED_BYTES: usize = 8 * 1024 * 1024;
 /// A frame that names an enormous index would otherwise allocate that many
 /// accumulator slots in a single `feed` call.
 pub(crate) const MAX_STREAM_INDEX: u64 = 64;
+
+/// Records a provider finish token.
+///
+/// An error token wins over a later success token and keeps the first detail.
+pub(crate) fn record_provider_stop(
+    current: &mut Option<StopReason>,
+    interrupt: &mut Option<String>,
+    token: &str,
+) {
+    let reason = map_stop_reason(token);
+    if reason == StopReason::Error {
+        if interrupt.is_none() {
+            *interrupt = Some(token.to_owned());
+        }
+        *current = Some(StopReason::Error);
+    } else if *current != Some(StopReason::Error) {
+        *current = Some(reason);
+    }
+}
 
 /// Maps a provider finish or stop token onto the agent stop reason.
 ///
@@ -296,14 +317,13 @@ pub(crate) fn merge_usage(previous: Option<Usage>, next: Usage) -> Usage {
 
 /// Concatenates the text of every text block, in order.
 pub(crate) fn join_text(blocks: &[ContentBlock]) -> String {
-    blocks
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
+    let mut joined = String::new();
+    for block in blocks {
+        if let ContentBlock::Text(text) = block {
+            joined.push_str(&text.text);
+        }
+    }
+    joined
 }
 
 /// Concatenates non-empty thinking blocks, separated by newlines.
