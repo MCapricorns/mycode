@@ -5,9 +5,10 @@
 # The output path is crates/mycode-providers/src/catalog/snapshot.json.
 # When that file is unchanged the job exits successfully and does not open
 # a pull request. scripts/generate_catalog.py stamps generatedAt with the
-# UTC date, so a later day changes the file even when the provider list
-# does not. When the file changes, cargo test -p mycode-providers runs on
-# the Linux runner. peter-evans/create-pull-request then opens or updates
+# UTC date. A difference that is only that date is not a catalog change:
+# the committed file is restored and the job exits with changed=false.
+# When provider or model data changes, cargo test -p mycode-providers runs
+# on the Linux runner. peter-evans/create-pull-request then opens or updates
 # one pull request on the fixed branch chore/models-dev-snapshot.
 #
 # The pull request is created with GITHUB_TOKEN. The repository setting
@@ -71,6 +72,27 @@ jobs:
           if git diff --quiet -- "${path}"; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
             echo "Vendored snapshot is unchanged."
+            exit 0
+          fi
+          # generatedAt is today's UTC date. Ignore it so a weekly run does
+          # not open a pull request when no provider or model data changed.
+          if python3 - "${path}" << 'PY'
+          import json
+          import subprocess
+          import sys
+
+          path = sys.argv[1]
+          old = json.loads(subprocess.check_output(["git", "show", f"HEAD:{path}"]))
+          with open(path, encoding="utf-8") as handle:
+              new = json.load(handle)
+          old.pop("generatedAt", None)
+          new.pop("generatedAt", None)
+          sys.exit(0 if old == new else 1)
+          PY
+          then
+            git checkout -- "${path}"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "Only generatedAt differs; restored the vendored snapshot."
             exit 0
           fi
           echo "changed=true" >> "${GITHUB_OUTPUT}"
