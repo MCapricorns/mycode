@@ -4,8 +4,10 @@ use std::fmt::Write;
 
 use mycode_tools::ToolRegistry;
 
-const IDENTITY: &str =
-    "You are MYCode Agent. Complete the task with the tools listed below. Do not invent tools.";
+/// Tool-list header. Deliberately not an identity sentence: every caller
+/// (session, subagent, compaction) opens its prompt with its own identity,
+/// so a second one here would read as a duplication.
+const IDENTITY: &str = "Complete the task with the tools listed below. Do not invent tools.";
 
 /// Tool-use contract. Only names tools this process can actually call.
 const TOOL_CALLING: &str = "\

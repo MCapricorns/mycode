@@ -14,6 +14,7 @@
 
 ### Changed
 
+- 系统提示词不再出现两句身份声明：工具清单前的「You are MYCode Agent…」改为纯粹的工具契约（「Complete the task with the tools listed below. Do not invent tools.」），身份由会话或子代理提示词开头各声明一次。
 - shell 为 PowerShell 且 bash 单行命令被翻译成 cmdlet 时，结果文本第一行注明 `[bash command translated to PowerShell: …]`，细节里新增 `translated_command`：改写对模型可见，不再静默成功让 bash 习惯看起来直接可用。
 - `shell` 工具描述删去跨平台 shell 枚举句，改为指向系统提示词的 `<environment>` 块；翻译说明同步注明结果会标注改写。
 
