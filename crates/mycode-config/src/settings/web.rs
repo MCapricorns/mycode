@@ -9,7 +9,7 @@ use crate::ConfigError;
 pub const MAX_WEB_BACKENDS: usize = 16;
 
 /// Wire families accepted by [`WebBackendSettings::kind`].
-pub const VALID_WEB_KINDS: [&str; 3] = ["querit", "anysearch", "custom"];
+const VALID_WEB_KINDS: [&str; 3] = ["querit", "anysearch", "custom"];
 
 /// One configured search backend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
