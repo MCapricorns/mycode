@@ -884,7 +884,8 @@ impl Workspace {
         let Some(detected) = mycode_tools::detect_default_shell() else {
             self.apply_action(
                 DesktopAction::Failed(
-                    "No usable shell was found. Browse to pwsh or Git bash.".to_owned(),
+                    "No usable shell was found. Browse to pwsh, Windows PowerShell, or Git bash."
+                        .to_owned(),
                 ),
                 cx,
             );
@@ -921,10 +922,11 @@ impl Workspace {
                     .and_then(|name| name.to_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                if !matches!(stem.as_str(), "pwsh" | "bash" | "sh") {
+                if !matches!(stem.as_str(), "pwsh" | "powershell" | "bash" | "sh") {
                     workspace.apply_action(
                         DesktopAction::Failed(
-                            "Unsupported shell: only pwsh and bash are supported.".to_owned(),
+                            "Unsupported shell: only pwsh, powershell, and bash are supported."
+                                .to_owned(),
                         ),
                         cx,
                     );

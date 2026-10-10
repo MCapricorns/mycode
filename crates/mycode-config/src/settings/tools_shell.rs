@@ -6,13 +6,13 @@ use super::{AppSettings, MAX_FIELD_BYTES, bounded_text};
 use crate::ConfigError;
 
 /// Accepted `tools.shell.kind` values.
-pub const VALID_SHELL_KINDS: [&str; 2] = ["pwsh", "bash"];
+pub const VALID_SHELL_KINDS: [&str; 3] = ["pwsh", "powershell", "bash"];
 
 /// One resolved platform shell used by the `shell` tool.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShellSettings {
-    /// Interpreter family: `pwsh` or `bash`.
+    /// Interpreter family: `pwsh`, `powershell` (Windows PowerShell 5.1), or `bash`.
     pub kind: String,
     /// Absolute path of the shell executable.
     pub program: String,
@@ -56,7 +56,9 @@ impl AppSettings {
             |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
         if let Some(shell) = self.tools.shell.as_ref() {
             if !VALID_SHELL_KINDS.contains(&shell.kind.as_str()) {
-                return Err(invalid("tools.shell.kind: must be pwsh or bash"));
+                return Err(invalid(
+                    "tools.shell.kind: must be pwsh, powershell, or bash",
+                ));
             }
             let program = shell.program.trim();
             if program.is_empty() {
@@ -70,5 +72,34 @@ impl AppSettings {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{AppSettings, ShellSettings, ToolsSettings};
+
+    #[test]
+    fn powershell_kind_is_stored_and_cmd_is_rejected() {
+        let mut settings = AppSettings::default();
+        settings.tools = ToolsSettings {
+            shell: Some(ShellSettings {
+                kind: "powershell".into(),
+                program: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".into(),
+                source: "auto".into(),
+            }),
+        };
+        assert!(settings.validate().is_ok());
+        settings.tools.shell.as_mut().unwrap().kind = "pwsh".into();
+        assert!(settings.validate().is_ok());
+        settings.tools.shell.as_mut().unwrap().kind = "bash".into();
+        assert!(settings.validate().is_ok());
+        settings.tools.shell.as_mut().unwrap().kind = "cmd".into();
+        let error = settings.validate().expect_err("cmd is not a settings kind");
+        assert!(
+            error.summary().contains("pwsh, powershell, or bash"),
+            "{}",
+            error.summary()
+        );
     }
 }

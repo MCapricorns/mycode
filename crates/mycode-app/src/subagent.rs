@@ -18,9 +18,13 @@ use tokio_util::sync::CancellationToken;
 /// Subagent system brief: one-shot work, no user channel.
 const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MYCode subagent. Finish the brief with the \
 tools you have. You cannot ask the user; reversible choices in the brief are authorized. \
-Report assumptions that matter, then stop.";
+Report assumptions that matter, then stop. \
+The environment block names this OS and the one shell tool; write that shell's syntax.";
 
 /// Parent-side tools a child can inherit when the role lists none.
+///
+/// `shell` is the stable allowlist token. The registered tool is still the
+/// one interpreter resolved for this process (`powershell`, `bash`, or `cmd`).
 const PARENT_TOOL_NAMES: &[&str] = &[
     "read",
     "write",
@@ -482,8 +486,13 @@ impl BridgeAgentHost {
             Some(&self.cwd),
         )
         .await;
+        let shell = mycode_tools::resolved_shell();
         let registry = Arc::new({
-            let registry = child_registry(&self.home, &allowed);
+            let registry = child_registry_with(
+                &self.home,
+                &allowed,
+                mycode_tools::ShellTool::forcing(shell.clone()),
+            );
             if let Some(catalog) =
                 crate::mcp_tools::McpCatalog::from_tools_with_warning(mcp_tools, mcp_warning)
             {
@@ -538,28 +547,15 @@ impl BridgeAgentHost {
             crate::turn::workspace_extra_roots(&self.home, &self.cwd)
         };
         extra_roots.sort();
-        let mut system = String::from(SUBAGENT_SYSTEM_PROMPT);
-        system.push_str("\n\n# Role: ");
-        system.push_str(&role.name);
-        system.push_str("\n\n");
-        system.push_str(&role.prompt);
-        if !extra_roots.is_empty() {
-            system.push_str("\n\nOther workspace folders (absolute paths only):\n");
-            for root in &extra_roots {
-                system.push_str(&format!("- {}\n", root.display()));
-            }
-        }
-        system.push_str("\n\n");
-        system.push_str(&crate::turn::environment_block(&run_dir));
-        append_child_skills(&mut system, &run_dir, &extra_roots);
-        if registry.get("search_tool").is_some() {
-            system.push_str(
-                "\n\nMCP tools are connected. Call `search_tool` with the tool name, then \
-`use_tool` with arguments that match the returned inputSchema. Never guess parameters.",
-            );
-        }
-        system.push_str("\n\n");
-        system.push_str(&mycode_agent::build_system_prompt(&registry));
+        let system = subagent_system_prompt(
+            &role,
+            &registry,
+            &run_dir,
+            &extra_roots,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            &shell,
+        );
         let mut config = AgentConfig::new()
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));
@@ -688,16 +684,80 @@ fn append_child_skills(system: &mut String, cwd: &Path, extras: &[PathBuf]) {
     crate::turn::push_skill_catalog(system, skills);
 }
 
-fn child_registry(home: &HomeLayout, allowed: &[String]) -> ToolRegistry {
+/// System prompt for one child run. The shell block and the tool list name
+/// the same interpreter the child can actually call.
+fn subagent_system_prompt(
+    role: &SubagentRole,
+    registry: &ToolRegistry,
+    run_dir: &Path,
+    extra_roots: &[PathBuf],
+    os: &str,
+    arch: &str,
+    shell: &mycode_tools::DetectedShell,
+) -> String {
+    let mut system = String::from(SUBAGENT_SYSTEM_PROMPT);
+    system.push_str("\n\n# Role: ");
+    system.push_str(&role.name);
+    system.push_str("\n\n");
+    system.push_str(&role.prompt);
+    if !extra_roots.is_empty() {
+        system.push_str("\n\nOther workspace folders (absolute paths only):\n");
+        for root in extra_roots {
+            system.push_str(&format!("- {}\n", root.display()));
+        }
+        if let Some(shell_tool) = registered_shell_name(registry) {
+            system.push_str(&format!(
+                "Relative paths stay in this run's cwd. For the other folders, pass an \
+absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
+path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in this run's \
+cwd for both script and program mode.",
+            ));
+        }
+    }
+    system.push_str("\n\n");
+    system.push_str(&mycode_tools::render_environment_block(
+        os, arch, run_dir, shell,
+    ));
+    append_child_skills(&mut system, run_dir, extra_roots);
+    if registry.get("search_tool").is_some() {
+        system.push_str(
+            "\n\nMCP tools are connected. Call `search_tool` with the tool name, then \
+`use_tool` with arguments that match the returned inputSchema. Never guess parameters.",
+        );
+    }
+    system.push_str("\n\n");
+    system.push_str(&mycode_agent::build_system_prompt(registry));
+    system
+}
+
+/// Model-facing name of the one shell tool in `registry`, if it has one.
+fn registered_shell_name(registry: &ToolRegistry) -> Option<String> {
+    let names = registry.names();
+    ["powershell", "bash", "cmd"]
+        .into_iter()
+        .find(|name| names.iter().any(|registered| registered == name))
+        .map(str::to_owned)
+}
+
+fn child_registry_with(
+    home: &HomeLayout,
+    allowed: &[String],
+    shell: mycode_tools::ShellTool,
+) -> ToolRegistry {
     let registry = ToolRegistry::new();
     let web_host: Arc<dyn mycode_tools::builtin::WebHost> =
         Arc::new(crate::tool_hosts::BridgeWebHost { home: home.clone() });
+    let mut shell = Some(shell);
     for name in allowed {
         match name.as_str() {
             "read" => registry.register(Arc::new(mycode_tools::builtin::ReadTool)),
             "write" => registry.register(Arc::new(mycode_tools::builtin::WriteTool)),
             "edit" => registry.register(Arc::new(mycode_tools::builtin::EditTool)),
-            "shell" => registry.register(Arc::new(mycode_tools::builtin::ShellTool::default())),
+            "shell" | "bash" | "powershell" | "cmd" => {
+                if let Some(tool) = shell.take() {
+                    registry.register(Arc::new(tool));
+                }
+            }
             "grep" => registry.register(Arc::new(mycode_tools::builtin::GrepTool)),
             "find" => registry.register(Arc::new(mycode_tools::builtin::FindTool)),
             "web_search" => registry.register(Arc::new(mycode_tools::builtin::WebSearchTool::new(
@@ -787,6 +847,231 @@ mod tests {
         assert!(!text.contains("sentinel"));
         assert!(!text.contains("`exec`"));
         assert!(!text.contains("`task`"));
+    }
+
+    fn shell_tool(kind: mycode_tools::ShellKind, program: &str) -> mycode_tools::ShellTool {
+        mycode_tools::ShellTool::forcing(mycode_tools::DetectedShell {
+            kind,
+            program: std::path::PathBuf::from(program),
+        })
+    }
+
+    fn shell_names(registry: &mycode_tools::ToolRegistry) -> Vec<String> {
+        registry
+            .names()
+            .into_iter()
+            .filter(|name| matches!(name.as_str(), "powershell" | "bash" | "cmd" | "shell"))
+            .collect()
+    }
+
+    #[test]
+    fn child_registry_keeps_one_shell_tool_for_every_allowlist_alias() {
+        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-shell")).unwrap();
+        let aliases = [
+            "read".to_owned(),
+            "shell".to_owned(),
+            "bash".to_owned(),
+            "powershell".to_owned(),
+            "cmd".to_owned(),
+        ];
+        let cases = [
+            (
+                mycode_tools::ShellKind::WindowsPowerShell,
+                "powershell.exe",
+                "powershell",
+            ),
+            (mycode_tools::ShellKind::Pwsh, "pwsh.exe", "powershell"),
+            (mycode_tools::ShellKind::Bash, "/bin/bash", "bash"),
+            (mycode_tools::ShellKind::Cmd, "cmd.exe", "cmd"),
+        ];
+        for (kind, program, expected) in cases {
+            let registry = super::child_registry_with(&home, &aliases, shell_tool(kind, program));
+            assert_eq!(
+                shell_names(&registry),
+                vec![expected.to_owned()],
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn artisan_on_windows_powershell_does_not_receive_bash() {
+        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-ps")).unwrap();
+        let artisan = builtin_roles().role("artisan").expect("artisan").clone();
+        let allowed = artisan.resolve_tools(
+            &super::PARENT_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            allowed.iter().any(|name| name == "shell"),
+            "artisan inherits the shell allowlist token, got {allowed:?}"
+        );
+        let shell = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::WindowsPowerShell,
+            program: std::path::PathBuf::from("powershell.exe"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(shell.clone()),
+        );
+        assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
+        let prompt = super::subagent_system_prompt(
+            &artisan,
+            &registry,
+            std::path::Path::new("/work"),
+            &[std::path::PathBuf::from("/other")],
+            "windows",
+            "x86_64",
+            &shell,
+        );
+        assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
+        assert!(prompt.contains("Windows PowerShell 5.1"), "{prompt}");
+        assert!(prompt.contains("Do not use `&&`"), "{prompt}");
+        assert!(prompt.contains("here-string"), "{prompt}");
+        assert!(prompt.contains("\n- powershell:"), "{prompt}");
+        assert!(!prompt.contains("\n- bash:"), "{prompt}");
+        assert!(!prompt.contains("\n- shell:"), "{prompt}");
+        assert!(!prompt.contains("translated"), "{prompt}");
+        assert!(
+            prompt.contains("a `powershell` script"),
+            "extra roots must name the active tool:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_bash_allowlist_entry_still_launches_the_active_powershell_tool() {
+        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-alias")).unwrap();
+        let mut role = builtin_roles().role("artisan").expect("artisan").clone();
+        role.tools = Some(vec!["read".into(), "bash".into()]);
+        let allowed = role.resolve_tools(&["read".into(), "shell".into()]);
+        assert_eq!(allowed, vec!["read".to_owned(), "bash".to_owned()]);
+        let shell = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Pwsh,
+            program: std::path::PathBuf::from("pwsh.exe"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(shell.clone()),
+        );
+        assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
+        let prompt = super::subagent_system_prompt(
+            &role,
+            &registry,
+            std::path::Path::new(r"C:\work"),
+            &[],
+            "windows",
+            "x86_64",
+            &shell,
+        );
+        assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
+        assert!(prompt.contains("PowerShell 7"), "{prompt}");
+        assert!(prompt.contains("`&&` and `||` are allowed"), "{prompt}");
+        assert!(prompt.contains("\n- powershell:"), "{prompt}");
+        assert!(!prompt.contains("\n- bash:"), "{prompt}");
+        assert!(!prompt.contains("syntax errors"), "{prompt}");
+        assert!(!prompt.contains("translated"), "{prompt}");
+    }
+
+    #[test]
+    fn git_bash_and_cmd_subagents_match_that_interpreter() {
+        let home =
+            HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-gitbash")).unwrap();
+        let artisan = builtin_roles().role("artisan").expect("artisan").clone();
+        let allowed = ["read".to_owned(), "shell".to_owned()];
+        let git_bash = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Bash,
+            program: std::path::PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(git_bash.clone()),
+        );
+        assert_eq!(shell_names(&registry), vec!["bash".to_owned()]);
+        let prompt = super::subagent_system_prompt(
+            &artisan,
+            &registry,
+            std::path::Path::new(r"C:\work"),
+            &[],
+            "windows",
+            "x86_64",
+            &git_bash,
+        );
+        assert!(prompt.contains("shell_tool: bash"), "{prompt}");
+        assert!(prompt.contains("Git Bash"), "{prompt}");
+        assert!(prompt.contains("\n- bash:"), "{prompt}");
+        assert!(!prompt.contains("\n- powershell:"), "{prompt}");
+        assert!(!prompt.contains("translated"), "{prompt}");
+
+        let cmd = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Cmd,
+            program: std::path::PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(cmd.clone()),
+        );
+        assert_eq!(shell_names(&registry), vec!["cmd".to_owned()]);
+        let prompt = super::subagent_system_prompt(
+            &artisan,
+            &registry,
+            std::path::Path::new(r"C:\work"),
+            &[],
+            "windows",
+            "x86_64",
+            &cmd,
+        );
+        assert!(prompt.contains("shell_tool: cmd"), "{prompt}");
+        assert!(prompt.contains("cmd.exe"), "{prompt}");
+        assert!(prompt.contains("\n- cmd:"), "{prompt}");
+        assert!(!prompt.contains("translated"), "{prompt}");
+    }
+
+    #[test]
+    fn scout_stays_read_only_while_the_prompt_names_the_active_shell() {
+        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-scout")).unwrap();
+        let scout = builtin_roles().role("scout").expect("scout").clone();
+        let allowed = scout.resolve_tools(
+            &super::PARENT_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            allowed
+                .iter()
+                .all(|name| !matches!(name.as_str(), "shell" | "bash" | "powershell" | "cmd")),
+            "scout must not inherit a shell tool, got {allowed:?}"
+        );
+        let shell = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::WindowsPowerShell,
+            program: std::path::PathBuf::from("powershell.exe"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(shell.clone()),
+        );
+        assert!(shell_names(&registry).is_empty(), "{:?}", registry.names());
+        let prompt = super::subagent_system_prompt(
+            &scout,
+            &registry,
+            std::path::Path::new(r"C:\work"),
+            &[],
+            "windows",
+            "x86_64",
+            &shell,
+        );
+        assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
+        assert!(prompt.contains("Do not use `&&`"), "{prompt}");
+        assert!(!prompt.contains("\n- powershell:"), "{prompt}");
+        assert!(!prompt.contains("\n- bash:"), "{prompt}");
+        assert!(!prompt.contains("translated"), "{prompt}");
     }
 
     #[test]

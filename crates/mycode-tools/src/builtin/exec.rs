@@ -1,14 +1,15 @@
 //! Direct image launch used by `shell` when `mode` is `program`.
 //!
-//! This module is not a tool. The only model-facing name is `shell`. The
-//! caller supplies `program` plus `args`; this path never inserts a shell or
-//! parses shell syntax. Only PE, ELF, and Mach-O images are launched.
-//! Scripts require an explicit interpreter, or `shell` `mode` `script`.
-//! Execution is unsandboxed current-user execution with normal file and
-//! network access; environment allowlisting is not isolation. There is no
-//! Core permission prompt: a registered, schema-valid `shell` call is
-//! dispatched directly. Same-account hostile processes remain outside the
-//! security boundary. stdout/stderr are captured with the shared 50 KiB
+//! This module is not a tool. The model-facing name is the active shell tool
+//! (`powershell`, `bash`, or `cmd`). The caller supplies `program` plus
+//! `args`; this path never inserts a shell or parses shell syntax. Only PE,
+//! ELF, and Mach-O images are launched. Scripts require an explicit
+//! interpreter, or shell-tool `mode` `script`. Execution is unsandboxed
+//! current-user execution with normal file and network access; environment
+//! allowlisting is not isolation. There is no Core permission prompt: a
+//! registered, schema-valid shell-tool call is dispatched directly.
+//! Same-account hostile processes remain outside the security boundary.
+//! stdout/stderr are captured with the shared 50 KiB
 //! truncation cap; a non-zero exit is an error result, not a tool failure.
 //! Timeout and cancel await terminate-and-reap; dropping the future transfers
 //! cleanup ownership. Launch is Windows x64, Windows ARM64, Linux x86_64 GNU,

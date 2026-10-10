@@ -46,7 +46,7 @@
 - **User-Agent**：`userAgent`，缺省是 pi agent 形状 `pi (<平台> <版本>; <架构>)`
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`）。密钥不在此列
 - **思考强度**：`reasoningEffort` 是保存的默认值，必须是 models.dev 档位（`off`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）。会话里选的模型和强度不写这里，见下文 `ui.json`
-- **Shell**：`tools.shell` 的 `kind` 只接受 `pwsh`（PowerShell 7）和 `bash`（Git bash），`program` 是可执行文件路径，`source` 是 `auto`（首次侦查）或 `user`。其它 `kind` 校验失败。自动侦查不选 Windows PowerShell 5.1。`cmd` 只在 `pwsh` 和 Git bash 都没有时当作运行时退路，不能写进这个字段
+- **Shell**：`tools.shell` 的 `kind` 接受 `pwsh`（PowerShell 7）、`powershell`（Windows PowerShell 5.1）和 `bash`（Git Bash 或 POSIX bash），`program` 是可执行文件路径，`source` 是 `auto`（首次侦查）或 `user`。其它 `kind`（包括 `cmd`）校验失败。自动侦查的顺序是 `pwsh`、Windows PowerShell 5.1、Git Bash；`cmd` 只在这三层都没有时当作运行时退路，不能写进这个字段。环境变量 `MYCODE_SHELL`（`pwsh`、`powershell`、`bash`、`cmd`、`auto`，或一个可执行文件路径）覆盖设置，不写回设置。WSL 的 `System32\bash.exe` 不会被自动选中
 - **网页**：后端 `kind` 为 `querit`、`anysearch` 或 `custom`，端点必须是 https，最多启用一个。默认带 Querit 和 AnySearch 两行，均未启用。密钥先看环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`，再看 `secrets.json` 的 `web-<id>`
 - **MCP**：`transport` 为 `stdio`（单个可执行文件加 `args`，不接受 shell 字符串）或 `http`（https 端点，`keyHeader` 为 `bearer` 或 `x-api-key`）。每服务器最多 32 个额外环境变量。密钥用 `mcp-<id>`
 - **子代理**：哪些角色启用（没写的角色默认启用）、模型路由、思考强度、并发。`subagents.maxConcurrent` 为 `0` 时使用默认的 4 个并发子代理，不是关闭委派，也不是零个名额。显式上限最高 6
