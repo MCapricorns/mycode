@@ -1,6 +1,8 @@
 //! URL and response guards for outbound web requests.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
+
+use mycode_providers::is_public_ip;
 
 /// Maximum accepted response body bytes per request.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -74,54 +76,6 @@ pub fn is_fetchable_url(value: &str) -> bool {
         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
         && !host.starts_with('-')
         && !host.contains("..")
-}
-
-/// Reports whether the address is globally routable public Internet space.
-#[must_use]
-pub fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_ipv4(ip),
-        IpAddr::V6(ip) => is_public_ipv6(ip),
-    }
-}
-
-fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    if ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        || ip.is_unspecified()
-        || ip.is_documentation()
-    {
-        return false;
-    }
-    // 0.0.0.0/8, 100.64.0.0/10 (CGNAT), 192.0.0.0/24, 198.18.0.0/15,
-    // 240.0.0.0/4 reserved blocks.
-    !(octets[0] == 0
-        || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
-        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
-        || (octets[0] == 198 && (octets[1] & 0xfe) == 18)
-        || octets[0] >= 240)
-}
-
-fn is_public_ipv6(ip: Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() {
-        return false;
-    }
-    let segments = ip.segments();
-    // IPv4-mapped and IPv4-compatible addresses fall back to v4 rules.
-    if let Some(v4) = ip.to_ipv4_mapped() {
-        return is_public_ipv4(v4);
-    }
-    // Unique-local fc00::/7, link-local fe80::/10, and the documentation,
-    // discard-only, and Teredo prefixes are not public.
-    !(segments[0] & 0xfe00 == 0xfc00
-        || segments[0] & 0xffc0 == 0xfe80
-        || segments[0] & 0xfffe == 0xfdfe
-        || segments[0] == 0x2001 && segments[1] == 0x0db8
-        || segments[0] == 0x100
-        || segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0)
 }
 
 /// Strips terminal escape sequences, control characters (keeping newline
