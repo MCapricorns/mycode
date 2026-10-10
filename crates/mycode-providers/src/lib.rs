@@ -36,7 +36,9 @@ use tokio_util::sync::CancellationToken;
 use mycode_config::ProviderSettings;
 use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Request};
 
-pub use http_pin::{PinMode, PinnedBody, PinnedRequest, connection_addresses, send_pinned};
+pub use http_pin::{
+    PinMode, PinnedBody, PinnedRequest, connection_addresses, is_public_ip, send_pinned,
+};
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
     CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,
