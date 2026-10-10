@@ -265,7 +265,7 @@ pub(crate) async fn compact_history(
 fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {
     let mut compacted = Vec::with_capacity(tail.len() + 1);
     compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
-        format!("{SUMMARY_PREFIX}\n\n{summary}"),
+        display_summary_text(summary),
     ))));
     compacted.extend(tail.iter().cloned());
     compacted
@@ -425,7 +425,7 @@ fn checkpoint_matches(
 }
 
 fn is_summary_message(message: &Message) -> bool {
-    matches!(message, Message::User(user) if blocks_text(&user.content).starts_with(SUMMARY_PREFIX))
+    matches!(message, Message::User(user) if is_display_only_summary(&blocks_text(&user.content)))
 }
 
 /// Returns the split index when compaction is due: everything before it is
