@@ -133,9 +133,22 @@ pub(super) fn glass_border(theme: &Theme) -> Hsla {
     theme.muted_foreground.opacity(0.42)
 }
 
-/// Menu and overlay fill.
+/// Menu and overlay fill. Translucent so the page shows through lightly.
 pub(super) fn popover(theme: &Theme) -> Hsla {
     lifted(theme.popover, 0.03, OVERLAY_ALPHA)
+}
+
+/// Thinking-menu fill. Fully opaque so a long transcript does not show through.
+const MENU_FILL_ALPHA: f32 = 1.;
+
+const _: () = {
+    assert!(MENU_FILL_ALPHA == 1.);
+};
+
+pub(super) fn opaque_menu_fill(theme: &Theme) -> Hsla {
+    let mut color = theme.popover;
+    color.a = MENU_FILL_ALPHA;
+    color
 }
 
 /// Light dimmer behind a menu. The panel is a sibling painted after this,

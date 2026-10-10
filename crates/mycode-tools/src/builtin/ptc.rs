@@ -756,14 +756,14 @@ return a.strip() + "|" + b.strip() + "|" + seen.get("a") + "|" + seen.get("missi
 mixed = dict([("a", 1)], b=2)
 g = {}
 g.setdefault("k", []).append(1)
-g.update({"m": 2})
-return str(d.get("a")) + "|" + str(mixed.get("b")) + "|" + str(len(g["k"])) + "|" + str(g.get("m"))
+g.update({"m": 2}, n=3)
+return str(d.get("a")) + "|" + str(mixed.get("b")) + "|" + str(len(g["k"])) + "|" + str(g.get("m")) + "|" + str(g.get("n"))
 "#,
         )
         .await;
         let text = text_of(&result);
         assert!(!result.is_error, "{text}");
-        assert_eq!(text, "1|2|1|2");
+        assert_eq!(text, "1|2|1|2|3");
         let rejected = run(&root, catalog(vec![]), "len([], bad=1)\n").await;
         let rejected_text = text_of(&rejected);
         assert!(rejected.is_error, "{rejected_text}");
