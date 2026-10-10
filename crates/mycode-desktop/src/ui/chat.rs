@@ -168,12 +168,7 @@ pub(super) fn render_chat(
                             ),
                     ),
                 )
-                .child(render_conversation_jumps(!show_welcome, workspace, cx))
-                .when(workspace.vm().reasoning_menu_open, |frame| {
-                    // Overlay inside the transcript frame. An in-flow full-width
-                    // row blanked every line below the menu's top edge.
-                    frame.child(menus::render_thinking_menu(workspace, cx))
-                }),
+                .child(render_conversation_jumps(!show_welcome, workspace, cx)),
         )
         // The model menu docks in-flow right above the composer: an
         // absolutely positioned overlay landed outside the visible window on

@@ -27,7 +27,7 @@ English notes are [below](#english).
 
 ![思考菜单](docs/images/thinking-menu/thinking-menu.png)
 
-思考菜单这张拍在开始页上。打开长对话时，菜单曾把菜单顶边以下的全文裁掉；修复之后可以补一张对话里的截图。
+思考菜单这张是在一条对话里打开的，菜单贴在 Thinking 按钮上方。
 
 ## 下载
 
@@ -90,7 +90,7 @@ mycode is a local-first desktop coding agent for Windows, macOS, and Linux x86_6
 
 ![Thinking menu](docs/images/thinking-menu/thinking-menu.png)
 
-The thinking-menu shot is the start screen. On a long transcript the open menu used to hide every line below its top edge; a shot from inside a chat can replace it after that fix.
+The thinking-menu shot is a chat with the menu open above the Thinking chip.
 
 ### Download
 

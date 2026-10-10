@@ -733,6 +733,93 @@ return a.strip() + "|" + b.strip() + "|" + seen.get("a") + "|" + seen.get("missi
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn every_implemented_method_is_reachable_as_an_attribute() {
+        for (kind, names) in super::eval::IMPLEMENTED_METHODS {
+            assert!(!names.is_empty(), "{kind}");
+            for name in *names {
+                assert!(
+                    super::eval::method_is_reachable(kind, name),
+                    "{kind}.{name} is implemented but attribute lookup does not return it"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dict_keywords_methods_and_line_numbers() {
+        let root = temp_dir("dict-lines");
+        let result = run(
+            &root,
+            catalog(vec![]),
+            r#"d = dict(a=1)
+mixed = dict([("a", 1)], b=2)
+g = {}
+g.setdefault("k", []).append(1)
+g.update({"m": 2})
+return str(d.get("a")) + "|" + str(mixed.get("b")) + "|" + str(len(g["k"])) + "|" + str(g.get("m"))
+"#,
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert_eq!(text, "1|2|1|2");
+        let rejected = run(&root, catalog(vec![]), "len([], bad=1)\n").await;
+        let rejected_text = text_of(&rejected);
+        assert!(rejected.is_error, "{rejected_text}");
+        assert!(
+            rejected_text.contains("unexpected keyword argument bad"),
+            "{rejected_text}"
+        );
+        let mut source = String::new();
+        for index in 1..=14 {
+            source.push_str(&format!("v{index} = {index}\n"));
+        }
+        source.push_str("g = {}\ng.setdefault(\"k\", []).nope(1)\n");
+        let chained = run(&root, catalog(vec![]), &source).await;
+        let chained_text = text_of(&chained);
+        assert!(chained.is_error, "{chained_text}");
+        assert!(
+            chained_text.contains("line 16:"),
+            "chained call keeps its own line:\n{chained_text}"
+        );
+        assert!(chained_text.contains("setdefault"), "{chained_text}");
+        let sample = "\
+a = list(zip([1, 2], [\"x\", \"y\"]))
+t = tuple([1, 2])
+d = dict(a=1)
+s = set([1, 1, 2])
+print(\"list\", a, \"tuple\", t, \"dict\", d, \"set\", len(s))
+print(\"repr\", repr(\"hi\"), \"isinstance\", isinstance(\"x\", str), isinstance(3, str))
+print(\"count\", \"banana\".count(\"a\"), \"find\", \"banana\".find(\"n\"), \"find-miss\", \"banana\".find(\"z\"))
+xs = [3, 1]
+xs.extend([2])
+last = xs.pop()
+xs.sort()
+print(\"extend/pop/sort\", xs, last)
+print(\"get-default\", d.get(\"zz\", 42), d.get(\"a\"))
+g = {}
+g.setdefault(\"k\", []).append(1)
+g.update({\"m\": 2})
+print(\"setdefault/update\", g)
+y = 1
+z = y + undefined_name
+";
+        let numbered = run(&root, catalog(vec![]), sample).await;
+        let numbered_text = text_of(&numbered);
+        assert!(numbered.is_error, "{numbered_text}");
+        assert!(
+            numbered_text.contains("line 19:"),
+            "undefined name stays on line 19, not an earlier line:\n{numbered_text}"
+        );
+        assert!(numbered_text.contains("undefined_name"), "{numbered_text}");
+        assert!(
+            numbered_text.contains("setdefault/update"),
+            "prints before the error remain:\n{numbered_text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn builtins_cover_list_repr_count_and_isinstance() {
         let root = temp_dir("builtins");

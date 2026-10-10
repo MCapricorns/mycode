@@ -31,8 +31,10 @@ const MAX_PAGE_EXCERPT_CHARS: usize = 8_000;
 const MAX_SNIPPET_CHARS: usize = 240;
 /// Excerpt budget for one page when `goal` is set.
 const GOAL_EXCERPT_CHARS: usize = 1_200;
-/// A goal that names a heading returns that whole section, up to this cap.
-const SECTION_EXCERPT_CHARS: usize = 8_000;
+/// A goal that names a heading returns that whole section, including
+/// subsections, up to this cap. A Rust release section is larger than the
+/// short excerpt budget.
+const SECTION_EXCERPT_CHARS: usize = 48_000;
 /// How long a repeated query or page stays cached.
 const CACHE_TTL: Duration = Duration::from_secs(600);
 /// Cached searches and cached pages, each.
@@ -418,19 +420,29 @@ fn best_section(chunks: &[String], terms: &[String], budget: usize) -> Option<St
     let level = section_level(&chunks[index])?;
     let mut parts = Vec::new();
     let mut used = 0usize;
+    let mut truncated = false;
     for chunk in chunks.iter().skip(index) {
         if !parts.is_empty() && section_level(chunk).is_some_and(|next| next <= level) {
             break;
         }
         let len = chunk.chars().count() + 2;
         if used > 0 && used + len > budget {
+            truncated = true;
             break;
         }
         parts.push(chunk.trim());
         used += len;
     }
-    let text = parts.join("\n\n");
-    (!text.is_empty()).then(|| cap_chars(&text, budget))
+    if parts.is_empty() {
+        return None;
+    }
+    let mut text = parts.join("\n\n");
+    if truncated {
+        text.push_str(&format!(
+            "\n\n(section truncated at {budget} characters; the rest of this heading was omitted)"
+        ));
+    }
+    Some(text)
 }
 
 fn section_level(chunk: &str) -> Option<u8> {
@@ -767,6 +779,25 @@ mod tests {
         assert!(section.contains("Change number 61"), "{section}");
         assert!(!section.contains("Version 1.98.0"), "{section}");
         assert!(!section.contains("Version 1.100.0"), "{section}");
+        let mut long = String::from("## Version 1.99.0\n\n### Language\n\n");
+        for index in 0..120 {
+            long.push_str(&format!(
+                "- Language bullet {index} is a reasonably long change note about the compiler.\n\n"
+            ));
+        }
+        long.push_str(
+            "### Cargo\n\n- Cargo bullet one adds a resolver flag.\n\n- Cargo bullet two changes the index.\n\n### Rustdoc\n\n- Rustdoc bullet lists private items.\n\n### Compatibility Notes\n\n- Compatibility note about the ABI.\n\n### Internal Changes\n\n- Internal change to the query system.\n\n## Version 1.100.0\n\nLater.\n",
+        );
+        let release = super::excerpt_for_goal(
+            &long,
+            "every change bullet listed under Version 1.99.0",
+            super::GOAL_EXCERPT_CHARS,
+        );
+        assert!(release.contains("Cargo bullet two"), "{release}");
+        assert!(release.contains("Rustdoc bullet"), "{release}");
+        assert!(release.contains("Compatibility note"), "{release}");
+        assert!(release.contains("Internal change"), "{release}");
+        assert!(!release.contains("Version 1.100.0"), "{release}");
         let notes = "\
 ## Release notes
 
