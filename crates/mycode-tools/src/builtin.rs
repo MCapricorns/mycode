@@ -64,9 +64,5 @@ pub(crate) fn truncate_bytes(text: &str, max_bytes: usize) -> (String, bool) {
     if text.len() <= max_bytes {
         return (text.to_owned(), false);
     }
-    let mut end = max_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (text[..end].to_owned(), true)
+    (text[..text.floor_char_boundary(max_bytes)].to_owned(), true)
 }
