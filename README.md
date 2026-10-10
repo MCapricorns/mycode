@@ -98,7 +98,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test -p mycode-tools --lib native_image_launches --locked
 ```
 
-pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 上构建并打包四个平台的 release 二进制（zip 与 `.sha256`；macOS 另产出一个 dmg）。pull request 不创建标签、不发 GitHub Release、不改版本、不推 `ci/release-*`。推送到 `main` 并完成四个平台构建后，每次都会新建 GitHub Release：新标签 `v<version>`、四个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）、macOS 的 dmg 和对应 `.sha256`，发布说明取 `CHANGELOG.md` 里该版本的条目，不从提交记录生成。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 都从这次提交构建。四个构建都成功之后，先用该提交创建标签并上传压缩包，再把版本写回 `main`：能快进就快进；若构建期间 `main` 有了新提交，就把版本提交重放到当前 `main` 上再推送（不强制推送；只自动处理 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md` 的冲突，计划中的版本号保留，构建期间写进 `## [Unreleased]` 的新说明也保留）。临时引用会在成功或失败后删除。因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
+pull request 和推送到 `main` 都会在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 上构建并打包四个平台的 release 二进制（zip 与 `.sha256`；macOS 另产出一个 dmg）。pull request 不创建标签、不发 GitHub Release、不改版本、不推 `ci/release-*`。推送到 `main` 并完成四个平台构建后，每次都会新建 GitHub Release：新标签 `v<version>`、四个平台的 zip（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）、macOS 的 dmg 和对应 `.sha256`，发布说明先放 `CHANGELOG.md` 里该版本的条目，再附上自上一个标签以来合并的 pull request、这些 PR 关闭的 issue，以及比较链接。`Cargo.toml` 里的版本如果已经有标签，发布计划会把补丁号加一，写回 `Cargo.toml`、`Cargo.lock` 和 `CHANGELOG.md`，并把这次提交推到临时引用 `ci/release-<version>-<run id>`。Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 都从这次提交构建。四个构建都成功之后，先用该提交创建标签并上传压缩包，再把版本写回 `main`：能快进就快进；若构建期间 `main` 有了新提交，就把版本提交重放到当前 `main` 上再推送（不强制推送；只自动处理 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md` 的冲突，计划中的版本号保留，构建期间写进 `## [Unreleased]` 的新说明也保留）。写回使用 `GITHUB_TOKEN`，`release-plan` 会跳过 `github-actions[bot]` 的推送，避免同一次发布把补丁号再加一次。临时引用会在成功或失败后删除。因此二进制里的版本与标签一致。写在 `CHANGELOG.md` 的 `## [Unreleased]` 下的内容会移到这个新版本下；该节为空时用一句固定说明。旧版本的压缩包已经齐，也不会跳过这次发布。手动把 `Cargo.toml` 改到一个还没有标签的版本时，`CHANGELOG.md` 里必须已经有该版本的条目。这些压缩包没有签名，仓库里没有可用的代码签名证书。
 
 ## 许可
 
@@ -304,15 +304,17 @@ Linux x86_64 (zip and `.sha256`; macOS also produces a dmg). Pull requests do no
 a `ci/release-*` ref. A push to
 `main` publishes a new GitHub Release after those four builds succeed: a new
 `v<version>` tag, the four platform zips (Windows x64, Windows ARM64,
-macOS Apple Silicon, and Linux x86_64), the macOS dmg, their `.sha256` sidecars, and the matching
-`CHANGELOG.md` section (not generated commit notes). When
+macOS Apple Silicon, and Linux x86_64), the macOS dmg, their `.sha256` sidecars, and release notes that start with the matching
+`CHANGELOG.md` section, then list the pull requests and fixed issues since the previous tag. When
 that version already has a tag, release-plan bumps the patch in
 `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md` and pushes that commit
 only to `ci/release-<version>-<run id>`. Windows x64, Windows ARM64,
 macOS Apple Silicon, and Linux x86_64 are built from that commit. After those four builds
 succeed, the tag and archives are published from that commit, then `main`
 is updated: fast-forward when it still can, otherwise the version bump is
-replayed onto current `main` and pushed without force. A replay resolves
+replayed onto current `main` and pushed without force. That push uses
+`GITHUB_TOKEN`, and release-plan ignores `github-actions[bot]`, so the
+bump cannot publish a second patch. A replay resolves
 conflicts only in `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`, keeping
 the planned version and any `## [Unreleased]` notes that landed on `main`
 during the build. The temporary ref is deleted after success or failure.

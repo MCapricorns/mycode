@@ -804,6 +804,14 @@ def _expect_workflow_contract() -> None:
         "release planner self-test missing from release-plan",
     )
     _expect(
+        "release_notes.py" in plan,
+        "release body is not built from the changelog plus linked changes",
+    )
+    _expect(
+        "github.actor != 'github-actions[bot]'" in plan,
+        "a version bump push can plan another patch release",
+    )
+    _expect(
         "advance_main.py --self-test" in plan,
         "advance_main self-test missing from release-plan",
     )

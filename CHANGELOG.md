@@ -2,9 +2,20 @@
 
 0.9.25 是第一次公开发布（init 第一版）。日期为发布日（UTC）。
 
-`main` 上四个平台构建成功后都会发布新的 GitHub Release 和新标签（四个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）。说明用本文件里该版本的条目，不从提交记录生成。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，四个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。压缩包未签名。
+`main` 上四个平台构建成功后都会发布新的 GitHub Release 和新标签（四个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）。说明先用本文件里该版本的条目，再附上自上一个标签以来合并的 pull request、这些 PR 关闭的 issue，以及比较链接。写回 main 使用 GITHUB_TOKEN，release-plan 会跳过 github-actions[bot]，避免同一次发布把补丁号再加一次。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，四个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。pull request 不发版。压缩包未签名。
 
 ## [Unreleased]
+
+## [0.10.2] - 2026-10-10
+
+### Changed
+
+- GitHub Release 的说明自动包含本文件里该版本的条目，以及自上一个标签以来合并的 pull request、这些 PR 关闭的 issue 和比较链接。每次发版生成，不用手写。
+- 写回 `main` 的版本提交使用 `GITHUB_TOKEN`，`release-plan` 忽略 `github-actions[bot]` 的推送，避免一次发布把补丁号连加两次。pull request 和 `main` 仍共用 `ci.yml`。
+
+### Fixed
+
+- macOS 的 `Build release binary` 在编译前会先访问 `index.crates.io`，并且只对域名解析、下载和 checksum 失败重试，编译错误不重试。`797dfde` 那次发布失败是因为 cargo 在大约 80 秒内耗尽对 `index.crates.io` 的解析重试（`Could not resolve host` / `download of config.json failed`），构建步骤没有外层重试，macOS 一失败就跳过了 Release。
 
 ## [0.10.1] - 2026-10-10
 
@@ -59,7 +70,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.10.2
 [0.10.1]: https://github.com/MCapricorns/mycode/compare/v0.9.28...v0.10.1
 [0.9.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.28
 [0.9.27]: https://github.com/MCapricorns/mycode/compare/v0.9.26...v0.9.27
