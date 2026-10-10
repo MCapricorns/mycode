@@ -31,11 +31,15 @@
 # commit, then advances main. The advance fast-forwards when it can.
 # When main moved during the build, the version bump is replayed onto
 # current main and pushed without force. The temporary ref is deleted
-# after success or failure. The body is the matching CHANGELOG section,
-# not generated commit notes. Archives already uploaded for the previous
-# tag do not skip the release. The version ref and the later main update
-# are pushed with GITHUB_TOKEN, which does not start another workflow run.
-# release-plan, release-publish, and release-cleanup run on ubuntu-latest.
+# after success or failure. The body is that version's CHANGELOG section,
+# then the pull requests and fixed issues since the previous tag
+# (release_notes.py). Archives
+# already uploaded for the previous tag do not skip the release. The
+# version ref and the later main update are pushed with GITHUB_TOKEN,
+# which does not start another workflow run. release-plan also ignores
+# github-actions[bot], so a replayed version bump cannot publish a
+# second patch. release-plan, release-publish, and release-cleanup run
+# on ubuntu-latest.
 # They do not compile the product.
 #
 # Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon, Linux x86_64):
@@ -67,7 +71,9 @@ env:
 
 jobs:
   release-plan:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # github-actions[bot] is the GITHUB_TOKEN pusher. Ignore it so the
+    # version bump that lands on main cannot plan another patch release.
+    if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'"
     name: release-plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -76,6 +82,8 @@ jobs:
     # does not start a second workflow run.
     permissions:
       contents: write
+      pull-requests: read
+      issues: read
     outputs:
       publish: ${{ steps.plan.outputs.publish }}
       tag: ${{ steps.plan.outputs.tag }}
@@ -92,6 +100,8 @@ jobs:
         run: |
           python3 .github/scripts/release_plan.py --self-test
           python3 .github/scripts/advance_main.py --self-test
+          python3 .github/scripts/release_notes.py --self-test
+          bash .github/scripts/cargo_release_build.sh --self-test
 
       - name: Choose a new release tag
         id: plan
@@ -141,6 +151,21 @@ jobs:
             # fast-forwards main or replays the bump onto current main.
             cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
             git push origin "HEAD:refs/heads/${cleanup_ref}"
+          fi
+          if [[ "${PUBLISH}" == "true" ]]; then
+            # The commit is already on the temporary ref when one was
+            # pushed, so generate-notes can see that sha. A failure here
+            # deletes that ref and does not set publish.
+            if ! python3 .github/scripts/release_notes.py \
+              --notes-file /tmp/release-notes.md \
+              --remote-tags /tmp/remote-tags.txt \
+              --tag "${TAG}" \
+              --sha "$(git rev-parse HEAD)"; then
+              if [[ -n "${cleanup_ref}" ]]; then
+                git push origin --delete "${cleanup_ref}" || true
+              fi
+              exit 1
+            fi
           fi
           # Outputs are written only after a required version commit is on
           # the temporary ref. If that push fails, this step stops before
@@ -239,7 +264,9 @@ jobs:
         env:
           CARGO_NET_RETRY: "10"
           CARGO_HTTP_TIMEOUT: "60"
-        run: bash .github/scripts/cargo_release_build.sh "${{ matrix.target }}"
+        run: |
+          bash .github/scripts/cargo_release_build.sh --self-test
+          bash .github/scripts/cargo_release_build.sh "${{ matrix.target }}"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
