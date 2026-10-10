@@ -1,0 +1,40 @@
+[package]
+name = "mycode-desktop"
+description = "GPUI desktop frontend for MYCode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+serde_json = { workspace = true }
+# `tree-sitter-languages` turns on gpui-kit's own grammars. Fenced code in
+# TextView is highlighted by that highlighter; this crate does not depend
+# on tree-sitter itself.
+gpui-kit = { version = "0.7.1", features = ["tree-sitter-languages"] }
+notify = "8.2.0"
+mycode-app = { path = "../mycode-app" }
+mycode-config = { path = "../mycode-config" }
+mycode-providers = { path = "../mycode-providers" }
+mycode-tools = { path = "../mycode-tools" }
+
+[features]
+# Headless GPUI layout tests. Off for the normal desktop build.
+test-support = ["gpui-kit/test-support"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Globalization",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"
+
+[[bin]]
+name = "mycode-desktop"
+path = "src/main.rs"
+
+[lints]
+workspace = true

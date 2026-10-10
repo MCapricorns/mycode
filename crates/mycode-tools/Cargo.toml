@@ -1,0 +1,70 @@
+[package]
+name = "mycode-tools"
+description = "MYCode tool trait, registry, and builtin tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mycode-core = { path = "../mycode-core" }
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+# `net` exposes `tokio::io::unix::AsyncFd`. The macOS spawn path reads the
+# child pipes through it. `process` does not enable that module, and reqwest
+# only does so when the app crate is in the same build.
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process"] }
+async-trait.workspace = true
+schemars.workspace = true
+tokio-util.workspace = true
+globset.workspace = true
+ignore.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
+regex.workspace = true
+aho-corasick.workspace = true
+memchr.workspace = true
+jsonschema.workspace = true
+blake3.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+# Grammars come from gpui-kit's registry. This pin is the same tree-sitter
+# gpui-component links (`links = "tree-sitter"`). gpui-component 0.7.1 still
+# requires `tree-sitter ^0.26.13`, so 0.27 cannot be linked beside it. gpui
+# does not re-export Parser or Query, so the runtime crate stays direct.
+gpui-kit = { version = "0.7.1", default-features = false, features = [
+    "tree-sitter-languages",
+] }
+tree-sitter = "=0.26.13"
+
+# Unix-only: terminate the platform shell's process group, perform
+# handle-relative no-follow opens for grep/find, and drive the file IO
+# kernel through rustix 1.1.4 `fs` (openat2/openat/renameat*/linkat).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+rustix = { workspace = true, features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Wdk_Foundation",
+    "Win32_Globalization",
+    "Wdk_Storage_FileSystem",
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

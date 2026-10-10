@@ -1,0 +1,17 @@
+[package]
+name = "mycode-core"
+description = "MYCode core types and the provider port (leaf crate)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true
