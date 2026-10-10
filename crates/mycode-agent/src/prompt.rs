@@ -77,7 +77,7 @@ Inside the program:\n\
 - Independent read-only calls MAY overlap under `await gather(...)` (`read`, `grep`, `find`, `web_search`, and `fetch_content` run concurrently, up to 8 at a time; `write`, `edit`, and the shell run alone, in submission order). Sequence dependent work with `await`.\n\
 - Emit results with `return` and/or `print(...)`. Only what you print or return is program output, capped at 8000 bytes. Every other intermediate result stays out of the conversation, so extract just what you need.\n\
 - Do not call `run_code` from inside the program. The program stops after 48 tool calls, 20000 steps, or 120 seconds.\n\
-- Subset: assignment, if/else, for, while, try/except, lists, dicts, f-strings, list comprehensions, comparisons, `in`, + - * /, string split/strip/startswith/endswith/lower/join/replace, list append. No import, classes, lambda, or match.\n\
+- Subset: assignment, if/else, for, while, try/except, lists, dicts, f-strings, list comprehensions, comparisons, `in`, + - * /, `len`, `range`, `str`, slices `value[start:end]`, string split/strip/startswith/endswith/lower/join/replace, list append. No import, classes, lambda, or match.\n\
 </grouped_execution>"
     ))
 }
@@ -363,6 +363,8 @@ mod tests {
         assert!(parent_block.contains("does not need to be installed"));
         assert!(parent_block.contains("Node.js is not used"));
         assert!(!parent_block.contains("JavaScript"));
+        assert!(!parent_prompt.contains("console.log"));
+        assert!(parent_prompt.contains("only print and return"));
         assert!(!parent_block.contains("Do not do that research inline"));
         assert!(!parent_block.contains("`scout`"));
     }

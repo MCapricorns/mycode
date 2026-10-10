@@ -1,10 +1,10 @@
 //! `run_code` — programmatic tool calling.
 //!
-//! The model writes one JavaScript program. The program calls the same
-//! tools a direct call would, and only `return` / `console.log` re-enter
-//! the conversation. This follows DeepSeek Harness PTC (`run_code` plus
-//! `tools.name(args)`, fresh per run, read-only calls may overlap) without
-//! hiding the single-call tools. See `docs/tools.md`.
+//! The model writes one Python program. The program calls the same tools a
+//! direct call would, and only `return` / `print` re-enter the conversation.
+//! This follows DeepSeek Harness PTC (`run_code` plus `tools.name(args)`,
+//! fresh per run, read-only calls may overlap) without hiding the single-call
+//! tools. See `docs/tools.md`.
 
 mod eval;
 mod parse;
@@ -48,9 +48,9 @@ const MAX_CODE_CHARS: usize = 16_000;
 pub(super) const MAX_OUTPUT_BYTES: usize = 8_000;
 /// Tool calls inside one program.
 const MAX_CALLS: u32 = 48;
-/// Read-only calls that may overlap inside `Promise.all`.
+/// Read-only calls that may overlap inside `gather`.
 pub(super) const MAX_PARALLEL: usize = 8;
-/// `console.log` lines kept.
+/// `print` lines kept.
 pub(super) const MAX_LOG_LINES: usize = 32;
 /// Wall clock for the program, including tool waits.
 const MAX_WALL: Duration = Duration::from_secs(120);
@@ -99,7 +99,7 @@ impl Tool for RunCodeTool {
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "run_code: pass description and code. Several reads, greps, finds, edits, or page fetches go in one program; only console.log and return come back. One obvious call stays direct.",
+            "run_code: pass description and code. Several reads, greps, finds, edits, or page fetches go in one program; only print and return come back. One obvious call stays direct.",
         )
     }
 
@@ -642,6 +642,26 @@ except Exception as e:
     }
 
     #[tokio::test]
+    async fn len_range_and_str_follow_python() {
+        let root = temp_dir("len");
+        let result = run(
+            &root,
+            catalog(vec![]),
+            r#"parts = "a\nb".split("\n")
+total = 0
+for i in range(len(parts)):
+    total = total + len(parts[i])
+return str(total)
+"#,
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert_eq!(text, "2");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn a_hot_loop_stops_on_the_step_budget() {
         let root = temp_dir("loop");
         let result = run(&root, catalog(vec![]), "while True:\n    pass\n").await;
@@ -729,6 +749,12 @@ return \"\\n\".join([line for line in hits.split(\"\\n\") if \"marker_\" in line
         );
         let schema = spec.params_schema.to_string();
         assert!(schema.contains("5-10 words"), "{schema}");
+        let snippet = tool.prompt_snippet().expect("snippet");
+        assert!(snippet.contains("print"), "{snippet}");
+        assert!(
+            !snippet.contains("console.log"),
+            "the tool list must not teach JavaScript:\n{snippet}"
+        );
         assert!(schema.contains("async Python"), "{schema}");
         assert!(schema.contains("does not need to be installed"), "{schema}");
         let description_key = schema.find("\"description\"").expect("description");
