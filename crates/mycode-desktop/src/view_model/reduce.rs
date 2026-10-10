@@ -678,12 +678,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 true
             });
         }
-        DesktopAction::SettingsToolsChanged(tools) => {
-            edit_settings(state, |settings| {
-                settings.tools = tools;
-                true
-            });
-        }
         DesktopAction::SubagentMenuToggled(menu) => {
             let opening = menu.is_some();
             state.subagent_menu = menu;
@@ -780,9 +774,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ShowSettingsSection(section) => {
             if section != super::SettingsSection::Models {
                 state.provider_detail = None;
-            }
-            if section != super::SettingsSection::Shell {
-                state.shell_kind_menu_open = false;
             }
             state.model_menu_open = false;
             state.model_menu_browse = None;
@@ -984,7 +975,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
         DesktopAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
-        DesktopAction::ShellKindMenuToggled(open) => state.shell_kind_menu_open = open,
         DesktopAction::LanguageMenuToggled(open) => {
             state.language_menu_open = open;
             if open {
@@ -1063,7 +1053,6 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.subagent_menu.is_some()
         || state.provider_kind_menu_open
         || state.mcp_transport_menu_open
-        || state.shell_kind_menu_open
         || state.language_menu_open
         || state.font_family_menu_open
         || state.mention.is_some();
@@ -1077,7 +1066,6 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.subagent_menu = None;
     state.provider_kind_menu_open = false;
     state.mcp_transport_menu_open = false;
-    state.shell_kind_menu_open = false;
     state.language_menu_open = false;
     state.font_family_menu_open = false;
     state.mention = None;

@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 进程工具不再读取 `MYCODE_SHELL`，也不再使用设置里的 `tools.shell`。解释器在进程启动时自动选定，工具名、参数说明和系统提示在整个会话里保持一致；子代理用同一个工具。旧的 `tools.shell` 仍能被读入，启动时忽略并在写回设置时去掉。若环境变量 `MYCODE_SHELL` 有值，进程提示一次后忽略。
+- Linux / macOS 使用 `$SHELL` 里的 bash、zsh 或 sh。否则 macOS 依次试 zsh、bash、sh，其它 Unix 依次试 bash、zsh、sh。这些系统不选择 pwsh 或 cmd。工具名是 `bash`、`zsh` 或 `sh`，路径分隔符是 `/`。
+- Windows 只自动选择 PowerShell：先是 PowerShell 7（`pwsh`，常规安装优先于 `WindowsApps` 目录下的执行别名），然后是 Windows PowerShell 5.1，最后才是 `cmd.exe`。不再把 Git Bash、MSYS2、Cygwin、`WindowsApps\bash.exe` 或 WSL 的 `System32\bash.exe` 当成 shell。商店别名按路径形状识别，不再靠 64 字节大小。
+
+### Fixed
+
+- 取消或超时会清掉整棵进程树。`setsid` 换了会话的子进程，以及子 shell 退出后被重新挂接、但仍留在原进程组里的后台进程，都会被结束。Linux 上 shell 会成为子进程回收者，这样脱离会话的孙子进程仍留在这棵树上。Windows 仍用不允许脱离的 Job Object。
+- 后台子进程不再把工具拖到管道关闭。`sleep 20 & echo bg` 在 shell 退出时返回输出，而不是等 `sleep` 结束。
+- `mycode-desktop --version` 和 `--help` 打印后退出，不再打开窗口。Linux 上 `DISPLAY` 和 `WAYLAND_DISPLAY` 都未设置时，或窗口表面创建失败（`Failed to create surface`）时，打印说明并以状态码 1 退出，不再以 101 崩溃。
+
 ## [0.10.2] - 2026-10-10
 
 ### Changed

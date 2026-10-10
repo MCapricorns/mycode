@@ -36,15 +36,17 @@ impl CapturedStream {
     }
 }
 
-/// Drain stdout and stderr concurrently, then wait for the leader.
+/// Read both pipes until the leader exits, then stop.
 ///
-/// Do not move the wait above the pipe-drain barrier. On Unix, an unreaped
-/// live/zombie leader reserves its PID and therefore its PGID number while an
-/// escaped descendant can keep collection pending.
+/// A background child inherits the pipes and would keep a read-to-EOF pending
+/// until it exits. The tool returns when the shell exits. Bytes already
+/// written are drained; a later write from a surviving child is not waited on.
+/// Timeout and cancel still terminate the tree before this wait is reaped, so
+/// the leader pid stays reserved for that kill.
 ///
 /// # Errors
 ///
-/// Returns the first I/O error from either pipe or from `Child::wait`.
+/// Returns the first I/O error from either pipe or from the wait.
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 pub(crate) async fn collect_child_output(
     child: &mut Child,
@@ -53,8 +55,57 @@ pub(crate) async fn collect_child_output(
     stdout: &mut CapturedStream,
     stderr: &mut CapturedStream,
 ) -> std::io::Result<ExitStatus> {
-    drain_pipes(stdout_pipe, stderr_pipe, stdout, stderr).await?;
-    child.wait().await
+    collect_until_exit(stdout_pipe, stderr_pipe, stdout, stderr, child.wait()).await
+}
+
+/// How long to keep reading after the leader exits, so output it already
+/// wrote can leave the pipe buffer. This does not wait for a background
+/// child to close the inherited write end.
+const OUTPUT_GRACE_AFTER_EXIT: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Read both pipes until `wait_for_exit` finishes.
+///
+/// # Errors
+///
+/// Returns the first I/O error from either pipe or from the wait.
+pub(crate) async fn collect_until_exit<Out, ErrStream, Wait>(
+    stdout_pipe: &mut Option<Out>,
+    stderr_pipe: &mut Option<ErrStream>,
+    stdout: &mut CapturedStream,
+    stderr: &mut CapturedStream,
+    wait_for_exit: Wait,
+) -> std::io::Result<std::process::ExitStatus>
+where
+    Out: AsyncRead + Unpin,
+    ErrStream: AsyncRead + Unpin,
+    Wait: std::future::Future<Output = std::io::Result<std::process::ExitStatus>>,
+{
+    let drain = drain_pipes(stdout_pipe, stderr_pipe, stdout, stderr);
+    tokio::pin!(drain);
+    tokio::pin!(wait_for_exit);
+    let mut status = None;
+    let mut drained = false;
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut wait_for_exit, if status.is_none() => {
+                status = Some(result?);
+            }
+            result = &mut drain, if !drained => {
+                result?;
+                drained = true;
+            }
+        }
+        if status.is_some() {
+            if !drained {
+                match tokio::time::timeout(OUTPUT_GRACE_AFTER_EXIT, &mut drain).await {
+                    Ok(result) => result?,
+                    Err(_elapsed) => {}
+                }
+            }
+            return Ok(status.expect("leader status was stored before the grace drain"));
+        }
+    }
 }
 
 /// Drain stdout and stderr concurrently while retaining bounded prefixes.

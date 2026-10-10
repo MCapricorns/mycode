@@ -220,7 +220,7 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
     let joined = match name {
         "read" | "write" | "edit" => text("path"),
         "grep" | "find" => join_target(&text("pattern"), &text("path")),
-        "shell" | "powershell" | "bash" | "cmd" => {
+        "shell" | "powershell" | "bash" | "zsh" | "sh" | "cmd" => {
             if text("mode") == "program" {
                 let args = arguments
                     .get("args")

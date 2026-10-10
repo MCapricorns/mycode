@@ -233,8 +233,6 @@ pub enum SettingsSection {
     Agents,
     /// Slash-command skills from `.agents`.
     Skills,
-    /// Platform shell used by tool scripts.
-    Shell,
     /// MCP servers.
     Mcp,
     /// Web search backends.
@@ -253,7 +251,6 @@ impl SettingsSection {
             Self::Models => "models",
             Self::Agents => "agents",
             Self::Skills => "skills",
-            Self::Shell => "shell",
             Self::Mcp => "mcp",
             Self::Web => "web",
             Self::Data => "data",
@@ -268,7 +265,6 @@ impl SettingsSection {
             Self::Models => t("Models", "模型"),
             Self::Agents => t("Agents", "子代理"),
             Self::Skills => t("Skills", "技能"),
-            Self::Shell => t("Shell", "Shell"),
             Self::Mcp => "MCP",
             Self::Web => t("Web search", "网页搜索"),
             Self::Data => t("Data", "数据"),
@@ -284,7 +280,6 @@ impl SettingsSection {
             Self::Models => IconName::Bot,
             Self::Agents => IconName::Sparkles,
             Self::Skills => IconName::Terminal,
-            Self::Shell => IconName::SquareTerminal,
             Self::Mcp => IconName::PlugZap,
             Self::Web => IconName::Globe,
             Self::Data => IconName::Database,
@@ -302,10 +297,6 @@ impl SettingsSection {
                 "Scout、Artisan，以及你添加的角色",
             ),
             Self::Skills => t("Slash commands", "斜杠命令"),
-            Self::Shell => t(
-                "pwsh, Windows PowerShell, or Git bash",
-                "pwsh、Windows PowerShell 或 Git bash",
-            ),
             Self::Mcp => t("Tool servers", "工具服务器"),
             Self::Web => t("Search backends", "搜索后端"),
             Self::Data => t("Usage, export", "用量、导出"),
@@ -329,7 +320,7 @@ impl SettingsSection {
         ("Appearance", &[Self::General]),
         ("Models", &[Self::Models]),
         ("Agents", &[Self::Agents]),
-        ("Tools", &[Self::Skills, Self::Shell, Self::Mcp, Self::Web]),
+        ("Tools", &[Self::Skills, Self::Mcp, Self::Web]),
         ("Data", &[Self::Data, Self::About]),
     ];
 }
@@ -494,7 +485,6 @@ mod tests {
                 SettingsSection::Models,
                 SettingsSection::Agents,
                 SettingsSection::Skills,
-                SettingsSection::Shell,
                 SettingsSection::Mcp,
                 SettingsSection::Web,
                 SettingsSection::Data,

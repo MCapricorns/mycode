@@ -1,7 +1,10 @@
 //! Windows Job Object enrollment for suspended children.
 //!
 //! A child is created with `CREATE_SUSPENDED`, assigned to a dedicated
-//! kill-on-close Job, and only then resumed.
+//! kill-on-close Job, and only then resumed. The Job does not grant
+//! breakaway, so descendants stay in it when they call `CreateProcess`,
+//! including Windows stand-ins for a detached Unix child. `TerminateJobObject`
+//! ends that whole tree.
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 
 /// RAII owner for a Windows Job Object configured to kill all members when its

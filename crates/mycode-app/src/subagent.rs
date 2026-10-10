@@ -729,7 +729,7 @@ cwd for both script and program mode.",
 /// Model-facing name of the one shell tool in `registry`, if it has one.
 fn registered_shell_name(registry: &ToolRegistry) -> Option<String> {
     let names = registry.names();
-    ["powershell", "bash", "cmd"]
+    ["powershell", "bash", "zsh", "sh", "cmd"]
         .into_iter()
         .find(|name| names.iter().any(|registered| registered == name))
         .map(str::to_owned)
@@ -749,7 +749,7 @@ fn child_registry_with(
             "read" => registry.register(Arc::new(mycode_tools::builtin::ReadTool)),
             "write" => registry.register(Arc::new(mycode_tools::builtin::WriteTool)),
             "edit" => registry.register(Arc::new(mycode_tools::builtin::EditTool)),
-            "shell" | "bash" | "powershell" | "cmd" => {
+            "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd" => {
                 if let Some(tool) = shell.take() {
                     registry.register(Arc::new(tool));
                 }
@@ -856,7 +856,12 @@ mod tests {
         registry
             .names()
             .into_iter()
-            .filter(|name| matches!(name.as_str(), "powershell" | "bash" | "cmd" | "shell"))
+            .filter(|name| {
+                matches!(
+                    name.as_str(),
+                    "powershell" | "bash" | "zsh" | "sh" | "cmd" | "shell"
+                )
+            })
             .collect()
     }
 
@@ -867,6 +872,8 @@ mod tests {
             "read".to_owned(),
             "shell".to_owned(),
             "bash".to_owned(),
+            "zsh".to_owned(),
+            "sh".to_owned(),
             "powershell".to_owned(),
             "cmd".to_owned(),
         ];
@@ -878,6 +885,8 @@ mod tests {
             ),
             (mycode_tools::ShellKind::Pwsh, "pwsh.exe", "powershell"),
             (mycode_tools::ShellKind::Bash, "/bin/bash", "bash"),
+            (mycode_tools::ShellKind::Zsh, "/bin/zsh", "zsh"),
+            (mycode_tools::ShellKind::Sh, "/bin/sh", "sh"),
             (mycode_tools::ShellKind::Cmd, "cmd.exe", "cmd"),
         ];
         for (kind, program, expected) in cases {
@@ -973,34 +982,35 @@ mod tests {
     }
 
     #[test]
-    fn git_bash_and_cmd_subagents_match_that_interpreter() {
-        let home =
-            HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-gitbash")).unwrap();
+    fn zsh_and_cmd_subagents_match_that_interpreter() {
+        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-zsh")).unwrap();
         let artisan = builtin_roles().role("artisan").expect("artisan").clone();
         let allowed = ["read".to_owned(), "shell".to_owned()];
-        let git_bash = mycode_tools::DetectedShell {
-            kind: mycode_tools::ShellKind::Bash,
-            program: std::path::PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"),
+        let zsh = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Zsh,
+            program: std::path::PathBuf::from("/bin/zsh"),
         };
         let registry = super::child_registry_with(
             &home,
             &allowed,
-            mycode_tools::ShellTool::forcing(git_bash.clone()),
+            mycode_tools::ShellTool::forcing(zsh.clone()),
         );
-        assert_eq!(shell_names(&registry), vec!["bash".to_owned()]);
+        assert_eq!(shell_names(&registry), vec!["zsh".to_owned()]);
         let prompt = super::subagent_system_prompt(
             &artisan,
             &registry,
-            std::path::Path::new(r"C:\work"),
+            std::path::Path::new("/work"),
             &[],
-            "windows",
-            "x86_64",
-            &git_bash,
+            "macos",
+            "aarch64",
+            &zsh,
         );
-        assert!(prompt.contains("shell_tool: bash"), "{prompt}");
-        assert!(prompt.contains("Git Bash"), "{prompt}");
-        assert!(prompt.contains("\n- bash:"), "{prompt}");
+        assert!(prompt.contains("shell_tool: zsh"), "{prompt}");
+        assert!(prompt.contains("Write zsh"), "{prompt}");
+        assert!(prompt.contains("The path separator is `/`."), "{prompt}");
+        assert!(prompt.contains("\n- zsh:"), "{prompt}");
         assert!(!prompt.contains("\n- powershell:"), "{prompt}");
+        assert!(!prompt.contains("Git Bash"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");
 
         let cmd = mycode_tools::DetectedShell {
@@ -1039,9 +1049,12 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         assert!(
-            allowed
-                .iter()
-                .all(|name| !matches!(name.as_str(), "shell" | "bash" | "powershell" | "cmd")),
+            allowed.iter().all(|name| {
+                !matches!(
+                    name.as_str(),
+                    "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd"
+                )
+            }),
             "scout must not inherit a shell tool, got {allowed:?}"
         );
         let shell = mycode_tools::DetectedShell {

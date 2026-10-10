@@ -182,7 +182,7 @@ pub struct AppSettings {
     /// Subagent delegation settings.
     #[serde(default, skip_serializing_if = "subagents_are_default")]
     pub subagents: SubagentSettings,
-    /// Tool-runtime preferences, including the platform shell.
+    /// Tool-runtime preferences. A legacy `shell` value is ignored.
     #[serde(default, skip_serializing_if = "tools_are_default")]
     pub tools: ToolsSettings,
 }

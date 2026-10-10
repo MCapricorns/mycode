@@ -199,8 +199,6 @@ pub(crate) struct WorkspaceState {
     /// Open Agents-page model picker: (role name, field). The field is
     /// `model`.
     pub subagent_menu: Option<(String, String)>,
-    /// Whether the Shell page's shell-kind dropdown is open.
-    pub shell_kind_menu_open: bool,
     /// Whether the General page's language dropdown is open.
     pub language_menu_open: bool,
     /// Whether the General page's font-family dropdown is open.
@@ -296,12 +294,8 @@ pub enum DesktopAction {
     SettingsBackendToggled(usize, bool),
     /// The settings editor changed subagent role routes.
     SettingsSubagentsChanged(mycode_config::SubagentSettings),
-    /// The settings editor changed the platform shell.
-    SettingsToolsChanged(mycode_config::ToolsSettings),
     /// The Agents-page model dropdown opened or closed.
     SubagentMenuToggled(Option<(String, String)>),
-    /// The Shell-page shell-kind dropdown opened or closed.
-    ShellKindMenuToggled(bool),
     /// The General-page language dropdown opened or closed.
     LanguageMenuToggled(bool),
     /// The General-page font-family dropdown opened or closed.

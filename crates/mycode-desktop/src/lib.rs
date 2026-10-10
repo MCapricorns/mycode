@@ -7,6 +7,7 @@
 //! commands back. This crate still chooses folders, reads git status for the
 //! changes panel, and forwards settings edits, including secrets. It does not
 //! run a model turn or a tool itself.
+pub mod cli;
 mod git_status;
 pub(crate) mod i18n;
 pub mod ui;

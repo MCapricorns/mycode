@@ -14,7 +14,7 @@ Tool results are the source of truth; do not claim a command ran unless its resu
 /// Names the one shell tool in `tools`, if the process registered one.
 fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
     let names = tools.names();
-    ["powershell", "bash", "cmd"]
+    ["powershell", "bash", "zsh", "sh", "cmd"]
         .into_iter()
         .find(|name| names.iter().any(|registered| registered == name))
         .map(str::to_owned)
@@ -25,7 +25,7 @@ fn edit_hint(shell_tool: &str) -> &'static str {
         "powershell" => {
             "For a shell edit, use `mode` `script` and pipe a literal here-string to `python` or `python3` (`@'...'@ | python -`)."
         }
-        "bash" => {
+        "bash" | "zsh" | "sh" => {
             "For a shell edit, use `mode` `script` and run Python (`python3` or `python`) with a quoted heredoc or a short script."
         }
         "cmd" => {
