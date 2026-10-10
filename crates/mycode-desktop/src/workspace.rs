@@ -1050,11 +1050,11 @@ impl Workspace {
     /// Applies and persists the UI font family. The next frame paints it, and
     /// the settings save writes `appearance.fontFamily`.
     pub(crate) fn on_select_font_family(&mut self, font_family: &str, cx: &mut Context<Self>) {
-        let Some(font_family) = crate::ui::desk::normalize_font_family(font_family) else {
+        let Some(font_family) = mycode_config::canonical_font_family(font_family) else {
             return;
         };
         if self.vm.settings.as_ref().is_some_and(|settings| {
-            crate::ui::desk::normalize_font_family(&settings.font_family) == Some(font_family)
+            mycode_config::canonical_font_family(&settings.font_family) == Some(font_family)
         }) {
             return;
         }
@@ -1087,7 +1087,7 @@ impl Workspace {
             .map(|settings| settings.font_family.as_str())
             .unwrap_or(mycode_config::SYSTEM_FONT_FAMILY);
         let size_id = crate::ui::desk::normalize_font_size(size_id);
-        let family_key = crate::ui::desk::normalize_font_family(family_id)
+        let family_key = mycode_config::canonical_font_family(family_id)
             .unwrap_or(mycode_config::SYSTEM_FONT_FAMILY);
         if self.applied_font_size == size_id && self.applied_font_family == family_key {
             return;
