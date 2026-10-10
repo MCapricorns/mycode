@@ -298,6 +298,24 @@ pub(crate) fn workspace_extra_roots(
     roots
 }
 
+/// Compact environment facts for the system prompt: OS, arch, the session
+/// cwd, and the shell `shell` script mode resolves to right now. Shared by
+/// the main session and subagent prompts so the model never guesses the
+/// platform from error messages.
+pub(crate) fn environment_block(cwd: &std::path::Path) -> String {
+    let mut block = format!(
+        "<environment>\nos: {} ({})\ncwd: {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cwd.display()
+    );
+    if let Some(shell) = mycode_tools::script_shell_line() {
+        block.push_str(&format!("\nshell (`shell` tool, script mode): {shell}"));
+    }
+    block.push_str("\n</environment>");
+    block
+}
+
 /// System prompt for one session. Skill order, the skill cap, and extra-root
 /// order are stable across calls that see the same files.
 pub(crate) fn session_system_prompt(
@@ -313,6 +331,8 @@ pub(crate) fn session_system_prompt(
     let mut system_prompt = String::from(
         "You are MYCode, a coding agent. Complete the user's request with the tools you have.",
     );
+    system_prompt.push_str("\n\n");
+    system_prompt.push_str(&environment_block(cwd));
     for part in mycode_config::render_resource_prompt(&resources) {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&part);
@@ -1650,6 +1670,36 @@ mod tests {
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn session_system_prompt_names_the_environment() {
+        let root = std::env::temp_dir().join("mycode-env-block");
+        let home = HomeLayout::from_root(&root).unwrap();
+        let registry = ToolRegistry::new();
+        mycode_tools::register_builtins(&registry);
+        let prompt = session_system_prompt(&home, &root, &registry, None, &[], "", None);
+        assert!(
+            prompt.contains(&format!(
+                "<environment>\nos: {} ({})\ncwd: {}",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                root.display()
+            )),
+            "environment block must open with os and cwd, got:\n{prompt}"
+        );
+        assert!(prompt.contains("</environment>"));
+        if let Some(shell_line) = prompt
+            .lines()
+            .find(|line| line.starts_with("shell (`shell` tool, script mode): "))
+        {
+            assert!(
+                shell_line.contains("PowerShell")
+                    || shell_line.contains("bash")
+                    || shell_line.contains("cmd"),
+                "shell line must name a concrete interpreter: {shell_line}"
+            );
         }
     }
 

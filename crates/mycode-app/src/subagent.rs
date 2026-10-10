@@ -549,6 +549,8 @@ impl BridgeAgentHost {
                 system.push_str(&format!("- {}\n", root.display()));
             }
         }
+        system.push_str("\n\n");
+        system.push_str(&crate::turn::environment_block(&run_dir));
         append_child_skills(&mut system, &run_dir, &extra_roots);
         if registry.get("search_tool").is_some() {
             system.push_str(

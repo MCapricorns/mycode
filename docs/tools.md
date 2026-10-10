@@ -50,6 +50,8 @@ Windows 上脚本模式只侦查 PowerShell 7（`pwsh`）和 Git bash，不侦�
 
 `pwsh` 不用 `-Command` 拼接用户字符串。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免 PowerShell 7 拒绝空的 `-EncodedCommand`。命令行按 UTF-16 码元计，上限 32767。Git bash 用 `-c`。
 
+选定 `pwsh` 时，常见 bash 单行命令（`ls`、`rm`、`cp`、`mkdir -p`、`touch`、`which`、`head`/`tail`、`wc -l`、`grep`、`find -name`，以及 `2>/dev/null`）在启动前翻译成对应 cmdlet；带管道、变量、替换或未知 flag 的命令原样执行。发生翻译时结果文本第一行注明 `[bash command translated to PowerShell: …]`，细节里带 `translated_command`，模型能看见改写而不是误以为 bash 直接可用。系统提示词的 `<environment>` 块用 `script_shell_line()` 命名当前解析到的 shell，工具描述不再枚举平台候选。
+
 进程输出先认 BOM，再认没有 BOM 的 UTF-16LE（PowerShell 往管道写中文时经常这样，这些字节有时也是合法 UTF-8），然后才是严格 UTF-8。还不行时，Windows 依次试 OEM 代码页、ANSI 代码页和控制台输出代码页（中文 Windows 上 `cmd` 的 `dir` 往往是 GBK）。标准输出和标准错误都会再整理一次：有 `#< CLIXML` 时抽出 `Error` 和 `Warning` 节点，`_xHHHH_`（包括 `_x001B_`）还原成字符，ANSI / VT 序列去掉。没有这些标记的普通文本保持原样。
 
 `program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon、Linux x86_64 glibc）。发布包包含这四个平台。摘要复查和参数组装共用。其它 Unix 目标（musl、Android、BSD）不支持直接启动映像。模型只看见工具名 `shell`，没有 `exec` 或 `bash` 别名。

@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- 系统提示词新增 `<environment>` 块：OS 与架构、会话 cwd、当前解析到的 shell（`script_shell_line()`，与脚本模式同一条解析链：设置 → 检测 → Windows 的 cmd 兜底）。子代理提示词同样注入一份，cwd 是各自的运行目录。模型不再需要靠报错猜平台或 shell 方言。
+
+### Changed
+
+- shell 为 PowerShell 且 bash 单行命令被翻译成 cmdlet 时，结果文本第一行注明 `[bash command translated to PowerShell: …]`，细节里新增 `translated_command`：改写对模型可见，不再静默成功让 bash 习惯看起来直接可用。
+- `shell` 工具描述删去跨平台 shell 枚举句，改为指向系统提示词的 `<environment>` 块；翻译说明同步注明结果会标注改写。
+
 ## [0.9.26] - 2026-10-10
 
 ### Fixed

@@ -132,6 +132,39 @@ pub(crate) fn preferred_identifier() -> &'static str {
     SHELL_CANDIDATES[0].executable
 }
 
+/// One-line name of the shell `script` mode would launch right now, for the
+/// system prompt's `<environment>` block.
+///
+/// Mirrors the script-mode resolution order (runtime preference, then
+/// detection, then the Windows `cmd.exe` runtime fallback). On POSIX the
+/// line is the resolved program path; existence is checked like detection,
+/// not like the full spawn-time resolution, so an exotic host can show a
+/// candidate the launch path would still reject. `None` when nothing
+/// resolves, in which case the prompt omits the line and the tool answers
+/// with its setup error at call time.
+#[must_use]
+pub fn script_shell_line() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let detected = detect::select_windows_shell(
+            runtime_shell().or_else(detect_default_shell),
+            windows_system_cmd(),
+        )?;
+        let name = shell_file_name(&detected.program);
+        Some(match detected.kind {
+            ShellKind::Pwsh => format!("PowerShell 7 ({name})"),
+            ShellKind::Bash => format!("Git bash ({name})"),
+            ShellKind::Cmd => format!("cmd.exe fallback ({name})"),
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        runtime_shell()
+            .or_else(detect_default_shell)
+            .map(|detected| detected.program.display().to_string())
+    }
+}
+
 /// The `shell` builtin.
 #[derive(Debug)]
 pub struct ShellTool {
@@ -241,6 +274,10 @@ struct PreparedShell {
     identifier: String,
     invocation: PreparedInvocation,
     lease: ExecutionLease,
+    /// The PowerShell command a translated bash one-liner became; `None`
+    /// when the command runs as written. Surfaced in the result text so
+    /// the model sees the rewrite instead of a silent success.
+    translated: Option<String>,
 }
 
 #[async_trait]
@@ -262,17 +299,18 @@ impl Tool for ShellTool {
          kernel-loadable PE, ELF, or Mach-O image is accepted. `write` and \
          `edit` remain available for one UTF-8 file. `read`, `grep`, and \
          `find` stay in-process. Do not use this tool to talk to the user. \
-         Edits made here are not undone. The platform shell is pwsh or Git \
-         bash on Windows; POSIX hosts use a POSIX shell. Execution is \
-         unsandboxed current-user execution with normal file and network \
-         access; environment filtering is not a sandbox. Same-account \
-         processes outside this host are outside the security boundary. \
-         Captured stdout/stderr is truncated beyond 50 KiB; a non-zero exit \
-         is an error result, not a tool failure. Default timeout: 120 s. \
-         There is no Core permission prompt. On PowerShell, common bash \
-         one-liners (ls -la, rm -rf, grep, touch, which, head, tail, wc) \
-         are translated to cmdlets automatically; writing PowerShell \
-         directly is still preferred."
+         Edits made here are not undone. The `<environment>` section of the \
+         system prompt names the shell in use; prefer its native syntax. \
+         Execution is unsandboxed current-user execution with normal file \
+         and network access; environment filtering is not a sandbox. \
+         Same-account processes outside this host are outside the security \
+         boundary. Captured stdout/stderr is truncated beyond 50 KiB; a \
+         non-zero exit is an error result, not a tool failure. Default \
+         timeout: 120 s. There is no Core permission prompt. On PowerShell, \
+         common bash one-liners (ls -la, rm -rf, grep, touch, which, head, \
+         tail, wc) are translated to cmdlets automatically and the result \
+         text notes the rewrite; writing PowerShell directly is still \
+         preferred."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -343,6 +381,7 @@ impl Tool for ShellTool {
             identifier: shell_identifier,
             invocation,
             lease,
+            translated,
         } = prepared;
         let outcome = run_prepared(invocation, lease, &ctx.cancel, &mut deadline).await?;
         let duration_ms = started.elapsed().as_millis() as u64;
@@ -362,6 +401,7 @@ impl Tool for ShellTool {
                     duration_ms,
                     false,
                     None,
+                    translated.as_deref(),
                 ),
                 &identity,
                 metadata,
@@ -385,6 +425,7 @@ impl Tool for ShellTool {
                     timeout,
                     teardown,
                     launched,
+                    translated.as_deref(),
                 ),
                 &identity,
                 metadata,
@@ -442,7 +483,7 @@ async fn prepare_windows_shell(
         )
         .ok_or_else(no_usable_shell_error)?;
         let identifier = shell_file_name(&detected.program);
-        let args = windows_shell_args(&detected, &command)?;
+        let (args, translated) = windows_shell_args(&detected, &command)?;
         let program = detected.program.to_str().ok_or_else(|| {
             ToolError::InvalidArgs(
                 "shell program path is not valid Unicode and cannot be recorded".into(),
@@ -455,6 +496,7 @@ async fn prepare_windows_shell(
             identifier,
             invocation,
             lease,
+            translated,
         })
     });
     tokio::pin!(pin_work);
@@ -467,19 +509,28 @@ async fn prepare_windows_shell(
     Ok(Some(prepared))
 }
 
+/// Launch arguments plus the translated command when a bash one-liner was
+/// rewritten for PowerShell.
 #[cfg(windows)]
-fn windows_shell_args(detected: &DetectedShell, command: &str) -> Result<Vec<String>, ToolError> {
+fn windows_shell_args(
+    detected: &DetectedShell,
+    command: &str,
+) -> Result<(Vec<String>, Option<String>), ToolError> {
     match detected.kind {
         ShellKind::Pwsh => {
             // The model keeps some bash habits regardless of the prompt, and
             // PowerShell answers those with parameter errors. Well-understood
             // bash one-liners are rewritten; everything else runs as typed.
-            let script = powershell_script_for(&translate::translate_bash_to_powershell(command));
+            let translation = translate::translate_bash_to_powershell(command);
+            let script = powershell_script_for(&translation.command);
             let encoded = encode_powershell_command(&script, &detected.program)?;
-            Ok(powershell_args(encoded))
+            Ok((
+                powershell_args(encoded),
+                translation.rewritten.then_some(translation.command),
+            ))
         }
-        ShellKind::Bash => Ok(vec!["-c".to_owned(), command.to_owned()]),
-        ShellKind::Cmd => Ok(detect::cmd_fallback_args(command)),
+        ShellKind::Bash => Ok((vec!["-c".to_owned(), command.to_owned()], None)),
+        ShellKind::Cmd => Ok((detect::cmd_fallback_args(command), None)),
     }
 }
 
@@ -516,6 +567,7 @@ async fn prepare_posix_shell(
                 identifier: program.to_owned(),
                 invocation,
                 lease,
+                translated: None,
             });
         }
         let mut last_not_found = None;
@@ -527,6 +579,7 @@ async fn prepare_posix_shell(
                         identifier: candidate.executable.to_owned(),
                         invocation,
                         lease,
+                        translated: None,
                     });
                 }
                 Err(error) => match shell_candidate_action(&error) {
@@ -670,6 +723,7 @@ fn timed_out_before_spawn_result(
         duration_ms,
         true,
         Some(&notice),
+        None,
     ))
 }
 
@@ -686,6 +740,7 @@ fn timed_out_result(
     timeout: Duration,
     teardown: Result<(), std::io::Error>,
     started: bool,
+    translated: Option<&str>,
 ) -> ToolResult {
     let notice = match (started, teardown.as_ref().err()) {
         (_, Some(err)) => format!(
@@ -710,6 +765,7 @@ fn timed_out_result(
         duration_ms,
         true,
         Some(&notice),
+        translated,
     ))
 }
 
@@ -952,7 +1008,9 @@ fn strip_clixml_header(text: &str) -> String {
 /// Assemble the tool result from collected output.
 ///
 /// `status == None` marks a command that did not finish (timeout path);
-/// such results are always `is_error`.
+/// such results are always `is_error`. `translated` is the PowerShell
+/// command a bash one-liner became; it leads the text so the model sees
+/// the rewrite even under a wall of output.
 #[expect(
     clippy::too_many_arguments,
     reason = "result assembly mirrors the tool's stable output fields"
@@ -966,11 +1024,17 @@ fn format_result(
     duration_ms: u64,
     forced_error: bool,
     notice: Option<&str>,
+    translated: Option<&str>,
 ) -> ToolResult {
     let stdout_text = sanitize_captured_shell_text(&decode_captured_text(&stdout.retained));
     let stderr_text = sanitize_captured_shell_text(&decode_captured_text(&stderr.retained));
 
     let mut text = String::new();
+    if let Some(translated) = translated {
+        text.push_str(&format!(
+            "[bash command translated to PowerShell: {translated}]\n"
+        ));
+    }
     if !stdout_text.trim().is_empty() {
         text.push_str(&stdout_text);
     }
@@ -1018,6 +1082,9 @@ fn format_result(
     });
     if let Some(s) = status {
         details["exit_code"] = json!(display_exit(&s));
+    }
+    if let Some(translated) = translated {
+        details["translated_command"] = json!(translated);
     }
 
     ToolResult {
@@ -1229,6 +1296,56 @@ mod mode_tests {
             .await
             .expect_err("mixed script arguments");
         assert!(matches!(error, ToolError::InvalidArgs(_)));
+    }
+
+    fn result_text(result: &crate::tool::ToolResult) -> String {
+        match result.content.first() {
+            Some(mycode_core::message::ContentBlock::Text(block)) => block.text.clone(),
+            other => panic!("expected text content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn translated_rewrite_leads_result_text_and_details() {
+        let translated = super::format_result(
+            None,
+            "ls -la",
+            "pwsh.exe",
+            crate::builtin::process::CapturedStream::default(),
+            crate::builtin::process::CapturedStream::default(),
+            12,
+            false,
+            None,
+            Some("Get-ChildItem -Force"),
+        );
+        assert_eq!(
+            result_text(&translated),
+            "[bash command translated to PowerShell: Get-ChildItem -Force]\n"
+        );
+        assert_eq!(
+            translated.details.expect("details")["translated_command"],
+            serde_json::json!("Get-ChildItem -Force")
+        );
+
+        let plain = super::format_result(
+            None,
+            "ls src",
+            "pwsh.exe",
+            crate::builtin::process::CapturedStream::default(),
+            crate::builtin::process::CapturedStream::default(),
+            12,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(result_text(&plain), "");
+        assert!(
+            plain
+                .details
+                .expect("details")
+                .get("translated_command")
+                .is_none()
+        );
     }
 }
 
