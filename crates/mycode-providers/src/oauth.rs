@@ -695,10 +695,7 @@ fn secret_from_token_payload(
         .get("expires_in")
         .and_then(Value::as_u64)
         .unwrap_or(3600);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
+    let now = crate::catalog::store::unix_now();
     let account_id = if extract_account {
         chatgpt_account_id(access)
     } else {
