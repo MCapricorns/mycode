@@ -299,21 +299,16 @@ pub(crate) fn workspace_extra_roots(
 }
 
 /// Compact environment facts for the system prompt: OS, arch, the session
-/// cwd, and the shell `shell` script mode resolves to right now. Shared by
-/// the main session and subagent prompts so the model never guesses the
+/// cwd, and the one shell tool `script` mode resolves to right now. Shared
+/// by the main session and subagent prompts so the model never guesses the
 /// platform from error messages.
 pub(crate) fn environment_block(cwd: &std::path::Path) -> String {
-    let mut block = format!(
-        "<environment>\nos: {} ({})\ncwd: {}",
+    mycode_tools::render_environment_block(
         std::env::consts::OS,
         std::env::consts::ARCH,
-        cwd.display()
-    );
-    if let Some(shell) = mycode_tools::script_shell_line() {
-        block.push_str(&format!("\nshell (`shell` tool, script mode): {shell}"));
-    }
-    block.push_str("\n</environment>");
-    block
+        cwd,
+        &mycode_tools::resolved_shell(),
+    )
 }
 
 /// System prompt for one session. Skill order, the skill cap, and extra-root
@@ -329,7 +324,8 @@ pub(crate) fn session_system_prompt(
 ) -> String {
     let resources = mycode_config::discover_resources(home, cwd);
     let mut system_prompt = String::from(
-        "You are MYCode, a coding agent. Complete the user's request with the tools you have.",
+        "You are MYCode, a coding agent. Complete the user's request with the tools you have. \
+The environment block names this OS and the one shell tool; write that shell's syntax.",
     );
     system_prompt.push_str("\n\n");
     system_prompt.push_str(&environment_block(cwd));
@@ -361,12 +357,13 @@ response as `agent`.\n</mcp>",
         for root in &roots {
             system_prompt.push_str(&format!("- {}\n", root.display()));
         }
-        system_prompt.push_str(
+        let shell_tool = mycode_tools::resolved_shell().kind.tool_name();
+        system_prompt.push_str(&format!(
             "Relative paths stay in the session cwd. For the other folders, pass an \
 absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
-path inside a `shell` script (`mode` `script`). `shell` starts in the session \
+path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in the session \
 cwd for both script and program mode.",
-        );
+        ));
     }
     system_prompt.push_str("\n\n");
     system_prompt.push_str(&mycode_agent::build_system_prompt(registry));
@@ -1690,17 +1687,20 @@ mod tests {
             "environment block must open with os and cwd, got:\n{prompt}"
         );
         assert!(prompt.contains("</environment>"));
-        if let Some(shell_line) = prompt
-            .lines()
-            .find(|line| line.starts_with("shell (`shell` tool, script mode): "))
-        {
-            assert!(
-                shell_line.contains("PowerShell")
-                    || shell_line.contains("bash")
-                    || shell_line.contains("cmd"),
-                "shell line must name a concrete interpreter: {shell_line}"
-            );
-        }
+        let shell = mycode_tools::resolved_shell();
+        assert!(
+            prompt.contains(&format!("shell_tool: {}", shell.kind.tool_name())),
+            "environment block must name the active shell tool, got:\n{prompt}"
+        );
+        assert!(prompt.contains("<shell>"), "{prompt}");
+        assert!(
+            prompt.contains("PowerShell") || prompt.contains("bash") || prompt.contains("cmd"),
+            "shell guidance must name a concrete interpreter:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("translated"),
+            "prompt must not describe bash-to-PowerShell translation:\n{prompt}"
+        );
     }
 
     #[test]

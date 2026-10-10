@@ -220,7 +220,7 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
     let joined = match name {
         "read" | "write" | "edit" => text("path"),
         "grep" | "find" => join_target(&text("pattern"), &text("path")),
-        "shell" => {
+        "shell" | "powershell" | "bash" | "cmd" => {
             if text("mode") == "program" {
                 let args = arguments
                     .get("args")
@@ -369,6 +369,8 @@ mod tests {
     fn shell_and_agent_targets_ignore_retired_names() {
         let script = json!({"mode": "script", "command": "echo hi"});
         assert_eq!(tool_target("shell", &script), "echo hi");
+        assert_eq!(tool_target("powershell", &script), "echo hi");
+        assert_eq!(tool_target("bash", &script), "echo hi");
         let program = json!({
             "mode": "program",
             "program": "/bin/echo",

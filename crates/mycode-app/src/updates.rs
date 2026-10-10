@@ -8,8 +8,8 @@
 //! executable and relaunches that copy with `--mycode-apply-update` so the
 //! helper can replace the install after this process exits. Asset names and
 //! staging conventions are produced by the release jobs in
-//! `.github/workflows/release.yml`. Pull requests build the same archives
-//! from `.github/workflows/ci.yml` and do not publish them.
+//! `.github/workflows/ci.yml`. Pull requests build the same archives
+//! and do not publish them. A push to main publishes when the version is new.
 
 pub(crate) mod apply;
 use std::io::{Read as _, Write as _};

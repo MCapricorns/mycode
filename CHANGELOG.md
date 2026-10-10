@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-10
+
+### Changed
+
+- 进程工具按启动时解析到的解释器只注册一个：Windows 上优先 PowerShell 7（`pwsh`），其次 Windows PowerShell 5.1（`powershell.exe`），工具名是 `powershell`，描述和参数按该版本的 PowerShell 来写。Git Bash 仅在两种 PowerShell 都没有，或设置 / `MYCODE_SHELL` 指定时使用，工具名是 `bash`。都不在时运行时才用 `cmd`，且不写入设置。不自动选择 WSL。Linux / macOS 仍是 `bash`。命令按该解释器原样执行，不再把 bash 翻译成 PowerShell。
+- 系统提示词的 `<environment>` / `<shell>` 写明当前 OS 和这一个 shell 的语法（PowerShell 5.1 不用 `&&` / `||`，路径分隔符和引号跟解释器走）。子代理使用同一个工具和同一套说明；白名单里的 `shell`、`bash`、`powershell`、`cmd` 不会再变成第二个 shell。scout 仍然不注册进程工具。
+- 四个平台的构建在 crates.io 域名解析或下载失败时会重试，编译错误不重试。macOS 上一次发布（`797dfde`）就是卡在 `index.crates.io` 解析失败。pull request 和 `main` 共用 `ci.yml`：都会构建四个平台，只有推到 `main` 且版本还没有标签时才打标签并上传 Release。`release.yml` 已删除。
+
 ## [0.9.28] - 2026-10-10
 
 ### Changed
@@ -51,7 +59,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.28...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/MCapricorns/mycode/compare/v0.9.28...v0.10.1
 [0.9.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.28
 [0.9.27]: https://github.com/MCapricorns/mycode/compare/v0.9.26...v0.9.27
 [0.9.26]: https://github.com/MCapricorns/mycode/compare/v0.9.25...v0.9.26
