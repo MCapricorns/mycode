@@ -224,6 +224,7 @@ async fn compact_session_now(
         branch_id: branch.as_str(),
         head: &head_stamp_text,
         context_window,
+        overhead_tokens: 0,
     };
     let compacted = crate::compaction::compact_history(&scope, history, true).await;
     match compacted.status {
@@ -347,9 +348,16 @@ guess parameters. When the user also wants a subagent, emit `search_tool` in the
 response as `agent`.\n</mcp>",
         );
     }
-    system_prompt.push_str(
-        "\n\nFor current facts, call `web_search`, then `fetch_content` on the URLs you will cite. Snippets are not evidence.",
-    );
+    if registry.get("run_code").is_some() {
+        system_prompt.push_str(
+            "\n\nSimple lookups stay inline. Use `run_code` when one step needs several reads, searches, edits, or page fetches, including a rename across files; one obvious call stays a direct tool. Pass `goal` to `fetch_content` when you already know the fact you need.",
+        );
+        if registry.get("agent").is_some() {
+            system_prompt.push_str(
+                " Web research, vendor docs, and a repository-wide map fit `scout` (`agent` with agent \"scout\"). Do not use the shell to fetch docs or map the repo. You choose; a narrow question stays inline.",
+            );
+        }
+    }
     let mut roots: Vec<&std::path::Path> = extra_roots.iter().map(PathBuf::as_path).collect();
     roots.sort();
     if !roots.is_empty() {
@@ -574,31 +582,6 @@ async fn run_chat_turn_on(
     let session_id = session_id.to_owned();
 
     let context_window = model_context_window(state, &provider, model);
-    // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
-    // This pre-turn pass publishes its transcript card immediately. The
-    // before-request hook later in this function only rewrites the
-    // in-memory request; that card is published after the turn's tool
-    // results and final reply commit, so a mid-turn summary cannot split
-    // a tool call from its result.
-    let compact_scope = crate::compaction::CompactScope {
-        home,
-        wire: &wire,
-        model,
-        session_id: &session_id,
-        branch_id: branch.as_str(),
-        head: &head_stamp_text,
-        context_window,
-    };
-    let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
-    if let Some(summary) = compacted.summary.as_deref() {
-        let _ = publish_visible_summary(&writer, events, &session_id, summary).await;
-    }
-    let history = compacted.messages;
-
-    // Grok Build call pattern: a short index, then the model loads the
-    // body or schema itself. Full skill text and MCP schemas stay off this
-    // prompt. Skill order and extra-root order are sorted so two turns share
-    // a byte-identical prefix.
     let user_home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from);
@@ -614,6 +597,37 @@ async fn run_chat_turn_on(
         &directive,
         user_home.as_deref(),
     );
+    let overhead_tokens = crate::compaction::estimate_prefix_tokens(
+        std::slice::from_ref(&system_prompt),
+        &registry.specs(),
+    );
+    // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
+    // This pre-turn pass publishes its transcript card immediately. The
+    // before-request hook later in this function only rewrites the
+    // in-memory request; that card is published after the turn's tool
+    // results and final reply commit, so a mid-turn summary cannot split
+    // a tool call from its result.
+    let compact_scope = crate::compaction::CompactScope {
+        home,
+        wire: &wire,
+        model,
+        session_id: &session_id,
+        branch_id: branch.as_str(),
+        head: &head_stamp_text,
+        context_window,
+        overhead_tokens,
+    };
+    let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
+    if let Some(summary) = compacted.summary.as_deref() {
+        let _ = publish_visible_summary(&writer, events, &session_id, summary).await;
+    }
+    let history = compacted.messages;
+
+    // Grok Build call pattern: a short index, then the model loads the
+    // body or schema itself. Full skill text and MCP schemas stay off this
+    // prompt. Skill order and extra-root order are sorted so two turns share
+    // a byte-identical prefix. The prompt was built above so compaction can
+    // count it.
 
     let turn_started = std::time::Instant::now();
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
@@ -642,6 +656,10 @@ async fn run_chat_turn_on(
                 branch_id: &branch_id,
                 head: &head,
                 context_window,
+                overhead_tokens: crate::compaction::estimate_prefix_tokens(
+                    &request.system_prompt,
+                    &request.tools,
+                ),
             };
             let compacted =
                 crate::compaction::compact_history(&scope, request.messages, false).await;

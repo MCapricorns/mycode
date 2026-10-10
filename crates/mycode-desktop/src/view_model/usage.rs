@@ -54,6 +54,7 @@ pub(crate) fn context_meter_parts(
     window: u64,
     cached: u64,
     cached_word: &str,
+    hit_word: &str,
 ) -> ContextMeterParts {
     let ratio = if window > 0 {
         format!("{} / {}", compact_count(used), compact_count(window))
@@ -66,7 +67,7 @@ pub(crate) fn context_meter_parts(
         String::new()
     };
     let hit = cache_percent(cached, used)
-        .map(|share| format!("{share}%"))
+        .map(|share| format!("{hit_word} {share}%"))
         .unwrap_or_default();
     ContextMeterParts { ratio, cache, hit }
 }
@@ -77,8 +78,14 @@ pub(crate) fn context_meter_parts(
 /// suffix. Empty when there is neither a ratio nor a cache read.
 #[cfg(test)]
 #[must_use]
-fn format_context_meter(used: u64, window: u64, cached: u64, cached_word: &str) -> String {
-    let parts = context_meter_parts(used, window, cached, cached_word);
+fn format_context_meter(
+    used: u64,
+    window: u64,
+    cached: u64,
+    cached_word: &str,
+    hit_word: &str,
+) -> String {
+    let parts = context_meter_parts(used, window, cached, cached_word, hit_word);
     [parts.ratio, parts.hit, parts.cache]
         .into_iter()
         .filter(|part| !part.is_empty())
@@ -90,11 +97,17 @@ fn format_context_meter(used: u64, window: u64, cached: u64, cached_word: &str) 
 /// prompt size or a cache read, so an empty chat does not show `0 / 1.0M`.
 #[cfg(test)]
 #[must_use]
-fn context_meter_label(used: u64, window: u64, cached: u64, cached_word: &str) -> Option<String> {
+fn context_meter_label(
+    used: u64,
+    window: u64,
+    cached: u64,
+    cached_word: &str,
+    hit_word: &str,
+) -> Option<String> {
     if used == 0 && cached == 0 {
         return None;
     }
-    let label = format_context_meter(used, window, cached, cached_word);
+    let label = format_context_meter(used, window, cached, cached_word, hit_word);
     (!label.is_empty()).then_some(label)
 }
 
@@ -202,33 +215,36 @@ mod tests {
 
     #[test]
     fn context_meter_shows_cache_reads_and_hides_an_empty_session() {
-        assert_eq!(context_meter_label(0, 1_000_000, 0, "cached"), None);
         assert_eq!(
-            context_meter_label(12_000, 1_000_000, 0, "cached").as_deref(),
+            context_meter_label(0, 1_000_000, 0, "cached", "cache hit"),
+            None
+        );
+        assert_eq!(
+            context_meter_label(12_000, 1_000_000, 0, "cached", "cache hit").as_deref(),
             Some("12.0k / 1.0M")
         );
         assert_eq!(
-            format_context_meter(12_000, 1_000_000, 11_800, "cached"),
-            "12.0k / 1.0M · 98% · 11.8k cached"
+            format_context_meter(12_000, 1_000_000, 11_800, "cached", "cache hit"),
+            "12.0k / 1.0M · cache hit 98% · 11.8k cached"
         );
-        let parts = context_meter_parts(12_000, 1_000_000, 11_800, "cached");
+        let parts = context_meter_parts(12_000, 1_000_000, 11_800, "cached", "cache hit");
         assert_eq!(parts.ratio, "12.0k / 1.0M");
         assert_eq!(parts.cache, "11.8k cached");
-        assert_eq!(parts.hit, "98%");
-        let uncached = context_meter_parts(12_000, 1_000_000, 0, "cached");
+        assert_eq!(parts.hit, "cache hit 98%");
+        let uncached = context_meter_parts(12_000, 1_000_000, 0, "cached", "cache hit");
         assert!(uncached.cache.is_empty());
         assert!(uncached.hit.is_empty());
         assert_eq!(
-            context_meter_parts(545, 1_000_000, 11_800, "cached").hit,
-            "95%"
+            context_meter_parts(545, 1_000_000, 11_800, "cached", "cache hit").hit,
+            "cache hit 95%"
         );
         assert_eq!(
-            context_meter_label(12_000, 1_000_000, 11_800, "缓存").as_deref(),
-            Some("12.0k / 1.0M · 98% · 11.8k 缓存")
+            context_meter_label(12_000, 1_000_000, 11_800, "缓存", "缓存命中").as_deref(),
+            Some("12.0k / 1.0M · 缓存命中 98% · 11.8k 缓存")
         );
         assert_eq!(
-            context_meter_label(0, 0, 11_800, "cached").as_deref(),
-            Some("100% · 11.8k cached")
+            context_meter_label(0, 0, 11_800, "cached", "cache hit").as_deref(),
+            Some("cache hit 100% · 11.8k cached")
         );
     }
 }

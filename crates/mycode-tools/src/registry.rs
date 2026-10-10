@@ -19,6 +19,38 @@ struct RegistryInner {
     specs: Option<Arc<[ToolSpec]>>,
 }
 
+/// Snapshot of a registry for nested `run_code` calls.
+///
+/// The snapshot is an `Arc` clone of the tool map taken at dispatch.
+/// Later registrations on the live registry are not visible, which keeps
+/// one program on the tool set the model was offered.
+#[derive(Clone)]
+pub struct ToolCatalog {
+    tools: Arc<BTreeMap<String, Arc<dyn ToolDyn>>>,
+}
+
+impl ToolCatalog {
+    /// Freezes the registry's current tools.
+    #[must_use]
+    pub fn from_registry(registry: &ToolRegistry) -> Self {
+        Self {
+            tools: Arc::new(registry.read().tools.clone()),
+        }
+    }
+
+    /// Looks up one tool by its model-facing name.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<Arc<dyn ToolDyn>> {
+        self.tools.get(name).cloned()
+    }
+
+    /// Sorted tool names.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.tools.keys().cloned().collect()
+    }
+}
+
 /// Thread-safe registry of tools, keyed by name.
 pub struct ToolRegistry {
     inner: RwLock<RegistryInner>,

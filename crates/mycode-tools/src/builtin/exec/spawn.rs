@@ -12,13 +12,13 @@ use super::prepare::PreparedInvocation;
 use super::resolve::PinnedImage;
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 use crate::builtin::process::collect_child_output;
-#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
-use crate::builtin::process::combine_teardown_results;
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
-use crate::builtin::process::drain_pipes;
+use crate::builtin::process::collect_until_exit;
+#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
+use crate::builtin::process::combine_teardown_results;
 use crate::builtin::process::{CapturedStream, ExecutionLease, ProcessTree};
 use crate::tool::ToolError;
 
@@ -711,15 +711,27 @@ impl SpawnedProgram {
             Inner::Windows(child) => {
                 let mut stdout_pipe = child.take_stdout();
                 let mut stderr_pipe = child.take_stderr();
-                drain_pipes(&mut stdout_pipe, &mut stderr_pipe, stdout, stderr).await?;
-                child.wait().await
+                collect_until_exit(
+                    &mut stdout_pipe,
+                    &mut stderr_pipe,
+                    stdout,
+                    stderr,
+                    child.wait(),
+                )
+                .await
             }
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             Inner::Mac(child) => {
                 let mut stdout_pipe = child.take_stdout()?;
                 let mut stderr_pipe = child.take_stderr()?;
-                drain_pipes(&mut stdout_pipe, &mut stderr_pipe, stdout, stderr).await?;
-                child.wait().await
+                collect_until_exit(
+                    &mut stdout_pipe,
+                    &mut stderr_pipe,
+                    stdout,
+                    stderr,
+                    child.wait(),
+                )
+                .await
             }
             #[cfg(not(any(
                 all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),

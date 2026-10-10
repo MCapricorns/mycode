@@ -815,6 +815,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 context_window,
                 cached,
                 t("cached", "缓存"),
+                t("cache hit", "缓存命中"),
             );
             this.child(bar_row(
                 "context",

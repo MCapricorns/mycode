@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-10
+
+### Added
+
+- `run_code`：嵌在二进制里的 Python 子集，一次调用里组合多次 `read` / `grep` / `find` / `edit` / 网页操作，只有 `return` 和 `print` 回到上下文。不依赖本机的 Node.js 或 Python。主代理和每个子代理用同一段提示。简单查找就地分组；较宽的代码库或网页研究可以由模型选择交给 `scout`。
+- `web_search` 返回短摘要并去重、缓存；`fetch_content` 增加 `goal`，只回匹配摘录。
+
+### Changed
+
+- 进程工具不再读取 `MYCODE_SHELL`，也不再使用设置里的 `tools.shell`。解释器在进程启动时自动选定，工具名、参数说明和系统提示在整个会话里保持一致；子代理用同一个工具。旧的 `tools.shell` 仍能被读入，启动时忽略并在写回设置时去掉。若环境变量 `MYCODE_SHELL` 有值，进程提示一次后忽略。
+- Linux / macOS 使用 `$SHELL` 里的 bash、zsh 或 sh。否则 macOS 依次试 zsh、bash、sh，其它 Unix 依次试 bash、zsh、sh。这些系统不选择 pwsh 或 cmd。工具名是 `bash`、`zsh` 或 `sh`，路径分隔符是 `/`。
+- Windows 只自动选择 PowerShell：先是 PowerShell 7（`pwsh`，常规安装优先于 `WindowsApps` 目录下的执行别名），然后是 Windows PowerShell 5.1，最后才是 `cmd.exe`。不再把 Git Bash、MSYS2、Cygwin、`WindowsApps\bash.exe` 或 WSL 的 `System32\bash.exe` 当成 shell。商店别名按路径形状识别，不再靠 64 字节大小。
+
+### Fixed
+
+- 取消或超时会清掉整棵进程树。`setsid` 换了会话的子进程，以及子 shell 退出后被重新挂接、但仍留在原进程组里的后台进程，都会被结束。Linux 上 shell 会成为子进程回收者，这样脱离会话的孙子进程仍留在这棵树上。Windows 仍用不允许脱离的 Job Object。
+- 后台子进程不再把工具拖到管道关闭。`sleep 20 & echo bg` 在 shell 退出时返回输出，而不是等 `sleep` 结束。
+- `mycode-desktop --version` 和 `--help` 打印后退出，不再打开窗口。未知参数打印用法并以状态码 1 退出，不再打开窗口。Linux 上没有可用显示（变量未设置，或 `DISPLAY=:99` 这种有变量但没有 X 服务器）时，或窗口表面创建失败时，打印说明并以状态码 1 退出，不再以 101 崩溃。
+- `run_code` 补上模型常写的 Python：元组解包、`for` 解包、下标赋值、`+=`、字符串重复、`enumerate` / `zip` / `sorted` / `min` / `max` / `sum` / `int`、字典 `items` / `get`。出错时先带回已经 `print` 的内容。`read` 进程序时去掉 `[revision ...]`。报错写明缺了什么、该怎么改。
+- 上下文计量里的百分比标明是缓存命中（`cache hit 99%`），不再紧挨窗口用量看起来像已用比例。自动压缩把系统提示和工具模式算进估算。`fetch_content` 的 `goal` 命中某一节时返回这一整节（上限 8000 字符），而不只是标题后的一小段。
+- `run_code` 补上 `list`、`dict`、`set`、`repr`、`isinstance`、`str.count`/`find`，以及列表和字典的常用方法（含 `setdefault`、`update`、`dict(a=1)` 和 `g.update(n=3)`）。语法和运行错误按用户源码行号标出那一行。进程工具省略 `mode` 时按 `script` 执行。思考菜单开在 Thinking 按钮上方，背景不透明，底边停在输入框上方，不再裁掉对话，也不贴在窗口右缘。`fetch_content` 命中某一节时包含其下各小节，上限 48000 字符。一次 `grep` 能回答的查找可以保持直接调用。
+- Windows 上 `WindowsApps\Microsoft.PowerShell_*\pwsh.exe` 不再直接启动（该路径没有执行权限），改用 App Execution Alias（`WindowsApps\pwsh.exe`）。写回 `settings.json` 时去掉旧的 `tools.shell`。没有 shell 的角色（含 `scout`）提示里不再出现 `shell_tool`。窗口标题改为 `MYCode`。
+
 ## [0.10.2] - 2026-10-10
 
 ### Changed
@@ -70,7 +93,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.10.3
 [0.10.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.10.2
 [0.10.1]: https://github.com/MCapricorns/mycode/compare/v0.9.28...v0.10.1
 [0.9.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.28

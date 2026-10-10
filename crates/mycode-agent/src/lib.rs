@@ -37,4 +37,7 @@ mod turn;
 pub use agent::{Agent, AgentConfig};
 pub use env::{SteerInbox, TurnEnv};
 pub use hooks::HookRunner;
-pub use prompt::build_system_prompt;
+pub use prompt::{
+    ChoiceScenario, TaskWeight, accept_choice, build_system_prompt, choice_scenarios,
+    grouped_execution_block, prompt_guides,
+};
