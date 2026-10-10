@@ -39,10 +39,7 @@ pub use compaction::{
 };
 pub use document_repair::{DocumentRepair, quarantine_owned_bytes};
 pub use error::{ConfigError, ConfigErrorKind};
-pub use home::{
-    HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, SCRATCH_DIR, SESSIONS_DIR,
-    session_relative,
-};
+pub use home::{HomeEnv, HomeLayout, SCRATCH_DIR, SESSIONS_DIR};
 pub use mcp_import::{normalize_api_key, parse_mcp_import};
 pub use project_mcp::project_mcp_servers;
 #[doc(inline)]
@@ -51,7 +48,7 @@ pub use resources::{
     render_resource_prompt, render_skill_catalog,
 };
 pub use secrets::{
-    MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_KIND, SECRETS_PATH,
+    MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_PATH,
     read_provider_secrets, read_provider_secrets_with_repair, replace_provider_secrets,
 };
 #[doc(inline)]
@@ -74,13 +71,13 @@ pub(crate) fn write_owned_test_bytes(
 pub use settings::{
     AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, MAX_AUTHORITY_DOCUMENT_BYTES,
     MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS,
-    MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES, MAX_WEB_BACKENDS, McpServerSettings,
-    ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SETTINGS_PATH, SYSTEM_FONT_FAMILY,
-    ShellSettings, SubagentRoleSettings, SubagentSettings, ToolsSettings, UsageSettings,
-    VALID_FONT_FAMILIES, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_PALETTES, VALID_PROVIDER_KINDS,
-    VALID_SHELL_KINDS, VALID_WEB_KINDS, WebBackendSettings, WebSettings, builtin_mcp_servers,
-    builtin_web_backends, canonical_font_family, default_user_agent, is_mcp_executable,
-    read_app_settings, read_app_settings_with_repair, replace_app_settings, split_command_line,
+    MAX_SUBAGENT_CONCURRENCY, MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings,
+    SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SYSTEM_FONT_FAMILY, ShellSettings,
+    SubagentRoleSettings, SubagentSettings, ToolsSettings, UsageSettings, VALID_FONT_FAMILIES,
+    VALID_FONT_SIZES, VALID_LANGUAGES, VALID_PALETTES, WebBackendSettings, WebSettings,
+    builtin_mcp_servers, builtin_web_backends, canonical_font_family, default_user_agent,
+    is_mcp_executable, read_app_settings, read_app_settings_with_repair, replace_app_settings,
+    split_command_line,
 };
 #[doc(inline)]
 pub use subagents::{
@@ -89,10 +86,9 @@ pub use subagents::{
 };
 #[doc(inline)]
 pub use ui_state::{
-    MAX_RECENT_MODELS, MAX_RECENT_PROJECTS, MAX_SESSION_MODELS, MAX_SESSION_PROJECTS,
-    MAX_SESSION_WORKSPACES, MAX_STARRED_MODELS, MAX_TRUSTED_PROJECTS, MAX_WORKSPACE_NAME_CHARS,
-    MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UI_STATE_FORMAT_VERSION,
-    UI_STATE_KIND, UI_STATE_PATH, UiState, WorkspaceDef, normalize_project_path, read_ui_state,
-    read_ui_state_with_repair, remember_model, replace_ui_state, revoke_project_trust,
-    same_project_path, session_model, toggle_star, trust_project, upsert_session_model,
+    MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES, MAX_WORKSPACE_NAME_CHARS,
+    MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UiState, WorkspaceDef,
+    read_ui_state, read_ui_state_with_repair, remember_model, replace_ui_state,
+    revoke_project_trust, same_project_path, session_model, toggle_star, trust_project,
+    upsert_session_model,
 };

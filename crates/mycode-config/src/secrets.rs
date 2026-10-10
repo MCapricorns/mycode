@@ -18,7 +18,7 @@ pub const MAX_SECRETS_BYTES: usize = 64 * 1024;
 /// Exact secrets format version.
 pub const SECRETS_FORMAT_VERSION: u32 = 1;
 /// Exact secrets document kind.
-pub const SECRETS_KIND: &str = "mycode-provider-secrets";
+const SECRETS_KIND: &str = "mycode-provider-secrets";
 /// Maximum providers with stored keys.
 pub(crate) const MAX_SECRET_PROVIDERS: usize = 64;
 /// Maximum accepted key length in bytes.

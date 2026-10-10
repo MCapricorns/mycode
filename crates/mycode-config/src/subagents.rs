@@ -260,7 +260,9 @@ pub fn discover_roles(home: &crate::HomeLayout, workspace_root: Option<&Path>) -
     if let Some(workspace) = workspace_root {
         layers.push((
             RoleOrigin::Project,
-            workspace.join(crate::MYCODE_DIR_NAME).join(ROLE_DIR_NAME),
+            workspace
+                .join(crate::home::MYCODE_DIR_NAME)
+                .join(ROLE_DIR_NAME),
         ));
     }
     for (origin, dir) in layers {
@@ -479,7 +481,7 @@ mod tests {
         )
         .expect("mismatched role");
         let project = root.join("project");
-        let project_agents = project.join(crate::MYCODE_DIR_NAME).join("agents");
+        let project_agents = project.join(crate::home::MYCODE_DIR_NAME).join("agents");
         std::fs::create_dir_all(&project_agents).expect("project agents");
         std::fs::write(
             project_agents.join("reviewer.md"),
