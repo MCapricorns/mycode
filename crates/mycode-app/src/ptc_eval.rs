@@ -35,7 +35,7 @@ async fn live_model_chooses_by_difficulty_when_configured() {
     mycode_tools::register_builtins(&registry);
     let mut system = build_system_prompt(&registry);
     system.push_str(
-        "\n\nYou decide whether to delegate. A rename, or reads across several files, stays inline as one `run_code`, not one grep or edit per file. A single obvious call stays a direct tool, and reading the file first is fine. Web research, vendor docs, and a repository-wide map fit `scout`: call `agent` with agent \"scout\". Do not use the shell to curl docs or map the repo. You choose; a narrow question stays inline.",
+        "\n\nYou decide whether to delegate. One grep or find that answers the question stays a direct call. A rename, or edits across several files, stays inline as one `run_code`, not one edit per file. Reading a file before a single edit is fine. Web research, vendor docs, and a repository-wide map fit `scout`: call `agent` with agent \"scout\". Do not use the shell to curl docs or map the repo. You choose; a narrow question stays inline.",
     );
     let mut tools = tool_specs(&registry);
     tools.push(json!({

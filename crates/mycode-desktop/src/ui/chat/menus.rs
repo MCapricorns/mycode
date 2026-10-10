@@ -52,23 +52,23 @@ pub(super) fn render_model_menu(
         .into_any_element()
 }
 
-/// Where the thinking menu sits. An in-flow full-width row hides the
-/// transcript under a blank band; the overlay only covers its own panel.
+/// Where the thinking menu sits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MenuPlacement {
-    /// Full-width row between the transcript and the composer.
-    ///
-    /// Not used. A row of this shape blanked the transcript.
+    /// Full-width row. Blanks the transcript under the row.
     #[allow(dead_code)]
     InFlowRow,
-    /// Bottom-right of the transcript. The transcript keeps its height.
-    BottomRightOverlay,
+    /// Right edge of the chat column, far from the Thinking chip.
+    #[allow(dead_code)]
+    ColumnRightEdge,
+    /// Directly above the Thinking chip. The transcript is not clipped.
+    AboveChip,
 }
 
-/// The thinking menu overlays the transcript instead of inserting a row.
+/// The thinking menu opens above its chip.
 #[must_use]
 pub(super) fn thinking_menu_placement() -> MenuPlacement {
-    MenuPlacement::BottomRightOverlay
+    MenuPlacement::AboveChip
 }
 
 /// Thinking effort as its own short list, opened from the composer button.
@@ -80,12 +80,12 @@ pub(super) fn render_thinking_menu(
     let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
     let selected = selected_reasoning_level(workspace.vm()).to_owned();
     let weak = cx.weak_entity();
-    let _placement = thinking_menu_placement();
+    debug_assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
     div()
         .id("thinking-menu-layer")
         .absolute()
-        .bottom(px(8.))
-        .right(px(24.))
+        .bottom(px(36.))
+        .left_0()
         .occlude()
         .child(
             popover_panel("thinking-menu", theme)
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
-        assert_eq!(thinking_menu_placement(), MenuPlacement::BottomRightOverlay);
+        assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
     }
 }
 

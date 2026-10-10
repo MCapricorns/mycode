@@ -72,6 +72,27 @@ pub(super) fn render_composer(
             state.set_placeholder(placeholder, window, cx);
         });
     }
+    let thinking_chip = show_thinking.then(|| {
+        let menu = workspace
+            .vm()
+            .reasoning_menu_open
+            .then(|| super::menus::render_thinking_menu(workspace, cx));
+        div()
+            .relative()
+            .child(composer_text_button(
+                "thinking",
+                thinking_label.clone(),
+                workspace.vm().reasoning_menu_open,
+                px(96.),
+                |workspace, _window, cx| {
+                    let open = !workspace.vm().reasoning_menu_open;
+                    workspace.on_toggle_reasoning_menu(open, cx);
+                },
+                cx,
+            ))
+            .children(menu)
+            .into_any_element()
+    });
     let theme = cx.theme();
     let session_project = workspace
         .vm()
@@ -185,19 +206,7 @@ pub(super) fn render_composer(
                             },
                             cx,
                         ))
-                        .when(show_thinking, |this| {
-                            this.child(composer_text_button(
-                                "thinking",
-                                thinking_label,
-                                workspace.vm().reasoning_menu_open,
-                                px(96.),
-                                |workspace, _window, cx| {
-                                    let open = !workspace.vm().reasoning_menu_open;
-                                    workspace.on_toggle_reasoning_menu(open, cx);
-                                },
-                                cx,
-                            ))
-                        })
+                        .when_some(thinking_chip, |this, chip| this.child(chip))
                         .when_some(context_meter(workspace), |this, meter| {
                             this.child(
                                 div()

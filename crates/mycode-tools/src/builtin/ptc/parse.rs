@@ -205,16 +205,36 @@ fn convert_body(src: &str, body: &[PyStmt]) -> Result<Vec<Spanned>, String> {
 }
 
 fn spanned(src: &str, stmt: &PyStmt, inner: Stmt) -> Spanned {
-    let prefix = "async def __mycode__():\n".len();
-    let start = stmt.start().to_usize().saturating_sub(prefix);
-    let (line, _column) = line_col(src, start);
-    let snippet = src.lines().nth(line.saturating_sub(1)).unwrap_or("").trim();
-    let snippet: String = snippet.chars().take(120).collect();
+    let (line, snippet) = user_location(src, stmt.start().to_usize());
     Spanned {
-        line: line as u32,
+        line,
         snippet,
         stmt: inner,
     }
+}
+
+/// Map a byte offset in the wrapped `async def` source back to the user's line.
+///
+/// Each non-empty user line is indented by four spaces inside the wrapper.
+/// Subtracting only the `async def` prefix and then scanning the unindented
+/// source walks past the real line.
+fn user_location(src: &str, wrapped_offset: usize) -> (u32, String) {
+    let wrapped = wrap_function_body(src);
+    let offset = wrapped_offset.min(wrapped.len());
+    let line = wrapped[..offset]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        .max(1);
+    let snippet: String = src
+        .lines()
+        .nth(line - 1)
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(120)
+        .collect();
+    (line as u32, snippet)
 }
 
 fn convert_stmt(src: &str, stmt: &PyStmt) -> Result<Option<Stmt>, String> {
@@ -661,13 +681,9 @@ fn convert_constant(value: &Constant) -> Result<Expr, String> {
 }
 
 fn syntax_error(src: &str, raw: &str) -> String {
-    let prefix = "async def __mycode__():\n".len();
-    let located = byte_offset(raw).and_then(|offset| {
-        let user = offset.checked_sub(prefix)?;
-        let (line, _column) = line_col(src, user);
-        let snippet = src.lines().nth(line.saturating_sub(1)).unwrap_or("").trim();
-        let snippet: String = snippet.chars().take(120).collect();
-        Some(format!("line {line}: `{snippet}` — syntax error: {raw}"))
+    let located = byte_offset(raw).map(|offset| {
+        let (line, snippet) = user_location(src, offset);
+        format!("line {line}: `{snippet}` — syntax error: {raw}")
     });
     format!(
         "{}. {FIX}",
@@ -691,23 +707,6 @@ fn byte_offset(raw: &str) -> Option<usize> {
         .take_while(|ch| ch.is_ascii_digit())
         .collect();
     digits.parse().ok()
-}
-
-fn line_col(src: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1usize;
-    let mut column = 1usize;
-    for (index, ch) in src.char_indices() {
-        if index >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-    (line, column)
 }
 
 fn unsupported(what: &str) -> String {

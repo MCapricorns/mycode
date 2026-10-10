@@ -462,6 +462,9 @@ impl Machine {
         args: Vec<Val>,
         kwargs: Vec<(String, Val)>,
     ) -> Result<Val, Stop> {
+        if !matches!(callee, Val::DictFn) {
+            expect_kwargs(&kwargs, allowed_keywords(&callee))?;
+        }
         match callee {
             Val::ToolFn(name) => {
                 let arg = match args.as_slice() {
@@ -496,12 +499,16 @@ impl Machine {
                 self.promise_all(list).await
             }
             Val::ConsoleLog => {
+                let sep = match kw_value(&kwargs, "sep") {
+                    Some(value) => display(&value)?,
+                    None => " ".to_owned(),
+                };
                 let mut parts = Vec::new();
                 for arg in &args {
                     parts.push(display(arg)?);
                 }
                 if self.logs.len() < super::MAX_LOG_LINES {
-                    self.logs.push(parts.join(" "));
+                    self.logs.push(parts.join(&sep));
                 }
                 Ok(Val::Null)
             }
@@ -551,7 +558,7 @@ impl Machine {
             }
             Val::Method { recv, name } => self.method(recv.as_ref(), &name, &args, &kwargs).await,
             Val::ListFn | Val::TupleFn => list_value(&args),
-            Val::DictFn => dict_value(&args),
+            Val::DictFn => dict_value(&args, &kwargs),
             Val::SetFn => set_value(&args),
             Val::BoolFn => Ok(Val::Bool(args.first().is_some_and(truthy))),
             Val::FloatFn => float_value(&args),
@@ -657,11 +664,11 @@ impl Machine {
                 }
                 Ok(Val::Str(parts.join(&sep)))
             }
-            (Val::Obj(map), "get" | "setdefault") => {
+            (Val::Obj(map), "get") => {
                 let Some(key) = args.first() else {
-                    return Err(Stop::Throw(Thrown::script(format!(
-                        "dict.{name} takes a key, as in counts.get(name, 0)"
-                    ))));
+                    return Err(Stop::Throw(Thrown::script(
+                        "dict.get takes a key, as in counts.get(name, 0)",
+                    )));
                 };
                 let key = display(key)?;
                 let fallback = args
@@ -669,11 +676,25 @@ impl Machine {
                     .cloned()
                     .or_else(|| kw_value(kwargs, "default"))
                     .unwrap_or(Val::Null);
-                let found = lock_map(map).get(&key).cloned();
-                if name == "setdefault" && found.is_none() {
-                    lock_map(map).insert(key, fallback.clone());
+                Ok(lock_map(map).get(&key).cloned().unwrap_or(fallback))
+            }
+            (Val::Obj(map), "setdefault") => {
+                let Some(key) = args.first() else {
+                    return Err(Stop::Throw(Thrown::script(
+                        "dict.setdefault takes a key, as in g.setdefault(\"k\", [])",
+                    )));
+                };
+                let key = display(key)?;
+                let fallback = args
+                    .get(1)
+                    .cloned()
+                    .or_else(|| kw_value(kwargs, "default"))
+                    .unwrap_or(Val::Null);
+                let mut borrowed = lock_map(map);
+                if !borrowed.contains_key(&key) {
+                    borrowed.insert(key.clone(), fallback);
                 }
-                Ok(found.unwrap_or(fallback))
+                Ok(borrowed.get(&key).cloned().unwrap_or(Val::Null))
             }
             (Val::Obj(map), "update") => {
                 if let Some(Val::Obj(other)) = args.first() {
@@ -905,6 +926,61 @@ impl Machine {
     }
 }
 
+/// Methods `method()` implements. Attribute lookup must use this list so a
+/// method cannot be implemented and then fail as "value is not callable".
+pub(super) const IMPLEMENTED_METHODS: &[(&str, &[&str])] = &[
+    (
+        "str",
+        &[
+            "split",
+            "splitlines",
+            "upper",
+            "includes",
+            "startsWith",
+            "startswith",
+            "endsWith",
+            "endswith",
+            "trim",
+            "strip",
+            "toLowerCase",
+            "lower",
+            "join",
+            "replace",
+            "count",
+            "find",
+            "slice",
+        ],
+    ),
+    (
+        "list",
+        &[
+            "push", "append", "slice", "join", "extend", "pop", "insert", "index", "sort",
+            "includes", "map", "filter",
+        ],
+    ),
+    (
+        "dict",
+        &["get", "setdefault", "update", "keys", "values", "items"],
+    ),
+];
+
+fn is_known_method(kind: &str, name: &str) -> bool {
+    IMPLEMENTED_METHODS
+        .iter()
+        .any(|(candidate, names)| *candidate == kind && names.contains(&name))
+}
+
+#[cfg(test)]
+pub(super) fn method_is_reachable(kind: &str, name: &str) -> bool {
+    let object = match kind {
+        "str" => Val::Str("ab".to_owned()),
+        "list" => Val::arr(Vec::new()),
+        "dict" => Val::obj(BTreeMap::new()),
+        _ => return false,
+    };
+    matches!(member(object, name), Ok(Val::Method { .. }))
+}
+
 fn member(object: Val, name: &str) -> Result<Val, Stop> {
     match &object {
         Val::Tools => Ok(Val::ToolFn(name.to_owned())),
@@ -913,12 +989,16 @@ fn member(object: Val, name: &str) -> Result<Val, Stop> {
         Val::PromiseCtor if name == "all" => Ok(Val::PromiseAll),
         Val::Str(text) if name == "length" => Ok(Val::Num(text.chars().count() as f64)),
         Val::Arr(items) if name == "length" => Ok(Val::Num(lock_vec(items).len() as f64)),
-        Val::Obj(_) if matches!(name, "get" | "keys" | "values" | "items") => Ok(Val::Method {
+        Val::Obj(_) if is_known_method("dict", name) => Ok(Val::Method {
             recv: Box::new(object.clone()),
             name: name.to_owned(),
         }),
         Val::Obj(map) => Ok(lock_map(map).get(name).cloned().unwrap_or(Val::Null)),
-        Val::Str(_) | Val::Arr(_) => Ok(Val::Method {
+        Val::Str(_) if is_known_method("str", name) => Ok(Val::Method {
+            recv: Box::new(object),
+            name: name.to_owned(),
+        }),
+        Val::Arr(_) if is_known_method("list", name) => Ok(Val::Method {
             recv: Box::new(object),
             name: name.to_owned(),
         }),
@@ -1548,27 +1628,67 @@ fn list_value(args: &[Val]) -> Result<Val, Stop> {
     }
 }
 
-fn dict_value(args: &[Val]) -> Result<Val, Stop> {
-    match args {
-        [] => Ok(Val::obj(BTreeMap::new())),
-        [Val::Obj(map)] => Ok(Val::obj(lock_map(map).clone())),
-        [one] => {
-            let mut fields = BTreeMap::new();
-            for pair in iterate(one)? {
-                let Some(items) = pair.as_arr() else {
-                    return Err(Stop::Throw(Thrown::script(
-                        "dict takes a dict or a list of [key, value] pairs",
-                    )));
-                };
-                if items.len() != 2 {
-                    return Err(Stop::Throw(Thrown::script("dict pairs need two items")));
-                }
-                fields.insert(display(&items[0])?, items[1].clone());
-            }
-            Ok(Val::obj(fields))
+fn dict_value(args: &[Val], kwargs: &[(String, Val)]) -> Result<Val, Stop> {
+    let mut fields = match args {
+        [] => BTreeMap::new(),
+        [Val::Obj(map)] => lock_map(map).clone(),
+        [one] => pairs_to_dict(one)?,
+        _ => {
+            return Err(Stop::Throw(Thrown::script(
+                "dict takes one mapping and keyword arguments, as in dict(pairs, a=1)",
+            )));
         }
-        _ => Err(Stop::Throw(Thrown::script("dict takes one mapping"))),
+    };
+    for (key, value) in kwargs {
+        fields.insert(key.clone(), value.clone());
     }
+    Ok(Val::obj(fields))
+}
+
+fn pairs_to_dict(value: &Val) -> Result<BTreeMap<String, Val>, Stop> {
+    let mut fields = BTreeMap::new();
+    for pair in iterate(value)? {
+        let Some(items) = pair.as_arr() else {
+            return Err(Stop::Throw(Thrown::script(
+                "dict takes a dict or a list of [key, value] pairs",
+            )));
+        };
+        if items.len() != 2 {
+            return Err(Stop::Throw(Thrown::script("dict pairs need two items")));
+        }
+        fields.insert(display(&items[0])?, items[1].clone());
+    }
+    Ok(fields)
+}
+
+fn allowed_keywords(callee: &Val) -> &'static [&'static str] {
+    match callee {
+        Val::Enumerate => &["start"],
+        Val::Sorted => &["reverse"],
+        Val::ConsoleLog => &["sep"],
+        Val::Method { name, .. } => match name.as_str() {
+            "get" | "setdefault" => &["default"],
+            "sort" => &["reverse"],
+            _ => &[],
+        },
+        _ => &[],
+    }
+}
+
+fn expect_kwargs(kwargs: &[(String, Val)], allowed: &[&str]) -> Result<(), Stop> {
+    for (key, _) in kwargs {
+        if !allowed.contains(&key.as_str()) {
+            let accepted = if allowed.is_empty() {
+                "no keyword arguments".to_owned()
+            } else {
+                allowed.join(", ")
+            };
+            return Err(Stop::Throw(Thrown::script(format!(
+                "unexpected keyword argument {key}. This call accepts {accepted}"
+            ))));
+        }
+    }
+    Ok(())
 }
 
 fn set_value(args: &[Val]) -> Result<Val, Stop> {

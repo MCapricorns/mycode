@@ -77,7 +77,7 @@ Inside the program:\n\
 - Independent read-only calls MAY overlap under `await gather(...)` (`read`, `grep`, `find`, `web_search`, and `fetch_content` run concurrently, up to 8 at a time; `write`, `edit`, and the shell run alone, in submission order). Sequence dependent work with `await`.\n\
 - Emit results with `return` and/or `print(...)`. Only what you print or return is program output, capped at 8000 bytes. Every other intermediate result stays out of the conversation, so extract just what you need.\n\
 - Do not call `run_code` from inside the program. The program stops after 48 tool calls, 20000 steps, or 120 seconds.\n\
-- A rename or the same edit across several files is one program: read and `edit` inside it, then return the paths. Do not emit one `edit` or one `grep` per file. Two files plus a filter is still `run_code`.\n\
+- One `grep` or `find` that answers the question stays a direct call, even across a couple of files. Use `run_code` when you must filter those hits or edit more than one file. A rename across files is one program, not one `edit` per file.\n\
 - Subset: assignment (`a, b = ...`, `obj[key] = value`, `+=`), if/else, `a if c else b`, for (including `for i, item in enumerate(...)`), while, try/except, lists, dicts (`get`/`items`/`keys`/`values`/`setdefault`/`update`/`in`), f-strings, list comprehensions, comparisons, + - * / (including `\"S\" * n`), `len`, `range`, `str`, `int`, `float`, `bool`, `list`, `dict`, `set`, `enumerate`, `zip`, `sorted`, `reversed`, `min`, `max`, `sum`, `abs`, `round`, `any`, `all`, `isinstance`, `repr`, slices `value[start:end]`, string split/strip/startswith/endswith/lower/upper/count/find/join/replace, list append/extend/pop/insert/index/sort. No import, classes, lambda, or match.\n\
 </grouped_execution>"
     ))
@@ -105,6 +105,8 @@ pub enum TaskWeight {
     Direct,
     /// Several lookups or edits in one step. Group them inline with `run_code`.
     GroupInline,
+    /// One search. A direct `grep` or `find` is enough; `run_code` is also fine.
+    Lookup,
     /// Broad research. `scout` is a fit; inline `run_code` is also allowed.
     Broad,
 }
@@ -127,7 +129,7 @@ pub fn choice_scenarios() -> &'static [ChoiceScenario] {
         ChoiceScenario {
             id: "narrow-search",
             task: "In src/turn.rs and src/prompt.rs, which functions mention dispatch_tool? Return path:line only.",
-            weight: TaskWeight::GroupInline,
+            weight: TaskWeight::Lookup,
         },
         ChoiceScenario {
             id: "one-edit",
@@ -144,13 +146,14 @@ pub fn choice_scenarios() -> &'static [ChoiceScenario] {
 
 /// Whether a model's first tool call matches the judgment for `weight`.
 ///
-/// A narrow multi-step task must be `run_code`. One edit may start with
-/// `read` (the prompt says to read before changing a file) or go straight to
-/// `edit` or `write`. Broad research may be `scout` or inline `run_code`.
+/// A single search may be `grep`, `find`, or `run_code`. One edit may start
+/// with `read` or go straight to `edit` or `write`. Several edits are
+/// `run_code`. Broad research may be `scout` or inline `run_code`.
 #[must_use]
 pub fn accept_choice(weight: TaskWeight, tool: &str, arguments: &serde_json::Value) -> bool {
     match weight {
         TaskWeight::Direct => matches!(tool, "read" | "edit" | "write"),
+        TaskWeight::Lookup => matches!(tool, "grep" | "find" | "run_code"),
         TaskWeight::GroupInline => tool == "run_code",
         TaskWeight::Broad => {
             tool == "run_code"
@@ -174,6 +177,13 @@ pub fn prompt_guides(prompt: &str, weight: TaskWeight) -> bool {
         TaskWeight::Direct => {
             prompt.contains("one obvious call stays direct")
                 || prompt.contains("One obvious call stays direct")
+        }
+        TaskWeight::Lookup => {
+            prompt.contains("run_code")
+                && (prompt.contains("one obvious call stays direct")
+                    || prompt.contains("One obvious call stays direct")
+                    || prompt.contains("single grep")
+                    || prompt.contains("single `grep`"))
         }
         TaskWeight::GroupInline => {
             prompt.contains("run_code")
@@ -393,6 +403,21 @@ mod tests {
                 );
             }
         }
+        assert!(super::accept_choice(
+            super::TaskWeight::Lookup,
+            "grep",
+            &serde_json::json!({"pattern": "dispatch_tool"})
+        ));
+        assert!(super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find dispatch", "code": "return 1"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Lookup,
+            "bash",
+            &serde_json::json!({"command": "rg dispatch"})
+        ));
         assert!(super::accept_choice(
             super::TaskWeight::GroupInline,
             "run_code",
