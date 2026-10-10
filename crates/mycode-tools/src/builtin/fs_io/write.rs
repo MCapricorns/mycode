@@ -151,10 +151,7 @@ fn fold_cleanup_error(primary: ToolError, cleanup: io::Result<()>) -> ToolError 
 }
 
 fn complete_temp<T>(mut temp: TempName, result: Result<T, ToolError>) -> Result<T, ToolError> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(primary) => Err(fold_cleanup_error(primary, temp.cleanup())),
-    }
+    result.map_err(|primary| fold_cleanup_error(primary, temp.cleanup()))
 }
 
 impl Drop for TempName {
