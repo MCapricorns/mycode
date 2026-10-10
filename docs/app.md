@@ -44,7 +44,7 @@
 5. 注册内置工具、`ask_user`、`web_search`、`fetch_content`。至少一个角色启用时注册 `agent`。连上的 MCP 再注册工具（见下文）。
 6. 取最后一条有文字的用户消息作为这次的 prompt；它后面残留的助手消息或工具结果（例如中断的回合）只在这次请求里省略，账本不动。
 7. 先跑一次压缩；写出新检查点时立刻把摘要卡片写进账本并发 `SummaryShown`。
-8. system prompt = 身份 + `<environment>` 块（OS、架构、会话 cwd、`script_shell_line()` 解析到的 shell；子代理提示词同样带一份，cwd 是自己的运行目录）+ 资源文件（`AGENTS.md`、`MYCODE.md`）+ skill 目录 + MCP 说明 + 网页工具说明 + 其它工作区文件夹 + `build_system_prompt` 的工具清单和约定 + 子代理委派表。skill 和文件夹排好序，同样的文件得到字节相同的提示，方便提供商命中前缀缓存。
+8. system prompt = 身份 + `<environment>` / `<shell>` 块（OS、架构、会话 cwd、当前这一个进程工具和它的语法；子代理提示词同样带一份，cwd 是自己的运行目录）+ 资源文件（`AGENTS.md`、`MYCODE.md`）+ skill 目录 + MCP 说明 + 网页工具说明 + 其它工作区文件夹 + `build_system_prompt` 的工具清单和约定 + 子代理委派表。skill 和文件夹排好序，同样的文件得到字节相同的提示，方便提供商命中前缀缓存。
 9. `AgentConfig` 带上这个提示、`prompt_cache_key` = 会话 id、输出上限（设置 `maxOutput` → 目录 `limit.output` → 32000）和会话自己的思考档位（`ChatTurn.reasoning`，来自 `ui.json` 里该会话的模型记录，不读全局设置）。装上压缩钩子，调用 `Agent::prompt`。不在工具前保存文件快照，`write`、`edit` 和 `shell` 的改动都留在工作区里。
 
 事件泵把 `AgentEvent` 投影成 `BridgeEvent`，并拥有分支头：`ToolStarted` 先提交 `ToolCall` 事件，`ToolCompleted` 提交结果；带工具调用的中间助手消息到达即提交（`AssistantStep`）；最后一条助手消息在 `TurnEnded` 时提交，随后是用量行（`usage.enabled` 默认开，且提供商报了用量）、钩子里攒下的摘要卡片，最后发 `ChatDone`。用户取消时，还没作为工具步骤提交的半截助手消息先写入账本（里面已有中断标记），再发 `ChatFailed`，消息是 `CHAT_CANCELLED`，不发 `ChatDone`。界面安静复位后可以接着发；下一条请求回放这段历史，prompt cache key 仍是会话 id。回合进行中的 `Steer` 把文字注入当前回合，不取消子代理。排队发送和「打断并发送」仍会取消当前回合。
@@ -57,7 +57,7 @@
 
 父提示要求：只有工作能独立并行、边界清楚，并且确实能降低成本或提高完成质量时才派 `agent`。单文件小改、已经有上下文、或同一个 brief 再套一层，都自己做。同一时刻尽量只跑一个 `artisan`，除非几份 brief 明显独立且父级能分别整合。问法含糊时先澄清或派 `scout`，不派 `artisan` 去漫游。
 
-角色来自内置、`<home>/agents/` 和项目的 `.mycode/agents/`（同名时项目覆盖用户覆盖内置）。同一条回复里的多个 `agent` 并行。并发上限默认是 4，每个回合一个信号量；设置里的 `subagents.maxConcurrent` 为 `0` 时使用这个默认值，不是零个子代理。子代理没有墙钟超时；取消父回合或单独 `CancelSubagent` 会停掉它。子代理用角色声明的工具白名单；角色没写时继承父级的 `read`、`write`、`edit`、`shell`、`grep`、`find`、`web_search`、`fetch_content`。连上的 MCP 也会注册给它。子代理不能 `ask_user`，也不能再调 `agent`，没有压缩钩子。角色可以在设置里指定自己的 provider / model 和思考档位，否则沿用父回合。路由到其它提供商时走与父回合相同的 `resolve_request_auth`（OAuth 刷新、Copilot bearer 交换，共用 bearer 缓存），不会把密钥库里的整段 blob 当 bearer 发出。`worktree` 隔离只给能写的角色：在 `<home>/agent-worktrees/` 下建分离的 git worktree，结束时把 diff（最多 256 KiB）附在答案后面再删掉。旧会话里的 `task` 调用不会按新名字重放。
+角色来自内置、`<home>/agents/` 和项目的 `.mycode/agents/`（同名时项目覆盖用户覆盖内置）。同一条回复里的多个 `agent` 并行。并发上限默认是 4，每个回合一个信号量；设置里的 `subagents.maxConcurrent` 为 `0` 时使用这个默认值，不是零个子代理。子代理没有墙钟超时；取消父回合或单独 `CancelSubagent` 会停掉它。子代理用角色声明的工具白名单；角色没写时继承父级的 `read`、`write`、`edit`、`shell`、`grep`、`find`、`web_search`、`fetch_content`。白名单里的 `shell`、`bash`、`powershell`、`cmd` 都注册成当前这一个进程工具（跟父会话同一个解释器，名字是 `powershell`、`bash` 或 `cmd`），不会在 Windows 上另给一个 bash 工具，也不会翻译命令。子代理提示词带同一份 `<environment>` / `<shell>`。scout 仍然是只读，不注册这个工具。连上的 MCP 也会注册给它。子代理不能 `ask_user`，也不能再调 `agent`，没有压缩钩子。角色可以在设置里指定自己的 provider / model 和思考档位，否则沿用父回合。路由到其它提供商时走与父回合相同的 `resolve_request_auth`（OAuth 刷新、Copilot bearer 交换，共用 bearer 缓存），不会把密钥库里的整段 blob 当 bearer 发出。`worktree` 隔离只给能写的角色：在 `<home>/agent-worktrees/` 下建分离的 git worktree，结束时把 diff（最多 256 KiB）附在答案后面再删掉。旧会话里的 `task` 调用不会按新名字重放。
 
 ## MCP
 

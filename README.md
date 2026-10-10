@@ -15,12 +15,12 @@ English notes are [below](#english).
 - **改动。** 详情面板里是当前文件夹的 git 改动，点文件看 diff。列表最多 80 个路径，超出时提示「还有更多改动未列出。」
 - **模型。** 内置 [models.dev](https://models.dev) 目录：启动时从 `models.dev/api.json` 更新（缓存 6 小时），取不到就用内置快照；「关于」页可以手动刷新。仓库每周由 CI 刷新内置快照。粘贴密钥即可用。自定义端点使用 `anthropic-messages`、`openai-completions` 或 `openai-responses`。GitHub Copilot、OpenAI Codex（ChatGPT）和 xAI（SuperGrok / X）在服务商页用设备码登录；xAI 与 Codex 的令牌过期后自动刷新，Copilot 用登录令牌换取短期 bearer。
 - **按服务商调整请求。** 思考参数参照 opencode 按服务商和模型发送：GLM / 智谱走 Anthropic 接口时发 `thinking` 和 `output_config.effort`；MiniMax 用 adaptive thinking（chat 接口另加 `reasoning_split`）；DeepSeek 发 `reasoning_effort`；Kimi 优先用运行时目录（再退回内置快照）里公布的 `reasoning_effort` 档位；目录里没有该模型 id 时，K3 仍按 id 映射发送。输出上限顺序：设置 `maxOutput` → models.dev `limit.output` → 32000。
-- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及 `shell`（`script` 走平台 shell，可以用 Python heredoc 或短脚本改文件；`program` 直接启动钉住的程序映像）。Windows 上 `script` 优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1；都不在时运行时才用 `cmd.exe`，且不写入设置。`pwsh` 用 UTF-16LE 的 `-EncodedCommand` 启动，标准输出和标准错误里的 CLIXML 与 ANSI 颜色会收成可读文本。`shell` 没有沙箱，也不逐条确认。这些改动都没有文件撤销。`grep` / `find` 不跟随符号链接，也不跨挂载点（overlay 按挂载 ID 判断，同一挂载不算跨越）。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。
+- **工具。** 进程内的 `read` / `write` / `edit` / `find` / `grep`，以及一个按平台选择的进程工具（`script` 走当前解释器，可以用 Python 改文件；`program` 直接启动钉住的程序映像）。模型只看见这一个工具：Windows 上是 `powershell`（优先 PowerShell 7 `pwsh`，其次 Windows PowerShell 5.1，再其次 Git Bash，工具名仍是 `bash`），Linux / macOS 上是 `bash`。PowerShell 和 Git Bash 都不在时，运行时才用 `cmd`（`cmd.exe`），且不写入设置。不自动选择 WSL。命令按该解释器的语法原样执行，不再把 bash 翻译成 PowerShell。PowerShell 用 UTF-16LE 的 `-EncodedCommand` 启动，并把管道设为 UTF-8；标准输出和标准错误里的 CLIXML 与 ANSI 颜色会收成可读文本。这个工具没有沙箱，也不逐条确认。这些改动都没有文件撤销。`grep` / `find` 不跟随符号链接，也不跨挂载点（overlay 按挂载 ID 判断，同一挂载不算跨越）。网页检索、向你提问、`agent` 和 MCP 走同一张注册表。环境变量 `MYCODE_SHELL` 或设置里的 `tools.shell` 可以指定解释器。
 - **网页搜索。** `web_search` 和 `fetch_content` 使用 Querit 或 AnySearch，也可以加 Querit / AnySearch 兼容的 https 端点；最多启用一个。密钥在「网页搜索」设置页填写（存进 `secrets.json`），或用环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`。
 - **MCP。** 全局 MCP 服务器在设置里配置。项目里的 `.mycode/mcp.json` 只在信任该项目后读取：点侧栏「添加目录」打开菜单，选「信任项目 MCP」或「不再信任项目 MCP」。信任列表存在 `ui.json` 的 `trusted_projects`（与侧栏、MCP 加载同一套路径比较）；打开文件夹不等于信任。
 - **技能。** 项目 `.agents/skills/` 或 `~/.agents/skills/` 下的 `SKILL.md` 成为 `/` 技能，设置的「技能」页列出它们。
 - **子代理。** 内置 scout、artisan，也可以在 `agents/` 里加 Markdown 角色。委派工具是 `agent`。并发默认 4 个；设置里的 `0` 表示这个默认值，不是零个子代理。子代理没有墙钟超时。
-- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。侧栏底部显示版本 **v0.9.25**。没有打开工作区时，空工作台只有「打开目录」和最近目录；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、余烬、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载并校验 `.sha256`，确认后再重启安装。读不了的 `settings.json`、`ui.json`、`secrets.json` 和模型目录缓存会先备份再恢复默认，会话账本不动。
+- **界面。** 中英双语，深色界面。全平台使用客户端绘制的标题栏（CSD）：系统标题栏隐藏，最小化、最大化和关闭在右侧。侧栏底部显示当前构建版本。没有打开工作区时，空工作台只有「打开目录」和最近目录；打开文件夹之后才出现「新建任务」。设置里的外观包括语言、色板（石板灰、海洋、森林、暮色、余烬、极光）、界面字体，以及界面字号 S / M / L / XL。对话里的代码块用 gpui-kit 的 Tree-sitter 高亮。发现新版本后下载并校验 `.sha256`，确认后再重启安装。读不了的 `settings.json`、`ui.json`、`secrets.json` 和模型目录缓存会先备份再恢复默认，会话账本不动。
 
 工具行会写明目标：读了哪个文件、搜了什么、跑了哪条命令。密钥只在 `secrets.json`，设置页对已保存的钥匙显示一把锁。
 
@@ -156,14 +156,17 @@ You bring the API keys. Follow [@M_Capricorns](https://x.com/M_Capricorns) on X.
   Output limit order: setting `maxOutput` → models.dev `limit.output` →
   32000.
 - **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`.
-  `shell` is the only process tool: `mode` `program` launches a pinned
-  executable with no shell, and `mode` `script` uses the platform shell,
-  including a Python heredoc or short script that edits files. On Windows,
-  `script` prefers PowerShell 7 (`pwsh`), then Git bash, and does not probe
-  Windows PowerShell 5.1. When neither exists, the runtime falls back to
-  `cmd.exe` and does not store that fallback. `pwsh` is started with a
-  UTF-16LE `-EncodedCommand`. CLIXML and ANSI color in stdout and stderr
-  are turned into readable text. `shell` is
+  One process tool is registered for the active interpreter: `mode`
+  `program` launches a pinned executable with no shell, and `mode`
+  `script` runs that interpreter, including a Python edit. The model sees
+  only that tool. On Windows it is `powershell` (PowerShell 7 `pwsh`, then
+  Windows PowerShell 5.1, then Git Bash, which is still named `bash`). On
+  Linux and macOS it is `bash`. When neither PowerShell nor Git Bash
+  exists, the runtime falls back to `cmd` (`cmd.exe`) and does not store
+  that fallback. WSL is not selected automatically. Commands are not
+  translated from bash into PowerShell. PowerShell is started with a
+  UTF-16LE `-EncodedCommand` and UTF-8 pipes. CLIXML and ANSI color in
+  stdout and stderr are turned into readable text. The tool is
   not sandboxed and does not ask per call. Those edits are not undone.
   `grep` and `find` do not follow symlinks or cross mounts (overlay is
   judged by mount ID, so one mount is not a crossing).
@@ -188,8 +191,8 @@ You bring the API keys. Follow [@M_Capricorns](https://x.com/M_Capricorns) on X.
   wall-clock timeout.
 - **UI.** English and Chinese, a dark theme, and a client-drawn title
   bar (CSD) on every platform: the system title bar stays hidden, and
-  minimize, zoom, and close sit on the right. The sidebar footer reads
-  **v0.9.25**. With no workspace open, the empty desk offers Open folder
+  minimize, zoom, and close sit on the right. The sidebar footer shows
+  the running build version. With no workspace open, the empty desk offers Open folder
   and recent folders only; New task appears after a folder is open.
   Appearance has Language, then the palettes slate, ocean, forest, dusk,
   ember, and aurora, plus Interface font and sizes S–XL. Fenced code in
