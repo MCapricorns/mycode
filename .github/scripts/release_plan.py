@@ -623,7 +623,7 @@ def _expect_manifests() -> None:
     cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     bumped = rewrite_workspace_version(cargo, "0.7.9")
     _expect(workspace_version(bumped) == "0.7.9", bumped)
-    _expect('jsonschema = { version = "0.52"' in bumped, "dependency version changed")
+    _expect('jsonschema = { version = "0.58.6"' in bumped, "dependency version changed")
     _expect(bumped.count('version = "0.7.9"') == 1, "extra workspace versions")
 
     lock = (ROOT / "Cargo.lock").read_text(encoding="utf-8")
