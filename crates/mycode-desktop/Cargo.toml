@@ -11,8 +11,8 @@ serde_json = { workspace = true }
 # `tree-sitter-languages` turns on gpui-kit's own grammars. Fenced code in
 # TextView is highlighted by that highlighter; this crate does not depend
 # on tree-sitter itself.
-gpui-kit = { version = "0.6", features = ["tree-sitter-languages"] }
-notify = "7"
+gpui-kit = { version = "0.7.1", features = ["tree-sitter-languages"] }
+notify = "8.2.0"
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
 mycode-providers = { path = "../mycode-providers" }
@@ -30,7 +30,7 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [target.'cfg(windows)'.build-dependencies]
-winresource = "0.1"
+winresource = "0.1.31"
 
 [[bin]]
 name = "mycode-desktop"

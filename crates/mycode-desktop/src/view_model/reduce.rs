@@ -464,9 +464,12 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.live_turn = None;
             state.sending = false;
         }
-        DesktopAction::ChatFailed(message) => {
+        DesktopAction::ChatFailed { message, head } => {
             let summary = state.pending_summary.take();
             if let Some(conversation) = state.active.as_mut() {
+                if !head.is_empty() {
+                    conversation.head = head;
+                }
                 if let Some(summary) = summary {
                     push_entry_once(conversation, summary);
                 }
@@ -474,12 +477,27 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
             // A user-initiated cancel resets the turn without an error
             // banner; the sentinel travels as the failure message.
+            // Context meters stay: a cancel is not a new empty session.
             if message != CHAT_CANCELLED {
                 state.error = Some(message);
             }
             state.live_jobs.clear();
             state.live_turn = None;
             state.sending = false;
+        }
+        DesktopAction::SteerCommitted {
+            session_id,
+            head,
+            entry,
+        } => {
+            if let Some(conversation) = state.active.as_mut()
+                && conversation.session_id == session_id
+            {
+                if !head.is_empty() {
+                    conversation.head = head;
+                }
+                push_entry_once(conversation, entry);
+            }
         }
         DesktopAction::Failed(message) => {
             state.error = Some(message);
@@ -1581,5 +1599,108 @@ mod tests {
             ),
             super::ComposerSubmit::Ignore
         );
+    }
+
+    #[test]
+    fn chat_failed_head_updates_conversation_without_clearing_context() {
+        use crate::view_model::StreamingReply;
+
+        let mut state = WorkspaceState {
+            context_used: 25_000,
+            context_cache: 24_300,
+            sending: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt-old".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: Some(StreamingReply {
+                    text: "PARTIAL_A".to_owned(),
+                    thinking: String::new(),
+                    status: "working".to_owned(),
+                }),
+            }),
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            DesktopAction::ChatFailed {
+                message: mycode_app::CHAT_CANCELLED.to_owned(),
+                head: "evt-partial".to_owned(),
+            },
+        );
+        let conversation = state.active.as_ref().expect("conversation");
+        assert_eq!(conversation.head, "evt-partial");
+        assert!(conversation.streaming.is_none());
+        assert!(!state.sending);
+        assert!(state.error.is_none());
+        assert_eq!(state.context_used, 25_000);
+        assert_eq!(state.context_cache, 24_300);
+
+        reduce(
+            &mut state,
+            DesktopAction::ChatFailed {
+                message: "provider down".to_owned(),
+                head: String::new(),
+            },
+        );
+        assert_eq!(
+            state.active.as_ref().expect("conversation").head,
+            "evt-partial"
+        );
+        assert_eq!(state.context_used, 25_000);
+        assert_eq!(state.error.as_deref(), Some("provider down"));
+    }
+
+    #[test]
+    fn steer_committed_appends_the_entry_and_moves_the_head() {
+        let mut state = WorkspaceState {
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt-old".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        let entry = ConversationEntry {
+            event_id: "evt-steer".to_owned(),
+            kind: EntryKind::UserMessage,
+            text: "keep going".into(),
+            call_id: None,
+            thinking: String::new(),
+        };
+        reduce(
+            &mut state,
+            DesktopAction::SteerCommitted {
+                session_id: "other".to_owned(),
+                head: "evt-ignored".to_owned(),
+                entry: entry.clone(),
+            },
+        );
+        assert_eq!(state.active.as_ref().expect("conversation").head, "evt-old");
+        assert!(
+            state
+                .active
+                .as_ref()
+                .expect("conversation")
+                .entries
+                .is_empty()
+        );
+        reduce(
+            &mut state,
+            DesktopAction::SteerCommitted {
+                session_id: "ses".to_owned(),
+                head: "evt-steer".to_owned(),
+                entry,
+            },
+        );
+        let conversation = state.active.as_ref().expect("conversation");
+        assert_eq!(conversation.head, "evt-steer");
+        assert_eq!(conversation.entries.len(), 1);
+        assert_eq!(conversation.entries[0].text.as_ref(), "keep going");
     }
 }

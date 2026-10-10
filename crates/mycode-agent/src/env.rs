@@ -2,6 +2,7 @@
 //! from its surroundings. See `docs/agent.md`.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use mycode_core::Provider;
 use mycode_core::events::AgentEvent;
@@ -10,6 +11,45 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::hooks::HookRunner;
+
+/// Texts the user steered into a running turn.
+///
+/// The desktop pushes while the model is streaming or a tool is running.
+/// The agent drains the inbox only at a loop boundary, so a steer never
+/// cancels the in-flight response or its subagents.
+#[derive(Debug, Default)]
+pub struct SteerInbox {
+    pending: Mutex<Vec<String>>,
+}
+
+impl SteerInbox {
+    /// An empty inbox.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Queues one non-empty steer. Blank text is ignored.
+    pub fn push(&self, text: impl Into<String>) {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return;
+        }
+        match self.pending.lock() {
+            Ok(mut pending) => pending.push(text),
+            Err(poisoned) => poisoned.into_inner().push(text),
+        }
+    }
+
+    /// Takes every queued steer, leaving the inbox empty.
+    #[must_use]
+    pub fn drain(&self) -> Vec<String> {
+        match self.pending.lock() {
+            Ok(mut pending) => std::mem::take(&mut *pending),
+            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+        }
+    }
+}
 
 /// Everything one turn needs: the model provider, tools, hooks,
 /// cancellation, and the event bus.
@@ -27,8 +67,10 @@ pub struct TurnEnv<'a> {
     /// Request hook. Compaction rewrites the provider request before send.
     pub hooks: &'a HookRunner,
     /// Cooperative turn cancellation. Firing it aborts the in-flight
-    /// turn: the current stream terminates with `Cancelled`, the turn
-    /// ends with [`TurnOutcome::Aborted`], and state stays consistent.
+    /// turn: the current stream terminates with `Cancelled`, thinking
+    /// and text already received are kept with an interruption line,
+    /// the turn ends with [`TurnOutcome::Aborted`], and state stays
+    /// consistent. Incomplete tool calls are not executed.
     ///
     /// [`TurnOutcome::Aborted`]: mycode_core::events::TurnOutcome::Aborted
     pub cancel: CancellationToken,
@@ -39,6 +81,9 @@ pub struct TurnEnv<'a> {
     /// Additional workspace folders. Absolute tool paths under one of
     /// these roots are prepared against that root instead of `cwd`.
     pub extra_roots: Vec<PathBuf>,
+    /// Steers to fold into this turn at the next loop boundary.
+    /// `None` for a turn that does not accept them (a nested agent).
+    pub steer: Option<Arc<SteerInbox>>,
 }
 
 impl<'a> TurnEnv<'a> {
@@ -57,6 +102,7 @@ impl<'a> TurnEnv<'a> {
             events: broadcast::channel(256).0,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             extra_roots: Vec::new(),
+            steer: None,
         }
     }
 
@@ -81,6 +127,12 @@ impl<'a> TurnEnv<'a> {
     /// Allow absolute tool paths under these extra workspace folders.
     pub fn with_extra_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.extra_roots = roots;
+        self
+    }
+
+    /// Accept steers into this turn. Drained at loop boundaries only.
+    pub fn with_steer(mut self, steer: Option<Arc<SteerInbox>>) -> Self {
+        self.steer = steer;
         self
     }
 }

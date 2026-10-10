@@ -349,7 +349,10 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
         let entry = archive
             .by_index(index)
             .map_err(|error| format!("asset entry: {error}"))?;
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|error| format!("asset entry: {error}"))?
+            .into_owned();
         if entry.is_dir() {
             continue;
         }

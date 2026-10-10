@@ -55,6 +55,7 @@ pub(crate) async fn chat_turn(
         let _ = events.try_send(BridgeEvent::ChatFailed {
             session_id,
             message,
+            head: String::new(),
         });
     }
 }
@@ -638,6 +639,12 @@ async fn run_chat_turn_on(
     // Publish the token so an Escape-driven CancelChat can abort this turn;
     // the guard unpublishes it on every exit path.
     let _cancel_guard = CancelGuard::register(state.turn_cancels.clone(), &session_id, &cancel);
+    let steer = Arc::new(mycode_agent::SteerInbox::new());
+    let _steer_guard = SteerGuard::register(
+        Arc::clone(&state.steer_inboxes),
+        &session_id,
+        Arc::clone(&steer),
+    );
     let mut config = AgentConfig::new()
         .with_system_prompt(system_prompt)
         .with_prompt_cache_key(Some(session_id.clone()))
@@ -660,14 +667,20 @@ async fn run_chat_turn_on(
         let mut pending_assistant: Option<std::sync::Arc<mycode_core::Message>> = None;
         let mut last_step: Option<crate::protocol::ConversationEntry> = None;
         let mut turn_usage = TurnUsage::default();
+        // The opening user message is already in the ledger. Later user
+        // messages are steers injected into this same turn.
+        let mut saw_opening_user = false;
         loop {
             let event = match agent_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                        session_id: pump_session_id.clone(),
-                        message: "agent event stream lagged".to_owned(),
-                    });
+                    emit_chat_failed(
+                        &pump_events,
+                        &writer,
+                        &pump_session_id,
+                        "agent event stream lagged",
+                    )
+                    .await;
                     return;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
@@ -702,10 +715,13 @@ async fn run_chat_turn_on(
                     // ledger's ordering check rejects results for calls that
                     // were never opened.
                     if let Err(error) = writer.open_call(&spelling, &name, &target).await {
-                        let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                            session_id: pump_session_id.clone(),
-                            message: render_error(error),
-                        });
+                        emit_chat_failed(
+                            &pump_events,
+                            &writer,
+                            &pump_session_id,
+                            render_error(error),
+                        )
+                        .await;
                         return;
                     }
                     let _ = pump_events.try_send(BridgeEvent::ToolStarted {
@@ -739,15 +755,97 @@ async fn run_chat_turn_on(
                             });
                         }
                         Err(error) => {
-                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                                session_id: pump_session_id.clone(),
-                                message: render_error(error),
-                            });
+                            emit_chat_failed(
+                                &pump_events,
+                                &writer,
+                                &pump_session_id,
+                                render_error(error),
+                            )
+                            .await;
                             return;
                         }
                     }
                 }
                 mycode_core::events::AgentEvent::MessageAdded(message) => {
+                    if let mycode_core::Message::User(user) = message.as_ref() {
+                        if !saw_opening_user {
+                            saw_opening_user = true;
+                            continue;
+                        }
+                        let text = plain_user_text(user);
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        // A text-only assistant message is held until the turn
+                        // ends. A steer continues that turn, so the held reply
+                        // has to land before the steer or the ledger order flips.
+                        if let Some(held) = pending_assistant.take()
+                            && let mycode_core::Message::Assistant(assistant) = held.as_ref()
+                        {
+                            match serde_json::to_vec(assistant) {
+                                Ok(payload) => {
+                                    match writer.write(EventKind::Message, &payload).await {
+                                        Ok(event_id) => {
+                                            let _ =
+                                                pump_events.try_send(BridgeEvent::AssistantStep {
+                                                    session_id: pump_session_id.clone(),
+                                                    entry: project_assistant_message(
+                                                        &event_id, assistant,
+                                                    ),
+                                                });
+                                        }
+                                        Err(error) => {
+                                            emit_chat_failed(
+                                                &pump_events,
+                                                &writer,
+                                                &pump_session_id,
+                                                render_error(error),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    emit_chat_failed(
+                                        &pump_events,
+                                        &writer,
+                                        &pump_session_id,
+                                        "assistant message could not be encoded",
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            }
+                        }
+                        match writer.write(EventKind::Message, text.as_bytes()).await {
+                            Ok(event_id) => {
+                                let entry = crate::protocol::ConversationEntry {
+                                    event_id,
+                                    kind: crate::protocol::EntryKind::UserMessage,
+                                    text: text.into(),
+                                    call_id: None,
+                                    thinking: String::new(),
+                                };
+                                let _ = pump_events.try_send(BridgeEvent::SteerCommitted {
+                                    session_id: pump_session_id.clone(),
+                                    head: writer.head().await,
+                                    entry,
+                                });
+                            }
+                            Err(error) => {
+                                emit_chat_failed(
+                                    &pump_events,
+                                    &writer,
+                                    &pump_session_id,
+                                    render_error(error),
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                        continue;
+                    }
                     let mycode_core::Message::Assistant(assistant) = message.as_ref() else {
                         continue;
                     };
@@ -780,10 +878,13 @@ async fn run_chat_turn_on(
                         continue;
                     }
                     let Ok(payload) = serde_json::to_vec(assistant) else {
-                        let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                            session_id: pump_session_id.clone(),
-                            message: "assistant step could not be encoded".to_owned(),
-                        });
+                        emit_chat_failed(
+                            &pump_events,
+                            &writer,
+                            &pump_session_id,
+                            "assistant step could not be encoded",
+                        )
+                        .await;
                         return;
                     };
                     match writer.write(EventKind::Message, &payload).await {
@@ -796,26 +897,68 @@ async fn run_chat_turn_on(
                             });
                         }
                         Err(error) => {
-                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                                session_id: pump_session_id.clone(),
-                                message: render_error(error),
-                            });
+                            emit_chat_failed(
+                                &pump_events,
+                                &writer,
+                                &pump_session_id,
+                                render_error(error),
+                            )
+                            .await;
                             return;
                         }
                     }
                 }
                 mycode_core::events::AgentEvent::TurnStarted => {}
                 mycode_core::events::AgentEvent::TurnEnded(outcome) => {
-                    let Some(message) = pending_assistant.take() else {
-                        // A cancelled mid-stream turn commits nothing; the
-                        // UI resets quietly on the sentinel message.
-                        if matches!(outcome, mycode_core::events::TurnOutcome::Aborted) {
-                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                                session_id: pump_session_id.clone(),
-                                message: CHAT_CANCELLED.to_owned(),
-                            });
-                            return;
+                    if matches!(outcome, mycode_core::events::TurnOutcome::Aborted) {
+                        // A cancel keeps the partial. Write it when it has
+                        // not already been committed as a tool step, then
+                        // fail quietly so the desktop can send the queue.
+                        // Never ChatDone: that would look like a finished turn.
+                        if let Some(message) = pending_assistant.take()
+                            && let mycode_core::Message::Assistant(assistant) = message.as_ref()
+                        {
+                            match serde_json::to_vec(assistant) {
+                                Ok(payload) => {
+                                    match writer.write(EventKind::Message, &payload).await {
+                                        Ok(event_id) => {
+                                            let _ =
+                                                pump_events.try_send(BridgeEvent::AssistantStep {
+                                                    session_id: pump_session_id.clone(),
+                                                    entry: project_assistant_message(
+                                                        &event_id, assistant,
+                                                    ),
+                                                });
+                                        }
+                                        Err(error) => {
+                                            emit_chat_failed(
+                                                &pump_events,
+                                                &writer,
+                                                &pump_session_id,
+                                                render_error(error),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    emit_chat_failed(
+                                        &pump_events,
+                                        &writer,
+                                        &pump_session_id,
+                                        "assistant message could not be encoded",
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            }
                         }
+                        emit_chat_failed(&pump_events, &writer, &pump_session_id, CHAT_CANCELLED)
+                            .await;
+                        return;
+                    }
+                    let Some(message) = pending_assistant.take() else {
                         // A failed stream that already committed a tool step
                         // (or any earlier step) is done. Reporting "no
                         // assistant message" used to clear the live bubble
@@ -831,10 +974,13 @@ async fn run_chat_turn_on(
                             });
                             return;
                         }
-                        let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                            session_id: pump_session_id.clone(),
-                            message: "the turn ended without an assistant message".to_owned(),
-                        });
+                        emit_chat_failed(
+                            &pump_events,
+                            &writer,
+                            &pump_session_id,
+                            "the turn ended without an assistant message",
+                        )
+                        .await;
                         return;
                     };
                     let mycode_core::Message::Assistant(assistant) = message.as_ref() else {
@@ -890,18 +1036,24 @@ async fn run_chat_turn_on(
                                     });
                                 }
                                 Err(error) => {
-                                    let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                                        session_id: pump_session_id.clone(),
-                                        message: render_error(error),
-                                    });
+                                    emit_chat_failed(
+                                        &pump_events,
+                                        &writer,
+                                        &pump_session_id,
+                                        render_error(error),
+                                    )
+                                    .await;
                                 }
                             }
                         }
                         Err(_) => {
-                            let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                                session_id: pump_session_id.clone(),
-                                message: "assistant message could not be encoded".to_owned(),
-                            });
+                            emit_chat_failed(
+                                &pump_events,
+                                &writer,
+                                &pump_session_id,
+                                "assistant message could not be encoded",
+                            )
+                            .await;
                         }
                     }
                     return;
@@ -917,10 +1069,13 @@ async fn run_chat_turn_on(
                             entry: project_assistant_message(&event_id, assistant),
                         });
                     }
-                    let _ = pump_events.try_send(BridgeEvent::ChatFailed {
-                        session_id: pump_session_id.clone(),
-                        message: format!("agent error: {error}"),
-                    });
+                    emit_chat_failed(
+                        &pump_events,
+                        &writer,
+                        &pump_session_id,
+                        format!("agent error: {error}"),
+                    )
+                    .await;
                     return;
                 }
             }
@@ -932,7 +1087,8 @@ async fn run_chat_turn_on(
         .with_cancel(cancel)
         .with_events(agent_tx)
         .with_cwd(cwd)
-        .with_extra_roots(extra_roots);
+        .with_extra_roots(extra_roots)
+        .with_steer(Some(steer));
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
     // Drain the pump before returning. An agent error already became
@@ -944,6 +1100,20 @@ async fn run_chat_turn_on(
     outcome.map_err(|error| format!("turn failed: {error}"))?;
     pump_ended.map_err(|_| "the turn pump stopped".to_owned())?;
     Ok(())
+}
+
+/// Reports a turn failure with the ledger head after whatever already committed.
+async fn emit_chat_failed(
+    events: &crate::BridgeEventTx,
+    writer: &HeadWriter,
+    session_id: &str,
+    message: impl Into<String>,
+) {
+    let _ = events.try_send(BridgeEvent::ChatFailed {
+        session_id: session_id.to_owned(),
+        message: message.into(),
+        head: writer.head().await,
+    });
 }
 
 /// Removes one session's turn token from the cancel registry on scope exit.
@@ -983,6 +1153,42 @@ impl Drop for CancelGuard {
             && map
                 .get(&self.session_id)
                 .is_some_and(|live| Arc::ptr_eq(live, &self.token))
+        {
+            map.remove(&self.session_id);
+        }
+    }
+}
+
+/// Publishes one session's steer inbox for the life of its turn.
+struct SteerGuard {
+    inboxes: Arc<std::sync::Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
+    session_id: String,
+    inbox: Arc<mycode_agent::SteerInbox>,
+}
+
+impl SteerGuard {
+    fn register(
+        inboxes: Arc<std::sync::Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
+        session_id: &str,
+        inbox: Arc<mycode_agent::SteerInbox>,
+    ) -> Self {
+        if let Ok(mut map) = inboxes.lock() {
+            map.insert(session_id.to_owned(), Arc::clone(&inbox));
+        }
+        Self {
+            inboxes,
+            session_id: session_id.to_owned(),
+            inbox,
+        }
+    }
+}
+
+impl Drop for SteerGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.inboxes.try_lock()
+            && map
+                .get(&self.session_id)
+                .is_some_and(|live| Arc::ptr_eq(live, &self.inbox))
         {
             map.remove(&self.session_id);
         }
@@ -1064,6 +1270,16 @@ fn user_has_text(user: &mycode_core::UserMessage) -> bool {
     })
 }
 
+fn plain_user_text(user: &mycode_core::UserMessage) -> String {
+    let mut text = String::new();
+    for block in &user.content {
+        if let mycode_core::ContentBlock::Text(block) = block {
+            text.push_str(&block.text);
+        }
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1079,7 +1295,7 @@ mod tests {
     use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
     use mycode_tools::ToolRegistry;
 
-    use super::session_system_prompt;
+    use super::{plain_user_text, session_system_prompt};
     use crate::protocol::EntryKind;
     use crate::state::CoreState;
 
@@ -1460,5 +1676,370 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    const PROMPT_A: &str = "PROMPT_A write a snake game";
+    const REPLY_A: &str = "REPLY_A here is the game";
+    const PROMPT_B: &str = "PROMPT_B also add a score";
+    const PARTIAL_A: &str = "PARTIAL_A game loop";
+
+    struct HistoryTransport {
+        bodies: Mutex<Vec<String>>,
+        hang_partial: bool,
+        partial_ready: Arc<tokio::sync::Notify>,
+    }
+
+    fn reply_sse(text: &str) -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {"content": text},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 3}
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    fn partial_sse(text: &str) -> String {
+        let chunk = serde_json::json!({
+            "choices": [{"delta": {"content": text}}]
+        });
+        format!("data: {chunk}\n\n")
+    }
+
+    #[async_trait::async_trait]
+    impl SseTransport for HistoryTransport {
+        async fn post(
+            &self,
+            call: TransportCall,
+            cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<
+            std::pin::Pin<
+                Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, ProviderError>> + Send>,
+            >,
+            ProviderError,
+        > {
+            let body = String::from_utf8_lossy(&call.body).into_owned();
+            self.bodies.lock().expect("bodies").push(body.clone());
+            let is_b = body.contains(PROMPT_B);
+            if !is_b && self.hang_partial {
+                use futures_util::StreamExt as _;
+                let partial = bytes::Bytes::from(partial_sse(PARTIAL_A));
+                let ready = Arc::clone(&self.partial_ready);
+                // The second poll runs only after the driver has taken the
+                // partial chunk, so the cancel waits until that text is queued.
+                let stream = futures_util::stream::once(async move { Ok(partial) }).chain(
+                    futures_util::stream::once(async move {
+                        ready.notify_one();
+                        cancel.cancelled().await;
+                        Err::<bytes::Bytes, ProviderError>(ProviderError::new(
+                            mycode_core::ProviderErrorKind::Cancelled,
+                        ))
+                    }),
+                );
+                return Ok(Box::pin(stream));
+            }
+            let reply = if is_b { "REPLY_B ok" } else { REPLY_A };
+            let sse = reply_sse(reply);
+            Ok(Box::pin(futures_util::stream::once(async move {
+                Ok(bytes::Bytes::from(sse))
+            })))
+        }
+    }
+
+    struct TurnFixture {
+        root: PathBuf,
+        state: Arc<CoreState>,
+        settings: AppSettings,
+        provider: ProviderSettings,
+        resolved: ResolvedProvider,
+        cwd: PathBuf,
+        session: mycode_agent::session::SessionId,
+        branch: mycode_agent::session::BranchId,
+    }
+
+    async fn turn_fixture() -> TurnFixture {
+        let (root, home) = scratch();
+        let mut settings = AppSettings::default();
+        settings.providers.push(ProviderSettings {
+            id: "local".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://example.com/v1".to_owned(),
+            models: vec!["test-model".to_owned()],
+            enabled: true,
+            context_limit: Some(200_000),
+            max_output: None,
+        });
+        replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
+        replace_provider_secrets(
+            &home,
+            AuthorityRevision::ABSENT,
+            &ProviderSecrets::new().with_key("local", Some("test-key")),
+        )
+        .expect("secrets");
+        let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        let catalog = mycode_providers::catalog::current(&home);
+        let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+        let created = state.service.create().await.expect("session");
+        let provider = settings.providers[0].clone();
+        let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
+            .expect("resolve");
+        TurnFixture {
+            root,
+            state,
+            settings,
+            provider,
+            resolved,
+            cwd,
+            session: created.session_id,
+            branch: created.branch_id,
+        }
+    }
+
+    fn parse_head(spelling: &str) -> HeadStamp {
+        match mycode_agent::session::SessionEventId::parse(spelling) {
+            Some(id) => HeadStamp::Event(id),
+            None => HeadStamp::Empty,
+        }
+    }
+
+    async fn run_scripted_turn(
+        fixture: &TurnFixture,
+        transport: Arc<dyn SseTransport>,
+        head: HeadStamp,
+    ) -> (Result<(), String>, Vec<crate::BridgeEvent>) {
+        let (tx, rx) = async_channel::unbounded();
+        let outcome = super::run_chat_turn_on(
+            &fixture.state,
+            &tx,
+            fixture.session.as_str(),
+            fixture.session.clone(),
+            fixture.branch.clone(),
+            head,
+            "local",
+            "test-model",
+            None,
+            fixture.cwd.clone(),
+            fixture.resolved.clone(),
+            fixture.settings.clone(),
+            fixture.provider.clone(),
+            transport,
+        )
+        .await;
+        drop(tx);
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        (outcome, events)
+    }
+
+    fn prompt_b_body(transport: &HistoryTransport) -> String {
+        transport
+            .bodies
+            .lock()
+            .expect("bodies")
+            .iter()
+            .rev()
+            .find(|body| body.contains(PROMPT_B))
+            .cloned()
+            .expect("B request was sent")
+    }
+
+    fn assert_cache_key(body: &str, session_id: &str) {
+        assert!(
+            body.contains(&format!("\"prompt_cache_key\":\"{session_id}\"")),
+            "prompt cache key missing: {body}"
+        );
+    }
+
+    /// Queue path: A finishes (ChatDone), then B is sent with that head.
+    #[tokio::test]
+    async fn queued_follow_up_after_chat_done_carries_history() {
+        let fixture = turn_fixture().await;
+        let transport = Arc::new(HistoryTransport {
+            bodies: Mutex::new(Vec::new()),
+            hang_partial: false,
+            partial_ready: Arc::new(tokio::sync::Notify::new()),
+        });
+        let (head_a, _) = crate::ledger::send_message(
+            &fixture.state.service,
+            &fixture.session,
+            &fixture.branch,
+            &HeadStamp::Empty,
+            PROMPT_A,
+        )
+        .await
+        .expect("prompt A");
+        let (outcome, events) =
+            run_scripted_turn(&fixture, transport.clone(), parse_head(&head_a)).await;
+        outcome.expect("turn A");
+        let done_head = events
+            .iter()
+            .find_map(|event| match event {
+                crate::BridgeEvent::ChatDone { head, .. } => Some(head.clone()),
+                _ => None,
+            })
+            .expect("ChatDone");
+        let (head_b, _) = crate::ledger::send_message(
+            &fixture.state.service,
+            &fixture.session,
+            &fixture.branch,
+            &parse_head(&done_head),
+            PROMPT_B,
+        )
+        .await
+        .expect("prompt B");
+        let (outcome, _) =
+            run_scripted_turn(&fixture, transport.clone(), parse_head(&head_b)).await;
+        outcome.expect("turn B");
+        let body = prompt_b_body(&transport);
+        assert!(body.contains(PROMPT_A), "B lost A's prompt: {body}");
+        assert!(body.contains(REPLY_A), "B lost A's reply: {body}");
+        assert!(body.contains(PROMPT_B), "B lost its own prompt: {body}");
+        assert_cache_key(&body, fixture.session.as_str());
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    /// Interrupt path: A streams a partial, the user cancels, then B is sent.
+    #[tokio::test]
+    async fn interrupt_then_send_keeps_partial_and_cache_key() {
+        let fixture = turn_fixture().await;
+        let transport = Arc::new(HistoryTransport {
+            bodies: Mutex::new(Vec::new()),
+            hang_partial: true,
+            partial_ready: Arc::new(tokio::sync::Notify::new()),
+        });
+        let (head_a, _) = crate::ledger::send_message(
+            &fixture.state.service,
+            &fixture.session,
+            &fixture.branch,
+            &HeadStamp::Empty,
+            PROMPT_A,
+        )
+        .await
+        .expect("prompt A");
+        let state = Arc::clone(&fixture.state);
+        let session = fixture.session.clone();
+        let branch = fixture.branch.clone();
+        let cwd = fixture.cwd.clone();
+        let resolved = fixture.resolved.clone();
+        let settings = fixture.settings.clone();
+        let provider = fixture.provider.clone();
+        let running = transport.clone();
+        let head = parse_head(&head_a);
+        let session_id = session.as_str().to_owned();
+        let turn_a = tokio::spawn(async move {
+            let (tx, rx) = async_channel::unbounded();
+            let outcome = super::run_chat_turn_on(
+                &state,
+                &tx,
+                &session_id,
+                session,
+                branch,
+                head,
+                "local",
+                "test-model",
+                None,
+                cwd,
+                resolved,
+                settings,
+                provider,
+                running,
+            )
+            .await;
+            drop(tx);
+            let mut events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+            (outcome, events)
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            transport.partial_ready.notified(),
+        )
+        .await
+        .expect("partial text was not streamed");
+        let token = fixture
+            .state
+            .turn_cancels
+            .lock()
+            .expect("cancels")
+            .get(fixture.session.as_str())
+            .cloned()
+            .expect("turn token");
+        token.cancel();
+        let (outcome, events) = tokio::time::timeout(std::time::Duration::from_secs(10), turn_a)
+            .await
+            .expect("turn A did not unwind")
+            .expect("turn task");
+        outcome.expect("cancelled turn still returns");
+        let failed = events.iter().find_map(|event| match event {
+            crate::BridgeEvent::ChatFailed { message, head, .. } => {
+                Some((message.clone(), head.clone()))
+            }
+            _ => None,
+        });
+        let (message, failed_head) = failed.expect("ChatFailed");
+        assert_eq!(message, crate::protocol::CHAT_CANCELLED);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, crate::BridgeEvent::ChatDone { .. })),
+            "a user cancel must not emit ChatDone"
+        );
+        assert!(
+            !failed_head.is_empty(),
+            "cancel must report the ledger head"
+        );
+        let history = crate::ledger::ledger_history(
+            &fixture.state.service,
+            &fixture.session,
+            &fixture.branch,
+            &parse_head(&failed_head),
+        )
+        .await
+        .expect("ledger");
+        let rendered = history
+            .iter()
+            .map(|message| match message.as_ref() {
+                mycode_core::Message::Assistant(assistant) => assistant.text(),
+                mycode_core::Message::User(user) => plain_user_text(user),
+                mycode_core::Message::ToolResult(_) => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(PARTIAL_A),
+            "ledger dropped the partial: {rendered}"
+        );
+        assert!(
+            rendered.contains("[error] the response was interrupted: interrupted by user"),
+            "ledger dropped the interruption line: {rendered}"
+        );
+        let (head_b, _) = crate::ledger::send_message(
+            &fixture.state.service,
+            &fixture.session,
+            &fixture.branch,
+            &parse_head(&failed_head),
+            PROMPT_B,
+        )
+        .await
+        .expect("prompt B");
+        let (outcome, _) =
+            run_scripted_turn(&fixture, transport.clone(), parse_head(&head_b)).await;
+        outcome.expect("turn B");
+        let body = prompt_b_body(&transport);
+        assert!(body.contains(PROMPT_A), "B lost A's prompt: {body}");
+        assert!(body.contains(PARTIAL_A), "B lost the partial: {body}");
+        assert!(
+            body.contains("[error] the response was interrupted: interrupted by user"),
+            "B lost the interruption marker: {body}"
+        );
+        assert!(body.contains(PROMPT_B), "B lost its own prompt: {body}");
+        assert_cache_key(&body, fixture.session.as_str());
+        let _ = std::fs::remove_dir_all(&fixture.root);
     }
 }
