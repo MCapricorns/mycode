@@ -192,7 +192,6 @@ fn is_sensitive_key(key: &str) -> bool {
         || normalized.ends_with("authkey")
         || normalized.ends_with("accesskey")
         || normalized.ends_with("subscriptionkey")
-        || normalized == "token"
         || normalized.ends_with("token")
         || normalized.contains("secret")
         || normalized.contains("credential")

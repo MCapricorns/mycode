@@ -84,7 +84,7 @@ impl AppSettings {
             for (model_index, model) in provider.models.iter().enumerate() {
                 bounded_text(model, MAX_FIELD_BYTES).map_err(|_| {
                     invalid(&format!(
-                        "{field}.models[{model_index}]: too long or contains control characters"
+                        "{field}.models[{model_index}]: too long or contains line breaks or NUL"
                     ))
                 })?;
             }

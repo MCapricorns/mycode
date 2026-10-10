@@ -429,10 +429,8 @@ fn drain_steers(env: &TurnEnv<'_>, state: &mut AgentState) -> bool {
         return false;
     };
     let mut appended = false;
+    // Blank steers never enter the inbox (`SteerInbox::push` filters them).
     for text in inbox.drain() {
-        if text.trim().is_empty() {
-            continue;
-        }
         turn::push_message(
             env,
             state,

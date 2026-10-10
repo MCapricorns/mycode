@@ -334,17 +334,3 @@ pub async fn refresh(
     }
     RefreshOutcome::Updated(refreshed)
 }
-
-/// Builds the HTTP client used for catalog and update downloads.
-///
-/// # Errors
-///
-/// Returns the reqwest build error message.
-pub fn http_client(user_agent: &str) -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent(user_agent.to_owned())
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|error| format!("http client unavailable: {error}"))
-}

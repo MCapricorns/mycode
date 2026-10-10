@@ -12,6 +12,7 @@ pub(crate) use menus::reasoning_row_label;
 pub(crate) use welcome::new_task_label;
 
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
@@ -126,6 +127,9 @@ pub(super) fn render_chat(
                 .min_w_0()
                 .flex()
                 .flex_col()
+                .on_hover(cx.listener(|workspace, hovered, _, cx| {
+                    workspace.on_conversation_hover(hovered, cx);
+                }))
                 .child(
                     anchor.child(
                         div()
@@ -164,7 +168,7 @@ pub(super) fn render_chat(
                             ),
                     ),
                 )
-                .child(render_conversation_jumps(cx)),
+                .child(render_conversation_jumps(!show_welcome, workspace, cx)),
         )
         // The model menu docks in-flow right above the composer: an
         // absolutely positioned overlay landed outside the visible window on
@@ -242,66 +246,92 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
     items
 }
 
-/// Jump controls pinned to the bottom-right of the scroll region, above the
-/// composer. They sit outside the scroller so they do not travel with the
-/// transcript. `stop_propagation` keeps the click from starting a scroll drag.
-fn render_conversation_jumps(cx: &Context<Workspace>) -> impl IntoElement {
+/// Hover-revealed jump arrows over the conversation column: a down arrow
+/// floating just above the composer when the tail is out of view, and an up
+/// arrow near the title bar when the first entry is scrolled away. Both sit
+/// outside the scroller so they do not travel with the transcript, and mount
+/// only while the pointer is over the column. The rows do not occlude, so
+/// the transcript below them still scrolls and takes clicks; the buttons
+/// occlude and `stop_propagation` keeps their click from starting a drag.
+fn render_conversation_jumps(
+    has_conversation: bool,
+    workspace: &Workspace,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let hovered = has_conversation && workspace.conversation_hovered();
     div()
         .id("conversation-jumps")
-        .absolute()
-        .bottom(px(8.))
-        .right(px(12.))
-        .flex()
-        .flex_row()
-        .gap_1()
-        .child(conversation_jump(
-            "conversation-jump-top",
-            t("Top", "顶部"),
-            true,
-            cx,
-        ))
-        .child(conversation_jump(
-            "conversation-jump-bottom",
-            t("Bottom", "底部"),
-            false,
-            cx,
-        ))
+        .when(hovered && !workspace.conversation_near_top(), |this| {
+            this.child(jump_arrow_row(
+                "conversation-jump-top",
+                px(8.),
+                gpui_kit::assets::IconName::ArrowUp,
+                true,
+                cx,
+            ))
+        })
+        .when(hovered && !workspace.conversation_follows_tail(), |this| {
+            this.child(jump_arrow_row(
+                "conversation-jump-bottom",
+                px(10.),
+                gpui_kit::assets::IconName::ArrowDown,
+                false,
+                cx,
+            ))
+        })
 }
 
-fn conversation_jump(
+/// One full-width row holding a centered circular jump arrow. Pinned to the
+/// column's top or bottom edge.
+fn jump_arrow_row(
     id: &'static str,
-    label: &'static str,
+    edge: gpui_kit::Pixels,
+    icon: gpui_kit::assets::IconName,
     to_top: bool,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    div()
-        .id(id)
-        .occlude()
+    let row = if to_top {
+        div().absolute().top(edge)
+    } else {
+        div().absolute().bottom(edge)
+    };
+    row.id(format!("{id}-row"))
+        .left_0()
+        .right_0()
         .flex()
-        .items_center()
-        .h(px(22.))
-        .px_2()
-        .rounded(super::skin::radius_control())
-        .border_1()
-        .border_color(super::skin::glass_border(theme))
-        .bg(super::skin::popover(theme))
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .cursor_pointer()
-        .hover(|this| this.bg(super::skin::frost_hover(theme)))
-        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .on_click(cx.listener(move |workspace, _, _, cx| {
-            cx.stop_propagation();
-            if to_top {
-                workspace.scroll_conversation_to_top(cx);
-            } else {
-                workspace.scroll_conversation_to_bottom(cx);
-            }
-        }))
-        .child(label)
+        .justify_center()
+        .child(
+            div()
+                .id(id)
+                .occlude()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(30.))
+                .rounded_full()
+                .border_1()
+                .border_color(super::skin::glass_border(theme))
+                .bg(super::skin::popover(theme))
+                .text_color(theme.muted_foreground)
+                .cursor_pointer()
+                .hover(|this| {
+                    this.bg(super::skin::frost_hover(theme))
+                        .text_color(theme.foreground)
+                })
+                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    cx.stop_propagation();
+                    if to_top {
+                        workspace.scroll_conversation_to_top(cx);
+                    } else {
+                        workspace.scroll_conversation_to_bottom(cx);
+                    }
+                }))
+                .child(gpui_kit::component::Icon::new(icon).small()),
+        )
 }
 
 /// The control above a tail window. The count of remaining events is not

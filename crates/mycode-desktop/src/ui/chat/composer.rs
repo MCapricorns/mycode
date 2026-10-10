@@ -460,13 +460,15 @@ fn model_button_label(vm: &WorkspaceState) -> String {
 
 fn thinking_button_label(vm: &WorkspaceState) -> String {
     match selected_reasoning_level(vm) {
-        "default" => t("Thinking", "思考").to_owned(),
+        // The chip names its rung: a bare "Thinking" read as some unnamed
+        // intensity. Default says the provider decides.
+        "default" => t("Thinking · Default", "思考 · 默认").to_owned(),
         "off" => t("Thinking off", "思考关").to_owned(),
         "on" => t("Thinking on", "思考开").to_owned(),
         "minimal" => t("Minimal", "极简").to_owned(),
-        "low" => t("Low", "低").to_owned(),
-        "medium" => t("Medium", "中").to_owned(),
-        "high" => t("High", "高").to_owned(),
+        "low" => t("Low · brief", "低 · 简短").to_owned(),
+        "medium" => t("Medium · balanced", "中 · 均衡").to_owned(),
+        "high" => t("High · deep", "高 · 深入").to_owned(),
         "xhigh" => t("Extra high", "超高").to_owned(),
         "max" => t("Max", "最高").to_owned(),
         other => other.to_owned(),

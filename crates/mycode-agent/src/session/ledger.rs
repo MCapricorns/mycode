@@ -223,7 +223,7 @@ impl SessionLedger {
             return Err(SessionError::InvalidArgument);
         }
         let end = start + (boundary - start).min(usize::from(limit));
-        let next = if end == 0 || end >= boundary {
+        let next = if end >= boundary {
             None
         } else {
             Some(branch_state.events[end - 1].event_id.clone())

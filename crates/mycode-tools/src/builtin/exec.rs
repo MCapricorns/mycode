@@ -45,7 +45,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::builtin::blocking::run_blocking_supervised;
 use crate::builtin::process::{
-    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, decode_captured_text,
+    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, collection_error,
+    command_cancelled_error, decode_captured_text, display_exit, mark_timed_out,
 };
 use crate::ctx::ToolCtx;
 use crate::tool::{ToolError, ToolResult};
@@ -302,21 +303,15 @@ pub(crate) async fn launch_program(
         return Err(command_cancelled_error(None));
     }
 
-    let program = prepared
-        .canonical_path()
-        .to_str()
-        .expect("pin_program validated canonical path Unicode")
-        .to_owned();
-    let digest = encode_hex(prepared.image_digest());
-    let invocation_digest = encode_hex(prepared.invocation_digest());
-    let image_identity = prepared.image_identity().debug_token();
-    let env_summary = environment_summary(prepared.env(), MAX_ARGUMENT_LENGTH_SUMMARY);
-    let image = match prepared.image_kind() {
-        image::ImageKind::Elf => "elf",
-        image::ImageKind::Pe => "pe",
-        image::ImageKind::MachO { fat: true } => "mach-o-fat",
-        image::ImageKind::MachO { fat: false } => "mach-o",
-    };
+    let identity = prepared_identity(&prepared);
+    let PreparedIdentity {
+        program,
+        digest,
+        invocation_digest,
+        image_identity,
+        image,
+        env_summary,
+    } = identity;
     let outcome = spawn::run_pinned(prepared, lease, &ctx.cancel, &mut deadline).await?;
     let duration_ms = started.elapsed().as_millis() as u64;
     match outcome {
@@ -379,24 +374,6 @@ pub(crate) async fn launch_program(
             ))
         }
         RunOutcome::Cancelled { teardown } => Err(command_cancelled_error(teardown.err())),
-    }
-}
-
-fn command_cancelled_error(teardown: Option<std::io::Error>) -> ToolError {
-    match teardown {
-        Some(err) => ToolError::Execution(format!(
-            "command cancelled before completion; termination failed: {err}"
-        )),
-        None => ToolError::Execution("command cancelled before completion".into()),
-    }
-}
-
-fn collection_error(collection: &std::io::Error, teardown: Option<std::io::Error>) -> ToolError {
-    match teardown {
-        Some(err) => ToolError::Execution(format!(
-            "failed to collect command output: {collection}; termination failed: {err}"
-        )),
-        None => ToolError::Execution(format!("failed to collect command output: {collection}")),
     }
 }
 
@@ -466,11 +443,6 @@ fn timed_out_result(
         true,
         Some(&notice),
     ))
-}
-
-fn mark_timed_out(mut result: ToolResult) -> ToolResult {
-    result.details.as_mut().expect("details were populated")["timed_out"] = json!(true);
-    result
 }
 
 fn execution_identity(invocation_digest: &str, metadata: ExecutionMetadata) -> String {
@@ -609,10 +581,6 @@ fn argument_summary(argv: &[String]) -> Value {
         "byte_lengths": byte_lengths,
         "omitted": argv.len().saturating_sub(MAX_ARGUMENT_LENGTH_SUMMARY),
     })
-}
-
-fn display_exit(status: &std::process::ExitStatus) -> i32 {
-    status.code().unwrap_or(-1)
 }
 
 #[cfg(test)]

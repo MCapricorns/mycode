@@ -197,9 +197,9 @@ pub trait ToolDyn: Send + Sync {
 ///
 /// Providers reject a root schema that is `true` or carries a draft
 /// `$schema` or `$id`. Boolean `true` becomes an object schema. A root
-/// object with no `type`, `oneOf`, `anyOf`, or `$ref` is marked
-/// `type: object`. Any other root shape is left as schemars emitted it,
-/// after `$schema` and `$id` are removed.
+/// object with no `type`, `oneOf`, `anyOf`, or `allOf` is marked
+/// `type: object` (`$ref` cannot survive inlining). Any other root shape is
+/// left as schemars emitted it, after `$schema` and `$id` are removed.
 pub(crate) fn args_schema<A: JsonSchema>() -> Value {
     let mut value = serde_json::to_value(schemars::schema_for!(A))
         .expect("schemars schemas always serialize to JSON");

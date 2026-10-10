@@ -96,7 +96,7 @@ impl CoreState {
     pub(crate) fn project_dir(&self, session_id: &str) -> PathBuf {
         self.projects
             .lock()
-            .expect("projects")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(session_id)
             .cloned()
             .unwrap_or_else(|| self.home.root().join(mycode_config::SCRATCH_DIR))

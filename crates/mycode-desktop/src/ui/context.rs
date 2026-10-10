@@ -798,10 +798,16 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                     .child(provider),
             )
         })
-        .child(stat_line(t("Thinking", "思考"), thinking, theme))
+        .child(stat_line(
+            t("Thinking", "思考"),
+            &super::chat::reasoning_row_label(thinking),
+            theme,
+        ))
         .when(context_window > 0, |this| {
             // The meter is the latest prompt, kept across an interrupt.
             // Summing every tool round or every turn is what painted 1.4M/1.0M.
+            // The pieces mirror the composer chip one-for-one (ratio · hit ·
+            // cache) so the two never read as disagreeing numbers.
             let used = vm.context_used;
             let cached = vm.context_cache;
             let parts = crate::view_model::context_meter_parts(
@@ -810,40 +816,42 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 cached,
                 t("cached", "缓存"),
             );
-            let cache = (!parts.cache.is_empty()).then_some(parts.cache.as_str());
             this.child(bar_row(
                 "context",
                 used,
                 context_window,
                 theme.cyan,
-                &parts.ratio,
-                cache,
+                &parts,
                 theme,
             ))
         })
         .when_some(usage, |this, row| {
-            this.child(stat_line(
-                t("Input", "输入"),
-                &super::compact_count(row.input),
-                theme,
-            ))
-            .child(stat_line(
-                t("Output", "输出"),
-                &super::compact_count(row.output),
-                theme,
-            ))
-            .when(row.cache > 0, |this| {
-                let value = match cache_percent(row.cache, row.input) {
-                    Some(share) => format!("{} · {share}%", super::compact_count(row.cache)),
-                    None => super::compact_count(row.cache),
-                };
-                this.child(stat_line(t("Cache", "缓存"), &value, theme))
-            })
-            .child(stat_line(
-                t("Turns", "轮次"),
-                &row.requests.to_string(),
-                theme,
-            ))
+            // Session-lifetime totals. The context meter above is the latest
+            // prompt; these rows accumulate every turn, so their cache count
+            // is larger by design. The caption keeps the two scopes apart.
+            this.child(caption_line(t("Session totals", "会话累计"), theme))
+                .child(stat_line(
+                    t("Input", "输入"),
+                    &super::compact_count(row.input),
+                    theme,
+                ))
+                .child(stat_line(
+                    t("Output", "输出"),
+                    &super::compact_count(row.output),
+                    theme,
+                ))
+                .when(row.cache > 0, |this| {
+                    let value = match cache_percent(row.cache, row.input) {
+                        Some(share) => format!("{} · {share}%", super::compact_count(row.cache)),
+                        None => super::compact_count(row.cache),
+                    };
+                    this.child(stat_line(t("Cache", "缓存"), &value, theme))
+                })
+                .child(stat_line(
+                    t("Turns", "轮次"),
+                    &row.requests.to_string(),
+                    theme,
+                ))
         })
         .when_some(live, |this, turn| {
             this.child(stat_line(
@@ -927,13 +935,31 @@ fn stat_line(label: &str, value: &str, theme: &Theme) -> impl IntoElement {
         )
 }
 
+/// A quiet divider that names the scope of the rows under it.
+fn caption_line(label: &str, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(label.to_owned()),
+        )
+        .child(div().flex_1().h(px(1.)).bg(theme.border.opacity(0.6)))
+}
+
+/// The context bar row. The right-hand pieces come from the same
+/// `context_meter_parts` the composer chip renders, in the same order:
+/// ratio, then hit percent, then the cached count.
 fn bar_row(
     label: &str,
     value: u64,
     total: u64,
     color: gpui_kit::Hsla,
-    ratio: &str,
-    cache: Option<&str>,
+    parts: &crate::view_model::ContextMeterParts,
     theme: &Theme,
 ) -> impl IntoElement {
     let fill = if total == 0 {
@@ -966,17 +992,28 @@ fn bar_row(
                         .min_w_0()
                         .child(
                             div()
+                                .min_w_0()
+                                .truncate()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .child(ratio.to_owned()),
+                                .child(parts.ratio.clone()),
                         )
-                        .when_some(cache, |this, cache| {
+                        .when(!parts.hit.is_empty(), |this| {
                             this.child(
                                 div()
                                     .flex_shrink_0()
                                     .text_xs()
                                     .text_color(theme.foreground)
-                                    .child(format!("· {cache}")),
+                                    .child(format!("· {}", parts.hit)),
+                            )
+                        })
+                        .when(!parts.cache.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(theme.foreground)
+                                    .child(format!("· {}", parts.cache)),
                             )
                         }),
                 ),

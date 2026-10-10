@@ -358,9 +358,8 @@ fn process_is_running(_pid: u32) -> bool {
 
 fn relaunch_target(target: &Path) -> Result<(), String> {
     #[cfg(windows)]
-    {
-        return spawn_detached(target, &[]).map_err(|error| format!("updater relaunch: {error}"));
-    }
+    return spawn_detached(target, &[]).map_err(|error| format!("updater relaunch: {error}"));
+
     #[cfg(not(windows))]
     {
         std::process::Command::new(target)

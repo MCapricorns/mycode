@@ -17,7 +17,7 @@ mod tests;
 
 pub(crate) use index::{
     AppendRequest, AppendedLocation, BranchCommitRequest, ListedSession, SessionStore, StoreError,
-    StoredEvent, delete_indexed_session, index_jsonl_session, list_sessions,
+    StoredEvent, decode_head, delete_indexed_session, index_jsonl_session, list_sessions,
 };
 pub(crate) use jsonl::{charge, encoded_record_len};
 

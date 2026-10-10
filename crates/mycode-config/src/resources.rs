@@ -1,9 +1,10 @@
 //! Workspace and global resource files feeding the system prompt.
 //!
 //! Bounded markdown files discovered at fixed locations: the session
-//! workspace (`AGENTS.md`, `MYCODE.md`) and the MYCode home (`AGENTS.md`).
-//! Each file becomes one system prompt contribution. Nothing enters the
-//! prompt unbounded or from arbitrary paths.
+//! workspace (`AGENTS.md`, `MYCODE.md`, `.mycode/agents.md`,
+//! `.agents/AGENTS.md`), the MYCode home (`AGENTS.md`), and the user home
+//! (`.agents/AGENTS.md`). Each file becomes one system prompt contribution.
+//! Nothing enters the prompt unbounded or from arbitrary paths.
 
 use std::path::{Path, PathBuf};
 

@@ -149,6 +149,8 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
             if models.len() >= super::MAX_MODELS_PER_PROVIDER {
                 break;
             }
+            // Any status at all (deprecated, retired, preview-only) drops
+            // the model: only unflagged entries ship as presets.
             if !valid_model_id(&model_id) || clean_text(&model.status).is_some() {
                 continue;
             }

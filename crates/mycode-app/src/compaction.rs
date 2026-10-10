@@ -152,12 +152,21 @@ pub(crate) async fn compact_history(
             stitched_over_threshold = true;
         }
     }
-    let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
-        return Compacted {
-            messages: history,
-            status: CompactStatus::Unchanged,
-            summary: None,
-        };
+    // A manual `/compact` on a session that still fits the tail budget
+    // summarizes everything instead of reporting nothing to compact: the
+    // user asked for the shrink now, not at the auto threshold. The covered
+    // range is the whole ledger, so the next request replays the summary
+    // plus whatever arrives after it.
+    let head_end = match compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) {
+        Some(head_end) => head_end,
+        None if force && history.len() >= 2 => history.len(),
+        None => {
+            return Compacted {
+                messages: history,
+                status: CompactStatus::Unchanged,
+                summary: None,
+            };
+        }
     };
     // `/compact` on a head this checkpoint already covers would summarize the
     // same prefix again (same replaced count, same tail). Say so instead.
@@ -923,7 +932,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_short_session_still_has_nothing_to_compact() {
+    async fn manual_compact_summarizes_a_session_that_still_fits() {
         let (root, home) = scratch_home();
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let wire = summary_wire(calls.clone());
@@ -937,13 +946,18 @@ mod tests {
             head: "head-1",
             context_window: 200_000,
         };
+        // `/compact` no longer answers "nothing to compact" for a short
+        // session: the whole ledger is summarized and the tail is empty.
         let manual = super::compact_history(&scope, history, true).await;
-        assert_eq!(manual.status, CompactStatus::Unchanged);
-        assert!(manual.summary.is_none());
-        assert_eq!(manual.messages.len(), 2);
-        assert_eq!(user_text(&manual.messages[0]), "hi");
-        assert_eq!(user_text(&manual.messages[1]), "there");
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(manual.status, CompactStatus::Wrote);
+        assert_eq!(manual.summary.as_deref(), Some(PLAUSIBLE_SUMMARY));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(manual.messages.len(), 1);
+        assert!(user_text(&manual.messages[0]).contains("COMPACTION SUMMARY"));
+        let checkpoint = mycode_config::read_compaction(&home, "session-b")
+            .expect("read")
+            .expect("written");
+        assert_eq!(checkpoint.covered_messages, 2);
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -256,7 +256,7 @@ pub(crate) use windows::*;
 // Blocking-worker runtime lives in `crate::builtin::blocking`; the search
 // entry points below keep their historical `fs_search` paths for the
 // crate-public API.
-pub use crate::builtin::blocking::{prepare_search_async, prepare_search_async_with_access};
+pub use crate::builtin::blocking::prepare_search_async_with_access;
 
 /// Handle-backed grep/find target bound during dispatch preparation.
 ///
@@ -306,14 +306,6 @@ impl PreparedSearch {
 /// Returns [`ToolError::Execution`] or [`ToolError::InvalidArgs`] when the
 /// target cannot be bound, including missing paths, sharing violations,
 /// cancellation, and deadline expiry.
-pub fn prepare_search(
-    cwd: &Path,
-    path_arg: Option<&str>,
-    cancel: &CancellationToken,
-) -> Result<PreparedSearch, ToolError> {
-    prepare_search_with_access(cwd, path_arg, cancel, SearchAccess::Content)
-}
-
 /// [`prepare_search`] with an explicit content/metadata capability.
 ///
 /// # Errors

@@ -106,7 +106,9 @@ enum ChatFamily {
 
 struct ChatRow {
     family: ChatFamily,
-    /// Stable name for tests and the PR table.
+    /// Stable name for tests and the PR table; only the cfg(test) name
+    /// accessors read it, so the field is dead in a non-test build.
+    #[cfg_attr(not(test), allow(dead_code))]
     name: &'static str,
     matches: fn(&str, &str) -> bool,
 }
@@ -170,6 +172,9 @@ enum AnthropicFamily {
 
 struct AnthropicRow {
     family: AnthropicFamily,
+    /// Stable name for tests and the PR table; only the cfg(test) name
+    /// accessors read it, so the field is dead in a non-test build.
+    #[cfg_attr(not(test), allow(dead_code))]
     name: &'static str,
     matches: fn(&str, &str) -> bool,
 }
@@ -266,7 +271,6 @@ pub(crate) fn apply_chat_thinking(
     let model_id = model.to_ascii_lowercase();
     let host = endpoint.to_ascii_lowercase();
     let row = chat_row(&model_id, &host);
-    let _family = row.name;
     match row.family {
         ChatFamily::OpenRouter => apply_openrouter(body, level),
         ChatFamily::DashScope => apply_dashscope(body, &model_id, level),
@@ -294,7 +298,6 @@ pub(crate) fn apply_anthropic_thinking_policy(
     let model_id = model.to_ascii_lowercase();
     let host = endpoint.to_ascii_lowercase();
     let row = anthropic_row(&model_id, &host);
-    let _family = row.name;
     match row.family {
         AnthropicFamily::MiniMax => apply_minimax(body, level, ThinkingWire::Anthropic),
         AnthropicFamily::Kimi => apply_kimi_anthropic(body, level),

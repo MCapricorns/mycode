@@ -56,6 +56,20 @@ pub use secrets::{
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
+
+/// Test-only fixture writer: publishes `bytes` through the app's own secure
+/// transaction so the file carries the platform's private permissions (Unix
+/// 0600, Windows protected DACL) instead of the temp directory's inherited
+/// ones. Plain `std::fs::write` fixtures fail the read path's fail-closed
+/// owner/ACL checks on Windows.
+#[cfg(test)]
+pub(crate) fn write_owned_test_bytes(
+    home: &HomeLayout,
+    relative: &str,
+    bytes: &[u8],
+) -> Result<(), ConfigError> {
+    locked_update_owned_file(home, relative, bytes.len().max(1), |_| Ok(bytes.to_vec()))
+}
 #[doc(inline)]
 pub use settings::{
     AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, MAX_AUTHORITY_DOCUMENT_BYTES,

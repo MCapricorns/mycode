@@ -170,10 +170,7 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
     upsert_live_job(state, call_id, "", message);
 }
 
-pub(super) fn live_job_mut<'a>(
-    state: &'a mut WorkspaceState,
-    call_id: &str,
-) -> Option<&'a mut LiveJob> {
+fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a mut LiveJob> {
     if call_id.is_empty() {
         return state.live_jobs.last_mut();
     }
@@ -215,10 +212,6 @@ pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) {
     if !call_id.is_empty() && state.subagent_window.as_deref() == Some(call_id) {
         state.subagent_window = None;
     }
-}
-
-pub(super) fn finish_live_job(state: &mut WorkspaceState, call_id: &str) {
-    drop_live_job(state, call_id);
 }
 
 #[cfg(test)]

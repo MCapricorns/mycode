@@ -73,7 +73,6 @@ struct NativeOpenedDirectory {
     created: bool,
 }
 
-/// Opens the trailing component without following it, for evidence probes.
 /// Creates or repairs the owned root and returns its parent handle.
 ///
 /// The root directory is opened relative to the parent with the exact

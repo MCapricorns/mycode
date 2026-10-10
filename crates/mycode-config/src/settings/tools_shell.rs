@@ -63,7 +63,7 @@ impl AppSettings {
                 return Err(invalid("tools.shell.program: set an executable path"));
             }
             bounded_text(program, MAX_FIELD_BYTES).map_err(|_| {
-                invalid("tools.shell.program: too long or contains control characters")
+                invalid("tools.shell.program: too long or contains line breaks or NUL")
             })?;
             if !shell.source.is_empty() && shell.source != "auto" && shell.source != "user" {
                 return Err(invalid("tools.shell.source: must be auto or user"));

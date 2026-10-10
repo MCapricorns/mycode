@@ -1112,7 +1112,7 @@ fn encode_head(head: &HeadStamp) -> String {
     }
 }
 
-fn decode_head(value: &str) -> Option<HeadStamp> {
+pub(crate) fn decode_head(value: &str) -> Option<HeadStamp> {
     if value == "empty" {
         return Some(HeadStamp::Empty);
     }

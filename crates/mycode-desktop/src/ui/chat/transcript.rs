@@ -45,6 +45,7 @@ pub(super) fn render_streaming_entry(
             .flex_col()
             .gap_2()
             .child(status_line(
+                "streaming-status",
                 &format!("{} · {status}", t("WORKING", "工作中")),
                 desk.amber,
                 theme,
@@ -64,19 +65,28 @@ pub(super) fn render_streaming_entry(
                 ))
             })
             .when(!streaming.text.trim().is_empty(), |this| {
-                this.child(status_line(t("AGENT", "代理"), desk.green, theme))
-                    .child(agent_text(
-                        "streaming-agent-md".into(),
-                        streaming.text.clone().into(),
-                        theme,
-                        true,
-                    ))
+                this.child(status_line(
+                    "streaming-agent-status",
+                    t("AGENT", "代理"),
+                    desk.green,
+                    theme,
+                ))
+                .child(agent_text(
+                    "streaming-agent-md".into(),
+                    streaming.text.clone().into(),
+                    theme,
+                    true,
+                ))
             })
             .when(
                 streaming.thinking.trim().is_empty() && streaming.text.trim().is_empty(),
                 |this| {
                     this.child(
                         div()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .truncate()
                             .text_sm()
                             .text_color(theme.muted_foreground)
                             .child(status),
@@ -199,18 +209,34 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
         .child(div().flex_1().min_w_0().h_auto().child(content))
 }
 
-fn status_line(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoElement {
+/// A lamp plus a one-line label. The label truncates: a running status
+/// carries the whole tool target (a full shell command), which otherwise
+/// stretches the row past the transcript column.
+fn status_line(
+    id: impl Into<gpui_kit::ElementId>,
+    label: &str,
+    color: gpui_kit::Hsla,
+    theme: &Theme,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
         .items_center()
         .gap_2()
+        .w_full()
+        .min_w_0()
         .child(crate::ui::lamp(color))
         .child(
             div()
+                .id(id)
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .truncate()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(label.to_owned()),
+                .child(label.to_owned())
+                .test_support(),
         )
 }
 
@@ -243,13 +269,18 @@ fn assistant_block(
             ))
         })
         .when(!entry.text.trim().is_empty(), |this| {
-            this.child(status_line(t("AGENT", "代理"), desk.green, theme))
-                .child(agent_text(
-                    format!("agent-md-{}", entry.event_id).into(),
-                    SharedString::from(entry.text.trim()),
-                    theme,
-                    false,
-                ))
+            this.child(status_line(
+                format!("agent-status-{}", entry.event_id),
+                t("AGENT", "代理"),
+                desk.green,
+                theme,
+            ))
+            .child(agent_text(
+                format!("agent-md-{}", entry.event_id).into(),
+                SharedString::from(entry.text.trim()),
+                theme,
+                false,
+            ))
         })
 }
 
@@ -811,7 +842,12 @@ pub(super) fn render_user_entry(
         .flex()
         .flex_col()
         .gap_1()
-        .child(status_line(t("YOU", "你"), desk.cyan, theme))
+        .child(status_line(
+            format!("you-status-{}", entry.event_id),
+            t("YOU", "你"),
+            desk.cyan,
+            theme,
+        ))
         .child(
             div()
                 .flex()
@@ -1067,6 +1103,56 @@ mod layout {
             open: probe_open,
         });
         (handle, open)
+    }
+
+    #[gpui_kit::test]
+    fn a_long_running_status_stays_inside_the_column(cx: &mut TestAppContext) {
+        struct StatusProbe(String);
+        impl Render for StatusProbe {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let theme = cx.theme().clone();
+                div().size_full().child(
+                    div()
+                        .id("conversation")
+                        .w(px(760.))
+                        .h(px(200.))
+                        .overflow_x_hidden()
+                        .overflow_y_scroll()
+                        .child(
+                            div()
+                                .id("status-column")
+                                .w_full()
+                                .px(px(16.))
+                                .child(super::status_line(
+                                    "probe-status",
+                                    &self.0,
+                                    gpui_kit::white(),
+                                    &theme,
+                                ))
+                                .test_support(),
+                        )
+                        .test_support(),
+                )
+            }
+        }
+        // One tool status carrying a full shell command, far wider than the
+        // 760px column. QA saw this line run off the right window edge.
+        let command = format!(
+            "正在执行 shell git stash push -m \"{}\"",
+            "wip: local edits before sync ".repeat(30)
+        );
+        cx.update(gpui_kit::init);
+        let handle = cx.open_window(size(px(900.), px(400.)), move |_, _| StatusProbe(command));
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let scroller = window.find("conversation").bounds();
+            let label = window.find("probe-status").bounds();
+            assert!(
+                label.right() <= scroller.right() + px(1.),
+                "a running status must truncate inside the transcript column: label {label:?} scroller {scroller:?}"
+            );
+        })
+        .unwrap();
     }
 
     #[gpui_kit::test]

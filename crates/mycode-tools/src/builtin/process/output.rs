@@ -304,7 +304,10 @@ mod tests {
     #[test]
     fn odd_invalid_utf8_is_not_decoded_as_utf16() {
         let text = decode_captured_text(&[0xFF, 0x00, 0x41]);
-        assert!(text.contains('\u{FFFD}'), "{text:?}");
+        // The odd length keeps this off the UTF-16 path, which would swallow
+        // the NUL into a code unit. Whatever fallback page decodes the 0xFF,
+        // the NUL and the ASCII byte must survive verbatim.
+        assert!(text.contains('\0') && text.ends_with('A'), "{text:?}");
     }
 
     #[test]

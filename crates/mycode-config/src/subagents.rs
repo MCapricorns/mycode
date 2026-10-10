@@ -394,7 +394,7 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
             "thinking" => {
                 thinking = RoleThinking::parse(value).ok_or_else(|| {
                     format!(
-                        "thinking \"{value}\": must be a models.dev option (default, off, on, minimal, low, medium, high, xhigh, max)"
+                        "thinking \"{value}\": must be a models.dev option (default, off, none, on, minimal, low, medium, high, xhigh, max)"
                     )
                 })?;
             }

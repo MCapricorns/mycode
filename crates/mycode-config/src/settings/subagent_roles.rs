@@ -148,7 +148,7 @@ impl AppSettings {
                     }
                     bounded_text(model, MAX_FIELD_BYTES).map_err(|_| {
                         invalid(&format!(
-                            "{field}.model: too long or contains control characters"
+                            "{field}.model: too long or contains line breaks or NUL"
                         ))
                     })?;
                 }
@@ -163,7 +163,7 @@ impl AppSettings {
                 && crate::RoleThinking::parse(level).is_none()
             {
                 return Err(invalid(&format!(
-                    "{field}.thinking: must be a models.dev option (default, off, on, minimal, low, medium, high, xhigh, max)"
+                    "{field}.thinking: must be a models.dev option (default, off, none, on, minimal, low, medium, high, xhigh, max)"
                 )));
             }
         }

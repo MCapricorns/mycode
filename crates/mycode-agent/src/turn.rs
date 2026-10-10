@@ -127,7 +127,6 @@ pub(crate) async fn stream_assistant(
                 String::new(),
                 String::new(),
                 &error.to_string(),
-                &[],
             ));
         }
     };
@@ -167,7 +166,6 @@ pub(crate) async fn stream_assistant(
                         state,
                         draft_thinking,
                         draft_text,
-                        &[],
                     ));
                 }
                 return Ok(commit_interrupted(
@@ -176,7 +174,6 @@ pub(crate) async fn stream_assistant(
                     draft_thinking,
                     draft_text,
                     &error.to_string(),
-                    &[],
                 ));
             }
         }
@@ -189,7 +186,6 @@ pub(crate) async fn stream_assistant(
             state,
             draft_thinking,
             draft_text,
-            &[],
         ));
     }
     Ok(commit_interrupted(
@@ -198,56 +194,38 @@ pub(crate) async fn stream_assistant(
         draft_thinking,
         draft_text,
         "provider stream ended without a terminal event",
-        &[],
     ))
 }
 
 /// User cancel: keep what already arrived, mark it interrupted, and abort.
 ///
-/// Fully formed tool calls (non-empty id and name) stay on the assistant
-/// message and are paired with an error result so the ids stay matched.
-/// They are not executed. A delta that never became a named call is omitted.
+/// A cancelled stream never carries formed tool calls — they only arrive with
+/// the terminal `Done` event, which a cancelled stream does not deliver — so
+/// there is nothing to pair or fail here.
 fn keep_cancelled_partial(
     env: &TurnEnv<'_>,
     state: &mut AgentState,
     thinking: String,
     text: String,
-    calls: &[ToolCall],
 ) -> TurnFailure {
-    let formed = calls
-        .iter()
-        .any(|call| !call.id.is_empty() && !call.name.is_empty());
-    if thinking.is_empty() && text.is_empty() && !formed {
+    if thinking.is_empty() && text.is_empty() {
         return TurnFailure::Aborted;
     }
-    let message = commit_interrupted(env, state, thinking, text, "interrupted by user", calls);
-    for block in &message.blocks {
-        let ContentBlock::ToolCall(call) = block else {
-            continue;
-        };
-        if call.id.is_empty() || call.name.is_empty() {
-            continue;
-        }
-        let result = fail_cancelled_call(env, call);
-        push_message(env, state, Message::ToolResult(result));
-    }
+    commit_interrupted(env, state, thinking, text, "interrupted by user");
     TurnFailure::Aborted
 }
 
 /// Keeps streamed thinking and text, then adds the shared interruption line.
 ///
-/// `calls` are tool calls already fully formed on this assistant message.
-/// A call with an empty id or name is incomplete: it is omitted and must
-/// not be executed. Tool-call deltas carry no name, so a mid-stream cancel
-/// passes none. A call that already completed on an earlier message stays
-/// in history on its own.
+/// A call that already completed on an earlier message stays in history on
+/// its own; an in-flight call on this message is still only deltas and is
+/// dropped with them.
 fn commit_interrupted(
     env: &TurnEnv<'_>,
     state: &mut AgentState,
     thinking: String,
     mut text: String,
     detail: &str,
-    calls: &[ToolCall],
 ) -> AssistantMessage {
     let note = mycode_core::interrupted_response_text(detail);
     if !text.contains(note.as_str()) {
@@ -263,12 +241,6 @@ fn commit_interrupted(
         )));
     }
     blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
-    for call in calls {
-        if call.id.is_empty() || call.name.is_empty() {
-            continue;
-        }
-        blocks.push(ContentBlock::ToolCall(call.clone()));
-    }
     let message = AssistantMessage {
         blocks,
         usage: None,

@@ -200,20 +200,8 @@ where
     }
 }
 
-/// Resolves a grep/find target on a cancellable worker thread.
-///
-/// # Errors
-///
-/// Returns [`ToolError::Execution`] when the worker is cancelled or exceeds
-/// the search time limit.
-pub async fn prepare_search_async(
-    cwd: std::path::PathBuf,
-    path_arg: Option<String>,
-    cancel: CancellationToken,
-) -> Result<PreparedSearch, ToolError> {
-    prepare_search_async_with_access(cwd, path_arg, cancel, SearchAccess::Content).await
-}
-
+/// [`prepare_search_async_with_access`] resolves a grep/find target on a
+/// cancellable worker thread.
 /// [`prepare_search_async`] with an explicit content/metadata capability.
 ///
 /// # Errors

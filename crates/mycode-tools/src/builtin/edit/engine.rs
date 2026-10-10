@@ -794,7 +794,7 @@ fn regex_planned(
         }
         if matches!(pick, Pick::Unique) && pushed > 0 {
             return Err(ToolError::Execution(
-                "regex pattern occurs 2 times; include more surrounding context to make it unique"
+                "regex pattern occurs more than once; include more surrounding context to make it unique"
                     .to_owned(),
             ));
         }

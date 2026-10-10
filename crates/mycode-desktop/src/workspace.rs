@@ -217,6 +217,9 @@ pub struct Workspace {
     /// children. gpui's offset grows more negative toward the bottom, so the
     /// correction subtracts the content-height growth.
     scroll_hold: Option<ScrollHold>,
+    /// The pointer is over the conversation column. The hover-revealed jump
+    /// arrows (to newest / to oldest) mount only while this is true.
+    conversation_hovered: bool,
     /// Latest git status for the open folder.
     git: crate::git_status::GitSnapshot,
     /// Platform watcher for the open folder. Dropping it stops refresh.
@@ -321,6 +324,7 @@ impl Workspace {
             project_picker: None,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
             scroll_hold: None,
+            conversation_hovered: false,
             git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
             git_watcher: None,
             git_generation: 0,
@@ -581,11 +585,31 @@ impl Workspace {
     /// The handle stores a positive max extent and a negative live offset, so
     /// their sum is about zero at the tail and positive after a scroll upward.
     /// Before the first layout both are zero, which still follows.
-    fn conversation_follows_tail(&self) -> bool {
+    pub(crate) fn conversation_follows_tail(&self) -> bool {
         follows_tail(
             self.conversation_scroll.offset().y,
             self.conversation_scroll.max_offset().y,
         )
+    }
+
+    /// True when the conversation column sits at (or a few pixels from) the
+    /// first entry. Drives the hover-revealed jump-to-top arrow.
+    pub(crate) fn conversation_near_top(&self) -> bool {
+        self.conversation_scroll.offset().y > px(-24.)
+    }
+
+    /// Whether the pointer is over the conversation column; the jump arrows
+    /// reveal only then.
+    pub(crate) fn conversation_hovered(&self) -> bool {
+        self.conversation_hovered
+    }
+
+    /// Hover tracking for the conversation column's jump arrows.
+    pub(crate) fn on_conversation_hover(&mut self, hovered: &bool, cx: &mut Context<Self>) {
+        if self.conversation_hovered != *hovered {
+            self.conversation_hovered = *hovered;
+            cx.notify();
+        }
     }
 
     /// The conversation column's scroll handle.
@@ -1263,8 +1287,10 @@ impl Workspace {
     }
 
     /// Loads the next older page when the viewport is within a short distance
-    /// of the top. A transcript that still fits does not chain-load.
+    /// of the top. A transcript that still fits does not chain-load. The
+    /// notify keeps the hover jump arrows in step with the scroll position.
     pub(crate) fn on_conversation_scrolled(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
         if self.vm.history_loading || self.scroll_hold.is_some() || !self.near_history_top() {
             return;
         }

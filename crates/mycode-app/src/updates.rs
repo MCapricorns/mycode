@@ -14,6 +14,7 @@
 pub(crate) mod apply;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Command;
 
 use serde::Deserialize;
@@ -237,6 +238,10 @@ pub fn is_newer(tag: &str, current: &str) -> bool {
 /// # Errors
 ///
 /// Returns a failure message; the running installation is untouched.
+///
+/// The bridge core runs on a single-threaded runtime, so every multi-hundred-
+/// megabyte synchronous stage (checksum, zip extraction, hashing) runs on
+/// the blocking pool; only the HTTP streams stay on the async thread.
 pub async fn download_update(
     user_agent: &str,
     offer: &UpdateOffer,
@@ -246,10 +251,16 @@ pub async fn download_update(
         std::process::id(),
         offer.version.replace('.', "-")
     ));
-    if stage_dir.exists() {
-        std::fs::remove_dir_all(&stage_dir).map_err(|error| format!("stage reset: {error}"))?;
-    }
-    std::fs::create_dir_all(&stage_dir).map_err(|error| format!("stage create: {error}"))?;
+    let stage_reset = stage_dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        if stage_reset.exists() {
+            std::fs::remove_dir_all(&stage_reset)
+                .map_err(|error| format!("stage reset: {error}"))?;
+        }
+        std::fs::create_dir_all(&stage_reset).map_err(|error| format!("stage create: {error}"))
+    })
+    .await
+    .map_err(|error| format!("stage task: {error}"))??;
 
     let asset_path = stage_dir.join("update.asset");
     fetch_to_file(user_agent, &offer.asset_url, &asset_path, MAX_ASSET_BYTES).await?;
@@ -262,14 +273,21 @@ pub async fn download_update(
         MAX_CHECKSUM_BYTES,
     )
     .await?;
-    verify_checksum(&asset_path, &checksum_path)?;
 
-    let binary_path = extract_binary(&asset_path, &stage_dir)?;
-    let binary_sha256 = file_sha256(&binary_path)?;
-    let _ = std::fs::remove_file(&asset_path);
-    let _ = std::fs::remove_file(&checksum_path);
+    let verify_stage_dir = stage_dir.clone();
+    let verify_stage = tokio::task::spawn_blocking(move || -> Result<(PathBuf, String), String> {
+        verify_checksum(&asset_path, &checksum_path)?;
+        let binary_path = extract_binary(&asset_path, &verify_stage_dir)?;
+        let binary_sha256 = file_sha256(&binary_path)?;
+        let _ = std::fs::remove_file(&asset_path);
+        let _ = std::fs::remove_file(&checksum_path);
+        Ok((binary_path, binary_sha256))
+    });
+    let (new_binary, binary_sha256) = verify_stage
+        .await
+        .map_err(|error| format!("verify task: {error}"))??;
     Ok(PreparedUpdate {
-        new_binary: binary_path,
+        new_binary,
         stage_dir,
         binary_sha256,
     })
@@ -298,26 +316,44 @@ async fn fetch_to_file(
     if !response.status().is_success() {
         return Err(format!("download returned {}", response.status()));
     }
-    let file = std::fs::File::create(destination).map_err(|error| format!("stage: {error}"))?;
-    let mut writer = std::io::BufWriter::new(file);
+    // Disk writes happen on a blocking-pool task fed by a bounded channel,
+    // so a fast network never parks the async thread inside write(2) and a
+    // slow disk applies backpressure instead of buffering the asset.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(32);
+    let writer_destination = destination.to_path_buf();
+    let writer = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let file = std::fs::File::create(&writer_destination)
+            .map_err(|error| format!("stage: {error}"))?;
+        let mut writer = std::io::BufWriter::new(file);
+        while let Some(chunk) = rx.blocking_recv() {
+            writer
+                .write_all(&chunk)
+                .map_err(|error| format!("stage write failed: {error}"))?;
+        }
+        writer
+            .flush()
+            .map_err(|error| format!("stage write failed: {error}"))
+    });
     let mut downloaded: u64 = 0;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("download stream failed: {error}"))?
-    {
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => return Err(format!("download stream failed: {error}")),
+        };
         downloaded += chunk.len() as u64;
         if downloaded > maximum {
             return Err("download exceeded its size bound".to_owned());
         }
-        writer
-            .write_all(&chunk)
-            .map_err(|error| format!("stage write failed: {error}"))?;
+        if tx.send(chunk).await.is_err() {
+            // The writer task already failed; its result carries the reason.
+            break;
+        }
     }
+    drop(tx);
     writer
-        .flush()
-        .map_err(|error| format!("stage write failed: {error}"))?;
-    Ok(())
+        .await
+        .map_err(|error| format!("stage task: {error}"))?
 }
 
 fn verify_checksum(asset: &Path, checksum_file: &Path) -> Result<(), String> {
@@ -461,6 +497,7 @@ pub fn cleanup_stale_stages() {
     }
 }
 
+#[cfg(not(windows))]
 fn unix_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: bool) -> String {
     let previous = previous_path(current);
     let previous = previous.to_string_lossy();
@@ -558,6 +595,7 @@ fn previous_path(current: &Path) -> PathBuf {
 
 /// Single-quote `text` for `/bin/sh`. `$`, backticks, `"`, and `\` stay
 /// literal. An embedded `'` ends and reopens the quote.
+#[cfg(not(windows))]
 fn shell_single_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
@@ -596,6 +634,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     fn scratch(label: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "mycode-update-script-{label}-{}-{}",
@@ -609,6 +648,7 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     fn output_text(output: &std::process::Output) -> String {
         format!(
             "status {:?}\nstdout {}\nstderr {}",
@@ -618,6 +658,7 @@ mod tests {
         )
     }
 
+    #[cfg(unix)]
     fn wait_child(
         child: &mut std::process::Child,
         timeout: std::time::Duration,
@@ -654,12 +695,17 @@ mod tests {
 
     #[test]
     fn relaunch_is_a_script_parameter() {
+        #[cfg(not(windows))]
+        {
+            let staged = std::path::Path::new("/tmp/next");
+            let current = std::path::Path::new("/tmp/app");
+            let quiet = super::unix_script(staged, current, "ab", false);
+            assert!(!quiet.contains("nohup"), "{quiet}");
+            let live = super::unix_script(staged, current, "ab", true);
+            assert!(live.contains("nohup \"$current\""), "{live}");
+        }
         let staged = std::path::Path::new("/tmp/next");
         let current = std::path::Path::new("/tmp/app");
-        let quiet = super::unix_script(staged, current, "ab", false);
-        assert!(!quiet.contains("nohup"), "{quiet}");
-        let live = super::unix_script(staged, current, "ab", true);
-        assert!(live.contains("nohup \"$current\""), "{live}");
         let quiet = super::apply::helper_arguments(current, staged, "ab", 1, false);
         assert!(!quiet.iter().any(|arg| arg == "--relaunch"));
         let live = super::apply::helper_arguments(current, staged, "ab", 1, true);

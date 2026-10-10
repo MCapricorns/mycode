@@ -40,7 +40,11 @@ pub(super) fn workspace_root_added(state: &mut WorkspaceState, project: String) 
             .folders
             .truncate(mycode_config::MAX_WORKSPACE_ROOTS);
     }
-    state.recents.retain(|existing| existing != &project);
+    // Same spelling-fold comparison as the folders list above, so a dropped
+    // path and a picked path do not leave two recents rows for one folder.
+    state
+        .recents
+        .retain(|existing| !same_project_path(existing, &project));
     state.recents.insert(0, project.clone());
     state.recents.truncate(mycode_config::MAX_RECENT_PROJECTS);
     if state.project_dir.is_none() {

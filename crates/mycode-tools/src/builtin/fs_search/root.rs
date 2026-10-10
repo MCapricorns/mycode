@@ -554,6 +554,17 @@ impl Drop for ForcedAncestorMountBoundary {
 
 #[cfg(test)]
 pub(crate) fn force_ancestor_mount_boundary(dir: &Path) -> io::Result<ForcedAncestorMountBoundary> {
+    // `File::open` on a directory needs FILE_FLAG_BACKUP_SEMANTICS on
+    // Windows; without it CreateFile answers access denied.
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(0x0200_0000)
+            .open(dir)?
+    };
+    #[cfg(not(windows))]
     let file = File::open(dir)?;
     let (identity, _) = identity_and_kind(&file)?;
     *ancestor_boundary_slot() = Some(identity);

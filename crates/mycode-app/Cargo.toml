@@ -17,6 +17,7 @@ async-channel.workspace = true
 # feature unification through mycode-providers.
 reqwest = { workspace = true, features = ["json"] }
 semver.workspace = true
+bytes.workspace = true
 jsonschema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,7 +28,6 @@ tokio-util.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
-bytes.workspace = true
 futures-util.workspace = true
 
 [target.'cfg(unix)'.dependencies]

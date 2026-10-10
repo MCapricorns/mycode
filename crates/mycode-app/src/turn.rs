@@ -964,6 +964,20 @@ async fn run_chat_turn_on(
                         // assistant message" used to clear the live bubble
                         // after the step was the whole turn.
                         if let Some(entry) = last_step {
+                            // Same accounting as a turn that ends with a
+                            // message: this path's billing and context meter
+                            // used to be silently dropped.
+                            commit_turn_usage(
+                                &writer,
+                                &pump_events,
+                                &pump_session_id,
+                                &usage_provider,
+                                &usage_model,
+                                &turn_usage,
+                                turn_started,
+                                usage_enabled,
+                            )
+                            .await;
                             pump_deferred
                                 .publish(&writer, &pump_events, &pump_session_id)
                                 .await;
@@ -991,37 +1005,17 @@ async fn run_chat_turn_on(
                             match writer.write(EventKind::Message, &payload).await {
                                 Ok(event_id) => {
                                     let entry = project_assistant_message(&event_id, assistant);
-                                    if usage_enabled && turn_usage.seen {
-                                        let elapsed_ms = turn_started.elapsed().as_millis() as u64;
-                                        let usage_payload = serde_json::json!({
-                                            "provider": usage_provider,
-                                            "model": usage_model,
-                                            "input": turn_usage.input,
-                                            "context": turn_usage.latest_input,
-                                            "context_cache": turn_usage.latest_cache,
-                                            "output": turn_usage.output,
-                                            "cache": turn_usage.cache,
-                                            "elapsed_ms": elapsed_ms,
-                                        });
-                                        if let Ok(bytes) = serde_json::to_vec(&usage_payload)
-                                            && let Ok(usage_event) =
-                                                writer.write(EventKind::Usage, &bytes).await
-                                        {
-                                            let _ =
-                                                pump_events.try_send(BridgeEvent::UsageRecorded {
-                                                    session_id: pump_session_id.clone(),
-                                                    provider: usage_provider.clone(),
-                                                    model: usage_model.clone(),
-                                                    input: turn_usage.input,
-                                                    context: turn_usage.latest_input,
-                                                    context_cache: turn_usage.latest_cache,
-                                                    output: turn_usage.output,
-                                                    cache: turn_usage.cache,
-                                                    elapsed_ms,
-                                                    entry: project_usage(&usage_event, &bytes),
-                                                });
-                                        }
-                                    }
+                                    commit_turn_usage(
+                                        &writer,
+                                        &pump_events,
+                                        &pump_session_id,
+                                        &usage_provider,
+                                        &usage_model,
+                                        &turn_usage,
+                                        turn_started,
+                                        usage_enabled,
+                                    )
+                                    .await;
                                     // The summary card follows the assistant
                                     // message and the usage row, so it cannot
                                     // split a tool call from its result. ChatDone
@@ -1201,6 +1195,56 @@ impl Drop for SteerGuard {
 /// several times. `seen` distinguishes "no usage reported" from a genuine
 /// zero, which keeps the ledger from recording a usage event the provider
 /// never sent.
+/// Writes the turn's usage row after a finished turn. Both terminal paths —
+/// the final assistant message and a turn whose last committed event was a
+/// tool step — call this, so the accounting never depends on how the turn
+/// ended.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fields mirror the usage row the turn already assembles"
+)]
+async fn commit_turn_usage(
+    writer: &HeadWriter,
+    events: &crate::BridgeEventTx,
+    session_id: &str,
+    provider: &str,
+    model: &str,
+    usage: &TurnUsage,
+    started: std::time::Instant,
+    usage_enabled: bool,
+) {
+    if !usage_enabled || !usage.seen {
+        return;
+    }
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let usage_payload = serde_json::json!({
+        "provider": provider,
+        "model": model,
+        "input": usage.input,
+        "context": usage.latest_input,
+        "context_cache": usage.latest_cache,
+        "output": usage.output,
+        "cache": usage.cache,
+        "elapsed_ms": elapsed_ms,
+    });
+    if let Ok(bytes) = serde_json::to_vec(&usage_payload)
+        && let Ok(usage_event) = writer.write(EventKind::Usage, &bytes).await
+    {
+        let _ = events.try_send(BridgeEvent::UsageRecorded {
+            session_id: session_id.to_owned(),
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            input: usage.input,
+            context: usage.latest_input,
+            context_cache: usage.latest_cache,
+            output: usage.output,
+            cache: usage.cache,
+            elapsed_ms,
+            entry: project_usage(&usage_event, &bytes),
+        });
+    }
+}
+
 #[derive(Debug, Default)]
 struct TurnUsage {
     seen: bool,

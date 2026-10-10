@@ -60,7 +60,7 @@ impl CompactionCheckpoint {
             || !valid_id(&self.branch_id)
             || !valid_id(&self.model)
             || self.summary.chars().count() > MAX_SUMMARY_CHARS
-            || self.covered_head.chars().count() > MAX_ID_CHARS
+            || !valid_id(&self.covered_head)
         {
             return Err(ConfigError::authority_rejection());
         }

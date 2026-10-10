@@ -418,7 +418,7 @@ fn render_settings_nav(
                 .border_color(theme.border)
                 .text_xs()
                 .text_color(desk.faint)
-                .child(format!("v{}", env!("CARGO_PKG_VERSION")))
+                .child(format!("v{}", mycode_app::current_version()))
                 .when(dirty || saving, |this| {
                     this.child(
                         div()

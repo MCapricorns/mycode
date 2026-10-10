@@ -256,13 +256,11 @@ mod tests {
         }
         let home = crate::HomeLayout::from_root(&root).expect("layout");
         let body = br#"{"formatVersion":1,"kind":"mycode-provider-secrets","revision":9223372036854775807,}"#;
+        // The fixture goes through the secure transaction: a plain fs::write
+        // file inherits the temp directory's DACL and the Windows read path
+        // rejects it before the revision check this test exercises.
+        crate::write_owned_test_bytes(&home, "secrets.json", body).expect("write");
         let path = root.join("secrets.json");
-        std::fs::write(&path, body).expect("write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
-        }
         let error = super::read_provider_secrets(&home).expect_err("rewrite must fail");
         assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionExhausted);
         let kept = std::fs::read(&path).expect("original remains");

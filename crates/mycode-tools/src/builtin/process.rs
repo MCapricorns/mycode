@@ -22,6 +22,43 @@ pub(crate) use output::collect_child_output;
 pub(crate) use output::drain_pipes;
 pub(crate) use output::{CapturedStream, MAX_OUTPUT_BYTES, decode_captured_text};
 
+use crate::tool::{ToolError, ToolResult};
+use serde_json::json;
+
+/// Cancelled-command error shared by the shell and program launch paths.
+pub(crate) fn command_cancelled_error(teardown: Option<std::io::Error>) -> ToolError {
+    match teardown {
+        Some(err) => ToolError::Execution(format!(
+            "command cancelled before completion; termination failed: {err}"
+        )),
+        None => ToolError::Execution("command cancelled before completion".into()),
+    }
+}
+
+/// Output-collection failure shared by the shell and program launch paths.
+pub(crate) fn collection_error(
+    collection: &std::io::Error,
+    teardown: Option<std::io::Error>,
+) -> ToolError {
+    match teardown {
+        Some(err) => ToolError::Execution(format!(
+            "failed to collect command output: {collection}; termination failed: {err}"
+        )),
+        None => ToolError::Execution(format!("failed to collect command output: {collection}")),
+    }
+}
+
+/// Flags a tool result as a timeout in its details JSON.
+pub(crate) fn mark_timed_out(mut result: ToolResult) -> ToolResult {
+    result.details.as_mut().expect("details were populated")["timed_out"] = json!(true);
+    result
+}
+
+/// Exit code spelling shared by the shell and program result builders.
+pub(crate) fn display_exit(status: &std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(-1)
+}
+
 #[cfg(windows)]
 pub(crate) use windows::{WindowsJob, current_process_is_in_job, resume_thread_handle};
 

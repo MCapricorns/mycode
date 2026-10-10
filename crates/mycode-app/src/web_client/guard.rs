@@ -54,9 +54,9 @@ pub fn is_fetchable_url(value: &str) -> bool {
     {
         return false;
     }
+    // The bracket trim above removes every leading `[` and trailing `]`,
+    // so no further strip can change the value.
     let host = host.trim_start_matches('[').trim_end_matches(']');
-    let host = host.strip_prefix('[').unwrap_or(host);
-    let host = host.strip_suffix(']').unwrap_or(host);
     if host.is_empty() || host.len() > 253 {
         return false;
     }

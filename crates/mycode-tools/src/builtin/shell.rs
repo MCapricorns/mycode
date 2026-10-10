@@ -26,6 +26,8 @@ use std::time::{Duration, Instant};
 
 #[path = "shell_detect.rs"]
 mod detect;
+#[path = "shell_translate.rs"]
+mod translate;
 
 use detect::runtime_shell;
 
@@ -50,7 +52,8 @@ use crate::builtin::exec::{
     snapshot_child_environment,
 };
 use crate::builtin::process::{
-    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, decode_captured_text,
+    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, collection_error,
+    command_cancelled_error, decode_captured_text, display_exit, mark_timed_out,
 };
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
@@ -266,7 +269,10 @@ impl Tool for ShellTool {
          processes outside this host are outside the security boundary. \
          Captured stdout/stderr is truncated beyond 50 KiB; a non-zero exit \
          is an error result, not a tool failure. Default timeout: 120 s. \
-         There is no Core permission prompt."
+         There is no Core permission prompt. On PowerShell, common bash \
+         one-liners (ls -la, rm -rf, grep, touch, which, head, tail, wc) \
+         are translated to cmdlets automatically; writing PowerShell \
+         directly is still preferred."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -465,7 +471,10 @@ async fn prepare_windows_shell(
 fn windows_shell_args(detected: &DetectedShell, command: &str) -> Result<Vec<String>, ToolError> {
     match detected.kind {
         ShellKind::Pwsh => {
-            let script = powershell_script_for(command);
+            // The model keeps some bash habits regardless of the prompt, and
+            // PowerShell answers those with parameter errors. Well-understood
+            // bash one-liners are rewritten; everything else runs as typed.
+            let script = powershell_script_for(&translate::translate_bash_to_powershell(command));
             let encoded = encode_powershell_command(&script, &detected.program)?;
             Ok(powershell_args(encoded))
         }
@@ -584,15 +593,19 @@ fn powershell_prologue_units(command: &str) -> usize {
             continue;
         }
         let trimmed = line.trim_start();
+        // PowerShell keywords are case-insensitive: `Param($x)` and
+        // `Using namespace …` are legal spellings the prelude must sit
+        // behind, or the inserted statement makes them fail to parse.
+        let lower = trimmed.to_ascii_lowercase();
         let is_prologue_line = trimmed.is_empty()
-            || trimmed.starts_with('#')
-            || trimmed.starts_with("using ")
-            || trimmed.starts_with("using\t");
+            || lower.starts_with('#')
+            || lower.starts_with("using ")
+            || lower.starts_with("using\t");
         if is_prologue_line {
             offset += line.len();
             continue;
         }
-        if trimmed.starts_with("param(") || trimmed.starts_with("param (") {
+        if lower.starts_with("param(") || lower.starts_with("param (") {
             in_param_block = true;
             paren_depth = 0;
             quote = None;
@@ -636,24 +649,6 @@ fn powershell_args(encoded_command: String) -> Vec<String> {
     );
     args.push(encoded_command);
     args
-}
-
-fn command_cancelled_error(teardown: Option<std::io::Error>) -> ToolError {
-    match teardown {
-        Some(err) => ToolError::Execution(format!(
-            "command cancelled before completion; termination failed: {err}"
-        )),
-        None => ToolError::Execution("command cancelled before completion".into()),
-    }
-}
-
-fn collection_error(collection: &std::io::Error, teardown: Option<std::io::Error>) -> ToolError {
-    match teardown {
-        Some(err) => ToolError::Execution(format!(
-            "failed to collect command output: {collection}; termination failed: {err}"
-        )),
-        None => ToolError::Execution(format!("failed to collect command output: {collection}")),
-    }
 }
 
 fn timed_out_before_spawn_result(
@@ -716,11 +711,6 @@ fn timed_out_result(
         true,
         Some(&notice),
     ))
-}
-
-fn mark_timed_out(mut result: ToolResult) -> ToolResult {
-    result.details.as_mut().expect("details were populated")["timed_out"] = json!(true);
-    result
 }
 
 fn with_identity(
@@ -1035,10 +1025,6 @@ fn format_result(
         is_error,
         details: Some(details),
     }
-}
-
-fn display_exit(status: &std::process::ExitStatus) -> i32 {
-    status.code().unwrap_or(-1)
 }
 
 /// Encode the user script itself as PowerShell's UTF-16LE Base64 transport.

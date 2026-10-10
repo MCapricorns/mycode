@@ -20,7 +20,9 @@ pub fn active_workspace(state: &WorkspaceState) -> Option<&mycode_config::Worksp
 }
 
 /// The workspace a session belongs to; a session without a binding predates
-/// named workspaces and belongs to the first one.
+/// named workspaces and belongs to the first one. A binding naming a removed
+/// workspace is treated as unbound — the session stays visible in the first
+/// workspace instead of hiding from every sidebar, and can be rebound there.
 #[must_use]
 pub fn workspace_of_session<'a>(
     state: &'a WorkspaceState,
@@ -32,7 +34,11 @@ pub fn workspace_of_session<'a>(
         .find(|(existing, _)| existing == session_id)
         .map(|(_, workspace)| workspace.as_str());
     match bound {
-        Some(id) => state.workspaces.iter().find(|workspace| workspace.id == id),
+        Some(id) => state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == id)
+            .or_else(|| state.workspaces.first()),
         None => state.workspaces.first(),
     }
 }

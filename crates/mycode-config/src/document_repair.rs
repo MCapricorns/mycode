@@ -160,13 +160,13 @@ mod tests {
         (tempfile_guard::Guard(parent), layout)
     }
 
-    fn write_private(path: &std::path::Path, bytes: &[u8]) {
-        std::fs::write(path, bytes).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
+    /// Writes fixture bytes through the app's secure transaction so the file
+    /// carries the private permissions the read path enforces (a plain
+    /// `fs::write` file inherits the temp directory's DACL and is rejected
+    /// by the Windows fail-closed checks).
+    fn write_private(home: &crate::HomeLayout, name: &str, bytes: &[u8]) {
+        crate::write_owned_test_bytes(home, name, bytes)
+            .unwrap_or_else(|error| panic!("fixture {name}: {error:?}"));
     }
 
     mod tempfile_guard {
@@ -181,9 +181,9 @@ mod tests {
     #[test]
     fn damaged_settings_ui_and_secrets_reset_without_dropping_the_backup() {
         let (_guard, home) = home("docs");
-        write_private(&home.root().join("settings.json"), b"{not-json");
-        write_private(&home.root().join("ui.json"), b"{\"formatVersion\":");
-        write_private(&home.root().join("secrets.json"), b"\xff\xfe broken");
+        write_private(&home, "settings.json", b"{not-json");
+        write_private(&home, "ui.json", b"{\"formatVersion\":");
+        write_private(&home, "secrets.json", b"\xff\xfe broken");
 
         let (settings, settings_repair) = read_app_settings_with_repair(&home).unwrap();
         assert_eq!(settings.appearance.palette, "slate");
@@ -232,7 +232,7 @@ mod tests {
                 "models": ["gpt-4o"]
             }]
         }"#;
-        write_private(&home.root().join("settings.json"), bytes);
+        write_private(&home, "settings.json", bytes);
         let (settings, repair) = read_app_settings_with_repair(&home).unwrap();
         assert!(settings.providers.is_empty());
         assert_eq!(settings.appearance.palette, "slate");
@@ -256,7 +256,8 @@ mod tests {
         assert_eq!(loaded.appearance.palette, "ocean");
 
         write_private(
-            &home.root().join("ui.json"),
+            &home,
+            "ui.json",
             br#"{"formatVersion":1,"kind":"mycode-ui-state","autoUpdate":false,}"#,
         );
         let (ui, repair) = read_ui_state_with_repair(&home).unwrap();

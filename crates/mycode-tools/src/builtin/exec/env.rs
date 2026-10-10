@@ -53,10 +53,11 @@ const ALLOWED_NAMES: &[&str] = &[
     "PROCESSOR_IDENTIFIER",
     "PROGRAMDATA",
     "PUBLIC",
+    // One canonical spelling per name: environment lookup is case-insensitive
+    // on Windows, so a second spelling was always skipped and only inflated
+    // the aggregate byte budget below.
     "SystemDrive",
-    "SYSTEMDRIVE",
     "SystemRoot",
-    "SYSTEMROOT",
     "TEMP",
     "TMP",
     "TMPDIR",
@@ -64,18 +65,12 @@ const ALLOWED_NAMES: &[&str] = &[
     "USERPROFILE",
     "USERDOMAIN",
     "windir",
-    "WINDIR",
     "PATHEXT",
     "COMSPEC",
-    "ComSpec",
     "ProgramFiles",
-    "PROGRAMFILES",
     "ProgramFiles(x86)",
-    "PROGRAMFILES(X86)",
     "LOCALAPPDATA",
-    "LocalAppData",
     "APPDATA",
-    "AppData",
 ];
 
 #[cfg(not(any(unix, windows)))]

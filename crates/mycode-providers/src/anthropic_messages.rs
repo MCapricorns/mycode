@@ -411,11 +411,20 @@ impl MessagesReducer {
         for piece in self.xml.feed(part) {
             match piece {
                 crate::xml_tool_calls::XmlPiece::Text(text) => {
-                    if let BlockAccumulator::Text { text: block } = self
-                        .blocks
-                        .get_mut(self.current)
-                        .unwrap_or(&mut BlockAccumulator::Empty)
-                    {
+                    // Some gateways emit text deltas without a preceding
+                    // content_block_start; create the block the way the
+                    // thinking path does, so the assembled Done message
+                    // keeps the text the deltas already showed.
+                    if !matches!(
+                        self.blocks.get(self.current),
+                        Some(BlockAccumulator::Text { .. })
+                    ) {
+                        self.blocks.push(BlockAccumulator::Text {
+                            text: String::new(),
+                        });
+                        self.current = self.blocks.len() - 1;
+                    }
+                    if let BlockAccumulator::Text { text: block } = &mut self.blocks[self.current] {
                         block.push_str(&text);
                     }
                     events.push(StreamEvent::TextDelta(text));

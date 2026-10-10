@@ -18,6 +18,8 @@ use super::env::is_searchable_path_entry;
 use super::image::{ImageKind, classify_image, read_pe_tail};
 use super::spawn::{SpawnFailure, SpawnGate};
 use crate::builtin::fs_search::lexical_normalize;
+#[cfg(windows)]
+use crate::builtin::fs_search::windows_extended_length_path;
 use crate::tool::ToolError;
 
 /// Maximum UTF-8 bytes accepted for `program`.
@@ -742,41 +744,5 @@ fn windows_final_path(file: &File) -> Result<PathBuf, ToolError> {
             ));
         }
         return Ok(path);
-    }
-}
-
-#[cfg(windows)]
-fn windows_extended_length_path(path: &Path) -> PathBuf {
-    use std::path::{Component, Prefix};
-    if !path.is_absolute() {
-        return path.to_path_buf();
-    }
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return path.to_path_buf();
-    };
-    match prefix.kind() {
-        Prefix::Disk(_) => {
-            let mut extended = std::ffi::OsString::from(r"\\?\");
-            extended.push(path.as_os_str());
-            PathBuf::from(extended)
-        }
-        Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _) | Prefix::Verbatim(_) => {
-            path.to_path_buf()
-        }
-        Prefix::UNC(server, share) => {
-            let mut authority = std::ffi::OsString::from(r"\\?\UNC\");
-            authority.push(server);
-            authority.push(r"\");
-            authority.push(share);
-            let mut extended = PathBuf::from(authority);
-            for component in components {
-                if !matches!(component, Component::RootDir) {
-                    extended.push(component.as_os_str());
-                }
-            }
-            extended
-        }
-        _ => path.to_path_buf(),
     }
 }

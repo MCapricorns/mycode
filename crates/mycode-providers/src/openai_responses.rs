@@ -57,6 +57,9 @@ fn convert_tool(tool: &ToolSpec) -> Value {
     })
 }
 
+/// Converts one message for the Responses API. Image blocks are dropped:
+/// the only Responses preset is the Codex backend, whose tool surface this
+/// adapter targets, and image input is not wired through it.
 fn convert_message(message: &Message, input: &mut Vec<Value>) {
     match message {
         Message::User(user) => {

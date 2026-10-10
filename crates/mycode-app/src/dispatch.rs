@@ -453,15 +453,11 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             let expected_head = expected_head.clone();
             let to_event = to_event.clone();
             let edit = edit.clone();
-            let task = tokio::spawn(async move {
-                recall_message(&service, &session, &branch, &expected_head, &to_event)
-                    .await
-                    .map(|conversation| (Box::new(conversation), edit))
-            });
-            match task.await {
-                Ok(Ok(payload)) => BridgeReply::Recalled(Ok(payload)),
-                Ok(Err(message)) => BridgeReply::Recalled(Err(message)),
-                Err(error) => BridgeReply::Recalled(Err(error.to_string())),
+            // `handle` already runs as its own task; an inner spawn only
+            // added a JoinError layer the match below then unwrapped.
+            match recall_message(&service, &session, &branch, &expected_head, &to_event).await {
+                Ok(conversation) => BridgeReply::Recalled(Ok((Box::new(conversation), edit))),
+                Err(message) => BridgeReply::Recalled(Err(message)),
             }
         }
         BridgeCommand::DeleteSession { session_id } => {
@@ -507,21 +503,13 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::ExportData { path } => {
             let home = state.home.clone();
             let path = path.clone();
-            let outcome =
-                tokio::task::spawn_blocking(move || crate::export::export_to_file(&home, &path))
-                    .await
-                    .map_err(|error| error.to_string())
-                    .and_then(|outcome| outcome);
+            let outcome = blocking(move || crate::export::export_to_file(&home, &path)).await;
             BridgeReply::Exported(outcome)
         }
         BridgeCommand::ImportData { path } => {
             let home = state.home.clone();
             let path = path.clone();
-            let outcome =
-                tokio::task::spawn_blocking(move || crate::export::import_from_file(&home, &path))
-                    .await
-                    .map_err(|error| error.to_string())
-                    .and_then(|outcome| outcome);
+            let outcome = blocking(move || crate::export::import_from_file(&home, &path)).await;
             BridgeReply::Imported(outcome)
         }
         BridgeCommand::ListResources { session_id } => {
@@ -584,7 +572,10 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::SetProjectDir { session_id, path } => {
             BridgeReply::ProjectSet(set_project_dir(state, session_id, path.as_deref()))
         }
-        BridgeCommand::RefreshCatalog | BridgeCommand::CheckUpdate => {
+        BridgeCommand::RefreshCatalog => {
+            BridgeReply::Catalog(Err("this request runs as a concurrent task".to_owned()))
+        }
+        BridgeCommand::CheckUpdate => {
             BridgeReply::UpdateChecked(Err("this request runs as a concurrent task".to_owned()))
         }
         BridgeCommand::DownloadUpdate { .. } => {

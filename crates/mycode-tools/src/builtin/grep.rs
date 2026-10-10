@@ -871,6 +871,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{GrepArgs, GrepTool};
+    use crate::builtin::fs_search::SearchAccess;
     use crate::ctx::ToolCtx;
     use crate::stream::ToolStream;
     use crate::tool::Tool;
@@ -887,10 +888,11 @@ mod tests {
         ));
         std::fs::create_dir_all(root.join("sub")).expect("dir");
         std::fs::write(root.join("sub/a.txt"), "alpha needle\nsecond line\n").expect("file");
-        let prepared = crate::builtin::blocking::prepare_search_async(
+        let prepared = crate::builtin::blocking::prepare_search_async_with_access(
             root.clone(),
             None,
             CancellationToken::new(),
+            SearchAccess::Content,
         )
         .await
         .expect("prepare");

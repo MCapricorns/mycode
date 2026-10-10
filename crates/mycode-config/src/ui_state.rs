@@ -677,29 +677,34 @@ mod tests {
         assert!(state.validate().is_err());
     }
 
+    /// An absolute scratch path that is valid on the host running the test
+    /// (`/tmp` literals are not absolute on Windows).
+    fn absolute_scratch(label: &str) -> String {
+        std::env::temp_dir()
+            .join(label)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
     fn trust_project_round_trips_and_rejects_a_relative_path() {
         let mut projects = Vec::new();
         assert!(!super::trust_project(&mut projects, "relative/path"));
         assert!(projects.is_empty());
-        assert!(super::trust_project(&mut projects, "/tmp/mycode-trust-a"));
-        assert!(super::trust_project(&mut projects, "/tmp/mycode-trust-b"));
+        let first = absolute_scratch("mycode-trust-a");
+        let second = absolute_scratch("mycode-trust-b");
+        assert!(super::trust_project(&mut projects, &first));
+        assert!(super::trust_project(&mut projects, &second));
         assert_eq!(
             projects,
             vec![
-                "/tmp/mycode-trust-b".to_owned(),
-                "/tmp/mycode-trust-a".to_owned()
+                super::normalize_project_path(&second),
+                super::normalize_project_path(&first)
             ]
         );
-        assert!(super::revoke_project_trust(
-            &mut projects,
-            "/tmp/mycode-trust-a"
-        ));
-        assert!(!super::revoke_project_trust(
-            &mut projects,
-            "/tmp/mycode-trust-a"
-        ));
-        assert_eq!(projects, vec!["/tmp/mycode-trust-b".to_owned()]);
+        assert!(super::revoke_project_trust(&mut projects, &first));
+        assert!(!super::revoke_project_trust(&mut projects, &first));
+        assert_eq!(projects, vec![super::normalize_project_path(&second)]);
 
         let parent = std::env::temp_dir().join(format!(
             "mycode-ui-trust-{}-{}",
@@ -719,15 +724,12 @@ mod tests {
         }
         let home = crate::HomeLayout::from_root(&root).expect("layout");
         let mut state = super::UiState::default();
-        assert!(super::trust_project(
-            &mut state.trusted_projects,
-            "/tmp/mycode-trust-b"
-        ));
+        assert!(super::trust_project(&mut state.trusted_projects, &second));
         super::replace_ui_state(&home, &state).expect("write");
         let loaded = super::read_ui_state(&home).expect("read");
         assert_eq!(
             loaded.trusted_projects,
-            vec!["/tmp/mycode-trust-b".to_owned()]
+            vec![super::normalize_project_path(&second)]
         );
         let _ = std::fs::remove_dir_all(&parent);
     }
@@ -736,20 +738,15 @@ mod tests {
     fn trusted_project_collapses_a_trailing_slash() {
         assert!(super::same_project_path("/tmp/app/", "/tmp/app"));
         assert!(!super::same_project_path("/tmp/app", "/tmp/other"));
+        let path = absolute_scratch("mycode-trust-slash");
         let mut projects = Vec::new();
-        assert!(super::trust_project(
-            &mut projects,
-            "/tmp/mycode-trust-slash/"
-        ));
-        assert_eq!(projects, vec!["/tmp/mycode-trust-slash".to_owned()]);
-        assert!(super::trust_project(
-            &mut projects,
-            "/tmp/mycode-trust-slash"
-        ));
+        assert!(super::trust_project(&mut projects, &format!("{path}/")));
+        assert_eq!(projects, vec![super::normalize_project_path(&path)]);
+        assert!(super::trust_project(&mut projects, &path));
         assert_eq!(projects.len(), 1);
         assert!(super::revoke_project_trust(
             &mut projects,
-            "/tmp/mycode-trust-slash/"
+            &format!("{path}/")
         ));
         assert!(projects.is_empty());
     }

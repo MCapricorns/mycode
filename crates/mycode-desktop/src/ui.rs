@@ -227,7 +227,10 @@ fn render_toasts(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEle
                 .bg(fill)
                 .text_color(ink)
                 .text_xs()
-                .child(toast.text.clone())
+                // A long unbroken token (URL, path) must not paint past the
+                // fixed-width card.
+                .overflow_hidden()
+                .child(ellipsis(&toast.text, 400))
         }))
 }
 
@@ -282,7 +285,7 @@ pub(super) fn icon_button_marked(
 
 /// A hover-revealed delete affordance: hidden until the parent row's group
 /// hovers, so rows stay clean at rest. Used by the welcome recents, the
-/// session rows, and the project menu rows.
+/// session rows, and the sidebar workspace-root rows.
 pub(super) fn hover_delete_button(
     id: impl Into<gpui_kit::ElementId>,
     icon: IconName,

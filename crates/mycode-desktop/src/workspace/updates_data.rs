@@ -231,6 +231,10 @@ impl Workspace {
         let Some(conversation) = self.vm.active.clone() else {
             return;
         };
+        // Drop the free-text field so the next ask panel starts empty; the
+        // entity is created lazily on first use and would otherwise carry
+        // this answer into an unrelated question.
+        self.ask_input = None;
         self.apply_action(DesktopAction::AskAnswered, cx);
         self.dispatch(
             BridgeCommand::AskAnswer {

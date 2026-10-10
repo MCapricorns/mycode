@@ -162,7 +162,7 @@ impl AppSettings {
             for (arg_index, arg) in server.args.iter().enumerate() {
                 bounded_text(arg, MAX_FIELD_BYTES).map_err(|_| {
                     invalid(&format!(
-                        "{field}.args[{arg_index}]: too long or contains control characters"
+                        "{field}.args[{arg_index}]: too long or contains line breaks or NUL"
                     ))
                 })?;
             }
@@ -200,7 +200,7 @@ impl AppSettings {
                         }
                         bounded_text(value, MAX_FIELD_BYTES).map_err(|_| {
                             invalid(&format!(
-                                "{field}.env.{key}: too long or contains control characters"
+                                "{field}.env.{key}: too long or contains line breaks or NUL"
                             ))
                         })?;
                     }

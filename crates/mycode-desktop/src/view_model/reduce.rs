@@ -23,11 +23,10 @@ pub(crate) use self::models::{
 
 pub(crate) use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
 use self::composer::{parse_mention, slash_items};
-use self::jobs::{finish_live_job, tool_progress, tool_started};
+use self::jobs::{drop_live_job, tool_progress, tool_started};
 use self::models::{
-    active_preset_changed, apply_session_model, assign_fresh_session_model,
-    clamp_reasoning_to_catalog, ensure_model_selection, model_selected, provider_selected,
-    remember_active_session_model, remember_session_model,
+    active_preset_changed, apply_session_model, assign_fresh_session_model, ensure_model_selection,
+    model_selected, provider_selected, remember_active_session_model, remember_session_model,
 };
 use self::projects::{
     bind_session_project, session_bindings_forgotten, session_project_bound,
@@ -302,7 +301,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         } => tool_progress(state, call_id, name, message),
         DesktopAction::ToolResultAppended(entry) => {
             if let Some(call_id) = entry.call_id.as_deref() {
-                finish_live_job(state, call_id);
+                drop_live_job(state, call_id);
             }
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);
@@ -798,7 +797,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         } => {
             state.catalog = Some(document);
             state.catalog_fetched_at = fetched_at;
-            clamp_reasoning_to_catalog(state);
         }
         DesktopAction::UiStateLoaded {
             recents,

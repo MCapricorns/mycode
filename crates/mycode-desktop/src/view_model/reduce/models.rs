@@ -25,7 +25,9 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
     if !selected_model_supports_reasoning(state) {
         state.reasoning_menu_open = false;
     }
-    clamp_reasoning_to_catalog(state);
+    // As in `model_selected`: the stored effort survives the switch. The
+    // projection falls back to Default for rungs the new provider does not
+    // advertise, and the pick returns when a supporting model comes back.
     remember_active_session_model(state);
 }
 
@@ -76,7 +78,10 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
     if !selected_model_supports_reasoning(state) {
         state.reasoning_menu_open = false;
     }
-    clamp_reasoning_to_catalog(state);
+    // The stored effort is deliberately not reset here: a rung the new
+    // model does not advertise still projects as Default (see
+    // `selected_reasoning_level`), and switching back to a model that
+    // supports it restores the pick without asking the user again.
     remember_active_session_model(state);
 }
 
@@ -279,33 +284,27 @@ pub(super) fn assign_fresh_session_model(state: &mut WorkspaceState, session_id:
     remember_session_model(state, session_id);
 }
 
-pub(super) fn clamp_reasoning_to_catalog(state: &mut WorkspaceState) {
-    let levels = selected_reasoning_levels(state);
-    // No published rungs: keep a stored effort instead of wiping it. The
-    // menu still shows Default, and the chip can display the stored token.
-    if !levels.iter().any(|level| level != "default") {
-        return;
-    }
-    let Some(settings) = state.settings.as_mut() else {
-        return;
-    };
-    let Some(current) = settings.reasoning.as_deref() else {
-        return;
-    };
-    if !levels.iter().any(|level| level == current) {
-        let document_rejected = settings.saved_reasoning.as_deref() == Some(current);
-        settings.reasoning = None;
-        if document_rejected {
-            settings.saved_reasoning = None;
-            super::mark_settings_dirty(settings);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::clamp_reasoning_to_catalog;
+    use super::selected_reasoning_levels;
     use crate::view_model::{SettingsState, WorkspaceState};
+
+    /// A catalog provider with one reasoning model advertising only `low`.
+    fn low_rung_catalog() -> std::sync::Arc<mycode_providers::catalog::CatalogDocument> {
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+        std::sync::Arc::new(CatalogDocument {
+            providers: vec![CatalogProvider {
+                id: "zai".to_owned(),
+                models: vec![CatalogModel {
+                    id: "glm".to_owned(),
+                    reasoning: true,
+                    reasoning_efforts: vec!["low".to_owned()],
+                    ..CatalogModel::default()
+                }],
+                ..CatalogProvider::default()
+            }],
+        })
+    }
 
     #[test]
     fn a_custom_model_keeps_the_stored_effort() {
@@ -317,28 +316,19 @@ mod tests {
         state.settings = Some(SettingsState::from_settings(&document, 1, Vec::new()));
         state.selected_provider = Some("zhipu".to_owned());
         state.selected_model = Some("glm-4.7".to_owned());
-        clamp_reasoning_to_catalog(&mut state);
-        assert_eq!(
-            state
-                .settings
-                .as_ref()
-                .expect("settings")
-                .reasoning
-                .as_deref(),
-            Some("high")
-        );
-        let levels = super::selected_reasoning_levels(&state);
+        let settings = state.settings.as_ref().expect("settings");
+        assert_eq!(settings.reasoning.as_deref(), Some("high"));
+        let levels = selected_reasoning_levels(&state);
         assert!(levels.iter().any(|item| item == "default"));
         assert!(levels.iter().any(|item| item == "high"));
         assert!(!levels.iter().any(|item| item == "xhigh"));
     }
 
     #[test]
-    fn a_session_overlay_does_not_dirty_the_saved_effort() {
-        use std::sync::Arc;
-
-        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
-
+    fn switching_to_a_model_without_the_stored_rung_keeps_the_pick() {
+        // The stored pick stays; only the projection falls back to Default.
+        // Wiping it here is what made the effort "not save" across model
+        // switches: returning to a supporting model showed Default.
         let document = mycode_config::AppSettings {
             reasoning_effort: Some("low".to_owned()),
             ..mycode_config::AppSettings::default()
@@ -347,67 +337,30 @@ mod tests {
         settings.reasoning = Some("high".to_owned());
         let mut state = WorkspaceState {
             settings: Some(settings),
-            catalog: Some(Arc::new(CatalogDocument {
-                providers: vec![CatalogProvider {
-                    id: "zai".to_owned(),
-                    models: vec![CatalogModel {
-                        id: "glm".to_owned(),
-                        reasoning: true,
-                        reasoning_efforts: vec!["low".to_owned()],
-                        ..CatalogModel::default()
-                    }],
-                    ..CatalogProvider::default()
-                }],
-            })),
+            catalog: Some(low_rung_catalog()),
             selected_provider: Some("zai".to_owned()),
             selected_model: Some("glm".to_owned()),
             ..WorkspaceState::default()
         };
-        clamp_reasoning_to_catalog(&mut state);
-        let settings = state.settings.expect("settings");
-        assert!(settings.reasoning.is_none());
+        assert_eq!(
+            crate::view_model::selected_reasoning_level(&state),
+            "default",
+            "a rung the model does not advertise projects as default"
+        );
+        let settings = state.settings.as_ref().expect("settings");
+        assert_eq!(settings.reasoning.as_deref(), Some("high"));
         assert_eq!(settings.saved_reasoning.as_deref(), Some("low"));
         assert!(!settings.dirty);
         assert_eq!(
             settings.to_settings().reasoning_effort.as_deref(),
-            Some("low")
+            Some("low"),
+            "a session pick never rewrites the saved document"
         );
-    }
 
-    #[test]
-    fn an_invalid_saved_effort_is_cleared_and_marked_dirty() {
-        use std::sync::Arc;
-
-        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
-
-        let document = mycode_config::AppSettings {
-            reasoning_effort: Some("high".to_owned()),
-            ..mycode_config::AppSettings::default()
-        };
-        let mut state = WorkspaceState {
-            settings: Some(SettingsState::from_settings(&document, 1, Vec::new())),
-            catalog: Some(Arc::new(CatalogDocument {
-                providers: vec![CatalogProvider {
-                    id: "zai".to_owned(),
-                    models: vec![CatalogModel {
-                        id: "glm".to_owned(),
-                        reasoning: true,
-                        reasoning_efforts: vec!["low".to_owned()],
-                        ..CatalogModel::default()
-                    }],
-                    ..CatalogProvider::default()
-                }],
-            })),
-            selected_provider: Some("zai".to_owned()),
-            selected_model: Some("glm".to_owned()),
-            ..WorkspaceState::default()
-        };
-        clamp_reasoning_to_catalog(&mut state);
-        let settings = state.settings.expect("settings");
-        assert!(settings.reasoning.is_none());
-        assert!(settings.saved_reasoning.is_none());
-        assert!(settings.dirty);
-        assert!(settings.to_settings().reasoning_effort.is_none());
+        // Back on a model that advertises the rung, the pick resurfaces.
+        state.selected_model = Some("glm-4.7".to_owned());
+        state.catalog = None;
+        assert_eq!(crate::view_model::selected_reasoning_level(&state), "high");
     }
 
     #[test]

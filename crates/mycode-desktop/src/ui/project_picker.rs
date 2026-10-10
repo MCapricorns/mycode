@@ -278,6 +278,9 @@ fn picker_list(
                 )
                 .child(
                     div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
                         .text_sm()
                         .text_color(if is_dir {
                             theme.foreground
@@ -441,10 +444,11 @@ fn starting_directory() -> PathBuf {
 }
 
 fn list_entries(path: &Path) -> Result<(Vec<PickerEntry>, bool), String> {
-    let read = std::fs::read_dir(path).map_err(|error| error.to_string())?;
+    let mut read = std::fs::read_dir(path).map_err(|error| error.to_string())?;
     let mut folders = Vec::new();
     let mut files = Vec::new();
-    for item in read {
+    let mut truncated = false;
+    for item in read.by_ref() {
         let Ok(item) = item else {
             continue;
         };
@@ -466,10 +470,13 @@ fn list_entries(path: &Path) -> Result<(Vec<PickerEntry>, bool), String> {
             files.push(entry);
         }
         if folders.len() + files.len() >= MAX_ENTRIES {
+            // Ask the iterator, not the count: a directory with exactly
+            // MAX_ENTRIES entries is fully shown and must not claim it was
+            // truncated.
+            truncated = read.filter_map(std::result::Result::ok).next().is_some();
             break;
         }
     }
-    let truncated = folders.len() + files.len() >= MAX_ENTRIES;
     let by_name = |left: &PickerEntry, right: &PickerEntry| {
         left.name
             .to_ascii_lowercase()

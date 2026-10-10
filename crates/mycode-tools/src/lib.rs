@@ -29,13 +29,10 @@ pub mod stream;
 pub mod tool;
 
 pub use builtin::fs_io::{
-    FileAccess, FileRead, FileRevision, FileSnapshot, PreparedFile, prepare_file,
-    prepare_file_async, read_file, read_file_async, read_file_snapshot_async,
+    FileAccess, FileRead, FileRevision, FileSnapshot, PreparedFile, prepare_file_async,
+    read_file_async, read_file_snapshot_async,
 };
-pub use builtin::fs_search::{
-    PreparedSearch, SearchAccess, prepare_search, prepare_search_async,
-    prepare_search_async_with_access,
-};
+pub use builtin::fs_search::{PreparedSearch, SearchAccess, prepare_search_async_with_access};
 pub use builtin::shell::{
     DetectedShell, ShellKind, detect_default_shell, detect_shell_kind, set_runtime_shell,
 };

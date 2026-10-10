@@ -131,7 +131,7 @@ fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, Strin
         let Some(branch_id) = BranchId::parse(&branch.branch_id) else {
             return Err(id);
         };
-        let Some(head) = decode_listed_head(&branch.head) else {
+        let Some(head) = store::decode_head(&branch.head) else {
             return Err(id);
         };
         branches.push(BranchSnapshot {
@@ -146,13 +146,6 @@ fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, Strin
         event_count: row.event_count,
         branches,
     })
-}
-
-fn decode_listed_head(value: &str) -> Option<HeadStamp> {
-    if value == "empty" {
-        return Some(HeadStamp::Empty);
-    }
-    SessionEventId::parse(value).map(HeadStamp::Event)
 }
 
 fn store_error(error: store::StoreError) -> SessionError {

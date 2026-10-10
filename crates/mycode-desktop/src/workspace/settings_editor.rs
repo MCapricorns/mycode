@@ -744,15 +744,10 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
+        let mut duplicates: Vec<String> = Vec::new();
         for row in imported {
             if existing.contains(&row.server.id) {
-                self.apply_action(
-                    DesktopAction::Failed(format!(
-                        "an MCP server named '{}' already exists",
-                        row.server.id
-                    )),
-                    cx,
-                );
+                duplicates.push(row.server.id.clone());
                 continue;
             }
             let server_id = row.server.id.clone();
@@ -772,6 +767,17 @@ impl Workspace {
         }
         if added > 0 {
             self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
+        }
+        if !duplicates.is_empty() {
+            // One aggregated message: per-row failures overwrote each other,
+            // so only the last duplicate name was ever reported.
+            self.apply_action(
+                DesktopAction::Failed(format!(
+                    "MCP servers already exist: {}",
+                    duplicates.join(", ")
+                )),
+                cx,
+            );
         }
     }
 

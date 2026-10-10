@@ -48,8 +48,8 @@ use crate::secure_fs::owned_file::locked_update_owned_file;
 pub const SETTINGS_PATH: &str = "settings.json";
 /// Maximum encoded authority document size: 256 KiB.
 ///
-/// The cap is domain-neutral on purpose: compaction and export authorities
-/// bound their documents with the same limit.
+/// The cap is domain-neutral on purpose: the compaction authority bounds
+/// its documents with the same limit.
 pub const MAX_AUTHORITY_DOCUMENT_BYTES: usize = 256 * 1024;
 /// Settings format version.
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
@@ -272,12 +272,12 @@ impl AppSettings {
         let invalid =
             |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
         bounded_text(&self.user_agent, MAX_FIELD_BYTES)
-            .map_err(|_| invalid("userAgent: too long or contains control characters"))?;
+            .map_err(|_| invalid("userAgent: too long or contains line breaks or NUL"))?;
         if let Some(level) = self.reasoning_effort.as_deref()
             && (level == "default" || crate::RoleThinking::parse(level).is_none())
         {
             return Err(invalid(
-                "reasoningEffort: must be a models.dev option (off, on, minimal, low, medium, high, xhigh, max)",
+                "reasoningEffort: must be a models.dev option (off, none, on, minimal, low, medium, high, xhigh, max)",
             ));
         }
         self.validate_providers()?;
@@ -665,13 +665,11 @@ mod tests {
         let home = crate::HomeLayout::from_root(&root).expect("layout");
         let body =
             br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":9223372036854775807,}"#;
+        // The fixture goes through the secure transaction: a plain fs::write
+        // file inherits the temp directory's DACL and the Windows read path
+        // rejects it before the revision check this test exercises.
+        crate::write_owned_test_bytes(&home, "settings.json", body).expect("write");
         let path = root.join("settings.json");
-        std::fs::write(&path, body).expect("write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
-        }
         let error = super::read_app_settings(&home).expect_err("rewrite must fail");
         assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionExhausted);
         let kept = std::fs::read(&path).expect("original remains");

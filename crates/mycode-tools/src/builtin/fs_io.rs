@@ -144,8 +144,8 @@ use read::{content_hash, revision_token};
 use types::{ChildOpen, FileIdentity, FileKind, FileMeta, OpenedChild, PreparedInner};
 
 // Crate-public surface kept at the historical `fs_io` paths.
-pub use prepare::{prepare_file, prepare_file_async};
-pub use read::{read_file, read_file_async, read_file_snapshot_async};
+pub use prepare::prepare_file_async;
+pub use read::{read_file_async, read_file_snapshot_async};
 
 pub(crate) use write::write_file_with_lease;
 
