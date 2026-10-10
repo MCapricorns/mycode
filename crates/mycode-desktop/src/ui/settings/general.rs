@@ -291,7 +291,7 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
 
 fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     let theme = cx.theme().clone();
-    let cells = crate::ui::desk::PALETTES
+    let cells = mycode_config::VALID_PALETTES
         .into_iter()
         .map(|id| {
             palette_cell(id, selected, &theme)
@@ -421,7 +421,7 @@ mod appearance_layout {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
             let swatches = palette_swatches(
-                crate::ui::desk::PALETTES
+                mycode_config::VALID_PALETTES
                     .into_iter()
                     .map(|id| {
                         palette_cell(id, "slate", &theme)
