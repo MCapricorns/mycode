@@ -15,7 +15,7 @@ BridgeCommand → CoreBridge
 再 reduce 一次，元素按新状态重画
 ```
 
-视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口：拉取请求上的 `ci.yml` 只在四个原生 runner 上编译并打包发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64），没有 fmt / clippy 任务。macOS 构建另外把二进制装进 `MYCode.app` 并产出 dmg 安装镜像（`scripts/make_dmg.sh`）。推到 main 时 `release.yml` 编译同样四个目标，再打标签并发布 GitHub Release。
+视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口：`ci.yml` 在四个原生 runner 上编译并打包发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64），没有 fmt / clippy 任务。macOS 构建另外把二进制装进 `MYCode.app` 并产出 dmg 安装镜像（`scripts/make_dmg.sh`）。拉取请求只上传构建产物。推到 main 时同一条流水线再打标签并发布 GitHub Release。
 
 ## 模块
 

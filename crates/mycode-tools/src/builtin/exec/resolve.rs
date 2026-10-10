@@ -388,7 +388,7 @@ fn candidate_metadata_error(error: std::io::Error) -> Result<bool, ResolveError>
 fn pin_candidate(path: &Path, cancel: &CancellationToken) -> Result<PinnedImage, ResolveError> {
     let mut file = open_executable(path)?;
     let identity = file_identity(&file)?;
-    let canonical_path = canonical_from_handle(&file, path)?;
+    let canonical_path = canonical_from_handle(&file)?;
     let unicode = canonical_path.to_str().ok_or_else(|| {
         ToolError::InvalidArgs(
             "canonical program path is not valid Unicode and cannot be recorded".into(),
@@ -557,7 +557,7 @@ fn file_identity(_file: &File) -> Result<FileIdentity, ToolError> {
 }
 
 #[cfg(unix)]
-fn canonical_from_handle(file: &File, _request: &Path) -> Result<PathBuf, ToolError> {
+fn canonical_from_handle(file: &File) -> Result<PathBuf, ToolError> {
     #[cfg(target_os = "linux")]
     {
         use std::os::fd::AsRawFd as _;
@@ -598,12 +598,12 @@ fn canonical_from_handle(file: &File, _request: &Path) -> Result<PathBuf, ToolEr
 }
 
 #[cfg(windows)]
-fn canonical_from_handle(file: &File, _request: &Path) -> Result<PathBuf, ToolError> {
+fn canonical_from_handle(file: &File) -> Result<PathBuf, ToolError> {
     windows_final_path(file)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn canonical_from_handle(_file: &File, _request: &Path) -> Result<PathBuf, ToolError> {
+fn canonical_from_handle(_file: &File) -> Result<PathBuf, ToolError> {
     Err(ToolError::Execution(
         "direct program launch is not supported on this platform".into(),
     ))

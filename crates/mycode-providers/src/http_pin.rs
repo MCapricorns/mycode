@@ -397,7 +397,9 @@ fn is_fake_ip(ip: IpAddr) -> bool {
     }
 }
 
-fn is_public_ip(ip: IpAddr) -> bool {
+/// Reports whether the address is globally routable public Internet space.
+#[must_use]
+pub fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_ipv4(ip),
         IpAddr::V6(ip) => is_public_ipv6(ip),
@@ -442,20 +444,21 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         return is_public_ipv4(embedded);
     }
     // Unique-local fc00::/7, link-local fe80::/10, site-local fec0::/10,
-    // discard 100::/8, documentation 2001:db8::/32, and Teredo 2001::/32.
+    // discard 100::/8, documentation 2001:db8::/32, and IETF protocol
+    // assignments 2001::/28 (Teredo, benchmarking, ORCHID).
     !(segments[0] & 0xfe00 == 0xfc00
         || segments[0] & 0xffc0 == 0xfe80
         || segments[0] & 0xffc0 == 0xfec0
         || segments[0] == 0x100
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-        || (segments[0] == 0x2001 && segments[1] == 0))
+        || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         AddressClass, PinMode, RedirectStep, classify_addresses, connection_addresses,
-        decide_redirect, validate_hop,
+        decide_redirect, is_public_ip, validate_hop,
     };
     use std::net::IpAddr;
 
@@ -803,6 +806,25 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("not all public"), "{error}");
+    }
+
+    #[test]
+    fn public_ip_rejects_reserved_ipv6_ranges() {
+        for addr in [
+            "ff02::1",
+            "fec0::1",
+            "fdfe::1",
+            "2002:0a00:0001::1",
+            "2001::1",
+            "2001:5::1",
+            "2001:db8::1",
+            "100::1",
+        ] {
+            assert!(!is_public_ip(v6(addr)), "{addr}");
+        }
+        for addr in ["2001:10::1", "2002:0101:0101::1", "2606:4700::1111"] {
+            assert!(is_public_ip(v6(addr)), "{addr}");
+        }
     }
 
     #[test]

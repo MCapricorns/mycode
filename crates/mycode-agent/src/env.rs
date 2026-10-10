@@ -35,19 +35,21 @@ impl SteerInbox {
         if text.trim().is_empty() {
             return;
         }
-        match self.pending.lock() {
-            Ok(mut pending) => pending.push(text),
-            Err(poisoned) => poisoned.into_inner().push(text),
-        }
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(text);
     }
 
     /// Takes every queued steer, leaving the inbox empty.
     #[must_use]
     pub fn drain(&self) -> Vec<String> {
-        match self.pending.lock() {
-            Ok(mut pending) => std::mem::take(&mut *pending),
-            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
-        }
+        std::mem::take(
+            &mut *self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 }
 
@@ -134,5 +136,28 @@ impl<'a> TurnEnv<'a> {
     pub fn with_steer(mut self, steer: Option<Arc<SteerInbox>>) -> Self {
         self.steer = steer;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steer_inbox_survives_a_poisoned_lock() {
+        let inbox = Arc::new(SteerInbox::new());
+        inbox.push("before");
+        let poisoner = Arc::clone(&inbox);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.pending.lock().unwrap();
+            panic!("poison the inbox");
+        })
+        .join();
+        assert!(inbox.pending.is_poisoned());
+
+        inbox.push("after");
+        inbox.push("   ");
+        assert_eq!(inbox.drain(), vec!["before".to_owned(), "after".to_owned()]);
+        assert!(inbox.drain().is_empty());
     }
 }

@@ -39,7 +39,7 @@ pub struct ProviderSettings {
 /// Vendor differences (DeepSeek, Kimi, Z.AI GLM, custom gateways, …) are data:
 /// a base URL plus credentials over one of these protocols. Adding a vendor
 /// never adds an adapter family.
-pub const VALID_PROVIDER_KINDS: [&str; 3] = [
+const VALID_PROVIDER_KINDS: [&str; 3] = [
     "anthropic-messages",
     "openai-completions",
     "openai-responses",

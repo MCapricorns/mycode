@@ -19,15 +19,10 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
     color
 }
 
-/// Palette ids the settings page offers, in display order.
-///
-/// Must stay identical to `mycode_config::VALID_PALETTES`.
-pub const PALETTES: [&str; 6] = ["slate", "ocean", "forest", "dusk", "ember", "aurora"];
-
 /// Canonical palette id. Unknown values fall back to slate.
 #[must_use]
 pub fn normalize_palette(palette: &str) -> &'static str {
-    PALETTES
+    mycode_config::VALID_PALETTES
         .into_iter()
         .find(|id| *id == palette)
         .unwrap_or("slate")
@@ -68,13 +63,10 @@ pub fn palette_swatch_colors(palette: &str) -> PaletteSwatch {
     }
 }
 
-/// Interface font-size ids. Must stay identical to `mycode_config::VALID_FONT_SIZES`.
-pub const FONT_SIZES: [&str; 4] = ["s", "m", "l", "xl"];
-
 /// Canonical font-size id. Unknown values fall back to medium.
 #[must_use]
 pub fn normalize_font_size(id: &str) -> &'static str {
-    FONT_SIZES
+    mycode_config::VALID_FONT_SIZES
         .into_iter()
         .find(|item| *item == id)
         .unwrap_or("m")
@@ -175,16 +167,10 @@ const FONT_FACES: &[FontFace] = &[
     },
 ];
 
-/// Canonical stored id. Empty and `"system"` are the OS UI font.
-#[must_use]
-pub fn normalize_font_family(value: &str) -> Option<&'static str> {
-    mycode_config::canonical_font_family(value)
-}
-
 /// Label for a stored font-family id. Font names stay as proper nouns.
 #[must_use]
 pub fn font_family_label(id: &str) -> &'static str {
-    match normalize_font_family(id) {
+    match mycode_config::canonical_font_family(id) {
         Some("Inter") => "Inter",
         Some("Segoe UI") => "Segoe UI",
         Some("PingFang") => "PingFang",
@@ -213,7 +199,7 @@ pub fn available_font_family_ids(installed: &[String]) -> Vec<&'static str> {
 /// installed. The stored id is left unchanged.
 #[must_use]
 pub fn paint_font_family(stored: &str, installed: &[String]) -> &'static str {
-    let Some(id) = normalize_font_family(stored) else {
+    let Some(id) = mycode_config::canonical_font_family(stored) else {
         return SYSTEM_UI_FONT;
     };
     if id == mycode_config::SYSTEM_FONT_FAMILY {
@@ -717,19 +703,7 @@ impl Desk {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn palette_ids_match_settings() {
-        assert_eq!(
-            super::PALETTES.as_slice(),
-            mycode_config::VALID_PALETTES.as_slice()
-        );
-    }
-
-    #[test]
-    fn font_sizes_match_settings_and_land_on_the_body_scale() {
-        assert_eq!(
-            super::FONT_SIZES.as_slice(),
-            mycode_config::VALID_FONT_SIZES.as_slice()
-        );
+    fn font_sizes_land_on_the_body_scale() {
         assert_eq!(super::interface_font_px("s"), 12.);
         assert_eq!(super::interface_font_px("m"), 13.);
         assert_eq!(super::interface_font_px("l"), 14.);
@@ -747,10 +721,10 @@ mod tests {
         assert_eq!(super::PALETTE_CELL_PX, 52.);
         assert_eq!(super::PALETTE_GAP_PX, 6.);
         const _: () = assert!(super::PALETTE_CELL_PX > super::PALETTE_SWATCH_PX);
-        assert_eq!(super::PALETTES.len(), 6);
+        assert_eq!(mycode_config::VALID_PALETTES.len(), 6);
         let columns = usize::from(super::PALETTE_COLUMNS);
-        assert_eq!(super::PALETTES.len() / columns, 1);
-        assert_eq!(super::PALETTES.len() % columns, 0);
+        assert_eq!(mycode_config::VALID_PALETTES.len() / columns, 1);
+        assert_eq!(mycode_config::VALID_PALETTES.len() % columns, 0);
         let row = super::palette_row_max_px();
         let six = super::PALETTE_CELL_PX * 6. + super::PALETTE_GAP_PX * 5.;
         assert!((row - six).abs() < f32::EPSILON);
@@ -760,7 +734,7 @@ mod tests {
     /// are the same spec `apply_palette` writes onto the theme.
     #[test]
     fn palette_swatch_uses_the_same_spec_as_apply_palette() {
-        for id in super::PALETTES {
+        for id in mycode_config::VALID_PALETTES {
             let spec = super::spec_for(id);
             let preview = super::palette_swatch_colors(id);
             assert_eq!(preview.base, super::hex(spec.bg));
@@ -816,7 +790,7 @@ mod tests {
     /// card, and an edge that still meets a 3:1 boundary.
     #[test]
     fn primary_fill_stays_soft_and_readable_on_every_dark_palette() {
-        for id in super::PALETTES {
+        for id in mycode_config::VALID_PALETTES {
             let spec = super::spec_for(id);
             let tint = super::hex(spec.tint);
             let accent = super::hex(spec.accent);

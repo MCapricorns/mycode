@@ -11,10 +11,10 @@ use std::path::{Component, Path, PathBuf};
 use crate::{ConfigError, ConfigErrorKind};
 
 /// Names the environment variable that relocates the entire owned home tree.
-pub const MYCODE_HOME_ENV: &str = "MYCODE_HOME";
+const MYCODE_HOME_ENV: &str = "MYCODE_HOME";
 
 /// Names the lowercase product directory under a user home.
-pub const MYCODE_DIR_NAME: &str = ".mycode";
+pub(crate) const MYCODE_DIR_NAME: &str = ".mycode";
 /// Durable session ledgers and compaction checkpoints.
 pub const SESSIONS_DIR: &str = "sessions";
 /// Tool working directory when no project folder is bound.
@@ -26,7 +26,7 @@ pub const SCRATCH_DIR: &str = "scratch";
 ///
 /// Returns [`ConfigErrorKind::AuthorityValidation`] when `session_id` or
 /// `file` is empty or contains a path separator.
-pub fn session_relative(session_id: &str, file: &str) -> Result<String, ConfigError> {
+pub(crate) fn session_relative(session_id: &str, file: &str) -> Result<String, ConfigError> {
     if session_id.is_empty()
         || session_id.contains(['/', '\\', '\0'])
         || file.is_empty()

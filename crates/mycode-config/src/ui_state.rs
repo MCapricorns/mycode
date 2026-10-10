@@ -12,16 +12,16 @@ use crate::error::ConfigErrorKind;
 use crate::secure_fs::owned_file::locked_update_owned_file;
 
 /// UI state path below the owned home.
-pub const UI_STATE_PATH: &str = "ui.json";
+const UI_STATE_PATH: &str = "ui.json";
 /// Maximum encoded UI state size.
 ///
 /// Session model pins sit beside the project bindings, so the document is
 /// larger than the original recent-folder list.
-pub const MAX_UI_STATE_BYTES: usize = 256 * 1024;
+const MAX_UI_STATE_BYTES: usize = 256 * 1024;
 /// UI state format version.
-pub const UI_STATE_FORMAT_VERSION: u32 = 1;
+const UI_STATE_FORMAT_VERSION: u32 = 1;
 /// UI state kind tag.
-pub const UI_STATE_KIND: &str = "mycode-ui-state";
+const UI_STATE_KIND: &str = "mycode-ui-state";
 /// Maximum remembered recent projects.
 pub const MAX_RECENT_PROJECTS: usize = 16;
 /// Maximum folders in one workspace.
@@ -35,20 +35,20 @@ pub const MAX_WORKSPACE_NAME_CHARS: usize = 64;
 /// Maximum remembered session-to-workspace bindings.
 pub const MAX_SESSION_WORKSPACES: usize = 512;
 /// Maximum projects explicitly trusted for project MCP config.
-pub const MAX_TRUSTED_PROJECTS: usize = 64;
+const MAX_TRUSTED_PROJECTS: usize = 64;
 /// Maximum length of one remembered session id.
 const MAX_SESSION_ID_BYTES: usize = 64;
 /// Maximum length of one remembered project path.
 const MAX_PROJECT_PATH_BYTES: usize = 1024;
 /// Recent model pins kept at the front of the picker.
-pub const MAX_RECENT_MODELS: usize = 8;
+const MAX_RECENT_MODELS: usize = 8;
 /// Starred model pins kept at the front of the picker.
-pub const MAX_STARRED_MODELS: usize = 24;
+const MAX_STARRED_MODELS: usize = 24;
 /// Maximum characters in one provider or model id on a pin.
 const MAX_MODEL_PIN_CHARS: usize = 256;
 /// Per-session model pins. Each chat keeps its own provider, model, and
 /// reasoning effort so one session cannot change the others.
-pub const MAX_SESSION_MODELS: usize = 128;
+const MAX_SESSION_MODELS: usize = 128;
 
 /// One named workspace: a set of folders plus the chats grouped under it.
 ///
@@ -99,7 +99,7 @@ impl ModelPin {
 }
 
 /// Moves `provider`/`model` to the front of `recent` and drops the tail past
-/// [`MAX_RECENT_MODELS`]. Invalid ids are ignored.
+/// `MAX_RECENT_MODELS`. Invalid ids are ignored.
 pub fn remember_model(recent: &mut Vec<ModelPin>, provider: &str, model: &str) {
     if !valid_pin_part(provider) || !valid_pin_part(model) {
         return;
@@ -455,7 +455,7 @@ fn valid_project_path(value: &str) -> Option<String> {
 /// folds slash direction and ASCII case. An empty result means the path was
 /// only slashes.
 #[must_use]
-pub fn normalize_project_path(path: &str) -> String {
+fn normalize_project_path(path: &str) -> String {
     let trimmed = path.trim().trim_end_matches(['/', '\\']);
     if cfg!(windows) {
         trimmed.replace('/', "\\").to_ascii_lowercase()
