@@ -6,7 +6,7 @@ use super::{AppSettings, MAX_FIELD_BYTES, bounded_text};
 use crate::ConfigError;
 
 /// Maximum configured subagent roles.
-pub const MAX_SUBAGENT_ROLES: usize = 32;
+const MAX_SUBAGENT_ROLES: usize = 32;
 /// Upper bound on the explicit subagent concurrency setting.
 pub const MAX_SUBAGENT_CONCURRENCY: u32 = 6;
 /// Slot count used when `max_concurrent` is `0`.

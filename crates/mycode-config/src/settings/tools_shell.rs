@@ -6,7 +6,7 @@ use super::{AppSettings, MAX_FIELD_BYTES, bounded_text};
 use crate::ConfigError;
 
 /// Accepted `tools.shell.kind` values.
-pub const VALID_SHELL_KINDS: [&str; 2] = ["pwsh", "bash"];
+const VALID_SHELL_KINDS: [&str; 2] = ["pwsh", "bash"];
 
 /// One resolved platform shell used by the `shell` tool.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
