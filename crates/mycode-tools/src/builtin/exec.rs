@@ -383,12 +383,7 @@ fn timed_out_before_spawn_result(
     duration_ms: u64,
     timeout: Duration,
 ) -> ToolResult {
-    let notice = format!(
-        "[command timed out after {}s before the program started]",
-        timeout.as_secs()
-    );
-    mark_timed_out(format_result(
-        None,
+    timed_out_result(
         program,
         argv,
         "",
@@ -396,9 +391,10 @@ fn timed_out_before_spawn_result(
         CapturedStream::default(),
         CapturedStream::default(),
         duration_ms,
-        true,
-        Some(&notice),
-    ))
+        timeout,
+        Ok(()),
+        false,
+    )
 }
 
 #[expect(
