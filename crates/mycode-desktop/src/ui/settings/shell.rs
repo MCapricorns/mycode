@@ -44,15 +44,15 @@ pub(super) fn render_shell_section(
     };
     let shell_status = if shell_program.is_empty() {
         t(
-            "No shell found. Detect one or browse to pwsh or Git bash.",
-            "未找到 shell。可自动检测,或浏览选择 pwsh 或 Git bash。",
+            "No shell found. Detect one or browse to pwsh, Windows PowerShell, or Git bash.",
+            "未找到 shell。可自动检测，或浏览选择 pwsh、Windows PowerShell 或 Git bash。",
         )
         .to_owned()
     } else {
         format!("{shell_kind} · {shell_program} ({source_label})")
     };
     let shell_kind_open = workspace.vm().shell_kind_menu_open;
-    let shell_options = ["pwsh", "bash"]
+    let shell_options = ["pwsh", "powershell", "bash"]
         .iter()
         .map(|kind| (*kind).to_owned())
         .collect::<Vec<_>>();
@@ -66,9 +66,9 @@ pub(super) fn render_shell_section(
             "shell",
             t("Shell", "Shell"),
             Some(t(
-                "First launch detects pwsh, then Git bash. Override it here if \
-                 detection misses your install.",
-                "首次启动会依次探测 pwsh、Git bash。如果检测不到,可在这里手动指定。",
+                "First launch detects pwsh, then Windows PowerShell 5.1, then Git bash. \
+                 MYCODE_SHELL overrides this. WSL bash is not selected automatically.",
+                "首次启动依次探测 pwsh、Windows PowerShell 5.1、Git bash。MYCODE_SHELL 会覆盖这里的选择。不会自动选择 WSL bash。",
             )),
             theme,
             vec![

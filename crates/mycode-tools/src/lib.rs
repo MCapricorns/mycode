@@ -17,9 +17,9 @@
 //!   errors, not user authorization.
 //! * Trusted builtin tools (read/write/edit/shell/grep/find) provide the
 //!   minimal recovery surface and cannot depend on external search binaries.
-//!   `shell` is the only process-launch tool: `mode` `script` uses the
-//!   platform shell, and `mode` `program` spawns a kernel-loadable image
-//!   with no shell.
+//!   The process tool is `powershell`, `bash`, or `cmd`, whichever matches
+//!   the shell resolved at startup. `mode` `script` runs that interpreter
+//!   and `mode` `program` spawns a kernel-loadable image with no shell.
 
 pub mod builtin;
 pub mod ctx;
@@ -34,8 +34,9 @@ pub use builtin::fs_io::{
 };
 pub use builtin::fs_search::{PreparedSearch, SearchAccess, prepare_search_async_with_access};
 pub use builtin::shell::{
-    DetectedShell, ShellKind, detect_default_shell, detect_shell_kind, script_shell_line,
-    set_runtime_shell,
+    DetectedShell, MYCODE_SHELL_ENV, ShellKind, ShellOverride, active_shell,
+    classify_shell_override, detect_default_shell, detect_shell_kind, render_environment_block,
+    resolved_shell, script_shell_line, set_runtime_shell,
 };
 pub use builtin::{
     EditTool, FindTool, GrepTool, ReadTool, ShellTool, WriteTool, register_builtins,

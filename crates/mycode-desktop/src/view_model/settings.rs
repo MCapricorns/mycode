@@ -302,7 +302,10 @@ impl SettingsSection {
                 "Scout、Artisan，以及你添加的角色",
             ),
             Self::Skills => t("Slash commands", "斜杠命令"),
-            Self::Shell => t("pwsh or Git bash", "pwsh 或 Git bash"),
+            Self::Shell => t(
+                "pwsh, Windows PowerShell, or Git bash",
+                "pwsh、Windows PowerShell 或 Git bash",
+            ),
             Self::Mcp => t("Tool servers", "工具服务器"),
             Self::Web => t("Search backends", "搜索后端"),
             Self::Data => t("Usage, export", "用量、导出"),

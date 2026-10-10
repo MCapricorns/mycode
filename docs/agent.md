@@ -32,7 +32,7 @@ prompt(用户消息)
 
 `HookRunner` 只有一个请求前钩子 `with_before_request`：改写 `Request`，应用层在这里做自动压缩。没有工具前观察者，回合也不会在改文件之前做快照。
 
-`build_system_prompt` 输出固定的身份说明、注册表里每个工具的一句说明（`Available tools:`），再加 `<tool_calling>` 约定。注册表里没有的名字不会出现在提示里。约定里 `write`、`edit` 和 `shell` 都可以改文件。文件编辑走 `shell` 的 `mode` `script`：POSIX shell 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`mode` `program` 不经过 shell，只启动一个可加载映像。Windows 上这条 shell 优先 PowerShell 7，输出里的 CLIXML 和 ANSI 颜色会先收成可读文本，细节在 [tools.md](tools.md)。编辑或撤回一条对话不会恢复或删除工作区文件。`AgentConfig` 没给 system prompt 时才用它；应用层把它拼在自己的提示末尾。
+`build_system_prompt` 输出固定的工具契约、注册表里每个工具的一句说明（`Available tools:`），再加 `<tool_calling>` 约定。注册表里没有的名字不会出现在提示里。进程工具只有当前解释器那一个（`powershell`、`bash` 或 `cmd`），约定里的文件编辑走它的 `mode` `script`：bash 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`mode` `program` 不经过 shell，只启动一个可加载映像。应用层另加 `<environment>` 和 `<shell>`，写明 OS、cwd 和这个解释器的语法（PowerShell 5.1 不用 `&&`）。输出里的 CLIXML 和 ANSI 颜色会先收成可读文本，细节在 [tools.md](tools.md)。编辑或撤回一条对话不会恢复或删除工作区文件。`AgentConfig` 没给 system prompt 时才用它；应用层把它拼在自己的提示末尾。
 
 ## 会话账本
 

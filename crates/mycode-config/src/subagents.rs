@@ -135,6 +135,16 @@ const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "web_search", "fetch_
 /// Tools that would let a child re-enter the parent or talk to the user.
 const PARENT_ONLY_TOOLS: &[&str] = &["agent", "ask_user"];
 
+/// `bash`, `powershell`, and `cmd` are the model-facing names of the one
+/// process tool. Role files and the parent allowlist may say any of them,
+/// or the stable name `shell`.
+fn canonical_tool_name(name: &str) -> &str {
+    match name {
+        "bash" | "powershell" | "cmd" => "shell",
+        other => other,
+    }
+}
+
 /// One resolved delegation role.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentRole {
@@ -163,7 +173,11 @@ impl SubagentRole {
     #[must_use]
     pub fn resolve_tools(&self, parent_tools: &[String]) -> Vec<String> {
         let live = |name: &str| {
-            !PARENT_ONLY_TOOLS.contains(&name) && parent_tools.iter().any(|parent| parent == name)
+            let name = canonical_tool_name(name);
+            !PARENT_ONLY_TOOLS.contains(&name)
+                && parent_tools
+                    .iter()
+                    .any(|parent| canonical_tool_name(parent) == name)
         };
         let declared: Vec<String> = match &self.tools {
             Some(tools) => tools.iter().filter(|name| live(name)).cloned().collect(),
@@ -535,7 +549,8 @@ mod tests {
             .join("\n");
         assert!(blob.contains("then stop"));
         assert!(blob.contains("Do not stop at a first draft"));
-        assert!(blob.contains("`shell`"));
+        assert!(blob.contains("`bash`"));
+        assert!(blob.contains("`powershell`"));
         assert!(!blob.contains("steward"));
         assert!(!blob.contains("sentinel"));
         assert!(!blob.contains("`exec`"));
@@ -586,5 +601,12 @@ mod tests {
                 "shell".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn powershell_in_a_role_matches_the_parent_shell_tool() {
+        let role = role("artisan", Some(vec!["read".into(), "powershell".into()]));
+        let tools = role.resolve_tools(&["read".into(), "shell".into()]);
+        assert_eq!(tools, vec!["read".to_owned(), "powershell".to_owned()]);
     }
 }

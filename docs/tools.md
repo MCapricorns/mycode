@@ -42,19 +42,21 @@
 | `edit` | 一个快照上的一批操作（最多 32 个），一次发布：`literal`（memmem / Aho-Corasick）、`fuzzy`（归一化后的 Levenshtein，只接受唯一且领先足够的最佳匹配）、有界 `regex`、行范围、`ast`（用 gpui-kit 注册的 Tree-sitter 语法做捕获替换，改完重新解析，新增语法错误就拒绝）。也接受旧的 `{old_string, new_string}` 唯一替换。返回 revision 和有界 diff 摘要，不回整个文件。模糊匹配在分词和扫描候选窗口时每约 4 KiB 原文检查一次取消 |
 | `find` | 按 glob 找文件和目录，限制在搜索根内，遵守 `.gitignore`，跳过隐藏和被忽略的路径。默认最多报告 1000 条，排序后用 `/` 分隔。取消或超时返回错误，不给半截结果 |
 | `grep` | 进程内的内容搜索，默认字面量，`is_regex` 开正则，支持 include / exclude glob。默认最多报告 200 行 `path:line:text`，每行最多 500 字节。跳过隐藏和被忽略的文件 |
-| `shell` | 唯一的进程启动工具。`mode` `script` 把 `command` 交给平台 shell（管道、重定向、展开、脚本，以及用 Python heredoc / 短脚本改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
+| `powershell` / `bash` / `cmd` | 唯一的进程启动工具，模型只看见其中一个。名字跟启动时解析到的解释器走：PowerShell 是 `powershell`，bash（含 Git Bash）是 `bash`，只有两者都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
 
-`shell` 的两条模式共用启动路径：钉住程序身份、限制参数和环境变量、截断约 50 KiB 输出、默认 120 秒超时（`timeout_secs` 可改），超时和取消时终止并回收整棵进程树。丢掉 future 也会把清理交出去，避免留下孤儿进程。非零退出码是 `is_error` 结果，不是循环故障。执行没有沙箱，环境变量白名单不是隔离。
+进程工具的两条模式共用启动路径：钉住程序身份、限制参数和环境变量、截断约 50 KiB 输出、默认 120 秒超时（`timeout_secs` 可改），超时和取消时终止并回收整棵进程树。丢掉 future 也会把清理交出去，避免留下孤儿进程。非零退出码是 `is_error` 结果，不是循环故障。执行没有沙箱，环境变量白名单不是隔离。每次 `script` 都是新进程，`cd` 和变量赋值不会留到下一次调用。
 
-Windows 上脚本模式只侦查 PowerShell 7（`pwsh`）和 Git bash，不侦查 Windows PowerShell 5.1，也不把 `cmd` 当成可保存的 shell。候选顺序是 PATH 里的 `pwsh.exe`、`Program Files\PowerShell\7`、预览版、WindowsApps 里的 `Microsoft.PowerShell_*`、WinGet 和 scoop 的 `pwsh`，然后才是 Git for Windows 的 `bash.exe`。能打开且大于 64 字节的映像优先；打不开或 0 字节的商店执行别名会跳过。只有找不到这种 `pwsh` 时，才接受 WindowsApps 里不超过 64 字节的 `pwsh.exe` 商店别名。两者都没有时，运行时退到 `%SystemRoot%\System32\cmd.exe`（`/d /s /c`），这个退路不写进设置。POSIX 主机用一张显式的 POSIX shell 候选表。
+Windows 上脚本模式按层侦查，命中一层就停：PowerShell 7（`pwsh`）、Windows PowerShell 5.1（`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`）、Git Bash。`pwsh` 的候选顺序是 PATH 里的 `pwsh.exe`、`Program Files\PowerShell\7`、预览版、WindowsApps 里的 `Microsoft.PowerShell_*`、WinGet 和 scoop。能打开且大于 64 字节的映像优先；只有这一层没有常规映像时，才接受 WindowsApps 里不超过 64 字节的 `pwsh.exe` 商店别名，并且这个别名优先于 5.1。Git Bash 看 `Program Files\Git\bin\bash.exe`、`usr\bin\bash.exe`、用户安装目录，以及 PATH 里的 `bash.exe`。`System32\bash.exe` 和 `SysWOW64\bash.exe` 是 WSL 启动器，不选：会话 cwd 是 Windows 路径，WSL 是另一套文件系统。SysWOW64 里的 32 位 `powershell.exe` 也不选。三层都没有时，运行时退到 `%SystemRoot%\System32\cmd.exe`（`/d /s /c`），工具名变成 `cmd`，这个退路不写进设置。POSIX 主机用 bash，然后 `sh`，工具名是 `bash`。
 
-`pwsh` 不用 `-Command` 拼接用户字符串。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免 PowerShell 7 拒绝空的 `-EncodedCommand`。命令行按 UTF-16 码元计，上限 32767。Git bash 用 `-c`。
+`MYCODE_SHELL` 覆盖设置和自动侦查，不写回设置。取值是 `pwsh`、`powershell`、`bash`、`cmd`、`auto`（或空，表示不覆盖），或一个可执行文件路径。设置里的 `tools.shell.kind` 只接受 `pwsh`、`powershell`、`bash`。
 
-选定 `pwsh` 时，常见 bash 单行命令（`ls`、`rm`、`cp`、`mkdir -p`、`touch`、`which`、`head`/`tail`、`wc -l`、`grep`、`find -name`，以及 `2>/dev/null`）在启动前翻译成对应 cmdlet；带管道、变量、替换或未知 flag 的命令原样执行。发生翻译时结果文本第一行注明 `[bash command translated to PowerShell: …]`，细节里带 `translated_command`，模型能看见改写而不是误以为 bash 直接可用。系统提示词的 `<environment>` 块用 `script_shell_line()` 命名当前解析到的 shell，工具描述不再枚举平台候选。
+PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bash 改写成 cmdlet。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免空的 `-EncodedCommand` 被拒绝。命令行按 UTF-16 码元计，上限 32767。bash 用 `-c`。用户命令原样执行。
+
+模型只注册这一个进程工具。描述、参数说明和系统提示词的 `<environment>` / `<shell>` 块按当前解释器来写：PowerShell 7 可以用 `&&`；Windows PowerShell 5.1 上 `&&` 和 `||` 是语法错误，要用 `;` 和 `$LASTEXITCODE`。提示词不再提 bash 到 PowerShell 的翻译。子代理用同一套解析：白名单里的 `shell` / `bash` / `powershell` / `cmd` 都变成这一个工具，提示词里的语法说明跟它一致。scout 不注册进程工具。
 
 进程输出先认 BOM，再认没有 BOM 的 UTF-16LE（PowerShell 往管道写中文时经常这样，这些字节有时也是合法 UTF-8），然后才是严格 UTF-8。还不行时，Windows 依次试 OEM 代码页、ANSI 代码页和控制台输出代码页（中文 Windows 上 `cmd` 的 `dir` 往往是 GBK）。标准输出和标准错误都会再整理一次：有 `#< CLIXML` 时抽出 `Error` 和 `Warning` 节点，`_xHHHH_`（包括 `_x001B_`）还原成字符，ANSI / VT 序列去掉。没有这些标记的普通文本保持原样。
 
-`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon、Linux x86_64 glibc）。发布包包含这四个平台。摘要复查和参数组装共用。其它 Unix 目标（musl、Android、BSD）不支持直接启动映像。模型只看见工具名 `shell`，没有 `exec` 或 `bash` 别名。
+`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon、Linux x86_64 glibc）。发布包包含这四个平台。摘要复查和参数组装共用。其它 Unix 目标（musl、Android、BSD）不支持直接启动映像。模型只看见当前这一个进程工具（`powershell`、`bash` 或 `cmd`），没有 `exec`，也不会同时看见 `bash` 和 `powershell`。角色白名单里的 `shell` 仍表示这个进程工具。
 
 ## 搜索的边界
 
@@ -82,7 +84,7 @@ MCP 不把远端工具名注册进这张表。应用层注册 `search_tool` 和 
 
 ## 改文件
 
-`write` 和 `edit` 仍然可用。`shell` 的 `mode` `script` 也可以改文件：POSIX shell 里用 Python（`python3` 或 `python`）的引号 heredoc 或短脚本，PowerShell 里用 here-string 管道给 `python`。`mode` `program` 不经过 shell，只启动可加载映像。这些路径都不做文件快照。撤回或编辑一条对话不会把工作区文件恢复或删掉。
+`write` 和 `edit` 仍然可用。进程工具的 `mode` `script` 也可以改文件：bash 里用 Python（`python3` 或 `python`）的引号 heredoc 或短脚本，PowerShell 里用 here-string 管道给 `python`。`mode` `program` 不经过 shell，只启动可加载映像。这些路径都不做文件快照。撤回或编辑一条对话不会把工作区文件恢复或删掉。
 
 ## 不放在这里的东西
 

@@ -108,6 +108,13 @@ pub trait Tool: Send + Sync + 'static {
         None
     }
 
+    /// JSON Schema sent to the model. The default is the schemars schema of
+    /// [`Self::Args`]. The shell tool replaces parameter descriptions so they
+    /// match the one interpreter the model is allowed to use.
+    fn params_schema(&self) -> Value {
+        args_schema::<Self::Args>()
+    }
+
     /// Access mode for a retained local search root.
     ///
     /// Built-in `grep` returns content access and `find` metadata access.
@@ -257,7 +264,7 @@ impl<T: Tool> ToolDyn for T {
         ToolSpec {
             name: self.name().to_owned(),
             description: self.description().to_owned(),
-            params_schema: args_schema::<T::Args>(),
+            params_schema: self.params_schema(),
         }
     }
 
