@@ -92,8 +92,11 @@ pub(crate) fn run_core(
                 } => {
                     // One live turn per session. A second turn used to replace
                     // the cancel token without stopping the first, so both
-                    // pumps appended to the same branch.
-                    cancel_session_work(&state, session.as_str());
+                    // pumps appended to the same branch. Only the turn token
+                    // is cancelled: subagents are children of that token and
+                    // stop with it. Sweeping the subagent map here also
+                    // stopped children the user meant to steer.
+                    cancel_turn(&state, session.as_str());
                     let task = chat_turn(
                         state.clone(),
                         events.clone(),
@@ -146,6 +149,19 @@ pub(crate) fn run_core(
                         };
                         let _ = reply.send(BridgeReply::SubagentCancelled(outcome));
                     });
+                }
+                BridgeCommand::Steer { session_id, text } => {
+                    let outcome = match state.steer_inboxes.lock() {
+                        Ok(inboxes) => match inboxes.get(&session_id) {
+                            Some(inbox) => {
+                                inbox.push(text);
+                                Ok(())
+                            }
+                            None => Err("no turn is running for this session".to_owned()),
+                        },
+                        Err(_) => Err("steer registry locked".to_owned()),
+                    };
+                    let _ = with_reply.reply.send(BridgeReply::Steered(outcome));
                 }
                 BridgeCommand::CancelChat { session_id } => {
                     let reply = with_reply.reply;
@@ -266,6 +282,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::StartOAuthSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
         BridgeCommand::CancelChat { .. } => BridgeReply::ChatCancelled(Err(message)),
         BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(message)),
+        BridgeCommand::Steer { .. } => BridgeReply::Steered(Err(message)),
     }
 }
 
@@ -281,16 +298,26 @@ async fn blocking<T: Send + 'static>(
         .map_err(|error| format!("background task failed: {error}"))?
 }
 
-/// Cancels one session's live turn and every subagent it started.
+/// Cancels and removes one session's live turn token.
 ///
-/// Subagent registry keys are `{session_id}:{call_id}`, so the prefix match
-/// stops exactly that session's background work without touching others.
-fn cancel_session_work(state: &CoreState, session_id: &str) {
+/// Subagent tokens that are children of this token stop with it. The
+/// subagent map is left alone so a follow-up turn does not cancel work
+/// the user is steering.
+fn cancel_turn(state: &CoreState, session_id: &str) {
     if let Ok(mut turns) = state.turn_cancels.lock()
         && let Some(token) = turns.remove(session_id)
     {
         token.cancel();
     }
+}
+
+/// Cancels one session's live turn and every subagent it started.
+///
+/// Subagent registry keys are `{session_id}:{call_id}`, so the prefix match
+/// stops exactly that session's background work without touching others.
+/// Session deletion uses this. A new chat turn uses [`cancel_turn`] only.
+fn cancel_session_work(state: &CoreState, session_id: &str) {
+    cancel_turn(state, session_id);
     if let Ok(mut subagents) = state.subagent_cancels.lock() {
         let prefix = format!("{session_id}:");
         subagents.retain(|key, token| {
@@ -395,6 +422,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::CancelChat { .. } => {
             BridgeReply::ChatCancelled(Err("chat cancels run as concurrent tasks".to_owned()))
+        }
+        BridgeCommand::Steer { .. } => {
+            BridgeReply::Steered(Err("steers are applied on the core thread".to_owned()))
         }
         BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(
             "subagent cancels run as concurrent tasks".to_owned(),

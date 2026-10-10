@@ -26,8 +26,8 @@ pub(crate) use self::chat::{
 };
 pub(crate) use self::models::{rank_model_ids, selected_reasoning_level};
 pub(crate) use self::projects::{
-    active_workspace, has_open_folder, newest_session_in_project, project_of_session,
-    same_project_path, task_surface_visible, workspace_of_session,
+    active_workspace, has_open_folder, newest_session_in_project, open_session_is_empty,
+    project_of_session, same_project_path, task_surface_visible, workspace_of_session,
 };
 pub(crate) use self::reduce::{
     ComposerSubmit, close_floating_menus, composer_submit, preferred_slash_index,
