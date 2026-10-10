@@ -450,6 +450,7 @@ fn context_meter(workspace: &Workspace) -> Option<crate::view_model::ContextMete
         super::super::context::model_context_window(vm),
         cached,
         t("cached", "缓存"),
+        t("cache hit", "缓存命中"),
     );
     (!parts.ratio.is_empty() || !parts.cache.is_empty()).then_some(parts)
 }

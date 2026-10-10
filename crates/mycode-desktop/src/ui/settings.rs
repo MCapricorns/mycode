@@ -11,7 +11,6 @@ mod general;
 mod mcp;
 mod models;
 mod provider_detail;
-mod shell;
 mod skills;
 mod web;
 mod widgets;
@@ -199,9 +198,6 @@ pub(super) fn render_settings_view(
                                         SettingsSection::Skills => {
                                             skills::render_skills_section(workspace, cx)
                                         }
-                                        SettingsSection::Shell => {
-                                            shell::render_shell_section(workspace, window, cx)
-                                        }
                                         SettingsSection::Mcp => {
                                             mcp::render_mcp_section(workspace, window, cx)
                                         }
@@ -308,7 +304,6 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
                 lamp: None,
             },
         ),
-        (SettingsSection::Shell, NavBadge::default()),
         (
             SettingsSection::Mcp,
             NavBadge {

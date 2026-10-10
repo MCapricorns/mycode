@@ -69,7 +69,7 @@ fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
     let titlebar = options
         .titlebar
         .get_or_insert_with(gpui_kit::component::TitleBar::title_bar_options);
-    titlebar.title = Some("MYCode Harness".into());
+    titlebar.title = Some("MYCode".into());
     titlebar.appears_transparent = true;
     titlebar.traffic_light_position = Some(PARKED_TRAFFIC_LIGHTS);
     options
@@ -1210,10 +1210,6 @@ impl Workspace {
         self.on_save_settings(cx);
     }
 
-    pub(crate) fn on_toggle_shell_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ShellKindMenuToggled(open), cx);
-    }
-
     pub(crate) fn on_toggle_language_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::LanguageMenuToggled(open), cx);
     }
@@ -1563,10 +1559,7 @@ mod tests {
         assert!(options.app_owns_titlebar_drag);
         let titlebar = options.titlebar.expect("custom title bar");
         assert!(titlebar.appears_transparent);
-        assert_eq!(
-            titlebar.title.as_ref().map(AsRef::as_ref),
-            Some("MYCode Harness")
-        );
+        assert_eq!(titlebar.title.as_ref().map(AsRef::as_ref), Some("MYCode"));
         assert_eq!(titlebar.traffic_light_position, Some(PARKED_TRAFFIC_LIGHTS));
         assert!(f32::from(PARKED_TRAFFIC_LIGHTS.x) < 0.);
         assert!(f32::from(PARKED_TRAFFIC_LIGHTS.y) >= 0.);

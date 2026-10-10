@@ -84,22 +84,24 @@ impl Tool for RunCodeTool {
     }
 
     fn description(&self) -> &str {
-        "Execute an embedded Python program that calls tools. Node.js is not \
-         used, and Python does not need to be installed. Takes two required \
-         arguments: `description`, a short summary of what the program does, \
-         and `code`, the BODY of an async function (top-level `await` and \
-         `return` work; no import). Call tools as \
-         `await tools.name(arg=value)`. Only what you `return` or `print` \
-         comes back — curate it. Use this when one step needs several \
-         reads, searches, edits, or page fetches. One obvious call stays a \
-         direct tool call. Do not call `run_code` from inside the program. \
-         The program stops after 48 tool calls, 20000 steps, or 120 seconds. \
-         The text that comes back is capped at 8000 bytes."
+        "Use this instead of several direct calls when one step reads, searches, \
+         or edits more than one file, or fetches more than one page. A rename \
+         or the same edit across files is one program here, not one `edit` per \
+         file. One obvious call stays direct (a single read, grep, or edit). \
+         Takes two required arguments: `description` (5-10 words, active voice, \
+         shown in the UI) and `code` (the body of an async Python function; \
+         top-level `await` and `return` work; no import). The interpreter is \
+         inside mycode: Node.js is not used, and Python does not need to be \
+         installed. Call tools as `await tools.name(arg=value)`. \
+         `await gather(...)` overlaps read-only calls. Only what you `return` \
+         or `print` comes back. Do not call `run_code` from inside the program. \
+         Stops after 48 tool calls, 20000 steps, or 120 seconds. Output cap \
+         8000 bytes."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "run_code: pass description and code. Several reads, greps, finds, edits, or page fetches go in one program; only print and return come back. One obvious call stays direct.",
+            "run_code: pass description and code. Use it when one step needs several reads, greps, finds, edits, or page fetches, including a rename across files. only print and return come back. One obvious call stays direct.",
         )
     }
 
@@ -148,10 +150,10 @@ impl Tool for RunCodeTool {
         let outcome = execute(&parsed, &catalog, ctx, out, &limits).await;
         match outcome {
             Ok(done) => Ok(success(description, done.logs, done.value, &notes)),
-            Err(thrown) => Ok(failure(
-                thrown.kind,
-                &thrown.message,
-                &[],
+            Err(failed) => Ok(failure(
+                failed.thrown.kind,
+                &failed.thrown.message,
+                &failed.logs,
                 &notes,
                 description,
             )),
@@ -298,7 +300,7 @@ pub(super) async fn invoke_tool(
             return Err(Thrown::tool(name, error.to_string()));
         }
     };
-    let text = result_text(&result);
+    let text = script_text(name, &result);
     record(limits, ordinal, name, !result.is_error, text.len());
     if result.is_error {
         Err(Thrown::tool(name, text))
@@ -389,6 +391,36 @@ fn result_text(result: &ToolResult) -> String {
         .collect()
 }
 
+/// Text the program sees. `read` keeps the revision in UI details; the
+/// script gets the file bytes without the trailing `[revision ...]` tag.
+fn script_text(name: &str, result: &ToolResult) -> String {
+    let text = result_text(result);
+    if name == "read" {
+        strip_revision_tag(&text)
+    } else {
+        text
+    }
+}
+
+fn strip_revision_tag(text: &str) -> String {
+    let Some(index) = text.rfind("\n[revision ") else {
+        if revision_tag_line(text) {
+            return String::new();
+        }
+        return text.to_owned();
+    };
+    let tail = &text[index + 1..];
+    if revision_tag_line(tail) {
+        text[..index].to_owned()
+    } else {
+        text.to_owned()
+    }
+}
+
+fn revision_tag_line(text: &str) -> bool {
+    text.starts_with("[revision ") && text.ends_with(']') && !text.contains('\n')
+}
+
 fn success(
     description: &str,
     logs: Vec<String>,
@@ -419,11 +451,12 @@ fn failure(
     notes: &Mutex<Vec<CallNote>>,
     description: &str,
 ) -> ToolResult {
-    let mut body = format!("Error: code run failed ({kind}): {message}");
+    let mut body = String::new();
     if !logs.is_empty() {
-        body.push_str("\nCaptured output:\n");
         body.push_str(&logs.join("\n"));
+        body.push('\n');
     }
+    body.push_str(&format!("Error: code run failed ({kind}): {message}"));
     let (body, truncated) = cap_output(body);
     ToolResult::error(body).with_details(details(description, notes, truncated))
 }
@@ -638,6 +671,65 @@ except Exception as e:
         assert!(result.is_error, "{text}");
         assert!(text.contains("import"), "{text}");
         assert!(text.contains("does not need to be installed"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn common_python_covers_unpack_assign_and_repeat() {
+        let root = temp_dir("py");
+        std::fs::write(root.join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(root.join("b.txt"), "beta\n").unwrap();
+        let tools = catalog(vec![Arc::new(ReadTool)]);
+        let result = run(
+            &root,
+            tools,
+            r#"a, b = await gather(tools.read(path="a.txt", limit=1), tools.read(path="b.txt", limit=1))
+seen = {}
+seen["a"] = a.strip()
+items = ["x", "y"]
+items[0] = "z"
+count = 0
+count += 2
+label = "S" * 4
+pairs = []
+for i, item in enumerate(items):
+    pairs.append(str(int(i)) + item)
+ordered = sorted(pairs, reverse=True)
+return a.strip() + "|" + b.strip() + "|" + seen.get("a") + "|" + seen.get("missing", "no") + "|" + label + "|" + str(count) + "|" + "|".join(ordered) + "|" + str(sum([1, 2])) + "|" + min(["b", "a"]) + "|" + ("yes" if count > 1 else "no")
+"#,
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(
+            !text.contains("[revision "),
+            "read results inside run_code stay free of the revision tag:\n{text}"
+        );
+        assert_eq!(text, "alpha|beta|alpha|no|SSSS|2|1y|0z|3|a|yes");
+        let printed = run(
+            &root,
+            catalog(vec![]),
+            "print(\"before\")\nraise Exception(\"boom\")\n",
+        )
+        .await;
+        let printed_text = text_of(&printed);
+        assert!(printed.is_error, "{printed_text}");
+        assert!(
+            printed_text.starts_with("before\nError:"),
+            "prints stay in front of the error:\n{printed_text}"
+        );
+        assert!(printed_text.contains("boom"), "{printed_text}");
+        let imported = run(&root, catalog(vec![]), "import os\n").await;
+        let imported_text = text_of(&imported);
+        assert!(imported.is_error, "{imported_text}");
+        assert!(
+            imported_text.contains("import is not available"),
+            "{imported_text}"
+        );
+        assert!(
+            !imported_text.contains("is not supported. Embedded"),
+            "import errors stay one sentence the model can act on:\n{imported_text}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -11,7 +11,7 @@ English notes are [below](#english).
 - **工作区。** 一个工作区挂多个文件夹。会话属于工作区；当前文件夹解析相对路径，其它文件夹用绝对路径。
 - **对话。** 输入框旁切换模型和思考强度（档位来自 models.dev；每个会话记在 `ui.json`）。`/` 列出 `/new`、`/compact`、`/settings`、技能和 MCP。
 - **上下文。** 大约用到窗口 85% 时自动压缩，也可以 `/compact`。最近约 2 万 token 原样保留，更早的内容写成摘要。账本不改写。
-- **工具。** 进程内的 `read`、`write`、`edit`、`find`、`grep`。进程工具只注册一个：Windows 上按 PowerShell 7、Windows PowerShell 5.1、Git Bash 的顺序选择（工具名是 `powershell` 或 `bash`），都没有时才用 `cmd`，且不写入设置。Linux / macOS 是 `bash`。不选 WSL，也不把 bash 翻译成 PowerShell。`MYCODE_SHELL` 或设置里的 `tools.shell` 可以指定解释器。`mode` `script` 交给这个解释器；`mode` `program` 直接启动映像。
+- **工具。** 进程内的 `read`、`write`、`edit`、`find`、`grep`。进程工具只注册一个，启动时自动选定，会话内名字不变。Windows 优先 PowerShell 7（`pwsh`），然后 Windows PowerShell 5.1，最后才是 `cmd`。不选 Git Bash、MSYS2、Cygwin 或 WSL。Linux / macOS 用 `$SHELL` 里的 bash、zsh 或 sh，否则按平台回退到这些 shell。不读取 `MYCODE_SHELL`，也不使用设置里的 `tools.shell`。`mode` `script` 交给这个解释器；`mode` `program` 直接启动映像。
 - **分组执行。** `run_code` 在进程内跑一段 Python（顶层 `await` / `return`）。不启动 Node.js，也不要求安装 Python。一次调用里组合多次读、搜、改和网页操作，只有 `return` 和 `print` 回到上下文。主代理和子代理用同一套。
 - **子代理。** 内置 `scout`（只读研究）和 `artisan`（有界实现），也可以在 `agents/` 里加角色。委派工具是 `agent`。简单查找留在原地用 `run_code`；较宽的代码库或网页研究可以由模型选择交给 `scout`。并发默认 4；设置为 `0` 表示这个默认值。
 - **网页。** `web_search` 返回短摘要（去重、缓存）。`fetch_content` 带 `goal` 时只回匹配摘录。后端是 Querit、AnySearch，或兼容的 https 端点，最多启用一个。密钥在设置页或 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`。
@@ -68,7 +68,7 @@ mycode is a local-first desktop coding agent for Windows, macOS, and Linux x86_6
 - **Workspaces.** One workspace mounts several folders. The current folder resolves relative paths; the others are absolute.
 - **Chat.** Switch model and thinking effort beside the composer. `/` lists commands, skills, and MCP.
 - **Context.** Automatic compaction near 85% of the window, or `/compact`. The last ~20k tokens stay verbatim.
-- **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`. One process tool is registered: on Windows, PowerShell 7, then Windows PowerShell 5.1, then Git Bash (`powershell` or `bash`); `cmd` only if none of those exist, and that fallback is not saved. Linux and macOS use `bash`. WSL is not selected. Commands are not translated. `MYCODE_SHELL` or `tools.shell` overrides the choice.
+- **Tools.** In-process `read`, `write`, `edit`, `find`, and `grep`. One process tool is registered at startup and keeps that name for the session. Windows prefers PowerShell 7 (`pwsh`), then Windows PowerShell 5.1, then `cmd`. Git Bash, MSYS2, Cygwin, and WSL are not selected. Linux and macOS use bash, zsh, or sh from `$SHELL`, then a platform fallback. `MYCODE_SHELL` and `tools.shell` are not used. `mode` `script` runs that interpreter; `mode` `program` launches an executable directly.
 - **Grouping.** `run_code` runs a Python function body inside the binary. Node.js is not used, and Python does not need to be installed. Several reads, searches, edits, or page fetches share one call; only `return` and `print` come back. The main agent and every subagent get the same tool.
 - **Subagents.** Built-in `scout` (read-only research) and `artisan` (a bounded change), or custom roles under `agents/`. The model chooses: a narrow lookup stays inline with `run_code`; broad repo or web research can go to `scout`. Default concurrency is 4 (`0` means that default).
 - **Web.** `web_search` returns short snippets (deduped, cached). `fetch_content` with `goal` returns matching excerpts. Querit, AnySearch, or one compatible https endpoint.

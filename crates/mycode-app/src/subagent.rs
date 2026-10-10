@@ -19,10 +19,9 @@ use tokio_util::sync::CancellationToken;
 const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MYCode subagent. Finish the brief with the \
 tools you have. You cannot ask the user; reversible choices in the brief are authorized. \
 Report assumptions that matter, then stop. \
-The environment block names this OS and the one shell tool; write that shell's syntax. \
 `run_code` is the same grouping tool the parent has: use it for several reads, searches, \
-edits, or page fetches in this brief, and return only what the brief asks for. One obvious \
-call stays direct. You cannot delegate further.";
+edits, or page fetches in this brief, including a rename across files, and return only \
+what the brief asks for. One obvious call stays direct. You cannot delegate further.";
 
 /// Parent-side tools a child can inherit when the role lists none.
 ///
@@ -354,7 +353,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .join("\n");
     let dispatch = [
         "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
-        "You decide whether to delegate. A simple lookup or a few files stays inline: use `run_code` when that step needs several reads, greps, finds, edits, or page fetches, and a direct tool when one call is enough. `scout` fits broad codebase search, web research, or documentation fetches, where a separate read-only pass returns a short map and keeps your context smaller. A narrow question does not need `scout`.",
+        "You decide whether to delegate. A rename or the same edit across several files stays inline as one `run_code`: the program reads and edits, then returns the paths. Do not spend one `edit` per file. A single obvious call stays a direct tool. `scout` is the better fit for web research, vendor docs, and a repository-wide map: it returns a short map instead of pasting pages into this chat. A narrow question does not need `scout`.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
         "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
         "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
@@ -715,9 +714,19 @@ cwd for both script and program mode.",
         }
     }
     system.push_str("\n\n");
-    system.push_str(&mycode_tools::render_environment_block(
-        os, arch, run_dir, shell,
-    ));
+    if registered_shell_name(registry).is_some() {
+        system.push_str(
+            "The environment block names this OS and the one shell tool; write that shell's syntax.\n\n",
+        );
+        system.push_str(&mycode_tools::render_environment_block(
+            os, arch, run_dir, shell,
+        ));
+    } else {
+        system.push_str(
+            "This role has no shell tool. The environment block names the OS and cwd only.\n\n",
+        );
+        system.push_str(&render_os_block(os, arch, run_dir));
+    }
     append_child_skills(&mut system, run_dir, extra_roots);
     if registry.get("search_tool").is_some() {
         system.push_str(
@@ -730,10 +739,17 @@ cwd for both script and program mode.",
     system
 }
 
+fn render_os_block(os: &str, arch: &str, cwd: &Path) -> String {
+    format!(
+        "<environment>\nos: {os} ({arch})\ncwd: {}\n</environment>",
+        cwd.display()
+    )
+}
+
 /// Model-facing name of the one shell tool in `registry`, if it has one.
 fn registered_shell_name(registry: &ToolRegistry) -> Option<String> {
     let names = registry.names();
-    ["powershell", "bash", "cmd"]
+    ["powershell", "bash", "zsh", "sh", "cmd"]
         .into_iter()
         .find(|name| names.iter().any(|registered| registered == name))
         .map(str::to_owned)
@@ -753,7 +769,7 @@ fn child_registry_with(
             "read" => registry.register(Arc::new(mycode_tools::builtin::ReadTool)),
             "write" => registry.register(Arc::new(mycode_tools::builtin::WriteTool)),
             "edit" => registry.register(Arc::new(mycode_tools::builtin::EditTool)),
-            "shell" | "bash" | "powershell" | "cmd" => {
+            "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd" => {
                 if let Some(tool) = shell.take() {
                     registry.register(Arc::new(tool));
                 }
@@ -861,7 +877,12 @@ mod tests {
         registry
             .names()
             .into_iter()
-            .filter(|name| matches!(name.as_str(), "powershell" | "bash" | "cmd" | "shell"))
+            .filter(|name| {
+                matches!(
+                    name.as_str(),
+                    "powershell" | "bash" | "zsh" | "sh" | "cmd" | "shell"
+                )
+            })
             .collect()
     }
 
@@ -872,6 +893,8 @@ mod tests {
             "read".to_owned(),
             "shell".to_owned(),
             "bash".to_owned(),
+            "zsh".to_owned(),
+            "sh".to_owned(),
             "powershell".to_owned(),
             "cmd".to_owned(),
         ];
@@ -883,6 +906,8 @@ mod tests {
             ),
             (mycode_tools::ShellKind::Pwsh, "pwsh.exe", "powershell"),
             (mycode_tools::ShellKind::Bash, "/bin/bash", "bash"),
+            (mycode_tools::ShellKind::Zsh, "/bin/zsh", "zsh"),
+            (mycode_tools::ShellKind::Sh, "/bin/sh", "sh"),
             (mycode_tools::ShellKind::Cmd, "cmd.exe", "cmd"),
         ];
         for (kind, program, expected) in cases {
@@ -978,34 +1003,35 @@ mod tests {
     }
 
     #[test]
-    fn git_bash_and_cmd_subagents_match_that_interpreter() {
-        let home =
-            HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-gitbash")).unwrap();
+    fn zsh_and_cmd_subagents_match_that_interpreter() {
+        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-zsh")).unwrap();
         let artisan = builtin_roles().role("artisan").expect("artisan").clone();
         let allowed = ["read".to_owned(), "shell".to_owned()];
-        let git_bash = mycode_tools::DetectedShell {
-            kind: mycode_tools::ShellKind::Bash,
-            program: std::path::PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"),
+        let zsh = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Zsh,
+            program: std::path::PathBuf::from("/bin/zsh"),
         };
         let registry = super::child_registry_with(
             &home,
             &allowed,
-            mycode_tools::ShellTool::forcing(git_bash.clone()),
+            mycode_tools::ShellTool::forcing(zsh.clone()),
         );
-        assert_eq!(shell_names(&registry), vec!["bash".to_owned()]);
+        assert_eq!(shell_names(&registry), vec!["zsh".to_owned()]);
         let prompt = super::subagent_system_prompt(
             &artisan,
             &registry,
-            std::path::Path::new(r"C:\work"),
+            std::path::Path::new("/work"),
             &[],
-            "windows",
-            "x86_64",
-            &git_bash,
+            "macos",
+            "aarch64",
+            &zsh,
         );
-        assert!(prompt.contains("shell_tool: bash"), "{prompt}");
-        assert!(prompt.contains("Git Bash"), "{prompt}");
-        assert!(prompt.contains("\n- bash:"), "{prompt}");
+        assert!(prompt.contains("shell_tool: zsh"), "{prompt}");
+        assert!(prompt.contains("Write zsh"), "{prompt}");
+        assert!(prompt.contains("The path separator is `/`."), "{prompt}");
+        assert!(prompt.contains("\n- zsh:"), "{prompt}");
         assert!(!prompt.contains("\n- powershell:"), "{prompt}");
+        assert!(!prompt.contains("Git Bash"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");
 
         let cmd = mycode_tools::DetectedShell {
@@ -1034,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn scout_stays_read_only_while_the_prompt_names_the_active_shell() {
+    fn scout_stays_read_only_and_does_not_list_a_shell() {
         let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-scout")).unwrap();
         let scout = builtin_roles().role("scout").expect("scout").clone();
         let allowed = scout.resolve_tools(
@@ -1044,9 +1070,12 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         assert!(
-            allowed
-                .iter()
-                .all(|name| !matches!(name.as_str(), "shell" | "bash" | "powershell" | "cmd")),
+            allowed.iter().all(|name| {
+                !matches!(
+                    name.as_str(),
+                    "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd"
+                )
+            }),
             "scout must not inherit a shell tool, got {allowed:?}"
         );
         let shell = mycode_tools::DetectedShell {
@@ -1068,8 +1097,13 @@ mod tests {
             "x86_64",
             &shell,
         );
-        assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
-        assert!(prompt.contains("Do not use `&&`"), "{prompt}");
+        assert!(
+            !prompt.contains("shell_tool:"),
+            "scout has no shell tool:\n{prompt}"
+        );
+        assert!(prompt.contains("no shell tool"), "{prompt}");
+        assert!(prompt.contains("os: windows"), "{prompt}");
+        assert!(!prompt.contains("Do not use `&&`"), "{prompt}");
         assert!(!prompt.contains("\n- powershell:"), "{prompt}");
         assert!(!prompt.contains("\n- bash:"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");

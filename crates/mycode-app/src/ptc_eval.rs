@@ -35,7 +35,7 @@ async fn live_model_chooses_by_difficulty_when_configured() {
     mycode_tools::register_builtins(&registry);
     let mut system = build_system_prompt(&registry);
     system.push_str(
-        "\n\nYou decide whether to delegate. A simple lookup or a few files stays inline: use `run_code` when that step needs several reads, greps, finds, edits, or page fetches, and a direct tool when one call is enough. `scout` fits broad codebase search, web research, or documentation fetches, when a separate read-only pass would keep this context smaller. You choose; a narrow question stays inline.",
+        "\n\nYou decide whether to delegate. A rename or the same edit across several files stays inline as one `run_code`: the program reads and edits, then returns the paths. Do not spend one `edit` per file. A single obvious call stays a direct tool, and reading the file first is fine. `scout` is the better fit for web research, vendor docs, and a repository-wide map: it returns a short map instead of pasting pages into this chat. You choose; a narrow question stays inline.",
     );
     let mut tools = tool_specs(&registry);
     tools.push(json!({
@@ -55,42 +55,86 @@ async fn live_model_chooses_by_difficulty_when_configured() {
         }
     }));
     let client = reqwest::Client::new();
+    let url = completions_url(&base);
+    let mut failures = Vec::new();
     for scenario in choice_scenarios() {
-        let body = json!({
-            "model": model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": scenario.task},
-            ],
-            "tools": tools,
-        });
-        let response = client
-            .post(format!("{}/chat/completions", base.trim_end_matches('/')))
-            .bearer_auth(&key)
-            .json(&body)
-            .send()
-            .await
-            .unwrap_or_else(|error| panic!("{}: {error}", scenario.id));
-        let status = response.status();
-        let payload: Value = response
-            .json()
-            .await
-            .unwrap_or_else(|error| panic!("{}: {error}", scenario.id));
-        assert!(status.is_success(), "{}: {status} {payload}", scenario.id);
-        let (name, arguments) = first_tool(&payload)
-            .unwrap_or_else(|| panic!("{}: no tool call in {payload}", scenario.id));
-        eprintln!(
-            "ptc live eval {}: tool={name} args={}",
-            scenario.id, arguments
-        );
-        assert!(
-            accept_choice(scenario.weight, &name, &arguments),
-            "{}: {name} does not match {:?}",
-            scenario.id,
-            scenario.weight
-        );
+        match score_scenario(&client, &url, &key, &model, &system, &tools, scenario).await {
+            Ok(line) => eprintln!("{line}"),
+            Err(message) => {
+                eprintln!("ptc live eval FAIL {message}");
+                failures.push(message);
+            }
+        }
     }
+    assert!(
+        failures.is_empty(),
+        "ptc live eval scored every scenario; failures:\n{}",
+        failures.join("\n")
+    );
+}
+
+fn completions_url(base: &str) -> String {
+    format!("{}/chat/completions", base.trim().trim_end_matches('/'))
+}
+
+async fn score_scenario(
+    client: &reqwest::Client,
+    url: &str,
+    key: &str,
+    model: &str,
+    system: &str,
+    tools: &[Value],
+    scenario: &mycode_agent::ChoiceScenario,
+) -> Result<String, String> {
+    let body = json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": scenario.task},
+        ],
+        "tools": tools,
+    });
+    let response = client
+        .post(url)
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("{}: {error}", scenario.id))?;
+    let status = response.status();
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("{}: {error}", scenario.id))?;
+    if !status.is_success() {
+        return Err(format!("{}: {status} {payload}", scenario.id));
+    }
+    let Some((name, arguments)) = first_tool(&payload) else {
+        return Err(format!("{}: no tool call in {payload}", scenario.id));
+    };
+    if !accept_choice(scenario.weight, &name, &arguments) {
+        return Err(format!(
+            "{}: {name} does not match {:?} args={arguments}",
+            scenario.id, scenario.weight
+        ));
+    }
+    Ok(format!(
+        "ptc live eval {}: tool={name} args={arguments}",
+        scenario.id
+    ))
+}
+
+#[test]
+fn completions_url_accepts_an_openai_compatible_base() {
+    assert_eq!(
+        completions_url("https://api.openai.com/v1"),
+        "https://api.openai.com/v1/chat/completions"
+    );
+    assert_eq!(
+        completions_url("https://api.deepseek.com/"),
+        "https://api.deepseek.com/chat/completions"
+    );
 }
 
 fn tool_specs(registry: &ToolRegistry) -> Vec<Value> {

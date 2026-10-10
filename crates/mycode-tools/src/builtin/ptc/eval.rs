@@ -23,13 +23,19 @@ pub(super) struct Outcome {
     pub value: Option<String>,
 }
 
+/// A program that stopped, plus anything already printed.
+pub(super) struct ExecFailure {
+    pub thrown: Thrown,
+    pub logs: Vec<String>,
+}
+
 pub(super) async fn execute(
     program: &Program,
     catalog: &ToolCatalog,
     ctx: &ToolCtx,
     out: &ToolStream,
     limits: &Limits,
-) -> Result<Outcome, Thrown> {
+) -> Result<Outcome, ExecFailure> {
     let mut machine = Machine {
         catalog: catalog.clone(),
         ctx: ctx.clone(),
@@ -41,15 +47,25 @@ pub(super) async fn execute(
         depth: 0,
     };
     match machine.run(&program.stmts).await {
-        Ok(Control::Return(value)) => Ok(Outcome {
-            logs: machine.logs,
-            value: Some(display(&value).map_err(thrown_from_stop)?),
-        }),
+        Ok(Control::Return(value)) => {
+            let logs = std::mem::take(&mut machine.logs);
+            let shown = display(&value).map_err(|stop| ExecFailure {
+                thrown: thrown_from_stop(stop),
+                logs: logs.clone(),
+            })?;
+            Ok(Outcome {
+                logs,
+                value: Some(shown),
+            })
+        }
         Ok(Control::Next) => Ok(Outcome {
             logs: machine.logs,
             value: None,
         }),
-        Err(Stop::Throw(thrown) | Stop::Halt(thrown)) => Err(thrown),
+        Err(Stop::Throw(thrown) | Stop::Halt(thrown)) => Err(ExecFailure {
+            thrown,
+            logs: machine.logs,
+        }),
     }
 }
 
@@ -113,19 +129,39 @@ impl Machine {
             }
             Stmt::Unpack { names, value } => {
                 let value = self.expr(value).await?;
-                let Some(items) = value.as_arr() else {
-                    return Err(Stop::Throw(Thrown::script("unpack needs a list")));
-                };
-                if items.len() != names.len() {
-                    return Err(Stop::Throw(Thrown::script(format!(
-                        "expected {} values, got {}",
-                        names.len(),
-                        items.len()
-                    ))));
-                }
-                for (name, item) in names.iter().zip(items) {
-                    self.bind(name, item);
-                }
+                self.bind_unpack(names, &value)?;
+                Ok(Control::Next)
+            }
+            Stmt::SetIndex {
+                object,
+                index,
+                value,
+            } => {
+                let object = self.expr(object).await?;
+                let index = self.expr(index).await?;
+                let value = self.expr(value).await?;
+                assign_index(&object, &index, value)?;
+                Ok(Control::Next)
+            }
+            Stmt::AugName { name, op, value } => {
+                let current = self.lookup(name)?;
+                let right = self.expr(value).await?;
+                let next = self.apply_binop(*op, &current, &right)?;
+                self.bind(name, next);
+                Ok(Control::Next)
+            }
+            Stmt::AugIndex {
+                object,
+                index,
+                op,
+                value,
+            } => {
+                let object = self.expr(object).await?;
+                let index = self.expr(index).await?;
+                let current = index_with(object.clone(), &index)?;
+                let right = self.expr(value).await?;
+                let next = self.apply_binop(*op, &current, &right)?;
+                assign_index(&object, &index, next)?;
                 Ok(Control::Next)
             }
             Stmt::Return(expr) => {
@@ -158,12 +194,16 @@ impl Machine {
                     return Ok(Control::Return(value));
                 }
             },
-            Stmt::ForOf { name, iter, body } => {
+            Stmt::ForOf { names, iter, body } => {
                 let iter = self.expr(iter).await?;
                 let items = iterate(&iter)?;
                 for item in items {
                     self.bump()?;
-                    self.bind(name, item);
+                    if names.len() == 1 {
+                        self.bind(&names[0], item);
+                    } else {
+                        self.bind_unpack(names, &item)?;
+                    }
                     if let Control::Return(value) = Box::pin(self.run(body)).await? {
                         return Ok(Control::Return(value));
                     }
@@ -187,6 +227,25 @@ impl Machine {
                 Ok(Control::Next)
             }
         }
+    }
+
+    fn bind_unpack(&mut self, names: &[String], value: &Val) -> Result<(), Stop> {
+        let Some(items) = value.as_arr() else {
+            return Err(Stop::Throw(Thrown::script(
+                "unpacking needs a list. `a, b = await gather(...)` returns one list; do not join it into a string first",
+            )));
+        };
+        if items.len() != names.len() {
+            return Err(Stop::Throw(Thrown::script(format!(
+                "unpacking expected {} values, got {}. Check the list on the right",
+                names.len(),
+                items.len()
+            ))));
+        }
+        for (name, item) in names.iter().zip(items) {
+            self.bind(name, item);
+        }
+        Ok(())
     }
 
     fn bind(&mut self, name: &str, value: Val) {
@@ -259,13 +318,29 @@ impl Machine {
                 let index = self.expr(index).await?;
                 index_with(object, &index)
             }
-            Expr::Call { callee, args } => {
+            Expr::Call {
+                callee,
+                args,
+                kwargs,
+            } => {
                 let callee = self.expr(callee).await?;
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.expr(arg).await?);
                 }
-                self.call(callee, values).await
+                let mut named = Vec::with_capacity(kwargs.len());
+                for (key, expr) in kwargs {
+                    named.push((key.clone(), self.expr(expr).await?));
+                }
+                self.call(callee, values, named).await
+            }
+            Expr::IfExp { test, body, orelse } => {
+                let test = self.expr(test).await?;
+                if truthy(&test) {
+                    self.expr(body).await
+                } else {
+                    self.expr(orelse).await
+                }
             }
             Expr::ListComp {
                 target,
@@ -321,37 +396,46 @@ impl Machine {
         }
         let left = self.expr(left).await?;
         let right = self.expr(right).await?;
+        self.apply_binop(op, &left, &right)
+    }
+
+    fn apply_binop(&mut self, op: BinOp, left: &Val, right: &Val) -> Result<Val, Stop> {
         match op {
-            BinOp::Add => add(&left, &right),
-            BinOp::Sub => Ok(Val::Num(number(&left)? - number(&right)?)),
-            BinOp::Mul => Ok(Val::Num(number(&left)? * number(&right)?)),
+            BinOp::Add => add(left, right),
+            BinOp::Sub => Ok(Val::Num(number(left)? - number(right)?)),
+            BinOp::Mul => multiply(left, right),
             BinOp::Div => {
-                let divisor = number(&right)?;
+                let divisor = number(right)?;
                 if divisor == 0.0 {
                     return Err(Stop::Throw(Thrown::script("division by zero")));
                 }
-                Ok(Val::Num(number(&left)? / divisor))
+                Ok(Val::Num(number(left)? / divisor))
             }
             BinOp::Rem => {
-                let divisor = number(&right)?;
+                let divisor = number(right)?;
                 if divisor == 0.0 {
                     return Err(Stop::Throw(Thrown::script("division by zero")));
                 }
-                Ok(Val::Num(number(&left)? % divisor))
+                Ok(Val::Num(number(left)? % divisor))
             }
-            BinOp::Eq => Ok(Val::Bool(equals(&left, &right))),
-            BinOp::Ne => Ok(Val::Bool(!equals(&left, &right))),
-            BinOp::In => Ok(Val::Bool(contains(&right, &left)?)),
-            BinOp::NotIn => Ok(Val::Bool(!contains(&right, &left)?)),
-            BinOp::Lt => Ok(Val::Bool(compare(&left, &right)? < 0)),
-            BinOp::Le => Ok(Val::Bool(compare(&left, &right)? <= 0)),
-            BinOp::Gt => Ok(Val::Bool(compare(&left, &right)? > 0)),
-            BinOp::Ge => Ok(Val::Bool(compare(&left, &right)? >= 0)),
+            BinOp::Eq => Ok(Val::Bool(equals(left, right))),
+            BinOp::Ne => Ok(Val::Bool(!equals(left, right))),
+            BinOp::In => Ok(Val::Bool(contains(right, left)?)),
+            BinOp::NotIn => Ok(Val::Bool(!contains(right, left)?)),
+            BinOp::Lt => Ok(Val::Bool(compare(left, right)? < 0)),
+            BinOp::Le => Ok(Val::Bool(compare(left, right)? <= 0)),
+            BinOp::Gt => Ok(Val::Bool(compare(left, right)? > 0)),
+            BinOp::Ge => Ok(Val::Bool(compare(left, right)? >= 0)),
             BinOp::And | BinOp::Or => unreachable!("short-circuit handled above"),
         }
     }
 
-    async fn call(&mut self, callee: Val, args: Vec<Val>) -> Result<Val, Stop> {
+    async fn call(
+        &mut self,
+        callee: Val,
+        args: Vec<Val>,
+        kwargs: Vec<(String, Val)>,
+    ) -> Result<Val, Stop> {
         match callee {
             Val::ToolFn(name) => {
                 let arg = match args.as_slice() {
@@ -412,6 +496,20 @@ impl Machine {
                 Ok(Val::Num(count as f64))
             }
             Val::Range => range_list(&args),
+            Val::Enumerate => enumerate_list(&args, &kwargs),
+            Val::Zip => zip_lists(&args),
+            Val::Sorted => sorted_list(&args, &kwargs),
+            Val::Min => reduce_cmp(&args, true),
+            Val::Max => reduce_cmp(&args, false),
+            Val::Sum => sum_list(&args),
+            Val::IntFn => int_value(&args),
+            Val::ExceptionCtor => {
+                let message = match args.first() {
+                    Some(value) => display(value)?,
+                    None => "Exception".to_owned(),
+                };
+                Ok(Val::Str(message))
+            }
             Val::StrFn => {
                 let Some(value) = args.first() else {
                     return Err(Stop::Throw(Thrown::script("str takes one value")));
@@ -433,16 +531,26 @@ impl Machine {
     async fn method(&mut self, recv: &Val, name: &str, args: &[Val]) -> Result<Val, Stop> {
         match (recv, name) {
             (Val::Str(text), "split") => {
-                let sep = arg_str(args, 0, "split")?;
-                let parts: Vec<Val> = if sep.is_empty() {
-                    text.chars().map(|ch| Val::Str(ch.to_string())).collect()
-                } else {
-                    text.split(&sep)
+                let parts: Vec<Val> = if args.is_empty() {
+                    text.split_whitespace()
                         .map(|part| Val::Str(part.to_owned()))
                         .collect()
+                } else {
+                    let sep = arg_str(args, 0, "split")?;
+                    if sep.is_empty() {
+                        text.chars().map(|ch| Val::Str(ch.to_string())).collect()
+                    } else {
+                        text.split(&sep)
+                            .map(|part| Val::Str(part.to_owned()))
+                            .collect()
+                    }
                 };
                 Ok(Val::arr(parts))
             }
+            (Val::Str(text), "splitlines") => Ok(Val::arr(
+                text.lines().map(|line| Val::Str(line.to_owned())).collect(),
+            )),
+            (Val::Str(text), "upper") => Ok(Val::Str(text.to_uppercase())),
             (Val::Str(text), "includes") => {
                 Ok(Val::Bool(text.contains(&arg_str(args, 0, "includes")?)))
             }
@@ -485,6 +593,25 @@ impl Machine {
                     parts.push(display(item)?);
                 }
                 Ok(Val::Str(parts.join(&sep)))
+            }
+            (Val::Obj(map), "get") => {
+                let Some(key) = args.first() else {
+                    return Err(Stop::Throw(Thrown::script("dict.get takes a key")));
+                };
+                let key = display(key)?;
+                let found = lock_map(map).get(&key).cloned();
+                Ok(found.unwrap_or_else(|| args.get(1).cloned().unwrap_or(Val::Null)))
+            }
+            (Val::Obj(map), "keys") => Ok(Val::arr(
+                lock_map(map).keys().cloned().map(Val::Str).collect(),
+            )),
+            (Val::Obj(map), "values") => Ok(Val::arr(lock_map(map).values().cloned().collect())),
+            (Val::Obj(map), "items") => {
+                let pairs = lock_map(map)
+                    .iter()
+                    .map(|(key, value)| Val::arr(vec![Val::Str(key.clone()), value.clone()]))
+                    .collect();
+                Ok(Val::arr(pairs))
             }
             (Val::Arr(items), "includes") => {
                 let needle = args.first().cloned().unwrap_or(Val::Null);
@@ -580,6 +707,14 @@ impl Machine {
             "len" => Ok(Val::Len),
             "range" => Ok(Val::Range),
             "str" => Ok(Val::StrFn),
+            "int" => Ok(Val::IntFn),
+            "enumerate" => Ok(Val::Enumerate),
+            "zip" => Ok(Val::Zip),
+            "sorted" => Ok(Val::Sorted),
+            "min" => Ok(Val::Min),
+            "max" => Ok(Val::Max),
+            "sum" => Ok(Val::Sum),
+            "Exception" => Ok(Val::ExceptionCtor),
             "console" => Ok(Val::Console),
             "Object" => Ok(Val::ObjectCtor),
             "Promise" => Ok(Val::PromiseCtor),
@@ -608,6 +743,10 @@ fn member(object: Val, name: &str) -> Result<Val, Stop> {
         Val::PromiseCtor if name == "all" => Ok(Val::PromiseAll),
         Val::Str(text) if name == "length" => Ok(Val::Num(text.chars().count() as f64)),
         Val::Arr(items) if name == "length" => Ok(Val::Num(lock_vec(items).len() as f64)),
+        Val::Obj(_) if matches!(name, "get" | "keys" | "values" | "items") => Ok(Val::Method {
+            recv: Box::new(object.clone()),
+            name: name.to_owned(),
+        }),
         Val::Obj(map) => Ok(lock_map(map).get(name).cloned().unwrap_or(Val::Null)),
         Val::Str(_) | Val::Arr(_) => Ok(Val::Method {
             recv: Box::new(object),
@@ -694,6 +833,14 @@ enum Val {
     Len,
     Range,
     StrFn,
+    IntFn,
+    Enumerate,
+    Zip,
+    Sorted,
+    Min,
+    Max,
+    Sum,
+    ExceptionCtor,
     ObjectKeys,
     Pending(Arc<Pending>),
     Method { recv: Box<Val>, name: String },
@@ -799,7 +946,13 @@ fn contains(haystack: &Val, needle: &Val) -> Result<bool, Stop> {
             Ok(text.contains(needle))
         }
         Val::Arr(items) => Ok(lock_vec(items).iter().any(|item| equals(item, needle))),
-        _ => Err(Stop::Throw(Thrown::script("`in` needs a string or a list"))),
+        Val::Obj(map) => {
+            let key = display(needle)?;
+            Ok(lock_map(map).contains_key(&key))
+        }
+        _ => Err(Stop::Throw(Thrown::script(
+            "`in` needs a string, a list, or a dict",
+        ))),
     }
 }
 
@@ -930,6 +1083,271 @@ fn range_list(args: &[Val]) -> Result<Val, Stop> {
         cursor += 1;
     }
     Ok(Val::arr(items))
+}
+
+fn multiply(left: &Val, right: &Val) -> Result<Val, Stop> {
+    match (left, right) {
+        (Val::Str(text), Val::Num(times)) => repeat_str(text, *times),
+        (Val::Num(times), Val::Str(text)) => repeat_str(text, *times),
+        (Val::Arr(items), Val::Num(times)) => repeat_list(&lock_vec(items), *times),
+        (Val::Num(times), Val::Arr(items)) => repeat_list(&lock_vec(items), *times),
+        _ => Ok(Val::Num(number(left)? * number(right)?)),
+    }
+}
+
+fn repeat_count(times: f64) -> Result<usize, Stop> {
+    if !times.is_finite() {
+        return Err(Stop::Throw(Thrown::script(
+            "repeat count must be a finite number",
+        )));
+    }
+    let raw = times.trunc() as i64;
+    if raw <= 0 {
+        return Ok(0);
+    }
+    Ok(raw as usize)
+}
+
+fn repeat_str(text: &str, times: f64) -> Result<Val, Stop> {
+    let count = repeat_count(times)?;
+    const MAX_REPEAT_CHARS: usize = 100_000;
+    if text.chars().count().saturating_mul(count) > MAX_REPEAT_CHARS {
+        return Err(Stop::Throw(Thrown::script(format!(
+            "string repeat is limited to {MAX_REPEAT_CHARS} characters. Return a shorter string"
+        ))));
+    }
+    Ok(Val::Str(text.repeat(count)))
+}
+
+fn repeat_list(items: &[Val], times: f64) -> Result<Val, Stop> {
+    let count = repeat_count(times)?;
+    const MAX_REPEAT_ITEMS: usize = 10_000;
+    if items.len().saturating_mul(count) > MAX_REPEAT_ITEMS {
+        return Err(Stop::Throw(Thrown::script(format!(
+            "list repeat is limited to {MAX_REPEAT_ITEMS} items"
+        ))));
+    }
+    let mut out = Vec::with_capacity(items.len().saturating_mul(count));
+    for _ in 0..count {
+        out.extend(items.iter().cloned());
+    }
+    Ok(Val::arr(out))
+}
+
+fn assign_index(object: &Val, index: &Val, value: Val) -> Result<(), Stop> {
+    match object {
+        Val::Obj(map) => {
+            let key = display(index)?;
+            lock_map(map).insert(key, value);
+            Ok(())
+        }
+        Val::Arr(items) => {
+            let Val::Num(number) = index else {
+                return Err(Stop::Throw(Thrown::script(
+                    "a list index assignment needs a number, as in items[i] = value",
+                )));
+            };
+            let mut borrowed = lock_vec(items);
+            let Some(slot) = index_at(*number, borrowed.len()) else {
+                return Err(Stop::Throw(Thrown::script(
+                    "list index is out of range. Assign an index that already exists",
+                )));
+            };
+            borrowed[slot] = value;
+            Ok(())
+        }
+        _ => Err(Stop::Throw(Thrown::script(
+            "only a list or a dict can be assigned by index",
+        ))),
+    }
+}
+
+fn enumerate_list(args: &[Val], kwargs: &[(String, Val)]) -> Result<Val, Stop> {
+    let Some(iter) = args.first() else {
+        return Err(Stop::Throw(Thrown::script(
+            "enumerate takes a list or a string",
+        )));
+    };
+    if args.len() > 2 {
+        return Err(Stop::Throw(Thrown::script(
+            "enumerate takes the iterable and an optional start",
+        )));
+    }
+    let mut start = match args.get(1) {
+        Some(Val::Num(number)) => *number,
+        Some(_) => {
+            return Err(Stop::Throw(Thrown::script(
+                "enumerate start must be a number",
+            )));
+        }
+        None => 0.0,
+    };
+    for (key, value) in kwargs {
+        if key != "start" {
+            return Err(Stop::Throw(Thrown::script(format!(
+                "enumerate accepts start=, not {key}"
+            ))));
+        }
+        if args.len() > 1 {
+            return Err(Stop::Throw(Thrown::script(
+                "pass enumerate's start once, either as the second argument or as start=",
+            )));
+        }
+        let Val::Num(number) = value else {
+            return Err(Stop::Throw(Thrown::script(
+                "enumerate start must be a number",
+            )));
+        };
+        start = *number;
+    }
+    if !start.is_finite() {
+        return Err(Stop::Throw(Thrown::script(
+            "enumerate start must be finite",
+        )));
+    }
+    let origin = start.trunc() as i64;
+    let pairs = iterate(iter)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| Val::arr(vec![Val::Num((origin + index as i64) as f64), item]))
+        .collect();
+    Ok(Val::arr(pairs))
+}
+
+fn zip_lists(args: &[Val]) -> Result<Val, Stop> {
+    if args.is_empty() {
+        return Ok(Val::arr(Vec::new()));
+    }
+    let lists = args.iter().map(iterate).collect::<Result<Vec<_>, _>>()?;
+    let len = lists.iter().map(Vec::len).min().unwrap_or(0);
+    let mut rows = Vec::with_capacity(len);
+    for index in 0..len {
+        rows.push(Val::arr(
+            lists.iter().map(|list| list[index].clone()).collect(),
+        ));
+    }
+    Ok(Val::arr(rows))
+}
+
+fn sorted_list(args: &[Val], kwargs: &[(String, Val)]) -> Result<Val, Stop> {
+    let Some(iter) = args.first() else {
+        return Err(Stop::Throw(Thrown::script(
+            "sorted takes one list or string",
+        )));
+    };
+    if args.len() != 1 {
+        return Err(Stop::Throw(Thrown::script(
+            "sorted takes one list or string",
+        )));
+    }
+    let mut reverse = false;
+    for (key, value) in kwargs {
+        if key != "reverse" {
+            return Err(Stop::Throw(Thrown::script(format!(
+                "sorted accepts reverse=True or reverse=False. key= is not available because lambda is not available. Not {key}"
+            ))));
+        }
+        reverse = truthy(value);
+    }
+    let mut items = iterate(iter)?;
+    items.sort_by(sort_pair);
+    if reverse {
+        items.reverse();
+    }
+    Ok(Val::arr(items))
+}
+
+fn sort_pair(left: &Val, right: &Val) -> std::cmp::Ordering {
+    match (left, right) {
+        (Val::Num(left), Val::Num(right)) => {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (Val::Str(left), Val::Str(right)) => left.cmp(right),
+        _ => display(left)
+            .unwrap_or_default()
+            .cmp(&display(right).unwrap_or_default()),
+    }
+}
+
+fn reduce_cmp(args: &[Val], want_min: bool) -> Result<Val, Stop> {
+    let name = if want_min { "min" } else { "max" };
+    let items = if args.len() == 1 {
+        iterate(&args[0])?
+    } else if args.is_empty() {
+        return Err(Stop::Throw(Thrown::script(format!(
+            "{name} takes a list or several values"
+        ))));
+    } else {
+        args.to_vec()
+    };
+    let mut items = items.into_iter();
+    let Some(mut best) = items.next() else {
+        return Err(Stop::Throw(Thrown::script(format!(
+            "{name} of an empty list"
+        ))));
+    };
+    for item in items {
+        let order = sort_pair(&best, &item);
+        let replace = if want_min {
+            order == std::cmp::Ordering::Greater
+        } else {
+            order == std::cmp::Ordering::Less
+        };
+        if replace {
+            best = item;
+        }
+    }
+    Ok(best)
+}
+
+fn sum_list(args: &[Val]) -> Result<Val, Stop> {
+    let Some(iter) = args.first() else {
+        return Err(Stop::Throw(Thrown::script("sum takes a list of numbers")));
+    };
+    if args.len() > 2 {
+        return Err(Stop::Throw(Thrown::script(
+            "sum takes a list and an optional start",
+        )));
+    }
+    let mut total = match args.get(1) {
+        Some(Val::Num(number)) => *number,
+        Some(_) => {
+            return Err(Stop::Throw(Thrown::script("sum start must be a number")));
+        }
+        None => 0.0,
+    };
+    for item in iterate(iter)? {
+        total += number(&item)?;
+    }
+    Ok(Val::Num(total))
+}
+
+fn int_value(args: &[Val]) -> Result<Val, Stop> {
+    let Some(value) = args.first() else {
+        return Err(Stop::Throw(Thrown::script("int takes one value")));
+    };
+    if args.len() != 1 {
+        return Err(Stop::Throw(Thrown::script("int takes one value")));
+    }
+    let number = match value {
+        Val::Num(number) => *number,
+        Val::Bool(true) => 1.0,
+        Val::Bool(false) => 0.0,
+        Val::Str(text) => text.trim().parse::<f64>().map_err(|_| {
+            Stop::Throw(Thrown::script(format!(
+                "int cannot parse {text:?}. Pass a number or a numeric string"
+            )))
+        })?,
+        _ => {
+            return Err(Stop::Throw(Thrown::script(
+                "int takes a number, a bool, or a numeric string",
+            )));
+        }
+    };
+    if !number.is_finite() {
+        return Err(Stop::Throw(Thrown::script("int argument must be finite")));
+    }
+    Ok(Val::Num(number.trunc()))
 }
 
 fn iterate(value: &Val) -> Result<Vec<Val>, Stop> {

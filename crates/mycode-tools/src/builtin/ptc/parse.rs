@@ -32,9 +32,29 @@ pub(super) enum Stmt {
         body: Vec<Stmt>,
     },
     ForOf {
-        name: String,
+        /// One name, or several names from `for a, b in ...`.
+        names: Vec<String>,
         iter: Expr,
         body: Vec<Stmt>,
+    },
+    /// `obj[key] = value` or `items[i] = value`.
+    SetIndex {
+        object: Expr,
+        index: Expr,
+        value: Expr,
+    },
+    /// `name += value` and the other augmented assigns.
+    AugName {
+        name: String,
+        op: BinOp,
+        value: Expr,
+    },
+    /// `obj[key] += value`.
+    AugIndex {
+        object: Expr,
+        index: Expr,
+        op: BinOp,
+        value: Expr,
     },
     Try {
         body: Vec<Stmt>,
@@ -78,6 +98,13 @@ pub(super) enum Expr {
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,
+        kwargs: Vec<(String, Expr)>,
+    },
+    /// `body if test else orelse`.
+    IfExp {
+        test: Box<Expr>,
+        body: Box<Expr>,
+        orelse: Box<Expr>,
     },
     Template(Vec<TemplatePart>),
     /// `[elt for target in iter if ...]`. One generator, name target.
@@ -121,20 +148,20 @@ pub(super) enum BinOp {
     NotIn,
 }
 
-const HINT: &str = " Embedded Python subset inside mycode. Node.js is not used, and Python does not need to be installed. No import, classes, or lambda. Call tools as await tools.name(arg=value). Parallel reads use await gather(...).";
+const FIX: &str = "Rewrite that part and call run_code again. You can use assignment (including a, b = ... and obj[key] = value), if/else, for, while, try/except, lists, dicts, f-strings, a if c else b, len/range/str/int/enumerate/zip/sorted/min/max/sum, slices, string split/join/strip, and await tools.name(arg=value). await gather(...) overlaps read-only calls. No import, classes, lambda, or match. Python does not need to be installed.";
 
 pub(super) fn parse(src: &str) -> Result<Program, String> {
     let wrapped = wrap_function_body(src);
     let module = parse_python(&wrapped, Mode::Module, "<run_code>")
-        .map_err(|err| format!("syntax: {err}.{HINT}"))?;
+        .map_err(|err| syntax_error(src, &err.to_string()))?;
     let Mod::Module(module) = module else {
-        return Err(format!("expected a program.{HINT}"));
+        return Err(format!("expected a program. {FIX}"));
     };
     let Some(PyStmt::AsyncFunctionDef(func)) = module.body.first() else {
-        return Err(format!("internal wrapper was not a function.{HINT}"));
+        return Err(format!("internal wrapper was not a function. {FIX}"));
     };
     if module.body.len() != 1 {
-        return Err(format!("extra statements outside the program.{HINT}"));
+        return Err(format!("extra statements outside the program. {FIX}"));
     }
     Ok(Program {
         stmts: convert_body(&func.body)?,
@@ -198,11 +225,8 @@ fn convert_stmt(stmt: &PyStmt) -> Result<Option<Stmt>, String> {
             if !node.orelse.is_empty() {
                 return Err(unsupported("for else"));
             }
-            let PyExpr::Name(name) = node.target.as_ref() else {
-                return Err(unsupported("for target must be a name"));
-            };
             Ok(Some(Stmt::ForOf {
-                name: name.id.as_str().to_owned(),
+                names: loop_names(&node.target)?,
                 iter: convert_expr(&node.iter)?,
                 body: convert_body(&node.body)?,
             }))
@@ -214,10 +238,29 @@ fn convert_stmt(stmt: &PyStmt) -> Result<Option<Stmt>, String> {
             };
             Ok(Some(Stmt::Throw(convert_expr(exc)?)))
         }
-        PyStmt::Import(_) | PyStmt::ImportFrom(_) => Err(unsupported(
-            "import. This interpreter has no modules; call tools.*",
-        )),
+        PyStmt::AugAssign(node) => convert_aug(&node.target, node.op, &node.value),
+        PyStmt::AnnAssign(node) => {
+            let Some(value) = node.value.as_deref() else {
+                return Ok(None);
+            };
+            convert_assign(std::slice::from_ref(node.target.as_ref()), value)
+        }
+        PyStmt::Import(_) | PyStmt::ImportFrom(_) => Err(
+            "import is not available in run_code. There is no module system, and Python does not need to be installed. Call tools directly, for example hits = await tools.grep(pattern=\"foo\", include=\"*.rs\"). Do not import os, json, or pathlib."
+                .to_owned(),
+        ),
         _ => Err(unsupported("that statement")),
+    }
+}
+
+fn loop_names(target: &PyExpr) -> Result<Vec<String>, String> {
+    match target {
+        PyExpr::Name(name) => Ok(vec![name.id.as_str().to_owned()]),
+        PyExpr::Tuple(tuple) => unpack_names(&tuple.elts),
+        PyExpr::List(list) => unpack_names(&list.elts),
+        _ => Err(unsupported(
+            "a for target must be a name or a tuple of names, as in `for i, item in enumerate(items)`",
+        )),
     }
 }
 
@@ -233,19 +276,71 @@ fn convert_assign(targets: &[PyExpr], value: &PyExpr) -> Result<Option<Stmt>, St
         })),
         PyExpr::Tuple(tuple) => unpack(&tuple.elts, value),
         PyExpr::List(list) => unpack(&list.elts, value),
-        _ => Err(unsupported("assignment target")),
+        PyExpr::Subscript(node) => {
+            if matches!(node.slice.as_ref(), PyExpr::Slice(_)) {
+                return Err(unsupported(
+                    "slice assignment. Assign one index, as in items[i] = value",
+                ));
+            }
+            Ok(Some(Stmt::SetIndex {
+                object: convert_expr(&node.value)?,
+                index: convert_expr(&node.slice)?,
+                value,
+            }))
+        }
+        _ => Err(unsupported(
+            "that assignment target. Use a name, a tuple of names (`a, b = ...`), or obj[key] = value",
+        )),
     }
 }
 
-fn unpack(elts: &[PyExpr], value: Expr) -> Result<Option<Stmt>, String> {
+fn convert_aug(target: &PyExpr, op: Operator, value: &PyExpr) -> Result<Option<Stmt>, String> {
+    let op = convert_operator(op)?;
+    let value = convert_expr(value)?;
+    match target {
+        PyExpr::Name(name) => Ok(Some(Stmt::AugName {
+            name: name.id.as_str().to_owned(),
+            op,
+            value,
+        })),
+        PyExpr::Subscript(node) => {
+            if matches!(node.slice.as_ref(), PyExpr::Slice(_)) {
+                return Err(unsupported("augmented slice assignment"));
+            }
+            Ok(Some(Stmt::AugIndex {
+                object: convert_expr(&node.value)?,
+                index: convert_expr(&node.slice)?,
+                op,
+                value,
+            }))
+        }
+        _ => Err(unsupported(
+            "that augmented assignment. Use name += value or obj[key] += value",
+        )),
+    }
+}
+
+fn unpack_names(elts: &[PyExpr]) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     for elt in elts {
         let PyExpr::Name(name) = elt else {
-            return Err(unsupported("unpack target must be names"));
+            return Err(unsupported(
+                "unpacking into anything but names. Write `a, b = await gather(...)`",
+            ));
         };
         names.push(name.id.as_str().to_owned());
     }
-    Ok(Some(Stmt::Unpack { names, value }))
+    if names.is_empty() {
+        return Err(unsupported("empty unpack"));
+    }
+    Ok(names)
+}
+
+fn unpack(elts: &[PyExpr], value: Expr) -> Result<Option<Stmt>, String> {
+    Ok(Some(Stmt::Unpack {
+        names: unpack_names(elts)?,
+        value,
+    }))
 }
 
 fn convert_try(node: &ast::StmtTry) -> Result<Option<Stmt>, String> {
@@ -358,6 +453,11 @@ fn convert_expr(expr: &PyExpr) -> Result<Expr, String> {
             Ok(Expr::Template(parts))
         }
         PyExpr::ListComp(node) => convert_list_comp(node),
+        PyExpr::IfExp(node) => Ok(Expr::IfExp {
+            test: Box::new(convert_expr(&node.test)?),
+            body: Box::new(convert_expr(&node.body)?),
+            orelse: Box::new(convert_expr(&node.orelse)?),
+        }),
         _ => Err(unsupported("that expression")),
     }
 }
@@ -382,6 +482,7 @@ fn convert_subscript(value: &PyExpr, slice: &PyExpr) -> Result<Expr, String> {
                 name: "slice".to_owned(),
             }),
             args,
+            kwargs: Vec::new(),
         });
     }
     Ok(Expr::Index {
@@ -428,6 +529,7 @@ fn convert_call(node: &ast::ExprCall) -> Result<Expr, String> {
         return Ok(Expr::Call {
             callee: Box::new(callee),
             args: vec![arg],
+            kwargs: Vec::new(),
         });
     }
     let args = node
@@ -435,12 +537,17 @@ fn convert_call(node: &ast::ExprCall) -> Result<Expr, String> {
         .iter()
         .map(convert_expr)
         .collect::<Result<Vec<_>, _>>()?;
-    if !node.keywords.is_empty() {
-        return Err(unsupported("keyword arguments on this call"));
+    let mut kwargs = Vec::new();
+    for keyword in &node.keywords {
+        let Some(name) = keyword.arg.as_ref() else {
+            return Err(unsupported("**kwargs"));
+        };
+        kwargs.push((name.as_str().to_owned(), convert_expr(&keyword.value)?));
     }
     Ok(Expr::Call {
         callee: Box::new(callee),
         args,
+        kwargs,
     })
 }
 
@@ -529,6 +636,48 @@ fn convert_constant(value: &Constant) -> Result<Expr, String> {
     })
 }
 
+fn syntax_error(src: &str, raw: &str) -> String {
+    let prefix = "async def __mycode__():\n".len();
+    let located = byte_offset(raw).and_then(|offset| {
+        let user = offset.checked_sub(prefix)?;
+        let (line, column) = line_col(src, user);
+        Some(format!(
+            "syntax error at line {line}, column {column}: {raw}"
+        ))
+    });
+    format!(
+        "{}. {FIX}",
+        located.unwrap_or_else(|| format!("syntax error: {raw}"))
+    )
+}
+
+fn byte_offset(raw: &str) -> Option<usize> {
+    let marker = "byte offset ";
+    let start = raw.rfind(marker)? + marker.len();
+    let digits: String = raw[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+fn line_col(src: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1usize;
+    let mut column = 1usize;
+    for (index, ch) in src.char_indices() {
+        if index >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
 fn unsupported(what: &str) -> String {
-    format!("{what} is not supported.{HINT}")
+    format!("{what} is not available in this embedded Python. {FIX}")
 }
