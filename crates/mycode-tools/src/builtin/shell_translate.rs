@@ -143,6 +143,15 @@ fn join(tokens: &[String]) -> String {
     tokens.join(" ")
 }
 
+/// Appends each argument to a cmdlet prefix, space-separated.
+fn with_args(mut out: String, args: &[String]) -> String {
+    for arg in args {
+        out.push(' ');
+        out.push_str(arg);
+    }
+    out
+}
+
 /// Rewrites the exact bash token `2>/dev/null` into PowerShell's `2> $null`.
 /// The tokenizer admits the `>` only inside this shape, so nothing else in
 /// the command can carry a redirect.
@@ -201,11 +210,7 @@ fn translate_ls(args: &[String]) -> Option<String> {
     if recurse {
         out.push_str(" -Recurse");
     }
-    for path in &paths {
-        out.push(' ');
-        out.push_str(path);
-    }
-    Some(out)
+    Some(with_args(out, &paths))
 }
 
 /// `rm -rf …` maps to `Remove-Item -Recurse -Force`. Plain `rm path` already
@@ -231,11 +236,7 @@ fn translate_rm(args: &[String]) -> Option<String> {
     if force {
         out.push_str(" -Force");
     }
-    for path in &paths {
-        out.push(' ');
-        out.push_str(path);
-    }
-    Some(out)
+    Some(with_args(out, &paths))
 }
 
 /// `cp -r …` maps to `Copy-Item -Recurse`.
@@ -249,12 +250,7 @@ fn translate_cp(args: &[String]) -> Option<String> {
             return None;
         }
     }
-    let mut out = String::from("Copy-Item -Recurse");
-    for path in &paths {
-        out.push(' ');
-        out.push_str(path);
-    }
-    Some(out)
+    Some(with_args(String::from("Copy-Item -Recurse"), &paths))
 }
 
 /// `mkdir -p a/b` maps to `New-Item -ItemType Directory -Force`.
@@ -263,12 +259,10 @@ fn translate_mkdir(args: &[String]) -> Option<String> {
     if flags != "p" || paths.is_empty() {
         return None;
     }
-    let mut out = String::from("New-Item -ItemType Directory -Force");
-    for path in &paths {
-        out.push(' ');
-        out.push_str(path);
-    }
-    Some(out)
+    Some(with_args(
+        String::from("New-Item -ItemType Directory -Force"),
+        &paths,
+    ))
 }
 
 /// `touch f` maps to `New-Item -ItemType File -Force`.
@@ -277,12 +271,10 @@ fn translate_touch(args: &[String]) -> Option<String> {
     if !flags.is_empty() || paths.is_empty() {
         return None;
     }
-    let mut out = String::from("New-Item -ItemType File -Force");
-    for path in &paths {
-        out.push(' ');
-        out.push_str(path);
-    }
-    Some(out)
+    Some(with_args(
+        String::from("New-Item -ItemType File -Force"),
+        &paths,
+    ))
 }
 
 /// `which x` maps to `Get-Command x`.
@@ -291,29 +283,25 @@ fn translate_which(args: &[String]) -> Option<String> {
     if !flags.is_empty() || names.is_empty() {
         return None;
     }
-    let mut out = String::from("Get-Command");
-    for name in &names {
-        out.push(' ');
-        out.push_str(name);
-    }
-    Some(out)
+    Some(with_args(String::from("Get-Command"), &names))
 }
 
 /// `head -n N f` → `Get-Content f -TotalCount N`; `tail -n N f` →
 /// `Get-Content f -Tail N`. The no-flag forms default to 10 lines like the
 /// originals. Exactly one path is supported.
 fn translate_head_tail(command: &str, args: &[String]) -> Option<String> {
+    let is_count = |count: &str| !count.is_empty() && count.chars().all(|c| c.is_ascii_digit());
     let (count, rest) = match args.first().map(String::as_str) {
         Some("-n") => {
             let count = args.get(1)?.clone();
-            if count.is_empty() || !count.chars().all(|c| c.is_ascii_digit()) {
+            if !is_count(&count) {
                 return None;
             }
             (count, args[2..].to_vec())
         }
         Some(flag) if flag.starts_with("-n") && flag.len() > 2 => {
             let count = flag.strip_prefix("-n")?.to_owned();
-            if count.is_empty() || !count.chars().all(|c| c.is_ascii_digit()) {
+            if !is_count(&count) {
                 return None;
             }
             (count, args[1..].to_vec())
@@ -364,12 +352,7 @@ fn translate_grep(args: &[String]) -> Option<String> {
             "Get-ChildItem -Recurse -File {list} | Select-String {pattern}"
         ))
     } else {
-        let mut out = format!("Select-String {pattern}");
-        for path in paths {
-            out.push(' ');
-            out.push_str(path);
-        }
-        Some(out)
+        Some(with_args(format!("Select-String {pattern}"), paths))
     }
 }
 

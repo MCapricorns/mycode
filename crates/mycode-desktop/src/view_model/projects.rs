@@ -2,6 +2,7 @@
 //! bindings, and the active-workspace view of the sidebar.
 
 use mycode_app::SessionSummary;
+pub(crate) use mycode_config::same_project_path;
 
 use super::state::WorkspaceState;
 
@@ -61,12 +62,6 @@ pub(crate) fn task_surface_visible(state: &WorkspaceState) -> bool {
         .session_projects
         .iter()
         .any(|(id, bound)| id == session_id && same_project_path(bound, project))
-}
-
-/// Compare project paths the way the sidebar groups them.
-#[must_use]
-pub(crate) fn same_project_path(left: &str, right: &str) -> bool {
-    mycode_config::same_project_path(left, right)
 }
 
 /// The folder bound to one session, if it has one.

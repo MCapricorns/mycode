@@ -712,12 +712,7 @@ fn parse_one_full_dir_info(
     Ok((entry, info.NextEntryOffset as usize))
 }
 
-#[cfg(windows)]
-fn probe_kind(_parent: &File, _name: &OsStr) -> io::Result<Option<FsEntryKind>> {
-    Ok(None)
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn probe_kind(_parent: &File, _name: &OsStr) -> io::Result<Option<FsEntryKind>> {
     Ok(None)
 }

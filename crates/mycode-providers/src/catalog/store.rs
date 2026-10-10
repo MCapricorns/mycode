@@ -100,7 +100,7 @@ pub(crate) fn clear_active() {
     }
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -233,11 +233,7 @@ async fn load_current(home: &HomeLayout) -> CachedCatalog {
     let home = home.clone();
     blocking(move || Ok(current(&home)))
         .await
-        .unwrap_or_else(|_| CachedCatalog {
-            document: bundled().clone(),
-            fetched_at: 0,
-            etag: None,
-        })
+        .unwrap_or_else(|_| bundled_cache())
 }
 
 async fn store_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
