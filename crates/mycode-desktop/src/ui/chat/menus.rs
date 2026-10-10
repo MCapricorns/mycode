@@ -52,6 +52,31 @@ pub(super) fn render_model_menu(
         .into_any_element()
 }
 
+/// Where the thinking menu sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MenuPlacement {
+    /// Full-width row. Blanks the transcript under the row.
+    #[allow(dead_code)]
+    InFlowRow,
+    /// Right edge of the chat column, far from the Thinking chip.
+    #[allow(dead_code)]
+    ColumnRightEdge,
+    /// Directly above the Thinking chip. The transcript is not clipped.
+    AboveChip,
+}
+
+/// Pixels from the bottom of the Thinking chip to the bottom of the menu.
+///
+/// The chip sits inside the composer card (input row, gap, and padding above
+/// it). This clearance puts the menu fully above that card.
+pub(super) const THINKING_MENU_CLEARANCE: f32 = 88.;
+
+/// The thinking menu opens above its chip.
+#[must_use]
+pub(super) fn thinking_menu_placement() -> MenuPlacement {
+    MenuPlacement::AboveChip
+}
+
 /// Thinking effort as its own short list, opened from the composer button.
 pub(super) fn render_thinking_menu(
     workspace: &mut Workspace,
@@ -61,48 +86,54 @@ pub(super) fn render_thinking_menu(
     let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
     let selected = selected_reasoning_level(workspace.vm()).to_owned();
     let weak = cx.weak_entity();
+    debug_assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
     div()
         .id("thinking-menu-layer")
-        .w_full()
-        .px_4()
-        .pb_1()
-        .flex()
-        .flex_row()
-        .justify_center()
+        .absolute()
+        .bottom(px(THINKING_MENU_CLEARANCE))
+        .left_0()
+        .occlude()
         .child(
-            div()
-                .w_full()
-                .max_w(super::COLUMN_MAX)
+            popover_panel("thinking-menu", theme)
+                .bg(skin::opaque_menu_fill(theme))
+                .w(px(220.))
+                .flex_none()
+                .p_1()
                 .flex()
-                .flex_row()
-                .justify_end()
-                .child(
-                    popover_panel("thinking-menu", theme)
-                        .w(px(220.))
-                        .flex_none()
-                        .p_1()
-                        .flex()
-                        .flex_col()
-                        .children(levels.iter().map(|level| {
-                            let picked = level.clone();
-                            let weak = weak.clone();
-                            let on = level == &selected;
-                            menu_row(
-                                format!("thinking-row-{level}"),
-                                reasoning_row_label(level),
-                                on,
-                                move |_, _, cx| {
-                                    let picked = picked.clone();
-                                    let _ = weak.update(cx, |workspace, cx| {
-                                        workspace.on_select_reasoning(&picked, cx);
-                                    });
-                                },
-                                theme,
-                            )
-                        })),
-                ),
+                .flex_col()
+                .children(levels.iter().map(|level| {
+                    let picked = level.clone();
+                    let weak = weak.clone();
+                    let on = level == &selected;
+                    menu_row(
+                        format!("thinking-row-{level}"),
+                        reasoning_row_label(level),
+                        on,
+                        move |_, _, cx| {
+                            let picked = picked.clone();
+                            let _ = weak.update(cx, |workspace, cx| {
+                                workspace.on_select_reasoning(&picked, cx);
+                            });
+                        },
+                        theme,
+                    )
+                })),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MenuPlacement, thinking_menu_placement};
+
+    #[test]
+    fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
+        assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
+        assert!(
+            super::THINKING_MENU_CLEARANCE >= 84.,
+            "the menu must clear the composer card, not sit on its top edge"
+        );
+    }
 }
 
 fn menu_row(

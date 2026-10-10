@@ -1,9 +1,14 @@
 //! Shared process-containment authority for native execution builtins.
 //!
-//! Unix children are enrolled in a dedicated process group. Windows children
-//! are enrolled in a kill-on-close Job Object before their initial thread
-//! resumes. Teardown reports real Job or process-group errors; an invalid
-//! Windows Job handle is not treated as evidence that members exited.
+//! Unix children are enrolled in a dedicated process group. On Linux the
+//! child is also a subreaper, so grandchildren that lose their parent stay
+//! in the tree instead of moving to init. Teardown signals every descendant
+//! (including a `setsid` child in a new session) and then the process group
+//! (including same-group orphans). Windows children are enrolled in a
+//! kill-on-close Job Object that does not allow breakaway, before their
+//! initial thread resumes. Teardown reports real Job or process-group
+//! errors; an invalid Windows Job handle is not treated as evidence that
+//! members exited.
 mod output;
 #[cfg(windows)]
 mod windows;
@@ -15,6 +20,11 @@ use tokio::sync::{Mutex, MutexGuard};
 
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 pub(crate) use output::collect_child_output;
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+pub(crate) use output::collect_until_exit;
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
@@ -282,16 +292,168 @@ impl UnixProcessGroupId {
 
         // The collection path has not waited on the child before timeout or
         // cancellation. Its live/zombie PID therefore cannot be reused between
-        // this getpgid validation and killpg, so `target` still names only the
-        // original group. Any validation failure skips the group signal and
+        // this getpgid validation and the signals below, so `target` still
+        // names only the original group. Descendants are signaled first, while
+        // the leader is alive and parent links still point at this tree.
+        // `killpg` then covers same-group processes that were reparented
+        // outside the tree. Any validation failure skips both signals and
         // lets the Child-handle fallback below kill only the leader.
+        let descendants = signal_descendants(leader);
         // SAFETY: `target` is positive, foreign, and was just observed as the
         // matching, still-reserved child leader's process group.
-        if unsafe { libc::killpg(target, libc::SIGKILL) } == 0 {
+        let group = if unsafe { libc::killpg(target, libc::SIGKILL) } == 0 {
             Ok(())
         } else {
-            Err(std::io::Error::last_os_error())
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        };
+        descendants.and(group)
+    }
+}
+
+/// How many descendant snapshots to take before `killpg`.
+///
+/// A child can fork between the walk and the signal. A few passes catch that
+/// without waiting on a process that is spawning forever.
+const DESCENDANT_KILL_PASSES: usize = 3;
+
+/// `SIGKILL` every descendant of `root`, not `root` itself.
+///
+/// Process-group signals miss a `setsid` child. The walk uses parent links,
+/// which on Linux still include orphans because the shell is a subreaper.
+#[cfg(unix)]
+fn signal_descendants(root: libc::pid_t) -> std::io::Result<()> {
+    let mut error = None;
+    for _ in 0..DESCENDANT_KILL_PASSES {
+        for pid in list_descendants(root)? {
+            if pid <= 1 || pid == root {
+                continue;
+            }
+            // SAFETY: `pid` is a positive descendant id from the process
+            // table, not this process and not pid 1. `SIGKILL` only requests
+            // termination of that one process. `ESRCH` means it already exited.
+            if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(libc::ESRCH) {
+                    error = Some(err);
+                }
+            }
         }
+    }
+    match error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
+    let mut children: std::collections::HashMap<libc::pid_t, Vec<libc::pid_t>> =
+        std::collections::HashMap::new();
+    for entry in std::fs::read_dir("/proc")?.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<libc::pid_t>() else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        let Some(ppid) = ppid_from_stat(&stat) else {
+            continue;
+        };
+        children.entry(ppid).or_default().push(pid);
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(root);
+    while let Some(pid) = stack.pop() {
+        let Some(kids) = children.get(&pid) else {
+            continue;
+        };
+        for kid in kids {
+            if seen.insert(*kid) {
+                out.push(*kid);
+                stack.push(*kid);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Parent pid from `/proc/<pid>/stat`. `comm` may contain spaces and
+/// parentheses, so the parse starts after the last `)`.
+#[cfg(any(test, target_os = "linux"))]
+fn ppid_from_stat(stat: &str) -> Option<libc::pid_t> {
+    let rest = stat.rsplit_once(')')?.1;
+    let mut fields = rest.split_whitespace();
+    let _state = fields.next()?;
+    fields.next()?.parse().ok()
+}
+
+#[cfg(target_os = "macos")]
+fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(root);
+    while let Some(pid) = stack.pop() {
+        for kid in direct_children(pid) {
+            if kid > 1 && seen.insert(kid) {
+                out.push(kid);
+                stack.push(kid);
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(target_os = "macos")]
+fn direct_children(parent: libc::pid_t) -> Vec<libc::pid_t> {
+    unsafe extern "C" {
+        fn proc_listchildpids(
+            ppid: libc::pid_t,
+            buffer: *mut libc::pid_t,
+            buffersize: libc::c_int,
+        ) -> libc::c_int;
+    }
+    // SAFETY: a null buffer asks for the byte count and does not write.
+    let bytes = unsafe { proc_listchildpids(parent, std::ptr::null_mut(), 0) };
+    if bytes <= 0 {
+        return Vec::new();
+    }
+    let width = std::mem::size_of::<libc::pid_t>();
+    let mut buf = vec![0; (bytes as usize / width).saturating_add(8)];
+    // SAFETY: `buf` is writable for `buf.len()` pids. The return value is a
+    // byte count, not a pid count.
+    let written =
+        unsafe { proc_listchildpids(parent, buf.as_mut_ptr(), (buf.len() * width) as libc::c_int) };
+    if written <= 0 {
+        return Vec::new();
+    }
+    let count = (written as usize) / width;
+    buf.truncate(count.min(buf.len()));
+    buf.into_iter().filter(|pid| *pid > 1).collect()
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn list_descendants(_root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
+    Ok(Vec::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ppid_from_stat;
+
+    #[test]
+    fn stat_ppid_ignores_parentheses_inside_comm() {
+        assert_eq!(ppid_from_stat("12 (bash) S 7 12 12"), Some(7));
+        assert_eq!(ppid_from_stat("9 (sleep 303) S 5 9 9"), Some(5));
+        assert_eq!(ppid_from_stat("3 (a) b) S 42 1 1"), Some(42));
+        assert!(ppid_from_stat("no paren").is_none());
     }
 }
 

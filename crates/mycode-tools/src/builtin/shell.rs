@@ -1,15 +1,14 @@
-//! The process-launch tool. The model sees exactly one of `powershell`,
-//! `bash`, or `cmd`, chosen from the shell resolved at startup.
+//! The process-launch tool. The model sees exactly one shell tool, chosen
+//! once when the process starts and kept for the whole session.
 //!
 //! Two modes share that name, one schema, and one prompt entry:
 //!
 //! * `script` runs `command` in the resolved interpreter. Windows prefers
-//!   PowerShell 7 (`pwsh`), then Windows PowerShell 5.1 (`powershell.exe`),
-//!   then Git Bash. `cmd.exe` is the runtime fallback when none of those
-//!   exist and is not written into settings. WSL `bash.exe` is not selected
-//!   automatically. POSIX hosts use bash. `MYCODE_SHELL` or `tools.shell`
-//!   overrides detection. Commands are not rewritten from bash into
-//!   PowerShell.
+//!   PowerShell 7 (`pwsh`), then Windows PowerShell 5.1 (`powershell.exe`).
+//!   `cmd.exe` is the runtime fallback when neither exists. Git Bash, MSYS2,
+//!   Cygwin, and WSL are not selected. Linux and macOS use `$SHELL` when it
+//!   is bash, zsh, or sh, then the platform default (`zsh` on macOS, `bash`
+//!   elsewhere). Commands are not rewritten between shells.
 //! * `program` spawns `program` with an explicit `args` vector and does not
 //!   start a shell. Only a kernel-loadable PE, ELF, or Mach-O image is
 //!   accepted. Shebang scripts and batch files are rejected.
@@ -28,11 +27,7 @@ mod detect;
 #[path = "shell_prompt.rs"]
 mod prompt;
 
-pub use detect::{
-    DetectedShell, MYCODE_SHELL_ENV, ShellKind, ShellOverride, active_shell,
-    classify_shell_override, detect_default_shell, detect_shell_kind, resolved_shell,
-    set_runtime_shell,
-};
+pub use detect::{DetectedShell, ShellKind, active_shell, detect_default_shell, resolved_shell};
 pub use prompt::render_environment_block;
 
 use async_trait::async_trait;
@@ -90,10 +85,9 @@ const POWERSHELL_UTF8_PRELUDE: &str = "try { $utf8 = New-Object System.Text.UTF8
 #[must_use]
 pub fn script_shell_line() -> Option<String> {
     let shell = resolved_shell();
-    let windows_host = prompt::host_is_windows();
     Some(format!(
         "{} ({})",
-        prompt::shell_label(shell.kind, windows_host),
+        prompt::shell_label(shell.kind),
         shell.program.display()
     ))
 }
@@ -149,11 +143,12 @@ impl Default for ShellTool {
 }
 
 /// Which launch path the shell tool uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(rename_all = "snake_case")]
 pub enum ShellMode {
-    /// Run `command` in the platform shell.
+    /// Run `command` in the platform shell. This is the default when `mode` is omitted.
+    #[default]
     Script,
     /// Spawn `program` with `args` and no shell.
     Program,
@@ -168,6 +163,9 @@ pub enum ShellMode {
 pub struct ShellArgs {
     /// `script` runs `command` in the platform shell. `program` spawns one
     /// kernel-loadable image with `program` and `args` and does not start a shell.
+    /// Omitted `mode` means `script`.
+    #[serde(default)]
+    #[schemars(default)]
     pub mode: ShellMode,
     /// Shell script. Required when `mode` is `script`. Omit for `program`.
     #[serde(default)]
@@ -238,7 +236,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        prompt::tool_description(self.resolved().kind, prompt::host_is_windows())
+        prompt::tool_description(self.resolved().kind)
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -247,7 +245,7 @@ impl Tool for ShellTool {
 
     fn params_schema(&self) -> serde_json::Value {
         let mut schema = crate::tool::args_schema::<ShellArgs>();
-        prompt::apply_parameter_docs(&mut schema, self.resolved().kind, prompt::host_is_windows());
+        prompt::apply_parameter_docs(&mut schema, self.resolved().kind);
         schema
     }
 
@@ -428,7 +426,9 @@ fn script_launch_args(shell: &DetectedShell, command: &str) -> Result<Vec<String
             let encoded = encode_powershell_command(&script, &shell.program)?;
             Ok(powershell_args(encoded))
         }
-        ShellKind::Bash => Ok(vec!["-c".to_owned(), command.to_owned()]),
+        ShellKind::Bash | ShellKind::Zsh | ShellKind::Sh => {
+            Ok(vec!["-c".to_owned(), command.to_owned()])
+        }
         ShellKind::Cmd => Ok(detect::cmd_fallback_args(command)),
     }
 }
@@ -1011,6 +1011,10 @@ fn command_too_long_with(
     ))
 }
 
+#[cfg(all(test, target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+#[path = "shell_lifecycle_test.rs"]
+mod lifecycle_test;
+
 #[cfg(test)]
 mod mode_tests {
     use super::{ShellArgs, ShellMode, ShellTool, validate_shell_args};
@@ -1024,7 +1028,10 @@ mod mode_tests {
         let spec = ToolDyn::spec(&tool);
         let expected = super::resolved_shell().kind.tool_name();
         assert_eq!(spec.name, expected);
-        assert!(matches!(spec.name.as_str(), "powershell" | "bash" | "cmd"));
+        assert!(matches!(
+            spec.name.as_str(),
+            "powershell" | "bash" | "zsh" | "sh" | "cmd"
+        ));
         let schema = spec.params_schema.to_string();
         assert!(schema.contains("\"script\""), "{schema}");
         assert!(schema.contains("\"program\""), "{schema}");
@@ -1035,6 +1042,25 @@ mod mode_tests {
         assert!(!snippet.contains("exec"));
         assert!(!spec.description.contains("`exec`"));
         assert!(!spec.description.contains("translated"));
+        let required = spec
+            .params_schema
+            .get("required")
+            .and_then(|value| value.as_array());
+        let mode_required =
+            required.is_some_and(|items| items.iter().any(|item| item.as_str() == Some("mode")));
+        assert!(
+            !mode_required,
+            "mode defaults to script, schema was {schema}"
+        );
+    }
+
+    #[test]
+    fn omitted_mode_is_script() {
+        let value = serde_json::json!({"command": "echo hi"});
+        crate::tool::validate_args::<ShellArgs>(&value).expect("mode is optional");
+        let args: ShellArgs = serde_json::from_value(value).expect("decode");
+        assert_eq!(args.mode, ShellMode::Script);
+        assert_eq!(args.command.as_deref(), Some("echo hi"));
     }
 
     #[test]
@@ -1080,7 +1106,12 @@ mod mode_tests {
         let names = registry.names();
         let shell_names: Vec<_> = names
             .iter()
-            .filter(|name| matches!(name.as_str(), "powershell" | "bash" | "cmd" | "shell"))
+            .filter(|name| {
+                matches!(
+                    name.as_str(),
+                    "powershell" | "bash" | "zsh" | "sh" | "cmd" | "shell"
+                )
+            })
             .cloned()
             .collect();
         assert_eq!(

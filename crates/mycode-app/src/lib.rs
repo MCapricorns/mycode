@@ -42,6 +42,8 @@ pub mod protocol;
 pub use compaction::{
     display_summary_text, is_display_only_summary as is_compaction_summary, summary_body,
 };
+#[cfg(test)]
+mod ptc_eval;
 mod search;
 mod settings_io;
 mod state;

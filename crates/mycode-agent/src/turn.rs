@@ -18,7 +18,7 @@ use mycode_core::message::{AssistantMessage, ContentBlock, Message, ToolCall, To
 use mycode_core::{CallId, MycodeError};
 use mycode_core::{Request, StreamEvent};
 use mycode_tools::{
-    PreparedFile, PreparedSearch, ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream,
+    PreparedFile, PreparedSearch, ToolCatalog, ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream,
     ToolStreamItem, prepare_file_async, prepare_search_async_with_access,
 };
 use tokio_util::sync::CancellationToken;
@@ -393,7 +393,9 @@ pub(crate) async fn dispatch_tool_call(
     // keeps its own result).
     let mut ctx = ToolCtx::new(env.cwd.clone())
         .with_cancel(token.clone())
-        .with_call_id(call.id.clone());
+        .with_call_id(call.id.clone())
+        .with_extra_roots(env.extra_roots.clone())
+        .with_catalog(ToolCatalog::from_registry(env.tools));
     if let Some(search) = prepared.search {
         ctx = ctx.with_prepared_search(search);
     }

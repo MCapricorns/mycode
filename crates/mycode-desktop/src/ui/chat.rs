@@ -176,9 +176,6 @@ pub(super) fn render_chat(
         .when(workspace.vm().model_menu_open, |this| {
             this.child(menus::render_model_menu(workspace, window, cx))
         })
-        .when(workspace.vm().reasoning_menu_open, |this| {
-            this.child(menus::render_thinking_menu(workspace, cx))
-        })
         .when(
             workspace
                 .vm()

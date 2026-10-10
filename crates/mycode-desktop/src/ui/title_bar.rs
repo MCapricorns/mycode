@@ -186,7 +186,7 @@ fn drag_region(
                         .text_sm()
                         .font_weight(gpui_kit::FontWeight::BOLD)
                         .text_color(theme.foreground)
-                        .child("MYCode Harness"),
+                        .child("MYCode"),
                 ),
         )
         .child(

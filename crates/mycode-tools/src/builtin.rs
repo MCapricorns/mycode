@@ -13,6 +13,7 @@ pub(crate) mod fs_search;
 pub(crate) mod fs_walk;
 pub mod grep;
 pub(crate) mod process;
+pub mod ptc;
 pub mod read;
 pub(crate) mod search_report;
 pub mod shell;
@@ -27,6 +28,7 @@ pub use ask::{
 pub use edit::EditTool;
 pub use find::FindTool;
 pub use grep::GrepTool;
+pub use ptc::{RUN_CODE_EXAMPLE_CODE, RUN_CODE_EXAMPLE_DESCRIPTION, RunCodeTool};
 pub use read::ReadTool;
 pub use shell::ShellTool;
 pub use web::{FetchContentTool, WebHit, WebHost, WebPage, WebSearchTool};
@@ -46,6 +48,7 @@ pub(crate) fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
         Arc::new(ShellTool::default()),
         Arc::new(GrepTool),
         Arc::new(FindTool),
+        Arc::new(RunCodeTool),
     ]
 }
 

@@ -103,18 +103,20 @@ impl Tool for AgentTool {
         "Delegate one scoped unit to a listed role. Use `agent` only when \
          the work can run independently in parallel, the brief has clear \
          boundaries, and it will cut cost or improve completion quality. \
-         `scout` returns a read-only map and stops. `artisan` implements a \
-         bounded change you integrate, one at a time unless the briefs are \
-         independent. Skip trivial edits and vague briefs. Independent calls \
-         overlap `search_tool` / `use_tool`. Custom roles from agents/*.md \
-         are valid. The child cannot ask the user."
+         `scout` is the read-only pass for web research, vendor docs, and a \
+         repository-wide map: it returns a short map and stops. Do not do \
+         that research with the shell. `artisan` implements a bounded change \
+         you integrate, one at a time unless the briefs are independent. \
+         Skip trivial edits and vague briefs. Independent calls overlap \
+         `search_tool` / `use_tool`. Custom roles from agents/*.md are valid. \
+         The child cannot ask the user."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "agent: only for independent parallel work with a clear brief that \
-             cuts cost or improves quality. One scout (read-only map) or one \
-             artisan (bounded change you integrate). Skip trivial edits.",
+            "agent: scout for web research, vendor docs, or a repository-wide map \
+             (short result, not a shell search). artisan for one bounded change. \
+             Skip a narrow lookup.",
         )
     }
 
