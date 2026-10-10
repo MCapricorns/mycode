@@ -92,22 +92,22 @@ pub(crate) fn command_parameter_doc(kind: ShellKind) -> &'static str {
 pub(crate) fn mode_parameter_doc(kind: ShellKind) -> &'static str {
     match kind {
         ShellKind::Pwsh => {
-            "`script` runs `command` in PowerShell 7. `program` spawns one kernel-loadable image with `program` and `args` and does not start PowerShell."
+            "`script` (the default when `mode` is omitted) runs `command` in PowerShell 7. `program` spawns one kernel-loadable image with `program` and `args` and does not start PowerShell."
         }
         ShellKind::WindowsPowerShell => {
-            "`script` runs `command` in Windows PowerShell 5.1. `program` spawns one kernel-loadable image with `program` and `args` and does not start PowerShell."
+            "`script` (the default when `mode` is omitted) runs `command` in Windows PowerShell 5.1. `program` spawns one kernel-loadable image with `program` and `args` and does not start PowerShell."
         }
         ShellKind::Bash => {
-            "`script` runs `command` in bash. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in bash. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
         }
         ShellKind::Zsh => {
-            "`script` runs `command` in zsh. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in zsh. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
         }
         ShellKind::Sh => {
-            "`script` runs `command` in POSIX sh. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in POSIX sh. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
         }
         ShellKind::Cmd => {
-            "`script` runs `command` in cmd.exe. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in cmd.exe. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
         }
     }
 }
@@ -247,26 +247,31 @@ not a tool failure. Default timeout: 120 s. There is no permission prompt.";
 const POWERSHELL_SNIPPET: &str = "\
 powershell: mode script runs one PowerShell command (command), including a \
 here-string piped to python that edits files; mode program runs one \
-kernel-loadable binary with explicit args and no shell. Optional timeout_secs.";
+kernel-loadable binary with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
+Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const BASH_SNIPPET: &str = "\
 bash: mode script runs one bash command (command), including a Python heredoc \
 or short script that edits files; mode program runs one kernel-loadable binary \
-with explicit args and no shell. Optional timeout_secs.";
+with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
+Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const ZSH_SNIPPET: &str = "\
 zsh: mode script runs one zsh command (command), including a Python heredoc \
 or short script that edits files; mode program runs one kernel-loadable binary \
-with explicit args and no shell. Optional timeout_secs.";
+with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
+Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const SH_SNIPPET: &str = "\
 sh: mode script runs one POSIX sh command (command), including a Python heredoc \
 or short script that edits files; mode program runs one kernel-loadable binary \
-with explicit args and no shell. Optional timeout_secs.";
+with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
+Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const CMD_SNIPPET: &str = "\
 cmd: mode script runs one cmd.exe command (command); mode program runs one \
-kernel-loadable binary with explicit args and no shell. Optional timeout_secs.";
+kernel-loadable binary with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
+Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const POWERSHELL7_GUIDANCE: &str = "\
 The `powershell` tool runs PowerShell 7 (`pwsh`). Write PowerShell, not bash or cmd.

@@ -354,7 +354,7 @@ response as `agent`.\n</mcp>",
         );
         if registry.get("agent").is_some() {
             system_prompt.push_str(
-                " Web research, vendor docs, and a repository-wide map fit `scout`: it returns a short map instead of pasting pages here. You choose; a narrow question stays inline.",
+                " Web research, vendor docs, and a repository-wide map fit `scout` (`agent` with agent \"scout\"). Do not use the shell to fetch docs or map the repo. You choose; a narrow question stays inline.",
             );
         }
     }

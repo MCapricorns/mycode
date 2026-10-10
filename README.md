@@ -21,7 +21,13 @@ English notes are [below](#english).
 
 ## 界面截图
 
-主窗口、思考菜单和外观页的旧截图已去掉：它们仍显示旧的 `shell` 工具名和 v0.9.23。这三处需要按当前界面重拍。
+![主窗口](docs/images/main-window/main-window.png)
+
+![外观](docs/images/appearance-page/appearance-page.png)
+
+![思考菜单](docs/images/thinking-menu/thinking-menu.png)
+
+思考菜单这张拍在开始页上。打开长对话时，菜单曾把菜单顶边以下的全文裁掉；修复之后可以补一张对话里的截图。
 
 ## 下载
 
@@ -78,7 +84,13 @@ mycode is a local-first desktop coding agent for Windows, macOS, and Linux x86_6
 
 ### Screenshots
 
-Screenshots of the main window, thinking menu, and appearance page were removed. They still showed the old `shell` tool name and v0.9.23. Those three views need new captures of the current UI.
+![Main window](docs/images/main-window/main-window.png)
+
+![Appearance](docs/images/appearance-page/appearance-page.png)
+
+![Thinking menu](docs/images/thinking-menu/thinking-menu.png)
+
+The thinking-menu shot is the start screen. On a long transcript the open menu used to hide every line below its top edge; a shot from inside a chat can replace it after that fix.
 
 ### Download
 

@@ -734,6 +734,48 @@ return a.strip() + "|" + b.strip() + "|" + seen.get("a") + "|" + seen.get("missi
     }
 
     #[tokio::test]
+    async fn builtins_cover_list_repr_count_and_isinstance() {
+        let root = temp_dir("builtins");
+        let result = run(
+            &root,
+            catalog(vec![]),
+            r#"name = "aba"
+counts = {}
+counts["a"] = name.count("a")
+items = list(name)
+items.append("z")
+items.extend(["q"])
+items.sort()
+flag = isinstance(name, str) and isinstance(items, list) and isinstance(True, int)
+text = repr(items) + "|" + str(counts.get("a", 0)) + "|" + str(counts.get("missing", 0)) + "|" + str(flag) + "|" + str(abs(round(-1.6))) + "|" + str(any([0, 1])) + "|" + str(all([]))
+return text
+"#,
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("[revision") == false, "{text}");
+        assert!(text.starts_with("["), "{text}");
+        assert!(text.contains("|2|0|"), "{text}");
+        assert!(
+            text.contains("|true|2|true|true") || text.contains("|True|2|True|True"),
+            "{text}"
+        );
+        let broken = run(&root, catalog(vec![]), "items = list()\nitems.nope()\n").await;
+        let broken_text = text_of(&broken);
+        assert!(broken.is_error, "{broken_text}");
+        assert!(
+            broken_text.contains("line 2:"),
+            "runtime errors name the line:\n{broken_text}"
+        );
+        assert!(
+            broken_text.contains("items.nope()"),
+            "runtime errors name the expression:\n{broken_text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn len_range_and_str_follow_python() {
         let root = temp_dir("len");
         let result = run(

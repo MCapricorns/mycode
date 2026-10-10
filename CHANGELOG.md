@@ -23,7 +23,8 @@
 - 后台子进程不再把工具拖到管道关闭。`sleep 20 & echo bg` 在 shell 退出时返回输出，而不是等 `sleep` 结束。
 - `mycode-desktop --version` 和 `--help` 打印后退出，不再打开窗口。未知参数打印用法并以状态码 1 退出，不再打开窗口。Linux 上没有可用显示（变量未设置，或 `DISPLAY=:99` 这种有变量但没有 X 服务器）时，或窗口表面创建失败时，打印说明并以状态码 1 退出，不再以 101 崩溃。
 - `run_code` 补上模型常写的 Python：元组解包、`for` 解包、下标赋值、`+=`、字符串重复、`enumerate` / `zip` / `sorted` / `min` / `max` / `sum` / `int`、字典 `items` / `get`。出错时先带回已经 `print` 的内容。`read` 进程序时去掉 `[revision ...]`。报错写明缺了什么、该怎么改。
-- 上下文计量里的百分比标明是缓存命中（`cache hit 99%`），不再紧挨窗口用量看起来像已用比例。自动压缩把系统提示和工具模式算进估算。`fetch_content` 的 `goal` 摘录在命中标题时带上标题下的正文。
+- 上下文计量里的百分比标明是缓存命中（`cache hit 99%`），不再紧挨窗口用量看起来像已用比例。自动压缩把系统提示和工具模式算进估算。`fetch_content` 的 `goal` 命中某一节时返回这一整节（上限 8000 字符），而不只是标题后的一小段。
+- `run_code` 补上 `list`、`dict`、`set`、`repr`、`isinstance`、`str.count`/`find`，以及列表和字典的常用方法。语法和运行错误带上行号和出错的那一行。进程工具省略 `mode` 时按 `script` 执行。思考菜单改为叠在对话右下角，不再裁掉菜单顶边以下的全文。
 - Windows 上 `WindowsApps\Microsoft.PowerShell_*\pwsh.exe` 不再直接启动（该路径没有执行权限），改用 App Execution Alias（`WindowsApps\pwsh.exe`）。写回 `settings.json` 时去掉旧的 `tools.shell`。没有 shell 的角色（含 `scout`）提示里不再出现 `shell_tool`。窗口标题改为 `MYCode`。
 
 ## [0.10.2] - 2026-10-10

@@ -143,11 +143,12 @@ impl Default for ShellTool {
 }
 
 /// Which launch path the shell tool uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(rename_all = "snake_case")]
 pub enum ShellMode {
-    /// Run `command` in the platform shell.
+    /// Run `command` in the platform shell. This is the default when `mode` is omitted.
+    #[default]
     Script,
     /// Spawn `program` with `args` and no shell.
     Program,
@@ -162,6 +163,9 @@ pub enum ShellMode {
 pub struct ShellArgs {
     /// `script` runs `command` in the platform shell. `program` spawns one
     /// kernel-loadable image with `program` and `args` and does not start a shell.
+    /// Omitted `mode` means `script`.
+    #[serde(default)]
+    #[schemars(default)]
     pub mode: ShellMode,
     /// Shell script. Required when `mode` is `script`. Omit for `program`.
     #[serde(default)]
@@ -1038,6 +1042,25 @@ mod mode_tests {
         assert!(!snippet.contains("exec"));
         assert!(!spec.description.contains("`exec`"));
         assert!(!spec.description.contains("translated"));
+        let required = spec
+            .params_schema
+            .get("required")
+            .and_then(|value| value.as_array());
+        let mode_required =
+            required.is_some_and(|items| items.iter().any(|item| item.as_str() == Some("mode")));
+        assert!(
+            !mode_required,
+            "mode defaults to script, schema was {schema}"
+        );
+    }
+
+    #[test]
+    fn omitted_mode_is_script() {
+        let value = serde_json::json!({"command": "echo hi"});
+        crate::tool::validate_args::<ShellArgs>(&value).expect("mode is optional");
+        let args: ShellArgs = serde_json::from_value(value).expect("decode");
+        assert_eq!(args.mode, ShellMode::Script);
+        assert_eq!(args.command.as_deref(), Some("echo hi"));
     }
 
     #[test]

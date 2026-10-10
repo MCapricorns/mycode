@@ -31,6 +31,8 @@ const MAX_PAGE_EXCERPT_CHARS: usize = 8_000;
 const MAX_SNIPPET_CHARS: usize = 240;
 /// Excerpt budget for one page when `goal` is set.
 const GOAL_EXCERPT_CHARS: usize = 1_200;
+/// A goal that names a heading returns that whole section, up to this cap.
+const SECTION_EXCERPT_CHARS: usize = 8_000;
 /// How long a repeated query or page stays cached.
 const CACHE_TTL: Duration = Duration::from_secs(600);
 /// Cached searches and cached pages, each.
@@ -278,6 +280,9 @@ pub(crate) fn excerpt_for_goal(content: &str, goal: &str, budget: usize) -> Stri
         let lead = cap_chars(content, budget.min(600));
         return format!("{lead}\n(no goal terms matched; leading excerpt)");
     }
+    if let Some(section) = best_section(&chunks, &terms, budget.max(SECTION_EXCERPT_CHARS)) {
+        return section;
+    }
     scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
     let mut chosen = Vec::new();
     let mut used = 0usize;
@@ -336,7 +341,8 @@ fn goal_terms(goal: &str) -> Vec<String> {
     let mut word = String::new();
     let mut cjk = String::new();
     let flush_word = |word: &mut String, terms: &mut Vec<String>| {
-        if word.len() >= 3
+        let dotted = word.chars().any(|ch| ch == '.');
+        if (word.len() >= 3 || dotted)
             && !STOP.contains(&word.as_str())
             && !terms.iter().any(|term| term == word)
         {
@@ -363,7 +369,13 @@ fn goal_terms(goal: &str) -> Vec<String> {
         }
     };
     for ch in goal.chars() {
-        if ch.is_ascii_alphanumeric() {
+        if ch.is_ascii_alphanumeric()
+            || (ch == '.'
+                && word
+                    .chars()
+                    .last()
+                    .is_some_and(|last| last.is_ascii_digit()))
+        {
             flush_cjk(&mut cjk, &mut terms);
             word.push(ch.to_ascii_lowercase());
         } else if is_cjk(ch) {
@@ -381,6 +393,62 @@ fn goal_terms(goal: &str) -> Vec<String> {
     flush_cjk(&mut cjk, &mut terms);
     terms.truncate(12);
     terms
+}
+
+/// When a heading matches the goal, return that heading and everything under
+/// it until the next heading of the same or higher level.
+fn best_section(chunks: &[String], terms: &[String], budget: usize) -> Option<String> {
+    let mut best: Option<(usize, usize)> = None;
+    for (index, chunk) in chunks.iter().enumerate() {
+        if section_level(chunk).is_none() {
+            continue;
+        }
+        let score = score(chunk, terms);
+        if score == 0 {
+            continue;
+        }
+        let replace = best.is_none_or(|(best_score, best_index)| {
+            score > best_score || (score == best_score && index < best_index)
+        });
+        if replace {
+            best = Some((score, index));
+        }
+    }
+    let (_, index) = best?;
+    let level = section_level(&chunks[index])?;
+    let mut parts = Vec::new();
+    let mut used = 0usize;
+    for chunk in chunks.iter().skip(index) {
+        if !parts.is_empty() && section_level(chunk).is_some_and(|next| next <= level) {
+            break;
+        }
+        let len = chunk.chars().count() + 2;
+        if used > 0 && used + len > budget {
+            break;
+        }
+        parts.push(chunk.trim());
+        used += len;
+    }
+    let text = parts.join("\n\n");
+    (!text.is_empty()).then(|| cap_chars(&text, budget))
+}
+
+fn section_level(chunk: &str) -> Option<u8> {
+    let line = chunk.trim().lines().next()?.trim();
+    let hashes = line.chars().take_while(|ch| *ch == '#').count();
+    if (1..=6).contains(&hashes) {
+        let rest = line.chars().skip(hashes).collect::<String>();
+        if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('#') {
+            return Some(hashes as u8);
+        }
+    }
+    if line.lines().count() == 1 && line.chars().count() <= 80 {
+        let lower = line.to_lowercase();
+        if lower.starts_with("version ") {
+            return Some(2);
+        }
+    }
+    None
 }
 
 fn looks_like_heading(chunk: &str) -> bool {
@@ -683,6 +751,22 @@ mod tests {
             excerpt_chars / 4
         );
         assert!(excerpt.contains("refresh_token"), "{excerpt}");
+        let mut notes = String::from("## Version 1.98.0\n\nOld notes.\n\n## Version 1.99.0\n\n");
+        for index in 0..62 {
+            notes.push_str(&format!(
+                "- Change number {index} updates the compiler.\n\n"
+            ));
+        }
+        notes.push_str("## Version 1.100.0\n\nLater notes.\n");
+        let section = super::excerpt_for_goal(
+            &notes,
+            "every change bullet listed under Version 1.99.0",
+            super::GOAL_EXCERPT_CHARS,
+        );
+        assert!(section.contains("Change number 0"), "{section}");
+        assert!(section.contains("Change number 61"), "{section}");
+        assert!(!section.contains("Version 1.98.0"), "{section}");
+        assert!(!section.contains("Version 1.100.0"), "{section}");
         let notes = "\
 ## Release notes
 

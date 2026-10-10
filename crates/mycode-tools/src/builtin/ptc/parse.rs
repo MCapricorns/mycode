@@ -6,13 +6,21 @@
 //! to the workspace is `tools.*`.
 
 use rustpython_parser::ast::{
-    self, BoolOp, CmpOp, Constant, Expr as PyExpr, Mod, Operator, Stmt as PyStmt, UnaryOp,
+    self, BoolOp, CmpOp, Constant, Expr as PyExpr, Mod, Operator, Ranged, Stmt as PyStmt, UnaryOp,
 };
 use rustpython_parser::{Mode, parse as parse_python};
 
 #[derive(Clone, Debug)]
 pub(super) struct Program {
-    pub stmts: Vec<Stmt>,
+    pub stmts: Vec<Spanned>,
+}
+
+/// One statement plus the user-source line it came from.
+#[derive(Clone, Debug)]
+pub(super) struct Spanned {
+    pub line: u32,
+    pub snippet: String,
+    pub stmt: Stmt,
 }
 
 #[derive(Clone, Debug)]
@@ -24,18 +32,18 @@ pub(super) enum Stmt {
     Return(Option<Expr>),
     If {
         cond: Expr,
-        then_body: Vec<Stmt>,
-        else_body: Vec<Stmt>,
+        then_body: Vec<Spanned>,
+        else_body: Vec<Spanned>,
     },
     While {
         cond: Expr,
-        body: Vec<Stmt>,
+        body: Vec<Spanned>,
     },
     ForOf {
         /// One name, or several names from `for a, b in ...`.
         names: Vec<String>,
         iter: Expr,
-        body: Vec<Stmt>,
+        body: Vec<Spanned>,
     },
     /// `obj[key] = value` or `items[i] = value`.
     SetIndex {
@@ -57,9 +65,9 @@ pub(super) enum Stmt {
         value: Expr,
     },
     Try {
-        body: Vec<Stmt>,
+        body: Vec<Spanned>,
         catch_name: String,
-        catch_body: Vec<Stmt>,
+        catch_body: Vec<Spanned>,
     },
     Throw(Expr),
     Unpack {
@@ -164,7 +172,7 @@ pub(super) fn parse(src: &str) -> Result<Program, String> {
         return Err(format!("extra statements outside the program. {FIX}"));
     }
     Ok(Program {
-        stmts: convert_body(&func.body)?,
+        stmts: convert_body(src, &func.body)?,
     })
 }
 
@@ -186,17 +194,30 @@ fn wrap_function_body(src: &str) -> String {
     out
 }
 
-fn convert_body(body: &[PyStmt]) -> Result<Vec<Stmt>, String> {
+fn convert_body(src: &str, body: &[PyStmt]) -> Result<Vec<Spanned>, String> {
     let mut stmts = Vec::new();
     for stmt in body {
-        if let Some(stmt) = convert_stmt(stmt)? {
-            stmts.push(stmt);
+        if let Some(inner) = convert_stmt(src, stmt)? {
+            stmts.push(spanned(src, stmt, inner));
         }
     }
     Ok(stmts)
 }
 
-fn convert_stmt(stmt: &PyStmt) -> Result<Option<Stmt>, String> {
+fn spanned(src: &str, stmt: &PyStmt, inner: Stmt) -> Spanned {
+    let prefix = "async def __mycode__():\n".len();
+    let start = stmt.start().to_usize().saturating_sub(prefix);
+    let (line, _column) = line_col(src, start);
+    let snippet = src.lines().nth(line.saturating_sub(1)).unwrap_or("").trim();
+    let snippet: String = snippet.chars().take(120).collect();
+    Spanned {
+        line: line as u32,
+        snippet,
+        stmt: inner,
+    }
+}
+
+fn convert_stmt(src: &str, stmt: &PyStmt) -> Result<Option<Stmt>, String> {
     match stmt {
         PyStmt::Pass(_) => Ok(None),
         PyStmt::Return(node) => Ok(Some(Stmt::Return(
@@ -209,8 +230,8 @@ fn convert_stmt(stmt: &PyStmt) -> Result<Option<Stmt>, String> {
         PyStmt::Expr(node) => Ok(Some(Stmt::Expr(convert_expr(&node.value)?))),
         PyStmt::If(node) => Ok(Some(Stmt::If {
             cond: convert_expr(&node.test)?,
-            then_body: convert_body(&node.body)?,
-            else_body: convert_body(&node.orelse)?,
+            then_body: convert_body(src, &node.body)?,
+            else_body: convert_body(src, &node.orelse)?,
         })),
         PyStmt::While(node) => {
             if !node.orelse.is_empty() {
@@ -218,7 +239,7 @@ fn convert_stmt(stmt: &PyStmt) -> Result<Option<Stmt>, String> {
             }
             Ok(Some(Stmt::While {
                 cond: convert_expr(&node.test)?,
-                body: convert_body(&node.body)?,
+                body: convert_body(src, &node.body)?,
             }))
         }
         PyStmt::For(node) => {
@@ -228,10 +249,10 @@ fn convert_stmt(stmt: &PyStmt) -> Result<Option<Stmt>, String> {
             Ok(Some(Stmt::ForOf {
                 names: loop_names(&node.target)?,
                 iter: convert_expr(&node.iter)?,
-                body: convert_body(&node.body)?,
+                body: convert_body(src, &node.body)?,
             }))
         }
-        PyStmt::Try(node) => convert_try(node),
+        PyStmt::Try(node) => convert_try(src, node),
         PyStmt::Raise(node) => {
             let Some(exc) = node.exc.as_ref() else {
                 return Err(unsupported("bare raise"));
@@ -245,11 +266,14 @@ fn convert_stmt(stmt: &PyStmt) -> Result<Option<Stmt>, String> {
             };
             convert_assign(std::slice::from_ref(node.target.as_ref()), value)
         }
-        PyStmt::Import(_) | PyStmt::ImportFrom(_) => Err(
-            "import is not available in run_code. There is no module system, and Python does not need to be installed. Call tools directly, for example hits = await tools.grep(pattern=\"foo\", include=\"*.rs\"). Do not import os, json, or pathlib."
-                .to_owned(),
-        ),
-        _ => Err(unsupported("that statement")),
+        PyStmt::Import(_) | PyStmt::ImportFrom(_) => {
+            let here = spanned(src, stmt, Stmt::Expr(Expr::Null));
+            Err(format!(
+                "line {}: `{}` — import is not available in run_code. There is no module system, and Python does not need to be installed. Call tools directly, for example hits = await tools.grep(pattern=\"foo\", include=\"*.rs\"). Do not import os, json, or pathlib.",
+                here.line, here.snippet
+            ))
+        }
+        _ => Err(located_unsupported(src, stmt, "that statement")),
     }
 }
 
@@ -343,7 +367,7 @@ fn unpack(elts: &[PyExpr], value: Expr) -> Result<Option<Stmt>, String> {
     }))
 }
 
-fn convert_try(node: &ast::StmtTry) -> Result<Option<Stmt>, String> {
+fn convert_try(src: &str, node: &ast::StmtTry) -> Result<Option<Stmt>, String> {
     if !node.orelse.is_empty() || !node.finalbody.is_empty() {
         return Err(unsupported("try else/finally"));
     }
@@ -352,13 +376,13 @@ fn convert_try(node: &ast::StmtTry) -> Result<Option<Stmt>, String> {
     }
     let ast::ExceptHandler::ExceptHandler(handler) = &node.handlers[0];
     Ok(Some(Stmt::Try {
-        body: convert_body(&node.body)?,
+        body: convert_body(src, &node.body)?,
         catch_name: handler
             .name
             .as_ref()
             .map(|name| name.as_str().to_owned())
             .unwrap_or_else(|| "error".to_owned()),
-        catch_body: convert_body(&handler.body)?,
+        catch_body: convert_body(src, &handler.body)?,
     }))
 }
 
@@ -640,14 +664,22 @@ fn syntax_error(src: &str, raw: &str) -> String {
     let prefix = "async def __mycode__():\n".len();
     let located = byte_offset(raw).and_then(|offset| {
         let user = offset.checked_sub(prefix)?;
-        let (line, column) = line_col(src, user);
-        Some(format!(
-            "syntax error at line {line}, column {column}: {raw}"
-        ))
+        let (line, _column) = line_col(src, user);
+        let snippet = src.lines().nth(line.saturating_sub(1)).unwrap_or("").trim();
+        let snippet: String = snippet.chars().take(120).collect();
+        Some(format!("line {line}: `{snippet}` — syntax error: {raw}"))
     });
     format!(
         "{}. {FIX}",
         located.unwrap_or_else(|| format!("syntax error: {raw}"))
+    )
+}
+
+fn located_unsupported(src: &str, stmt: &PyStmt, what: &str) -> String {
+    let here = spanned(src, stmt, Stmt::Expr(Expr::Null));
+    format!(
+        "line {}: `{}` — {what} is not available in this embedded Python. {FIX}",
+        here.line, here.snippet
     )
 }
 
