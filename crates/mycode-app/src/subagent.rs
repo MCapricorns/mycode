@@ -19,7 +19,10 @@ use tokio_util::sync::CancellationToken;
 const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MYCode subagent. Finish the brief with the \
 tools you have. You cannot ask the user; reversible choices in the brief are authorized. \
 Report assumptions that matter, then stop. \
-The environment block names this OS and the one shell tool; write that shell's syntax.";
+The environment block names this OS and the one shell tool; write that shell's syntax. \
+`run_code` is the same grouping tool the parent has: use it for several reads, searches, \
+edits, or page fetches in this brief, and return only what the brief asks for. One obvious \
+call stays direct. You cannot delegate further.";
 
 /// Parent-side tools a child can inherit when the role lists none.
 ///
@@ -34,6 +37,7 @@ const PARENT_TOOL_NAMES: &[&str] = &[
     "find",
     "web_search",
     "fetch_content",
+    "run_code",
 ];
 
 /// Host for the `agent` tool: runs one nested agent on a resolved role.
@@ -350,7 +354,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .join("\n");
     let dispatch = [
         "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
-        "`scout` when you need a repo, layout, API, or call-site map before deciding or editing; multi-file or unfamiliar exploration; or fact-gathering while you plan. It is read-only and stops after findings.",
+        "You decide whether to delegate. A simple lookup or a few files stays inline: use `run_code` when that step needs several reads, greps, finds, edits, or page fetches, and a direct tool when one call is enough. `scout` fits broad codebase search, web research, or documentation fetches, where a separate read-only pass returns a short map and keeps your context smaller. A narrow question does not need `scout`.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
         "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
         "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
@@ -544,7 +548,7 @@ impl BridgeAgentHost {
         };
         extra_roots.sort();
         let system = subagent_system_prompt(
-            &role,
+            role,
             &registry,
             &run_dir,
             &extra_roots,
@@ -756,6 +760,7 @@ fn child_registry_with(
             }
             "grep" => registry.register(Arc::new(mycode_tools::builtin::GrepTool)),
             "find" => registry.register(Arc::new(mycode_tools::builtin::FindTool)),
+            "run_code" => registry.register(Arc::new(mycode_tools::builtin::RunCodeTool)),
             "web_search" => registry.register(Arc::new(mycode_tools::builtin::WebSearchTool::new(
                 web_host.clone(),
             ))),
@@ -1068,6 +1073,79 @@ mod tests {
         assert!(!prompt.contains("\n- powershell:"), "{prompt}");
         assert!(!prompt.contains("\n- bash:"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");
+        assert!(
+            allowed.iter().any(|name| name == "run_code"),
+            "scout keeps run_code, got {allowed:?}"
+        );
+        assert!(registry.get("run_code").is_some(), "{:?}", registry.names());
+        assert!(registry.get("edit").is_none());
+        assert!(prompt.contains("## Writing code for run_code"), "{prompt}");
+        assert!(prompt.contains("same `run_code` grouping"), "{prompt}");
+        assert!(prompt.contains("`goal`"), "{prompt}");
+        assert!(
+            !prompt.contains("Do not do that research inline"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn artisan_gets_the_same_grouping_block_as_the_parent_tools() {
+        let home =
+            HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-artisan-ptc")).unwrap();
+        let artisan = builtin_roles().role("artisan").expect("artisan").clone();
+        let allowed = artisan.resolve_tools(
+            &super::PARENT_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        assert!(allowed.iter().any(|name| name == "run_code"), "{allowed:?}");
+        let shell = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Bash,
+            program: std::path::PathBuf::from("/bin/bash"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(shell.clone()),
+        );
+        let prompt = super::subagent_system_prompt(
+            &artisan,
+            &registry,
+            std::path::Path::new("/work"),
+            &[],
+            "linux",
+            "x86_64",
+            &shell,
+        );
+        let parent = mycode_tools::ToolRegistry::new();
+        mycode_tools::register_builtins(&parent);
+        let parent_prompt = mycode_agent::build_system_prompt(&parent);
+        let child_block = mycode_agent::grouped_execution_block(&prompt).expect("child");
+        let parent_block = mycode_agent::grouped_execution_block(&parent_prompt).expect("parent");
+        assert_eq!(child_block, parent_block);
+        assert!(prompt.contains("same grouping tool"), "{prompt}");
+        assert!(prompt.contains("cannot delegate further"), "{prompt}");
+        assert!(
+            !prompt.contains("Do not do that research inline"),
+            "{prompt}"
+        );
+        let directive = super::delegation_directive(
+            &builtin_roles(),
+            &mycode_config::SubagentSettings::default(),
+        );
+        assert!(
+            mycode_agent::prompt_guides(&directive, mycode_agent::TaskWeight::Broad),
+            "{directive}"
+        );
+        assert!(
+            mycode_agent::prompt_guides(&directive, mycode_agent::TaskWeight::GroupInline),
+            "{directive}"
+        );
+        assert!(
+            !directive.contains("Do not do that research inline"),
+            "{directive}"
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::builtin::fs_io::PreparedFile;
 use crate::builtin::fs_search::PreparedSearch;
+use crate::registry::ToolCatalog;
 
 /// Everything a tool needs to execute an invocation.
 ///
@@ -32,6 +33,11 @@ pub struct ToolCtx {
     /// Host-owned. Execution takes the inner handles once and never
     /// re-resolves.
     pub prepared_file: Option<Arc<PreparedFile>>,
+    /// Extra workspace roots. Absolute tool paths under one of these are
+    /// re-anchored the same way the agent loop anchors a direct call.
+    pub extra_roots: Vec<PathBuf>,
+    /// Tools a `run_code` program may call. Absent for ordinary tools.
+    pub catalog: Option<ToolCatalog>,
 }
 
 impl ToolCtx {
@@ -43,6 +49,8 @@ impl ToolCtx {
             call_id: String::new(),
             prepared_search: None,
             prepared_file: None,
+            extra_roots: Vec::new(),
+            catalog: None,
         }
     }
 
@@ -67,6 +75,18 @@ impl ToolCtx {
     /// Bind a ready preflight file capability (builder style).
     pub fn with_prepared_file(mut self, prepared: Arc<PreparedFile>) -> Self {
         self.prepared_file = Some(prepared);
+        self
+    }
+
+    /// Allow absolute paths under these extra workspace folders.
+    pub fn with_extra_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.extra_roots = roots;
+        self
+    }
+
+    /// Install the tool snapshot `run_code` dispatches into.
+    pub fn with_catalog(mut self, catalog: ToolCatalog) -> Self {
+        self.catalog = Some(catalog);
         self
     }
 

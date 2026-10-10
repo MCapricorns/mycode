@@ -249,6 +249,7 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
             .to_owned(),
         "search_tool" | "use_tool" => text("name"),
         "agent" => join_target(&text("agent"), &text("description")),
+        "run_code" => text("description"),
         _ => text("path"),
     };
     let flat = joined.split_whitespace().collect::<Vec<_>>().join(" ");
