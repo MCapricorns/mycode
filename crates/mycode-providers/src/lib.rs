@@ -50,11 +50,11 @@ pub use oauth::{
 pub use transport::{ReqwestTransport, SseTransport, TransportCall};
 
 /// OpenAI-compatible completions path appended to the base URL.
-pub const OPENAI_COMPLETIONS_PATH: &str = "/chat/completions";
+const OPENAI_COMPLETIONS_PATH: &str = "/chat/completions";
 /// OpenAI-compatible Responses path appended to the base URL.
-pub const OPENAI_RESPONSES_PATH: &str = "/responses";
+const OPENAI_RESPONSES_PATH: &str = "/responses";
 /// Anthropic protocol version header value.
-pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// One resolved streaming provider endpoint.
 #[derive(Clone)]

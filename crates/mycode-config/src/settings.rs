@@ -21,18 +21,13 @@ pub use mcp::{
     MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, builtin_mcp_servers, is_mcp_executable,
     split_command_line,
 };
-pub use providers::{
-    MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings, VALID_PROVIDER_KINDS,
-};
+pub use providers::{MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings};
 pub use subagent_roles::{
-    DEFAULT_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES,
-    SubagentRoleSettings, SubagentSettings,
+    DEFAULT_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings,
 };
-pub use tools_shell::{ShellSettings, ToolsSettings, VALID_SHELL_KINDS};
+pub use tools_shell::{ShellSettings, ToolsSettings};
 pub use user_agent::default_user_agent;
-pub use web::{
-    MAX_WEB_BACKENDS, VALID_WEB_KINDS, WebBackendSettings, WebSettings, builtin_web_backends,
-};
+pub use web::{MAX_WEB_BACKENDS, WebBackendSettings, WebSettings, builtin_web_backends};
 
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +49,7 @@ pub const MAX_AUTHORITY_DOCUMENT_BYTES: usize = 256 * 1024;
 /// Settings format version.
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 /// Settings kind tag.
-pub const SETTINGS_KIND: &str = "mycode-app-settings";
+const SETTINGS_KIND: &str = "mycode-app-settings";
 /// Maximum string field length in bytes.
 pub(super) const MAX_FIELD_BYTES: usize = 8 * 1024;
 /// Base URL maximum length.
