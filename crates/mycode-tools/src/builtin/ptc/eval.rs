@@ -1,7 +1,7 @@
 //! Interpreter for one `run_code` program.
 //!
 //! Tool calls stay inside this future. The only value that leaves is the
-//! program's `return` plus `console.log` lines.
+//! program's `return` plus `print` lines.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -395,6 +395,29 @@ impl Machine {
                 }
                 Ok(Val::Null)
             }
+            Val::Len => {
+                let Some(value) = args.first() else {
+                    return Err(Stop::Throw(Thrown::script("len takes one value")));
+                };
+                let count = match value {
+                    Val::Str(text) => text.chars().count(),
+                    Val::Arr(items) => lock_vec(items).len(),
+                    Val::Obj(map) => lock_map(map).len(),
+                    _ => {
+                        return Err(Stop::Throw(Thrown::script(
+                            "len takes a string, list, or dict",
+                        )));
+                    }
+                };
+                Ok(Val::Num(count as f64))
+            }
+            Val::Range => range_list(&args),
+            Val::StrFn => {
+                let Some(value) = args.first() else {
+                    return Err(Stop::Throw(Thrown::script("str takes one value")));
+                };
+                Ok(Val::Str(display(value)?))
+            }
             Val::ObjectKeys => {
                 let Some(object) = args.first() else {
                     return Err(Stop::Throw(Thrown::script("Object.keys takes an object")));
@@ -554,6 +577,9 @@ impl Machine {
             "tools" => Ok(Val::Tools),
             "gather" => Ok(Val::PromiseAll),
             "print" => Ok(Val::ConsoleLog),
+            "len" => Ok(Val::Len),
+            "range" => Ok(Val::Range),
+            "str" => Ok(Val::StrFn),
             "console" => Ok(Val::Console),
             "Object" => Ok(Val::ObjectCtor),
             "Promise" => Ok(Val::PromiseCtor),
@@ -587,9 +613,7 @@ fn member(object: Val, name: &str) -> Result<Val, Stop> {
             recv: Box::new(object),
             name: name.to_owned(),
         }),
-        _ => Err(Stop::Throw(Thrown::script(format!(
-            "cannot read property {name}"
-        )))),
+        _ => Err(Stop::Throw(Thrown::script(format!("no attribute {name}")))),
     }
 }
 
@@ -667,6 +691,9 @@ enum Val {
     ToolFn(String),
     PromiseAll,
     ConsoleLog,
+    Len,
+    Range,
+    StrFn,
     ObjectKeys,
     Pending(Arc<Pending>),
     Method { recv: Box<Val>, name: String },
@@ -871,13 +898,45 @@ fn format_num(value: f64) -> String {
     }
 }
 
+fn range_list(args: &[Val]) -> Result<Val, Stop> {
+    let (start, end) = match args {
+        [Val::Num(end)] => (0.0, *end),
+        [Val::Num(start), Val::Num(end)] => (*start, *end),
+        _ => {
+            return Err(Stop::Throw(Thrown::script(
+                "range takes one or two numbers",
+            )));
+        }
+    };
+    if !start.is_finite() || !end.is_finite() {
+        return Err(Stop::Throw(Thrown::script("range bounds must be finite")));
+    }
+    let start = start.trunc() as i64;
+    let end = end.trunc() as i64;
+    if end <= start {
+        return Ok(Val::arr(Vec::new()));
+    }
+    let span = end.checked_sub(start).unwrap_or(i64::MAX);
+    const MAX_RANGE: i64 = 10_000;
+    if span > MAX_RANGE {
+        return Err(Stop::Throw(Thrown::script(format!(
+            "range is limited to {MAX_RANGE} values"
+        ))));
+    }
+    let mut items = Vec::with_capacity(span as usize);
+    let mut cursor = start;
+    while cursor < end {
+        items.push(Val::Num(cursor as f64));
+        cursor += 1;
+    }
+    Ok(Val::arr(items))
+}
+
 fn iterate(value: &Val) -> Result<Vec<Val>, Stop> {
     match value {
         Val::Arr(items) => Ok(lock_vec(items).clone()),
         Val::Str(text) => Ok(text.chars().map(|ch| Val::Str(ch.to_string())).collect()),
-        _ => Err(Stop::Throw(Thrown::script(
-            "for-of needs an array or string",
-        ))),
+        _ => Err(Stop::Throw(Thrown::script("for needs a list or a string"))),
     }
 }
 

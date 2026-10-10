@@ -76,7 +76,7 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 | --- | --- |
 | `ask_user` | 把 1–4 个问题送到界面，等用户答完再继续 |
 | `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，没有 `task` 别名。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
-| `run_code` | 嵌在二进制里的 Python 子集。模型写一段带顶层 `await` / `return` 的函数体，在程序里调用其它工具；只有 `return` 和 `print` 回到上下文。不启动 Node.js，也不要求机器上安装 Python。只读调用可以 `await gather(...)` 重叠，写操作按提交顺序单独执行。一次最多 48 次工具调用、20000 步、120 秒；回到模型的文本上限 8000 字节 |
+| `run_code` | 嵌在二进制里的 Python 子集。模型写一段带顶层 `await` / `return` 的函数体，在程序里调用其它工具；只有 `return` 和 `print` 回到上下文。不启动 Node.js，也不要求机器上安装 Python。内建 `len`、`range`、`str` 和切片 `value[start:end]`。只读调用可以 `await gather(...)` 重叠，写操作按提交顺序单独执行。一次最多 48 次工具调用、20000 步、120 秒；回到模型的文本上限 8000 字节 |
 | `web_search` / `fetch_content` | 有界 HTTP：每次最多 8 条结果 / 8 个 URL。搜索结果是标题、URL 和最多 240 字符的摘要，重复 URL 丢掉，相同查询缓存 10 分钟。`fetch_content` 带 `goal` 时只返回匹配摘录（每页约 1200 字符）；不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)` |
 
 网页后端由设置决定：启用的那个优先；都没启用时用第一个有钥匙（环境变量或 `web-<id>`）的后端。Querit 和自定义后端走 `POST {endpoint}/v1/search` 与 `/v1/contents`，AnySearch 走 `/v1/search` 与 `/v1/extract`。Querit 没钥匙时调用失败并提示去设置页粘贴或设 `QUERIT_API_KEY`；已启用的 AnySearch 没钥匙时匿名访问。
