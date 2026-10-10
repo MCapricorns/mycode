@@ -1,24 +1,23 @@
-//! Default platform-shell discovery and the process-wide runtime preference.
+//! Automatic platform-shell discovery.
 //!
-//! Windows prefers PowerShell 7 (`pwsh`), then Windows PowerShell 5.1
-//! (`powershell.exe`), then Git Bash. `cmd.exe` is only the runtime fallback
-//! when none of those exist, and it is not a settings kind. POSIX hosts use
-//! bash, then `sh`. WSL's `System32\bash.exe` is not a candidate: it is a
-//! Linux environment, and the session cwd is a Windows path.
+//! The choice is fixed for the process. `MYCODE_SHELL` and `tools.shell` are
+//! not overrides: callers that still see them log once and ignore them.
+//!
+//! Windows follows Codex and Gemini CLI: PowerShell 7 (`pwsh`), then Windows
+//! PowerShell 5.1, then `cmd.exe`. Git Bash, MSYS2, Cygwin, and WSL are not
+//! candidates. A `WindowsApps\pwsh.exe` execution alias is recognized by path
+//! shape, not by file size, and is used only when no regular `pwsh` exists.
+//!
+//! Linux and macOS follow Codex's user-shell rule, limited to POSIX shells.
+//! `$SHELL` wins when it is an absolute `bash`, `zsh`, or `sh`. Otherwise
+//! macOS tries `zsh`, then `bash`, then `sh`; other Unix tries `bash`, then
+//! `zsh`, then `sh`. `pwsh` and `cmd` are never selected there.
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::builtin::fs_search::lexical_normalize;
-
-static RUNTIME_SHELL: RwLock<Option<DetectedShell>> = RwLock::new(None);
-
-/// Environment variable that forces the shell for this process.
-///
-/// Values: `pwsh`, `powershell`, `bash`, `cmd`, `auto` (or empty) to keep
-/// detection, or a path to an executable. This overrides saved settings and
-/// is not written back to them.
-pub const MYCODE_SHELL_ENV: &str = "MYCODE_SHELL";
 
 /// Kind of platform shell used by the shell tool.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,21 +26,26 @@ pub enum ShellKind {
     Pwsh,
     /// Windows PowerShell 5.1 (`powershell.exe`).
     WindowsPowerShell,
-    /// Bash (`bash` / `sh`), including Git Bash on Windows.
+    /// Bash.
     Bash,
-    /// Windows `cmd.exe`. Runtime fallback and `MYCODE_SHELL=cmd` only.
-    /// [`Self::parse`] does not accept it, so settings cannot persist it.
+    /// Zsh.
+    Zsh,
+    /// POSIX `sh`.
+    Sh,
+    /// Windows `cmd.exe`. Runtime fallback only. Not a settings value.
     Cmd,
 }
 
 impl ShellKind {
-    /// Stable settings / wire name for this kind.
+    /// Stable name for logs and tests.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pwsh => "pwsh",
             Self::WindowsPowerShell => "powershell",
             Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Sh => "sh",
             Self::Cmd => "cmd",
         }
     }
@@ -52,6 +56,8 @@ impl ShellKind {
         match self {
             Self::Pwsh | Self::WindowsPowerShell => "powershell",
             Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Sh => "sh",
             Self::Cmd => "cmd",
         }
     }
@@ -62,24 +68,32 @@ impl ShellKind {
         matches!(self, Self::Pwsh | Self::WindowsPowerShell)
     }
 
-    /// Parses a settings / wire name. `cmd` is intentionally rejected.
+    /// Parses a shell family name. `cmd` is intentionally rejected.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "pwsh" => Some(Self::Pwsh),
             "powershell" => Some(Self::WindowsPowerShell),
             "bash" => Some(Self::Bash),
+            "zsh" => Some(Self::Zsh),
+            "sh" => Some(Self::Sh),
             _ => None,
         }
     }
 
     /// Classifies a program path from its file stem.
+    ///
+    /// Unknown stems use the host default family so a forced test double
+    /// still has a launch style. Discovery never uses that default: POSIX
+    /// selection only accepts `bash`, `zsh`, and `sh`.
     #[must_use]
     pub fn from_program(path: &Path) -> Self {
         match file_stem(path).as_str() {
             "pwsh" => Self::Pwsh,
             "powershell" => Self::WindowsPowerShell,
-            "bash" | "sh" => Self::Bash,
+            "bash" => Self::Bash,
+            "zsh" => Self::Zsh,
+            "sh" => Self::Sh,
             "cmd" => Self::Cmd,
             _ => {
                 #[cfg(windows)]
@@ -91,15 +105,6 @@ impl ShellKind {
                     Self::Bash
                 }
             }
-        }
-    }
-
-    fn fallback_executable(self) -> &'static str {
-        match self {
-            Self::Pwsh => "pwsh",
-            Self::WindowsPowerShell => "powershell.exe",
-            Self::Bash => "bash",
-            Self::Cmd => "cmd.exe",
         }
     }
 }
@@ -117,34 +122,15 @@ fn file_stem(path: &Path) -> String {
     stem.to_ascii_lowercase()
 }
 
-/// How an explicit shell override should be resolved.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ShellOverride {
-    /// Unset, empty, or `auto`: use settings, then detection.
-    Default,
-    /// A kind name. The program comes from detection for that kind.
-    Kind(ShellKind),
-    /// An executable path, classified from its file name.
-    Program(PathBuf),
-}
-
-/// Classifies `MYCODE_SHELL` text. Does not touch the filesystem.
-#[must_use]
-pub fn classify_shell_override(value: &str) -> ShellOverride {
-    let value = value.trim();
-    if value.is_empty() || value.eq_ignore_ascii_case("auto") {
-        return ShellOverride::Default;
+/// `bash`, `zsh`, or `sh`. Anything else, including `pwsh` and `fish`, is
+/// not a POSIX shell for this tool.
+fn posix_kind(path: &Path) -> Option<ShellKind> {
+    match file_stem(path).as_str() {
+        "bash" => Some(ShellKind::Bash),
+        "zsh" => Some(ShellKind::Zsh),
+        "sh" => Some(ShellKind::Sh),
+        _ => None,
     }
-    let token = value.strip_suffix(".exe").unwrap_or(value);
-    if !value.contains(['/', '\\']) && Path::new(token).components().count() == 1 {
-        if let Some(kind) = ShellKind::parse(token) {
-            return ShellOverride::Kind(kind);
-        }
-        if token.eq_ignore_ascii_case("cmd") {
-            return ShellOverride::Kind(ShellKind::Cmd);
-        }
-    }
-    ShellOverride::Program(PathBuf::from(value))
 }
 
 /// A resolved shell program and its kind.
@@ -162,9 +148,9 @@ pub struct DetectedShell {
 pub(crate) enum ShellImage {
     /// Not present, or not a usable file.
     Missing,
-    /// A regular executable image (larger than a Store execution alias).
+    /// A regular executable image.
     Regular,
-    /// A WindowsApps `pwsh.exe` execution alias.
+    /// `WindowsApps\pwsh.exe`, the Store execution alias, not a package binary.
     PwshStoreAlias,
 }
 
@@ -202,14 +188,31 @@ pub(crate) fn select_shell_tiers(
 }
 
 /// `true` when `path` is the WSL launcher `bash.exe` under System32 or SysWOW64.
-///
-/// Checked on the path text so the rule is the same on every host.
 #[cfg(any(windows, test))]
 #[must_use]
 pub(crate) fn is_wsl_bash_launcher(path: &Path) -> bool {
     let text = path.to_string_lossy().replace('/', "\\");
     let lower = text.to_ascii_lowercase();
     lower.ends_with("\\system32\\bash.exe") || lower.ends_with("\\syswow64\\bash.exe")
+}
+
+/// `true` when `path` is `WindowsApps\<name>.exe` itself, not a package folder
+/// under `WindowsApps`.
+///
+/// Store execution aliases live at that exact path. Package binaries live in
+/// `WindowsApps\Microsoft.PowerShell_*\pwsh.exe` and are access-restricted, so
+/// discovery uses the alias path instead of launching them. File size is not
+/// part of the check: an alias can be larger than a few dozen bytes, and a
+/// tiny file outside `WindowsApps` is not an alias.
+#[cfg(any(windows, test))]
+#[must_use]
+pub(crate) fn is_windowsapps_execution_alias(path: &Path) -> bool {
+    let text = path.to_string_lossy().replace('/', "\\");
+    let mut parts = text.rsplit('\\');
+    let file = parts.next().unwrap_or("");
+    let parent = parts.next().unwrap_or("");
+    parent.eq_ignore_ascii_case("WindowsApps")
+        && (file.eq_ignore_ascii_case("pwsh.exe") || file.eq_ignore_ascii_case("bash.exe"))
 }
 
 /// `true` when `path` is the 32-bit Windows PowerShell under SysWOW64.
@@ -237,71 +240,55 @@ pub fn detect_default_shell() -> Option<DetectedShell> {
     }
 }
 
-/// Resolves one shell kind to a program, when one is installed.
-#[must_use]
-pub fn detect_shell_kind(kind: ShellKind) -> Option<DetectedShell> {
-    #[cfg(windows)]
-    {
-        if kind == ShellKind::Cmd {
-            return windows_system_cmd().map(|program| DetectedShell { kind, program });
-        }
-        let tiers = windows_shell_tiers(&WindowsShellEnv::from_process());
-        let tier = match kind {
-            ShellKind::Pwsh => &tiers[0],
-            ShellKind::WindowsPowerShell => &tiers[1],
-            ShellKind::Bash => &tiers[2],
-            ShellKind::Cmd => unreachable!("cmd is handled above"),
-        };
-        select_shell_tiers(std::slice::from_ref(tier), image_of)
-    }
-    #[cfg(not(windows))]
-    {
-        if kind == ShellKind::Bash {
-            detect_posix_shell()
-        } else {
-            None
-        }
-    }
+struct CachedShell {
+    detected: Option<DetectedShell>,
+    resolved: DetectedShell,
 }
 
-/// Shell selected for this process: `MYCODE_SHELL`, then the runtime
-/// preference, then detection. `None` when nothing is installed (the Windows
-/// `cmd.exe` fallback is applied by [`resolved_shell`]).
+static CACHED_SHELL: OnceLock<CachedShell> = OnceLock::new();
+
+fn cached_shell() -> &'static CachedShell {
+    note_ignored_mycode_shell();
+    CACHED_SHELL.get_or_init(|| {
+        let detected = detect_default_shell();
+        let resolved = detected.clone().unwrap_or_else(fallback_shell);
+        CachedShell { detected, resolved }
+    })
+}
+
+/// Shell discovered on this host, without the Windows `cmd.exe` fallback.
+///
+/// The value is computed once per process so the tool spec and later launches
+/// stay on the same interpreter.
 #[must_use]
 pub fn active_shell() -> Option<DetectedShell> {
-    if let Ok(value) = std::env::var(MYCODE_SHELL_ENV)
-        && let Some(forced) = shell_from_override(&classify_shell_override(&value))
-    {
-        return Some(forced);
-    }
-    runtime_shell().or_else(detect_default_shell)
+    cached_shell().detected.clone()
 }
 
-/// Shell the tool and the system prompt agree on.
+/// Shell the tool and the system prompt agree on for this process.
 ///
-/// On Windows, when PowerShell and Git Bash are both missing, this is
-/// `cmd.exe` and the model sees the `cmd` tool.
+/// On Windows, when PowerShell is missing, this is `cmd.exe` and the model
+/// sees the `cmd` tool.
 #[must_use]
 pub fn resolved_shell() -> DetectedShell {
-    active_shell().unwrap_or_else(fallback_shell)
+    cached_shell().resolved.clone()
 }
 
-fn shell_from_override(override_value: &ShellOverride) -> Option<DetectedShell> {
-    match override_value {
-        ShellOverride::Default => None,
-        ShellOverride::Kind(kind) => Some(resolve_kind(*kind)),
-        ShellOverride::Program(program) => Some(DetectedShell {
-            kind: ShellKind::from_program(program),
-            program: program.clone(),
-        }),
+fn note_ignored_mycode_shell() {
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    let Ok(value) = std::env::var("MYCODE_SHELL") else {
+        return;
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return;
     }
-}
-
-fn resolve_kind(kind: ShellKind) -> DetectedShell {
-    detect_shell_kind(kind).unwrap_or(DetectedShell {
-        kind,
-        program: PathBuf::from(kind.fallback_executable()),
-    })
+    if LOGGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "mycode: ignoring MYCODE_SHELL ({trimmed}); the shell is chosen automatically for this operating system"
+    );
 }
 
 fn fallback_shell() -> DetectedShell {
@@ -327,33 +314,63 @@ fn fallback_shell() -> DetectedShell {
     }
 }
 
-/// Replaces the process-wide shell preference used when `MYCODE_SHELL` is unset.
-pub fn set_runtime_shell(shell: Option<DetectedShell>) {
-    *RUNTIME_SHELL
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = shell;
-}
-
-/// Current process-wide shell preference, if desktop or a test set one.
-#[must_use]
-pub(crate) fn runtime_shell() -> Option<DetectedShell> {
-    RUNTIME_SHELL
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
 #[cfg(not(windows))]
 fn detect_posix_shell() -> Option<DetectedShell> {
-    let path = std::env::var_os("PATH");
-    let mut candidates = vec![PathBuf::from("/bin/bash")];
-    candidates.extend(path_named_files(path.as_deref(), "bash"));
-    candidates.extend(path_named_files(path.as_deref(), "sh"));
+    choose_posix_shell(
+        std::env::var_os("SHELL").as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        cfg!(target_os = "macos"),
+        |program| program.is_file(),
+    )
+}
+
+/// POSIX search order. Existence is not required.
+///
+/// `$SHELL` is first when it is an absolute `bash`, `zsh`, or `sh`. Relative
+/// values and other families (`pwsh`, `fish`, `nu`) are skipped.
+#[cfg(any(not(windows), test))]
+pub(crate) fn posix_shell_candidates(
+    user_shell: Option<&OsStr>,
+    path_var: Option<&OsStr>,
+    macos: bool,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(value) = user_shell {
+        let path = PathBuf::from(value);
+        if is_absolute_path_entry(&path) && posix_kind(&path).is_some() {
+            candidates.push(path);
+        }
+    }
+    if macos {
+        candidates.push(PathBuf::from("/bin/zsh"));
+        candidates.push(PathBuf::from("/bin/bash"));
+        candidates.extend(path_named_files(path_var, "zsh"));
+        candidates.extend(path_named_files(path_var, "bash"));
+    } else {
+        candidates.push(PathBuf::from("/bin/bash"));
+        candidates.push(PathBuf::from("/usr/bin/bash"));
+        candidates.extend(path_named_files(path_var, "bash"));
+        candidates.extend(path_named_files(path_var, "zsh"));
+        candidates.push(PathBuf::from("/bin/zsh"));
+    }
+    candidates.push(PathBuf::from("/bin/sh"));
+    candidates.extend(path_named_files(path_var, "sh"));
     candidates
+}
+
+/// First existing POSIX candidate.
+#[cfg(any(not(windows), test))]
+pub(crate) fn choose_posix_shell(
+    user_shell: Option<&OsStr>,
+    path_var: Option<&OsStr>,
+    macos: bool,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<DetectedShell> {
+    posix_shell_candidates(user_shell, path_var, macos)
         .into_iter()
-        .find(|program| program.is_file())
+        .find(|program| exists(program))
         .map(|program| DetectedShell {
-            kind: ShellKind::Bash,
+            kind: posix_kind(&program).unwrap_or(ShellKind::Bash),
             program,
         })
 }
@@ -405,15 +422,12 @@ pub(crate) fn detect_windows_shell_with(env: &WindowsShellEnv) -> Option<Detecte
 
 /// Candidate programs in discovery order, one vector per family.
 ///
-/// Existence is not required. The order is PowerShell 7, Windows PowerShell
-/// 5.1, then Git Bash. WSL `bash.exe` is omitted.
+/// The order is PowerShell 7, then Windows PowerShell 5.1. Bash is not a
+/// Windows candidate. `cmd.exe` is not listed here; [`resolved_shell`] adds
+/// it when both tiers miss.
 #[cfg(any(windows, test))]
-pub(crate) fn windows_shell_tiers(env: &WindowsShellEnv) -> [Vec<(ShellKind, PathBuf)>; 3] {
-    [
-        pwsh_candidates(env),
-        powershell51_candidates(env),
-        git_bash_candidates(env),
-    ]
+pub(crate) fn windows_shell_tiers(env: &WindowsShellEnv) -> [Vec<(ShellKind, PathBuf)>; 2] {
+    [pwsh_candidates(env), powershell51_candidates(env)]
 }
 
 #[cfg(any(windows, test))]
@@ -437,11 +451,6 @@ fn pwsh_candidates(env: &WindowsShellEnv) -> Vec<(ShellKind, PathBuf)> {
                 .join("7-preview")
                 .join("pwsh.exe"),
         ));
-        candidates.extend(
-            fuzzy_windows_apps_pwsh(&program_files.join("WindowsApps"))
-                .into_iter()
-                .map(|program| (ShellKind::Pwsh, program)),
-        );
     }
     if let Some(program_files_x86) = env.program_files_x86.as_ref() {
         candidates.push((
@@ -504,80 +513,35 @@ fn powershell51_candidates(env: &WindowsShellEnv) -> Vec<(ShellKind, PathBuf)> {
     candidates
 }
 
-#[cfg(any(windows, test))]
-fn git_bash_candidates(env: &WindowsShellEnv) -> Vec<(ShellKind, PathBuf)> {
-    let mut candidates = Vec::new();
-    if let Some(program_files) = env.program_files.as_ref() {
-        let program_files = Path::new(program_files);
-        candidates.push((
-            ShellKind::Bash,
-            program_files.join("Git").join("bin").join("bash.exe"),
-        ));
-        candidates.push((
-            ShellKind::Bash,
-            program_files
-                .join("Git")
-                .join("usr")
-                .join("bin")
-                .join("bash.exe"),
-        ));
-    }
-    if let Some(local_app_data) = env.local_app_data.as_ref() {
-        candidates.push((
-            ShellKind::Bash,
-            Path::new(local_app_data)
-                .join("Programs")
-                .join("Git")
-                .join("bin")
-                .join("bash.exe"),
-        ));
-    }
-    candidates.extend(
-        path_named_files(env.path.as_deref(), "bash.exe")
-            .into_iter()
-            .filter(|program| !is_wsl_bash_launcher(program))
-            .map(|program| (ShellKind::Bash, program)),
-    );
-    candidates
-}
-
 #[cfg(windows)]
 fn image_of(path: &Path) -> ShellImage {
+    if is_windowsapps_package_pwsh(path) {
+        return ShellImage::Missing;
+    }
+    if is_windowsapps_execution_alias(path) {
+        return if alias_file_present(path) {
+            ShellImage::PwshStoreAlias
+        } else {
+            ShellImage::Missing
+        };
+    }
     if image_is_regular_executable(path) {
         ShellImage::Regular
-    } else if is_store_execution_alias(path) {
-        ShellImage::PwshStoreAlias
     } else {
         ShellImage::Missing
     }
 }
 
-/// A regular file larger than a Store execution alias (at most 64 bytes).
+/// A non-empty file. Store aliases are excluded by path before this runs.
 #[cfg(windows)]
 fn image_is_regular_executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 64)
+    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }
 
-/// A Store execution alias `pwsh.exe` under `WindowsApps` (at most 64 bytes).
+/// The alias path exists and is not a directory. Size is irrelevant.
 #[cfg(windows)]
-fn is_store_execution_alias(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    if !name.eq_ignore_ascii_case("pwsh.exe") {
-        return false;
-    }
-    let in_windows_apps = path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_string_lossy()
-            .eq_ignore_ascii_case("WindowsApps")
-    });
-    if !in_windows_apps {
-        return false;
-    }
-    std::fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_dir() && meta.len() <= 64)
+fn alias_file_present(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_dir())
 }
 
 /// `%SystemRoot%\System32\cmd.exe` when that file exists.
@@ -602,59 +566,51 @@ fn is_absolute_path_entry(entry: &Path) -> bool {
     !entry.as_os_str().is_empty() && lexical_normalize(entry).is_absolute()
 }
 
-/// Finds `pwsh.exe` inside versioned `Microsoft.PowerShell_*` package
-/// directories under a WindowsApps root, newest version first.
+/// `true` when `path` is `WindowsApps\Microsoft.PowerShell_*\pwsh.exe`.
+///
+/// That file is the Store package, not the App Execution Alias. Launching it
+/// directly is access-restricted. Callers treat it as missing and use
+/// `WindowsApps\pwsh.exe` instead.
 #[cfg(any(windows, test))]
 #[must_use]
-pub(crate) fn fuzzy_windows_apps_pwsh(windows_apps: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(windows_apps) else {
-        return Vec::new();
-    };
-    let mut packages: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("Microsoft.PowerShell_"))
-        })
-        .collect();
-    packages.sort_unstable_by(|a, b| b.cmp(a));
-    packages
-        .into_iter()
-        .map(|package| package.join("pwsh.exe"))
-        .filter(|pwsh| pwsh.exists())
-        .collect()
+pub(crate) fn is_windowsapps_package_pwsh(path: &Path) -> bool {
+    let text = path.to_string_lossy().replace('/', "\\");
+    let lower = text.to_ascii_lowercase();
+    lower.contains("\\windowsapps\\")
+        && lower.contains("\\microsoft.powershell_")
+        && lower.ends_with("\\pwsh.exe")
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DetectedShell, ShellImage, ShellKind, ShellOverride, WindowsShellEnv,
-        classify_shell_override, cmd_fallback_args, is_syswow64_powershell, is_wsl_bash_launcher,
+        DetectedShell, ShellImage, ShellKind, WindowsShellEnv, choose_posix_shell,
+        cmd_fallback_args, is_syswow64_powershell, is_windowsapps_execution_alias,
+        is_windowsapps_package_pwsh, is_wsl_bash_launcher, posix_shell_candidates, resolved_shell,
         select_shell_tiers, windows_shell_tiers,
     };
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn settings_kinds_cover_powershell_editions_and_not_cmd() {
+    fn shell_names_cover_posix_families_and_not_cmd() {
         assert_eq!(ShellKind::parse("pwsh"), Some(ShellKind::Pwsh));
         assert_eq!(
             ShellKind::parse("powershell"),
             Some(ShellKind::WindowsPowerShell)
         );
         assert_eq!(ShellKind::parse("bash"), Some(ShellKind::Bash));
+        assert_eq!(ShellKind::parse("zsh"), Some(ShellKind::Zsh));
+        assert_eq!(ShellKind::parse("sh"), Some(ShellKind::Sh));
         assert_eq!(ShellKind::parse("cmd"), None);
-        assert_eq!(ShellKind::Pwsh.as_str(), "pwsh");
-        assert_eq!(ShellKind::WindowsPowerShell.as_str(), "powershell");
+        assert_eq!(ShellKind::Zsh.tool_name(), "zsh");
+        assert_eq!(ShellKind::Sh.tool_name(), "sh");
         assert_eq!(ShellKind::Pwsh.tool_name(), "powershell");
         assert_eq!(ShellKind::WindowsPowerShell.tool_name(), "powershell");
         assert_eq!(ShellKind::Bash.tool_name(), "bash");
         assert_eq!(ShellKind::Cmd.tool_name(), "cmd");
         assert!(ShellKind::Pwsh.is_powershell());
-        assert!(ShellKind::WindowsPowerShell.is_powershell());
-        assert!(!ShellKind::Bash.is_powershell());
+        assert!(!ShellKind::Zsh.is_powershell());
     }
 
     #[test]
@@ -670,9 +626,10 @@ mod tests {
             ShellKind::WindowsPowerShell
         );
         assert_eq!(
-            ShellKind::from_program(Path::new(r"C:\Program Files\Git\bin\bash.exe")),
-            ShellKind::Bash
+            ShellKind::from_program(Path::new("/bin/zsh")),
+            ShellKind::Zsh
         );
+        assert_eq!(ShellKind::from_program(Path::new("/bin/sh")), ShellKind::Sh);
         assert_eq!(
             ShellKind::from_program(Path::new(r"C:\Windows\System32\cmd.exe")),
             ShellKind::Cmd
@@ -680,45 +637,59 @@ mod tests {
     }
 
     #[test]
-    fn override_tokens_force_a_family_without_touching_the_filesystem() {
-        assert_eq!(classify_shell_override("  "), ShellOverride::Default);
-        assert_eq!(classify_shell_override("auto"), ShellOverride::Default);
-        assert_eq!(
-            classify_shell_override("pwsh"),
-            ShellOverride::Kind(ShellKind::Pwsh)
-        );
-        assert_eq!(
-            classify_shell_override("powershell.exe"),
-            ShellOverride::Kind(ShellKind::WindowsPowerShell)
-        );
-        assert_eq!(
-            classify_shell_override("bash"),
-            ShellOverride::Kind(ShellKind::Bash)
-        );
-        assert_eq!(
-            classify_shell_override("cmd"),
-            ShellOverride::Kind(ShellKind::Cmd)
-        );
-        assert_eq!(
-            classify_shell_override(r"C:\Program Files\PowerShell\7\pwsh.exe"),
-            ShellOverride::Program(PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"))
+    fn posix_shell_prefers_an_absolute_user_shell_then_the_platform_default() {
+        let zsh = Path::new("/bin/zsh");
+        let bash = Path::new("/bin/bash");
+        let sh = Path::new("/bin/sh");
+        let have = |path: &Path| path == zsh || path == bash || path == sh;
+
+        let picked = choose_posix_shell(Some(OsStr::new("/bin/zsh")), None, false, have).unwrap();
+        assert_eq!(picked.kind, ShellKind::Zsh);
+        assert_eq!(picked.program, zsh);
+
+        let picked =
+            choose_posix_shell(Some(OsStr::new("/usr/bin/fish")), None, false, have).unwrap();
+        assert_eq!(picked.kind, ShellKind::Bash, "fish is not the tool shell");
+
+        let picked =
+            choose_posix_shell(Some(OsStr::new("/usr/bin/pwsh")), None, false, have).unwrap();
+        assert_eq!(picked.kind, ShellKind::Bash, "pwsh is not a POSIX shell");
+        assert_ne!(picked.program, PathBuf::from("/usr/bin/pwsh"));
+
+        let macos = choose_posix_shell(None, None, true, have).unwrap();
+        assert_eq!(macos.program, zsh);
+
+        let linux =
+            choose_posix_shell(None, None, false, |path| path == bash || path == sh).unwrap();
+        assert_eq!(linux.program, bash);
+
+        let only_sh = choose_posix_shell(None, None, false, |path| path == sh).unwrap();
+        assert_eq!(only_sh.kind, ShellKind::Sh);
+
+        assert!(choose_posix_shell(None, None, false, |_| false).is_none());
+    }
+
+    #[test]
+    fn relative_user_shell_is_not_searched() {
+        let candidates = posix_shell_candidates(Some(OsStr::new("bash")), None, false);
+        assert!(
+            candidates.iter().all(|path| path != Path::new("bash")),
+            "{candidates:?}"
         );
     }
 
     #[test]
-    fn tiers_prefer_pwsh_then_windows_powershell_then_git_bash() {
+    fn tiers_prefer_regular_pwsh_then_store_alias_then_windows_powershell() {
         let pwsh = PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe");
         let alias = PathBuf::from(r"C:\Program Files\WindowsApps\pwsh.exe");
         let powershell =
             PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
-        let bash = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
         let tiers = [
             vec![
                 (ShellKind::Pwsh, pwsh.clone()),
                 (ShellKind::Pwsh, alias.clone()),
             ],
             vec![(ShellKind::WindowsPowerShell, powershell.clone())],
-            vec![(ShellKind::Bash, bash.clone())],
         ];
         let regular = |path: &Path| {
             if path == alias.as_path() {
@@ -728,7 +699,6 @@ mod tests {
             }
         };
         let picked = select_shell_tiers(&tiers, regular).unwrap();
-        assert_eq!(picked.kind, ShellKind::Pwsh);
         assert_eq!(picked.program, pwsh);
 
         let alias_only = |path: &Path| {
@@ -758,69 +728,93 @@ mod tests {
         };
         let picked = select_shell_tiers(&tiers, no_pwsh).unwrap();
         assert_eq!(picked.kind, ShellKind::WindowsPowerShell);
-
-        let bash_only = |path: &Path| {
-            if path == bash.as_path() {
-                ShellImage::Regular
-            } else {
-                ShellImage::Missing
-            }
-        };
-        let picked = select_shell_tiers(&tiers, bash_only).unwrap();
-        assert_eq!(picked.kind, ShellKind::Bash);
         assert!(select_shell_tiers(&tiers, |_| ShellImage::Missing).is_none());
     }
 
     #[test]
-    fn windows_candidate_list_skips_wsl_bash_and_includes_powershell_51() {
+    fn windows_candidates_skip_bash_wsl_syswow64_and_classify_store_aliases_by_path() {
         let env = WindowsShellEnv {
             path: Some(OsString::from(
-                r"C:\Windows\System32;C:\Program Files\Git\bin",
+                r"C:\msys64\usr\bin;C:\Windows\System32;C:\Windows\SysWOW64\WindowsPowerShell\v1.0;C:\Program Files\Git\bin",
             )),
             program_files: Some(OsString::from(r"C:\Program Files")),
             program_files_x86: None,
-            local_app_data: None,
+            local_app_data: Some(OsString::from(r"C:\Users\me\AppData\Local")),
             user_profile: None,
             system_root: Some(OsString::from(r"C:\Windows")),
         };
         let tiers = windows_shell_tiers(&env);
-        let powershell = &tiers[1];
+        let programs: Vec<_> = tiers
+            .iter()
+            .flat_map(|tier| tier.iter().map(|(_, path)| path.clone()))
+            .collect();
         assert!(
-            powershell.iter().any(|(_, path)| {
-                path.ends_with(
-                    Path::new("WindowsPowerShell")
-                        .join("v1.0")
-                        .join("powershell.exe"),
-                )
-            }),
-            "5.1 candidate missing: {powershell:?}"
+            programs.iter().all(|path| !file_ends_with_bash(path)),
+            "bash is not a Windows shell: {programs:?}"
         );
-        let bash_paths: Vec<_> = tiers[2].iter().map(|(_, path)| path.clone()).collect();
         assert!(
-            bash_paths
+            programs.iter().any(|path| path.ends_with(
+                Path::new("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe")
+            )),
+            "5.1 candidate missing: {programs:?}"
+        );
+        assert!(
+            programs
                 .iter()
-                .any(|path| path.ends_with(Path::new("Git").join("bin").join("bash.exe"))),
-            "Git Bash candidate missing: {bash_paths:?}"
+                .all(|path| !is_syswow64_powershell(path) && !is_wsl_bash_launcher(path)),
+            "{programs:?}"
         );
+        assert!(is_windowsapps_execution_alias(Path::new(
+            r"C:\Program Files\WindowsApps\pwsh.exe"
+        )));
+        assert!(is_windowsapps_execution_alias(Path::new(
+            r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\bash.exe"
+        )));
+        let package =
+            Path::new(r"C:\Program Files\WindowsApps\Microsoft.PowerShell_8wekyb3d8bbwe\pwsh.exe");
         assert!(
-            bash_paths.iter().all(|path| !is_wsl_bash_launcher(path)),
-            "WSL bash launcher leaked into candidates: {bash_paths:?}"
+            !is_windowsapps_execution_alias(package),
+            "a package binary is not the execution alias"
         );
-        assert!(is_wsl_bash_launcher(Path::new(
-            r"C:\Windows\System32\bash.exe"
+        assert!(is_windowsapps_package_pwsh(package));
+        assert!(!is_windowsapps_package_pwsh(Path::new(
+            r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\pwsh.exe"
         )));
-        assert!(is_wsl_bash_launcher(Path::new(
-            r"C:\Windows\SysWOW64\bash.exe"
+        let alias = PathBuf::from(r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\pwsh.exe");
+        let tiers = [
+            vec![
+                (ShellKind::Pwsh, package.to_path_buf()),
+                (ShellKind::Pwsh, alias.clone()),
+            ],
+            Vec::new(),
+        ];
+        let picked = select_shell_tiers(&tiers, |path| {
+            if is_windowsapps_package_pwsh(path) {
+                ShellImage::Missing
+            } else if path == alias.as_path() {
+                ShellImage::PwshStoreAlias
+            } else {
+                ShellImage::Missing
+            }
+        })
+        .expect("alias");
+        assert_eq!(picked.program, alias);
+        assert!(!is_windowsapps_execution_alias(Path::new(
+            r"C:\msys64\usr\bin\bash.exe"
         )));
-        assert!(!is_wsl_bash_launcher(Path::new(
-            r"C:\Program Files\Git\bin\bash.exe"
-        )));
-        assert!(is_syswow64_powershell(Path::new(
-            r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
-        )));
-        assert!(!is_syswow64_powershell(Path::new(
-            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-        )));
+    }
+
+    fn file_ends_with_bash(path: &Path) -> bool {
+        path.to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase()
+            .ends_with("\\bash.exe")
+            || path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("bash"))
     }
 
     #[test]
@@ -834,5 +828,22 @@ mod tests {
                 "echo hi".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn resolved_shell_stays_on_one_interpreter() {
+        let first = resolved_shell();
+        let second = resolved_shell();
+        assert_eq!(first, second);
+        #[cfg(windows)]
+        assert!(matches!(
+            first.kind,
+            ShellKind::Pwsh | ShellKind::WindowsPowerShell | ShellKind::Cmd
+        ));
+        #[cfg(not(windows))]
+        assert!(matches!(
+            first.kind,
+            ShellKind::Bash | ShellKind::Zsh | ShellKind::Sh
+        ));
     }
 }

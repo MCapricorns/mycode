@@ -1,20 +1,25 @@
-//! Tool-runtime settings family: the platform shell behind the `shell` tool.
+//! Legacy `tools.shell` document shape.
+//!
+//! The shell is chosen automatically. This module only keeps old settings
+//! files readable.
 
 use serde::{Deserialize, Serialize};
 
-use super::{AppSettings, MAX_FIELD_BYTES, bounded_text};
+use super::AppSettings;
 use crate::ConfigError;
 
-/// Accepted `tools.shell.kind` values.
-const VALID_SHELL_KINDS: [&str; 3] = ["pwsh", "powershell", "bash"];
-
-/// One resolved platform shell used by the `shell` tool.
+/// Legacy `tools.shell` object.
+///
+/// Startup ignores this value. It stays deserializable so an older
+/// `settings.json` still loads, then the load path clears it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShellSettings {
-    /// Interpreter family: `pwsh`, `powershell` (Windows PowerShell 5.1), or `bash`.
+    /// Previously `pwsh`, `powershell`, or `bash`. Not consulted.
+    #[serde(default)]
     pub kind: String,
-    /// Absolute path of the shell executable.
+    /// Previously an executable path. Not consulted.
+    #[serde(default)]
     pub program: String,
     /// `auto` after first-run detection; `user` after an explicit pick.
     #[serde(default, skip_serializing_if = "shell_source_is_auto")]
@@ -36,10 +41,12 @@ impl Default for ShellSettings {
 }
 
 /// Tool-runtime preferences persisted in settings.
+///
+/// `shell` is accepted and ignored. Selection is automatic.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolsSettings {
-    /// Platform shell used by the `shell` tool.
+    /// Legacy shell override. Ignored when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<ShellSettings>,
 }
@@ -49,28 +56,10 @@ pub(super) fn tools_are_default(tools: &ToolsSettings) -> bool {
 }
 
 impl AppSettings {
-    /// Validates the shell override: kind vocabulary, a nonempty executable
-    /// path, and the source marker grammar.
+    /// `tools.shell` is legacy and ignored, including kinds that used to be
+    /// rejected. A present value must not fail the rest of the document.
     pub(super) fn validate_tools_shell(&self) -> Result<(), ConfigError> {
-        let invalid =
-            |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
-        if let Some(shell) = self.tools.shell.as_ref() {
-            if !VALID_SHELL_KINDS.contains(&shell.kind.as_str()) {
-                return Err(invalid(
-                    "tools.shell.kind: must be pwsh, powershell, or bash",
-                ));
-            }
-            let program = shell.program.trim();
-            if program.is_empty() {
-                return Err(invalid("tools.shell.program: set an executable path"));
-            }
-            bounded_text(program, MAX_FIELD_BYTES).map_err(|_| {
-                invalid("tools.shell.program: too long or contains line breaks or NUL")
-            })?;
-            if !shell.source.is_empty() && shell.source != "auto" && shell.source != "user" {
-                return Err(invalid("tools.shell.source: must be auto or user"));
-            }
-        }
+        let _ = self.tools.shell;
         Ok(())
     }
 }
@@ -80,26 +69,25 @@ mod tests {
     use crate::{AppSettings, ShellSettings, ToolsSettings};
 
     #[test]
-    fn powershell_kind_is_stored_and_cmd_is_rejected() {
+    fn stored_shell_of_any_kind_still_validates() {
         let mut settings = AppSettings::default();
         settings.tools = ToolsSettings {
             shell: Some(ShellSettings {
-                kind: "powershell".into(),
-                program: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".into(),
-                source: "auto".into(),
+                kind: "cmd".into(),
+                program: r"C:\Windows\System32\cmd.exe".into(),
+                source: "user".into(),
             }),
         };
         assert!(settings.validate().is_ok());
-        settings.tools.shell.as_mut().unwrap().kind = "pwsh".into();
-        assert!(settings.validate().is_ok());
         settings.tools.shell.as_mut().unwrap().kind = "bash".into();
+        settings.tools.shell.as_mut().unwrap().program.clear();
         assert!(settings.validate().is_ok());
-        settings.tools.shell.as_mut().unwrap().kind = "cmd".into();
-        let error = settings.validate().expect_err("cmd is not a settings kind");
-        assert!(
-            error.summary().contains("pwsh, powershell, or bash"),
-            "{}",
-            error.summary()
+        let parsed: AppSettings =
+            serde_json::from_str(r#"{"tools":{"shell":{"kind":"pwsh","program":"C:\\pwsh.exe"}}}"#)
+                .expect("legacy shell object");
+        assert_eq!(
+            parsed.tools.shell.as_ref().map(|shell| shell.kind.as_str()),
+            Some("pwsh")
         );
     }
 }

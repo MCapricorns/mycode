@@ -1,5 +1,5 @@
 //! Durable settings and secrets I/O: reads with revision tracking, CAS
-//! saves, key storage, and the shell the runtime tools use.
+//! saves, and key storage. The shell is not taken from this document.
 
 use mycode_config::{
     AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES,
@@ -79,19 +79,18 @@ pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String>
         SETTINGS_FORMAT_VERSION,
         "settings",
     )?;
-    let filled_shell = fill_detected_shell(&mut settings);
+    let discarded_shell = discard_stored_shell(&mut settings);
     let filled_agent = settings.user_agent.trim().is_empty();
     if filled_agent {
         settings.user_agent = mycode_config::default_user_agent();
     }
-    // Persist a discovered shell or user-agent so the next load and the
-    // editor see the stored values instead of filling them again.
-    if (filled_shell || filled_agent)
+    // Drop a legacy shell override, and fill an empty user-agent, so the
+    // next load does not repeat the same rewrite.
+    if (discarded_shell || filled_agent)
         && let Ok(next) = replace_app_settings(home, revision, &settings)
     {
         revision = next;
     }
-    apply_runtime_shell(&settings);
     let (secrets, secrets_repair) =
         read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
     if let Some(repair) = secrets_repair {
@@ -112,9 +111,10 @@ pub(crate) fn save_settings(
     expected_revision: AuthorityRevision,
     settings: &AppSettings,
 ) -> Result<AuthorityRevision, String> {
-    let revision = replace_app_settings(home, expected_revision, settings)
+    let mut settings = settings.clone();
+    let _ = discard_stored_shell(&mut settings);
+    let revision = replace_app_settings(home, expected_revision, &settings)
         .map_err(|error| render_config_error(&error))?;
-    apply_runtime_shell(settings);
     Ok(revision)
 }
 
@@ -122,41 +122,18 @@ pub(crate) fn render_config_error(error: &mycode_config::ConfigError) -> String 
     format!("settings error: {}", error.summary())
 }
 
-fn fill_detected_shell(settings: &mut AppSettings) -> bool {
-    if settings
-        .tools
-        .shell
-        .as_ref()
-        .is_some_and(|shell| !shell.program.trim().is_empty())
-    {
+fn discard_stored_shell(settings: &mut AppSettings) -> bool {
+    if settings.tools.shell.is_none() {
         return false;
     }
-    let Some(detected) = mycode_tools::detect_default_shell() else {
-        return false;
-    };
-    settings.tools.shell = Some(mycode_config::ShellSettings {
-        kind: detected.kind.as_str().to_owned(),
-        program: detected.program.to_string_lossy().into_owned(),
-        source: "auto".to_owned(),
-    });
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!(
+            "mycode: ignoring tools.shell in settings; the shell is chosen automatically for this operating system"
+        );
+    }
+    settings.tools.shell = None;
     true
-}
-
-fn apply_runtime_shell(settings: &AppSettings) {
-    let shell = settings.tools.shell.as_ref().and_then(|configured| {
-        let program = configured.program.trim();
-        if program.is_empty() {
-            return None;
-        }
-        let kind = mycode_tools::ShellKind::parse(&configured.kind).unwrap_or_else(|| {
-            mycode_tools::ShellKind::from_program(std::path::Path::new(program))
-        });
-        Some(mycode_tools::DetectedShell {
-            kind,
-            program: std::path::PathBuf::from(program),
-        })
-    });
-    mycode_tools::set_runtime_shell(shell);
 }
 
 /// Splits stored secret ids into provider and MCP key markers.
@@ -200,4 +177,53 @@ pub(crate) fn save_provider_key(
     replace_provider_secrets(home, expected, &updated)
         .map_err(|error| render_config_error(&error))?;
     Ok(split_key_ids(&updated))
+}
+
+#[cfg(test)]
+mod tests {
+    use mycode_config::{AppSettings, AuthorityRevision, HomeLayout, ShellSettings, ToolsSettings};
+
+    #[test]
+    fn saving_settings_removes_a_legacy_shell_override() {
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-shell-save-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&parent).expect("temp parent");
+        let root = parent.join("home");
+        std::fs::create_dir(&root).expect("home");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let home = HomeLayout::from_root(&root).expect("layout");
+        let mut settings = AppSettings::default();
+        settings.tools = ToolsSettings {
+            shell: Some(ShellSettings {
+                kind: "bash".into(),
+                program: "/bin/bash".into(),
+                source: "user".into(),
+            }),
+        };
+        let revision =
+            mycode_config::replace_app_settings(&home, AuthorityRevision::ABSENT, &settings)
+                .expect("publish shell");
+        let stored = std::fs::read_to_string(home.root().join("settings.json")).expect("file");
+        assert!(stored.contains("\"shell\""), "{stored}");
+        let next = super::save_settings(&home, revision, &settings).expect("save");
+        let cleared = std::fs::read_to_string(home.root().join("settings.json")).expect("file");
+        assert!(
+            !cleared.contains("\"shell\""),
+            "write-back drops tools.shell:\n{cleared}"
+        );
+        let loaded = super::load_settings(&home).expect("load");
+        assert!(loaded.settings.tools.shell.is_none());
+        assert_eq!(loaded.revision, next);
+        let _ = std::fs::remove_dir_all(parent);
+    }
 }

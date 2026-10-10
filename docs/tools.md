@@ -42,15 +42,17 @@
 | `edit` | 一个快照上的一批操作（最多 32 个），一次发布：`literal`（memmem / Aho-Corasick）、`fuzzy`（归一化后的 Levenshtein，只接受唯一且领先足够的最佳匹配）、有界 `regex`、行范围、`ast`（用 gpui-kit 注册的 Tree-sitter 语法做捕获替换，改完重新解析，新增语法错误就拒绝）。也接受旧的 `{old_string, new_string}` 唯一替换。返回 revision 和有界 diff 摘要，不回整个文件。模糊匹配在分词和扫描候选窗口时每约 4 KiB 原文检查一次取消 |
 | `find` | 按 glob 找文件和目录，限制在搜索根内，遵守 `.gitignore`，跳过隐藏和被忽略的路径。默认最多报告 1000 条，排序后用 `/` 分隔。取消或超时返回错误，不给半截结果 |
 | `grep` | 进程内的内容搜索，默认字面量，`is_regex` 开正则，支持 include / exclude glob。默认最多报告 200 行 `path:line:text`，每行最多 500 字节。跳过隐藏和被忽略的文件 |
-| `powershell` / `bash` / `cmd` | 唯一的进程启动工具，模型只看见其中一个。名字跟启动时解析到的解释器走：PowerShell 是 `powershell`，bash（含 Git Bash）是 `bash`，只有两者都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
+| `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程启动工具，模型只看见其中一个。名字跟启动时解析到的解释器走，整个会话不变：PowerShell 是 `powershell`，bash 是 `bash`，zsh 是 `zsh`，POSIX sh 是 `sh`，只有 Windows 上两种 PowerShell 都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
 
-进程工具的两条模式共用启动路径：钉住程序身份、限制参数和环境变量、截断约 50 KiB 输出、默认 120 秒超时（`timeout_secs` 可改），超时和取消时终止并回收整棵进程树。丢掉 future 也会把清理交出去，避免留下孤儿进程。非零退出码是 `is_error` 结果，不是循环故障。执行没有沙箱，环境变量白名单不是隔离。每次 `script` 都是新进程，`cd` 和变量赋值不会留到下一次调用。
+进程工具的两条模式共用启动路径：钉住程序身份、限制参数和环境变量、截断约 50 KiB 输出、默认 120 秒超时（`timeout_secs` 可改）。超时和取消时终止并回收整棵进程树，包括 `setsid` 脱离进程组的子孙，以及子 shell 退出后仍留在原进程组里的后台进程。shell 自己退出后工具就返回，不等后台子进程关掉继承的管道。丢掉 future 也会把清理交出去。非零退出码是 `is_error` 结果，不是循环故障。执行没有沙箱，环境变量白名单不是隔离。每次 `script` 都是新进程，`cd` 和变量赋值不会留到下一次调用。
 
-Windows 上脚本模式按层侦查，命中一层就停：PowerShell 7（`pwsh`）、Windows PowerShell 5.1（`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`）、Git Bash。`pwsh` 的候选顺序是 PATH 里的 `pwsh.exe`、`Program Files\PowerShell\7`、预览版、WindowsApps 里的 `Microsoft.PowerShell_*`、WinGet 和 scoop。能打开且大于 64 字节的映像优先；只有这一层没有常规映像时，才接受 WindowsApps 里不超过 64 字节的 `pwsh.exe` 商店别名，并且这个别名优先于 5.1。Git Bash 看 `Program Files\Git\bin\bash.exe`、`usr\bin\bash.exe`、用户安装目录，以及 PATH 里的 `bash.exe`。`System32\bash.exe` 和 `SysWOW64\bash.exe` 是 WSL 启动器，不选：会话 cwd 是 Windows 路径，WSL 是另一套文件系统。SysWOW64 里的 32 位 `powershell.exe` 也不选。三层都没有时，运行时退到 `%SystemRoot%\System32\cmd.exe`（`/d /s /c`），工具名变成 `cmd`，这个退路不写进设置。Windows 自带的是 5.1，不是 5.0；它和 PowerShell 7 的 `&&` 不通用，所以只有没找到 `pwsh` 时才用它，提示词也改成 5.1 的语法。这和 pi、Codex、Gemini CLI 的退路一致。POSIX 主机用 bash，然后 `sh`，工具名是 `bash`。
+Windows 上脚本模式按层侦查，命中一层就停：PowerShell 7（`pwsh`），然后 Windows PowerShell 5.1（`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`）。`pwsh` 的候选顺序是 PATH 里的 `pwsh.exe`、`Program Files\PowerShell\7`、预览版、WindowsApps 里的 `Microsoft.PowerShell_*` 包、WinGet 和 scoop。常规映像优先。`WindowsApps\pwsh.exe` 这种直接放在 `WindowsApps` 目录下的商店执行别名只在没有常规 `pwsh` 时使用，并且按路径形状识别，不看文件大小；包目录里的 `pwsh.exe` 仍算常规映像。不选择 Git Bash、MSYS2、Cygwin，也不选 WSL 的 `System32\bash.exe` / `SysWOW64\bash.exe`：会话 cwd 是 Windows 路径。SysWOW64 里的 32 位 `powershell.exe` 也不选。两层都没有时，运行时退到 `%SystemRoot%\System32\cmd.exe`（`/d /s /c`），工具名变成 `cmd`，这个退路不写入设置。Windows 自带的是 5.1，不是 5.0；它和 PowerShell 7 的 `&&` 不通用，所以只有没找到 `pwsh` 时才用它，提示词也改成 5.1 的语法。这和 Codex、Gemini CLI 的 Windows 顺序一致；pi 和 Claude Code 在 Windows 上以 bash 为先，这里不跟，因为要优先 PowerShell 7。
 
-`MYCODE_SHELL` 覆盖设置和自动侦查，不写回设置。取值是 `pwsh`、`powershell`、`bash`、`cmd`、`auto`（或空，表示不覆盖），或一个可执行文件路径。设置里的 `tools.shell.kind` 只接受 `pwsh`、`powershell`、`bash`。
+Linux / macOS 先看 `$SHELL`。它是绝对路径且文件名是 bash、zsh 或 sh 时就用它。否则 macOS 依次试 `/bin/zsh`、`/bin/bash`、PATH 里的 zsh 和 bash，再试 `sh`；其它 Unix 依次试 bash、zsh、`sh`。`$SHELL` 若是 pwsh、fish 或其他家族，就跳过。这些系统不选择 pwsh 或 cmd。工具名跟实际解释器走。
 
-PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bash 改写成 cmdlet。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免空的 `-EncodedCommand` 被拒绝。命令行按 UTF-16 码元计，上限 32767。bash 用 `-c`。用户命令原样执行。
+`MYCODE_SHELL` 和设置里的 `tools.shell` 都不再切换解释器。环境变量有具体取值时提示一次并忽略；设置里的旧字段仍能读入，启动时清掉，下次保存就不再写出。
+
+PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bash 改写成 cmdlet。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免空的 `-EncodedCommand` 被拒绝。命令行按 UTF-16 码元计，上限 32767。bash、zsh 和 sh 用 `-c`。用户命令原样执行。
 
 模型只注册这一个进程工具。描述、参数说明和系统提示词的 `<environment>` / `<shell>` 块按当前解释器来写：PowerShell 7 可以用 `&&`；Windows PowerShell 5.1 上 `&&` 和 `||` 是语法错误，要用 `;` 和 `$LASTEXITCODE`。提示词不再提 bash 到 PowerShell 的翻译。子代理用同一套解析：白名单里的 `shell` / `bash` / `powershell` / `cmd` 都变成这一个工具，提示词里的语法说明跟它一致。scout 不注册进程工具。
 
@@ -76,7 +78,7 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 | --- | --- |
 | `ask_user` | 把 1–4 个问题送到界面，等用户答完再继续 |
 | `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，没有 `task` 别名。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
-| `run_code` | 嵌在二进制里的 Python 子集。模型写一段带顶层 `await` / `return` 的函数体，在程序里调用其它工具；只有 `return` 和 `print` 回到上下文。不启动 Node.js，也不要求机器上安装 Python。内建 `len`、`range`、`str` 和切片 `value[start:end]`。只读调用可以 `await gather(...)` 重叠，写操作按提交顺序单独执行。一次最多 48 次工具调用、20000 步、120 秒；回到模型的文本上限 8000 字节 |
+| `run_code` | 嵌在二进制里的 Python 子集。模型写一段带顶层 `await` / `return` 的函数体，在程序里调用其它工具；只有 `return` 和 `print` 回到上下文。不启动 Node.js，也不要求机器上安装 Python。支持解包、下标赋值、`enumerate` / `zip` / `sorted`、字符串重复，以及 `len`、`range`、`str`、`int` 和切片。只读调用可以 `await gather(...)` 重叠，写操作按提交顺序单独执行。一次最多 48 次工具调用、20000 步、120 秒；回到模型的文本上限 8000 字节。程序里的 `read` 不带 `[revision ...]` 标签 |
 | `web_search` / `fetch_content` | 有界 HTTP：每次最多 8 条结果 / 8 个 URL。搜索结果是标题、URL 和最多 240 字符的摘要，重复 URL 丢掉，相同查询缓存 10 分钟。`fetch_content` 带 `goal` 时只返回匹配摘录（每页约 1200 字符）；不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)` |
 
 网页后端由设置决定：启用的那个优先；都没启用时用第一个有钥匙（环境变量或 `web-<id>`）的后端。Querit 和自定义后端走 `POST {endpoint}/v1/search` 与 `/v1/contents`，AnySearch 走 `/v1/search` 与 `/v1/extract`。Querit 没钥匙时调用失败并提示去设置页粘贴或设 `QUERIT_API_KEY`；已启用的 AnySearch 没钥匙时匿名访问。

@@ -15,7 +15,7 @@ Tool results are the source of truth; do not claim a command ran unless its resu
 /// Names the one shell tool in `tools`, if the process registered one.
 fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
     let names = tools.names();
-    ["powershell", "bash", "cmd"]
+    ["powershell", "bash", "zsh", "sh", "cmd"]
         .into_iter()
         .find(|name| names.iter().any(|registered| registered == name))
         .map(str::to_owned)
@@ -26,7 +26,7 @@ fn edit_hint(shell_tool: &str) -> &'static str {
         "powershell" => {
             "For a shell edit, use `mode` `script` and pipe a literal here-string to `python` or `python3` (`@'...'@ | python -`)."
         }
-        "bash" => {
+        "bash" | "zsh" | "sh" => {
             "For a shell edit, use `mode` `script` and run Python (`python3` or `python`) with a quoted heredoc or a short script."
         }
         "cmd" => {
@@ -77,7 +77,8 @@ Inside the program:\n\
 - Independent read-only calls MAY overlap under `await gather(...)` (`read`, `grep`, `find`, `web_search`, and `fetch_content` run concurrently, up to 8 at a time; `write`, `edit`, and the shell run alone, in submission order). Sequence dependent work with `await`.\n\
 - Emit results with `return` and/or `print(...)`. Only what you print or return is program output, capped at 8000 bytes. Every other intermediate result stays out of the conversation, so extract just what you need.\n\
 - Do not call `run_code` from inside the program. The program stops after 48 tool calls, 20000 steps, or 120 seconds.\n\
-- Subset: assignment, if/else, for, while, try/except, lists, dicts, f-strings, list comprehensions, comparisons, `in`, + - * /, `len`, `range`, `str`, slices `value[start:end]`, string split/strip/startswith/endswith/lower/join/replace, list append. No import, classes, lambda, or match.\n\
+- A rename or the same edit across several files is one program: read and `edit` inside it, then return the paths. Do not emit one `edit` per file.\n\
+- Subset: assignment (`a, b = ...`, `obj[key] = value`, `+=`), if/else, `a if c else b`, for (including `for i, item in enumerate(...)`), while, try/except, lists, dicts (`items`/`get`/`in`), f-strings, list comprehensions, comparisons, + - * / (including `\"S\" * n`), `len`, `range`, `str`, `int`, `enumerate`, `zip`, `sorted`, `min`, `max`, `sum`, slices `value[start:end]`, string split/strip/startswith/endswith/lower/upper/join/replace, list append. No import, classes, lambda, or match.\n\
 </grouped_execution>"
     ))
 }
@@ -143,12 +144,13 @@ pub fn choice_scenarios() -> &'static [ChoiceScenario] {
 
 /// Whether a model's first tool call matches the judgment for `weight`.
 ///
-/// A narrow multi-step task must be `run_code`. One edit must be `edit` or
-/// `write`. Broad research may be `scout` or inline `run_code`.
+/// A narrow multi-step task must be `run_code`. One edit may start with
+/// `read` (the prompt says to read before changing a file) or go straight to
+/// `edit` or `write`. Broad research may be `scout` or inline `run_code`.
 #[must_use]
 pub fn accept_choice(weight: TaskWeight, tool: &str, arguments: &serde_json::Value) -> bool {
     match weight {
-        TaskWeight::Direct => matches!(tool, "edit" | "write"),
+        TaskWeight::Direct => matches!(tool, "read" | "edit" | "write"),
         TaskWeight::GroupInline => tool == "run_code",
         TaskWeight::Broad => {
             tool == "run_code"
@@ -176,6 +178,7 @@ pub fn prompt_guides(prompt: &str, weight: TaskWeight) -> bool {
         TaskWeight::GroupInline => {
             prompt.contains("run_code")
                 && (prompt.contains("several reads")
+                    || prompt.contains("several files")
                     || prompt.contains("Simple lookups stay inline"))
         }
         TaskWeight::Broad => {
@@ -404,6 +407,16 @@ mod tests {
             super::TaskWeight::Direct,
             "edit",
             &serde_json::json!({"path": "src/a.rs"})
+        ));
+        assert!(super::accept_choice(
+            super::TaskWeight::Direct,
+            "read",
+            &serde_json::json!({"path": "src/a.rs"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Direct,
+            "run_code",
+            &serde_json::json!({"description": "One edit", "code": "return 1"})
         ));
         assert!(super::accept_choice(
             super::TaskWeight::Broad,

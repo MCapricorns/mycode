@@ -25,6 +25,79 @@ impl gpui_kit::AssetSource for BrandAssets {
     }
 }
 
+fn emit_early_text(text: &str) {
+    #[cfg(windows)]
+    {
+        write_parent_console(text);
+    }
+    #[cfg(not(windows))]
+    {
+        print!("{text}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
+}
+
+/// Attaches the parent console and writes `text` there.
+///
+/// A `windows_subsystem = "windows"` binary starts with no stdout. `println!`
+/// would not reach the terminal that launched `--version` or `--help`.
+#[cfg(windows)]
+fn write_parent_console(text: &str) {
+    use windows_sys::Win32::Storage::FileSystem::WriteFile;
+    use windows_sys::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_OUTPUT_HANDLE,
+    };
+
+    // SAFETY: AttachConsole borrows no pointers. ATTACH_PARENT_PROCESS asks
+    // for the console of the process that started this one. Failure leaves
+    // the process without a console; the WriteFile path then falls back.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+    // SAFETY: STD_OUTPUT_HANDLE is the documented constant. The returned
+    // handle is borrowed from the process and is not closed here.
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    let invalid = handle.is_null() || (handle as isize) == -1;
+    if invalid {
+        print!("{text}");
+        return;
+    }
+    let bytes = text.as_bytes();
+    let mut written = 0_u32;
+    // SAFETY: `bytes` is readable for this length and `written` is a live
+    // u32. A null OVERLAPPED means a synchronous write.
+    let wrote = unsafe {
+        WriteFile(
+            handle,
+            bytes.as_ptr().cast(),
+            u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+            &raw mut written,
+            std::ptr::null_mut(),
+        )
+    };
+    if wrote == 0 {
+        print!("{text}");
+    }
+}
+
+fn install_surface_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .map(str::to_owned)
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| info.to_string());
+        if let Some(notice) = mycode_desktop::cli::surface_failure_message(&message) {
+            eprintln!("{notice}");
+            std::process::exit(1);
+        }
+        previous(info);
+    }));
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match mycode_app::parse_apply_update_args(&args) {
@@ -44,6 +117,35 @@ fn main() {
         }
         Ok(None) => {}
     }
+    if let Some(action) = mycode_desktop::cli::early_action(&args) {
+        let text = match action {
+            mycode_desktop::cli::EarlyAction::Version => {
+                format!("{}\n", mycode_desktop::cli::version_line())
+            }
+            mycode_desktop::cli::EarlyAction::Help => mycode_desktop::cli::help_text(),
+            mycode_desktop::cli::EarlyAction::Unknown(flag) => {
+                emit_early_text(&format!(
+                    "mycode: unknown option {flag}\n\n{}",
+                    mycode_desktop::cli::help_text()
+                ));
+                std::process::exit(1);
+            }
+        };
+        // Release builds are windowed, so stdout is not a console until the
+        // parent console is attached. Debug builds already have one.
+        emit_early_text(&text);
+        std::process::exit(0);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(message) = mycode_desktop::cli::linux_session_problem(
+        std::env::var_os("DISPLAY").as_deref(),
+        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+        std::env::var_os("XDG_RUNTIME_DIR").as_deref(),
+    ) {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+    install_surface_panic_hook();
     // Remove staging directories left behind by earlier self-updates.
     // The apply helper returns before this, so it does not delete the
     // staged binary it is installing.

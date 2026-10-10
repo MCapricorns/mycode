@@ -281,18 +281,41 @@ pub(crate) fn excerpt_for_goal(content: &str, goal: &str, budget: usize) -> Stri
     scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
     let mut chosen = Vec::new();
     let mut used = 0usize;
+    let mut taken = HashSet::new();
     for (_, index, chunk) in scored {
-        let len = chunk.chars().count() + 2;
+        if taken.contains(&index) {
+            continue;
+        }
+        let mut block = vec![index];
+        if looks_like_heading(chunk) {
+            let mut cursor = index + 1;
+            while cursor < chunks.len() && looks_like_heading(&chunks[cursor]) {
+                block.push(cursor);
+                cursor += 1;
+            }
+            if cursor < chunks.len() {
+                block.push(cursor);
+            }
+        }
+        let len: usize = block
+            .iter()
+            .map(|slot| chunks[*slot].chars().count() + 2)
+            .sum();
         if used > 0 && used + len > budget {
             continue;
         }
-        chosen.push(index);
+        for slot in block {
+            if taken.insert(slot) {
+                chosen.push(slot);
+            }
+        }
         used += len;
         if used >= budget {
             break;
         }
     }
     chosen.sort_unstable();
+    chosen.dedup();
     let mut out = String::new();
     for index in chosen {
         if !out.is_empty() {
@@ -358,6 +381,20 @@ fn goal_terms(goal: &str) -> Vec<String> {
     flush_cjk(&mut cjk, &mut terms);
     terms.truncate(12);
     terms
+}
+
+fn looks_like_heading(chunk: &str) -> bool {
+    let trimmed = chunk.trim();
+    let Some(line) = trimmed.lines().next() else {
+        return false;
+    };
+    if trimmed.lines().count() != 1 {
+        return line.starts_with('#') && trimmed.chars().count() <= 160;
+    }
+    if line.starts_with('#') {
+        return true;
+    }
+    line.chars().count() <= 80 && !line.ends_with('.') && !line.contains(". ")
 }
 
 fn is_cjk(ch: char) -> bool {
@@ -646,6 +683,22 @@ mod tests {
             excerpt_chars / 4
         );
         assert!(excerpt.contains("refresh_token"), "{excerpt}");
+        let notes = "\
+## Release notes
+
+### Changed
+
+The installer checks the sha256 before replacing the binary.
+
+## Unrelated
+
+Packaging boilerplate that should stay out.
+";
+        let with_body = super::excerpt_for_goal(notes, "release notes", 1_200);
+        assert!(
+            with_body.contains("sha256"),
+            "a matching heading keeps the body under it:\n{with_body}"
+        );
         assert!(
             excerpt_chars * 4 < full,
             "expected at least 75% savings, full {full}, excerpt {excerpt_chars}"

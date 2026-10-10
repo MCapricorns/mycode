@@ -65,6 +65,21 @@ pub fn summary_body(text: &str) -> &str {
         .trim_start_matches(['\n', '\r'])
 }
 
+/// Token estimate for the system prompt and tool schemas sent with every request.
+#[must_use]
+pub(crate) fn estimate_prefix_tokens(system: &[String], tools: &[mycode_core::ToolSpec]) -> usize {
+    let mut chars = 0usize;
+    for part in system {
+        chars = chars.saturating_add(part.chars().count());
+    }
+    for tool in tools {
+        chars = chars.saturating_add(tool.name.chars().count());
+        chars = chars.saturating_add(tool.description.chars().count());
+        chars = chars.saturating_add(tool.params_schema.to_string().len());
+    }
+    mycode_config::estimate_token_count(chars)
+}
+
 /// Tokens that fire auto-compaction for this model window.
 #[must_use]
 pub(crate) fn compaction_threshold(context_window: u64) -> usize {
@@ -84,6 +99,11 @@ pub(crate) struct CompactScope<'a> {
     pub branch_id: &'a str,
     pub head: &'a str,
     pub context_window: u64,
+    /// Tokens already consumed by the system prompt and tool schemas.
+    ///
+    /// The history estimate alone stays under the trigger while the real
+    /// request, which always sends this prefix, is already near the window.
+    pub overhead_tokens: usize,
 }
 
 /// What a compaction attempt did with the checkpoint.
@@ -133,10 +153,23 @@ pub(crate) async fn compact_history(
     if !force
         && !starts_with_summary
         && let Some(checkpoint) = prior.as_ref()
-        && checkpoint_matches(&history, checkpoint, scope.head, auto_threshold)
+        && checkpoint_matches(
+            &history,
+            checkpoint,
+            scope.head,
+            auto_threshold,
+            scope.overhead_tokens,
+        )
     {
         let stitched = with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
-        if compaction_split(&stitched, threshold, TAIL_TOKEN_BUDGET).is_none() {
+        if compaction_split(
+            &stitched,
+            threshold,
+            TAIL_TOKEN_BUDGET,
+            scope.overhead_tokens,
+        )
+        .is_none()
+        {
             return Compacted {
                 messages: stitched,
                 status: CompactStatus::Unchanged,
@@ -147,7 +180,14 @@ pub(crate) async fn compact_history(
         // ledger itself splits, fall through and persist a new checkpoint
         // against that ledger. When only the stitched copy is over, shrink
         // it in memory: its indexes are not ledger indexes.
-        if compaction_split(&history, threshold, TAIL_TOKEN_BUDGET).is_none() {
+        if compaction_split(
+            &history,
+            threshold,
+            TAIL_TOKEN_BUDGET,
+            scope.overhead_tokens,
+        )
+        .is_none()
+        {
             history = stitched;
             stitched_over_threshold = true;
         }
@@ -157,7 +197,12 @@ pub(crate) async fn compact_history(
     // user asked for the shrink now, not at the auto threshold. The covered
     // range is the whole ledger, so the next request replays the summary
     // plus whatever arrives after it.
-    let head_end = match compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) {
+    let head_end = match compaction_split(
+        &history,
+        threshold,
+        TAIL_TOKEN_BUDGET,
+        scope.overhead_tokens,
+    ) {
         Some(head_end) => head_end,
         None if force && history.len() >= 2 => history.len(),
         None => {
@@ -410,6 +455,7 @@ fn checkpoint_matches(
     checkpoint: &mycode_config::CompactionCheckpoint,
     head: &str,
     auto_threshold: usize,
+    overhead: usize,
 ) -> bool {
     if checkpoint.covered_messages == 0 || checkpoint.covered_messages >= history.len() {
         return false;
@@ -421,7 +467,7 @@ fn checkpoint_matches(
         .iter()
         .map(|message| message_tokens(message))
         .sum();
-    checkpoint.covered_head == head || tail_tokens <= auto_threshold
+    checkpoint.covered_head == head || tail_tokens.saturating_add(overhead) <= auto_threshold
 }
 
 fn is_summary_message(message: &Message) -> bool {
@@ -434,11 +480,16 @@ fn compaction_split(
     history: &[Arc<Message>],
     threshold: usize,
     tail_budget: usize,
+    overhead: usize,
 ) -> Option<usize> {
     if history.len() < 2 {
         return None;
     }
-    let estimate: usize = history.iter().map(|message| message_tokens(message)).sum();
+    let estimate: usize = history
+        .iter()
+        .map(|message| message_tokens(message))
+        .sum::<usize>()
+        .saturating_add(overhead);
     if estimate <= threshold {
         return None;
     }
@@ -882,6 +933,7 @@ mod tests {
             // Large window: this history is over the ~20k tail, under the
             // auto threshold, which is the case that used to skip the checkpoint.
             context_window: 200_000,
+            overhead_tokens: 0,
         };
         let manual = super::compact_history(&scope, history.clone(), true).await;
         assert_eq!(manual.status, CompactStatus::Wrote);
@@ -945,6 +997,7 @@ mod tests {
             branch_id: "branch-b",
             head: "head-1",
             context_window: 200_000,
+            overhead_tokens: 0,
         };
         // `/compact` no longer answers "nothing to compact" for a short
         // session: the whole ledger is summarized and the tail is empty.
@@ -1114,6 +1167,7 @@ mod tests {
             branch_id: "branch-glm",
             head: "head-1",
             context_window: 200_000,
+            overhead_tokens: 0,
         };
         let compacted = super::compact_history(&scope, large_history(), true).await;
         assert_eq!(compacted.status, CompactStatus::Wrote);
@@ -1147,6 +1201,7 @@ mod tests {
             branch_id: "branch-cut",
             head: "head-1",
             context_window: 200_000,
+            overhead_tokens: 0,
         };
         let compacted = super::compact_history(&scope, large_history(), true).await;
         match compacted.status {
@@ -1180,6 +1235,7 @@ mod tests {
             branch_id: "branch-empty",
             head: "head-1",
             context_window: 200_000,
+            overhead_tokens: 0,
         };
         let compacted = super::compact_history(&scope, large_history(), true).await;
         match compacted.status {
@@ -1340,6 +1396,7 @@ mod tests {
             branch_id: "branch-short",
             head: "head-1",
             context_window: 200_000,
+            overhead_tokens: 0,
         };
         let compacted = super::compact_history(&scope, history.clone(), true).await;
         match compacted.status {
@@ -1388,5 +1445,31 @@ mod tests {
                 .is_none()
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn system_prompt_and_tools_count_toward_the_auto_trigger() {
+        let history = vec![
+            user(&"a".repeat(8_000)),
+            user(&"b".repeat(8_000)),
+            user(&"c".repeat(8_000)),
+            user(&"d".repeat(8_000)),
+        ];
+        let threshold = 9_000;
+        assert!(
+            super::compaction_split(&history, threshold, 4_000, 0).is_none(),
+            "history alone is under the trigger"
+        );
+        assert!(
+            super::compaction_split(&history, threshold, 4_000, 2_000).is_some(),
+            "the same history plus the prompt and tools is over the trigger"
+        );
+        let tools = [mycode_core::ToolSpec {
+            name: "read".to_owned(),
+            description: "Read a file".to_owned(),
+            params_schema: serde_json::json!({"type": "object"}),
+        }];
+        let tokens = super::estimate_prefix_tokens(&["You are MYCode".to_owned()], &tools);
+        assert!(tokens > 0, "{tokens}");
     }
 }
