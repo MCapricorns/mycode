@@ -237,11 +237,7 @@ fn cap_diff(mut text: String) -> String {
     if text.len() <= MAX_WORKTREE_DIFF_BYTES {
         return text;
     }
-    let mut end = MAX_WORKTREE_DIFF_BYTES;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text.truncate(end);
+    text.truncate(text.floor_char_boundary(MAX_WORKTREE_DIFF_BYTES));
     text.push_str("\n... diff truncated\n");
     text
 }
