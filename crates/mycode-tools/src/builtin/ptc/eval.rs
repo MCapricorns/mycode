@@ -462,7 +462,7 @@ impl Machine {
         args: Vec<Val>,
         kwargs: Vec<(String, Val)>,
     ) -> Result<Val, Stop> {
-        if !matches!(callee, Val::DictFn) {
+        if !matches!(callee, Val::DictFn) && !is_dict_update(&callee) {
             expect_kwargs(&kwargs, allowed_keywords(&callee))?;
         }
         match callee {
@@ -714,6 +714,9 @@ impl Machine {
                         }
                         lock_map(map).insert(display(&items[0])?, items[1].clone());
                     }
+                }
+                for (key, value) in kwargs {
+                    lock_map(map).insert(key.clone(), value.clone());
                 }
                 Ok(Val::Null)
             }
@@ -1659,6 +1662,10 @@ fn pairs_to_dict(value: &Val) -> Result<BTreeMap<String, Val>, Stop> {
         fields.insert(display(&items[0])?, items[1].clone());
     }
     Ok(fields)
+}
+
+fn is_dict_update(callee: &Val) -> bool {
+    matches!(callee, Val::Method { name, .. } if name == "update")
 }
 
 fn allowed_keywords(callee: &Val) -> &'static [&'static str] {

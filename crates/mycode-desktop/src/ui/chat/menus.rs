@@ -65,6 +65,12 @@ pub(super) enum MenuPlacement {
     AboveChip,
 }
 
+/// Pixels from the bottom of the Thinking chip to the bottom of the menu.
+///
+/// The chip sits inside the composer card (input row, gap, and padding above
+/// it). This clearance puts the menu fully above that card.
+pub(super) const THINKING_MENU_CLEARANCE: f32 = 88.;
+
 /// The thinking menu opens above its chip.
 #[must_use]
 pub(super) fn thinking_menu_placement() -> MenuPlacement {
@@ -84,11 +90,12 @@ pub(super) fn render_thinking_menu(
     div()
         .id("thinking-menu-layer")
         .absolute()
-        .bottom(px(36.))
+        .bottom(px(THINKING_MENU_CLEARANCE))
         .left_0()
         .occlude()
         .child(
             popover_panel("thinking-menu", theme)
+                .bg(skin::opaque_menu_fill(theme))
                 .w(px(220.))
                 .flex_none()
                 .p_1()
@@ -122,6 +129,10 @@ mod tests {
     #[test]
     fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
         assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
+        assert!(
+            super::THINKING_MENU_CLEARANCE >= 84.,
+            "the menu must clear the composer card, not sit on its top edge"
+        );
     }
 }
 

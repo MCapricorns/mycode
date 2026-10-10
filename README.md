@@ -31,12 +31,12 @@ English notes are [below](#english).
 
 ## 下载
 
-[Releases](https://github.com/MCapricorns/mycode/releases)
+[Releases](https://github.com/MCapricorns/mycode/releases) 提供四个平台的压缩包。说明用本文件该版本的条目，再附上自上一个标签以来合并的 pull request。写回 `main` 的版本提交使用 `github-actions[bot]`，不会因此再发一次。
 
 | 文件 | 平台 |
 | --- | --- |
 | `mycode-desktop-v<version>-x86_64-pc-windows-msvc.zip` | Windows 10/11 x64 |
-| `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows 11 ARM64 |
+| `mycode-desktop-v<version>-aarch64-pc-windows-msvc.zip` | Windows ARM64 |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.zip` | macOS Apple Silicon |
 | `mycode-desktop-v<version>-aarch64-apple-darwin.dmg` | macOS Apple Silicon（`MYCode.app`） |
 | `mycode-desktop-v<version>-x86_64-unknown-linux-gnu.zip` | Linux x86_64 |
@@ -94,7 +94,7 @@ The thinking-menu shot is a chat with the menu open above the Thinking chip.
 
 ### Download
 
-[Releases](https://github.com/MCapricorns/mycode/releases). Each zip and the macOS dmg has a `.sha256` file. There is no Intel macOS build. The app inside the dmg is ad-hoc signed; right-click → Open once, or `xattr -d com.apple.quarantine /Applications/MYCode.app`.
+[Releases](https://github.com/MCapricorns/mycode/releases) publish one zip for each of the four platforms. The body starts with that version's changelog section, then the pull requests merged since the previous tag. A version commit pushed by `github-actions[bot]` does not start another release. Each zip and the macOS dmg has a `.sha256` file. There is no Intel macOS build. The app inside the dmg is ad-hoc signed; right-click → Open once, or `xattr -d com.apple.quarantine /Applications/MYCode.app`.
 
 ### Build
 
