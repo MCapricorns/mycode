@@ -347,9 +347,16 @@ guess parameters. When the user also wants a subagent, emit `search_tool` in the
 response as `agent`.\n</mcp>",
         );
     }
-    system_prompt.push_str(
-        "\n\nFor current facts, call `web_search`, then `fetch_content` on the URLs you will cite. Snippets are not evidence.",
-    );
+    if registry.get("run_code").is_some() {
+        system_prompt.push_str(
+            "\n\nSimple lookups stay inline. Use `run_code` when one step needs several reads, searches, edits, or page fetches; one obvious call stays a direct tool. Pass `goal` to `fetch_content` when you already know the fact you need.",
+        );
+        if registry.get("agent").is_some() {
+            system_prompt.push_str(
+                " Broad codebase search, web research, or documentation fetches can go to `scout` when a separate read-only pass would keep this context smaller. You choose; a narrow question stays inline.",
+            );
+        }
+    }
     let mut roots: Vec<&std::path::Path> = extra_roots.iter().map(PathBuf::as_path).collect();
     roots.sort();
     if !roots.is_empty() {

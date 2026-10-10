@@ -131,7 +131,14 @@ pub enum RoleOrigin {
 ///
 /// Scout is a hard read-only boundary: mutating tools never reach it, even
 /// when a project override lists them.
-const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "web_search", "fetch_content"];
+const READ_ONLY_TOOLS: &[&str] = &[
+    "read",
+    "grep",
+    "find",
+    "web_search",
+    "fetch_content",
+    "run_code",
+];
 /// Tools that would let a child re-enter the parent or talk to the user.
 const PARENT_ONLY_TOOLS: &[&str] = &["agent", "ask_user"];
 

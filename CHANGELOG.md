@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- `run_code`：嵌在二进制里的 Python 子集，一次调用里组合多次 `read` / `grep` / `find` / `edit` / 网页操作，只有 `return` 和 `print` 回到上下文。不依赖本机的 Node.js 或 Python。主代理和每个子代理用同一段提示。简单查找就地分组；较宽的代码库或网页研究可以由模型选择交给 `scout`。
+- `web_search` 返回短摘要并去重、缓存；`fetch_content` 增加 `goal`，只回匹配摘录。
+
 ## [0.10.2] - 2026-10-10
 
 ### Changed

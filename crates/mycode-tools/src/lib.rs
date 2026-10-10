@@ -37,7 +37,7 @@ pub use builtin::shell::{
 };
 pub use builtin::{ShellTool, register_builtins};
 pub use ctx::ToolCtx;
-pub use registry::ToolRegistry;
+pub use registry::{ToolCatalog, ToolRegistry};
 pub use roots::anchor_tool_path;
 pub use stream::{ToolProgress, ToolStream, ToolStreamItem, ToolStreamReceiver};
 pub use tool::{Tool, ToolDyn, ToolError, ToolResult};
