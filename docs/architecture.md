@@ -85,7 +85,7 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 这些是现在代码的真实边界，读模块文档时一起记住。
 
 - 工具在当前用户权限下执行，没有沙箱，也没有每次调用前的许可弹窗。校验过的调用会直接跑。
-- 进程工具会钉住要启动的程序映像并回收进程树。模型只看见一个工具：PowerShell 时叫 `powershell`，bash 时叫 `bash`，最后才是 `cmd`。`script` 模式走这个解释器，`program` 模式直接启动可加载映像。Windows 上脚本模式优先 PowerShell 7（`pwsh`），其次 Windows PowerShell 5.1，然后 Git Bash；都不在时运行时才退到 `cmd.exe`，且不写入设置。不自动选择 WSL bash。PowerShell 用 UTF-16LE 的 `-EncodedCommand` 启动，用户命令不从 bash 翻译，标准输出和标准错误里的 CLIXML 与 ANSI 颜色会收成可读文本。环境变量过滤不是隔离。
+- 进程工具会钉住要启动的程序映像，并在取消或超时时回收整棵进程树（含 `setsid` 脱离进程组的子孙）。模型只看见一个工具，名字在整个会话里不变：PowerShell 时叫 `powershell`，bash / zsh / sh 各用自己的名字，Windows 上两种 PowerShell 都没有时才是 `cmd`。`script` 模式走这个解释器，`program` 模式直接启动可加载映像。Windows 优先 PowerShell 7（`pwsh`），其次 Windows PowerShell 5.1，再不济才是 `cmd.exe`。不选择 Git Bash 或 WSL。Linux / macOS 用 `$SHELL` 里的 bash、zsh 或 sh，否则用平台默认。shell 退出后工具就返回，不等后台子进程关掉管道。PowerShell 用 UTF-16LE 的 `-EncodedCommand` 启动，用户命令不从别的 shell 翻译过来，标准输出和标准错误里的 CLIXML 与 ANSI 颜色会收成可读文本。环境变量过滤不是隔离。`MYCODE_SHELL` 和 `tools.shell` 不切换解释器。
 - 持续集成在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x86_64 上构建发布包。同一份 `ci.yml` 既跑 pull request，也跑 `main`；只有 `main` 在版本还没有标签时打标签并发布。发布说明是该版本的 `CHANGELOG.md` 条目，加上自上一个标签以来的 pull request 和被关闭的 issue。`github-actions[bot]` 写回版本时不会再开一次发布。这条流水线不跑 `cargo test`、fmt 或 clippy；只有每周的 `models-snapshot.yml` 在目录快照变化时跑 `cargo test -p mycode-providers`。
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
 - 生产环境的回合钩子只有请求前压缩，子代理连这个也没有。没有工具前观察者，也不再为改文件装快照。

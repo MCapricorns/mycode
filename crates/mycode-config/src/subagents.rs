@@ -135,12 +135,12 @@ const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "web_search", "fetch_
 /// Tools that would let a child re-enter the parent or talk to the user.
 const PARENT_ONLY_TOOLS: &[&str] = &["agent", "ask_user"];
 
-/// `bash`, `powershell`, and `cmd` are the model-facing names of the one
-/// process tool. Role files and the parent allowlist may say any of them,
-/// or the stable name `shell`.
+/// `bash`, `zsh`, `sh`, `powershell`, and `cmd` are the model-facing names
+/// of the one process tool. Role files and the parent allowlist may say any
+/// of them, or the stable name `shell`.
 fn canonical_tool_name(name: &str) -> &str {
     match name {
-        "bash" | "powershell" | "cmd" => "shell",
+        "bash" | "zsh" | "sh" | "powershell" | "cmd" => "shell",
         other => other,
     }
 }

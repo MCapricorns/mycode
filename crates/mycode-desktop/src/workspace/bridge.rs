@@ -428,7 +428,6 @@ impl Workspace {
                     self.ua_sync_pending = true;
                 }
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
-                self.apply_runtime_shell();
             }
             BridgeReply::Exported(Ok(_summary)) => {}
             BridgeReply::Exported(Err(message)) => {

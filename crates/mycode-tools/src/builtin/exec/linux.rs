@@ -93,16 +93,19 @@ where
         .env_clear()
         .kill_on_drop(true)
         .process_group(0);
-    // SAFETY: `pre_exec` is Command's documented child hook. The closure only
-    // performs async-signal-safe kernel operations (`close_range` then
-    // `execveat`) with pointers into `argv` / `env` that are moved into the
-    // closure and remain valid until the call. `launch_fd` is owned by the
-    // closure and remains open across fork; `CLOSE_RANGE_CLOEXEC` does not
-    // close it until a successful exec, so `execveat(AT_EMPTY_PATH)` still
-    // sees the retained image. No allocation, lock, formatting, or
-    // environment access happens inside the closure.
+    // SAFETY: `pre_exec` runs in the forked child before exec. The closure
+    // calls `prctl(PR_SET_CHILD_SUBREAPER)`, `close_range`, then `execveat`.
+    // `prctl` does not allocate or take a lock; the flag must be set on this
+    // process because it survives exec and is not inherited by children.
+    // `close_range` and `execveat` are async-signal-safe. Pointers into
+    // `argv` / `env` are moved into the closure and remain valid until the
+    // call. `launch_fd` is owned by the closure and remains open across fork;
+    // `CLOSE_RANGE_CLOEXEC` does not close it until a successful exec, so
+    // `execveat(AT_EMPTY_PATH)` still sees the retained image. No allocation,
+    // lock, formatting, or environment access happens inside the closure.
     unsafe {
         process.pre_exec(move || {
+            become_child_subreaper()?;
             mark_nonstandard_fds_cloexec()?;
             execveat_empty_path(&launch_fd, &argv, &env)
         });
@@ -209,6 +212,23 @@ impl PendingLinuxSpawn {
 impl Drop for PendingLinuxSpawn {
     fn drop(&mut self) {
         finish_pending_spawn_cleanup(|| self.cleanup());
+    }
+}
+
+/// Makes the child a subreaper before `execveat`.
+///
+/// Orphans in the shell's tree reparent to the shell instead of init, so a
+/// later descendant walk still sees a `setsid` grandchild whose intermediate
+/// parent has exited. The flag persists across exec and is not copied to
+/// children created by `fork`.
+fn become_child_subreaper() -> std::io::Result<()> {
+    // SAFETY: called after fork in the single-threaded child. `prctl` with
+    // `PR_SET_CHILD_SUBREAPER` only sets a process flag and does not allocate.
+    let rc = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
