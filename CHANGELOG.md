@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.9.24] - 2026-10-10
+
 ### Fixed
 
 - 打断正在生成的回合后再发送时，已经收到的助手正文和已完成的工具调用会写入会话，并标成被用户打断。下一条请求仍带着此前的历史和同一条 prompt cache key，输入框下的上下文计量不会被清成新会话。
@@ -29,5 +31,6 @@
 - init 第一版：mycode 首次公开发布。
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.23...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.9.24...HEAD
+[0.9.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.24
 [0.9.23]: https://github.com/MCapricorns/mycode/releases/tag/v0.9.23
