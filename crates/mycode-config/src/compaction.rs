@@ -78,7 +78,7 @@ pub fn estimate_token_count(chars: usize) -> usize {
 }
 
 fn compaction_path(session_id: &str) -> Result<String, ConfigError> {
-    crate::session_relative(session_id, "compaction.json")
+    crate::home::session_relative(session_id, "compaction.json")
 }
 
 /// Reads one session's checkpoint; a missing file yields `None`.

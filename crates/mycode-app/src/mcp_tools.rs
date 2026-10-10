@@ -162,29 +162,14 @@ pub(crate) fn bound_mcp_result(dir: &std::path::Path, text: &str) -> String {
         Ok(()) => format!("full text stored at {}", path.display()),
         Err(error) => format!("full text could not be stored: {error}"),
     };
-    let head_end = char_floor(text, MAX_MCP_TOOL_RESULT_BYTES / 2);
-    let tail_start = char_ceil_from_end(text, MAX_MCP_TOOL_RESULT_BYTES / 2);
+    let head_end = text.floor_char_boundary(MAX_MCP_TOOL_RESULT_BYTES / 2);
+    let tail_start =
+        text.ceil_char_boundary(text.len().saturating_sub(MAX_MCP_TOOL_RESULT_BYTES / 2));
     format!(
         "{}\n\n[truncated; {stored}]\n\n{}",
         &text[..head_end],
         &text[tail_start..]
     )
-}
-
-fn char_floor(text: &str, index: usize) -> usize {
-    let mut end = index.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
-}
-
-fn char_ceil_from_end(text: &str, keep: usize) -> usize {
-    let mut start = text.len().saturating_sub(keep);
-    while start < text.len() && !text.is_char_boundary(start) {
-        start += 1;
-    }
-    start
 }
 
 /// A server is exposed directly when it is small and its schemas are small.

@@ -36,7 +36,9 @@ use tokio_util::sync::CancellationToken;
 use mycode_config::ProviderSettings;
 use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Request};
 
-pub use http_pin::{PinMode, PinnedBody, PinnedRequest, connection_addresses, send_pinned};
+pub use http_pin::{
+    PinMode, PinnedBody, PinnedRequest, connection_addresses, is_public_ip, send_pinned,
+};
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
     CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,
@@ -48,11 +50,11 @@ pub use oauth::{
 pub use transport::{ReqwestTransport, SseTransport, TransportCall};
 
 /// OpenAI-compatible completions path appended to the base URL.
-pub const OPENAI_COMPLETIONS_PATH: &str = "/chat/completions";
+const OPENAI_COMPLETIONS_PATH: &str = "/chat/completions";
 /// OpenAI-compatible Responses path appended to the base URL.
-pub const OPENAI_RESPONSES_PATH: &str = "/responses";
+const OPENAI_RESPONSES_PATH: &str = "/responses";
 /// Anthropic protocol version header value.
-pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// One resolved streaming provider endpoint.
 #[derive(Clone)]

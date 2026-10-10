@@ -142,11 +142,7 @@ impl From<ProviderError> for MycodeError {
 }
 
 fn sanitize_message(raw: &str) -> String {
-    let mut input_end = raw.len().min(MAX_ERROR_SCAN_BYTES);
-    while !raw.is_char_boundary(input_end) {
-        input_end -= 1;
-    }
-    let redacted = redact_sensitive(&raw[..input_end]);
+    let redacted = redact_sensitive(&raw[..raw.floor_char_boundary(MAX_ERROR_SCAN_BYTES)]);
     if redacted.chars().count() <= MAX_ERROR_MESSAGE_CHARS {
         redacted
     } else {
