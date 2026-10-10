@@ -358,16 +358,7 @@ pub fn read_app_settings_with_repair(
 fn publish_default_settings(home: &crate::HomeLayout) -> Result<(), ConfigError> {
     let settings = AppSettings::default();
     settings.validate()?;
-    let revision = AuthorityRevision::ABSENT.checked_next()?;
-    let document = SerializedSettings {
-        format_version: SETTINGS_FORMAT_VERSION,
-        kind: SETTINGS_KIND,
-        revision: revision.get(),
-        settings: &settings,
-    };
-    let mut bytes = serde_json::to_vec_pretty(&document)
-        .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
-    bytes.push(b'\n');
+    let bytes = encode_settings(AuthorityRevision::ABSENT.checked_next()?, &settings)?;
     locked_update_owned_file(home, SETTINGS_PATH, MAX_AUTHORITY_DOCUMENT_BYTES, |_| {
         Ok(bytes)
     })
@@ -402,15 +393,7 @@ pub fn replace_app_settings(
                 return Err(ConfigError::new(ConfigErrorKind::RevisionConflict));
             }
             let revision = current_revision.checked_next()?;
-            let document = SerializedSettings {
-                format_version: SETTINGS_FORMAT_VERSION,
-                kind: SETTINGS_KIND,
-                revision: revision.get(),
-                settings,
-            };
-            let mut bytes = serde_json::to_vec_pretty(&document)
-                .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
-            bytes.push(b'\n');
+            let bytes = encode_settings(revision, settings)?;
             if bytes.len() > MAX_AUTHORITY_DOCUMENT_BYTES {
                 return Err(ConfigError::new(ConfigErrorKind::Oversized));
             }
@@ -419,6 +402,22 @@ pub fn replace_app_settings(
         },
     )?;
     published_revision.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
+}
+
+fn encode_settings(
+    revision: AuthorityRevision,
+    settings: &AppSettings,
+) -> Result<Vec<u8>, ConfigError> {
+    let document = SerializedSettings {
+        format_version: SETTINGS_FORMAT_VERSION,
+        kind: SETTINGS_KIND,
+        revision: revision.get(),
+        settings,
+    };
+    let mut bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 #[derive(Serialize)]
@@ -441,7 +440,7 @@ struct DeserializedSettings {
     settings: AppSettings,
 }
 
-/// Reads the current revision without full validation of the body.
+/// A decoded and validated settings document.
 struct ParsedSettings {
     settings: AppSettings,
     revision: AuthorityRevision,
@@ -507,9 +506,8 @@ fn is_https_url(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AppSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SerializedSettings, decode_settings,
-    };
+    use super::{AppSettings, decode_settings, encode_settings};
+    use crate::authority::AuthorityRevision;
 
     #[test]
     fn legacy_appearance_without_font_size_defaults_to_medium() {
@@ -534,13 +532,8 @@ mod tests {
         let mut settings = AppSettings::default();
         settings.appearance.font_size = "xl".to_owned();
         assert!(settings.validate().is_ok());
-        let document = SerializedSettings {
-            format_version: SETTINGS_FORMAT_VERSION,
-            kind: SETTINGS_KIND,
-            revision: 4,
-            settings: &settings,
-        };
-        let bytes = serde_json::to_vec_pretty(&document).expect("encode");
+        let revision = AuthorityRevision::new(4).expect("revision");
+        let bytes = encode_settings(revision, &settings).expect("encode");
         let parsed = decode_settings(&bytes).expect("decode");
         assert_eq!(parsed.settings.appearance.font_size, "xl");
         assert_eq!(parsed.settings.effective_font_size(), "xl");
