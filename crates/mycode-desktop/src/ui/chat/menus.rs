@@ -52,6 +52,25 @@ pub(super) fn render_model_menu(
         .into_any_element()
 }
 
+/// Where the thinking menu sits. An in-flow full-width row hides the
+/// transcript under a blank band; the overlay only covers its own panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MenuPlacement {
+    /// Full-width row between the transcript and the composer.
+    ///
+    /// Not used. A row of this shape blanked the transcript.
+    #[allow(dead_code)]
+    InFlowRow,
+    /// Bottom-right of the transcript. The transcript keeps its height.
+    BottomRightOverlay,
+}
+
+/// The thinking menu overlays the transcript instead of inserting a row.
+#[must_use]
+pub(super) fn thinking_menu_placement() -> MenuPlacement {
+    MenuPlacement::BottomRightOverlay
+}
+
 /// Thinking effort as its own short list, opened from the composer button.
 pub(super) fn render_thinking_menu(
     workspace: &mut Workspace,
@@ -61,48 +80,49 @@ pub(super) fn render_thinking_menu(
     let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
     let selected = selected_reasoning_level(workspace.vm()).to_owned();
     let weak = cx.weak_entity();
+    let _placement = thinking_menu_placement();
     div()
         .id("thinking-menu-layer")
-        .w_full()
-        .px_4()
-        .pb_1()
-        .flex()
-        .flex_row()
-        .justify_center()
+        .absolute()
+        .bottom(px(8.))
+        .right(px(24.))
+        .occlude()
         .child(
-            div()
-                .w_full()
-                .max_w(super::COLUMN_MAX)
+            popover_panel("thinking-menu", theme)
+                .w(px(220.))
+                .flex_none()
+                .p_1()
                 .flex()
-                .flex_row()
-                .justify_end()
-                .child(
-                    popover_panel("thinking-menu", theme)
-                        .w(px(220.))
-                        .flex_none()
-                        .p_1()
-                        .flex()
-                        .flex_col()
-                        .children(levels.iter().map(|level| {
-                            let picked = level.clone();
-                            let weak = weak.clone();
-                            let on = level == &selected;
-                            menu_row(
-                                format!("thinking-row-{level}"),
-                                reasoning_row_label(level),
-                                on,
-                                move |_, _, cx| {
-                                    let picked = picked.clone();
-                                    let _ = weak.update(cx, |workspace, cx| {
-                                        workspace.on_select_reasoning(&picked, cx);
-                                    });
-                                },
-                                theme,
-                            )
-                        })),
-                ),
+                .flex_col()
+                .children(levels.iter().map(|level| {
+                    let picked = level.clone();
+                    let weak = weak.clone();
+                    let on = level == &selected;
+                    menu_row(
+                        format!("thinking-row-{level}"),
+                        reasoning_row_label(level),
+                        on,
+                        move |_, _, cx| {
+                            let picked = picked.clone();
+                            let _ = weak.update(cx, |workspace, cx| {
+                                workspace.on_select_reasoning(&picked, cx);
+                            });
+                        },
+                        theme,
+                    )
+                })),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MenuPlacement, thinking_menu_placement};
+
+    #[test]
+    fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
+        assert_eq!(thinking_menu_placement(), MenuPlacement::BottomRightOverlay);
+    }
 }
 
 fn menu_row(
