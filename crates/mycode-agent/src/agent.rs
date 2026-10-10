@@ -10,13 +10,14 @@
 //!
 //! Firing `TurnEnv::cancel` cancels the turn's cancellation token — a
 //! child of the caller's token. The in-flight provider stream terminates
-//! with `Cancelled`, partial assistant messages are *not* kept (only
-//! completed messages enter history), and `prompt()` returns
-//! [`TurnOutcome::Aborted`] — never a half `TurnEnded::Completed`.
+//! with `Cancelled`. Thinking, text, and any fully formed tool calls
+//! already on that assistant message stay in history, with one visible
+//! interruption line (`interrupted by user`). Incomplete tool calls are
+//! not executed. `prompt()` returns [`TurnOutcome::Aborted`] — never a
+//! half `TurnEnded::Completed`.
 //!
-//! A provider or transport failure is different: thinking and text that
-//! already arrived stay in history, with one visible interruption line.
-//! Named tool calls on that message are not executed. The turn completes.
+//! A provider or transport failure is the same shape of partial, with
+//! the provider's detail on the interruption line, but the turn completes.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,8 +92,10 @@ impl AgentConfig {
 #[derive(Debug, Default)]
 pub struct AgentState {
     /// Conversation history: user inputs, assistant messages, tool
-    /// results. Only completed messages live here — a response aborted
-    /// mid-stream never enters. Entries are shared with provider requests.
+    /// results. A user cancel keeps the partial assistant message
+    /// (thinking, text, fully formed tool calls, and the interruption
+    /// line). Incomplete tool calls never enter. Entries are shared
+    /// with provider requests.
     pub messages: Vec<Arc<Message>>,
 }
 
@@ -109,9 +112,9 @@ impl AgentState {
 /// prompt(msg)
 /// ├─ TurnStarted, msg enters history
 /// ├─ loop: while tool calls
-/// │    stream response (MessageDelta …) → history
+/// │    drain steers, then stream response (MessageDelta …) → history
 /// │    dispatch tool calls (registry → ToolResult → hist.)
-/// │  break when the response has no tool calls or stop reason Error
+/// │  break when the response has no tool calls and no pending steer
 /// └─ TurnEnded(Completed | Aborted)
 /// ```
 pub struct Agent {
@@ -142,10 +145,14 @@ impl Agent {
     /// stream responses and dispatch tools until the model stops.
     ///
     /// Cancellation (`env.cancel`) ends the turn with
-    /// [`TurnOutcome::Aborted`] and drops an in-flight partial.
-    /// A provider failure keeps the partial assistant message and
-    /// completes the turn. Tool-level failures never end the turn
-    /// (they become `is_error` tool results the model can react to).
+    /// [`TurnOutcome::Aborted`] and keeps the in-flight partial
+    /// (thinking, text, fully formed tool calls, and an interruption
+    /// line). Incomplete tool calls are not executed. A provider
+    /// failure keeps the same partial and completes the turn.
+    /// Tool-level failures never end the turn (they become `is_error`
+    /// tool results the model can react to). Steers queued on
+    /// [`TurnEnv::steer`] are appended at loop boundaries and do not
+    /// cancel the turn.
     pub async fn prompt(
         &mut self,
         msg: Message,
@@ -206,6 +213,12 @@ async fn agent_loop(
             aborted = true;
             break;
         }
+        // A steer that arrived during the previous response or its tools
+        // is folded in before the next model call. The first call waits
+        // until the turn has started, so the opening prompt is not doubled.
+        if *started {
+            drain_steers(env, state);
+        }
 
         let assistant =
             match turn::stream_assistant(env, token, config, state, started, &mut pending_user)
@@ -234,7 +247,8 @@ async fn agent_loop(
 
         if calls.is_empty() || assistant.stop_reason == StopReason::Error {
             // A failed stream may still name tool calls. Pair each one
-            // with an error result and stop; do not run them or retry.
+            // with an error result and do not run them. A queued steer
+            // still continues this turn; otherwise it ends.
             if assistant.stop_reason == StopReason::Error {
                 for call in calls
                     .iter()
@@ -244,7 +258,10 @@ async fn agent_loop(
                     turn::push_message(env, state, Message::ToolResult(message));
                 }
             }
-            has_tool_calls = false;
+            // No further tool calls: this response would end the turn.
+            // A steer that landed while it streamed starts another cycle
+            // in the same turn instead of being dropped.
+            has_tool_calls = drain_steers(env, state);
         } else if assistant.stop_reason == StopReason::Length {
             // Truncated arguments are never executed (pi parity);
             // the model re-issues the calls.
@@ -279,7 +296,11 @@ async fn agent_loop(
     }
 
     if aborted {
-        if !*started {
+        if *started {
+            // The turn is already ending, so this does not start another
+            // model call. It keeps a steer the loop had not reached yet.
+            drain_steers(env, state);
+        } else {
             state.messages = saved;
         }
         return Ok(TurnOutcome::Aborted);
@@ -399,6 +420,29 @@ async fn dispatch_response_calls(
         .collect()
 }
 
+/// Appends drained steers as user messages. Returns whether any were added.
+///
+/// Called only after the turn has started, and only at a loop boundary, so
+/// the in-flight response and its subagents are left alone.
+fn drain_steers(env: &TurnEnv<'_>, state: &mut AgentState) -> bool {
+    let Some(inbox) = env.steer.as_ref() else {
+        return false;
+    };
+    let mut appended = false;
+    for text in inbox.drain() {
+        if text.trim().is_empty() {
+            continue;
+        }
+        turn::push_message(
+            env,
+            state,
+            Message::User(mycode_core::UserMessage::text(text)),
+        );
+        appended = true;
+    }
+    appended
+}
+
 #[cfg(test)]
 mod tests {
     use mycode_core::{
@@ -409,7 +453,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{Agent, AgentConfig};
-    use crate::env::TurnEnv;
+    use crate::env::{SteerInbox, TurnEnv};
     use crate::hooks::HookRunner;
 
     struct Scripted {
@@ -510,9 +554,17 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_still_drops_the_partial() {
+        // The name is historical. A user cancel keeps the partial and the
+        // interruption line; the turn outcome stays aborted. An unnamed
+        // tool-call delta is not executed and does not enter history.
         let provider = Scripted {
             events: vec![
                 StreamEvent::ThinkingDelta("discard me".into()),
+                StreamEvent::TextDelta("keep me".into()),
+                StreamEvent::ToolCallDelta {
+                    id: "call-partial".into(),
+                    partial_json: "{\"path\":".into(),
+                },
                 StreamEvent::Error(ProviderError::new(ProviderErrorKind::Cancelled)),
             ],
         };
@@ -525,12 +577,27 @@ mod tests {
             .await
             .expect("aborted turn");
         assert!(matches!(outcome, mycode_core::events::TurnOutcome::Aborted));
+        assert_eq!(assistant_thinking(&agent), "discard me");
+        let text = assistant_text(&agent);
+        assert!(text.contains("keep me"), "{text}");
+        assert!(
+            text.contains("[error] the response was interrupted: interrupted by user"),
+            "{text}"
+        );
         assert!(
             agent
                 .state()
                 .messages()
                 .iter()
-                .all(|message| { !matches!(message.as_ref(), Message::Assistant(_)) })
+                .all(|message| match message.as_ref() {
+                    Message::Assistant(assistant) => !assistant
+                        .blocks
+                        .iter()
+                        .any(|block| matches!(block, ContentBlock::ToolCall(_))),
+                    Message::ToolResult(_) => false,
+                    Message::User(_) => true,
+                }),
+            "an incomplete tool call was kept or executed"
         );
     }
 
@@ -706,5 +773,136 @@ mod tests {
         );
         assert!(history.contains("discarded"), "{history}");
         release.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    struct StepProvider {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for StepProvider {
+        async fn stream(
+            &self,
+            request: &Request,
+            cancel: CancellationToken,
+        ) -> Result<EventStream, ProviderError> {
+            let rendered = request
+                .messages
+                .iter()
+                .map(|message| match message.as_ref() {
+                    Message::User(user) => user
+                        .content
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Text(text) => Some(text.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                    Message::Assistant(assistant) => assistant.text(),
+                    Message::ToolResult(result) => result
+                        .content
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Text(text) => Some(text.text.as_str()),
+                            _ => None,
+                        })
+                        .collect(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.seen.lock().expect("seen").push(rendered);
+            let step = self.seen.lock().expect("seen").len();
+            let (sender, stream) = EventStream::channel(cancel);
+            if step == 1 {
+                sender
+                    .send(StreamEvent::Done {
+                        message: mycode_core::AssistantMessage {
+                            blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                "call-note",
+                                "note",
+                                serde_json::json!({}),
+                            ))],
+                            usage: None,
+                            stop_reason: StopReason::ToolUse,
+                        },
+                    })
+                    .await;
+            } else {
+                sender
+                    .send(StreamEvent::Done {
+                        message: mycode_core::AssistantMessage {
+                            blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                                "second step",
+                            ))],
+                            usage: None,
+                            stop_reason: StopReason::Stop,
+                        },
+                    })
+                    .await;
+            }
+            Ok(stream)
+        }
+    }
+
+    struct NoteTool {
+        inbox: std::sync::Arc<SteerInbox>,
+    }
+
+    #[async_trait::async_trait]
+    impl mycode_tools::ToolDyn for NoteTool {
+        fn spec(&self) -> mycode_core::ToolSpec {
+            mycode_core::ToolSpec {
+                name: "note".to_owned(),
+                description: "records a note".to_owned(),
+                params_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+
+        async fn execute_dyn(
+            &self,
+            _args: serde_json::Value,
+            _ctx: &mycode_tools::ToolCtx,
+            _out: &mut mycode_tools::ToolStream,
+        ) -> Result<mycode_tools::ToolResult, mycode_tools::ToolError> {
+            self.inbox.push("STEER_KEEP_GOING");
+            Ok(mycode_tools::ToolResult::text("noted"))
+        }
+    }
+
+    #[tokio::test]
+    async fn steer_between_steps_is_in_the_next_request() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = StepProvider {
+            seen: std::sync::Arc::clone(&seen),
+        };
+        let inbox = std::sync::Arc::new(SteerInbox::new());
+        let tools = ToolRegistry::new();
+        tools.register(std::sync::Arc::new(NoteTool {
+            inbox: std::sync::Arc::clone(&inbox),
+        }));
+        let hooks = HookRunner::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks).with_steer(Some(inbox));
+        let mut agent = Agent::new(AgentConfig::new());
+        let outcome = agent
+            .prompt(Message::User(UserMessage::text("start")), &env)
+            .await
+            .expect("completed turn");
+        assert!(matches!(
+            outcome,
+            mycode_core::events::TurnOutcome::Completed
+        ));
+        assert!(!env.cancel.is_cancelled());
+        let seen = seen.lock().expect("seen");
+        assert!(seen.len() >= 2, "expected a second model call: {seen:?}");
+        assert!(
+            !seen[0].contains("STEER_KEEP_GOING"),
+            "steer leaked into the in-flight request: {}",
+            seen[0]
+        );
+        assert!(
+            seen[1].contains("STEER_KEEP_GOING"),
+            "steer missing from the next request: {}",
+            seen[1]
+        );
     }
 }

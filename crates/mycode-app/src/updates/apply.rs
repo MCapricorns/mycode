@@ -100,7 +100,9 @@ where
     }))
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
+/// Production callers are Windows-only. Unit tests round-trip the flags on
+/// every host.
+#[cfg(any(windows, test))]
 pub(crate) fn helper_arguments(
     target: &Path,
     source: &Path,

@@ -13,7 +13,7 @@ use mycode_config::HomeLayout;
 
 use crate::ui::{BackendForm, McpForm, ProviderForm};
 use crate::view_model::{DesktopAction, MainView, WorkspaceState, reduce};
-use mycode_app::{BridgeCommand, BridgeEventRx, CoreBridge};
+use mycode_app::{BridgeCommand, BridgeEventRx, BridgeReply, CoreBridge};
 
 mod bridge;
 mod git;
@@ -237,6 +237,11 @@ pub struct Workspace {
     git_diff_panel_open: bool,
     /// Tool rows the transcript is showing in full. Empty means one-line summaries.
     expanded_tools: HashSet<String>,
+    /// Thinking blocks flipped away from their default.
+    ///
+    /// Streaming thinking (`streaming-thinking`) starts expanded. Committed
+    /// thinking starts collapsed. An id in this set is showing the other way.
+    thinking_overrides: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Last UI font-family id applied to the theme. Empty until the first frame.
@@ -326,6 +331,7 @@ impl Workspace {
             git_diff_generation: 0,
             git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
+            thinking_overrides: HashSet::new(),
             applied_font_size: String::new(),
             applied_font_family: String::new(),
             applied_language: u8::MAX,
@@ -714,7 +720,7 @@ impl Workspace {
         }
         if self.vm.sending {
             if !draft.trim().is_empty() {
-                self.enqueue_follow_up(draft, window, cx);
+                self.dispatch_steer(draft, window, cx);
             }
             return;
         }
@@ -723,6 +729,40 @@ impl Workspace {
             return;
         }
         self.pump_queued_send(cx);
+    }
+
+    /// Steers the running turn. The composer clears immediately. If the turn
+    /// ended before the inbox was registered, the text is queued instead.
+    fn dispatch_steer(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session_id) = self
+            .vm
+            .active
+            .as_ref()
+            .map(|conversation| conversation.session_id.clone())
+        else {
+            self.enqueue_follow_up(draft, window, cx);
+            return;
+        };
+        self.apply_action(DesktopAction::ComposerChanged(String::new()), cx);
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+        let request = self.bridge.request(BridgeCommand::Steer {
+            session_id,
+            text: draft.clone(),
+        });
+        cx.spawn(async move |this, cx| {
+            let reply = request.await;
+            if matches!(reply, BridgeReply::Steered(Err(_))) {
+                let _ = this.update(cx, |workspace, cx| {
+                    workspace.apply_action(DesktopAction::MessageQueued(draft), cx);
+                    // The turn may have finished between the click and the
+                    // reply. Pump so the text does not sit in the queue.
+                    workspace.pump_queued_send(cx);
+                });
+            }
+        })
+        .detach();
     }
 
     /// Enter or send on the welcome desk starts a task with that text.
@@ -1107,6 +1147,27 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Whether a thinking block is showing its body.
+    ///
+    /// Streaming thinking starts open. Every other id starts closed so old
+    /// traces stay out of the way until the user opens them.
+    pub(crate) fn thinking_open(&self, id: &str) -> bool {
+        let default_open = id == "streaming-thinking";
+        if self.thinking_overrides.contains(id) {
+            !default_open
+        } else {
+            default_open
+        }
+    }
+
+    /// Flips one thinking block between its header and the full trace.
+    pub(crate) fn on_toggle_thinking(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.thinking_overrides.remove(id) {
+            self.thinking_overrides.insert(id.to_owned());
+        }
+        cx.notify();
+    }
+
     /// Applies and persists the UI language. The whole window re-renders on
     /// the next frame, so no theme-style refresh is needed.
     pub(crate) fn on_select_language(&mut self, language: &str, cx: &mut Context<Self>) {
@@ -1182,6 +1243,23 @@ impl Workspace {
             cx,
         );
         self.persist_ui_state(cx);
+    }
+
+    /// Moves the conversation column to the first line.
+    ///
+    /// The offset is the distance from the scroller's top left to the
+    /// content's top left, and it grows more negative toward the bottom.
+    /// Zero is the top. `ScrollHandle` has no `scroll_to_top`.
+    pub(crate) fn scroll_conversation_to_top(&mut self, cx: &mut Context<Self>) {
+        self.conversation_scroll
+            .set_offset(gpui_kit::point(px(0.), px(0.)));
+        cx.notify();
+    }
+
+    /// Moves the conversation column to the newest line.
+    pub(crate) fn scroll_conversation_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.conversation_scroll.scroll_to_bottom();
+        cx.notify();
     }
 
     /// Loads the next older page when the viewport is within a short distance

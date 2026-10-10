@@ -49,18 +49,33 @@ impl Workspace {
             BridgeEvent::ChatFailed {
                 session_id,
                 message,
+                head,
             } => {
                 if !matches_active(&session_id) {
                     return;
                 }
                 let cancelled = message == CHAT_CANCELLED;
-                self.apply_action(DesktopAction::ChatFailed(message), cx);
+                self.apply_action(DesktopAction::ChatFailed { message, head }, cx);
                 // A user interrupt frees the turn; queued follow-ups start next.
                 // Provider errors keep the queue so a failed retry cannot loop.
                 if cancelled {
                     self.pump_queued_send(cx);
                 }
                 return;
+            }
+            BridgeEvent::SteerCommitted {
+                session_id,
+                head,
+                entry,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::SteerCommitted {
+                    session_id,
+                    head,
+                    entry,
+                }
             }
             BridgeEvent::UsageSnapshot {
                 session_id,
@@ -500,6 +515,7 @@ impl Workspace {
             // The turn unwinds over the event channel; the reply itself
             // carries no state.
             BridgeReply::ChatCancelled(_) => {}
+            BridgeReply::Steered(_) => {}
             BridgeReply::SubagentCancelled(Err(message)) => {
                 self.push_toast(message, crate::workspace::ToastKind::Info, cx);
             }

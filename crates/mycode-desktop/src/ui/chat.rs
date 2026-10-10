@@ -65,14 +65,26 @@ pub(super) fn render_chat(
                     elements.push(transcript::render_tool_block(call, result, expanded, cx));
                 }
                 TranscriptItem::Entry(entry) => {
-                    elements.push(transcript::render_entry(entry, cx.theme(), show_reasoning));
+                    elements.push(transcript::render_entry(
+                        entry,
+                        workspace,
+                        cx.theme(),
+                        show_reasoning,
+                        cx,
+                    ));
                 }
             }
         }
         let streaming_element = streaming
             .map(|streaming| {
-                transcript::render_streaming_entry(streaming, cx.theme(), show_reasoning, cx)
-                    .into_any_element()
+                transcript::render_streaming_entry(
+                    streaming,
+                    workspace,
+                    cx.theme(),
+                    show_reasoning,
+                    cx,
+                )
+                .into_any_element()
             })
             .or_else(|| {
                 sending.then(|| {
@@ -82,6 +94,7 @@ pub(super) fn render_chat(
                                 .to_owned(),
                             ..crate::view_model::StreamingReply::default()
                         },
+                        workspace,
                         cx.theme(),
                         show_reasoning,
                         cx,
@@ -105,49 +118,53 @@ pub(super) fn render_chat(
         .flex_col()
         .bg(super::skin::ambient(theme))
         .child(
-            anchor.child(
-                div()
-                    .id("conversation")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll_handle)
-                    .on_scroll_wheel(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_conversation_scrolled(cx);
-                    }))
-                    .on_mouse_up(
-                        gpui_kit::MouseButton::Left,
-                        cx.listener(|workspace, _, _, cx| {
-                            workspace.on_conversation_scrolled(cx);
-                        }),
-                    )
-                    .flex()
-                    .flex_col()
-                    .child(
-                        probe.child(
-                            div()
-                                .id("conversation-inner")
-                                .w_full()
-                                .max_w(COLUMN_MAX)
-                                .mx_auto()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .py_4()
-                                .px_4()
-                                .when(show_welcome, |this| {
-                                    this.child(welcome::render_welcome(workspace, cx))
-                                })
-                                .when(has_older || loading_older, |this| {
-                                    this.child(render_older_chip(loading_older, cx))
-                                })
-                                .children(entry_elements)
-                                .when_some(streaming_element, |this, streaming| {
-                                    this.child(streaming)
+            div()
+                .id("conversation-frame")
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    anchor.child(
+                        div()
+                            .id("conversation")
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_x_hidden()
+                            .overflow_y_scroll()
+                            .track_scroll(&scroll_handle)
+                            .on_scroll_wheel(cx.listener(|workspace, _, _, cx| {
+                                workspace.on_conversation_scrolled(cx);
+                            }))
+                            .on_mouse_up(
+                                gpui_kit::MouseButton::Left,
+                                cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_conversation_scrolled(cx);
                                 }),
-                        ),
+                            )
+                            .flex()
+                            .flex_col()
+                            .child(
+                                probe.child(
+                                    transcript::transcript_stack()
+                                        .when(show_welcome, |this| {
+                                            this.child(welcome::render_welcome(workspace, cx))
+                                        })
+                                        .when(has_older || loading_older, |this| {
+                                            this.child(render_older_chip(loading_older, cx))
+                                        })
+                                        .children(entry_elements)
+                                        .when_some(streaming_element, |this, streaming| {
+                                            this.child(streaming)
+                                        }),
+                                ),
+                            ),
                     ),
-            ),
+                )
+                .child(render_conversation_jumps(cx)),
         )
         // The model menu docks in-flow right above the composer: an
         // absolutely positioned overlay landed outside the visible window on
@@ -223,6 +240,68 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
         index += 1;
     }
     items
+}
+
+/// Jump controls pinned to the bottom-right of the scroll region, above the
+/// composer. They sit outside the scroller so they do not travel with the
+/// transcript. `stop_propagation` keeps the click from starting a scroll drag.
+fn render_conversation_jumps(cx: &Context<Workspace>) -> impl IntoElement {
+    div()
+        .id("conversation-jumps")
+        .absolute()
+        .bottom(px(8.))
+        .right(px(12.))
+        .flex()
+        .flex_row()
+        .gap_1()
+        .child(conversation_jump(
+            "conversation-jump-top",
+            t("Top", "顶部"),
+            true,
+            cx,
+        ))
+        .child(conversation_jump(
+            "conversation-jump-bottom",
+            t("Bottom", "底部"),
+            false,
+            cx,
+        ))
+}
+
+fn conversation_jump(
+    id: &'static str,
+    label: &'static str,
+    to_top: bool,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id(id)
+        .occlude()
+        .flex()
+        .items_center()
+        .h(px(22.))
+        .px_2()
+        .rounded(super::skin::radius_control())
+        .border_1()
+        .border_color(super::skin::glass_border(theme))
+        .bg(super::skin::popover(theme))
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .cursor_pointer()
+        .hover(|this| this.bg(super::skin::frost_hover(theme)))
+        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(cx.listener(move |workspace, _, _, cx| {
+            cx.stop_propagation();
+            if to_top {
+                workspace.scroll_conversation_to_top(cx);
+            } else {
+                workspace.scroll_conversation_to_bottom(cx);
+            }
+        }))
+        .child(label)
 }
 
 /// The control above a tail window. The count of remaining events is not

@@ -92,6 +92,24 @@ fn path_open(path: Option<&str>) -> bool {
     path.is_some_and(|path| !path.trim().is_empty())
 }
 
+/// The open chat is already a blank task.
+///
+/// New task (welcome, sidebar, and `/new`) should stay on it. Creating
+/// another session lists a second empty row that looks like a copy. A turn
+/// in flight, a loaded message, or history still on disk is a real
+/// conversation and still needs its own session.
+#[must_use]
+pub fn open_session_is_empty(state: &WorkspaceState) -> bool {
+    if state.sending {
+        return false;
+    }
+    state.active.as_ref().is_some_and(|conversation| {
+        conversation.entries.is_empty()
+            && conversation.older_before.is_none()
+            && conversation.streaming.is_none()
+    })
+}
+
 /// Newest session already bound to `project`. `sessions` is newest-first.
 #[must_use]
 pub(crate) fn newest_session_in_project<'a>(
@@ -107,7 +125,7 @@ pub(crate) fn newest_session_in_project<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::has_open_folder;
+    use super::{has_open_folder, open_session_is_empty};
     use crate::view_model::WorkspaceState;
 
     #[test]
@@ -142,5 +160,47 @@ mod tests {
             ..WorkspaceState::default()
         };
         assert!(has_open_folder(&state));
+    }
+
+    #[test]
+    fn an_open_empty_idle_chat_is_reused_for_a_new_task() {
+        let blank = WorkspaceState {
+            sending: false,
+            active: Some(mycode_app::ActiveConversation {
+                session_id: "blank".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+            }),
+            ..WorkspaceState::default()
+        };
+        assert!(open_session_is_empty(&blank));
+
+        let mut with_messages = blank.clone();
+        with_messages
+            .active
+            .as_mut()
+            .expect("open")
+            .entries
+            .push(mycode_app::ConversationEntry {
+                event_id: "e1".to_owned(),
+                kind: mycode_app::EntryKind::UserMessage,
+                text: "hello".into(),
+                call_id: None,
+                thinking: String::new(),
+            });
+        assert!(!open_session_is_empty(&with_messages));
+
+        let mut sending = blank.clone();
+        sending.sending = true;
+        assert!(!open_session_is_empty(&sending));
+
+        let mut hidden_history = blank.clone();
+        hidden_history.active.as_mut().expect("open").older_before = Some("e0".to_owned());
+        assert!(!open_session_is_empty(&hidden_history));
+
+        assert!(!open_session_is_empty(&WorkspaceState::default()));
     }
 }

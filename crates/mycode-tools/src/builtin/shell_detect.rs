@@ -78,9 +78,10 @@ pub struct DetectedShell {
 /// Picks a detected shell, or `cmd.exe` when nothing else is available.
 ///
 /// `cmd_path` is used only when `detected` is empty. Callers must not persist
-/// the `cmd` kind into settings.
+/// the `cmd` kind into settings. Production callers are Windows-only; unit
+/// tests exercise the fallback on every host.
 #[must_use]
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(any(windows, test))]
 pub fn select_windows_shell(
     detected: Option<DetectedShell>,
     cmd_path: Option<PathBuf>,
@@ -95,8 +96,11 @@ pub fn select_windows_shell(
 }
 
 /// Arguments for a `cmd.exe /d /s /c` invocation.
+///
+/// Production callers are Windows-only; unit tests check the flag order on
+/// every host.
 #[must_use]
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(any(windows, test))]
 pub fn cmd_fallback_args(command: &str) -> Vec<String> {
     vec![
         "/d".to_owned(),

@@ -470,6 +470,13 @@ impl Workspace {
         if !crate::view_model::has_open_folder(&self.vm) {
             return false;
         }
+        // The welcome desk stays up while the open chat has no messages.
+        // New task is already that chat. Another CreateSession lists a
+        // second empty row. `true` means a session is ready: false is only
+        // "no folder", which is what drops a held welcome draft.
+        if crate::view_model::open_session_is_empty(&self.vm) {
+            return true;
+        }
         // New sessions inherit the active project so the sidebar grouping and
         // the tool working directory follow the project switcher.
         if self.vm.project_dir.is_some() {

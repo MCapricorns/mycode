@@ -444,8 +444,23 @@ pub enum DesktopAction {
         head: String,
         entry: ConversationEntry,
     },
-    /// The model turn failed without committing anything.
-    ChatFailed(String),
+    /// The model turn failed. A non-empty `head` is the ledger head after
+    /// writes this turn already committed; empty leaves the UI head alone.
+    ChatFailed {
+        /// Banner text. [`crate::view_model::CHAT_CANCELLED`] is a quiet cancel.
+        message: String,
+        /// Ledger head spelling, or empty when the head must not move.
+        head: String,
+    },
+    /// A steer was committed on the active session while the turn kept running.
+    SteerCommitted {
+        /// Session identity spelling.
+        session_id: String,
+        /// Branch head after the steered user message.
+        head: String,
+        /// Transcript row for that message.
+        entry: ConversationEntry,
+    },
     /// Clear the surfaced error.
     /// Switch the main area between chat and settings.
     ShowMainView(MainView),
