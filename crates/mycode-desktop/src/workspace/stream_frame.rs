@@ -124,6 +124,7 @@ mod tests {
                 text: Arc::from("full"),
                 call_id: None,
                 thinking: String::new(),
+                parent_call_id: None,
             },
         }
     }
@@ -134,6 +135,7 @@ mod tests {
             call_id: "c".into(),
             name: "read".into(),
             target: "a.rs".into(),
+            parent: None,
         }
     }
 
@@ -146,6 +148,7 @@ mod tests {
                 text: Arc::from("ok"),
                 call_id: Some("c".into()),
                 thinking: String::new(),
+                parent_call_id: None,
             },
         }
     }

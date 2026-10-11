@@ -1,43 +1,30 @@
-//! `run_code` — programmatic tool calling.
+//! `run_code` — the only tool the model can call directly.
 //!
-//! The model writes one Python program. The program calls the same tools a
-//! direct call would, and only `return` / `print` re-enter the conversation.
-//! This follows DeepSeek Harness PTC (`run_code` plus `tools.name(args)`,
-//! fresh per run, read-only calls may overlap) without hiding the single-call
-//! tools. See `docs/tools.md`.
+//! The program runs in a fresh system Python process. Other tools are
+//! `await tools.name(...)` inside that program and go through the same
+//! preflight as a direct call. Only `print` and `return` come back to the
+//! model. Inner calls are nested UI events, not model history.
 
-mod eval;
-mod parse;
-
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+mod protocol;
+mod runtime;
 
 use async_trait::async_trait;
-use mycode_core::message::ContentBlock;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
+use crate::builtin::python::python_unavailable_message;
 use crate::builtin::truncate_bytes;
 use crate::ctx::ToolCtx;
-use crate::registry::ToolCatalog;
-use crate::roots::anchor_tool_path;
 use crate::stream::ToolStream;
-use crate::tool::{Tool, ToolDyn, ToolError, ToolResult};
+use crate::tool::{Tool, ToolError, ToolResult};
 
-use eval::execute;
-use parse::parse;
+use runtime::{ProgramOutcome, execute_program};
 
-/// Example `description` embedded in the system prompt. Tests run the
-/// matching program so the example cannot drift from the interpreter.
+/// Example `description` embedded in the system prompt.
 pub const RUN_CODE_EXAMPLE_DESCRIPTION: &str = "List rust files that mention dispatch";
 
 /// Example program body. Top-level `await` and `return`, one grep, a filter.
-///
-/// This is Python executed by the embedded interpreter. It does not start
-/// Node.js or a system Python.
 pub const RUN_CODE_EXAMPLE_CODE: &str = "\
 hits = await tools.grep(pattern=\"dispatch_tool\", include=\"*.rs\")\n\
 return \"\\n\".join([line for line in hits.split(\"\\n\") if \"turn.rs\" in line][:20])\n";
@@ -45,31 +32,23 @@ return \"\\n\".join([line for line in hits.split(\"\\n\") if \"turn.rs\" in line
 /// Largest program, in characters.
 const MAX_CODE_CHARS: usize = 16_000;
 /// Largest combined log and return value sent back to the model.
-pub(super) const MAX_OUTPUT_BYTES: usize = 8_000;
-/// Tool calls inside one program.
-const MAX_CALLS: u32 = 48;
-/// Read-only calls that may overlap inside `gather`.
-pub(super) const MAX_PARALLEL: usize = 8;
-/// `print` lines kept.
-pub(super) const MAX_LOG_LINES: usize = 32;
-/// Wall clock for the program, including tool waits.
-const MAX_WALL: Duration = Duration::from_secs(120);
+const MAX_OUTPUT_BYTES: usize = 8_000;
 
 /// The `run_code` builtin.
 #[derive(Debug, Default)]
 pub struct RunCodeTool;
 
-/// Arguments for [`RunCodeTool`].
+/// Arguments for [`RunCodeTool`]. `description` is listed first on purpose.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunCodeArgs {
-    /// UI label. The schema text is what the model sees, not this comment.
+    /// UI title. The schema text is what the model sees.
     #[schemars(
-        description = "Clear, concise description of what this program does, in active voice, 5-10 words (shown in the UI). Example: \"List rust files that mention dispatch\"."
+        description = "Clear, concise description of what this program does in active voice, 5-10 words (shown in the UI). Provide `description` before `code`. Example: \"List rust files that mention dispatch\"."
     )]
     pub description: String,
     /// Program body. The schema text is what the model sees.
     #[schemars(
-        description = "The program: the body of an async Python function, executed inside mycode. Top-level await and return work. No import. Python does not need to be installed. Call tools as await tools.name(arg=value)."
+        description = "The program: the body of an async Python function run by the system Python. Top-level await and return work. Call tools as await tools.name(arg=value). Only print and return come back."
     )]
     pub code: String,
 }
@@ -84,24 +63,18 @@ impl Tool for RunCodeTool {
     }
 
     fn description(&self) -> &str {
-        "Use this instead of several direct calls when one step reads, searches, \
-         or edits more than one file, or fetches more than one page. A rename \
-         or the same edit across files is one program here, not one `edit` per \
-         file. One obvious call stays direct (a single read, grep, or edit). \
-         Takes two required arguments: `description` (5-10 words, active voice, \
-         shown in the UI) and `code` (the body of an async Python function; \
-         top-level `await` and `return` work; no import). The interpreter is \
-         inside mycode: Node.js is not used, and Python does not need to be \
-         installed. Call tools as `await tools.name(arg=value)`. \
-         `await gather(...)` overlaps read-only calls. Only what you `return` \
-         or `print` comes back. Do not call `run_code` from inside the program. \
-         Stops after 48 tool calls, 20000 steps, or 120 seconds. Output cap \
-         8000 bytes."
+        "Execute a Python program against the available tools. The only tool \
+         you can call directly. Takes two required arguments, `description` \
+         then `code`: `description` is a short summary shown in the UI, and \
+         `code` is the body of an async function (top-level await and return \
+         work). Call tools as `await tools.name(...)` per the system prompt. \
+         Only what you print or return comes back. Each call runs in a fresh \
+         system Python process."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "run_code: pass description and code. Use it when one step needs several reads, greps, finds, edits, or page fetches, including a rename across files. only print and return come back. One obvious call stays direct.",
+            "run_code: the only directly callable tool. Pass description, then code. Reach every other tool as await tools.name(...) inside the program. Only print and return come back.",
         )
     }
 
@@ -134,331 +107,78 @@ impl Tool for RunCodeTool {
                 "run_code has no tool catalog".to_owned(),
             ));
         };
-        let notes = Arc::new(Mutex::new(Vec::new()));
-        let limits = Limits {
-            cancel: ctx.cancel.clone(),
-            started: Instant::now(),
-            calls: Arc::new(AtomicU32::new(0)),
-            notes: Arc::clone(&notes),
-        };
-        let parsed = match parse(code) {
-            Ok(program) => program,
-            Err(message) => {
-                return Ok(failure("syntax", &message, &[], &notes, description));
-            }
-        };
-        let outcome = execute(&parsed, &catalog, ctx, out, &limits).await;
-        match outcome {
-            Ok(done) => Ok(success(description, done.logs, done.value, &notes)),
-            Err(failed) => Ok(failure(
-                failed.thrown.kind,
-                &failed.thrown.message,
-                &failed.logs,
-                &notes,
-                description,
-            )),
+        if let Some(message) = python_unavailable_message() {
+            return Ok(failure("exception", &message, "", &[], description));
         }
+        let outcome = execute_program(code, ctx, &catalog, out).await;
+        Ok(render_outcome(description, outcome))
     }
 }
 
-#[derive(Clone)]
-pub(super) struct Limits {
-    cancel: tokio_util::sync::CancellationToken,
-    started: Instant,
-    calls: Arc<AtomicU32>,
-    notes: Arc<Mutex<Vec<CallNote>>>,
-}
-
-impl Limits {
-    fn check(&self) -> Result<(), Thrown> {
-        if self.cancel.is_cancelled() {
-            return Err(Thrown::abort("program cancelled"));
-        }
-        if self.started.elapsed() > MAX_WALL {
-            return Err(Thrown::timeout("program exceeded 120 seconds"));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct Thrown {
-    pub tool_name: Option<String>,
-    pub message: String,
-    pub kind: &'static str,
-}
-
-impl Thrown {
-    fn script(message: impl Into<String>) -> Self {
-        Self {
-            tool_name: None,
-            message: message.into(),
-            kind: "exception",
-        }
-    }
-
-    fn tool(name: &str, message: impl Into<String>) -> Self {
-        Self {
-            tool_name: Some(name.to_owned()),
-            message: message.into(),
-            kind: "exception",
-        }
-    }
-
-    fn budget(message: impl Into<String>) -> Self {
-        Self {
-            tool_name: None,
-            message: message.into(),
-            kind: "budget",
-        }
-    }
-
-    fn abort(message: impl Into<String>) -> Self {
-        Self {
-            tool_name: None,
-            message: message.into(),
-            kind: "abort",
-        }
-    }
-
-    fn timeout(message: impl Into<String>) -> Self {
-        Self {
-            tool_name: None,
-            message: message.into(),
-            kind: "timeout",
-        }
-    }
-
-    fn catchable(&self) -> bool {
-        self.kind == "exception"
-    }
-}
-
-#[derive(Clone, Debug)]
-struct CallNote {
-    ordinal: u32,
-    tool: String,
-    ok: bool,
-    bytes: usize,
-}
-
-pub(super) fn is_concurrency_safe(name: &str) -> bool {
-    matches!(
-        name,
-        "read" | "grep" | "find" | "web_search" | "fetch_content"
-    )
-}
-
-pub(super) async fn invoke_tool(
-    catalog: &ToolCatalog,
-    parent: &ToolCtx,
-    out: &ToolStream,
-    limits: &Limits,
-    name: &str,
-    args: Value,
-) -> Result<String, Thrown> {
-    limits.check()?;
-    let ordinal = limits.calls.fetch_add(1, Ordering::Relaxed);
-    if ordinal >= MAX_CALLS {
-        return Err(Thrown::budget(format!(
-            "program exceeded {MAX_CALLS} tool calls"
-        )));
-    }
-    if name == "run_code" {
-        return Err(Thrown::tool(
-            name,
-            "run_code cannot be called from inside a program",
-        ));
-    }
-    let Some(tool) = catalog.get(name) else {
-        let available = catalog
-            .names()
-            .into_iter()
-            .filter(|registered| registered != "run_code")
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(Thrown::tool(
-            name,
-            format!("unknown tool {name}; available: {available}"),
-        ));
-    };
-    let args = crate::tool::normalize_tool_args(args);
-    let target = mycode_core::tool_target(name, &args);
-    let _ = out.progress(format!("{name} {target}").trim().to_owned());
-    let ctx = match child_ctx(parent, tool.as_ref(), &args, name).await {
-        Ok(ctx) => ctx,
-        Err(thrown) => {
-            record(limits, ordinal, name, false, 0);
-            return Err(thrown);
-        }
-    };
-    let mut stream = ToolStream::closed();
-    let result = match tool.execute_dyn(args, &ctx, &mut stream).await {
-        Ok(result) => result,
-        Err(error) => {
-            record(limits, ordinal, name, false, 0);
-            return Err(Thrown::tool(name, error.to_string()));
-        }
-    };
-    let text = script_text(name, &result);
-    record(limits, ordinal, name, !result.is_error, text.len());
-    if result.is_error {
-        Err(Thrown::tool(name, text))
-    } else {
-        Ok(text)
-    }
-}
-
-fn record(limits: &Limits, ordinal: u32, tool: &str, ok: bool, bytes: usize) {
-    limits
-        .notes
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .push(CallNote {
-            ordinal,
-            tool: tool.to_owned(),
-            ok,
-            bytes,
-        });
-}
-
-async fn child_ctx(
-    parent: &ToolCtx,
-    tool: &dyn ToolDyn,
-    args: &Value,
-    name: &str,
-) -> Result<ToolCtx, Thrown> {
-    let mut ctx = ToolCtx::new(parent.cwd.clone())
-        .with_cancel(parent.cancel.clone())
-        .with_call_id(format!("{}:ptc", parent.call_id))
-        .with_extra_roots(parent.extra_roots.clone());
-    if let Some(access) = tool.search_access() {
-        let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
-        let (cwd, path) = anchored_search(&parent.cwd, &parent.extra_roots, path.as_deref());
-        let prepared =
-            crate::prepare_search_async_with_access(cwd, path, parent.cancel.clone(), access)
-                .await
-                .map_err(|error| Thrown::tool(name, error.to_string()))?;
-        ctx = ctx.with_prepared_search(Arc::new(prepared));
-    } else if let Some(access) = tool.file_access() {
-        let path = args
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| Thrown::tool(name, "file tool is missing a path argument"))?;
-        let (cwd, path) = anchored_file(&parent.cwd, &parent.extra_roots, path);
-        let prepared = crate::prepare_file_async(cwd, path, parent.cancel.clone(), access)
-            .await
-            .map_err(|error| Thrown::tool(name, error.to_string()))?;
-        ctx = ctx.with_prepared_file(Arc::new(prepared));
-    }
-    Ok(ctx)
-}
-
-fn anchored_search(cwd: &Path, extras: &[PathBuf], raw: Option<&str>) -> (PathBuf, Option<String>) {
-    let Some(raw) = raw else {
-        return (cwd.to_path_buf(), None);
-    };
-    let (root, relative) = anchor_tool_path(cwd, extras, raw);
-    if root == cwd {
-        return (cwd.to_path_buf(), Some(raw.to_owned()));
-    }
-    if relative.is_empty() {
-        (root, None)
-    } else {
-        (root, Some(relative))
-    }
-}
-
-fn anchored_file(cwd: &Path, extras: &[PathBuf], raw: &str) -> (PathBuf, String) {
-    let (root, relative) = anchor_tool_path(cwd, extras, raw);
-    if root == cwd {
-        (cwd.to_path_buf(), raw.to_owned())
-    } else if relative.is_empty() {
-        (root, ".".to_owned())
-    } else {
-        (root, relative)
-    }
-}
-
-fn result_text(result: &ToolResult) -> String {
-    result
-        .content
+fn render_outcome(description: &str, outcome: ProgramOutcome) -> ToolResult {
+    let calls = outcome
+        .calls
         .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
-            _ => None,
+        .map(|note| {
+            json!({
+                "tool": note.tool,
+                "ok": note.ok,
+                "bytes": note.bytes,
+            })
         })
-        .collect()
-}
-
-/// Text the program sees. `read` keeps the revision in UI details; the
-/// script gets the file bytes without the trailing `[revision ...]` tag.
-fn script_text(name: &str, result: &ToolResult) -> String {
-    let text = result_text(result);
-    if name == "read" {
-        strip_revision_tag(&text)
-    } else {
-        text
+        .collect::<Vec<_>>();
+    match outcome.error {
+        Some(error) => failure(
+            error.kind,
+            &error.message,
+            &outcome.logs,
+            &calls,
+            description,
+        ),
+        None => success(description, &outcome.logs, outcome.value, &calls),
     }
-}
-
-fn strip_revision_tag(text: &str) -> String {
-    let Some(index) = text.rfind("\n[revision ") else {
-        if revision_tag_line(text) {
-            return String::new();
-        }
-        return text.to_owned();
-    };
-    let tail = &text[index + 1..];
-    if revision_tag_line(tail) {
-        text[..index].to_owned()
-    } else {
-        text.to_owned()
-    }
-}
-
-fn revision_tag_line(text: &str) -> bool {
-    text.starts_with("[revision ") && text.ends_with(']') && !text.contains('\n')
 }
 
 fn success(
     description: &str,
-    logs: Vec<String>,
+    logs: &str,
     value: Option<String>,
-    notes: &Mutex<Vec<CallNote>>,
+    calls: &[serde_json::Value],
 ) -> ToolResult {
     let mut body = String::new();
+    let logs = logs.trim();
     if !logs.is_empty() {
-        body.push_str(&logs.join("\n"));
+        body.push_str(logs);
     }
-    if let Some(value) = value.filter(|text| text != "null") {
+    if let Some(value) = value.filter(|text| !text.trim().is_empty()) {
         if !body.is_empty() {
             body.push_str("\n\n");
         }
-        body.push_str(&value);
+        body.push_str(value.trim());
     }
     if body.is_empty() {
         body.push_str("(run_code completed with no output)");
     }
     let (body, truncated) = cap_output(body);
-    ToolResult::text(body).with_details(details(description, notes, truncated))
+    ToolResult::text(body).with_details(details(description, calls, truncated))
 }
 
 fn failure(
     kind: &str,
     message: &str,
-    logs: &[String],
-    notes: &Mutex<Vec<CallNote>>,
+    logs: &str,
+    calls: &[serde_json::Value],
     description: &str,
 ) -> ToolResult {
     let mut body = String::new();
+    let logs = logs.trim();
     if !logs.is_empty() {
-        body.push_str(&logs.join("\n"));
+        body.push_str(logs);
         body.push('\n');
     }
     body.push_str(&format!("Error: code run failed ({kind}): {message}"));
     let (body, truncated) = cap_output(body);
-    ToolResult::error(body).with_details(details(description, notes, truncated))
+    ToolResult::error(body).with_details(details(description, calls, truncated))
 }
 
 fn cap_output(text: String) -> (String, bool) {
@@ -471,39 +191,45 @@ fn cap_output(text: String) -> (String, bool) {
     (body, true)
 }
 
-fn details(description: &str, notes: &Mutex<Vec<CallNote>>, truncated: bool) -> Value {
-    let mut calls = notes
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone();
-    calls.sort_by_key(|note| note.ordinal);
+fn details(description: &str, calls: &[serde_json::Value], truncated: bool) -> serde_json::Value {
     json!({
         "description": description,
         "truncated": truncated,
-        "calls": calls.into_iter().map(|note| json!({
-            "tool": note.tool,
-            "ok": note.ok,
-            "bytes": note.bytes,
-        })).collect::<Vec<_>>(),
+        "calls": calls,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use async_trait::async_trait;
+    use mycode_core::tool::ToolSpec;
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
 
     use super::RunCodeTool;
-    use crate::builtin::{EditTool, FindTool, GrepTool, ReadTool};
+    use crate::builtin::python::{PythonStatus, set_python_status_for_test};
+    use crate::builtin::{GrepTool, ReadTool, WriteTool};
     use crate::ctx::ToolCtx;
     use crate::registry::{ToolCatalog, ToolRegistry};
-    use crate::stream::ToolStream;
-    use crate::tool::{Tool, ToolResult};
+    use crate::stream::{ToolStream, ToolStreamItem};
+    use crate::tool::{Tool, ToolDyn, ToolError, ToolResult};
 
     fn text_of(result: &ToolResult) -> String {
-        super::result_text(result)
+        result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                mycode_core::message::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
-    fn catalog(tools: Vec<Arc<dyn crate::tool::ToolDyn>>) -> ToolCatalog {
+    fn catalog(tools: Vec<Arc<dyn ToolDyn>>) -> ToolCatalog {
         let registry = ToolRegistry::new();
         for tool in tools {
             registry.register(tool);
@@ -512,9 +238,12 @@ mod tests {
     }
 
     async fn run(dir: &std::path::Path, tools: ToolCatalog, code: &str) -> ToolResult {
-        let ctx = ToolCtx::new(dir).with_catalog(tools);
-        let mut stream = ToolStream::closed();
-        RunCodeTool
+        run_with(ToolCtx::new(dir).with_catalog(tools), code).await
+    }
+
+    async fn run_with(ctx: ToolCtx, code: &str) -> ToolResult {
+        let (mut stream, mut rx) = ToolStream::channel();
+        let result = RunCodeTool
             .execute(
                 super::RunCodeArgs {
                     description: "test".to_owned(),
@@ -524,10 +253,34 @@ mod tests {
                 &mut stream,
             )
             .await
-            .expect("run_code")
+            .expect("run_code returns a result");
+        drop(stream);
+        while rx.recv().await.is_some() {}
+        result
     }
 
-    fn temp_dir(label: &str) -> std::path::PathBuf {
+    async fn run_watching(ctx: ToolCtx, code: &str) -> (ToolResult, Vec<ToolStreamItem>) {
+        let (mut stream, mut rx) = ToolStream::channel();
+        let result = RunCodeTool
+            .execute(
+                super::RunCodeArgs {
+                    description: "watch".to_owned(),
+                    code: code.to_owned(),
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("run_code");
+        drop(stream);
+        let mut items = Vec::new();
+        while let Some(item) = rx.recv().await {
+            items.push(item);
+        }
+        (result, items)
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "mycode-ptc-{label}-{}-{}",
             std::process::id(),
@@ -540,6 +293,13 @@ mod tests {
         root
     }
 
+    struct RestorePython;
+    impl Drop for RestorePython {
+        fn drop(&mut self) {
+            set_python_status_for_test(None);
+        }
+    }
+
     #[tokio::test]
     async fn filters_grep_hits_so_only_the_return_value_comes_back() {
         let root = temp_dir("grep");
@@ -549,8 +309,12 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("skip.rs"), "fn unrelated() {}\n").unwrap();
-        let tools = catalog(vec![Arc::new(GrepTool)]);
-        let result = run(&root, tools, super::RUN_CODE_EXAMPLE_CODE).await;
+        let result = run(
+            &root,
+            catalog(vec![Arc::new(GrepTool)]),
+            super::RUN_CODE_EXAMPLE_CODE,
+        )
+        .await;
         let text = text_of(&result);
         assert!(!result.is_error, "{text}");
         assert!(text.contains("turn.rs"), "{text}");
@@ -560,16 +324,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn promise_all_reads_two_files_and_returns_both() {
+    async fn gather_reads_two_files_and_strips_the_revision_tag() {
         let root = temp_dir("all");
         std::fs::write(root.join("a.txt"), "alpha\n").unwrap();
         std::fs::write(root.join("b.txt"), "beta\n").unwrap();
-        let tools = catalog(vec![Arc::new(ReadTool)]);
         let result = run(
             &root,
-            tools,
+            catalog(vec![Arc::new(ReadTool)]),
             "\
-a, b = await gather(tools.read(path=\"a.txt\", limit=1), tools.read(path=\"b.txt\", limit=1))\n\
+a, b = await asyncio.gather(tools.read(path=\"a.txt\", limit=1), tools.read(path=\"b.txt\", limit=1))\n\
 return a + \"\\n\" + b\n",
         )
         .await;
@@ -577,412 +340,470 @@ return a + \"\\n\" + b\n",
         assert!(!result.is_error, "{text}");
         assert!(text.contains("alpha"), "{text}");
         assert!(text.contains("beta"), "{text}");
+        assert!(!text.contains("[revision"), "{text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn edit_inside_the_program_publishes_once() {
-        let root = temp_dir("edit");
-        std::fs::write(root.join("a.txt"), "foo\n").unwrap();
-        let tools = catalog(vec![Arc::new(EditTool), Arc::new(ReadTool)]);
+    async fn a_missing_file_is_catchable_and_prints_survive() {
+        let root = temp_dir("miss");
         let result = run(
             &root,
-            tools,
-            "\
-await tools.edit(path=\"a.txt\", old_string=\"foo\", new_string=\"bar\")\n\
-return \"edited\"\n",
-        )
-        .await;
-        let text = text_of(&result);
-        assert!(!result.is_error, "{text}");
-        assert_eq!(
-            std::fs::read_to_string(root.join("a.txt")).unwrap(),
-            "bar\n"
-        );
-        assert_eq!(text, "edited");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn a_missing_file_is_catchable() {
-        let root = temp_dir("catch");
-        let tools = catalog(vec![Arc::new(ReadTool)]);
-        let result = run(
-            &root,
-            tools,
-            r#"try:
+            catalog(vec![Arc::new(ReadTool)]),
+            r#"
+print("kept")
+try:
     await tools.read(path="missing.txt")
     return "no"
-except Exception as e:
-    return e.toolName + ": " + e.message
+except ToolCallError as e:
+    return e.toolName + ":" + e.message
 "#,
         )
         .await;
         let text = text_of(&result);
         assert!(!result.is_error, "{text}");
-        assert!(text.starts_with("read:"), "{text}");
+        assert!(text.contains("kept"), "{text}");
+        assert!(text.contains("read:"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn an_uncaught_error_keeps_earlier_output_and_the_user_line() {
+        let root = temp_dir("line");
+        let result = run(
+            &root,
+            catalog(vec![Arc::new(ReadTool)]),
+            "print(\"before\")\nx = 1\nraise RuntimeError(\"boom\")\n",
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(result.is_error, "{text}");
+        assert!(text.contains("before"), "{text}");
+        assert!(text.contains("boom"), "{text}");
+        assert!(text.contains("line 3"), "{text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
     async fn nested_run_code_is_rejected() {
         let root = temp_dir("nest");
-        let tools = catalog(vec![Arc::new(RunCodeTool), Arc::new(ReadTool)]);
         let result = run(
             &root,
-            tools,
-            "await tools.run_code(description=\"inner\", code=\"return 1\")\n",
+            catalog(vec![Arc::new(ReadTool), Arc::new(RunCodeTool)]),
+            r#"
+try:
+    await tools.run_code(description="again", code="return 1")
+    return "no"
+except ToolCallError as e:
+    return e.message
+"#,
         )
         .await;
         let text = text_of(&result);
-        assert!(result.is_error, "{text}");
+        assert!(!result.is_error, "{text}");
         assert!(text.contains("cannot be called"), "{text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn a_read_only_catalog_cannot_edit() {
-        let root = temp_dir("ro");
-        std::fs::write(root.join("a.txt"), "keep\n").unwrap();
-        let tools = catalog(vec![
-            Arc::new(ReadTool),
-            Arc::new(GrepTool),
-            Arc::new(FindTool),
-        ]);
-        let result = run(
-            &root,
-            tools,
-            "await tools.edit(path=\"a.txt\", old_string=\"keep\", new_string=\"no\")\n",
-        )
-        .await;
-        assert!(result.is_error, "{}", text_of(&result));
-        assert_eq!(
-            std::fs::read_to_string(root.join("a.txt")).unwrap(),
-            "keep\n"
+    async fn a_write_outside_the_workspace_fails_through_preflight() {
+        let root = temp_dir("perm");
+        let outside =
+            std::env::temp_dir().join(format!("mycode-ptc-outside-{}", std::process::id()));
+        let _ = std::fs::remove_file(&outside);
+        let path = serde_json::to_string(&outside.display().to_string()).unwrap();
+        let code = format!(
+            r#"
+try:
+    await tools.write(path={path}, content="nope")
+    return "wrote"
+except ToolCallError as e:
+    return "caught"
+"#
         );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn syntax_errors_name_the_subset() {
-        let root = temp_dir("syn");
-        let result = run(&root, catalog(vec![]), "import os\n").await;
+        let result = run(&root, catalog(vec![Arc::new(WriteTool)]), &code).await;
         let text = text_of(&result);
-        assert!(result.is_error, "{text}");
-        assert!(text.contains("import"), "{text}");
-        assert!(text.contains("does not need to be installed"), "{text}");
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("caught"), "{text}");
+        assert!(!outside.exists(), "preflight let a write escape");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn common_python_covers_unpack_assign_and_repeat() {
-        let root = temp_dir("py");
-        std::fs::write(root.join("a.txt"), "alpha\n").unwrap();
-        std::fs::write(root.join("b.txt"), "beta\n").unwrap();
-        let tools = catalog(vec![Arc::new(ReadTool)]);
+    async fn scout_python_cannot_write_spawn_or_open_a_socket_but_can_read() {
+        let root = temp_dir("scout");
+        std::fs::write(root.join("ok.txt"), "visible\n").unwrap();
         let result = run(
             &root,
-            tools,
-            r#"a, b = await gather(tools.read(path="a.txt", limit=1), tools.read(path="b.txt", limit=1))
-seen = {}
-seen["a"] = a.strip()
-items = ["x", "y"]
-items[0] = "z"
-count = 0
-count += 2
-label = "S" * 4
-pairs = []
-for i, item in enumerate(items):
-    pairs.append(str(int(i)) + item)
-ordered = sorted(pairs, reverse=True)
-return a.strip() + "|" + b.strip() + "|" + seen.get("a") + "|" + seen.get("missing", "no") + "|" + label + "|" + str(count) + "|" + "|".join(ordered) + "|" + str(sum([1, 2])) + "|" + min(["b", "a"]) + "|" + ("yes" if count > 1 else "no")
+            catalog(vec![Arc::new(ReadTool), Arc::new(GrepTool)]),
+            r#"
+import pathlib, socket, subprocess
+err = []
+try:
+    pathlib.Path("nope.txt").write_text("x")
+except Exception:
+    err.append("write")
+try:
+    subprocess.Popen(["echo", "hi"])
+except Exception:
+    err.append("spawn")
+try:
+    socket.socket()
+except Exception:
+    err.append("net")
+text = await tools.read(path="ok.txt")
+return "|".join(err) + "|" + text
 "#,
         )
         .await;
         let text = text_of(&result);
         assert!(!result.is_error, "{text}");
-        assert!(
-            !text.contains("[revision "),
-            "read results inside run_code stay free of the revision tag:\n{text}"
-        );
-        assert_eq!(text, "alpha|beta|alpha|no|SSSS|2|1y|0z|3|a|yes");
-        let printed = run(
-            &root,
-            catalog(vec![]),
-            "print(\"before\")\nraise Exception(\"boom\")\n",
-        )
-        .await;
-        let printed_text = text_of(&printed);
-        assert!(printed.is_error, "{printed_text}");
-        assert!(
-            printed_text.starts_with("before\nError:"),
-            "prints stay in front of the error:\n{printed_text}"
-        );
-        assert!(printed_text.contains("boom"), "{printed_text}");
-        let imported = run(&root, catalog(vec![]), "import os\n").await;
-        let imported_text = text_of(&imported);
-        assert!(imported.is_error, "{imported_text}");
-        assert!(
-            imported_text.contains("import is not available"),
-            "{imported_text}"
-        );
-        assert!(
-            !imported_text.contains("is not supported. Embedded"),
-            "import errors stay one sentence the model can act on:\n{imported_text}"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn every_implemented_method_is_reachable_as_an_attribute() {
-        for (kind, names) in super::eval::IMPLEMENTED_METHODS {
-            assert!(!names.is_empty(), "{kind}");
-            for name in *names {
-                assert!(
-                    super::eval::method_is_reachable(kind, name),
-                    "{kind}.{name} is implemented but attribute lookup does not return it"
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn dict_keywords_methods_and_line_numbers() {
-        let root = temp_dir("dict-lines");
-        let result = run(
-            &root,
-            catalog(vec![]),
-            r#"d = dict(a=1)
-mixed = dict([("a", 1)], b=2)
-g = {}
-g.setdefault("k", []).append(1)
-g.update({"m": 2}, n=3)
-return str(d.get("a")) + "|" + str(mixed.get("b")) + "|" + str(len(g["k"])) + "|" + str(g.get("m")) + "|" + str(g.get("n"))
-"#,
-        )
-        .await;
-        let text = text_of(&result);
-        assert!(!result.is_error, "{text}");
-        assert_eq!(text, "1|2|1|2|3");
-        let rejected = run(&root, catalog(vec![]), "len([], bad=1)\n").await;
-        let rejected_text = text_of(&rejected);
-        assert!(rejected.is_error, "{rejected_text}");
-        assert!(
-            rejected_text.contains("unexpected keyword argument bad"),
-            "{rejected_text}"
-        );
-        let mut source = String::new();
-        for index in 1..=14 {
-            source.push_str(&format!("v{index} = {index}\n"));
-        }
-        source.push_str("g = {}\ng.setdefault(\"k\", []).nope(1)\n");
-        let chained = run(&root, catalog(vec![]), &source).await;
-        let chained_text = text_of(&chained);
-        assert!(chained.is_error, "{chained_text}");
-        assert!(
-            chained_text.contains("line 16:"),
-            "chained call keeps its own line:\n{chained_text}"
-        );
-        assert!(chained_text.contains("setdefault"), "{chained_text}");
-        let sample = "\
-a = list(zip([1, 2], [\"x\", \"y\"]))
-t = tuple([1, 2])
-d = dict(a=1)
-s = set([1, 1, 2])
-print(\"list\", a, \"tuple\", t, \"dict\", d, \"set\", len(s))
-print(\"repr\", repr(\"hi\"), \"isinstance\", isinstance(\"x\", str), isinstance(3, str))
-print(\"count\", \"banana\".count(\"a\"), \"find\", \"banana\".find(\"n\"), \"find-miss\", \"banana\".find(\"z\"))
-xs = [3, 1]
-xs.extend([2])
-last = xs.pop()
-xs.sort()
-print(\"extend/pop/sort\", xs, last)
-print(\"get-default\", d.get(\"zz\", 42), d.get(\"a\"))
-g = {}
-g.setdefault(\"k\", []).append(1)
-g.update({\"m\": 2})
-print(\"setdefault/update\", g)
-y = 1
-z = y + undefined_name
-";
-        let numbered = run(&root, catalog(vec![]), sample).await;
-        let numbered_text = text_of(&numbered);
-        assert!(numbered.is_error, "{numbered_text}");
-        assert!(
-            numbered_text.contains("line 19:"),
-            "undefined name stays on line 19, not an earlier line:\n{numbered_text}"
-        );
-        assert!(numbered_text.contains("undefined_name"), "{numbered_text}");
-        assert!(
-            numbered_text.contains("setdefault/update"),
-            "prints before the error remain:\n{numbered_text}"
-        );
+        assert!(text.contains("write"), "{text}");
+        assert!(text.contains("spawn"), "{text}");
+        assert!(text.contains("net"), "{text}");
+        assert!(text.contains("visible"), "{text}");
+        assert!(!root.join("nope.txt").exists(), "{text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn builtins_cover_list_repr_count_and_isinstance() {
-        let root = temp_dir("builtins");
+    async fn the_main_agent_warns_when_python_calls_os_system() {
+        let root = temp_dir("warn");
         let result = run(
             &root,
-            catalog(vec![]),
-            r#"name = "aba"
-counts = {}
-counts["a"] = name.count("a")
-items = list(name)
-items.append("z")
-items.extend(["q"])
-items.sort()
-flag = isinstance(name, str) and isinstance(items, list) and isinstance(True, int)
-text = repr(items) + "|" + str(counts.get("a", 0)) + "|" + str(counts.get("missing", 0)) + "|" + str(flag) + "|" + str(abs(round(-1.6))) + "|" + str(any([0, 1])) + "|" + str(all([]))
-return text
-"#,
+            catalog(vec![Arc::new(WriteTool)]),
+            "import os\nos.system(\"echo hi\")\nreturn \"done\"\n",
         )
         .await;
         let text = text_of(&result);
         assert!(!result.is_error, "{text}");
-        assert!(text.contains("[revision") == false, "{text}");
-        assert!(text.starts_with("["), "{text}");
-        assert!(text.contains("|2|0|"), "{text}");
+        assert!(text.contains("warning:"), "{text}");
         assert!(
-            text.contains("|true|2|true|true") || text.contains("|True|2|True|True"),
+            text.contains("os.system") || text.contains("subprocess"),
             "{text}"
         );
-        let broken = run(&root, catalog(vec![]), "items = list()\nitems.nope()\n").await;
-        let broken_text = text_of(&broken);
-        assert!(broken.is_error, "{broken_text}");
+        assert!(text.contains("tools.shell"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    type ProbeLog = Arc<Mutex<Vec<(String, &'static str, Instant)>>>;
+
+    struct Probe {
+        name: &'static str,
+        delay: Duration,
+        log: ProbeLog,
+    }
+
+    #[async_trait]
+    impl ToolDyn for Probe {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: self.name.to_owned(),
+                description: "probe".to_owned(),
+                params_schema: json!({"type": "object"}),
+            }
+        }
+
+        async fn execute_dyn(
+            &self,
+            args: serde_json::Value,
+            _ctx: &ToolCtx,
+            _out: &mut ToolStream,
+        ) -> Result<ToolResult, ToolError> {
+            let path = args
+                .get("path")
+                .and_then(|value| value.as_str())
+                .unwrap_or(self.name)
+                .to_owned();
+            self.log
+                .lock()
+                .expect("log")
+                .push((path.clone(), "start", Instant::now()));
+            tokio::time::sleep(self.delay).await;
+            self.log
+                .lock()
+                .expect("log")
+                .push((path.clone(), "end", Instant::now()));
+            Ok(ToolResult::text(path))
+        }
+    }
+
+    #[tokio::test]
+    async fn gather_overlaps_read_only_calls_and_serializes_writes() {
+        let root = temp_dir("sched");
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let tools = catalog(vec![
+            Arc::new(Probe {
+                name: "read",
+                delay: Duration::from_millis(200),
+                log: Arc::clone(&log),
+            }),
+            Arc::new(Probe {
+                name: "write",
+                delay: Duration::from_millis(200),
+                log: Arc::clone(&log),
+            }),
+        ]);
+        let started = Instant::now();
+        let overlapped = run(
+            &root,
+            tools.clone(),
+            "await asyncio.gather(tools.read(path=\"a\"), tools.read(path=\"b\"))\nreturn \"ok\"\n",
+        )
+        .await;
+        let overlap_elapsed = started.elapsed();
+        let text = text_of(&overlapped);
+        assert!(!overlapped.is_error, "{text}");
         assert!(
-            broken_text.contains("line 2:"),
-            "runtime errors name the line:\n{broken_text}"
+            overlap_elapsed < Duration::from_millis(500),
+            "read-only gather took {overlap_elapsed:?}"
+        );
+        log.lock().expect("log").clear();
+        let serial_started = Instant::now();
+        let serial = run(
+            &root,
+            tools,
+            "await asyncio.gather(tools.write(path=\"a\"), tools.write(path=\"b\"))\nreturn \"ok\"\n",
+        )
+        .await;
+        let serial_elapsed = serial_started.elapsed();
+        let text = text_of(&serial);
+        assert!(!serial.is_error, "{text}");
+        assert!(
+            serial_elapsed >= Duration::from_millis(350),
+            "writes overlapped: {serial_elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_kills_the_python_process_tree() {
+        let root = temp_dir("kill");
+        let token = CancellationToken::new();
+        let ctx = ToolCtx::new(&root)
+            .with_catalog(catalog(vec![Arc::new(WriteTool)]))
+            .with_cancel(token.clone());
+        let code = "\
+import subprocess, sys, time\n\
+from pathlib import Path\n\
+child = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(60)\"])\n\
+Path(\"child.pid\").write_text(str(child.pid))\n\
+time.sleep(45)\n\
+return \"done\"\n";
+        let ctx_task = ctx.clone();
+        let task = tokio::spawn(async move { run_with(ctx_task, code).await });
+        let pid_path = root.join("child.pid");
+        let mut pid = None;
+        for _ in 0..50 {
+            if let Ok(text) = std::fs::read_to_string(&pid_path) {
+                pid = text.trim().parse::<i32>().ok();
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let pid = pid.expect("child pid was not written");
+        token.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("cancel hung")
+            .expect("task");
+        let text = text_of(&result);
+        assert!(result.is_error, "{text}");
+        assert!(text.contains("cancel") || text.contains("abort"), "{text}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        assert!(!alive, "grandchild {pid} survived the tree kill");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_short_wall_clock_times_out_and_returns() {
+        let root = temp_dir("time");
+        let ctx = ToolCtx::new(&root)
+            .with_catalog(catalog(vec![Arc::new(ReadTool)]))
+            .with_ptc_wall(Duration::from_secs(1));
+        let started = Instant::now();
+        let result = run_with(ctx, "import time\ntime.sleep(30)\nreturn \"late\"\n").await;
+        let elapsed = started.elapsed();
+        let text = text_of(&result);
+        assert!(result.is_error, "{text}");
+        assert!(
+            text.contains("timeout") || text.contains("exceeded"),
+            "{text}"
         );
         assert!(
-            broken_text.contains("items.nope()"),
-            "runtime errors name the expression:\n{broken_text}"
+            elapsed < Duration::from_secs(8),
+            "timeout did not kill the process: {elapsed:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn len_range_and_str_follow_python() {
-        let root = temp_dir("len");
-        let result = run(
-            &root,
-            catalog(vec![]),
-            r#"parts = "a\nb".split("\n")
-total = 0
-for i in range(len(parts)):
-    total = total + len(parts[i])
-return str(total)
+    async fn missing_python_returns_install_steps() {
+        let _restore = RestorePython;
+        set_python_status_for_test(Some(PythonStatus::Missing {
+            message: "Python 3.10+ was not found on PATH. run_code needs the system Python.\nInstall steps for the test.".to_owned(),
+        }));
+        let root = temp_dir("nopy");
+        let result = run(&root, catalog(vec![Arc::new(ReadTool)]), "return 1\n").await;
+        let text = text_of(&result);
+        assert!(result.is_error, "{text}");
+        assert!(text.contains("Python 3.10+"), "{text}");
+        assert!(text.contains("Install steps"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    struct GateAsk {
+        entered: Arc<std::sync::atomic::AtomicBool>,
+        release: Mutex<Option<tokio::sync::oneshot::Receiver<String>>>,
+    }
+
+    #[async_trait]
+    impl crate::builtin::AskChannel for GateAsk {
+        async fn ask(
+            &self,
+            _questions: &[crate::builtin::AskQuestion],
+            cancel: &CancellationToken,
+        ) -> Result<Vec<crate::builtin::AskAnswer>, ToolError> {
+            self.entered
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let receiver = self
+                .release
+                .lock()
+                .expect("release")
+                .take()
+                .expect("oneshot");
+            tokio::select! {
+                _ = cancel.cancelled() => Err(ToolError::Execution("cancelled".to_owned())),
+                answer = receiver => {
+                    let answer = answer.map_err(|_| ToolError::Execution("dropped".to_owned()))?;
+                    Ok(vec![crate::builtin::AskAnswer { question: "Go?".to_owned(), answer }])
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_user_blocks_the_script_until_the_answer() {
+        let root = temp_dir("ask");
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let channel = Arc::new(GateAsk {
+            entered: Arc::clone(&entered),
+            release: Mutex::new(Some(rx)),
+        });
+        let tools = catalog(vec![Arc::new(crate::builtin::AskTool::new(channel))]);
+        let ctx = ToolCtx::new(&root).with_catalog(tools);
+        let task = tokio::spawn(async move {
+            run_with(
+                ctx,
+                "answer = await tools.ask_user(questions=[{\"question\": \"Go?\"}])\nreturn answer\n",
+            )
+            .await
+        });
+        for _ in 0..50 {
+            if entered.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            entered.load(std::sync::atomic::Ordering::SeqCst),
+            "ask_user did not block inside the script"
+        );
+        assert!(!task.is_finished(), "script finished before the answer");
+        tx.send("yes".to_owned()).expect("send");
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("ask hung")
+            .expect("task");
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("yes"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn cancelling_ask_user_is_a_catchable_tool_error() {
+        let root = temp_dir("ask-cancel");
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (_tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let channel = Arc::new(GateAsk {
+            entered: Arc::clone(&entered),
+            release: Mutex::new(Some(rx)),
+        });
+        let token = CancellationToken::new();
+        let ctx = ToolCtx::new(&root)
+            .with_catalog(catalog(vec![Arc::new(crate::builtin::AskTool::new(
+                channel,
+            ))]))
+            .with_cancel(token.clone());
+        let task = tokio::spawn(async move {
+            run_with(
+                ctx,
+                r#"
+try:
+    await tools.ask_user(questions=[{"question": "Go?"}])
+    return "no"
+except ToolCallError as e:
+    return "caught:" + e.message
 "#,
+            )
+            .await
+        });
+        for _ in 0..50 {
+            if entered.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        token.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("cancel hung")
+            .expect("task");
+        let text = text_of(&result);
+        assert!(
+            text.contains("caught:") || text.contains("cancel"),
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn inner_calls_emit_nested_cards_and_not_their_text_as_the_program() {
+        let root = temp_dir("cards");
+        std::fs::write(root.join("a.txt"), "alpha-secret\n").unwrap();
+        let ctx = ToolCtx::new(&root).with_catalog(catalog(vec![Arc::new(ReadTool)]));
+        let (result, items) = run_watching(
+            ctx,
+            "text = await tools.read(path=\"a.txt\")\nreturn \"done\"\n",
         )
         .await;
         let text = text_of(&result);
         assert!(!result.is_error, "{text}");
-        assert_eq!(text, "2");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn a_hot_loop_stops_on_the_step_budget() {
-        let root = temp_dir("loop");
-        let result = run(&root, catalog(vec![]), "while True:\n    pass\n").await;
-        let text = text_of(&result);
-        assert!(result.is_error, "{text}");
-        assert!(text.contains("budget"), "{text}");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn grouped_reads_return_fewer_bytes_than_four_full_files() {
-        let root = temp_dir("save");
-        let mut baseline = 0usize;
-        for index in 0..4 {
-            let mut body = String::new();
-            for line in 0..80 {
-                body.push_str(&format!("fn item_{index}_{line}() {{ return {line}; }}\n"));
-            }
-            body.push_str(&format!("fn marker_{index}() {{ return 1; }}\n"));
-            let path = root.join(format!("file{index}.rs"));
-            std::fs::write(&path, &body).unwrap();
-            let tools = catalog(vec![Arc::new(ReadTool)]);
-            let ctx = ToolCtx::new(&root).with_catalog(tools);
-            let mut stream = ToolStream::closed();
-            let read = crate::builtin::ReadTool
-                .execute(
-                    crate::builtin::read::ReadArgs {
-                        path: format!("file{index}.rs"),
-                        offset: None,
-                        limit: None,
-                    },
-                    &ctx,
-                    &mut stream,
-                )
-                .await
-                .expect("read");
-            baseline += text_of(&read).len();
-        }
-        let tools = catalog(vec![Arc::new(GrepTool)]);
-        let grouped = run(
-            &root,
-            tools,
-            "\
-hits = await tools.grep(pattern=\"fn marker_\", include=\"*.rs\")\n\
-return \"\\n\".join([line for line in hits.split(\"\\n\") if \"marker_\" in line])\n",
-        )
-        .await;
-        let grouped_text = text_of(&grouped);
-        assert!(!grouped.is_error, "{grouped_text}");
-        let grouped_bytes = grouped_text.len();
-        let saved = baseline.saturating_sub(grouped_bytes);
-        let tokens_before = baseline / 4;
-        let tokens_after = grouped_bytes / 4;
-        eprintln!(
-            "savings multi-file map: baseline {baseline} bytes (~{tokens_before} tokens), grouped {grouped_bytes} bytes (~{tokens_after} tokens), saved {saved} bytes"
-        );
+        assert!(text.contains("done"), "{text}");
+        assert!(!text.contains("alpha-secret"), "{text}");
         assert!(
-            grouped_bytes * 5 < baseline,
-            "expected at least 80% savings, baseline {baseline}, grouped {grouped_bytes}"
+            items.iter().any(|item| matches!(
+                item,
+                ToolStreamItem::NestedStarted(start) if start.name == "read" && start.target.contains("a.txt")
+            )),
+            "missing nested card: {items:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn description_names_both_required_arguments() {
-        let tool = RunCodeTool;
-        let spec = crate::tool::ToolDyn::spec(&tool);
-        assert!(spec.description.contains("two required"));
-        assert!(spec.description.contains("`description`"));
-        assert!(spec.description.contains("`code`"));
-        assert!(
-            spec.description
-                .contains("Python does not need to be installed")
-        );
-        assert!(spec.description.contains("Node.js is not used"));
-        assert!(spec.description.contains("8000 bytes"));
-        assert!(
-            !spec.description.contains("TypeScript"),
-            "the runtime is embedded Python, not TypeScript:\n{}",
-            spec.description
-        );
-        assert!(
-            !spec.description.to_lowercase().contains("image"),
-            "run_code does not attach images"
-        );
-        let schema = spec.params_schema.to_string();
-        assert!(schema.contains("5-10 words"), "{schema}");
-        let snippet = tool.prompt_snippet().expect("snippet");
-        assert!(snippet.contains("print"), "{snippet}");
-        assert!(
-            !snippet.contains("console.log"),
-            "the tool list must not teach JavaScript:\n{snippet}"
-        );
-        assert!(schema.contains("async Python"), "{schema}");
-        assert!(schema.contains("does not need to be installed"), "{schema}");
-        let description_key = schema.find("\"description\"").expect("description");
-        let code_key = schema.find("\"code\"").expect("code");
-        assert!(
-            description_key < code_key,
-            "description is the first parameter so a model does not emit code alone"
-        );
+    fn description_is_the_first_schema_property() {
+        let schema = RunCodeTool.params_schema();
+        let required = schema["required"].as_array().expect("required");
+        assert_eq!(required[0], "description");
+        assert_eq!(required[1], "code");
+        let props = schema["properties"].as_object().expect("properties");
+        let mut names = props.keys();
+        assert_eq!(names.next().map(String::as_str), Some("description"));
+        assert_eq!(names.next().map(String::as_str), Some("code"));
     }
 }

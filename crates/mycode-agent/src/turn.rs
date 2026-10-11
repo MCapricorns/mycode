@@ -13,13 +13,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use mycode_core::events::{AgentEvent, MessageDelta};
+use mycode_core::events::{AgentEvent, MessageDelta, PtcNestedKind};
 use mycode_core::message::{AssistantMessage, ContentBlock, Message, ToolCall, ToolResultMessage};
 use mycode_core::{CallId, MycodeError};
 use mycode_core::{Request, StreamEvent};
 use mycode_tools::{
-    PreparedFile, PreparedSearch, ToolCatalog, ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream,
-    ToolStreamItem, prepare_file_async, prepare_search_async_with_access,
+    ToolCatalog, ToolError, ToolResult, ToolStream, ToolStreamItem, prepare_tool_ctx,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -78,7 +77,7 @@ pub(crate) async fn stream_assistant(
     let request = Request {
         system_prompt,
         messages: std::mem::take(&mut state.messages),
-        tools: env.tools.specs(),
+        tools: env.tools.model_specs(),
         reasoning: config.reasoning,
         max_output_tokens: config.max_output_tokens,
         reasoning_token: config.reasoning_token.clone(),
@@ -348,6 +347,18 @@ fn canonical_tool_name(name: &str) -> &str {
     }
 }
 
+/// Error returned when the model names any tool other than `run_code`.
+pub(crate) fn direct_call_rejection(name: &str) -> String {
+    let via = if matches!(name, "powershell" | "bash" | "zsh" | "sh" | "cmd") {
+        "shell"
+    } else {
+        name
+    };
+    format!(
+        "only `run_code` is callable directly — call `{name}` via `run_code` (`await tools.{via}(...)`)"
+    )
+}
+
 /// Dispatch one registered, schema-valid tool call and return the
 /// resulting [`ToolResultMessage`].
 ///
@@ -377,31 +388,30 @@ pub(crate) async fn dispatch_tool_call(
     );
 
     let tool_name = canonical_tool_name(&call.name);
+    if tool_name != "run_code" {
+        return completed_error(env, &call_id, call, direct_call_rejection(tool_name));
+    }
     let Some(tool) = env.tools.get(tool_name) else {
         return completed_error(env, &call_id, call, format!("unknown tool: {}", call.name));
     };
 
     let args = call.arguments.clone();
-    let prepared = match bind_prepared(env, token, tool.as_ref(), &args).await {
-        Ok(bound) => bound,
+    // Same preflight a program uses for an inner call. `run_code` itself
+    // declares neither file nor search access; the catalog is what the
+    // program dispatches through.
+    let ctx = match prepare_tool_ctx(
+        &env.cwd,
+        &env.extra_roots,
+        token.clone(),
+        call.id.clone(),
+        tool.as_ref(),
+        &args,
+    )
+    .await
+    {
+        Ok(ctx) => ctx.with_catalog(ToolCatalog::from_registry(env.tools)),
         Err(message) => return completed_error(env, &call_id, call, message),
     };
-
-    // Execute. Progress items stream out live while the tool runs; the
-    // dispatcher pushes the returned terminal result onto the tool stream
-    // (first terminal wins, so a self-terminating tool
-    // keeps its own result).
-    let mut ctx = ToolCtx::new(env.cwd.clone())
-        .with_cancel(token.clone())
-        .with_call_id(call.id.clone())
-        .with_extra_roots(env.extra_roots.clone())
-        .with_catalog(ToolCatalog::from_registry(env.tools));
-    if let Some(search) = prepared.search {
-        ctx = ctx.with_prepared_search(search);
-    }
-    if let Some(file) = prepared.file {
-        ctx = ctx.with_prepared_file(file);
-    }
     let (mut producer, mut consumer) = ToolStream::channel();
     let mut terminal_pusher = Some(producer.clone());
     let execute =
@@ -444,6 +454,41 @@ pub(crate) async fn dispatch_tool_call(
                             message: progress.message,
                         },
                     ),
+                    Some(ToolStreamItem::NestedStarted(start)) => emit(
+                        env,
+                        AgentEvent::PtcNested {
+                            parent: call_id.clone(),
+                            call_id: CallId::from(start.id),
+                            kind: PtcNestedKind::Started {
+                                name: start.name,
+                                target: start.target,
+                            },
+                        },
+                    ),
+                    Some(ToolStreamItem::NestedProgress { id, message }) => emit(
+                        env,
+                        AgentEvent::PtcNested {
+                            parent: call_id.clone(),
+                            call_id: CallId::from(id),
+                            kind: PtcNestedKind::Progress { message },
+                        },
+                    ),
+                    Some(ToolStreamItem::NestedCompleted { id, result }) => emit(
+                        env,
+                        AgentEvent::PtcNested {
+                            parent: call_id.clone(),
+                            call_id: CallId::from(id.clone()),
+                            kind: PtcNestedKind::Completed {
+                                result: ToolResultMessage {
+                                    tool_call_id: id,
+                                    content: result.content,
+                                    is_error: result.is_error,
+                                    details: result.details,
+                                    ptc_parent: Some(call.id.clone()),
+                                },
+                            },
+                        },
+                    ),
                     Some(ToolStreamItem::Terminal(result)) => streamed_terminal = Some(result),
                     None => break,
                 }
@@ -459,6 +504,7 @@ pub(crate) async fn dispatch_tool_call(
         content: result.content,
         is_error: result.is_error,
         details: result.details,
+        ptc_parent: None,
     };
     emit(
         env,
@@ -471,77 +517,6 @@ pub(crate) async fn dispatch_tool_call(
     // next call in this response is dispatched.
     tokio::task::yield_now().await;
     message
-}
-
-struct BoundPrepared {
-    search: Option<std::sync::Arc<PreparedSearch>>,
-    file: Option<std::sync::Arc<PreparedFile>>,
-}
-
-fn anchored_search(env: &TurnEnv<'_>, raw: Option<&str>) -> (std::path::PathBuf, Option<String>) {
-    let Some(raw) = raw else {
-        return (env.cwd.clone(), None);
-    };
-    let (root, relative) = mycode_tools::anchor_tool_path(&env.cwd, &env.extra_roots, raw);
-    if root == env.cwd {
-        return (env.cwd.clone(), Some(raw.to_owned()));
-    }
-    if relative.is_empty() {
-        (root, None)
-    } else {
-        (root, Some(relative))
-    }
-}
-
-fn anchored_file(env: &TurnEnv<'_>, raw: &str) -> (std::path::PathBuf, String) {
-    let (root, relative) = mycode_tools::anchor_tool_path(&env.cwd, &env.extra_roots, raw);
-    if root == env.cwd {
-        (env.cwd.clone(), raw.to_owned())
-    } else if relative.is_empty() {
-        (root, ".".to_owned())
-    } else {
-        (root, relative)
-    }
-}
-
-async fn bind_prepared(
-    env: &TurnEnv<'_>,
-    token: &CancellationToken,
-    tool: &dyn ToolDyn,
-    args: &serde_json::Value,
-) -> Result<BoundPrepared, String> {
-    if let Some(access) = tool.search_access() {
-        let path = args
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
-        let (cwd, path) = anchored_search(env, path.as_deref());
-        let prepared = prepare_search_async_with_access(cwd, path, token.clone(), access)
-            .await
-            .map_err(|error| error.to_string())?;
-        return Ok(BoundPrepared {
-            search: Some(std::sync::Arc::new(prepared)),
-            file: None,
-        });
-    }
-    if let Some(access) = tool.file_access() {
-        let path = args
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "file tool is missing a path argument".to_owned())?;
-        let (cwd, path) = anchored_file(env, path);
-        let prepared = prepare_file_async(cwd, path, token.clone(), access)
-            .await
-            .map_err(|error| error.to_string())?;
-        return Ok(BoundPrepared {
-            search: None,
-            file: Some(std::sync::Arc::new(prepared)),
-        });
-    }
-    Ok(BoundPrepared {
-        search: None,
-        file: None,
-    })
 }
 
 /// Synthesize an `is_error` tool result, emit its `ToolCompleted` event,
@@ -557,6 +532,7 @@ fn completed_error(
         content: vec![ContentBlock::Text(reason.into())],
         is_error: true,
         details: None,
+        ptc_parent: None,
     };
     emit(
         env,

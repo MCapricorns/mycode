@@ -141,6 +141,7 @@ impl Workspace {
                 call_id,
                 name,
                 target,
+                parent,
             } => {
                 if !matches_active(&session_id) {
                     return;
@@ -149,6 +150,7 @@ impl Workspace {
                     call_id,
                     name,
                     target,
+                    parent,
                 }
             }
             BridgeEvent::ToolProgress {

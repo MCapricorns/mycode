@@ -21,7 +21,7 @@ pub mod provider;
 pub mod tool;
 
 pub use error::MycodeError;
-pub use events::{AgentEvent, MessageDelta, TurnOutcome};
+pub use events::{AgentEvent, MessageDelta, PtcNestedKind, TurnOutcome};
 pub use ids::CallId;
 pub use message::{
     AssistantMessage, BinaryData, ContentBlock, Message, SharedMessage, StopReason, TextBlock,

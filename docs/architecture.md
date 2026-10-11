@@ -90,4 +90,5 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
 - 生产环境的回合钩子只有请求前压缩，子代理连这个也没有。没有工具前观察者，也不再为改文件装快照。
 - 项目里的 `.mycode/mcp.json` 只有在项目菜单里信任该文件夹后才会加载。
-- 进程工具的 `script` 模式可以改文件：bash 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`program` 模式不经过 shell。`write` 和 `edit` 仍然可用。Windows 上的侦查、编码和 stderr 清洗见 [tools.md](tools.md)。
+- 模型只能直接调用 `run_code`。程序在系统 Python 里跑，内层 `tools.*` 走和原来直接调用相同的路径预检。scout 的 Python 另有 audit hook，拦截写、子进程和套接字；这是尽力而为，不是安全边界。主代理的 Python 与 shell 权限相同。
+- 进程工具的 `script` 模式可以改文件：bash 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`program` 模式不经过 shell。`write` 和 `edit` 仍然可用，但只能从 `run_code` 里调用。Windows 上的侦查、编码和 stderr 清洗见 [tools.md](tools.md)。

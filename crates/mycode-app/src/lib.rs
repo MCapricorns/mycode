@@ -374,6 +374,8 @@ pub enum BridgeEvent {
         name: String,
         /// Path, query, or command. Empty when the call has no target.
         target: String,
+        /// Provider id of the enclosing `run_code` call when this card is nested.
+        parent: Option<String>,
     },
     /// Incremental tool progress (including nested subagent steps).
     ToolProgress {

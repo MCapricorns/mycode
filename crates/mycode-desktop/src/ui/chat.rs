@@ -61,9 +61,34 @@ pub(super) fn render_chat(
                         elements.push(transcript::render_user_entry(entry, index > 0, index, cx));
                     }
                 }
-                TranscriptItem::Tool { call, result } => {
+                TranscriptItem::Tool {
+                    call,
+                    result,
+                    children,
+                } => {
                     let expanded = workspace.tool_row_open(&call.event_id);
-                    elements.push(transcript::render_tool_block(call, result, expanded, cx));
+                    let mut column = div()
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(transcript::render_tool_block(call, result, expanded, cx));
+                    if !children.is_empty() {
+                        let nested = children.iter().map(|(child, child_result)| {
+                            let open = workspace.tool_row_open(&child.event_id);
+                            transcript::render_tool_block(child, *child_result, open, cx)
+                        });
+                        column = column.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .pl(px(18.))
+                                .flex()
+                                .flex_col()
+                                .children(nested),
+                        );
+                    }
+                    elements.push(column.into_any_element());
                 }
                 TranscriptItem::Entry(entry) => {
                     elements.push(transcript::render_entry(
@@ -118,6 +143,21 @@ pub(super) fn render_chat(
         .flex()
         .flex_col()
         .bg(super::skin::ambient(theme))
+        .when(workspace.python_warning().is_some(), |this| {
+            let message = workspace.python_warning().unwrap_or("").to_owned();
+            this.child(
+                div()
+                    .id("python-warning")
+                    .w_full()
+                    .px_4()
+                    .py_2()
+                    .text_xs()
+                    .whitespace_normal()
+                    .bg(theme.warning.opacity(0.18))
+                    .text_color(theme.warning_foreground)
+                    .child(message),
+            )
+        })
         .child(
             div()
                 .id("conversation-frame")
@@ -199,6 +239,7 @@ enum TranscriptItem<'a> {
     Tool {
         call: &'a ConversationEntry,
         result: Option<&'a ConversationEntry>,
+        children: Vec<(&'a ConversationEntry, Option<&'a ConversationEntry>)>,
     },
     Entry(&'a ConversationEntry),
 }
@@ -214,14 +255,24 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
         if entry.kind == EntryKind::UserMessage {
             items.push(TranscriptItem::User { entry, index });
         } else if entry.kind == EntryKind::ToolCall {
+            if entry.parent_call_id.as_deref().is_some_and(|parent| {
+                entries.iter().any(|other| {
+                    other.kind == EntryKind::ToolCall && other.call_id.as_deref() == Some(parent)
+                })
+            }) {
+                index += 1;
+                continue;
+            }
             let result = entry.call_id.as_deref().and_then(|call| {
                 entries[index + 1..].iter().find(|next| {
                     next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
                 })
             });
+            let children = child_tool_rows(entries, entry.call_id.as_deref());
             items.push(TranscriptItem::Tool {
                 call: entry,
                 result,
+                children,
             });
         } else if entry.kind == EntryKind::AssistantMessage
             && entry.text.trim().is_empty()
@@ -241,6 +292,85 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
         index += 1;
     }
     items
+}
+
+/// Inner calls of one `run_code` card, in ledger order.
+fn child_tool_rows<'a>(
+    entries: &'a [ConversationEntry],
+    parent: Option<&str>,
+) -> Vec<(&'a ConversationEntry, Option<&'a ConversationEntry>)> {
+    let Some(parent) = parent else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.kind != EntryKind::ToolCall || entry.parent_call_id.as_deref() != Some(parent) {
+            continue;
+        }
+        let result = entry.call_id.as_deref().and_then(|call| {
+            entries[index + 1..].iter().find(|next| {
+                next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
+            })
+        });
+        rows.push((entry, result));
+    }
+    rows
+}
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::{TranscriptItem, child_tool_rows, collect_transcript_items};
+    use crate::view_model::{ConversationEntry, EntryKind};
+
+    fn call(id: &str, text: &str, parent: Option<&str>) -> ConversationEntry {
+        ConversationEntry {
+            event_id: format!("call-{id}"),
+            kind: EntryKind::ToolCall,
+            text: text.into(),
+            call_id: Some(id.to_owned()),
+            thinking: String::new(),
+            parent_call_id: parent.map(str::to_owned),
+        }
+    }
+
+    fn result(id: &str, text: &str, parent: Option<&str>) -> ConversationEntry {
+        ConversationEntry {
+            event_id: format!("result-{id}"),
+            kind: EntryKind::ToolResult,
+            text: text.into(),
+            call_id: Some(id.to_owned()),
+            thinking: String::new(),
+            parent_call_id: parent.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn nested_cards_sit_under_the_run_code_row() {
+        let entries = vec![
+            call("outer", "run_code  List rust files", None),
+            call("inner", "read  src/lib.rs L1+20", Some("outer")),
+            result("inner", "fn main", Some("outer")),
+            result("outer", "done", None),
+        ];
+        let items = collect_transcript_items(&entries);
+        let TranscriptItem::Tool {
+            call: outer,
+            children,
+            ..
+        } = &items[0]
+        else {
+            panic!("expected one tool row");
+        };
+        assert_eq!(outer.call_id.as_deref(), Some("outer"));
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].0.call_id.as_deref(), Some("inner"));
+        assert_eq!(
+            children[0].1.map(|entry| entry.text.as_ref()),
+            Some("fn main")
+        );
+        assert_eq!(items.len(), 1, "the inner card is not a sibling row");
+        assert_eq!(child_tool_rows(&entries, Some("outer")).len(), 1);
+    }
 }
 
 /// Hover-revealed jump arrows over the conversation column: a down arrow
