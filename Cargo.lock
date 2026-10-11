@@ -4273,9 +4273,7 @@ dependencies = [
 name = "mycode-agent"
 version = "0.11.1"
 dependencies = [
- "async-trait",
  "base64 0.23.1",
- "futures-util",
  "getrandom 0.4.3",
  "mycode-config",
  "mycode-core",
@@ -4293,10 +4291,7 @@ dependencies = [
 name = "mycode-app"
 version = "0.11.1"
 dependencies = [
- "async-channel",
- "async-trait",
  "bytes",
- "futures-util",
  "jsonschema",
  "libc",
  "mycode-agent",
@@ -4332,7 +4327,6 @@ dependencies = [
 name = "mycode-core"
 version = "0.11.1"
 dependencies = [
- "async-trait",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4344,7 +4338,6 @@ dependencies = [
 name = "mycode-desktop"
 version = "0.11.1"
 dependencies = [
- "async-channel",
  "gpui-kit",
  "mycode-app",
  "mycode-config",
@@ -4352,6 +4345,7 @@ dependencies = [
  "mycode-tools",
  "notify",
  "serde_json",
+ "tokio",
  "windows-sys 0.61.2",
  "winresource",
 ]
@@ -4360,9 +4354,7 @@ dependencies = [
 name = "mycode-providers"
 version = "0.11.1"
 dependencies = [
- "async-trait",
  "bytes",
- "futures-util",
  "mycode-config",
  "mycode-core",
  "reqwest",
@@ -4377,7 +4369,6 @@ name = "mycode-tools"
 version = "0.11.1"
 dependencies = [
  "aho-corasick",
- "async-trait",
  "base64 0.23.1",
  "blake3",
  "globset",

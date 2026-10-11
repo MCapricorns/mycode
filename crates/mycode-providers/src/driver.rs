@@ -7,8 +7,6 @@
 
 use std::sync::Arc;
 
-use futures_util::StreamExt as _;
-
 use mycode_core::{EventStreamSender, ProviderError, StreamEvent};
 
 use crate::sse::FrameParser;
@@ -90,7 +88,7 @@ pub(crate) async fn drive(
         let chunk = tokio::select! {
             biased;
             () = cancel.cancelled() => return,
-            chunk = body.next() => chunk,
+            chunk = body.recv() => chunk,
         };
         let chunk = match chunk {
             Some(Ok(chunk)) => chunk,
@@ -164,6 +162,8 @@ pub(crate) fn protocol_error(message: &'static str) -> StreamEvent {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
 
     use bytes::Bytes;
@@ -179,25 +179,32 @@ mod tests {
         steps: Mutex<Vec<Result<&'static [u8], &'static str>>>,
     }
 
-    #[async_trait::async_trait]
     impl SseTransport for Scripted {
-        async fn post(
-            &self,
+        fn post<'a>(
+            &'a self,
             call: TransportCall,
             _cancel: CancellationToken,
-        ) -> Result<ByteStream, ProviderError> {
-            self.bodies.lock().expect("bodies").push(call.body);
-            let step = self.steps.lock().expect("steps").remove(0);
-            match step {
-                Ok(bytes) => {
-                    let stream = futures_util::stream::iter(vec![Ok(Bytes::from(bytes.to_vec()))]);
-                    Ok(Box::pin(stream))
+        ) -> Pin<Box<dyn Future<Output = Result<ByteStream, ProviderError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.bodies.lock().expect("bodies").push(call.body);
+                let step = self.steps.lock().expect("steps").remove(0);
+                match step {
+                    Ok(bytes) => {
+                        // One queued chunk, then the dropped sender ends the
+                        // stream — the channel form of `stream::iter([chunk])`.
+                        let (sender, stream) = tokio::sync::mpsc::channel(1);
+                        sender
+                            .send(Ok(Bytes::from(bytes.to_vec())))
+                            .await
+                            .expect("channel accepts one scripted chunk");
+                        Ok(stream)
+                    }
+                    Err(message) => Err(ProviderError::with_message(
+                        ProviderErrorKind::Rejected,
+                        message,
+                    )),
                 }
-                Err(message) => Err(ProviderError::with_message(
-                    ProviderErrorKind::Rejected,
-                    message,
-                )),
-            }
+            })
         }
     }
 

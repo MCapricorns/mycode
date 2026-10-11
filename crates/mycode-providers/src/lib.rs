@@ -25,10 +25,12 @@ mod oauth;
 mod openai_completions;
 mod openai_responses;
 mod sse;
-mod transport;
+pub mod transport;
 mod wire_common;
 mod xml_tool_calls;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -193,21 +195,22 @@ impl WireProvider {
     }
 }
 
-#[async_trait::async_trait]
 impl Provider for WireProvider {
-    async fn stream(
-        &self,
-        request: &Request,
+    fn stream<'a>(
+        &'a self,
+        request: &'a Request,
         cancel: CancellationToken,
-    ) -> Result<EventStream, ProviderError> {
-        request.validate()?;
-        let call = self.call_for(request);
-        let reducer = self.reducer_for();
-        let (sender, stream) = EventStream::channel(cancel.clone());
-        let transport = Arc::clone(&self.transport);
-        tokio::spawn(async move {
-            driver::drive(transport, call, reducer, sender, cancel).await;
-        });
-        Ok(stream)
+    ) -> Pin<Box<dyn Future<Output = Result<EventStream, ProviderError>> + Send + 'a>> {
+        Box::pin(async move {
+            request.validate()?;
+            let call = self.call_for(request);
+            let reducer = self.reducer_for();
+            let (sender, stream) = EventStream::channel(cancel.clone());
+            let transport = Arc::clone(&self.transport);
+            tokio::spawn(async move {
+                driver::drive(transport, call, reducer, sender, cancel).await;
+            });
+            Ok(stream)
+        })
     }
 }

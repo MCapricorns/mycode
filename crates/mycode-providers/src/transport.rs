@@ -10,7 +10,6 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::Stream;
 use tokio_util::sync::CancellationToken;
 
 use mycode_core::{ProviderError, ProviderErrorKind};
@@ -37,13 +36,23 @@ pub struct TransportCall {
 }
 
 /// A live response body stream.
-pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>;
+///
+/// Items arrive through a small bounded channel: one `Ok` per body chunk,
+/// one final `Err` for a transport failure (idle timeout, connection
+/// error, cancellation) when applicable, then `None` ends the body.
+pub type ByteStream = tokio::sync::mpsc::Receiver<Result<Bytes, ProviderError>>;
+
+/// Chunks buffered between the reader task and the consumer. Bounds
+/// read-ahead without stalling a fast SSE peer.
+const BYTE_STREAM_CAPACITY: usize = 4;
 
 /// Opens SSE POST requests for provider adapters.
 ///
 /// Implementations must honor cancellation by ending the returned stream
 /// promptly once `cancel` fires.
-#[async_trait::async_trait]
+///
+/// The method returns a boxed future so the trait stays object-safe for
+/// `dyn SseTransport` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait SseTransport: Send + Sync + 'static {
     /// Starts one POST and returns the raw response body.
     ///
@@ -51,11 +60,11 @@ pub trait SseTransport: Send + Sync + 'static {
     ///
     /// Returns a typed [`ProviderError`] for connection, status, and timeout
     /// failures; body-level failures surface through the stream.
-    async fn post(
-        &self,
+    fn post<'a>(
+        &'a self,
         call: TransportCall,
         cancel: CancellationToken,
-    ) -> Result<ByteStream, ProviderError>;
+    ) -> Pin<Box<dyn Future<Output = Result<ByteStream, ProviderError>> + Send + 'a>>;
 }
 
 /// reqwest-backed production transport.
@@ -106,114 +115,97 @@ impl Default for ReqwestTransport {
     }
 }
 
-#[async_trait::async_trait]
 impl SseTransport for ReqwestTransport {
-    async fn post(
-        &self,
+    fn post<'a>(
+        &'a self,
         call: TransportCall,
         cancel: CancellationToken,
-    ) -> Result<ByteStream, ProviderError> {
-        let mut headers = call.headers;
-        headers.push((
-            reqwest::header::CONTENT_TYPE.to_string(),
-            "application/json".to_owned(),
-        ));
-        let response = crate::http_pin::send_pinned(crate::http_pin::PinnedRequest {
-            method: reqwest::Method::POST,
-            url: call.endpoint,
-            headers,
-            body: Some(crate::http_pin::PinnedBody::Bytes(call.body.into())),
-            mode: crate::http_pin::PinMode::CheckRedirect,
-            timeout: None,
-            read_timeout: Some(self.read_timeout),
-            user_agent: None,
-            follow_redirects: true,
-            cancel: cancel.clone(),
-        })
-        .await
-        .map_err(|message| {
-            if cancel.is_cancelled() || message == "request cancelled" {
-                ProviderError::new(ProviderErrorKind::Cancelled)
-            } else {
-                ProviderError::with_message(ProviderErrorKind::Unavailable, message)
-            }
-        })?;
-        let response = match cancel.is_cancelled() {
-            true => return Err(ProviderError::new(ProviderErrorKind::Cancelled)),
-            false => response,
-        };
-        let status = response.status();
-        if !status.is_success() {
-            let body = tokio::select! {
-                text = response.text() => text.unwrap_or_default(),
-                () = cancel.cancelled() => return Err(ProviderError::new(ProviderErrorKind::Cancelled)),
-            };
-            return Err(ProviderError::with_message(
-                status_error_kind(status),
-                format!("HTTP {status}: {}", body.as_str()),
+    ) -> Pin<Box<dyn Future<Output = Result<ByteStream, ProviderError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut headers = call.headers;
+            headers.push((
+                reqwest::header::CONTENT_TYPE.to_string(),
+                "application/json".to_owned(),
             ));
-        }
-        let stream = response.bytes_stream();
-        let cancel_for_body = cancel.clone();
-        let mapped = futures_util::stream::StreamExt::map(stream, move |chunk| {
-            chunk.map_err(map_reqwest_error)
-        });
-        let guarded = CancellableStream {
-            inner: mapped,
-            cancel: cancel_for_body,
-            idle: self.read_timeout,
-            waiting: None,
-        };
-        Ok(Box::pin(guarded))
-    }
-}
-
-/// Ends the stream once cancellation fires, and fails when a chunk gap
-/// exceeds the idle ceiling. Each delivered chunk starts the wait over.
-struct CancellableStream<S> {
-    inner: S,
-    cancel: CancellationToken,
-    idle: Duration,
-    waiting: Option<Pin<Box<tokio::time::Sleep>>>,
-}
-
-impl<S> Stream for CancellableStream<S>
-where
-    S: Stream<Item = Result<Bytes, ProviderError>> + Unpin,
-{
-    type Item = Result<Bytes, ProviderError>;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        context: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        if this.cancel.is_cancelled() {
-            return std::task::Poll::Ready(Some(Err(ProviderError::new(
-                ProviderErrorKind::Cancelled,
-            ))));
-        }
-        match Pin::new(&mut this.inner).poll_next(context) {
-            std::task::Poll::Ready(item) => {
-                this.waiting = None;
-                std::task::Poll::Ready(item)
-            }
-            std::task::Poll::Pending => {
-                if this.waiting.is_none() {
-                    this.waiting = Some(Box::pin(tokio::time::sleep(this.idle)));
+            let response = crate::http_pin::send_pinned(crate::http_pin::PinnedRequest {
+                method: reqwest::Method::POST,
+                url: call.endpoint,
+                headers,
+                body: Some(crate::http_pin::PinnedBody::Bytes(call.body.into())),
+                mode: crate::http_pin::PinMode::CheckRedirect,
+                timeout: None,
+                read_timeout: Some(self.read_timeout),
+                user_agent: None,
+                follow_redirects: true,
+                cancel: cancel.clone(),
+            })
+            .await
+            .map_err(|message| {
+                if cancel.is_cancelled() || message == "request cancelled" {
+                    ProviderError::new(ProviderErrorKind::Cancelled)
+                } else {
+                    ProviderError::with_message(ProviderErrorKind::Unavailable, message)
                 }
-                let waiting = this.waiting.as_mut().expect("idle wait");
-                match waiting.as_mut().poll(context) {
-                    std::task::Poll::Ready(()) => {
-                        this.waiting = None;
-                        std::task::Poll::Ready(Some(Err(ProviderError::new(
-                            ProviderErrorKind::Timeout,
-                        ))))
+            })?;
+            let response = match cancel.is_cancelled() {
+                true => return Err(ProviderError::new(ProviderErrorKind::Cancelled)),
+                false => response,
+            };
+            let status = response.status();
+            if !status.is_success() {
+                let body = tokio::select! {
+                    text = response.text() => text.unwrap_or_default(),
+                    () = cancel.cancelled() => return Err(ProviderError::new(ProviderErrorKind::Cancelled)),
+                };
+                return Err(ProviderError::with_message(
+                    status_error_kind(status),
+                    format!("HTTP {status}: {}", body.as_str()),
+                ));
+            }
+            let cancel_for_body = cancel;
+            let (chunk_tx, chunk_rx) =
+                tokio::sync::mpsc::channel::<Result<Bytes, ProviderError>>(BYTE_STREAM_CAPACITY);
+            let idle = self.read_timeout;
+            // Reads the body chunk by chunk on a dedicated task and forwards
+            // each chunk through the bounded channel. Cancellation and a chunk
+            // gap over the idle ceiling surface as one final `Err` item, then
+            // the stream ends; a dropped consumer stops the task and releases
+            // the response. Every delivered chunk starts the idle wait over.
+            tokio::spawn(async move {
+                let mut response = response;
+                loop {
+                    let chunk = tokio::select! {
+                        biased;
+                        () = cancel_for_body.cancelled() => {
+                            let _ = chunk_tx
+                                .send(Err(ProviderError::new(ProviderErrorKind::Cancelled)))
+                                .await;
+                            return;
+                        }
+                        chunk = tokio::time::timeout(idle, response.chunk()) => chunk,
+                    };
+                    match chunk {
+                        Ok(Ok(Some(bytes))) => {
+                            if chunk_tx.send(Ok(bytes)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Ok(Ok(None)) => return,
+                        Ok(Err(error)) => {
+                            let _ = chunk_tx.send(Err(map_reqwest_error(error))).await;
+                            return;
+                        }
+                        Err(_elapsed) => {
+                            let _ = chunk_tx
+                                .send(Err(ProviderError::new(ProviderErrorKind::Timeout)))
+                                .await;
+                            return;
+                        }
                     }
-                    std::task::Poll::Pending => std::task::Poll::Pending,
                 }
-            }
-        }
+            });
+            Ok(chunk_rx)
+        })
     }
 }
 
@@ -242,7 +234,6 @@ mod tests {
     use std::io::{Read, Write};
     use std::time::Duration;
 
-    use futures_util::StreamExt;
     use tokio_util::sync::CancellationToken;
 
     use super::{ReqwestTransport, SseTransport, TransportCall};
@@ -302,7 +293,7 @@ mod tests {
             .expect("post");
         let mut collected = Vec::new();
         let outcome = tokio::time::timeout(Duration::from_secs(3), async {
-            while let Some(item) = stream.next().await {
+            while let Some(item) = stream.recv().await {
                 match item {
                     Ok(bytes) => collected.extend_from_slice(&bytes),
                     Err(error) => panic!("stream failed: {error}"),

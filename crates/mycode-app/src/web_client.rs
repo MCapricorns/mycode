@@ -11,6 +11,8 @@
 pub mod guard;
 pub mod transport;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -171,7 +173,9 @@ fn anysearch_rejected(payload: &serde_json::Value) -> Option<WebError> {
 }
 
 /// Outbound POST seam for the web client.
-#[async_trait::async_trait]
+///
+/// The method returns a boxed future so the trait stays object-safe for
+/// `dyn WebTransport` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait WebTransport: Send + Sync + 'static {
     /// Posts a JSON body with an optional bearer key and returns the raw
     /// response bytes.
@@ -179,14 +183,14 @@ pub trait WebTransport: Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns [`WebError`] for transport-level failures.
-    async fn post_json(
-        &self,
-        endpoint: &str,
-        bearer: Option<&str>,
-        body: &[u8],
+    fn post_json<'a>(
+        &'a self,
+        endpoint: &'a str,
+        bearer: Option<&'a str>,
+        body: &'a [u8],
         timeout: Duration,
         cancel: CancellationToken,
-    ) -> Result<Vec<u8>, WebError>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, WebError>> + Send + 'a>>;
 }
 
 /// Backend family that selects the request and response wire mapping.
@@ -578,17 +582,18 @@ mod tests {
         reason: String,
     }
 
-    #[async_trait::async_trait]
     impl WebTransport for StaticFailure {
-        async fn post_json(
-            &self,
-            _endpoint: &str,
-            _bearer: Option<&str>,
-            _body: &[u8],
+        fn post_json<'a>(
+            &'a self,
+            _endpoint: &'a str,
+            _bearer: Option<&'a str>,
+            _body: &'a [u8],
             _timeout: Duration,
             _cancel: CancellationToken,
-        ) -> Result<Vec<u8>, WebError> {
-            Err(pinned_transport_error(&self.reason))
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<u8>, WebError>> + Send + 'a>,
+        > {
+            Box::pin(async move { Err(pinned_transport_error(&self.reason)) })
         }
     }
 
@@ -643,17 +648,18 @@ mod tests {
         body: Vec<u8>,
     }
 
-    #[async_trait::async_trait]
     impl WebTransport for StaticJson {
-        async fn post_json(
-            &self,
-            _endpoint: &str,
-            _bearer: Option<&str>,
-            _body: &[u8],
+        fn post_json<'a>(
+            &'a self,
+            _endpoint: &'a str,
+            _bearer: Option<&'a str>,
+            _body: &'a [u8],
             _timeout: Duration,
             _cancel: CancellationToken,
-        ) -> Result<Vec<u8>, WebError> {
-            Ok(self.body.clone())
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<u8>, WebError>> + Send + 'a>,
+        > {
+            Box::pin(async move { Ok(self.body.clone()) })
         }
     }
 
@@ -774,17 +780,18 @@ mod tests {
         reason: String,
     }
 
-    #[async_trait::async_trait]
     impl WebTransport for StatusFailure {
-        async fn post_json(
-            &self,
-            _endpoint: &str,
-            _bearer: Option<&str>,
-            _body: &[u8],
+        fn post_json<'a>(
+            &'a self,
+            _endpoint: &'a str,
+            _bearer: Option<&'a str>,
+            _body: &'a [u8],
             _timeout: Duration,
             _cancel: CancellationToken,
-        ) -> Result<Vec<u8>, WebError> {
-            Err(WebError::unavailable(self.reason.clone()))
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<u8>, WebError>> + Send + 'a>,
+        > {
+            Box::pin(async move { Err(WebError::unavailable(self.reason.clone())) })
         }
     }
 

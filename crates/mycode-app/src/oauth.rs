@@ -116,7 +116,7 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
             if std::time::Instant::now() >= deadline {
-                let _ = events.try_send(BridgeEvent::CopilotSignInFailed {
+                let _ = events.send(BridgeEvent::CopilotSignInFailed {
                     message: "the sign-in code expired before authorization".to_owned(),
                 });
                 return;
@@ -125,7 +125,7 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
                 Ok(DeviceTokenPoll::Pending) => {}
                 Ok(DeviceTokenPoll::SlowDown) => interval_secs += 5,
                 Ok(DeviceTokenPoll::Denied(reason)) => {
-                    let _ = events.try_send(BridgeEvent::CopilotSignInFailed {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed {
                         message: reason.to_owned(),
                     });
                     return;
@@ -137,14 +137,14 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
                         continue;
                     };
                     let outcome = finish(state.clone(), granted, models).await;
-                    let _ = events.try_send(match outcome {
+                    let _ = events.send(match outcome {
                         Ok(()) => BridgeEvent::CopilotSignedIn,
                         Err(message) => BridgeEvent::CopilotSignInFailed { message },
                     });
                     return;
                 }
                 Err(message) => {
-                    let _ = events.try_send(BridgeEvent::CopilotSignInFailed { message });
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed { message });
                     return;
                 }
             }
@@ -214,7 +214,7 @@ fn spawn_codex_poll(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
             if std::time::Instant::now() >= deadline {
-                let _ = events.try_send(BridgeEvent::CopilotSignInFailed {
+                let _ = events.send(BridgeEvent::CopilotSignInFailed {
                     message: "the sign-in code expired before authorization".to_owned(),
                 });
                 return;
@@ -238,7 +238,7 @@ fn spawn_codex_poll(
                             }
                             Err(message) => Err(message),
                         };
-                    let _ = events.try_send(match outcome {
+                    let _ = events.send(match outcome {
                         Ok(()) => BridgeEvent::CopilotSignedIn,
                         Err(message) => BridgeEvent::CopilotSignInFailed { message },
                     });
@@ -246,13 +246,13 @@ fn spawn_codex_poll(
                 }
                 Ok(CodexDevicePoll::Pending) => {}
                 Ok(CodexDevicePoll::Denied(reason)) => {
-                    let _ = events.try_send(BridgeEvent::CopilotSignInFailed {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed {
                         message: reason.to_owned(),
                     });
                     return;
                 }
                 Err(message) => {
-                    let _ = events.try_send(BridgeEvent::CopilotSignInFailed { message });
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed { message });
                     return;
                 }
             }

@@ -19,8 +19,11 @@
 //! A provider or transport failure is the same shape of partial, with
 //! the provider's detail on the interruption line, but the turn completes.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Poll;
 
 use mycode_core::MycodeError;
 use mycode_core::events::{AgentEvent, TurnOutcome};
@@ -314,6 +317,43 @@ fn is_agent_call(call: &ToolCall) -> bool {
     call.name == "agent"
 }
 
+/// Joins same-type borrowed futures concurrently, preserving input order.
+///
+/// Local stand-in for `futures_util::future::join_all`: the dispatched tool
+/// futures borrow the turn environment, so `tokio::task::JoinSet` (which
+/// takes owned futures) cannot take its place. Every child registers the
+/// shared waker, so the task parks between events instead of spinning;
+/// dropping the joined future drops all children.
+async fn join_all<F>(futures: Vec<F>) -> Vec<F::Output>
+where
+    F: Future,
+{
+    let mut futures: Vec<Pin<Box<F>>> = futures.into_iter().map(Box::pin).collect();
+    let mut outputs: Vec<Option<F::Output>> = Vec::with_capacity(futures.len());
+    outputs.resize_with(futures.len(), || None);
+    let mut remaining = futures.len();
+    let joined = std::future::poll_fn(move |context| {
+        for (index, future) in futures.iter_mut().enumerate() {
+            if outputs[index].is_none()
+                && let Poll::Ready(output) = future.as_mut().poll(context)
+            {
+                outputs[index] = Some(output);
+                remaining -= 1;
+            }
+        }
+        if remaining == 0 {
+            Poll::Ready(std::mem::take(&mut outputs))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+    joined
+        .into_iter()
+        .map(|slot| slot.expect("every slot fills before Ready"))
+        .collect()
+}
+
 /// Runs one response's tool calls.
 ///
 /// Every `agent` call starts immediately. The other calls run in their original
@@ -346,8 +386,9 @@ async fn dispatch_response_calls(
         polled.store(true, Ordering::SeqCst);
         let futures = agent_ids
             .iter()
-            .map(|index| turn::dispatch_tool_call(env, token, &calls[*index]));
-        futures_util::future::join_all(futures).await
+            .map(|index| turn::dispatch_tool_call(env, token, &calls[*index]))
+            .collect::<Vec<_>>();
+        join_all(futures).await
     };
     let others = async move {
         let mut messages = Vec::with_capacity(other_ids.len());
@@ -458,18 +499,21 @@ mod tests {
         events: Vec<StreamEvent>,
     }
 
-    #[async_trait::async_trait]
     impl Provider for Scripted {
-        async fn stream(
-            &self,
-            _request: &Request,
+        fn stream<'a>(
+            &'a self,
+            _request: &'a Request,
             cancel: CancellationToken,
-        ) -> Result<EventStream, ProviderError> {
-            let (sender, stream) = EventStream::channel(cancel);
-            for event in self.events.clone() {
-                sender.send(event).await;
-            }
-            Ok(stream)
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                let (sender, stream) = EventStream::channel(cancel);
+                for event in self.events.clone() {
+                    sender.send(event).await;
+                }
+                Ok(stream)
+            })
         }
     }
 
@@ -603,22 +647,25 @@ mod tests {
         calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
-    #[async_trait::async_trait]
     impl Provider for CountingProvider {
-        async fn stream(
-            &self,
-            _request: &Request,
+        fn stream<'a>(
+            &'a self,
+            _request: &'a Request,
             cancel: CancellationToken,
-        ) -> Result<EventStream, ProviderError> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (sender, stream) = EventStream::channel(cancel);
-            sender
-                .send(StreamEvent::Error(ProviderError::with_message(
-                    ProviderErrorKind::Unavailable,
-                    "should not stream",
-                )))
-                .await;
-            Ok(stream)
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (sender, stream) = EventStream::channel(cancel);
+                sender
+                    .send(StreamEvent::Error(ProviderError::with_message(
+                        ProviderErrorKind::Unavailable,
+                        "should not stream",
+                    )))
+                    .await;
+                Ok(stream)
+            })
         }
     }
 
@@ -659,7 +706,6 @@ mod tests {
         release: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
 
-    #[async_trait::async_trait]
     impl mycode_tools::ToolDyn for HangAgent {
         fn spec(&self) -> mycode_core::ToolSpec {
             mycode_core::ToolSpec {
@@ -669,23 +715,32 @@ mod tests {
             }
         }
 
-        async fn execute_dyn(
-            &self,
+        fn execute_dyn<'a>(
+            &'a self,
             _args: serde_json::Value,
-            _ctx: &mycode_tools::ToolCtx,
-            _out: &mut mycode_tools::ToolStream,
-        ) -> Result<mycode_tools::ToolResult, mycode_tools::ToolError> {
-            self.started
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            while !self.release.load(std::sync::atomic::Ordering::SeqCst) {
-                if _ctx.cancel.is_cancelled() {
-                    return Err(mycode_tools::ToolError::Execution("cancelled".to_owned()));
+            _ctx: &'a mycode_tools::ToolCtx,
+            _out: &'a mut mycode_tools::ToolStream,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.started
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                while !self.release.load(std::sync::atomic::Ordering::SeqCst) {
+                    if _ctx.cancel.is_cancelled() {
+                        return Err(mycode_tools::ToolError::Execution("cancelled".to_owned()));
+                    }
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
-            }
-            Ok(mycode_tools::ToolResult::text(
-                "NESTED_ANSWER_SHOULD_NOT_APPEND",
-            ))
+                Ok(mycode_tools::ToolResult::text(
+                    "NESTED_ANSWER_SHOULD_NOT_APPEND",
+                ))
+            })
         }
     }
 
@@ -783,68 +838,71 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
-    #[async_trait::async_trait]
     impl Provider for StepProvider {
-        async fn stream(
-            &self,
-            request: &Request,
+        fn stream<'a>(
+            &'a self,
+            request: &'a Request,
             cancel: CancellationToken,
-        ) -> Result<EventStream, ProviderError> {
-            let rendered = request
-                .messages
-                .iter()
-                .map(|message| match message.as_ref() {
-                    Message::User(user) => user
-                        .content
-                        .iter()
-                        .filter_map(|block| match block {
-                            ContentBlock::Text(text) => Some(text.text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<String>(),
-                    Message::Assistant(assistant) => assistant.text(),
-                    Message::ToolResult(result) => result
-                        .content
-                        .iter()
-                        .filter_map(|block| match block {
-                            ContentBlock::Text(text) => Some(text.text.as_str()),
-                            _ => None,
-                        })
-                        .collect(),
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            self.seen.lock().expect("seen").push(rendered);
-            let step = self.seen.lock().expect("seen").len();
-            let (sender, stream) = EventStream::channel(cancel);
-            if step == 1 {
-                sender
-                    .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
-                            blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
-                                "call-note",
-                                "run_code",
-                                serde_json::json!({}),
-                            ))],
-                            usage: None,
-                            stop_reason: StopReason::ToolUse,
-                        },
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                let rendered = request
+                    .messages
+                    .iter()
+                    .map(|message| match message.as_ref() {
+                        Message::User(user) => user
+                            .content
+                            .iter()
+                            .filter_map(|block| match block {
+                                ContentBlock::Text(text) => Some(text.text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<String>(),
+                        Message::Assistant(assistant) => assistant.text(),
+                        Message::ToolResult(result) => result
+                            .content
+                            .iter()
+                            .filter_map(|block| match block {
+                                ContentBlock::Text(text) => Some(text.text.as_str()),
+                                _ => None,
+                            })
+                            .collect(),
                     })
-                    .await;
-            } else {
-                sender
-                    .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
-                            blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
-                                "second step",
-                            ))],
-                            usage: None,
-                            stop_reason: StopReason::Stop,
-                        },
-                    })
-                    .await;
-            }
-            Ok(stream)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.seen.lock().expect("seen").push(rendered);
+                let step = self.seen.lock().expect("seen").len();
+                let (sender, stream) = EventStream::channel(cancel);
+                if step == 1 {
+                    sender
+                        .send(StreamEvent::Done {
+                            message: mycode_core::AssistantMessage {
+                                blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                    "call-note",
+                                    "run_code",
+                                    serde_json::json!({}),
+                                ))],
+                                usage: None,
+                                stop_reason: StopReason::ToolUse,
+                            },
+                        })
+                        .await;
+                } else {
+                    sender
+                        .send(StreamEvent::Done {
+                            message: mycode_core::AssistantMessage {
+                                blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                                    "second step",
+                                ))],
+                                usage: None,
+                                stop_reason: StopReason::Stop,
+                            },
+                        })
+                        .await;
+                }
+                Ok(stream)
+            })
         }
     }
 
@@ -852,7 +910,6 @@ mod tests {
         inbox: std::sync::Arc<SteerInbox>,
     }
 
-    #[async_trait::async_trait]
     impl mycode_tools::ToolDyn for NoteTool {
         fn spec(&self) -> mycode_core::ToolSpec {
             mycode_core::ToolSpec {
@@ -862,14 +919,23 @@ mod tests {
             }
         }
 
-        async fn execute_dyn(
-            &self,
+        fn execute_dyn<'a>(
+            &'a self,
             _args: serde_json::Value,
-            _ctx: &mycode_tools::ToolCtx,
-            _out: &mut mycode_tools::ToolStream,
-        ) -> Result<mycode_tools::ToolResult, mycode_tools::ToolError> {
-            self.inbox.push("STEER_KEEP_GOING");
-            Ok(mycode_tools::ToolResult::text("noted"))
+            _ctx: &'a mycode_tools::ToolCtx,
+            _out: &'a mut mycode_tools::ToolStream,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.inbox.push("STEER_KEEP_GOING");
+                Ok(mycode_tools::ToolResult::text("noted"))
+            })
         }
     }
 
@@ -914,7 +980,6 @@ mod tests {
         ran: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
 
-    #[async_trait::async_trait]
     impl mycode_tools::ToolDyn for FlagTool {
         fn spec(&self) -> mycode_core::ToolSpec {
             mycode_core::ToolSpec {
@@ -924,14 +989,23 @@ mod tests {
             }
         }
 
-        async fn execute_dyn(
-            &self,
+        fn execute_dyn<'a>(
+            &'a self,
             _args: serde_json::Value,
-            _ctx: &mycode_tools::ToolCtx,
-            _out: &mut mycode_tools::ToolStream,
-        ) -> Result<mycode_tools::ToolResult, mycode_tools::ToolError> {
-            self.ran.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(mycode_tools::ToolResult::text("SECRET_READ"))
+            _ctx: &'a mycode_tools::ToolCtx,
+            _out: &'a mut mycode_tools::ToolStream,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(mycode_tools::ToolResult::text("SECRET_READ"))
+            })
         }
     }
 
@@ -939,41 +1013,46 @@ mod tests {
         step: std::sync::atomic::AtomicUsize,
     }
 
-    #[async_trait::async_trait]
     impl Provider for TwoStep {
-        async fn stream(
-            &self,
-            _request: &Request,
+        fn stream<'a>(
+            &'a self,
+            _request: &'a Request,
             cancel: CancellationToken,
-        ) -> Result<EventStream, ProviderError> {
-            let step = self.step.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (sender, stream) = EventStream::channel(cancel);
-            if step == 0 {
-                sender
-                    .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
-                            blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
-                                "call-read",
-                                "read",
-                                serde_json::json!({"path": "a.rs"}),
-                            ))],
-                            usage: None,
-                            stop_reason: StopReason::ToolUse,
-                        },
-                    })
-                    .await;
-            } else {
-                sender
-                    .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
-                            blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new("done"))],
-                            usage: None,
-                            stop_reason: StopReason::Stop,
-                        },
-                    })
-                    .await;
-            }
-            Ok(stream)
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                let step = self.step.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (sender, stream) = EventStream::channel(cancel);
+                if step == 0 {
+                    sender
+                        .send(StreamEvent::Done {
+                            message: mycode_core::AssistantMessage {
+                                blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                    "call-read",
+                                    "read",
+                                    serde_json::json!({"path": "a.rs"}),
+                                ))],
+                                usage: None,
+                                stop_reason: StopReason::ToolUse,
+                            },
+                        })
+                        .await;
+                } else {
+                    sender
+                        .send(StreamEvent::Done {
+                            message: mycode_core::AssistantMessage {
+                                blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                                    "done",
+                                ))],
+                                usage: None,
+                                stop_reason: StopReason::Stop,
+                            },
+                        })
+                        .await;
+                }
+                Ok(stream)
+            })
         }
     }
 

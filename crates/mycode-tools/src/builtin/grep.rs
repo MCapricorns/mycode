@@ -28,7 +28,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use async_trait::async_trait;
 use globset::GlobMatcher;
 use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
@@ -346,7 +345,6 @@ impl Sink for FileSink<'_> {
     }
 }
 
-#[async_trait]
 impl Tool for GrepTool {
     type Args = GrepArgs;
     type Output = ();

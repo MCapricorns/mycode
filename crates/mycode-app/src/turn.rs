@@ -52,7 +52,7 @@ pub(crate) async fn chat_turn(
     )
     .await
     {
-        let _ = events.try_send(BridgeEvent::ChatFailed {
+        let _ = events.send(BridgeEvent::ChatFailed {
             session_id,
             message,
             head: String::new(),
@@ -94,7 +94,7 @@ pub(crate) async fn manual_compact(
         Ok((_, None)) => (false, "compaction finished without a summary".to_owned()),
         Err(message) => (false, message),
     };
-    let _ = events.try_send(BridgeEvent::CompactFinished {
+    let _ = events.send(BridgeEvent::CompactFinished {
         session_id,
         message,
         ok,
@@ -172,7 +172,7 @@ async fn publish_visible_summary(
         thinking: String::new(),
         parent_call_id: None,
     };
-    let _ = events.try_send(BridgeEvent::SummaryShown {
+    let _ = events.send(BridgeEvent::SummaryShown {
         session_id: session_id.to_owned(),
         entry,
     });
@@ -715,7 +715,7 @@ async fn run_chat_turn_on(
                 mycode_core::events::AgentEvent::MessageDelta(
                     mycode_core::events::MessageDelta::TextDelta(delta),
                 ) => {
-                    let _ = pump_events.try_send(BridgeEvent::ChatText {
+                    let _ = pump_events.send(BridgeEvent::ChatText {
                         session_id: pump_session_id.clone(),
                         delta,
                     });
@@ -723,7 +723,7 @@ async fn run_chat_turn_on(
                 mycode_core::events::AgentEvent::MessageDelta(
                     mycode_core::events::MessageDelta::ThinkingDelta(delta),
                 ) => {
-                    let _ = pump_events.try_send(BridgeEvent::ChatThinking {
+                    let _ = pump_events.send(BridgeEvent::ChatThinking {
                         session_id: pump_session_id.clone(),
                         delta,
                     });
@@ -750,7 +750,7 @@ async fn run_chat_turn_on(
                         .await;
                         return;
                     }
-                    let _ = pump_events.try_send(BridgeEvent::ToolStarted {
+                    let _ = pump_events.send(BridgeEvent::ToolStarted {
                         session_id: pump_session_id.clone(),
                         call_id: spelling,
                         name,
@@ -759,7 +759,7 @@ async fn run_chat_turn_on(
                     });
                 }
                 mycode_core::events::AgentEvent::ToolProgress { call_id, message } => {
-                    let _ = pump_events.try_send(BridgeEvent::ToolProgress {
+                    let _ = pump_events.send(BridgeEvent::ToolProgress {
                         session_id: pump_session_id.clone(),
                         call_id: call_id.to_string(),
                         name: String::new(),
@@ -801,7 +801,7 @@ async fn run_chat_turn_on(
                     match writer.close_call(call_id.as_str(), &payload).await {
                         Ok(event_id) => {
                             let entry = project_tool_result_message(&event_id, &tool_result);
-                            let _ = pump_events.try_send(BridgeEvent::ToolCompleted {
+                            let _ = pump_events.send(BridgeEvent::ToolCompleted {
                                 session_id: pump_session_id.clone(),
                                 entry,
                             });
@@ -838,13 +838,12 @@ async fn run_chat_turn_on(
                                 Ok(payload) => {
                                     match writer.write(EventKind::Message, &payload).await {
                                         Ok(event_id) => {
-                                            let _ =
-                                                pump_events.try_send(BridgeEvent::AssistantStep {
-                                                    session_id: pump_session_id.clone(),
-                                                    entry: project_assistant_message(
-                                                        &event_id, assistant,
-                                                    ),
-                                                });
+                                            let _ = pump_events.send(BridgeEvent::AssistantStep {
+                                                session_id: pump_session_id.clone(),
+                                                entry: project_assistant_message(
+                                                    &event_id, assistant,
+                                                ),
+                                            });
                                         }
                                         Err(error) => {
                                             emit_chat_failed(
@@ -880,7 +879,7 @@ async fn run_chat_turn_on(
                                     thinking: String::new(),
                                     parent_call_id: None,
                                 };
-                                let _ = pump_events.try_send(BridgeEvent::SteerCommitted {
+                                let _ = pump_events.send(BridgeEvent::SteerCommitted {
                                     session_id: pump_session_id.clone(),
                                     head: writer.head().await,
                                     entry,
@@ -907,7 +906,7 @@ async fn run_chat_turn_on(
                     // would bill a ten-step turn as one.
                     if let Some(usage) = assistant.usage.as_ref() {
                         turn_usage.fold(usage);
-                        let _ = pump_events.try_send(BridgeEvent::UsageSnapshot {
+                        let _ = pump_events.send(BridgeEvent::UsageSnapshot {
                             session_id: pump_session_id.clone(),
                             model: usage_model.clone(),
                             input: turn_usage.input,
@@ -944,7 +943,7 @@ async fn run_chat_turn_on(
                         Ok(event_id) => {
                             let entry = project_assistant_message(&event_id, assistant);
                             last_step = Some(entry.clone());
-                            let _ = pump_events.try_send(BridgeEvent::AssistantStep {
+                            let _ = pump_events.send(BridgeEvent::AssistantStep {
                                 session_id: pump_session_id.clone(),
                                 entry,
                             });
@@ -975,13 +974,12 @@ async fn run_chat_turn_on(
                                 Ok(payload) => {
                                     match writer.write(EventKind::Message, &payload).await {
                                         Ok(event_id) => {
-                                            let _ =
-                                                pump_events.try_send(BridgeEvent::AssistantStep {
-                                                    session_id: pump_session_id.clone(),
-                                                    entry: project_assistant_message(
-                                                        &event_id, assistant,
-                                                    ),
-                                                });
+                                            let _ = pump_events.send(BridgeEvent::AssistantStep {
+                                                session_id: pump_session_id.clone(),
+                                                entry: project_assistant_message(
+                                                    &event_id, assistant,
+                                                ),
+                                            });
                                         }
                                         Err(error) => {
                                             emit_chat_failed(
@@ -1020,7 +1018,7 @@ async fn run_chat_turn_on(
                             pump_deferred
                                 .publish(&writer, &pump_events, &pump_session_id)
                                 .await;
-                            let _ = pump_events.try_send(BridgeEvent::ChatDone {
+                            let _ = pump_events.send(BridgeEvent::ChatDone {
                                 session_id: pump_session_id.clone(),
                                 head: writer.head().await,
                                 entry,
@@ -1051,7 +1049,7 @@ async fn run_chat_turn_on(
                                     pump_deferred
                                         .publish(&writer, &pump_events, &pump_session_id)
                                         .await;
-                                    let _ = pump_events.try_send(BridgeEvent::ChatDone {
+                                    let _ = pump_events.send(BridgeEvent::ChatDone {
                                         session_id: pump_session_id.clone(),
                                         head: writer.head().await,
                                         entry,
@@ -1086,7 +1084,7 @@ async fn run_chat_turn_on(
                         && let Ok(payload) = serde_json::to_vec(assistant)
                         && let Ok(event_id) = writer.write(EventKind::Message, &payload).await
                     {
-                        let _ = pump_events.try_send(BridgeEvent::AssistantStep {
+                        let _ = pump_events.send(BridgeEvent::AssistantStep {
                             session_id: pump_session_id.clone(),
                             entry: project_assistant_message(&event_id, assistant),
                         });
@@ -1149,7 +1147,7 @@ async fn handle_ptc_nested(
             {
                 return false;
             }
-            let _ = events.try_send(BridgeEvent::ToolStarted {
+            let _ = events.send(BridgeEvent::ToolStarted {
                 session_id: session_id.to_owned(),
                 call_id: call_id.to_owned(),
                 name,
@@ -1159,7 +1157,7 @@ async fn handle_ptc_nested(
             true
         }
         mycode_core::PtcNestedKind::Progress { message } => {
-            let _ = events.try_send(BridgeEvent::ToolProgress {
+            let _ = events.send(BridgeEvent::ToolProgress {
                 session_id: session_id.to_owned(),
                 call_id: call_id.to_owned(),
                 name: String::new(),
@@ -1177,7 +1175,7 @@ async fn handle_ptc_nested(
                     let mut entry = project_tool_result_message(&event_id, &result);
                     entry.call_id = Some(call_id.to_owned());
                     entry.parent_call_id = Some(parent.to_owned());
-                    let _ = events.try_send(BridgeEvent::ToolCompleted {
+                    let _ = events.send(BridgeEvent::ToolCompleted {
                         session_id: session_id.to_owned(),
                         entry,
                     });
@@ -1195,7 +1193,7 @@ async fn emit_chat_failed(
     session_id: &str,
     message: impl Into<String>,
 ) {
-    let _ = events.try_send(BridgeEvent::ChatFailed {
+    let _ = events.send(BridgeEvent::ChatFailed {
         session_id: session_id.to_owned(),
         message: message.into(),
         head: writer.head().await,
@@ -1388,38 +1386,45 @@ mod tests {
         final_summaries: Mutex<Option<usize>>,
     }
 
-    #[async_trait::async_trait]
     impl SseTransport for TurnTransport {
-        async fn post(
-            &self,
+        fn post<'a>(
+            &'a self,
             call: TransportCall,
             _cancel: tokio_util::sync::CancellationToken,
-        ) -> Result<
-            std::pin::Pin<
-                Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, ProviderError>> + Send>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    > + Send
+                    + 'a,
             >,
-            ProviderError,
         > {
-            let body = String::from_utf8_lossy(&call.body);
-            let (kind, sse) = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
-                let summary = format!(
-                    "handoff notes. {}",
-                    "The covered prefix is replaced by this checkpoint. ".repeat(6)
-                );
-                ("summary", text_sse(&summary, 80))
-            } else if body.contains("\"role\":\"tool\"") {
-                ("final", {
-                    *self.final_summaries.lock().expect("summaries") =
-                        Some(body.matches("COMPACTION SUMMARY").count());
-                    text_sse("ok", 3)
-                })
-            } else {
-                ("tools", tool_sse())
-            };
-            self.kinds.lock().expect("kinds").push(kind);
-            Ok(Box::pin(futures_util::stream::once(async move {
-                Ok(bytes::Bytes::from(sse))
-            })))
+            Box::pin(async move {
+                let body = String::from_utf8_lossy(&call.body);
+                let (kind, sse) = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                    let summary = format!(
+                        "handoff notes. {}",
+                        "The covered prefix is replaced by this checkpoint. ".repeat(6)
+                    );
+                    ("summary", text_sse(&summary, 80))
+                } else if body.contains("\"role\":\"tool\"") {
+                    ("final", {
+                        *self.final_summaries.lock().expect("summaries") =
+                            Some(body.matches("COMPACTION SUMMARY").count());
+                        text_sse("ok", 3)
+                    })
+                } else {
+                    ("tools", tool_sse())
+                };
+                self.kinds.lock().expect("kinds").push(kind);
+                // One queued chunk, then the dropped sender ends the stream.
+                let (sender, stream) = tokio::sync::mpsc::channel(1);
+                sender
+                    .send(Ok(bytes::Bytes::from(sse)))
+                    .await
+                    .expect("queue scripted body");
+                Ok(stream)
+            })
         }
     }
 
@@ -1546,10 +1551,10 @@ mod tests {
         let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
             .expect("resolve");
 
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let collected = tokio::spawn(async move {
             let mut events = Vec::new();
-            while let Ok(event) = rx.recv().await {
+            while let Some(event) = rx.recv().await {
                 let done = matches!(
                     event,
                     crate::BridgeEvent::ChatDone { .. } | crate::BridgeEvent::ChatFailed { .. }
@@ -1781,7 +1786,7 @@ mod tests {
         let (root, home) = scratch();
         let catalog = mycode_providers::catalog::current(&home);
         let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         manual_compact(
             state,
             tx,
@@ -1832,43 +1837,55 @@ mod tests {
         format!("data: {chunk}\n\n")
     }
 
-    #[async_trait::async_trait]
     impl SseTransport for HistoryTransport {
-        async fn post(
-            &self,
+        fn post<'a>(
+            &'a self,
             call: TransportCall,
             cancel: tokio_util::sync::CancellationToken,
-        ) -> Result<
-            std::pin::Pin<
-                Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, ProviderError>> + Send>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    > + Send
+                    + 'a,
             >,
-            ProviderError,
         > {
-            let body = String::from_utf8_lossy(&call.body).into_owned();
-            self.bodies.lock().expect("bodies").push(body.clone());
-            let is_b = body.contains(PROMPT_B);
-            if !is_b && self.hang_partial {
-                use futures_util::StreamExt as _;
-                let partial = bytes::Bytes::from(partial_sse(PARTIAL_A));
-                let ready = Arc::clone(&self.partial_ready);
-                // The second poll runs only after the driver has taken the
-                // partial chunk, so the cancel waits until that text is queued.
-                let stream = futures_util::stream::once(async move { Ok(partial) }).chain(
-                    futures_util::stream::once(async move {
+            Box::pin(async move {
+                let body = String::from_utf8_lossy(&call.body).into_owned();
+                self.bodies.lock().expect("bodies").push(body.clone());
+                let is_b = body.contains(PROMPT_B);
+                if !is_b && self.hang_partial {
+                    let partial = bytes::Bytes::from(partial_sse(PARTIAL_A));
+                    let ready = Arc::clone(&self.partial_ready);
+                    let (sender, stream) = tokio::sync::mpsc::channel(1);
+                    // `reserve` resolves only after the driver received the
+                    // partial chunk (the buffer slot freed), so the cancel waits
+                    // until that text was taken — the same handshake the chained
+                    // streams expressed through their second poll.
+                    tokio::spawn(async move {
+                        sender.send(Ok(partial)).await.expect("queue partial chunk");
+                        if sender.reserve().await.is_err() {
+                            return;
+                        }
                         ready.notify_one();
                         cancel.cancelled().await;
-                        Err::<bytes::Bytes, ProviderError>(ProviderError::new(
-                            mycode_core::ProviderErrorKind::Cancelled,
-                        ))
-                    }),
-                );
-                return Ok(Box::pin(stream));
-            }
-            let reply = if is_b { "REPLY_B ok" } else { REPLY_A };
-            let sse = reply_sse(reply);
-            Ok(Box::pin(futures_util::stream::once(async move {
-                Ok(bytes::Bytes::from(sse))
-            })))
+                        let _ = sender
+                            .send(Err(ProviderError::new(
+                                mycode_core::ProviderErrorKind::Cancelled,
+                            )))
+                            .await;
+                    });
+                    return Ok(stream);
+                }
+                let reply = if is_b { "REPLY_B ok" } else { REPLY_A };
+                let sse = reply_sse(reply);
+                let (sender, stream) = tokio::sync::mpsc::channel(1);
+                sender
+                    .send(Ok(bytes::Bytes::from(sse)))
+                    .await
+                    .expect("queue reply body");
+                Ok(stream)
+            })
         }
     }
 
@@ -1934,7 +1951,7 @@ mod tests {
         transport: Arc<dyn SseTransport>,
         head: HeadStamp,
     ) -> (Result<(), String>, Vec<crate::BridgeEvent>) {
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let outcome = super::run_chat_turn_on(
             &fixture.state,
             &tx,
@@ -2055,7 +2072,7 @@ mod tests {
         let head = parse_head(&head_a);
         let session_id = session.as_str().to_owned();
         let turn_a = tokio::spawn(async move {
-            let (tx, rx) = async_channel::unbounded();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let outcome = super::run_chat_turn_on(
                 &state,
                 &tx,

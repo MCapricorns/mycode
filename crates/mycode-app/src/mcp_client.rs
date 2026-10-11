@@ -9,6 +9,8 @@
 //! not by this client. The [`JsonRpcChannel`] seam abstracts the byte
 //! transport shared by both.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,25 +29,37 @@ pub use stdio_channel::StdioChannel;
 /// `params` into a JSON-RPC request, wait for the response carrying the same
 /// id, map JSON-RPC error objects to [`McpError::Server`], and return the
 /// bare `result` value.
-#[async_trait::async_trait]
+/// Methods return boxed futures so the trait stays object-safe for
+/// `dyn JsonRpcChannel` dispatch; implementers write
+/// `Box::pin(async move { … })`.
 pub trait JsonRpcChannel: Send + Sync + 'static {
     /// Performs one request and returns the bare `result` value.
     ///
     /// # Errors
     ///
     /// Returns [`McpError`] for transport, timeout, and protocol failures.
-    async fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError>;
+    fn request<'a>(
+        &'a self,
+        id: u64,
+        method: &'a str,
+        params: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, McpError>> + Send + 'a>>;
 
     /// Sends one notification that expects no response.
     ///
     /// # Errors
     ///
     /// Returns [`McpError`] for transport failures.
-    async fn notify(&self, method: &str) -> Result<(), McpError>;
+    fn notify<'a>(
+        &'a self,
+        method: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>>;
 
     /// Releases the transport gracefully; stdio closes the child's stdin
     /// and waits before killing it. Stateless transports do nothing.
-    async fn shutdown(&self) {}
+    fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async {})
+    }
 }
 
 /// Maximum accepted response message bytes.

@@ -1,5 +1,7 @@
 //! reqwest-backed [`WebTransport`] production implementation.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
@@ -65,57 +67,58 @@ pub(super) fn pinned_transport_error(message: &str) -> WebError {
     }
 }
 
-#[async_trait::async_trait]
 impl WebTransport for ReqwestWebTransport {
-    async fn post_json(
-        &self,
-        endpoint: &str,
-        bearer: Option<&str>,
-        body: &[u8],
+    fn post_json<'a>(
+        &'a self,
+        endpoint: &'a str,
+        bearer: Option<&'a str>,
+        body: &'a [u8],
         timeout: Duration,
         cancel: CancellationToken,
-    ) -> Result<Vec<u8>, WebError> {
-        let mut headers = vec![
-            ("content-type".to_owned(), "application/json".to_owned()),
-            ("accept".to_owned(), "application/json".to_owned()),
-        ];
-        if let Some(key) = bearer {
-            // Strip a leading `Bearer` prefix from a pasted key before
-            // sending `Authorization: Bearer …`.
-            let key = crate::mcp_client::strip_bearer_prefix(key);
-            headers.push(("authorization".to_owned(), format!("Bearer {key}")));
-        }
-        let response = tokio::select! {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, WebError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut headers = vec![
+                ("content-type".to_owned(), "application/json".to_owned()),
+                ("accept".to_owned(), "application/json".to_owned()),
+            ];
+            if let Some(key) = bearer {
+                // Strip a leading `Bearer` prefix from a pasted key before
+                // sending `Authorization: Bearer …`.
+                let key = crate::mcp_client::strip_bearer_prefix(key);
+                headers.push(("authorization".to_owned(), format!("Bearer {key}")));
+            }
+            let response = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(WebError::Cancelled),
             sent = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
-                method: reqwest::Method::POST,
-                url: endpoint.to_owned(),
-                headers,
-                body: Some(mycode_providers::PinnedBody::Bytes(body.to_vec().into())),
-                mode: mycode_providers::PinMode::PublicHttps,
-                timeout: Some(timeout),
-                read_timeout: None,
-                user_agent: None,
-                follow_redirects: true,
-                cancel: cancel.clone(),
+            method: reqwest::Method::POST,
+            url: endpoint.to_owned(),
+            headers,
+            body: Some(mycode_providers::PinnedBody::Bytes(body.to_vec().into())),
+            mode: mycode_providers::PinMode::PublicHttps,
+            timeout: Some(timeout),
+            read_timeout: None,
+            user_agent: None,
+            follow_redirects: true,
+            cancel: cancel.clone(),
             }) => sent.map_err(|message| pinned_transport_error(&message))?,
-        };
-        if !response.status().is_success() {
-            let status = response.status();
-            let bytes = tokio::select! {
+            };
+            if !response.status().is_success() {
+                let status = response.status();
+                let bytes = tokio::select! {
                 biased;
                 () = cancel.cancelled() => return Err(WebError::Cancelled),
                 bytes = response.bytes() => bytes,
-            };
-            let body = bytes.unwrap_or_default();
-            return Err(WebError::unavailable(http_error_reason(status, &body)));
-        }
-        let bytes = tokio::select! {
+                };
+                let body = bytes.unwrap_or_default();
+                return Err(WebError::unavailable(http_error_reason(status, &body)));
+            }
+            let bytes = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(WebError::Cancelled),
             bytes = response.bytes() => bytes.map_err(|_| WebError::Protocol)?,
-        };
-        Ok(bytes.to_vec())
+            };
+            Ok(bytes.to_vec())
+        })
     }
 }

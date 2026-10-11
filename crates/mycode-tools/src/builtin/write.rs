@@ -4,7 +4,6 @@
 //! safely). Existing targets require `expected_revision` or `overwrite=true`.
 //! Hidden files are writable. Unconditional overwrite is not the default.
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -46,7 +45,6 @@ impl std::fmt::Debug for WriteArgs {
     }
 }
 
-#[async_trait]
 impl Tool for WriteTool {
     type Args = WriteArgs;
     type Output = ();

@@ -10,10 +10,11 @@
 //! can search, then fetch, without paying the raw page twice.
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +60,9 @@ pub struct WebPage {
 }
 
 /// Host side of the web tools.
-#[async_trait]
+///
+/// Both methods return boxed futures so the trait stays object-safe for
+/// `dyn WebHost` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait WebHost: Send + Sync + 'static {
     /// Runs one bounded search.
     ///
@@ -67,23 +70,23 @@ pub trait WebHost: Send + Sync + 'static {
     ///
     /// Returns [`ToolError::Execution`] when no backend is configured or
     /// the search failed.
-    async fn search(
-        &self,
-        query: &str,
+    fn search<'a>(
+        &'a self,
+        query: &'a str,
         max_results: usize,
-        cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<Vec<WebHit>, ToolError>;
+        cancel: &'a tokio_util::sync::CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<WebHit>, ToolError>> + Send + 'a>>;
 
     /// Fetches bounded page text for vetted URLs.
     ///
     /// # Errors
     ///
     /// Returns [`ToolError::Execution`] when the fetch failed.
-    async fn fetch_content(
-        &self,
-        urls: &[String],
-        cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<Vec<WebPage>, ToolError>;
+    fn fetch_content<'a>(
+        &'a self,
+        urls: &'a [String],
+        cancel: &'a tokio_util::sync::CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<WebPage>, ToolError>> + Send + 'a>>;
 }
 
 /// The built-in `web_search` tool.
@@ -108,7 +111,6 @@ pub struct WebSearchArgs {
     pub max_results: Option<usize>,
 }
 
-#[async_trait]
 impl Tool for WebSearchTool {
     type Args = WebSearchArgs;
     type Output = ();
@@ -173,7 +175,6 @@ pub struct FetchContentArgs {
     pub goal: Option<String>,
 }
 
-#[async_trait]
 impl Tool for FetchContentTool {
     type Args = FetchContentArgs;
     type Output = ();
@@ -635,6 +636,8 @@ async fn cached_pages(
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::Arc;
 
     use super::{
@@ -657,23 +660,22 @@ mod tests {
 
     struct StaticPages(Vec<WebPage>);
 
-    #[async_trait::async_trait]
     impl WebHost for StaticPages {
-        async fn search(
-            &self,
-            _query: &str,
+        fn search<'a>(
+            &'a self,
+            _query: &'a str,
             _max_results: usize,
-            _cancel: &tokio_util::sync::CancellationToken,
-        ) -> Result<Vec<WebHit>, ToolError> {
-            Ok(Vec::new())
+            _cancel: &'a tokio_util::sync::CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<WebHit>, ToolError>> + Send + 'a>> {
+            Box::pin(async { Ok(Vec::new()) })
         }
 
-        async fn fetch_content(
-            &self,
-            _urls: &[String],
-            _cancel: &tokio_util::sync::CancellationToken,
-        ) -> Result<Vec<WebPage>, ToolError> {
-            Ok(self.0.clone())
+        fn fetch_content<'a>(
+            &'a self,
+            _urls: &'a [String],
+            _cancel: &'a tokio_util::sync::CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<WebPage>, ToolError>> + Send + 'a>> {
+            Box::pin(async move { Ok(self.0.clone()) })
         }
     }
 

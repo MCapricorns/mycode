@@ -15,7 +15,6 @@ thiserror.workspace = true
 # child pipes through it. `process` does not enable that module, and reqwest
 # only does so when the app crate is in the same build.
 tokio = { workspace = true, features = ["fs", "io-util", "net", "process"] }
-async-trait.workspace = true
 schemars.workspace = true
 tokio-util.workspace = true
 globset.workspace = true

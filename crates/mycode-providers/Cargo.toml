@@ -8,9 +8,7 @@ license.workspace = true
 [dependencies]
 mycode-core = { path = "../mycode-core" }
 mycode-config = { path = "../mycode-config" }
-async-trait.workspace = true
 bytes.workspace = true
-futures-util.workspace = true
 reqwest = { workspace = true, features = ["json", "form"] }
 serde.workspace = true
 serde_json.workspace = true

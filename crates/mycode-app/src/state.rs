@@ -160,7 +160,7 @@ pub(crate) async fn refresh_catalog(
             if let Ok(mut guard) = state.catalog.write() {
                 *guard = info.clone();
             }
-            let _ = events.try_send(BridgeEvent::CatalogUpdated {
+            let _ = events.send(BridgeEvent::CatalogUpdated {
                 providers,
                 fetched_at,
             });
@@ -191,7 +191,7 @@ pub(crate) fn spawn_update_check(state: Arc<CoreState>, events: crate::BridgeEve
         if let Some(event) =
             startup_update_event(crate::updates::latest_release(UPDATE_USER_AGENT).await)
         {
-            let _ = events.try_send(event);
+            let _ = events.send(event);
         }
     });
 }
@@ -354,7 +354,7 @@ mod tests {
                 .provider("marker-fresh")
                 .is_none()
         );
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let reply = refresh_catalog(&state, &tx, false).await;
         let crate::BridgeReply::Catalog(Ok(info)) = reply else {
             panic!("fresh refresh failed: {reply:?}");

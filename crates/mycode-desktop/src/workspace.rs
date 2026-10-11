@@ -385,15 +385,15 @@ impl Workspace {
     /// before the next await paints only the finished message. Each slice
     /// stops before `ChatDone` and before the character budget, then waits
     /// one frame so the bubble can grow.
-    fn spawn_event_pump(&self, events: BridgeEventRx, cx: &mut Context<Self>) {
+    fn spawn_event_pump(&self, mut events: BridgeEventRx, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let mut buffer: VecDeque<mycode_app::BridgeEvent> = VecDeque::new();
             let mut not_before = Instant::now();
             loop {
                 if buffer.is_empty() {
                     match events.recv().await {
-                        Ok(event) => buffer.push_back(event),
-                        Err(_) => return,
+                        Some(event) => buffer.push_back(event),
+                        None => return,
                     }
                 }
                 while let Ok(event) = events.try_recv() {
