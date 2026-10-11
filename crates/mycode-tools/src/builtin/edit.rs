@@ -4,7 +4,7 @@
 //! using the snapshot revision. Matches are collected on that snapshot,
 //! sorted by byte range, and rejected on ambiguity, UTF-8 boundary errors,
 //! overlap, or empty search matches. `fuzzy` commits only a unique-best
-//! normalized match; `ast` replaces tree-sitter capture ranges only.
+//! normalized match.
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -76,7 +76,7 @@ pub struct EditArgs {
     /// Replacement for `old_string`. Used only when `operations` is omitted;
     /// ignored when `operations` is set.
     pub new_string: Option<String>,
-    /// Bounded batch of literal, regex, line-range, fuzzy, and ast operations.
+    /// Bounded batch of literal, regex, line-range, and fuzzy operations.
     /// When set, this list is the whole edit and `old_string`/`new_string`
     /// are ignored.
     pub operations: Option<Vec<EditOp>>,
@@ -160,18 +160,6 @@ pub enum EditOp {
         /// Inclusive character Levenshtein cap on the normalized form.
         max_distance: u32,
     },
-    /// Tree-sitter capture replace. Never pretty-prints the whole file.
-    Ast {
-        /// Grammar name (`rust`, `python`, …). Inferred from the path when omitted.
-        language: Option<String>,
-        /// One bounded tree-sitter query with portable ASCII named captures.
-        query: String,
-        /// Replacement for the capture range; `@name` expands from the match
-        /// and `@@` emits one literal `@`.
-        replacement: String,
-        /// Portable ASCII capture to replace. When omitted, every capture is replaced.
-        capture: Option<String>,
-    },
     /// Inclusive 1-based line range with expected old text and/or hash.
     LineRange {
         /// First line to replace (1-based, BOM-stripped).
@@ -201,18 +189,17 @@ impl Tool for EditTool {
          Example: {\"path\":\"a.rs\",\"operations\":[{\"type\":\"literal\",\"pattern\":\"foo\",\"replacement\":\"bar\"}]}. \
          When `operations` is present it is applied and `old_string`/`new_string` \
          are ignored. Batch literal (memmem / Aho-Corasick), fuzzy \
-         (unique-best normalized Levenshtein), bounded regex, line-range, \
-         and ast (tree-sitter capture) ops all match one snapshot and \
-         publish once. `old_string` must match exactly once. Hidden files \
-         are editable. Returns a revision and a bounded diff summary, not \
-         the file body."
+         (unique-best normalized Levenshtein), bounded regex, and line-range \
+         ops all match one snapshot and publish once. `old_string` must match \
+         exactly once. Hidden files are editable. Returns a revision and a \
+         bounded diff summary, not the file body."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
             "edit: unique replace is {path, old_string, new_string}. Batch \
              edits are {path, operations:[...]} (literal, regex, line_range, \
-             fuzzy, ast) with optional expected_revision. When operations is \
+             fuzzy) with optional expected_revision. When operations is \
              present it is the whole edit and old_string/new_string are \
              ignored. Example: {\"path\":\"a.rs\",\"operations\":[{\"type\":\"literal\",\"pattern\":\"foo\",\"replacement\":\"bar\"}]}",
         )
@@ -262,21 +249,8 @@ impl Tool for EditTool {
         let planning_cancel = ctx.cancel.clone();
         let (snapshot, applied) = tokio::task::spawn_blocking(move || {
             check_cancel(&planning_cancel)?;
-            let ast_snapshot = ast::parse_snapshot(&ops, &snapshot.text, &planning_cancel)?;
-            let planned = plan_edits(
-                &snapshot.text,
-                &ops,
-                ast_snapshot.as_ref(),
-                &planning_cancel,
-            )?;
+            let planned = plan_edits(&snapshot.text, &ops, &planning_cancel)?;
             let applied = apply_planned(&snapshot.text, &planned, &planning_cancel)?;
-            ast::reject_new_syntax_errors(
-                ast_snapshot.as_ref(),
-                &snapshot.text,
-                &applied.text,
-                &planned,
-                &planning_cancel,
-            )?;
             check_cancel(&planning_cancel)?;
             Ok::<_, ToolError>((snapshot, applied))
         })
@@ -326,7 +300,6 @@ impl Tool for EditTool {
     }
 }
 
-mod ast;
 mod engine;
 mod fuzzy;
 mod line;

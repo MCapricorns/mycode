@@ -403,11 +403,10 @@ fn thinking_box(
 
 /// Assistant reply bubble: Markdown via gpui-kit's TextView.
 ///
-/// Fenced code is highlighted by the kit's tree-sitter grammars
-/// (`tree-sitter-languages`). `apply_palette` installs that highlighter
-/// (`install_highlight`); the caller then publishes it with `Theme::sync_base`.
-/// The id must be unique per entry — `ElementId::CodeLocation` would collide
-/// across blocks since all bubbles render from the same call site.
+/// Fenced code renders in a single default style: the tree-sitter grammars
+/// were dropped to halve the binary. The id must be unique per entry —
+/// `ElementId::CodeLocation` would collide across blocks since all bubbles
+/// render from the same call site.
 fn agent_text(
     id: SharedString,
     text: SharedString,

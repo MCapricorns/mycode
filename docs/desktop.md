@@ -40,7 +40,7 @@ BridgeCommand → CoreBridge
 | `git_status` | 只读 `git status --porcelain=v1`（带 `--no-optional-locks`，不抢 `index.lock`）和 `git diff HEAD`。最多保留 80 个改动文件，改名行打开新路径的 diff |
 | `i18n` | `auto` 跟系统语言，否则用设置里的 `en` / `zh` |
 
-视觉是 Desk：窗口使用系统模糊（macOS 视觉效果、Windows DWM、Wayland 上的 KDE 模糊）。标题栏、侧栏、详情面板和菜单是半透明毛玻璃；对话和设置的阅读区更接近实色，保证文字对比。页面是接近实色的深色底，只带一点色板的渐变。色板来自设置，默认石板灰，另外还有海洋、森林、暮色、余烬和极光。通用页把这六个色板排成一行固定宽度的色块（卡片太窄时换行），选中是一圈细环。界面字体是 `appearance.fontFamily`：缺省、空字符串或 `system` 用操作系统界面字体，另外可以选本机能够加载的 Inter、Segoe UI、PingFang、Noto Sans。字号是 `appearance.fontSize`。这三项改完立刻上屏，并写入 `settings.json`，下次启动再读回来。界面只有深色；设置里不是 `dark` 的主题或已删除的旧色板会让整份 `settings.json` 备份后重置（见 config.md）。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块用 kit 自带的 Tree-sitter 语法高亮（`tree-sitter-languages`），不另引一套 grammar。
+视觉是 Desk：窗口使用系统模糊（macOS 视觉效果、Windows DWM、Wayland 上的 KDE 模糊）。标题栏、侧栏、详情面板和菜单是半透明毛玻璃；对话和设置的阅读区更接近实色，保证文字对比。页面是接近实色的深色底，只带一点色板的渐变。色板来自设置，默认石板灰，另外还有海洋、森林、暮色、余烬和极光。通用页把这六个色板排成一行固定宽度的色块（卡片太窄时换行），选中是一圈细环。界面字体是 `appearance.fontFamily`：缺省、空字符串或 `system` 用操作系统界面字体，另外可以选本机能够加载的 Inter、Segoe UI、PingFang、Noto Sans。字号是 `appearance.fontSize`。这三项改完立刻上屏，并写入 `settings.json`，下次启动再读回来。界面只有深色；设置里不是 `dark` 的主题或已删除的旧色板会让整份 `settings.json` 备份后重置（见 config.md）。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块单色渲染（tree-sitter 语法高亮已移除，二进制减半）。
 
 ## 窗口里有什么
 

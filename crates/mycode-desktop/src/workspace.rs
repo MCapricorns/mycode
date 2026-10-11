@@ -93,7 +93,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         // appearance, and other sessions simply composite the translucent fills.
         window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Blurred);
         // `init` installs the stock light theme. The product paints dark only,
-        // then pushes that theme (and its code-block highlighter) into Base.
+        // then pushes that theme into Base.
         Theme::change(ThemeMode::Dark, Some(window), cx);
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);

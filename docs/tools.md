@@ -39,7 +39,7 @@
 | --- | --- |
 | `read` | 带行号读 UTF-8 文件（去掉 BOM），返回不透明的 revision。`offset` 是从 1 开始的行号，schema 写着 `minimum: 1`，传 `0` 在校验阶段就被拒，内核里也再挡一次，不会当成第一行；省略时从第一行读。`limit` 是行数。每次最多 2000 行或 50 KiB，超出时附说明让模型用 offset / limit 再读。文件超过 32 MiB 直接拒绝 |
 | `write` | 创建或整文件替换，最多 8 MiB。新文件原子创建（缺的父目录一并建）；已有文件必须带上次 `read` 的 `expected_revision`，或显式 `overwrite: true`，两者不能同用 |
-| `edit` | 一个快照上的一批操作（最多 32 个），一次发布：`literal`（memmem / Aho-Corasick）、`fuzzy`（归一化后的 Levenshtein，只接受唯一且领先足够的最佳匹配）、有界 `regex`、行范围、`ast`（用 gpui-kit 注册的 Tree-sitter 语法做捕获替换，改完重新解析，新增语法错误就拒绝）。也接受旧的 `{old_string, new_string}` 唯一替换。返回 revision 和有界 diff 摘要，不回整个文件。模糊匹配在分词和扫描候选窗口时每约 4 KiB 原文检查一次取消 |
+| `edit` | 一个快照上的一批操作（最多 32 个），一次发布：`literal`（memmem / Aho-Corasick）、`fuzzy`（归一化后的 Levenshtein，只接受唯一且领先足够的最佳匹配）、有界 `regex`、行范围。也接受旧的 `{old_string, new_string}` 唯一替换。返回 revision 和有界 diff 摘要，不回整个文件。模糊匹配在分词和扫描候选窗口时每约 4 KiB 原文检查一次取消 |
 | `find` | 按 glob 找文件和目录，限制在搜索根内，遵守 `.gitignore`，跳过隐藏和被忽略的路径。默认最多报告 1000 条，排序后用 `/` 分隔。取消或超时返回错误，不给半截结果 |
 | `grep` | 进程内的内容搜索，默认字面量，`is_regex` 开正则，支持 include / exclude glob。默认最多报告 200 行 `path:line:text`，每行最多 500 字节。跳过隐藏和被忽略的文件 |
 | `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程启动工具。模型不能直接点名它，只能在 `run_code` 里写 `await tools.shell(...)`。注册表里的名字跟启动时解析到的解释器走，整个会话不变：PowerShell 是 `powershell`，bash 是 `bash`，zsh 是 `zsh`，POSIX sh 是 `sh`，只有 Windows 上两种 PowerShell 都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
