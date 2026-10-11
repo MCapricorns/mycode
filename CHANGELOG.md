@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-10-12
+
+### Changed
+
+- 移除 tree-sitter：`edit` 删去 `ast` 操作（连同 36 个静态链接的语法 crate），gpui-kit 不再启用 `tree-sitter-languages`，对话里的围栏代码块单色渲染（gpui-component 退回无操作的高亮 stub）。编辑结果与 git diff 面板的红绿行前缀着色不受影响。release 二进制从 75.3 MB 降到 38.2 MB。
+
 ## [0.11.2] - 2026-10-11
 
 ### Changed
