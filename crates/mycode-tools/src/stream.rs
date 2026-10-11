@@ -40,11 +40,29 @@ impl ToolProgress {
     }
 }
 
+/// One inner tool call started by `run_code`. The UI nests a card under the
+/// program; the model does not see this event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NestedCallStart {
+    /// Stable id for this inner call (`{parent}:ptc:{n}`).
+    pub id: String,
+    /// Tool name shown on the card.
+    pub name: String,
+    /// Path, command, or query shown beside the name.
+    pub target: String,
+}
+
 /// One item on a tool's output stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ToolStreamItem {
     /// Incremental progress (zero or more, before the terminal).
     Progress(ToolProgress),
+    /// An inner `run_code` call started. Not a terminal.
+    NestedStarted(NestedCallStart),
+    /// Progress from an inner call, including subagent steps.
+    NestedProgress { id: String, message: String },
+    /// An inner call finished. The result is for the UI card only.
+    NestedCompleted { id: String, result: ToolResult },
     /// The final result of the call (exactly one; ends the stream).
     Terminal(ToolResult),
 }
@@ -88,6 +106,36 @@ impl ToolStream {
     /// the stream has terminated or the receiver is gone.
     pub fn progress(&self, message: impl Into<String>) -> bool {
         self.send(ToolStreamItem::Progress(ToolProgress::new(message)))
+    }
+
+    /// Record an inner `run_code` call for the UI. Not model history.
+    pub fn nested_started(
+        &self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        target: impl Into<String>,
+    ) -> bool {
+        self.send(ToolStreamItem::NestedStarted(NestedCallStart {
+            id: id.into(),
+            name: name.into(),
+            target: target.into(),
+        }))
+    }
+
+    /// Forward progress from an inner call.
+    pub fn nested_progress(&self, id: impl Into<String>, message: impl Into<String>) -> bool {
+        self.send(ToolStreamItem::NestedProgress {
+            id: id.into(),
+            message: message.into(),
+        })
+    }
+
+    /// Finish an inner call's UI card.
+    pub fn nested_completed(&self, id: impl Into<String>, result: ToolResult) -> bool {
+        self.send(ToolStreamItem::NestedCompleted {
+            id: id.into(),
+            result,
+        })
     }
 
     /// Send the terminal result. Only the **first** terminal wins; later
@@ -150,6 +198,11 @@ impl ToolStreamReceiver {
     /// Await the next item; `None` once all senders are dropped.
     pub async fn recv(&mut self) -> Option<ToolStreamItem> {
         self.rx.recv().await
+    }
+
+    /// Poll one queued item without waiting.
+    pub fn try_recv(&mut self) -> Option<ToolStreamItem> {
+        self.rx.try_recv().ok()
     }
 
     /// Collect items until the terminal item arrives (or the producer is

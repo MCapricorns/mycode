@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
@@ -38,6 +39,8 @@ pub struct ToolCtx {
     pub extra_roots: Vec<PathBuf>,
     /// Tools a `run_code` program may call. Absent for ordinary tools.
     pub catalog: Option<ToolCatalog>,
+    /// Wall-clock override for one `run_code` program. `None` uses the default.
+    pub ptc_wall: Option<Duration>,
 }
 
 impl ToolCtx {
@@ -51,7 +54,14 @@ impl ToolCtx {
             prepared_file: None,
             extra_roots: Vec::new(),
             catalog: None,
+            ptc_wall: None,
         }
+    }
+
+    /// Shorten or extend the `run_code` wall clock for this invocation.
+    pub fn with_ptc_wall(mut self, wall: Duration) -> Self {
+        self.ptc_wall = Some(wall);
+        self
     }
 
     /// Replace the cancellation token (builder style).

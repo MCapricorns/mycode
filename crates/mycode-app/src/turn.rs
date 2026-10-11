@@ -170,6 +170,7 @@ async fn publish_visible_summary(
         text: payload.into(),
         call_id: None,
         thinking: String::new(),
+        parent_call_id: None,
     };
     let _ = events.try_send(BridgeEvent::SummaryShown {
         session_id: session_id.to_owned(),
@@ -342,21 +343,12 @@ The environment block names this OS and the one shell tool; write that shell's s
         system_prompt.push_str("\n\n<mcp>\n");
         system_prompt.push_str(note);
         system_prompt.push_str(
-            "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
-call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
-guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
-response as `agent`.\n</mcp>",
+            "Built-in tools and MCP tools are `await tools.<name>(...)` inside `run_code`. \
+MCP tools are named `server__tool`. A name that is not an identifier is \
+`await tools[\"name\"](...)`. For a deferred MCP tool, call `await tools.search_tool(...)` \
+with name \"list\", then with the exact name, then `await tools.use_tool(...)`. Do not \
+guess parameters.\n</mcp>",
         );
-    }
-    if registry.get("run_code").is_some() {
-        system_prompt.push_str(
-            "\n\nSimple lookups stay inline. Use `run_code` when one step needs several reads, searches, edits, or page fetches, including a rename across files; one obvious call stays a direct tool. Pass `goal` to `fetch_content` when you already know the fact you need.",
-        );
-        if registry.get("agent").is_some() {
-            system_prompt.push_str(
-                " Web research, vendor docs, and a repository-wide map fit `scout` (`agent` with agent \"scout\"). Do not use the shell to fetch docs or map the repo. You choose; a narrow question stays inline.",
-            );
-        }
     }
     let mut roots: Vec<&std::path::Path> = extra_roots.iter().map(PathBuf::as_path).collect();
     roots.sort();
@@ -367,10 +359,10 @@ response as `agent`.\n</mcp>",
         }
         let shell_tool = mycode_tools::resolved_shell().kind.tool_name();
         system_prompt.push_str(&format!(
-            "Relative paths stay in the session cwd. For the other folders, pass an \
-absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
-path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in the session \
-cwd for both script and program mode.",
+            "Relative paths stay in the session cwd. For the other folders, inside \
+`run_code` pass an absolute path to `tools.read`, `tools.write`, `tools.edit`, \
+`tools.find`, and `tools.grep`, or an absolute path inside `tools.shell` \
+(`mode` `script`, a `{shell_tool}` script). `tools.shell` starts in the session cwd.",
         ));
     }
     system_prompt.push_str("\n\n");
@@ -393,7 +385,9 @@ pub(crate) fn push_skill_catalog(prompt: &mut String, mut skills: Vec<mycode_con
     {
         catalog.insert_str(
             close,
-            &format!("\n- and {hidden} more; read the matching SKILL.md by path"),
+            &format!(
+                "\n- and {hidden} more; inside run_code, await tools.read on the matching SKILL.md path"
+            ),
         );
     }
     prompt.push_str("\n\n");
@@ -599,7 +593,7 @@ async fn run_chat_turn_on(
     );
     let overhead_tokens = crate::compaction::estimate_prefix_tokens(
         std::slice::from_ref(&system_prompt),
-        &registry.specs(),
+        &registry.model_specs(),
     );
     // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
     // This pre-turn pass publishes its transcript card immediately. The
@@ -764,6 +758,7 @@ async fn run_chat_turn_on(
                         call_id: spelling,
                         name,
                         target,
+                        parent: None,
                     });
                 }
                 mycode_core::events::AgentEvent::ToolProgress { call_id, message } => {
@@ -773,6 +768,31 @@ async fn run_chat_turn_on(
                         name: String::new(),
                         message,
                     });
+                }
+                mycode_core::events::AgentEvent::PtcNested {
+                    parent,
+                    call_id,
+                    kind,
+                } => {
+                    if !handle_ptc_nested(
+                        &writer,
+                        &pump_events,
+                        &pump_session_id,
+                        parent.as_str(),
+                        call_id.as_str(),
+                        kind,
+                    )
+                    .await
+                    {
+                        emit_chat_failed(
+                            &pump_events,
+                            &writer,
+                            &pump_session_id,
+                            "could not record an inner tool call",
+                        )
+                        .await;
+                        return;
+                    }
                 }
                 mycode_core::events::AgentEvent::ToolCompleted {
                     call_id,
@@ -861,6 +881,7 @@ async fn run_chat_turn_on(
                                     text: text.into(),
                                     call_id: None,
                                     thinking: String::new(),
+                                    parent_call_id: None,
                                 };
                                 let _ = pump_events.try_send(BridgeEvent::SteerCommitted {
                                     session_id: pump_session_id.clone(),
@@ -1132,6 +1153,70 @@ async fn run_chat_turn_on(
 }
 
 /// Reports a turn failure with the ledger head after whatever already committed.
+/// Records one inner `run_code` call for the transcript without putting it
+/// in model history. Live cards use the provider ids; the ledger stores the
+/// parent ledger id so a restored session nests the same way.
+async fn handle_ptc_nested(
+    writer: &crate::ledger::HeadWriter,
+    events: &crate::BridgeEventTx,
+    session_id: &str,
+    parent: &str,
+    call_id: &str,
+    kind: mycode_core::PtcNestedKind,
+) -> bool {
+    let parent_ledger = writer
+        .ledger_id(parent)
+        .await
+        .unwrap_or_else(|| parent.to_owned());
+    match kind {
+        mycode_core::PtcNestedKind::Started { name, target } => {
+            if writer
+                .open_nested_call(call_id, &name, &target, &parent_ledger)
+                .await
+                .is_err()
+            {
+                return false;
+            }
+            let _ = events.try_send(BridgeEvent::ToolStarted {
+                session_id: session_id.to_owned(),
+                call_id: call_id.to_owned(),
+                name,
+                target,
+                parent: Some(parent.to_owned()),
+            });
+            true
+        }
+        mycode_core::PtcNestedKind::Progress { message } => {
+            let _ = events.try_send(BridgeEvent::ToolProgress {
+                session_id: session_id.to_owned(),
+                call_id: call_id.to_owned(),
+                name: String::new(),
+                message,
+            });
+            true
+        }
+        mycode_core::PtcNestedKind::Completed { mut result } => {
+            result.ptc_parent = Some(parent_ledger);
+            let Ok(payload) = serde_json::to_vec(&result) else {
+                return false;
+            };
+            match writer.close_call(call_id, &payload).await {
+                Ok(event_id) => {
+                    let mut entry = project_tool_result_message(&event_id, &result);
+                    entry.call_id = Some(call_id.to_owned());
+                    entry.parent_call_id = Some(parent.to_owned());
+                    let _ = events.try_send(BridgeEvent::ToolCompleted {
+                        session_id: session_id.to_owned(),
+                        entry,
+                    });
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+    }
+}
+
 async fn emit_chat_failed(
     events: &crate::BridgeEventTx,
     writer: &HeadWriter,
@@ -1431,24 +1516,20 @@ mod tests {
     }
 
     fn tool_sse() -> String {
+        let code = "a = await tools.read(path=\"a.txt\")\nb = await tools.read(path=\"b.txt\")\nreturn a + \"\\n\" + b\n";
         let chunk = serde_json::json!({
             "choices": [{
                 "delta": {
                     "tool_calls": [
                         {
                             "index": 0,
-                            "id": "call_read_a",
+                            "id": "call_run",
                             "function": {
-                                "name": "read",
-                                "arguments": serde_json::json!({"path": "a.txt"}).to_string()
-                            }
-                        },
-                        {
-                            "index": 1,
-                            "id": "call_read_b",
-                            "function": {
-                                "name": "read",
-                                "arguments": serde_json::json!({"path": "b.txt"}).to_string()
+                                "name": "run_code",
+                                "arguments": serde_json::json!({
+                                    "description": "Read both fixtures",
+                                    "code": code
+                                }).to_string()
                             }
                         }
                     ]
@@ -1489,7 +1570,7 @@ mod tests {
             models: vec!["test-model".to_owned()],
             enabled: true,
             // ~22k token auto threshold. The seeded prompt stays under it;
-            // the two read results push the next hook over it.
+            // the `run_code` result (capped near 8k chars) pushes the next hook over it.
             context_limit: Some(26_000),
             max_output: None,
         });
@@ -1517,7 +1598,7 @@ mod tests {
         let state = CoreState::new(home, catalog, Vec::new());
         let created = state.service.create().await.expect("session");
         let mut head = HeadStamp::Empty;
-        for text in ["prior work", &"P".repeat(72_000)] {
+        for text in ["prior work", &"P".repeat(78_000)] {
             let reservation = state
                 .service
                 .reserve_event(
@@ -1638,8 +1719,22 @@ mod tests {
             .collect();
         assert_eq!(
             tool_calls.len(),
+            3,
+            "the run_code card and both nested reads should be on the ledger"
+        );
+        assert!(
+            tool_calls.iter().any(|(_, entry)| {
+                entry.parent_call_id.is_none() && entry.text.contains("Read both fixtures")
+            }),
+            "run_code card missing: {tool_calls:?}"
+        );
+        assert_eq!(
+            tool_calls
+                .iter()
+                .filter(|(_, entry)| entry.parent_call_id.is_some())
+                .count(),
             2,
-            "both read calls should be on the ledger"
+            "nested reads should remember their parent"
         );
         for (index, call) in tool_calls {
             let call_id = call.call_id.as_deref().expect("call id");

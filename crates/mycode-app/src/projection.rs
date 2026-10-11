@@ -24,6 +24,7 @@ pub(crate) fn project_replayed_entry(
                     text: decode_text(payload).into(),
                     call_id: None,
                     thinking: String::new(),
+                    parent_call_id: None,
                 }),
             }
         }
@@ -51,6 +52,7 @@ pub(crate) fn project_replayed_entry(
                 text: mycode_core::tool_label(name, target).into(),
                 call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
                 thinking: String::new(),
+                parent_call_id: value["parent"].as_str().map(str::to_owned),
             })
         }
         EventKind::Usage => Some(project_usage(event.event_id.as_str(), payload)),
@@ -102,6 +104,7 @@ pub(crate) fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry
         text: text.into(),
         call_id: None,
         thinking: String::new(),
+        parent_call_id: None,
     }
 }
 
@@ -130,6 +133,7 @@ pub(crate) fn project_tool_result(event_id: &str, payload: &[u8]) -> Conversatio
             content: Vec::new(),
             is_error: true,
             details: None,
+            ptc_parent: None,
         });
     project_tool_result_message(event_id, &result)
 }
@@ -156,6 +160,7 @@ pub(crate) fn project_tool_result_message(
         },
         call_id: Some(result.tool_call_id.clone()),
         thinking: String::new(),
+        parent_call_id: result.ptc_parent.clone(),
     }
 }
 
@@ -186,6 +191,7 @@ pub(crate) fn project_assistant_message(
         text: text.into(),
         call_id: None,
         thinking,
+        parent_call_id: None,
     }
 }
 

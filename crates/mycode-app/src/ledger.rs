@@ -253,6 +253,11 @@ pub(crate) async fn ledger_history(
             }
             EventKind::ToolResult => {
                 if let Ok(result) = serde_json::from_slice::<ToolResultMessage>(payload) {
+                    // Inner `run_code` calls are UI cards. The model only
+                    // sees the program's print and return value.
+                    if result.ptc_parent.is_some() {
+                        return Ok(());
+                    }
                     history.push(Arc::new(Message::ToolResult(result)));
                 }
             }
@@ -349,6 +354,7 @@ pub(crate) async fn send_message(
             text: text.into(),
             call_id: None,
             thinking: String::new(),
+            parent_call_id: None,
         },
     ))
 }
@@ -456,6 +462,40 @@ impl HeadWriter {
             .await
             .insert(provider_call_id.to_owned(), identity.clone());
         let payload = serde_json::json!({ "name": name, "target": target });
+        let bytes = serde_json::to_vec(&payload).map_err(|_| SessionError::Corrupt)?;
+        self.write_event(EventKind::ToolCall, Some(identity), &bytes)
+            .await
+            .map(|_| ())
+    }
+
+    /// Ledger id opened for a provider call that is still in flight.
+    pub(crate) async fn ledger_id(&self, provider_call_id: &str) -> Option<String> {
+        self.calls
+            .lock()
+            .await
+            .get(provider_call_id)
+            .map(|identity| identity.as_str().to_owned())
+    }
+
+    /// Opens an inner `run_code` call. `parent_ledger` is the enclosing
+    /// program's ledger id so replay can nest the card.
+    pub(crate) async fn open_nested_call(
+        &self,
+        provider_call_id: &str,
+        name: &str,
+        target: &str,
+        parent_ledger: &str,
+    ) -> Result<(), SessionError> {
+        let identity = SessionCallId::generate().ok_or(SessionError::Corrupt)?;
+        self.calls
+            .lock()
+            .await
+            .insert(provider_call_id.to_owned(), identity.clone());
+        let payload = serde_json::json!({
+            "name": name,
+            "target": target,
+            "parent": parent_ledger,
+        });
         let bytes = serde_json::to_vec(&payload).map_err(|_| SessionError::Corrupt)?;
         self.write_event(EventKind::ToolCall, Some(identity), &bytes)
             .await

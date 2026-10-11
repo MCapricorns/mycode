@@ -249,6 +249,12 @@ pub enum BridgeCommand {
         /// One answer per asked question, in order; empty string skips.
         answers: Vec<String>,
     },
+    /// Dismiss a pending ask without answering. The script sees a catchable
+    /// tool error. This does not cancel the turn.
+    AskDismiss {
+        /// Session identity spelling.
+        session_id: String,
+    },
     /// Resolve the current provider catalog (cache, else bundled snapshot).
     GetCatalog,
     /// Re-download the cloud provider catalog.
@@ -374,6 +380,8 @@ pub enum BridgeEvent {
         name: String,
         /// Path, query, or command. Empty when the call has no target.
         target: String,
+        /// Provider id of the enclosing `run_code` call when this card is nested.
+        parent: Option<String>,
     },
     /// Incremental tool progress (including nested subagent steps).
     ToolProgress {

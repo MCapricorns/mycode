@@ -91,7 +91,7 @@ const MAX_TOTAL_ENV_BYTES: usize =
 ///
 /// Returns [`ToolError::InvalidArgs`] when the reconstructed block would exceed
 /// the existing per-value and aggregate environment budgets.
-pub(super) fn snapshot_child_environment() -> Result<Vec<(OsString, OsString)>, ToolError> {
+pub(crate) fn snapshot_child_environment() -> Result<Vec<(OsString, OsString)>, ToolError> {
     let mut env = Vec::with_capacity(ALLOWED_NAMES.len() + 1);
     let mut total_bytes = 0_usize;
     let path = reconstructed_path()?;

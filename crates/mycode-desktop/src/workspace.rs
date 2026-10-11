@@ -245,6 +245,9 @@ pub struct Workspace {
     /// Streaming thinking (`streaming-thinking`) starts expanded. Committed
     /// thinking starts collapsed. An id in this set is showing the other way.
     thinking_overrides: HashSet<String>,
+    /// Shown when the process probe did not find Python 3.10+. Stays up so
+    /// the missing interpreter is visible after the startup toast fades.
+    python_warning: Option<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Last UI font-family id applied to the theme. Empty until the first frame.
@@ -336,6 +339,7 @@ impl Workspace {
             git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
             thinking_overrides: HashSet::new(),
+            python_warning: mycode_tools::python_unavailable_message(),
             applied_font_size: String::new(),
             applied_font_family: String::new(),
             applied_language: u8::MAX,
@@ -358,6 +362,17 @@ impl Workspace {
                 workspace.on_composer_event(event, window, cx);
             })
             .detach();
+            if workspace.python_warning.is_some() {
+                workspace.push_toast(
+                    crate::i18n::t(
+                        "Python 3.10+ was not found. run_code cannot run until it is installed.",
+                        "未找到 Python 3.10+。装好之前 run_code 无法执行。",
+                    )
+                    .to_owned(),
+                    ToastKind::Error,
+                    cx,
+                );
+            }
             workspace.spawn_event_pump(events, cx);
             workspace.spawn_update_recheck(cx);
             workspace.dispatch(BridgeCommand::ListSessions, cx);
@@ -1360,6 +1375,10 @@ impl Workspace {
 
     pub(crate) fn vm(&self) -> &WorkspaceState {
         &self.vm
+    }
+
+    pub(crate) fn python_warning(&self) -> Option<&str> {
+        self.python_warning.as_deref()
     }
 
     pub(crate) fn toasts(&self) -> &[Toast] {

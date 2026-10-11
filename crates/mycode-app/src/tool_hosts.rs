@@ -40,6 +40,14 @@ impl AskRouter {
             .remove(session_id)
             .is_some_and(|tx| tx.send(answers).is_ok())
     }
+
+    fn dismiss(&self, session_id: &str) -> bool {
+        self.pending
+            .lock()
+            .expect("ask router")
+            .remove(session_id)
+            .is_some()
+    }
 }
 
 /// Process-wide ask router; one pending ask per session.
@@ -55,6 +63,17 @@ pub(crate) fn register_ask(session_id: &str) -> tokio::sync::oneshot::Receiver<V
 pub(crate) fn deliver_ask_answer(session_id: &str, answers: Vec<String>) -> Result<(), String> {
     let router = ASK_ROUTER.get_or_init(AskRouter::default);
     if router.deliver(session_id, answers) {
+        Ok(())
+    } else {
+        Err("no pending question for this session".to_owned())
+    }
+}
+
+/// Drops a pending ask without answering. The tool returns a catchable error
+/// and the program keeps running. Stopping the turn is a separate cancel.
+pub(crate) fn dismiss_ask(session_id: &str) -> Result<(), String> {
+    let router = ASK_ROUTER.get_or_init(AskRouter::default);
+    if router.dismiss(session_id) {
         Ok(())
     } else {
         Err("no pending question for this session".to_owned())

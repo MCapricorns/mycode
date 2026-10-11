@@ -59,6 +59,10 @@ pub struct ConversationEntry {
     pub call_id: Option<String>,
     /// Reasoning text shown above an assistant answer. Empty when none.
     pub thinking: String,
+    /// Provider or ledger id of the enclosing `run_code` call. `None` for a
+    /// top-level card. Live events use the provider id; replay uses the
+    /// ledger id, matching the parent card's `call_id` in that view.
+    pub parent_call_id: Option<String>,
 }
 
 /// The currently open conversation.

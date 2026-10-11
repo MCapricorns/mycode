@@ -14,6 +14,7 @@ pub(crate) mod fs_walk;
 pub mod grep;
 pub(crate) mod process;
 pub mod ptc;
+pub mod python;
 pub mod read;
 pub(crate) mod search_report;
 pub mod shell;

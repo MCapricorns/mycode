@@ -35,25 +35,9 @@ async fn live_model_chooses_by_difficulty_when_configured() {
     mycode_tools::register_builtins(&registry);
     let mut system = build_system_prompt(&registry);
     system.push_str(
-        "\n\nYou decide whether to delegate. One grep or find that answers the question stays a direct call. A rename, or edits across several files, stays inline as one `run_code`, not one edit per file. Reading a file before a single edit is fine. Web research, vendor docs, and a repository-wide map fit `scout`: call `agent` with agent \"scout\". Do not use the shell to curl docs or map the repo. You choose; a narrow question stays inline.",
+        "\n\nYou decide whether to delegate. A narrow lookup is one `run_code` whose code calls `tools.grep` or `tools.find`. One edit is `run_code` whose code calls `tools.edit` or `tools.write`. Web research and a repository-wide map may call `tools.agent` with agent \"scout\" inside that program. Delegating broad research to scout is your judgment. Do not call any tool except `run_code` directly.",
     );
-    let mut tools = tool_specs(&registry);
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "agent",
-            "description": "Delegate one scoped unit. scout is read-only research. artisan is a bounded change. You choose when the task is broad enough.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent": {"type": "string", "description": "scout or artisan"},
-                    "prompt": {"type": "string"},
-                    "description": {"type": "string"}
-                },
-                "required": ["agent", "prompt"]
-            }
-        }
-    }));
+    let tools = tool_specs(&registry);
     let client = reqwest::Client::new();
     let url = completions_url(&base);
     let mut failures = Vec::new();
@@ -139,7 +123,7 @@ fn completions_url_accepts_an_openai_compatible_base() {
 
 fn tool_specs(registry: &ToolRegistry) -> Vec<Value> {
     registry
-        .specs()
+        .model_specs()
         .iter()
         .map(|spec| {
             json!({
