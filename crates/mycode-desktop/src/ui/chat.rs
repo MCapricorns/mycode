@@ -143,21 +143,26 @@ pub(super) fn render_chat(
         .flex()
         .flex_col()
         .bg(super::skin::ambient(theme))
-        .when(workspace.python_warning().is_some(), |this| {
-            let message = workspace.python_warning().unwrap_or("").to_owned();
-            this.child(
-                div()
-                    .id("python-warning")
-                    .w_full()
-                    .px_4()
-                    .py_2()
-                    .text_xs()
-                    .whitespace_normal()
-                    .bg(theme.warning.opacity(0.18))
-                    .text_color(theme.warning_foreground)
-                    .child(message),
-            )
-        })
+        .when(
+            python_warning_banner(workspace.python_warning()).is_some(),
+            |this| {
+                let message = python_warning_banner(workspace.python_warning())
+                    .unwrap_or("")
+                    .to_owned();
+                this.child(
+                    div()
+                        .id("python-warning")
+                        .w_full()
+                        .px_4()
+                        .py_2()
+                        .text_xs()
+                        .whitespace_normal()
+                        .bg(theme.warning.opacity(0.18))
+                        .text_color(theme.warning_foreground)
+                        .child(message),
+                )
+            },
+        )
         .child(
             div()
                 .id("conversation-frame")
@@ -247,6 +252,11 @@ enum TranscriptItem<'a> {
 /// Splits the raw entry list into display blocks: user messages become their
 /// own rows, each tool call merges with its matching result, and everything
 /// else (assistant text, orphan results, usage markers) passes through.
+/// Banner text for a missing Python install. Empty stored warnings stay hidden.
+pub(crate) fn python_warning_banner(warning: Option<&str>) -> Option<&str> {
+    warning.map(str::trim).filter(|text| !text.is_empty())
+}
+
 fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem<'_>> {
     let mut items = Vec::with_capacity(entries.len());
     let mut index = 0;
@@ -319,7 +329,7 @@ fn child_tool_rows<'a>(
 
 #[cfg(test)]
 mod nesting_tests {
-    use super::{TranscriptItem, child_tool_rows, collect_transcript_items};
+    use super::{TranscriptItem, child_tool_rows, collect_transcript_items, python_warning_banner};
     use crate::view_model::{ConversationEntry, EntryKind};
 
     fn call(id: &str, text: &str, parent: Option<&str>) -> ConversationEntry {
@@ -342,6 +352,17 @@ mod nesting_tests {
             thinking: String::new(),
             parent_call_id: parent.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn missing_python_banner_uses_the_stored_warning() {
+        let stored = "Python 3.10+ was not found on PATH. run_code needs the system Python.\nInstall Python 3.10 or newer with the system package manager.";
+        let banner = python_warning_banner(Some(stored)).expect("banner");
+        assert_eq!(banner, stored.trim());
+        assert!(banner.contains("Python 3.10+"));
+        assert!(banner.contains("Install Python"));
+        assert!(python_warning_banner(None).is_none());
+        assert!(python_warning_banner(Some(" \n ")).is_none());
     }
 
     #[test]

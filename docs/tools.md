@@ -1,14 +1,14 @@
 # mycode-tools
 
-模型能调用的工具。这里定义 trait、注册表，以及文件、搜索和进程这组内置实现，也定义 `ask_user`、`agent`、`web_search`、`fetch_content` 这几个工具本身；它们背后的宿主（`AskChannel`、`AgentHost`、`WebHost`）和 MCP 在 `mycode-app`，在每个回合注册进去。
+模型能直接调用的工具只有 `run_code`。文件、搜索、进程、`ask_user`、`agent`、网页和 MCP 都在脚本里写成 `await tools.name(...)`。本 crate 定义 trait、注册表和这些内置实现；宿主（`AskChannel`、`AgentHost`、`WebHost`）和 MCP 在 `mycode-app`，在每个回合注册进去。
 
 ```text
-模型的 tool_call
-    → 按名字取出 ToolDyn
-    → 用该工具的 JSON Schema 校验参数
-    → 执行
+模型的 tool_call（只能是 run_code）
+    → Python 进程里的 await tools.name(...)
+    → 长度前缀 JSON 控制通道
+    → 按名字取出 ToolDyn，走和原先直接调用相同的预检
     → ToolResult
-         content  回到模型
+         content  回到脚本（失败则抛 ToolCallError）
          details  只给界面（diff、字节数），不进上下文
 ```
 
@@ -16,7 +16,7 @@
 
 一份 schema 两处用。`schemars` 从参数结构体生成 JSON Schema，既放进 `ToolSpec` 给模型，也在 `execute_dyn` 里校验。模型看见的和运行时接受的是同一份（发给服务商前 `$ref` 会被展开，见 providers.md）。
 
-注册表按名字最后写入者生效，规格按名字排序后发给模型，保证请求体稳定。已经注册且参数合法的调用直接执行。未知工具、参数错误、取消和执行错误都变成工具结果里的 `is_error`，循环不因此停掉。没有「先问用户准不准」的回调。
+注册表按名字最后写入者生效。发给模型的工具模式只有 `run_code`；其余工具的签名写在 system prompt 的 `<tools>` 里。内层调用仍按那份 JSON Schema 校验。未知工具、参数错误和执行错误变成脚本里可捕获的 `ToolCallError`，回合循环不因此停掉。没有「先问用户准不准」的回调。
 
 文件发现和内容搜索在进程内完成（自己的句柄相对遍历加 ripgrep 的搜索核心），不依赖外部的 `fd` 或 `rg`。这样工具机器上没有这些二进制也能用，也少一次进程启动。
 
@@ -42,7 +42,7 @@
 | `edit` | 一个快照上的一批操作（最多 32 个），一次发布：`literal`（memmem / Aho-Corasick）、`fuzzy`（归一化后的 Levenshtein，只接受唯一且领先足够的最佳匹配）、有界 `regex`、行范围、`ast`（用 gpui-kit 注册的 Tree-sitter 语法做捕获替换，改完重新解析，新增语法错误就拒绝）。也接受旧的 `{old_string, new_string}` 唯一替换。返回 revision 和有界 diff 摘要，不回整个文件。模糊匹配在分词和扫描候选窗口时每约 4 KiB 原文检查一次取消 |
 | `find` | 按 glob 找文件和目录，限制在搜索根内，遵守 `.gitignore`，跳过隐藏和被忽略的路径。默认最多报告 1000 条，排序后用 `/` 分隔。取消或超时返回错误，不给半截结果 |
 | `grep` | 进程内的内容搜索，默认字面量，`is_regex` 开正则，支持 include / exclude glob。默认最多报告 200 行 `path:line:text`，每行最多 500 字节。跳过隐藏和被忽略的文件 |
-| `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程启动工具，模型只看见其中一个。名字跟启动时解析到的解释器走，整个会话不变：PowerShell 是 `powershell`，bash 是 `bash`，zsh 是 `zsh`，POSIX sh 是 `sh`，只有 Windows 上两种 PowerShell 都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
+| `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程启动工具。模型不能直接点名它，只能在 `run_code` 里写 `await tools.shell(...)`。注册表里的名字跟启动时解析到的解释器走，整个会话不变：PowerShell 是 `powershell`，bash 是 `bash`，zsh 是 `zsh`，POSIX sh 是 `sh`，只有 Windows 上两种 PowerShell 都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
 
 进程工具的两条模式共用启动路径：钉住程序身份、限制参数和环境变量、截断约 50 KiB 输出、默认 120 秒超时（`timeout_secs` 可改）。超时和取消时终止并回收整棵进程树，包括 `setsid` 脱离进程组的子孙，以及子 shell 退出后仍留在原进程组里的后台进程。shell 自己退出后工具就返回，不等后台子进程关掉继承的管道。丢掉 future 也会把清理交出去。非零退出码是 `is_error` 结果，不是循环故障。执行没有沙箱，环境变量白名单不是隔离。每次 `script` 都是新进程，`cd` 和变量赋值不会留到下一次调用。
 
@@ -54,11 +54,11 @@ Linux / macOS 先看 `$SHELL`。它是绝对路径且文件名是 bash、zsh 或
 
 PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bash 改写成 cmdlet。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免空的 `-EncodedCommand` 被拒绝。命令行按 UTF-16 码元计，上限 32767。bash、zsh 和 sh 用 `-c`。用户命令原样执行。
 
-模型只注册这一个进程工具。描述、参数说明和系统提示词的 `<environment>` / `<shell>` 块按当前解释器来写：PowerShell 7 可以用 `&&`；Windows PowerShell 5.1 上 `&&` 和 `||` 是语法错误，要用 `;` 和 `$LASTEXITCODE`。提示词不再提 bash 到 PowerShell 的翻译。子代理用同一套解析：白名单里的 `shell` / `bash` / `powershell` / `cmd` 都变成这一个工具，提示词里的语法说明跟它一致。scout 不注册进程工具。
+进程工具不出现在模型的工具列表里。SDK 里它叫 `tools.shell`，描述和 `<environment>` / `<shell>` 按当前解释器来写：PowerShell 7 可以用 `&&`；Windows PowerShell 5.1 上 `&&` 和 `||` 是语法错误，要用 `;` 和 `$LASTEXITCODE`。提示词不再提 bash 到 PowerShell 的翻译。子代理用同一套解析：白名单里的 `shell` / `bash` / `powershell` / `cmd` 都变成这一个工具，提示词里的语法说明跟它一致。scout 不注册进程工具。
 
 进程输出先认 BOM，再认没有 BOM 的 UTF-16LE（PowerShell 往管道写中文时经常这样，这些字节有时也是合法 UTF-8），然后才是严格 UTF-8。还不行时，Windows 依次试 OEM 代码页、ANSI 代码页和控制台输出代码页（中文 Windows 上 `cmd` 的 `dir` 往往是 GBK）。标准输出和标准错误都会再整理一次：有 `#< CLIXML` 时抽出 `Error` 和 `Warning` 节点，`_xHHHH_`（包括 `_x001B_`）还原成字符，ANSI / VT 序列去掉。没有这些标记的普通文本保持原样。
 
-`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon、Linux x86_64 glibc）。发布包包含这四个平台。摘要复查和参数组装共用。其它 Unix 目标（musl、Android、BSD）不支持直接启动映像。模型只看见当前这一个进程工具（`powershell`、`bash` 或 `cmd`），没有 `exec`，也不会同时看见 `bash` 和 `powershell`。角色白名单里的 `shell` 仍表示这个进程工具。
+`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon、Linux x86_64 glibc）。发布包包含这四个平台。摘要复查和参数组装共用。其它 Unix 目标（musl、Android、BSD）不支持直接启动映像。SDK 里始终是 `tools.shell`，背后只有当前这一个解释器（`powershell`、`bash` 或 `cmd`），没有 `exec`，也不会同时有 `bash` 和 `powershell`。角色白名单里的 `shell` 仍表示这个进程工具。
 
 ## 搜索的边界
 
@@ -76,14 +76,14 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 
 | 工具 | 宿主提供什么 |
 | --- | --- |
-| `ask_user` | 把 1–4 个问题送到界面，等用户答完再继续 |
-| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，没有 `task` 别名。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
-| `run_code` | 模型唯一能直接调用的工具。参数是 `description` 然后 `code`：`code` 是系统 Python 3.10+ 里一段 async 函数体。其它工具只能写成 `await tools.name(...)`。每次新进程、精简环境；工具调用走长度前缀 JSON 控制通道，不混在 stdout 里，并经过和直接调用相同的路径预检。只读调用可 `asyncio.gather` 重叠，写操作按提交顺序单独执行。只有 `print` 和 `return` 回到模型。一次最多 48 次工具调用、8 路并行、32 个未完成调用、120 秒；回到模型的文本上限 8000 字节。程序里的 `read` 不带 `[revision ...]` 标签。找不到 Python 时返回按操作系统写的安装步骤 |
+| `ask_user` | 把 1–4 个问题送到界面，等用户答完再继续。在脚本里拒绝问题会抛出可捕获的 `ToolCallError`，程序继续。停止整个回合会中止程序 |
+| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，在脚本里是 `await tools.agent(...)`，没有 `task` 别名。`asyncio.gather` 里的多个 `tools.agent` 会并行；能写的角色用 worktree，不共用会话目录。宿主仍限制同时跑几个。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
+| `run_code` | 模型唯一能直接调用的工具。参数是 `description` 然后 `code`：`code` 是系统 Python 3.10+ 里一段 async 函数体。其它工具只能写成 `await tools.name(...)`，名字不是标识符时用 `await tools["name"](...)`。每次新进程、精简环境。控制通道优先是继承的 Unix 套接字或 Windows 命名管道，不行才用带一次性令牌的本机 TCP；令牌放在环境变量里，不放在命令行，核对之后才下发程序。内层调用经过和原先直接调用相同的路径预检。`read`、`grep`、`find`、`web_search`、`fetch_content` 和 `agent` 可 `asyncio.gather` 重叠；`write`、`edit`、`shell` 按提交顺序单独执行。只有 `print` 和 `return` 回到模型。一次最多 48 次工具调用、8 路并行、32 个未完成调用、120 秒；回到模型的文本上限 8000 字节。程序里的 `read` 不带 `[revision ...]` 标签。找不到 Python 时返回按操作系统写的安装步骤，窗口用同一段说明做横幅 |
 | `web_search` / `fetch_content` | 有界 HTTP：每次最多 8 条结果 / 8 个 URL。搜索结果是标题、URL 和最多 240 字符的摘要，重复 URL 丢掉，相同查询缓存 10 分钟。`fetch_content` 带 `goal` 时只返回匹配摘录（每页约 1200 字符）；不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)` |
 
 网页后端由设置决定：启用的那个优先；都没启用时用第一个有钥匙（环境变量或 `web-<id>`）的后端。Querit 和自定义后端走 `POST {endpoint}/v1/search` 与 `/v1/contents`，AnySearch 走 `/v1/search` 与 `/v1/extract`。Querit 没钥匙时调用失败并提示去设置页粘贴或设 `QUERIT_API_KEY`；已启用的 AnySearch 没钥匙时匿名访问。
 
-MCP 不把远端工具名注册进这张表。应用层注册 `search_tool` 和 `use_tool`：先取 schema，再按 schema 调用。这样远端工具不会盖住 `read` 或 `shell`。
+MCP 工具在脚本里叫 `server__tool`（例如 `await tools.docs__lookup(...)`）。小服务直接进 SDK；大服务仍走 `tools.search_tool` 和 `tools.use_tool`。调用远端时用原来的工具名。scout 只拿到带 `readOnlyHint: true` 的 MCP 工具，没有这个标注的不给。技能目录在 system prompt 的 `<skills>` 里，正文不进提示；匹配时在 `run_code` 里 `await tools.read(path=...)` 读取对应的 `SKILL.md`。子代理（含 scout）用同一份目录。
 
 ## 改文件
 

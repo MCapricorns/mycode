@@ -141,6 +141,15 @@ pub(crate) fn render_ask_panel(
                                 .child(Input::new(&ask_input)),
                         )
                         .child(
+                            skin::glass_button("ask-decline", false, theme)
+                                .flex_shrink_0()
+                                .whitespace_nowrap()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_dismiss_ask(cx);
+                                }))
+                                .child(t("Decline", "拒绝")),
+                        )
+                        .child(
                             skin::glass_button("ask-submit", true, theme)
                                 .flex_shrink_0()
                                 .whitespace_nowrap()

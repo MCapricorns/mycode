@@ -1,9 +1,13 @@
 //! One fresh system-Python process per `run_code` invocation.
 //!
-//! Tool calls arrive on a length-framed socket, not on stdout. Each call is
-//! prepared and executed with [`crate::prepare_tool_ctx`], the same preflight
-//! a direct call uses. Read-only calls may overlap; every other call waits
-//! until the ones submitted before it have finished, then runs alone.
+//! Tool calls arrive on a length-framed control channel, not on stdout. The
+//! channel is an inherited socket (Unix), a named pipe (Windows), or a
+//! loopback TCP socket that still requires the per-run token. The token is
+//! passed in the child environment, never on the command line, and checked
+//! before the program is sent. Each call is prepared and executed with
+//! [`crate::prepare_tool_ctx`], the same preflight a direct call uses.
+//! Read-only calls and `agent` may overlap; mutating calls wait until the
+//! ones submitted before them have finished, then run alone.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -13,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use mycode_core::message::ContentBlock;
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -38,7 +42,17 @@ pub(super) const DEFAULT_WALL: Duration = Duration::from_secs(120);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 const SHELL_NAMES: &[&str] = &["powershell", "bash", "zsh", "sh", "cmd"];
-const SAFE_TOOLS: &[&str] = &["read", "grep", "find", "web_search", "fetch_content"];
+/// Tools that may overlap. `agent` is included because write-capable children
+/// use their own worktree and the host still caps how many run at once.
+/// `write`, `edit`, and `shell` stay exclusive.
+const SAFE_TOOLS: &[&str] = &[
+    "read",
+    "grep",
+    "find",
+    "web_search",
+    "fetch_content",
+    "agent",
+];
 
 /// What the program printed and returned, or why it stopped.
 pub(super) struct ProgramOutcome {
@@ -197,17 +211,12 @@ async fn run_child(
     let program_cancel = parent.cancel.child_token();
     let mut ctx = parent.clone();
     ctx.cancel = program_cancel.clone();
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|error| format!("control socket: {error}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| format!("control socket: {error}"))?
-        .port();
+    let mut control = open_control().await?;
+    let spec = control.env_spec();
     let bootstrap = bootstrap_path()?;
     let env = crate::builtin::exec::snapshot_child_environment()
         .map_err(|error| format!("python environment: {error}"))?;
-    let mut child = spawn_python(interpreter, restricted, &bootstrap, port, &ctx, &env)?;
+    let mut child = spawn_python(interpreter, restricted, &bootstrap, &spec, &ctx, &env)?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let tree = enroll_spawned(&child).ok();
@@ -223,41 +232,23 @@ async fn run_child(
         tokio::spawn(drain_pipe(pipe, slot));
     }
 
+    control.release_local_end();
     let wall = ctx.ptc_wall.unwrap_or(DEFAULT_WALL);
     let deadline = Instant::now() + wall;
     let startup = Instant::now() + STARTUP_TIMEOUT.min(wall);
-    let socket = tokio::select! {
-        biased;
-        _ = ctx.cancel.cancelled() => {
+    let (mut reader, mut writer) = match control.handshake(&ctx, startup).await {
+        Ok(io) => io,
+        Err(message) => {
             running.kill_tree();
-            return Ok(stopped("abort", "program cancelled", String::new(), &[]));
+            let kind = if message == "program cancelled" {
+                "abort"
+            } else if message.contains("startup") || message.contains("time limit") {
+                "timeout"
+            } else {
+                "protocol"
+            };
+            return Ok(stopped(kind, &message, String::new(), &[]));
         }
-        _ = tokio::time::sleep_until(startup.into()) => {
-            running.kill_tree();
-            return Ok(stopped(
-                "timeout",
-                "python did not connect before the startup limit",
-                String::new(),
-                &[],
-            ));
-        }
-        accepted = listener.accept() => {
-            accepted.map(|(stream, _)| stream).map_err(|error| format!("python did not connect: {error}"))?
-        }
-    };
-    socket
-        .set_nodelay(true)
-        .map_err(|error| format!("control socket: {error}"))?;
-    let (mut reader, mut writer) = socket.into_split();
-    let ready = read_child_frame(&mut reader, &ctx, deadline).await;
-    let ChildFrame::Ready = ready? else {
-        running.kill_tree();
-        return Ok(stopped(
-            "protocol",
-            "python did not send ready",
-            String::new(),
-            &[],
-        ));
     };
     write_host(
         &mut writer,
@@ -302,6 +293,9 @@ async fn run_child(
                 );
             }
             finished = done_rx.recv() => {
+                if ctx.cancel.is_cancelled() {
+                    break stopped("abort", "program cancelled", logs, &notes);
+                }
                 let Some(finished) = finished else { continue };
                 inflight.retain(|(id, _)| *id != finished.id);
                 if finished.exclusive {
@@ -387,7 +381,7 @@ async fn run_child(
                             calls: notes.clone(),
                         };
                     }
-                    Ok(ChildFrame::Ready) => {
+                    Ok(ChildFrame::Ready { .. }) => {
                         break stopped("protocol", "unexpected ready frame", logs, &notes);
                     }
                     Err(message) => {
@@ -686,7 +680,7 @@ fn append_raw(logs: &mut String, slot: &std::sync::Mutex<String>, label: &str) {
 }
 
 async fn read_child_frame(
-    reader: &mut tokio::net::tcp::OwnedReadHalf,
+    reader: &mut ControlRead,
     ctx: &ToolCtx,
     deadline: Instant,
 ) -> Result<ChildFrame, String> {
@@ -719,10 +713,7 @@ async fn read_child_frame(
     decode_child(&body)
 }
 
-async fn write_host(
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
-    frame: &HostFrame,
-) -> Result<(), String> {
+async fn write_host(writer: &mut ControlWrite, frame: &HostFrame) -> Result<(), String> {
     let bytes = encode_frame(frame)?;
     writer
         .write_all(&bytes)
@@ -730,11 +721,245 @@ async fn write_host(
         .map_err(|_| "python closed the control channel".to_owned())
 }
 
+type ControlRead = Box<dyn AsyncRead + Unpin + Send>;
+type ControlWrite = Box<dyn AsyncWrite + Unpin + Send>;
+
+struct ControlEnv {
+    token: String,
+    fd: Option<i32>,
+    pipe: Option<String>,
+    port: Option<u16>,
+}
+
+enum PendingControl {
+    #[cfg(unix)]
+    Unix {
+        host: tokio::net::UnixStream,
+        child: Option<std::os::unix::net::UnixStream>,
+        fd: i32,
+        token: String,
+    },
+    #[cfg(windows)]
+    Pipe {
+        server: tokio::net::windows::named_pipe::NamedPipeServer,
+        name: String,
+        token: String,
+    },
+    Tcp {
+        listener: TcpListener,
+        port: u16,
+        token: String,
+    },
+}
+
+fn fresh_token() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+fn tokens_match(got: &str, expected: &str) -> bool {
+    if expected.is_empty() || got.len() != expected.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in got.bytes().zip(expected.bytes()) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
+
+fn box_split(
+    stream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
+) -> (ControlRead, ControlWrite) {
+    let (reader, writer) = tokio::io::split(stream);
+    (Box::new(reader), Box::new(writer))
+}
+
+async fn open_control() -> Result<PendingControl, String> {
+    #[cfg(unix)]
+    if let Ok(control) = unix_control() {
+        return Ok(control);
+    }
+    #[cfg(windows)]
+    if let Ok(control) = pipe_control() {
+        return Ok(control);
+    }
+    tcp_control().await
+}
+
+#[cfg(unix)]
+fn unix_control() -> std::io::Result<PendingControl> {
+    use std::os::fd::AsRawFd;
+    let (host, child) = std::os::unix::net::UnixStream::pair()?;
+    host.set_nonblocking(true)?;
+    child.set_nonblocking(false)?;
+    let fd = child.as_raw_fd();
+    let host = tokio::net::UnixStream::from_std(host)?;
+    Ok(PendingControl::Unix {
+        host,
+        child: Some(child),
+        fd,
+        token: fresh_token(),
+    })
+}
+
+#[cfg(windows)]
+fn pipe_control() -> std::io::Result<PendingControl> {
+    let name = format!(r"\\.\pipe\mycode-ptc-{}", uuid::Uuid::new_v4().simple());
+    let server = tokio::net::windows::named_pipe::ServerOptions::new()
+        .first_pipe_instance(true)
+        .reject_remote_clients(true)
+        .max_instances(1)
+        .create(name.as_str())?;
+    Ok(PendingControl::Pipe {
+        server,
+        name,
+        token: fresh_token(),
+    })
+}
+
+async fn tcp_control() -> Result<PendingControl, String> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|error| format!("control socket: {error}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("control socket: {error}"))?
+        .port();
+    Ok(PendingControl::Tcp {
+        listener,
+        port,
+        token: fresh_token(),
+    })
+}
+
+impl PendingControl {
+    fn env_spec(&self) -> ControlEnv {
+        match self {
+            #[cfg(unix)]
+            Self::Unix { fd, token, .. } => ControlEnv {
+                token: token.clone(),
+                fd: Some(*fd),
+                pipe: None,
+                port: None,
+            },
+            #[cfg(windows)]
+            Self::Pipe { name, token, .. } => ControlEnv {
+                token: token.clone(),
+                fd: None,
+                pipe: Some(name.clone()),
+                port: None,
+            },
+            Self::Tcp { port, token, .. } => ControlEnv {
+                token: token.clone(),
+                fd: None,
+                pipe: None,
+                port: Some(*port),
+            },
+        }
+    }
+
+    fn release_local_end(&mut self) {
+        #[cfg(unix)]
+        if let Self::Unix { child, .. } = self {
+            child.take();
+        }
+    }
+
+    async fn handshake(
+        self,
+        ctx: &ToolCtx,
+        deadline: Instant,
+    ) -> Result<(ControlRead, ControlWrite), String> {
+        match self {
+            #[cfg(unix)]
+            Self::Unix { host, token, .. } => {
+                let (mut reader, writer) = box_split(host);
+                expect_ready(&mut reader, &token, ctx, deadline).await?;
+                Ok((reader, writer))
+            }
+            #[cfg(windows)]
+            Self::Pipe { server, token, .. } => {
+                tokio::select! {
+                    biased;
+                    () = ctx.cancel.cancelled() => return Err("program cancelled".to_owned()),
+                    () = tokio::time::sleep_until(deadline.into()) => {
+                        return Err("python did not connect before the startup limit".to_owned());
+                    }
+                    connected = server.connect() => {
+                        connected.map_err(|error| format!("python did not connect: {error}"))?;
+                    }
+                }
+                let (mut reader, writer) = box_split(server);
+                expect_ready(&mut reader, &token, ctx, deadline).await?;
+                Ok((reader, writer))
+            }
+            Self::Tcp {
+                listener, token, ..
+            } => accept_tcp(listener, &token, ctx, deadline).await,
+        }
+    }
+}
+
+async fn accept_tcp(
+    listener: TcpListener,
+    token: &str,
+    ctx: &ToolCtx,
+    deadline: Instant,
+) -> Result<(ControlRead, ControlWrite), String> {
+    let mut rejects = 0u32;
+    loop {
+        if rejects >= 8 {
+            return Err("control token rejected".to_owned());
+        }
+        let stream = tokio::select! {
+            biased;
+            () = ctx.cancel.cancelled() => return Err("program cancelled".to_owned()),
+            () = tokio::time::sleep_until(deadline.into()) => {
+                return Err("python did not connect before the startup limit".to_owned());
+            }
+            accepted = listener.accept() => {
+                accepted
+                    .map(|(stream, _)| stream)
+                    .map_err(|error| format!("python did not connect: {error}"))?
+            }
+        };
+        stream
+            .set_nodelay(true)
+            .map_err(|error| format!("control socket: {error}"))?;
+        let (mut reader, writer) = box_split(stream);
+        match expect_ready(&mut reader, token, ctx, deadline).await {
+            Ok(()) => return Ok((reader, writer)),
+            Err(message) if message == "control token rejected" => {
+                rejects += 1;
+                continue;
+            }
+            Err(message) => return Err(message),
+        }
+    }
+}
+
+async fn expect_ready(
+    reader: &mut ControlRead,
+    token: &str,
+    ctx: &ToolCtx,
+    deadline: Instant,
+) -> Result<(), String> {
+    match read_child_frame(reader, ctx, deadline).await? {
+        ChildFrame::Ready { token: got } if tokens_match(&got, token) => Ok(()),
+        ChildFrame::Ready { .. } => Err("control token rejected".to_owned()),
+        _ => Err("python did not send ready".to_owned()),
+    }
+}
+
 fn spawn_python(
     interpreter: &PythonInterpreter,
     restricted: bool,
     bootstrap: &PathBuf,
-    port: u16,
+    control: &ControlEnv,
     ctx: &ToolCtx,
     env: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Result<Child, String> {
@@ -745,11 +970,20 @@ fn spawn_python(
     }
     command.arg("-u");
     command.arg(bootstrap);
-    command.arg(port.to_string());
     command.current_dir(&ctx.cwd);
     command.env_clear();
     for (key, value) in env {
         command.env(key, value);
+    }
+    command.env("MYCODE_PTC_TOKEN", &control.token);
+    if let Some(fd) = control.fd {
+        command.env("MYCODE_PTC_FD", fd.to_string());
+    }
+    if let Some(pipe) = &control.pipe {
+        command.env("MYCODE_PTC_PIPE", pipe);
+    }
+    if let Some(port) = control.port {
+        command.env("MYCODE_PTC_PORT", port.to_string());
     }
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::piped());
@@ -758,11 +992,22 @@ fn spawn_python(
     #[cfg(unix)]
     {
         command.process_group(0);
-        // SAFETY: runs in the forked child before exec. `prctl` only sets the
-        // subreaper flag so grandchildren stay in this tree; it does not
-        // allocate, lock, or touch the environment. No-op off Linux.
+        let inherit = control.fd;
+        // SAFETY: runs in the forked child before exec. Clearing CLOEXEC lets
+        // the interpreter inherit one socket. `prctl` only sets the subreaper
+        // flag so grandchildren stay in this tree. Neither allocates, locks,
+        // or touches the environment. `prctl` is a no-op off Linux.
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
+                if let Some(fd) = inherit {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
                 #[cfg(target_os = "linux")]
                 {
                     let rc = libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
@@ -802,6 +1047,62 @@ impl OnceLockBootstrap {
                 }
             })
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::{box_split, encode_frame, expect_ready, tokens_match};
+    use crate::ctx::ToolCtx;
+    use std::time::{Duration, Instant};
+    use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn control_tokens_must_match_exactly() {
+        assert!(tokens_match("abc", "abc"));
+        assert!(!tokens_match("abc", "abd"));
+        assert!(!tokens_match("abc", "ab"));
+        assert!(!tokens_match("", ""));
+        assert!(!tokens_match("abc", ""));
+    }
+
+    #[tokio::test]
+    async fn a_wrong_ready_token_is_rejected() {
+        let (host, mut child) = tokio::io::duplex(256);
+        let (mut reader, _writer) = box_split(host);
+        let frame = encode_frame(&serde_json::json!({"type": "ready", "token": "nope"})).unwrap();
+        tokio::spawn(async move {
+            let _ = child.write_all(&frame).await;
+        });
+        let ctx = ToolCtx::new(std::env::temp_dir());
+        let error = expect_ready(
+            &mut reader,
+            "secret",
+            &ctx,
+            Instant::now() + Duration::from_secs(2),
+        )
+        .await
+        .expect_err("bad token");
+        assert_eq!(error, "control token rejected");
+    }
+
+    #[tokio::test]
+    async fn a_matching_ready_token_is_accepted() {
+        let (host, mut child) = tokio::io::duplex(256);
+        let (mut reader, _writer) = box_split(host);
+        let frame = encode_frame(&serde_json::json!({"type": "ready", "token": "secret"})).unwrap();
+        tokio::spawn(async move {
+            let _ = child.write_all(&frame).await;
+        });
+        let ctx = ToolCtx::new(std::env::temp_dir());
+        expect_ready(
+            &mut reader,
+            "secret",
+            &ctx,
+            Instant::now() + Duration::from_secs(2),
+        )
+        .await
+        .expect("token");
     }
 }
 

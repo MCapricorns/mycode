@@ -343,10 +343,11 @@ The environment block names this OS and the one shell tool; write that shell's s
         system_prompt.push_str("\n\n<mcp>\n");
         system_prompt.push_str(note);
         system_prompt.push_str(
-            "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
-call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
-guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
-response as `agent`.\n</mcp>",
+            "Built-in tools and MCP tools are `await tools.<name>(...)` inside `run_code`. \
+MCP tools are named `server__tool`. A name that is not an identifier is \
+`await tools[\"name\"](...)`. For a deferred MCP tool, call `await tools.search_tool(...)` \
+with name \"list\", then with the exact name, then `await tools.use_tool(...)`. Do not \
+guess parameters.\n</mcp>",
         );
     }
     let mut roots: Vec<&std::path::Path> = extra_roots.iter().map(PathBuf::as_path).collect();
@@ -358,10 +359,10 @@ response as `agent`.\n</mcp>",
         }
         let shell_tool = mycode_tools::resolved_shell().kind.tool_name();
         system_prompt.push_str(&format!(
-            "Relative paths stay in the session cwd. For the other folders, pass an \
-absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
-path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in the session \
-cwd for both script and program mode.",
+            "Relative paths stay in the session cwd. For the other folders, inside \
+`run_code` pass an absolute path to `tools.read`, `tools.write`, `tools.edit`, \
+`tools.find`, and `tools.grep`, or an absolute path inside `tools.shell` \
+(`mode` `script`, a `{shell_tool}` script). `tools.shell` starts in the session cwd.",
         ));
     }
     system_prompt.push_str("\n\n");
@@ -384,7 +385,9 @@ pub(crate) fn push_skill_catalog(prompt: &mut String, mut skills: Vec<mycode_con
     {
         catalog.insert_str(
             close,
-            &format!("\n- and {hidden} more; read the matching SKILL.md by path"),
+            &format!(
+                "\n- and {hidden} more; inside run_code, await tools.read on the matching SKILL.md path"
+            ),
         );
     }
     prompt.push_str("\n\n");

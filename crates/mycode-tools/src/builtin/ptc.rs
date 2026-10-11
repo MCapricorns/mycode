@@ -558,6 +558,26 @@ return "|".join(err) + "|" + text
             overlap_elapsed < Duration::from_millis(500),
             "read-only gather took {overlap_elapsed:?}"
         );
+        let agent_log = Arc::new(Mutex::new(Vec::new()));
+        let agents = catalog(vec![Arc::new(Probe {
+            name: "agent",
+            delay: Duration::from_millis(200),
+            log: Arc::clone(&agent_log),
+        })]);
+        let agent_started = Instant::now();
+        let overlapped_agents = run(
+            &root,
+            agents,
+            "await asyncio.gather(tools.agent(path=\"a\"), tools.agent(path=\"b\"))\nreturn \"ok\"\n",
+        )
+        .await;
+        let agent_elapsed = agent_started.elapsed();
+        let agent_text = text_of(&overlapped_agents);
+        assert!(!overlapped_agents.is_error, "{agent_text}");
+        assert!(
+            agent_elapsed < Duration::from_millis(500),
+            "agent gather took {agent_elapsed:?}"
+        );
         log.lock().expect("log").clear();
         let serial_started = Instant::now();
         let serial = run(
@@ -677,7 +697,8 @@ return \"done\"\n";
             tokio::select! {
                 _ = cancel.cancelled() => Err(ToolError::Execution("cancelled".to_owned())),
                 answer = receiver => {
-                    let answer = answer.map_err(|_| ToolError::Execution("dropped".to_owned()))?;
+                    let answer = answer
+                        .map_err(|_| ToolError::Execution("the user dismissed the questions".to_owned()))?;
                     Ok(vec![crate::builtin::AskAnswer { question: "Go?".to_owned(), answer }])
                 }
             }
@@ -725,7 +746,7 @@ return \"done\"\n";
     }
 
     #[tokio::test]
-    async fn cancelling_ask_user_is_a_catchable_tool_error() {
+    async fn cancelling_the_turn_aborts_the_program() {
         let root = temp_dir("ask-cancel");
         let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (_tx, rx) = tokio::sync::oneshot::channel::<String>();
@@ -764,8 +785,58 @@ except ToolCallError as e:
             .expect("cancel hung")
             .expect("task");
         let text = text_of(&result);
+        assert!(result.is_error, "{text}");
         assert!(
-            text.contains("caught:") || text.contains("cancel"),
+            text.contains("program cancelled"),
+            "stopping the turn aborts the program: {text}"
+        );
+        assert!(
+            !text.contains("caught:"),
+            "a turn cancel must not be delivered as a catchable tool error: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn dismissing_ask_user_is_a_catchable_tool_error() {
+        let root = temp_dir("ask-dismiss");
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let channel = Arc::new(GateAsk {
+            entered: Arc::clone(&entered),
+            release: Mutex::new(Some(rx)),
+        });
+        let ctx = ToolCtx::new(&root).with_catalog(catalog(vec![Arc::new(
+            crate::builtin::AskTool::new(channel),
+        )]));
+        let task = tokio::spawn(async move {
+            run_with(
+                ctx,
+                r#"
+try:
+    await tools.ask_user(questions=[{"question": "Go?"}])
+    return "no"
+except ToolCallError as e:
+    return "caught:" + e.message
+"#,
+            )
+            .await
+        });
+        for _ in 0..50 {
+            if entered.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        drop(tx);
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("dismiss hung")
+            .expect("task");
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(
+            text.contains("caught:the user dismissed the questions"),
             "{text}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -789,6 +860,59 @@ except ToolCallError as e:
             items.iter().any(|item| matches!(
                 item,
                 ToolStreamItem::NestedStarted(start) if start.name == "read" && start.target.contains("a.txt")
+            )),
+            "missing nested card: {items:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn division_by_zero_includes_the_source_line() {
+        let root = temp_dir("divzero");
+        let result = run(&root, catalog(vec![]), "return 1/0\n").await;
+        let text = text_of(&result);
+        assert!(result.is_error, "{text}");
+        assert!(text.contains("ZeroDivisionError"), "{text}");
+        assert!(text.contains("1/0"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn the_control_token_is_not_visible_to_user_code() {
+        let root = temp_dir("token");
+        let result = run(
+            &root,
+            catalog(vec![]),
+            "import os\nreturn \"leaked\" if \"MYCODE_PTC_TOKEN\" in os.environ else \"clean\"\n",
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("clean"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn reading_a_skill_file_returns_its_body_as_a_nested_card() {
+        let root = temp_dir("skill-read");
+        let skill = root.join(".agents").join("skills").join("review");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "# Review\nLoad this with tools.read inside run_code.\n",
+        )
+        .unwrap();
+        let path = serde_json::to_string(&skill.join("SKILL.md").display().to_string()).unwrap();
+        let code = format!("text = await tools.read(path={path})\nreturn text\n");
+        let ctx = ToolCtx::new(&root).with_catalog(catalog(vec![Arc::new(ReadTool)]));
+        let (result, items) = run_watching(ctx, &code).await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("tools.read inside run_code"), "{text}");
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                ToolStreamItem::NestedStarted(start) if start.name == "read"
             )),
             "missing nested card: {items:?}"
         );

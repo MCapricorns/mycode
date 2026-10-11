@@ -15,7 +15,12 @@ pub(super) const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 #[serde(tag = "type")]
 pub(super) enum ChildFrame {
     #[serde(rename = "ready")]
-    Ready,
+    Ready {
+        /// Shared secret from the child environment. A mismatch is rejected
+        /// before the host sends the program.
+        #[serde(default)]
+        token: String,
+    },
     #[serde(rename = "call")]
     Call {
         id: u64,

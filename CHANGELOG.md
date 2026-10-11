@@ -12,7 +12,12 @@
 - 脚本改在系统 Python 3.10+ 上执行，每次一个新进程，环境按 shell 的允许名单裁剪。工具调用走与 stdout 分开的长度前缀 JSON 通道，并经过和原先直接调用相同的路径预检、写顺序、超时、输出上限、取消和进程树清理。只读调用可以 `asyncio.gather` 重叠；其余调用按提交顺序单独执行。只有 `print` 和 `return` 回到模型；出错前已经打印的内容保留；失败的工具调用抛出可捕获的 `ToolCallError`。内层调用不进入模型历史。
 - 启动时按操作系统探测 `python3` / `python`（Windows 先用 `py`，并跳过 WindowsApps 商店别名），结果在进程内缓存，因此一次会话里的提示和工具模式保持稳定。找不到或版本不够时，`run_code` 返回带安装步骤的错误，窗口显示警告，提示词写明 Python 不可用。
 - scout 以及其它只读工具目录里的 Python 在用户代码前安装 `sys.addaudithook`，拦截写、创建、删除、改名、建目录、subprocess / `os.system` / exec / spawn、ctypes 和原始套接字，并以 `-I` 和精简环境启动。这个 hook 是尽力而为，不是安全边界。主代理的 Python 与它的 shell 一样不受限，但直接调用 subprocess 会在结果里警告。
-- 界面把每次内层调用画成原来的工具卡片，嵌在标题为 `description` 的 `run_code` 卡片下，并随会话保存。`tools.agent` 的进度、状态和取消与以前相同。`ask_user` 在脚本里会一直等到用户回答；取消变成可捕获错误。
+- 界面把每次内层调用画成原来的工具卡片，嵌在标题为 `description` 的 `run_code` 卡片下，并随会话保存。`tools.agent` 的进度、状态和取消与以前相同。`ask_user` 在脚本里会一直等到用户回答。拒绝问题是可捕获的 `ToolCallError`，程序继续；停止整个回合会中止程序。
+- 控制通道优先使用继承的 Unix 套接字或 Windows 命名管道。退回本机 TCP 时，每次运行有一次性令牌，放在环境变量里，核对后才下发程序。未通过核对的连接会被拒绝。
+- `asyncio.gather` 里的 `tools.agent` 并行。能写的子代理仍用自己的 worktree，宿主继续限制同时运行的个数。
+- `fetch_content` 遇到 HTTP 4xx、HTTP 422 或 `extract_failed` 时把说明作为页面文本返回，并写明不要再请求这个 URL。
+- MCP 工具在脚本里的名字是 `server__tool`。scout 只接收带 `readOnlyHint` 的 MCP 工具。
+- 技能目录仍在提示词里。加载技能是 `await tools.read(path=...)`，子代理（含 scout）使用同一份目录。
 
 ## [0.10.3] - 2026-10-10
 

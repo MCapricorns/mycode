@@ -153,6 +153,9 @@ pub struct McpTool {
     pub name: String,
     pub description: Option<String>,
     pub input_schema: Value,
+    /// True only when the server set `annotations.readOnlyHint` to true.
+    /// A missing annotation is not read-only.
+    pub read_only: bool,
 }
 
 /// The outcome of one `tools/call`.
@@ -237,6 +240,11 @@ impl McpClient {
                         Value::Null => json!({"type": "object"}),
                         schema => schema.clone(),
                     },
+                    read_only: tool
+                        .get("annotations")
+                        .and_then(|annotations| annotations.get("readOnlyHint"))
+                        .and_then(Value::as_bool)
+                        == Some(true),
                 })
             })
             .collect())

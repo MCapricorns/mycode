@@ -1,7 +1,8 @@
 """Static bootstrap for one `run_code` process.
 
-The host owns a localhost socket. Frames are a 4-byte big-endian length plus
-UTF-8 JSON. stdout and stderr stay free; `print` is forwarded as a log frame.
+Frames are a 4-byte big-endian length plus UTF-8 JSON on a private control
+channel: an inherited socket, a named pipe, or a token-authenticated TCP
+fallback. stdout and stderr stay free; `print` is forwarded as a log frame.
 User code is the body of an async function and keeps its own line numbers.
 A read-only (scout) process installs an audit hook before that code runs.
 The hook is best-effort: it is not a security boundary.
@@ -16,11 +17,14 @@ import socket
 import struct
 import sys
 import threading
+import time
 import traceback
 
 _MAX_FRAME = 8 * 1024 * 1024
-_sock = None
+_hold = None
+_fd = None
 _write_lock = threading.Lock()
+_USER_LINES = []
 _loop = None
 _pending = {}
 _next_id = 1
@@ -58,22 +62,31 @@ _FILE_MUTATION = {
 }
 
 
-def _recvn(sock, count):
+def _recvn(fd, count):
     buf = bytearray()
     while len(buf) < count:
-        chunk = sock.recv(count - len(buf))
+        chunk = os.read(fd, count - len(buf))
         if not chunk:
             raise EOFError("control channel closed")
         buf += chunk
     return bytes(buf)
 
 
-def _read_frame(sock):
-    header = _recvn(sock, 4)
+def _write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise EOFError("control channel closed")
+        view = view[written:]
+
+
+def _read_frame():
+    header = _recvn(_fd, 4)
     length = struct.unpack(">I", header)[0]
     if length == 0 or length > _MAX_FRAME:
         raise ValueError("control frame length %s" % length)
-    return json.loads(_recvn(sock, length).decode("utf-8"))
+    return json.loads(_recvn(_fd, length).decode("utf-8"))
 
 
 def _write_frame(obj):
@@ -82,7 +95,7 @@ def _write_frame(obj):
         raise ValueError("control frame is too large")
     packet = struct.pack(">I", len(data)) + data
     with _write_lock:
-        _sock.sendall(packet)
+        _write_all(_fd, packet)
 
 
 class ToolCallError(Exception):
@@ -108,7 +121,7 @@ class _Log(io.TextIOBase):
 def _reader():
     while True:
         try:
-            message = _read_frame(_sock)
+            message = _read_frame()
         except Exception:
             _fail_pending("control channel closed")
             return
@@ -254,15 +267,27 @@ def _install_hook(restricted, warn_process):
     sys.addaudithook(hook)
 
 
+def _source_line(lineno):
+    if not isinstance(lineno, int) or lineno < 1 or lineno > len(_USER_LINES):
+        return ""
+    return _USER_LINES[lineno - 1].strip()
+
+
+def _snippet(lineno, fallback):
+    text = (fallback or "").strip() or _source_line(lineno)
+    return text or "<source unavailable>"
+
+
 def _format_exc(exc):
     if isinstance(exc, SyntaxError):
         line = exc.lineno or 0
-        return "SyntaxError: %s (line %s)" % (exc.msg, line)
+        snippet = _snippet(line, exc.text)
+        return "SyntaxError: %s (line %s)\nline %s: %s" % (exc.msg, line, line, snippet)
     rows = []
     for frame in traceback.extract_tb(exc.__traceback__):
         if frame.filename == "<user>":
-            snippet = (frame.line or "").strip()
-            rows.append(("line %s: %s" % (frame.lineno, snippet)).rstrip())
+            snippet = _snippet(frame.lineno, frame.line)
+            rows.append("line %s: %s" % (frame.lineno, snippet))
     head = "%s: %s" % (type(exc).__name__, exc)
     if rows:
         return head + "\n" + "\n".join(rows)
@@ -316,20 +341,60 @@ async def _run_user(code):
     _write_frame({"type": "done", "value": result})
 
 
+def _open_control():
+    """Attach the channel the host prepared. The token stays in the environment
+    only until the ready frame is sent."""
+    global _hold, _fd
+    inherited = os.environ.get("MYCODE_PTC_FD")
+    pipe = os.environ.get("MYCODE_PTC_PIPE")
+    port = os.environ.get("MYCODE_PTC_PORT")
+    if inherited:
+        _hold = os.fdopen(int(inherited), "r+b", buffering=0)
+        _fd = _hold.fileno()
+        return
+    if pipe:
+        last = None
+        for _ in range(50):
+            try:
+                _hold = open(pipe, "r+b", buffering=0)
+                _fd = _hold.fileno()
+                return
+            except OSError as exc:
+                last = exc
+                time.sleep(0.05)
+        raise SystemExit("control pipe: %s" % last)
+    if port:
+        sock = socket.create_connection(("127.0.0.1", int(port)), timeout=30)
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        sock.settimeout(None)
+        _hold = sock
+        _fd = sock.fileno()
+        return
+    raise SystemExit("no control channel")
+
+
+def _drop_channel_env():
+    for key in ("MYCODE_PTC_TOKEN", "MYCODE_PTC_FD", "MYCODE_PTC_PIPE", "MYCODE_PTC_PORT"):
+        os.environ.pop(key, None)
+
+
 def main():
-    global _sock, _loop, _tools
-    port = int(sys.argv[1])
-    sock = socket.create_connection(("127.0.0.1", port), timeout=30)
-    sock.settimeout(None)
-    _sock = sock
-    _write_frame({"type": "ready"})
-    boot = _read_frame(sock)
+    global _loop, _tools, _USER_LINES
+    token = os.environ.get("MYCODE_PTC_TOKEN") or ""
+    _open_control()
+    _write_frame({"type": "ready", "token": token})
+    boot = _read_frame()
     if boot.get("type") != "boot":
         raise SystemExit("expected boot")
     code = boot.get("code") or ""
+    _USER_LINES = code.splitlines()
     _tools = set(boot.get("tools") or [])
     restricted = bool(boot.get("restricted"))
     warn_process = bool(boot.get("warn_process"))
+    _drop_channel_env()
     sys.stdout = _Log()
     sys.stderr = _Log()
     # The event loop opens a self-pipe. Install the audit hook after that,

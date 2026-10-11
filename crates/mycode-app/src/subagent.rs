@@ -352,11 +352,11 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .join("\n");
     let dispatch = [
         "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
-        "You decide whether to delegate. A narrow lookup is one `run_code` that calls `tools.grep` or `tools.find`. A rename, or edits across several files, is one `run_code` that calls `tools.edit`, not one edit per file. Web research, vendor docs, and a repository-wide map fit `scout` via `tools.agent` with agent \"scout\": it returns a short map. Do not use `tools.shell` to curl docs or to map the repo. A narrow question does not need `scout`. Delegating broad research to scout is your judgment.",
+        "You decide whether to delegate. A narrow lookup is one `run_code` that calls `tools.grep` or `tools.find`. A rename, or edits across several files, is one `run_code` that calls `tools.edit`, not one edit per file. Prefer `tools.agent` with agent \"scout\" for web research, vendor docs, and a repository-wide map: several scout calls may overlap inside `asyncio.gather`, and each returns a short map. Do not spend this chat on a long chain of `web_search` and `fetch_content` for that kind of task. A `fetch_content` result that reports HTTP 4xx or extract_failed is final for that URL. A narrow question does not need `scout`. Delegating broad research to scout is your judgment.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
         "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
         "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
-        "Send one self-contained brief. The child has no parent conversation and returns once. Independent `agent` calls in one response run together, including with `search_tool` / `use_tool`.",
+        "Send one self-contained brief. The child has no parent conversation and returns once. Independent `tools.agent` calls overlap, including inside `asyncio.gather`. Write-capable roles use a worktree, so concurrent artisans do not share the session checkout. The host still caps how many run at once.",
     ];
     let dispatch_block = dispatch
         .iter()
@@ -484,6 +484,14 @@ impl BridgeAgentHost {
             Some(&self.cwd),
         )
         .await;
+        let mcp_tools = if role.is_write_capable() {
+            mcp_tools
+        } else {
+            mcp_tools
+                .into_iter()
+                .filter(|tool| tool.read_only())
+                .collect()
+        };
         let shell = mycode_tools::resolved_shell();
         let registry = Arc::new({
             let registry = child_registry_with(
@@ -717,10 +725,10 @@ fn subagent_system_prompt(
         }
         if let Some(shell_tool) = registered_shell_name(registry) {
             system.push_str(&format!(
-                "Relative paths stay in this run's cwd. For the other folders, pass an \
-absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
-path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in this run's \
-cwd for both script and program mode.",
+                "Relative paths stay in this run's cwd. For the other folders, inside \
+`run_code` pass an absolute path to `tools.read`, `tools.write`, `tools.edit`, \
+`tools.find`, and `tools.grep`, or an absolute path inside `tools.shell` \
+(`mode` `script`, a `{shell_tool}` script). `tools.shell` starts in this run's cwd.",
             ));
         }
     }
@@ -741,8 +749,8 @@ cwd for both script and program mode.",
     append_child_skills(&mut system, run_dir, extra_roots);
     if registry.get("search_tool").is_some() {
         system.push_str(
-            "\n\nMCP tools are connected. Call `search_tool` with the tool name, then \
-`use_tool` with arguments that match the returned inputSchema. Never guess parameters.",
+            "\n\nMCP tools are connected. Inside `run_code`, call `await tools.search_tool(...)` with the tool name, then \
+`await tools.use_tool(...)` with arguments that match the returned inputSchema. Direct tools are `await tools.server__tool(...)`. Never guess parameters. A read-only role only receives MCP tools whose server set readOnlyHint.",
         );
     }
     system.push_str("\n\n");
@@ -1136,6 +1144,48 @@ mod tests {
             !prompt.contains("Do not do that research inline"),
             "{prompt}"
         );
+    }
+
+    #[test]
+    fn scout_prompt_lists_workspace_skills_for_tools_read() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-scout-skill-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let skill = root.join(".agents").join("skills").join("aaa-ptc");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "# Aaa Ptc\nMap the crate.\n").unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        let scout = builtin_roles().role("scout").expect("scout").clone();
+        let allowed = scout.resolve_tools(
+            &super::PARENT_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        let shell = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Bash,
+            program: std::path::PathBuf::from("/bin/bash"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(shell.clone()),
+        );
+        let prompt =
+            super::subagent_system_prompt(&scout, &registry, &root, &[], "linux", "x86_64", &shell);
+        assert!(prompt.contains("/aaa-ptc"), "{prompt}");
+        assert!(prompt.contains("await tools.read"), "{prompt}");
+        assert!(prompt.contains("async def read("), "{prompt}");
+        assert!(
+            !prompt.contains("`read` that SKILL.md"),
+            "skill guidance must not name a direct read call:\n{prompt}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

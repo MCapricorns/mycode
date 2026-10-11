@@ -81,7 +81,10 @@ fn tools_section(tools: &ToolRegistry) -> Option<String> {
         "# Call tools as await tools.name(arg=value) or await tools.name({...}). A failed call raises ToolCallError (e.toolName, e.message); try/except it to continue.\n",
     );
     section.push_str(
-        "# Independent read-only calls MAY overlap under asyncio.gather (read, grep, find, web_search, fetch_content run concurrently; mutating calls run alone, in submission order).\n",
+        "# Independent calls MAY overlap under asyncio.gather. read, grep, find, web_search, fetch_content, and agent run concurrently. write, edit, and shell run alone, in submission order.\n",
+    );
+    section.push_str(
+        "# A name that is not a Python identifier is called as await tools[\"name\"](...). MCP tools are named server__tool, for example await tools.docs__lookup(...).\n",
     );
     section.push_str(
         "# Only print(...) and return reach the conversation. Other results stay out, so extract just what you need.\n",
@@ -95,8 +98,14 @@ fn tools_section(tools: &ToolRegistry) -> Option<String> {
         "Use `tools.shell(...)` to run external programs (build, test, lint, git, package managers, servers, project scripts); `tools.read` / `tools.grep` / `tools.find` / `tools.edit` / `tools.write` for files; `tools.web_search` / `tools.fetch_content` for the web. Never call `subprocess` or `os.system` from Python directly.\n",
     );
     if tools.get("agent").is_some() {
-        section
-            .push_str("Delegating broad research to scout via `tools.agent` is your judgment.\n");
+        section.push_str(
+            "Prefer `tools.agent` with agent \"scout\" for broad research, vendor docs, and a repository-wide map. Several scout calls may overlap inside `asyncio.gather`; each returns a short map. Do not spend this chat on a long chain of `web_search` and `fetch_content` for that kind of task. A narrow lookup stays in this program. Delegating broad research to scout is your judgment.\n",
+        );
+    }
+    if tools.get("fetch_content").is_some() {
+        section.push_str(
+            "A `fetch_content` result that reports HTTP 4xx, HTTP 422, or extract_failed is final for that URL. Do not call `fetch_content` again for it; try another URL or continue without that page.\n",
+        );
     }
     section.push_str("</tools>");
     Some(section)
@@ -150,6 +159,59 @@ fn first_sentence(text: &str) -> String {
     flat.chars().take(cut.min(180)).collect()
 }
 
+fn is_python_attribute(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return false;
+    }
+    !is_python_keyword(name)
+}
+
+fn is_python_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "False"
+            | "None"
+            | "True"
+            | "and"
+            | "as"
+            | "assert"
+            | "async"
+            | "await"
+            | "break"
+            | "class"
+            | "continue"
+            | "def"
+            | "del"
+            | "elif"
+            | "else"
+            | "except"
+            | "finally"
+            | "for"
+            | "from"
+            | "global"
+            | "if"
+            | "import"
+            | "in"
+            | "is"
+            | "lambda"
+            | "nonlocal"
+            | "not"
+            | "or"
+            | "pass"
+            | "raise"
+            | "return"
+            | "try"
+            | "while"
+            | "with"
+            | "yield"
+    )
+}
+
 fn python_signature(name: &str, schema: &serde_json::Value) -> String {
     let required = schema
         .get("required")
@@ -172,6 +234,18 @@ fn python_signature(name: &str, schema: &serde_json::Value) -> String {
                 params.push(format!("{field}: {ty}"));
             }
         }
+    }
+    if !is_python_attribute(name) {
+        let args = if params.is_empty() {
+            String::new()
+        } else {
+            params
+                .iter()
+                .map(|param| param.split(':').next().unwrap_or(param).trim())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        return format!("# await tools[{name:?}]({args})");
     }
     if params.is_empty() {
         format!("async def {name}() -> str: ...")
@@ -250,7 +324,7 @@ fn web_section(tools: &ToolRegistry) -> Option<&'static str> {
     Some(
         "<web>\n\
 `web_search` returns compact hits: title, URL, and a snippet of at most 240 characters. Duplicate URLs are dropped. An identical query is cached for 10 minutes. Snippets are leads, not evidence.\n\
-`fetch_content` reads pages. Pass `goal` (the fact you need) and only matching excerpts return, about 1200 characters per page, marked `(excerpts for goal)`. Without `goal`, each page is capped at 8000 characters and marked `(truncated)` when cut. extract_failed, HTTP 422, or Unable to extract is permanent for that URL; do not sleep-retry.\n\
+`fetch_content` reads pages. Pass `goal` (the fact you need) and only matching excerpts return, about 1200 characters per page, marked `(excerpts for goal)`. Without `goal`, each page is capped at 8000 characters and marked `(truncated)` when cut. HTTP 4xx, HTTP 422, extract_failed, or Unable to extract is permanent for that URL; do not call `fetch_content` again for it.\n\
 </web>",
     )
 }
@@ -636,5 +710,26 @@ mod tests {
             "web_search",
             &serde_json::json!({"query": "auth"})
         ));
+    }
+
+    #[test]
+    fn sdk_quotes_names_that_are_not_python_identifiers() {
+        let keyword = super::python_signature("class", &serde_json::json!({"type": "object"}));
+        assert!(
+            keyword.contains("tools[\"class\"]"),
+            "keywords need quoted access: {keyword}"
+        );
+        let mcp = super::python_signature(
+            "docs__lookup",
+            &serde_json::json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }),
+        );
+        assert!(
+            mcp.contains("async def docs__lookup(*, query: str)"),
+            "{mcp}"
+        );
     }
 }
