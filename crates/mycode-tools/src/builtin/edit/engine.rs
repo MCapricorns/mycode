@@ -67,12 +67,6 @@ pub(super) enum PreparedOp {
         replacement: String,
         max_distance: u32,
     },
-    Ast {
-        language: super::ast::AstLanguage,
-        query: tree_sitter::Query,
-        replacement: String,
-        capture: Option<String>,
-    },
     LineRange {
         start_line: usize,
         end_line: usize,
@@ -108,7 +102,7 @@ pub(super) fn normalize_args(args: &EditArgs) -> Result<Vec<PreparedOp>, ToolErr
     // The batch is authoritative: legacy fields are not validated and do not
     // apply. An operations-only call is the same path.
     if let Some(operations) = args.operations.as_deref() {
-        return prepare_operations(operations, &args.path);
+        return prepare_operations(operations);
     }
     match (&args.old_string, &args.new_string) {
         (Some(old), Some(new)) => {
@@ -137,7 +131,7 @@ pub(super) fn normalize_args(args: &EditArgs) -> Result<Vec<PreparedOp>, ToolErr
     }
 }
 
-fn prepare_operations(operations: &[EditOp], path: &str) -> Result<Vec<PreparedOp>, ToolError> {
+fn prepare_operations(operations: &[EditOp]) -> Result<Vec<PreparedOp>, ToolError> {
     if operations.is_empty() {
         return Err(ToolError::InvalidArgs(
             "operations must not be empty".to_owned(),
@@ -148,12 +142,7 @@ fn prepare_operations(operations: &[EditOp], path: &str) -> Result<Vec<PreparedO
             "at most {MAX_OPERATIONS} operations are allowed"
         )));
     }
-    let ops: Vec<PreparedOp> = operations
-        .iter()
-        .map(|op| prepare_op(op, path))
-        .collect::<Result<_, _>>()?;
-    super::ast::reject_mixed_languages(&ops)?;
-    Ok(ops)
+    operations.iter().map(prepare_op).collect()
 }
 
 fn bound_pattern(label: &str, value: &str) -> Result<(), ToolError> {
@@ -166,7 +155,7 @@ fn bound_pattern(label: &str, value: &str) -> Result<(), ToolError> {
     }
 }
 
-fn prepare_op(op: &EditOp, path: &str) -> Result<PreparedOp, ToolError> {
+fn prepare_op(op: &EditOp) -> Result<PreparedOp, ToolError> {
     match op {
         EditOp::Literal {
             pattern,
@@ -229,18 +218,6 @@ fn prepare_op(op: &EditOp, path: &str) -> Result<PreparedOp, ToolError> {
             replacement,
             max_distance,
         } => super::fuzzy::prepare(pattern, replacement, *max_distance),
-        EditOp::Ast {
-            language,
-            query,
-            replacement,
-            capture,
-        } => super::ast::prepare(
-            language.as_deref(),
-            path,
-            query,
-            replacement,
-            capture.as_deref(),
-        ),
         EditOp::LineRange {
             start_line,
             end_line,
@@ -367,7 +344,6 @@ struct Found {
 pub(super) fn plan_edits(
     snapshot: &str,
     ops: &[PreparedOp],
-    ast_snapshot: Option<&super::ast::AstSnapshot>,
     cancel: &CancellationToken,
 ) -> Result<Vec<Planned>, ToolError> {
     let (had_bom, body) = strip_bom(snapshot);
@@ -452,34 +428,6 @@ pub(super) fn plan_edits(
                 &mut replacement_bytes,
                 cancel,
             )?,
-            PreparedOp::Ast {
-                language,
-                query,
-                replacement,
-                capture,
-            } => {
-                let parsed = ast_snapshot.ok_or_else(|| {
-                    ToolError::Execution("ast snapshot was not prepared".to_owned())
-                })?;
-                if parsed.language != *language {
-                    return Err(ToolError::Execution(
-                        "ast snapshot language does not match the prepared operation".to_owned(),
-                    ));
-                }
-                super::ast::plan_ast(
-                    body,
-                    &parsed.tree,
-                    super::ast::AstPlan {
-                        query,
-                        replacement,
-                        capture: capture.as_deref(),
-                    },
-                    bom_len,
-                    &mut planned,
-                    &mut replacement_bytes,
-                    cancel,
-                )?;
-            }
         }
     }
     Ok(planned)
@@ -1111,7 +1059,7 @@ mod newline_tests {
     fn apply(body: &str, old: &str, new: &str) -> Result<String, ToolError> {
         let ops = [literal(old, new)];
         let cancel = CancellationToken::new();
-        let planned = plan_edits(body, &ops, None, &cancel)?;
+        let planned = plan_edits(body, &ops, &cancel)?;
         Ok(apply_planned(body, &planned, &cancel)?.text)
     }
 
@@ -1186,7 +1134,7 @@ mod normalize_tests {
         let args: EditArgs = serde_json::from_value(raw).map_err(|err| err.to_string())?;
         let ops = normalize_args(&args).map_err(|err| err.to_string())?;
         let cancel = CancellationToken::new();
-        let planned = plan_edits(body, &ops, None, &cancel).map_err(|err| err.to_string())?;
+        let planned = plan_edits(body, &ops, &cancel).map_err(|err| err.to_string())?;
         apply_planned(body, &planned, &cancel)
             .map(|applied| applied.text)
             .map_err(|err| err.to_string())
