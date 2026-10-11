@@ -90,6 +90,23 @@ pub struct SkillFile {
     pub global: bool,
 }
 
+/// Host-global skill catalog roots for read-only tool anchoring.
+///
+/// The workspace `.agents` tree sits inside the session cwd and needs no
+/// extra anchor; only the user-home tree is returned. Missing directories
+/// are dropped, so a machine without global skills anchors nothing.
+#[must_use]
+pub fn skill_read_roots(user_home: Option<&Path>) -> Vec<PathBuf> {
+    let Some(home) = user_home else {
+        return Vec::new();
+    };
+    let agents = home.join(".agents");
+    [agents.clone(), agents.join("skills")]
+        .into_iter()
+        .filter(|root| root.is_dir())
+        .collect()
+}
+
 /// Discovers `/` skills from the workspace and the user-global `.agents` tree.
 ///
 /// Directory entries are sorted by path before they are read, duplicate slugs
@@ -278,6 +295,19 @@ mod tests {
         let path = dir.join(slug);
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("SKILL.md"), format!("# {title}\n")).unwrap();
+    }
+
+    #[test]
+    fn read_roots_list_global_tree_and_drop_missing() {
+        let home = temp("roots");
+        assert!(super::skill_read_roots(None).is_empty());
+        assert!(
+            super::skill_read_roots(Some(&home.0)).is_empty(),
+            "missing .agents anchors nothing"
+        );
+        fs::create_dir_all(home.0.join(".agents").join("skills")).unwrap();
+        let roots = super::skill_read_roots(Some(&home.0));
+        assert_eq!(roots, vec![home.0.join(".agents"), home.0.join(".agents").join("skills")]);
     }
 
     #[test]

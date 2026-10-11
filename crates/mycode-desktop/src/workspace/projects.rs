@@ -828,6 +828,7 @@ impl Workspace {
             auto_update: self.vm.auto_update,
             selected_provider: self.vm.selected_provider.clone(),
             selected_model: self.vm.selected_model.clone(),
+            selected_reasoning: self.vm.default_reasoning.clone(),
             session_projects: self.vm.session_projects.clone(),
             session_models: self.vm.session_models.clone(),
             // The legacy root list mirrors the active workspace so a

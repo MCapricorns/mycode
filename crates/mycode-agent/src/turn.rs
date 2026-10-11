@@ -402,6 +402,7 @@ pub(crate) async fn dispatch_tool_call(
     let ctx = match prepare_tool_ctx(
         &env.cwd,
         &env.extra_roots,
+        &env.read_roots,
         token.clone(),
         call.id.clone(),
         tool.as_ref(),

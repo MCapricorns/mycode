@@ -742,6 +742,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             auto_update,
             selected_provider,
             selected_model,
+            selected_reasoning,
             session_projects,
             session_models,
             workspaces,
@@ -761,6 +762,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.active_workspace = active;
             state.recent_models = recent_models;
             state.starred_models = starred_models;
+            state.default_reasoning = selected_reasoning;
             sync_workspace_roots(state);
             state.auto_update = auto_update;
             if selected_provider.is_some() {
@@ -894,8 +896,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 return;
             };
             if let Some(settings) = state.settings.as_mut() {
-                settings.reasoning = picked;
+                settings.reasoning = picked.clone();
             }
+            state.default_reasoning = picked;
             remember_active_session_model(state);
         }
         DesktopAction::PresetSearchChanged(text) => state.preset_search = text,

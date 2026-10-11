@@ -83,6 +83,10 @@ pub struct TurnEnv<'a> {
     /// Additional workspace folders. Absolute tool paths under one of
     /// these roots are prepared against that root instead of `cwd`.
     pub extra_roots: Vec<PathBuf>,
+    /// Host-published read-only anchor roots outside the workspace (the
+    /// skills catalog). Only read-only file tools anchor here; `edit` and
+    /// `write` refuse them.
+    pub read_roots: Vec<PathBuf>,
     /// Steers to fold into this turn at the next loop boundary.
     /// `None` for a turn that does not accept them (a nested agent).
     pub steer: Option<Arc<SteerInbox>>,
@@ -104,6 +108,7 @@ impl<'a> TurnEnv<'a> {
             events: broadcast::channel(256).0,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             extra_roots: Vec::new(),
+            read_roots: Vec::new(),
             steer: None,
         }
     }
@@ -129,6 +134,12 @@ impl<'a> TurnEnv<'a> {
     /// Allow absolute tool paths under these extra workspace folders.
     pub fn with_extra_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.extra_roots = roots;
+        self
+    }
+
+    /// Let read-only file tools anchor absolute paths under these roots.
+    pub fn with_read_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.read_roots = roots;
         self
     }
 

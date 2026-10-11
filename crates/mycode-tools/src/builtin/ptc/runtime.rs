@@ -521,6 +521,7 @@ async fn run_one(call: QueuedCall, parent: &ToolCtx, out: &ToolStream) -> Finish
     let ctx = match crate::prepare_tool_ctx(
         &parent.cwd,
         &parent.extra_roots,
+        &parent.read_roots,
         parent.cancel.clone(),
         nested_id.clone(),
         call.tool.as_ref(),
