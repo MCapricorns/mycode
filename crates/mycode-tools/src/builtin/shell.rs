@@ -30,7 +30,6 @@ mod prompt;
 pub use detect::{DetectedShell, ShellKind, active_shell, detect_default_shell, resolved_shell};
 pub use prompt::render_environment_block;
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -226,7 +225,6 @@ struct PreparedShell {
     lease: ExecutionLease,
 }
 
-#[async_trait]
 impl Tool for ShellTool {
     type Args = ShellArgs;
     type Output = ();

@@ -13,6 +13,8 @@ pub use error::{ProviderError, ProviderErrorKind};
 #[doc(inline)]
 pub use stream::{EVENT_STREAM_CAPACITY, EventStream, EventStreamSender, MAX_EVENT_ENCODED_BYTES};
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::{AssistantMessage, Message, SharedMessage, ToolSpec};
@@ -226,7 +228,9 @@ impl StreamEvent {
 /// implementations. Producers must honor `cancel`, stop when
 /// [`EventStreamSender::send`] returns `false`, and release upstream
 /// resources.
-#[async_trait::async_trait]
+///
+/// The method returns a boxed future so the trait stays object-safe for
+/// `dyn Provider` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait Provider: Send + Sync {
     /// Starts one completion stream.
     ///
@@ -234,9 +238,9 @@ pub trait Provider: Send + Sync {
     ///
     /// Returns a bounded [`ProviderError`] when setup fails before a stream is
     /// available. Streaming failures are terminal [`StreamEvent::Error`] items.
-    async fn stream(
-        &self,
-        request: &Request,
+    fn stream<'a>(
+        &'a self,
+        request: &'a Request,
         cancel: CancellationToken,
-    ) -> Result<EventStream, ProviderError>;
+    ) -> Pin<Box<dyn Future<Output = Result<EventStream, ProviderError>> + Send + 'a>>;
 }

@@ -1,7 +1,9 @@
 //! Role-aware `agent` host: catalog resolution, tool allowlists, isolation,
 //! per-role model routes, and the parent-prompt delegation directive.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use mycode_agent::{Agent, AgentConfig, HookRunner};
@@ -391,61 +393,63 @@ pub(crate) fn resolve_isolation(role: &SubagentRole, requested: Option<&str>) ->
     }
 }
 
-#[async_trait::async_trait]
 impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
-    async fn run_subagent(
-        &self,
+    fn run_subagent<'a>(
+        &'a self,
         request: mycode_tools::builtin::SubagentRequest,
-        progress: &mycode_tools::ToolStream,
-        cancel: &CancellationToken,
-        call_id: &str,
-    ) -> Result<String, mycode_tools::ToolError> {
-        let fail = |message: String| mycode_tools::ToolError::Execution(message);
-        let catalog = discover_roles(&self.home, Some(&self.cwd));
-        let role = catalog.role(&request.agent).cloned().ok_or_else(|| {
-            fail(format!(
-                "unknown role '{}'; available: {}",
-                request.agent,
-                catalog.names().join(", ")
-            ))
-        })?;
-        if !self.settings.subagents.is_enabled(&role.name) {
-            return Err(fail(format!(
-                "role '{}' is disabled in settings",
-                role.name
-            )));
-        }
-        let isolation = resolve_isolation(&role, request.isolation.as_deref());
-        let _ = progress.progress(agent_progress(&role.name, "queued", &request.description));
-        let _ = progress.progress(agent_progress(&role.name, "prompt", &request.prompt));
-        let permit = tokio::select! {
+        progress: &'a mycode_tools::ToolStream,
+        cancel: &'a CancellationToken,
+        call_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, mycode_tools::ToolError>> + Send + 'a>> {
+        Box::pin(async move {
+            let fail = |message: String| mycode_tools::ToolError::Execution(message);
+            let catalog = discover_roles(&self.home, Some(&self.cwd));
+            let role = catalog.role(&request.agent).cloned().ok_or_else(|| {
+                fail(format!(
+                    "unknown role '{}'; available: {}",
+                    request.agent,
+                    catalog.names().join(", ")
+                ))
+            })?;
+            if !self.settings.subagents.is_enabled(&role.name) {
+                return Err(fail(format!(
+                    "role '{}' is disabled in settings",
+                    role.name
+                )));
+            }
+            let isolation = resolve_isolation(&role, request.isolation.as_deref());
+            let _ = progress.progress(agent_progress(&role.name, "queued", &request.description));
+            let _ = progress.progress(agent_progress(&role.name, "prompt", &request.prompt));
+            let permit = tokio::select! {
             permit = self.slots.acquire() => permit.map_err(|_| fail("agent slots closed".to_owned()))?,
             _ = cancel.cancelled() => return Err(fail("agent cancelled".to_owned())),
-        };
-        let lease = if isolation == RoleIsolation::Worktree {
-            let home = self.home.clone();
-            let cwd = self.cwd.clone();
-            match tokio::task::spawn_blocking(move || WorktreeLease::acquire(&home, &cwd)).await {
-                Ok(Ok(lease)) => Some(lease),
-                Ok(Err(message)) => return Err(fail(message)),
-                Err(error) => return Err(fail(format!("worktree task failed: {error}"))),
-            }
-        } else {
-            None
-        };
-        let result = self
-            .drive_subagent(&request, &role, progress, cancel, call_id, lease.as_ref())
-            .await;
-        let result = if let Some(lease) = lease {
-            match tokio::task::spawn_blocking(move || handoff_worktree(lease, result)).await {
-                Ok(outcome) => outcome,
-                Err(error) => Err(fail(format!("worktree handoff failed: {error}"))),
-            }
-        } else {
+            };
+            let lease = if isolation == RoleIsolation::Worktree {
+                let home = self.home.clone();
+                let cwd = self.cwd.clone();
+                match tokio::task::spawn_blocking(move || WorktreeLease::acquire(&home, &cwd)).await
+                {
+                    Ok(Ok(lease)) => Some(lease),
+                    Ok(Err(message)) => return Err(fail(message)),
+                    Err(error) => return Err(fail(format!("worktree task failed: {error}"))),
+                }
+            } else {
+                None
+            };
+            let result = self
+                .drive_subagent(&request, &role, progress, cancel, call_id, lease.as_ref())
+                .await;
+            let result = if let Some(lease) = lease {
+                match tokio::task::spawn_blocking(move || handoff_worktree(lease, result)).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => Err(fail(format!("worktree handoff failed: {error}"))),
+                }
+            } else {
+                result
+            };
+            drop(permit);
             result
-        };
-        drop(permit);
-        result
+        })
     }
 }
 

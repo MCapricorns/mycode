@@ -6,7 +6,9 @@
 //! `Args`, used both for the LLM tool spec (`ToolSpec::params_schema`) and
 //! for runtime argument validation in [`ToolDyn::execute_dyn`].
 
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -88,9 +90,9 @@ impl From<std::io::Error> for ToolError {
 /// A tool with typed arguments. Builtin tools and Rust-side plugins
 /// implement this; the blanket [`ToolDyn`] impl type-erases it.
 ///
-/// `Args` must additionally be `Send`: the returned boxed future (from
-/// `async_trait` on the object-safe [`ToolDyn`]) captures the arguments.
-#[async_trait]
+/// `execute` returns an `impl Future` pinned by trait, so implementers
+/// write plain `async fn`; `Args` must additionally be `Send` because the
+/// future captures the arguments and the object-safe [`ToolDyn`] boxes it.
 pub trait Tool: Send + Sync + 'static {
     /// Typed, schema-derived arguments. The schemars-generated schema is
     /// the single source for both the tool spec and runtime validation.
@@ -154,17 +156,19 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Execute the tool. Tools may stream progress through `out`; the returned
     /// result is the terminal outcome claimed by the dispatcher.
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: Self::Args,
-        ctx: &ToolCtx,
-        out: &mut ToolStream,
-    ) -> Result<ToolResult, ToolError>;
+        ctx: &'a ToolCtx,
+        out: &'a mut ToolStream,
+    ) -> impl Future<Output = Result<ToolResult, ToolError>> + Send + 'a;
 }
 
 /// Object-safe, type-erased view of a [`Tool`] for registry storage and
 /// dispatch with raw-JSON arguments.
-#[async_trait]
+///
+/// `execute_dyn` returns a boxed future so the trait stays object-safe;
+/// implementers write `Box::pin(async move { … })`.
 pub trait ToolDyn: Send + Sync {
     /// The tool spec (name, description, JSON Schema of arguments) as
     /// sent to LLM providers.
@@ -192,12 +196,12 @@ pub trait ToolDyn: Send + Sync {
     /// Validate `args` against the tool's schema, deserialize, and
     /// execute. Wrong-shaped arguments fail with
     /// [`ToolError::InvalidArgs`].
-    async fn execute_dyn(
-        &self,
+    fn execute_dyn<'a>(
+        &'a self,
         args: Value,
-        ctx: &ToolCtx,
-        out: &mut ToolStream,
-    ) -> Result<ToolResult, ToolError>;
+        ctx: &'a ToolCtx,
+        out: &'a mut ToolStream,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>>;
 }
 
 /// Generate the JSON Schema of `A`'s arguments (schemars single source).
@@ -257,8 +261,6 @@ pub(crate) fn validate_args<A: JsonSchema>(args: &Value) -> Result<(), ToolError
 /// `Value → Args` after validating it against the schemars-generated
 /// schema, so wrong-shaped arguments are rejected with
 /// [`ToolError::InvalidArgs`] before the tool runs.
-
-#[async_trait]
 impl<T: Tool> ToolDyn for T {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -288,17 +290,19 @@ impl<T: Tool> ToolDyn for T {
         Tool::requires_file_preflight(self)
     }
 
-    async fn execute_dyn(
-        &self,
+    fn execute_dyn<'a>(
+        &'a self,
         args: Value,
-        ctx: &ToolCtx,
-        out: &mut ToolStream,
-    ) -> Result<ToolResult, ToolError> {
-        let args = self.prepare_args(normalize_tool_args(args));
-        validate_args::<T::Args>(&args)?;
-        let typed =
-            serde_json::from_value(args).map_err(|err| ToolError::InvalidArgs(err.to_string()))?;
-        self.execute(typed, ctx, out).await
+        ctx: &'a ToolCtx,
+        out: &'a mut ToolStream,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
+        Box::pin(async move {
+            let args = self.prepare_args(normalize_tool_args(args));
+            validate_args::<T::Args>(&args)?;
+            let typed = serde_json::from_value(args)
+                .map_err(|err| ToolError::InvalidArgs(err.to_string()))?;
+            self.execute(typed, ctx, out).await
+        })
     }
 }
 

@@ -5,7 +5,6 @@
 //! sorted by byte range, and rejected on ambiguity, UTF-8 boundary errors,
 //! overlap, or empty search matches. `fuzzy` commits only a unique-best
 //! normalized match; `ast` replaces tree-sitter capture ranges only.
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -188,7 +187,6 @@ pub enum EditOp {
     },
 }
 
-#[async_trait]
 impl Tool for EditTool {
     type Args = EditArgs;
     type Output = ();

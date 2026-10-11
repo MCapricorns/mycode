@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use async_trait::async_trait;
 use globset::GlobMatcher;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -93,7 +92,6 @@ fn offer(
     }
 }
 
-#[async_trait]
 impl Tool for FindTool {
     type Args = FindArgs;
     type Output = ();

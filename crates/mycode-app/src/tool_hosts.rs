@@ -1,6 +1,9 @@
 //! Host-backed tools bridged into the agent's registry: `ask_user` and the
 //! settings-configured web search backend.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use mycode_config::{AppSettings, HomeLayout, read_app_settings, read_provider_secrets};
 use tokio_util::sync::CancellationToken;
 
@@ -19,9 +22,7 @@ const ANYSEARCH_KEY_ENV: &str = "ANYSEARCH_API_KEY";
 #[derive(Default)]
 struct AskRouter {
     next: std::sync::atomic::AtomicU64,
-    pending: std::sync::Mutex<
-        std::collections::HashMap<String, PendingAsk>,
-    >,
+    pending: std::sync::Mutex<std::collections::HashMap<String, PendingAsk>>,
 }
 
 /// One registered answer channel with its issuance generation.
@@ -31,24 +32,16 @@ struct PendingAsk {
 }
 
 impl AskRouter {
-    fn register(
-        &self,
-        session_id: &str,
-    ) -> (tokio::sync::oneshot::Receiver<Vec<String>>, AskSlot) {
-        let generation = self
-            .next
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    fn register(&self, session_id: &str) -> (tokio::sync::oneshot::Receiver<Vec<String>>, AskSlot) {
+        let generation = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.pending
-            .lock()
-            .expect("ask router")
-            .insert(
-                session_id.to_owned(),
-                PendingAsk {
-                    generation,
-                    answer: tx,
-                },
-            );
+        self.pending.lock().expect("ask router").insert(
+            session_id.to_owned(),
+            PendingAsk {
+                generation,
+                answer: tx,
+            },
+        );
         (
             rx,
             AskSlot {
@@ -113,10 +106,7 @@ static ASK_ROUTER: std::sync::OnceLock<AskRouter> = std::sync::OnceLock::new();
 /// one. The returned slot removes the registration when the turn ends.
 pub(crate) fn register_ask(
     session_id: &str,
-) -> (
-    tokio::sync::oneshot::Receiver<Vec<String>>,
-    AskSlot,
-) {
+) -> (tokio::sync::oneshot::Receiver<Vec<String>>, AskSlot) {
     ASK_ROUTER
         .get_or_init(AskRouter::default)
         .register(session_id)
@@ -152,47 +142,55 @@ pub(crate) struct BridgeAskChannel {
     pub(crate) _slot: AskSlot,
 }
 
-#[async_trait::async_trait]
 impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
-    async fn ask(
-        &self,
-        questions: &[mycode_tools::builtin::AskQuestion],
-        cancel: &CancellationToken,
-    ) -> Result<Vec<mycode_tools::builtin::AskAnswer>, mycode_tools::ToolError> {
-        let rows = questions
-            .iter()
-            .map(|question| crate::protocol::AskPrompt {
-                question: question.question.clone(),
-                choices: question.choices.clone(),
-                optional: question.optional,
-                multiple: question.multiple,
-            })
-            .collect();
-        let _ = self.events.try_send(BridgeEvent::AskRequested {
-            session_id: self.session_id.clone(),
-            questions: rows,
-        });
-        let rx = self
-            .answer
-            .lock()
-            .await
-            .take()
-            .ok_or_else(mycode_tools::builtin::user_dismissed)?;
-        let answers = tokio::select! {
+    fn ask<'a>(
+        &'a self,
+        questions: &'a [mycode_tools::builtin::AskQuestion],
+        cancel: &'a CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<Vec<mycode_tools::builtin::AskAnswer>, mycode_tools::ToolError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let rows = questions
+                .iter()
+                .map(|question| crate::protocol::AskPrompt {
+                    question: question.question.clone(),
+                    choices: question.choices.clone(),
+                    optional: question.optional,
+                    multiple: question.multiple,
+                })
+                .collect();
+            let _ = self.events.send(BridgeEvent::AskRequested {
+                session_id: self.session_id.clone(),
+                questions: rows,
+            });
+            let rx = self
+                .answer
+                .lock()
+                .await
+                .take()
+                .ok_or_else(mycode_tools::builtin::user_dismissed)?;
+            let answers = tokio::select! {
             biased;
             () = cancel.cancelled() => {
-                return Err(mycode_tools::ToolError::Execution("cancelled".into()));
+            return Err(mycode_tools::ToolError::Execution("cancelled".into()));
             }
             answers = rx => answers.map_err(|_| mycode_tools::builtin::user_dismissed())?,
-        };
-        Ok(questions
-            .iter()
-            .enumerate()
-            .map(|(index, question)| mycode_tools::builtin::AskAnswer {
-                question: question.question.clone(),
-                answer: answers.get(index).cloned().unwrap_or_default(),
-            })
-            .collect())
+            };
+            Ok(questions
+                .iter()
+                .enumerate()
+                .map(|(index, question)| mycode_tools::builtin::AskAnswer {
+                    question: question.question.clone(),
+                    answer: answers.get(index).cloned().unwrap_or_default(),
+                })
+                .collect())
+        })
     }
 }
 
@@ -271,49 +269,65 @@ pub(crate) struct BridgeWebHost {
     pub(crate) home: HomeLayout,
 }
 
-#[async_trait::async_trait]
 impl mycode_tools::builtin::WebHost for BridgeWebHost {
-    async fn search(
-        &self,
-        query: &str,
+    fn search<'a>(
+        &'a self,
+        query: &'a str,
         max_results: usize,
-        cancel: &CancellationToken,
-    ) -> Result<Vec<mycode_tools::builtin::WebHit>, mycode_tools::ToolError> {
-        let fail = |message: String| mycode_tools::ToolError::Execution(message);
-        let client = web_client(&self.home).map_err(fail)?;
-        let results = client
-            .search(query, max_results, cancel.clone())
-            .await
-            .map_err(|error| fail(crate::web_client::tool_failure("search", &error)))?;
-        Ok(results
-            .into_iter()
-            .map(|result| mycode_tools::builtin::WebHit {
-                url: result.url,
-                title: result.title,
-                snippet: result.snippet,
-            })
-            .collect())
+        cancel: &'a CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<Vec<mycode_tools::builtin::WebHit>, mycode_tools::ToolError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let fail = |message: String| mycode_tools::ToolError::Execution(message);
+            let client = web_client(&self.home).map_err(fail)?;
+            let results = client
+                .search(query, max_results, cancel.clone())
+                .await
+                .map_err(|error| fail(crate::web_client::tool_failure("search", &error)))?;
+            Ok(results
+                .into_iter()
+                .map(|result| mycode_tools::builtin::WebHit {
+                    url: result.url,
+                    title: result.title,
+                    snippet: result.snippet,
+                })
+                .collect())
+        })
     }
 
-    async fn fetch_content(
-        &self,
-        urls: &[String],
-        cancel: &CancellationToken,
-    ) -> Result<Vec<mycode_tools::builtin::WebPage>, mycode_tools::ToolError> {
-        let fail = |message: String| mycode_tools::ToolError::Execution(message);
-        let client = web_client(&self.home).map_err(fail)?;
-        let pages = client
-            .contents(urls, cancel.clone())
-            .await
-            .map_err(|error| fail(crate::web_client::tool_failure("fetch", &error)))?;
-        Ok(pages
-            .into_iter()
-            .map(|page| mycode_tools::builtin::WebPage {
-                url: page.url,
-                content: page.content,
-                truncated: page.truncated,
-            })
-            .collect())
+    fn fetch_content<'a>(
+        &'a self,
+        urls: &'a [String],
+        cancel: &'a CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<Vec<mycode_tools::builtin::WebPage>, mycode_tools::ToolError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let fail = |message: String| mycode_tools::ToolError::Execution(message);
+            let client = web_client(&self.home).map_err(fail)?;
+            let pages = client
+                .contents(urls, cancel.clone())
+                .await
+                .map_err(|error| fail(crate::web_client::tool_failure("fetch", &error)))?;
+            Ok(pages
+                .into_iter()
+                .map(|page| mycode_tools::builtin::WebPage {
+                    url: page.url,
+                    content: page.content,
+                    truncated: page.truncated,
+                })
+                .collect())
+        })
     }
 }
 

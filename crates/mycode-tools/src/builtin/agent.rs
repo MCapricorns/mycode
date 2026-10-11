@@ -6,9 +6,10 @@
 //! seam keeps the tool free of provider and runtime dependencies; hosts run
 //! the nested agent, tests replay canned answers. There is no `task` alias.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +40,9 @@ pub struct SubagentRequest {
 }
 
 /// Host side of the delegation.
-#[async_trait]
+///
+/// The method returns a boxed future so the trait stays object-safe for
+/// `dyn AgentHost` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait AgentHost: Send + Sync + 'static {
     /// Runs one subagent to completion and returns its final answer.
     ///
@@ -50,13 +53,13 @@ pub trait AgentHost: Send + Sync + 'static {
     ///
     /// Returns [`ToolError::Execution`] when the subagent failed or was
     /// cancelled. A nested run has no wall-clock timeout.
-    async fn run_subagent(
-        &self,
+    fn run_subagent<'a>(
+        &'a self,
         request: SubagentRequest,
-        progress: &ToolStream,
-        cancel: &tokio_util::sync::CancellationToken,
-        call_id: &str,
-    ) -> Result<String, ToolError>;
+        progress: &'a ToolStream,
+        cancel: &'a tokio_util::sync::CancellationToken,
+        call_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>>;
 }
 
 /// The built-in `agent` tool.
@@ -90,7 +93,6 @@ pub struct AgentArgs {
     pub isolation: Option<String>,
 }
 
-#[async_trait]
 impl Tool for AgentTool {
     type Args = AgentArgs;
     type Output = ();
@@ -180,7 +182,8 @@ fn brief_label(prompt: &str) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use async_trait::async_trait;
+    use std::future::Future;
+    use std::pin::Pin;
 
     use super::{AgentHost, AgentTool, SubagentRequest};
     use crate::stream::ToolStream;
@@ -188,16 +191,15 @@ mod tests {
 
     struct EchoHost;
 
-    #[async_trait]
     impl AgentHost for EchoHost {
-        async fn run_subagent(
-            &self,
+        fn run_subagent<'a>(
+            &'a self,
             request: SubagentRequest,
-            _progress: &ToolStream,
-            _cancel: &tokio_util::sync::CancellationToken,
-            _call_id: &str,
-        ) -> Result<String, ToolError> {
-            Ok(request.prompt)
+            _progress: &'a ToolStream,
+            _cancel: &'a tokio_util::sync::CancellationToken,
+            _call_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>> {
+            Box::pin(async move { Ok(request.prompt) })
         }
     }
 

@@ -15,6 +15,9 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
@@ -270,37 +273,50 @@ impl StdioChannel {
     }
 }
 
-#[async_trait::async_trait]
 impl JsonRpcChannel for StdioChannel {
-    async fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError> {
-        let line = serde_json::to_vec(&json!({
+    fn request<'a>(
+        &'a self,
+        id: u64,
+        method: &'a str,
+        params: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            let line = serde_json::to_vec(&json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params,
-        }))
-        .map_err(|error| McpError::protocol(error.to_string()))?;
-        if line.len() > MAX_MESSAGE_BYTES {
-            return Err(McpError::Oversized);
-        }
-        self.write_line(&line).await?;
-        match tokio::time::timeout(self.timeout, self.wait_for(id)).await {
-            Ok(outcome) => outcome,
-            Err(_) => Err(McpError::Timeout),
-        }
+            }))
+            .map_err(|error| McpError::protocol(error.to_string()))?;
+            if line.len() > MAX_MESSAGE_BYTES {
+                return Err(McpError::Oversized);
+            }
+            self.write_line(&line).await?;
+            match tokio::time::timeout(self.timeout, self.wait_for(id)).await {
+                Ok(outcome) => outcome,
+                Err(_) => Err(McpError::Timeout),
+            }
+        })
     }
 
-    async fn notify(&self, method: &str) -> Result<(), McpError> {
-        let line = serde_json::to_vec(&json!({
+    fn notify<'a>(
+        &'a self,
+        method: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            let line = serde_json::to_vec(&json!({
             "jsonrpc": "2.0",
             "method": method,
-        }))
-        .map_err(|error| McpError::protocol(error.to_string()))?;
-        self.write_line(&line).await
+            }))
+            .map_err(|error| McpError::protocol(error.to_string()))?;
+            self.write_line(&line).await
+        })
     }
 
-    async fn shutdown(&self) {
-        StdioChannel::shutdown(self).await;
+    fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            StdioChannel::shutdown(self).await;
+        })
     }
 }
 

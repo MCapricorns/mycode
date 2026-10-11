@@ -63,13 +63,13 @@ impl Workspace {
         self.git_diff = t("Loading diff…", "正在加载差异…").to_owned();
         self.git_diff_generation = self.git_diff_generation.wrapping_add(1);
         let generation = self.git_diff_generation;
-        let (tx, rx) = async_channel::bounded(1);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         std::thread::spawn(move || {
             let diff = git_status::read_diff(Path::new(&root), &path);
             let _ = tx.try_send((path, diff));
         });
         cx.spawn(async move |this, cx| {
-            let Ok((path, diff)) = rx.recv().await else {
+            let Some((path, diff)) = rx.recv().await else {
                 return;
             };
             let _ = this.update(cx, |workspace, cx| {
@@ -88,12 +88,12 @@ impl Workspace {
     fn spawn_git_watch(
         &self,
         generation: u64,
-        events: async_channel::Receiver<()>,
+        mut events: tokio::sync::mpsc::Receiver<()>,
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
             loop {
-                if events.recv().await.is_err() {
+                if events.recv().await.is_none() {
                     return;
                 }
                 cx.background_executor().timer(GIT_REFRESH_DEBOUNCE).await;
@@ -124,14 +124,14 @@ impl Workspace {
         };
         self.git_status_inflight = true;
         let generation = self.git_generation;
-        let (tx, rx) = async_channel::bounded(1);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let read_root = root.clone();
         std::thread::spawn(move || {
             let snapshot = git_status::read_status(Path::new(&read_root));
             let _ = tx.try_send(snapshot);
         });
         cx.spawn(async move |this, cx| {
-            let Ok(snapshot) = rx.recv().await else {
+            let Some(snapshot) = rx.recv().await else {
                 return;
             };
             let _ = this.update(cx, |workspace, cx| {
@@ -163,8 +163,8 @@ impl Workspace {
     }
 }
 
-fn watch_root(root: &str) -> Option<(Watcher, async_channel::Receiver<()>)> {
-    let (tx, rx) = async_channel::bounded(1);
+fn watch_root(root: &str) -> Option<(Watcher, tokio::sync::mpsc::Receiver<()>)> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         if watch_signal(&result) {
             let _ = tx.try_send(());

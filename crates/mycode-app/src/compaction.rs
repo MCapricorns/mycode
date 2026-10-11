@@ -836,39 +836,45 @@ mod tests {
         calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
-    #[async_trait::async_trait]
     impl mycode_providers::SseTransport for SummaryTransport {
-        async fn post(
-            &self,
+        fn post<'a>(
+            &'a self,
             call: mycode_providers::TransportCall,
             _cancel: tokio_util::sync::CancellationToken,
-        ) -> Result<
-            std::pin::Pin<
-                Box<
-                    dyn futures_util::Stream<
-                            Item = Result<bytes::Bytes, mycode_core::ProviderError>,
-                        > + Send,
-                >,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            mycode_providers::transport::ByteStream,
+                            mycode_core::ProviderError,
+                        >,
+                    > + Send
+                    + 'a,
             >,
-            mycode_core::ProviderError,
         > {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let body = String::from_utf8_lossy(&call.body);
-            let text = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
-                PLAUSIBLE_SUMMARY
-            } else {
-                "unexpected summary request"
-            };
-            let chunk = serde_json::json!({
-                "choices": [{
-                    "delta": {"content": text},
-                    "finish_reason": "stop"
-                }]
-            });
-            let sse = format!("data: {chunk}\n\ndata: [DONE]\n\n");
-            Ok(Box::pin(futures_util::stream::once(async move {
-                Ok(bytes::Bytes::from(sse))
-            })))
+            Box::pin(async move {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let body = String::from_utf8_lossy(&call.body);
+                let text = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                    PLAUSIBLE_SUMMARY
+                } else {
+                    "unexpected summary request"
+                };
+                let chunk = serde_json::json!({
+                    "choices": [{
+                        "delta": {"content": text},
+                        "finish_reason": "stop"
+                    }]
+                });
+                let sse = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+                // One queued chunk, then the dropped sender ends the stream.
+                let (sender, stream) = tokio::sync::mpsc::channel(1);
+                sender
+                    .send(Ok(bytes::Bytes::from(sse)))
+                    .await
+                    .expect("queue scripted body");
+                Ok(stream)
+            })
         }
     }
 
@@ -1051,58 +1057,64 @@ mod tests {
         protocol: &'static str,
     }
 
-    #[async_trait::async_trait]
     impl mycode_providers::SseTransport for ScriptedSummary {
-        async fn post(
-            &self,
+        fn post<'a>(
+            &'a self,
             call: mycode_providers::TransportCall,
             _cancel: tokio_util::sync::CancellationToken,
-        ) -> Result<
-            std::pin::Pin<
-                Box<
-                    dyn futures_util::Stream<
-                            Item = Result<bytes::Bytes, mycode_core::ProviderError>,
-                        > + Send,
-                >,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            mycode_providers::transport::ByteStream,
+                            mycode_core::ProviderError,
+                        >,
+                    > + Send
+                    + 'a,
             >,
-            mycode_core::ProviderError,
         > {
-            self.bodies
-                .lock()
-                .expect("bodies")
-                .push(String::from_utf8_lossy(&call.body).into_owned());
-            let index = self.index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (finish, content) = self
-                .script
-                .get(index)
-                .copied()
-                .unwrap_or(("stop", PLAUSIBLE_SUMMARY));
-            let sse = if self.protocol == "anthropic" {
-                let stop = if finish == "length" {
-                    "max_tokens"
-                } else {
-                    "end_turn"
-                };
-                let text = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_owned());
-                format!(
-                    "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
+            Box::pin(async move {
+                self.bodies
+                    .lock()
+                    .expect("bodies")
+                    .push(String::from_utf8_lossy(&call.body).into_owned());
+                let index = self.index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (finish, content) = self
+                    .script
+                    .get(index)
+                    .copied()
+                    .unwrap_or(("stop", PLAUSIBLE_SUMMARY));
+                let sse = if self.protocol == "anthropic" {
+                    let stop = if finish == "length" {
+                        "max_tokens"
+                    } else {
+                        "end_turn"
+                    };
+                    let text = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_owned());
+                    format!(
+                        "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
                      data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{text}}}}}\n\n\
                      data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
                      data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"{stop}\"}}}}\n\n\
                      data: {{\"type\":\"message_stop\"}}\n\n"
-                )
-            } else {
-                let chunk = serde_json::json!({
-                    "choices": [{
-                        "delta": {"content": content},
-                        "finish_reason": finish
-                    }]
-                });
-                format!("data: {chunk}\n\ndata: [DONE]\n\n")
-            };
-            Ok(Box::pin(futures_util::stream::once(async move {
-                Ok(bytes::Bytes::from(sse))
-            })))
+                    )
+                } else {
+                    let chunk = serde_json::json!({
+                        "choices": [{
+                            "delta": {"content": content},
+                            "finish_reason": finish
+                        }]
+                    });
+                    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+                };
+                // One queued chunk, then the dropped sender ends the stream.
+                let (sender, stream) = tokio::sync::mpsc::channel(1);
+                sender
+                    .send(Ok(bytes::Bytes::from(sse)))
+                    .await
+                    .expect("queue scripted body");
+                Ok(stream)
+            })
         }
     }
 

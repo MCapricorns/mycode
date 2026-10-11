@@ -8,6 +8,9 @@
 
 use std::time::Duration;
 
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
@@ -208,26 +211,37 @@ fn finish_reply(value: Option<Value>, id: u64) -> Result<Value, McpError> {
     Ok(value["result"].clone())
 }
 
-#[async_trait::async_trait]
 impl JsonRpcChannel for HttpChannel {
-    async fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError> {
-        let envelope = json!({
+    fn request<'a>(
+        &'a self,
+        id: u64,
+        method: &'a str,
+        params: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            let envelope = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params,
-        });
-        let reply = self.post_envelope(envelope).await?;
-        finish_reply(reply, id)
+            });
+            let reply = self.post_envelope(envelope).await?;
+            finish_reply(reply, id)
+        })
     }
 
-    async fn notify(&self, method: &str) -> Result<(), McpError> {
-        let envelope = json!({
+    fn notify<'a>(
+        &'a self,
+        method: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            let envelope = json!({
             "jsonrpc": "2.0",
             "method": method,
-        });
-        // 202/empty responses are success; transport failures propagate.
-        self.post_envelope(envelope).await?;
-        Ok(())
+            });
+            // 202/empty responses are success; transport failures propagate.
+            self.post_envelope(envelope).await?;
+            Ok(())
+        })
     }
 }

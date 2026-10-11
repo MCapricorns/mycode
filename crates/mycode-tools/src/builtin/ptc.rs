@@ -8,7 +8,6 @@
 mod protocol;
 mod runtime;
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -53,7 +52,6 @@ pub struct RunCodeArgs {
     pub code: String,
 }
 
-#[async_trait]
 impl Tool for RunCodeTool {
     type Args = RunCodeArgs;
     type Output = ();
@@ -205,9 +203,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use async_trait::async_trait;
     use mycode_core::tool::ToolSpec;
     use serde_json::json;
+    use std::future::Future;
+    use std::pin::Pin;
     use tokio_util::sync::CancellationToken;
 
     use super::RunCodeTool;
@@ -497,7 +496,6 @@ return "|".join(err) + "|" + text
         log: ProbeLog,
     }
 
-    #[async_trait]
     impl ToolDyn for Probe {
         fn spec(&self) -> ToolSpec {
             ToolSpec {
@@ -507,27 +505,29 @@ return "|".join(err) + "|" + text
             }
         }
 
-        async fn execute_dyn(
-            &self,
+        fn execute_dyn<'a>(
+            &'a self,
             args: serde_json::Value,
-            _ctx: &ToolCtx,
-            _out: &mut ToolStream,
-        ) -> Result<ToolResult, ToolError> {
-            let path = args
-                .get("path")
-                .and_then(|value| value.as_str())
-                .unwrap_or(self.name)
-                .to_owned();
-            self.log
-                .lock()
-                .expect("log")
-                .push((path.clone(), "start", Instant::now()));
-            tokio::time::sleep(self.delay).await;
-            self.log
-                .lock()
-                .expect("log")
-                .push((path.clone(), "end", Instant::now()));
-            Ok(ToolResult::text(path))
+            _ctx: &'a ToolCtx,
+            _out: &'a mut ToolStream,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
+            Box::pin(async move {
+                let path = args
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(self.name)
+                    .to_owned();
+                self.log
+                    .lock()
+                    .expect("log")
+                    .push((path.clone(), "start", Instant::now()));
+                tokio::time::sleep(self.delay).await;
+                self.log
+                    .lock()
+                    .expect("log")
+                    .push((path.clone(), "end", Instant::now()));
+                Ok(ToolResult::text(path))
+            })
         }
     }
 
@@ -715,29 +715,32 @@ return \"done\"\n";
         release: Mutex<Option<tokio::sync::oneshot::Receiver<String>>>,
     }
 
-    #[async_trait]
     impl crate::builtin::AskChannel for GateAsk {
-        async fn ask(
-            &self,
-            _questions: &[crate::builtin::AskQuestion],
-            cancel: &CancellationToken,
-        ) -> Result<Vec<crate::builtin::AskAnswer>, ToolError> {
-            self.entered
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            let receiver = self
-                .release
-                .lock()
-                .expect("release")
-                .take()
-                .expect("oneshot");
-            tokio::select! {
-                _ = cancel.cancelled() => Err(ToolError::Execution("cancelled".to_owned())),
-                answer = receiver => {
-                    let answer = answer
-                        .map_err(|_| ToolError::Execution("the user dismissed the questions".to_owned()))?;
-                    Ok(vec![crate::builtin::AskAnswer { question: "Go?".to_owned(), answer }])
+        fn ask<'a>(
+            &'a self,
+            _questions: &'a [crate::builtin::AskQuestion],
+            cancel: &'a CancellationToken,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<Vec<crate::builtin::AskAnswer>, ToolError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                self.entered
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let receiver = self
+                    .release
+                    .lock()
+                    .expect("release")
+                    .take()
+                    .expect("oneshot");
+                tokio::select! {
+                    _ = cancel.cancelled() => Err(ToolError::Execution("cancelled".to_owned())),
+                    answer = receiver => {
+                        let answer = answer
+                            .map_err(|_| ToolError::Execution("the user dismissed the questions".to_owned()))?;
+                        Ok(vec![crate::builtin::AskAnswer { question: "Go?".to_owned(), answer }])
+                    }
                 }
-            }
+            })
         }
     }
 
@@ -974,7 +977,6 @@ except ToolCallError as e:
     async fn a_large_tool_reply_round_trips_intact() {
         let root = temp_dir("large");
         struct Big;
-        #[async_trait]
         impl ToolDyn for Big {
             fn spec(&self) -> ToolSpec {
                 ToolSpec {
@@ -983,13 +985,14 @@ except ToolCallError as e:
                     params_schema: json!({"type": "object"}),
                 }
             }
-            async fn execute_dyn(
-                &self,
+            fn execute_dyn<'a>(
+                &'a self,
                 _args: serde_json::Value,
-                _ctx: &ToolCtx,
-                _out: &mut ToolStream,
-            ) -> Result<ToolResult, ToolError> {
-                Ok(ToolResult::text("x".repeat(2 * 1024 * 1024)))
+                _ctx: &'a ToolCtx,
+                _out: &'a mut ToolStream,
+            ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(ToolResult::text("x".repeat(2 * 1024 * 1024))) })
             }
         }
         let result = run(
@@ -1044,12 +1047,7 @@ return text.strip()
         assert!(!result.is_error, "{text}");
         assert!(text.contains("日志 line ✓"), "{text}");
         assert!(text.contains("中文🎉 émoji"), "{text}");
-        let failed = run(
-            &root,
-            catalog(vec![]),
-            "raise ValueError(\"错误💥\")\n",
-        )
-        .await;
+        let failed = run(&root, catalog(vec![]), "raise ValueError(\"错误💥\")\n").await;
         let text = text_of(&failed);
         assert!(failed.is_error, "{text}");
         assert!(text.contains("错误💥"), "{text}");

@@ -6,8 +6,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-async-channel = { workspace = true }
 serde_json = { workspace = true }
+# Sync primitives only: the git watcher and status threads hand results to
+# the gpui executor through tokio channels, which are runtime-independent.
+tokio = { workspace = true, features = ["sync"] }
 # `tree-sitter-languages` turns on gpui-kit's own grammars. Fenced code in
 # TextView is highlighted by that highlighter; this crate does not depend
 # on tree-sitter itself. gpui-kit is the GUI framework and stays in this

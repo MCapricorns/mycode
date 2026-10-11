@@ -5,9 +5,10 @@
 //! to the model as the tool result. The channel seam keeps the tool free of
 //! any UI dependency; hosts answer, tests replay.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -79,7 +80,9 @@ pub struct AskAnswer {
 }
 
 /// Host side of the ask interaction.
-#[async_trait]
+///
+/// The method returns a boxed future so the trait stays object-safe for
+/// `dyn AskChannel` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait AskChannel: Send + Sync + 'static {
     /// Presents the questions and waits for the user.
     ///
@@ -90,11 +93,11 @@ pub trait AskChannel: Send + Sync + 'static {
     ///
     /// Returns [`ToolError::Execution`] when the user dismissed the ask or
     /// the channel failed.
-    async fn ask(
-        &self,
-        questions: &[AskQuestion],
-        cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<Vec<AskAnswer>, ToolError>;
+    fn ask<'a>(
+        &'a self,
+        questions: &'a [AskQuestion],
+        cancel: &'a tokio_util::sync::CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AskAnswer>, ToolError>> + Send + 'a>>;
 }
 
 /// The built-in `ask_user` tool.
@@ -116,7 +119,6 @@ pub struct AskArgs {
     pub questions: Vec<AskQuestion>,
 }
 
-#[async_trait]
 impl Tool for AskTool {
     type Args = AskArgs;
     type Output = ();
@@ -484,6 +486,9 @@ fn coerce_bool(value: &serde_json::Value) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+
     use serde_json::json;
 
     use super::{
@@ -494,14 +499,14 @@ mod tests {
 
     struct Unused;
 
-    #[async_trait::async_trait]
     impl super::AskChannel for Unused {
-        async fn ask(
-            &self,
-            _questions: &[AskQuestion],
-            _cancel: &tokio_util::sync::CancellationToken,
-        ) -> Result<Vec<AskAnswer>, crate::tool::ToolError> {
-            Err(crate::tool::ToolError::Execution("unused".into()))
+        fn ask<'a>(
+            &'a self,
+            _questions: &'a [AskQuestion],
+            _cancel: &'a tokio_util::sync::CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<AskAnswer>, crate::tool::ToolError>> + Send + 'a>>
+        {
+            Box::pin(async { Err(crate::tool::ToolError::Execution("unused".into())) })
         }
     }
 

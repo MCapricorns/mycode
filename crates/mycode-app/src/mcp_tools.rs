@@ -5,7 +5,9 @@
 //! `use_tool`. A failed server is skipped.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -84,7 +86,6 @@ impl DynamicMcpTool {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolDyn for DynamicMcpTool {
     fn spec(&self) -> ToolSpec {
         self.spec.clone()
@@ -94,57 +95,59 @@ impl ToolDyn for DynamicMcpTool {
         Some(self.snippet.as_str())
     }
 
-    async fn execute_dyn(
-        &self,
+    fn execute_dyn<'a>(
+        &'a self,
         args: Value,
-        ctx: &ToolCtx,
-        out: &mut ToolStream,
-    ) -> Result<ToolResult, ToolError> {
-        if let Some(validator) = &self.validator {
-            let errors: Vec<String> = validator
-                .iter_errors(&args)
-                .map(|error| format!("{error} (at {})", error.instance_path()))
-                .collect();
-            if !errors.is_empty() {
-                return Err(ToolError::InvalidArgs(errors.join("; ")));
+        ctx: &'a ToolCtx,
+        out: &'a mut ToolStream,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
+        Box::pin(async move {
+            if let Some(validator) = &self.validator {
+                let errors: Vec<String> = validator
+                    .iter_errors(&args)
+                    .map(|error| format!("{error} (at {})", error.instance_path()))
+                    .collect();
+                if !errors.is_empty() {
+                    return Err(ToolError::InvalidArgs(errors.join("; ")));
+                }
             }
-        }
-        out.progress(format!(
-            "calling {} on MCP server {}",
-            self.tool_name, self.server_id
-        ));
-        let mut client = self.client.lock().await;
-        // The dispatcher does not select on the turn token while a tool
-        // runs; bound the call here so Escape actually cancels an MCP call.
-        let call = client.call_tool(&self.tool_name, args);
-        let output = tokio::select! {
+            out.progress(format!(
+                "calling {} on MCP server {}",
+                self.tool_name, self.server_id
+            ));
+            let mut client = self.client.lock().await;
+            // The dispatcher does not select on the turn token while a tool
+            // runs; bound the call here so Escape actually cancels an MCP call.
+            let call = client.call_tool(&self.tool_name, args);
+            let output = tokio::select! {
             biased;
             () = ctx.cancel.cancelled() => {
-                return Err(ToolError::Execution("MCP call cancelled".to_owned()));
+            return Err(ToolError::Execution("MCP call cancelled".to_owned()));
             }
             result = call => result.map_err(|error| {
-                if error.is_connection_lost() {
-                    self.broken.store(true, Ordering::Relaxed);
-                }
-                let detail = if error.is_connection_lost() {
-                    format!(
-                        "MCP server '{}' lost the connection: {error}",
-                        self.server_id
-                    )
-                } else {
-                    format!("MCP server '{}': {error}", self.server_id)
-                };
-                ToolError::Execution(detail)
+            if error.is_connection_lost() {
+            self.broken.store(true, Ordering::Relaxed);
+            }
+            let detail = if error.is_connection_lost() {
+            format!(
+            "MCP server '{}' lost the connection: {error}",
+            self.server_id
+            )
+            } else {
+            format!("MCP server '{}': {error}", self.server_id)
+            };
+            ToolError::Execution(detail)
             })?,
-        };
-        // A server that flags `isError` ran the tool and reported failure as
-        // data. The model needs to read it to correct its arguments, so it
-        // becomes an error *result* rather than a dispatcher failure.
-        let text = bound_mcp_result(&self.result_dir, &output.text);
-        Ok(if output.is_error {
-            ToolResult::error(text)
-        } else {
-            ToolResult::text(text)
+            };
+            // A server that flags `isError` ran the tool and reported failure as
+            // data. The model needs to read it to correct its arguments, so it
+            // becomes an error *result* rather than a dispatcher failure.
+            let text = bound_mcp_result(&self.result_dir, &output.text);
+            Ok(if output.is_error {
+                ToolResult::error(text)
+            } else {
+                ToolResult::text(text)
+            })
         })
     }
 }
@@ -545,7 +548,6 @@ impl SearchTool {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolDyn for SearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -564,26 +566,28 @@ impl ToolDyn for SearchTool {
         Some("search_tool: fetch one MCP inputSchema before use_tool. Never guess parameters.")
     }
 
-    async fn execute_dyn(
-        &self,
+    fn execute_dyn<'a>(
+        &'a self,
         args: Value,
-        _ctx: &ToolCtx,
-        _out: &mut ToolStream,
-    ) -> Result<ToolResult, ToolError> {
-        let name = arg_name(&args)?;
-        if name == "list" {
-            return Ok(ToolResult::text(self.catalog.list_text()));
-        }
-        let Some(tool) = self.catalog.get(&name) else {
-            return Err(ToolError::InvalidArgs(format!(
-                "no MCP tool named {name}. Call search_tool with name \"list\"."
-            )));
-        };
-        let spec = tool.spec();
-        Ok(ToolResult::text(format!(
-            "name: {}\nserver: {}\ndescription: {}\ninputSchema: {}",
-            spec.name, tool.server_id, spec.description, spec.params_schema
-        )))
+        _ctx: &'a ToolCtx,
+        _out: &'a mut ToolStream,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
+        Box::pin(async move {
+            let name = arg_name(&args)?;
+            if name == "list" {
+                return Ok(ToolResult::text(self.catalog.list_text()));
+            }
+            let Some(tool) = self.catalog.get(&name) else {
+                return Err(ToolError::InvalidArgs(format!(
+                    "no MCP tool named {name}. Call search_tool with name \"list\"."
+                )));
+            };
+            let spec = tool.spec();
+            Ok(ToolResult::text(format!(
+                "name: {}\nserver: {}\ndescription: {}\ninputSchema: {}",
+                spec.name, tool.server_id, spec.description, spec.params_schema
+            )))
+        })
     }
 }
 
@@ -601,7 +605,6 @@ impl UseTool {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolDyn for UseTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -621,28 +624,30 @@ impl ToolDyn for UseTool {
         Some("use_tool: call an MCP tool only after search_tool returned its schema.")
     }
 
-    async fn execute_dyn(
-        &self,
+    fn execute_dyn<'a>(
+        &'a self,
         args: Value,
-        ctx: &ToolCtx,
-        out: &mut ToolStream,
-    ) -> Result<ToolResult, ToolError> {
-        let name = arg_name(&args)?;
-        let Some(tool) = self.catalog.get(&name) else {
-            return Err(ToolError::InvalidArgs(format!(
-                "no MCP tool named {name}. Call search_tool with name \"list\"."
-            )));
-        };
-        let arguments = args
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        if !arguments.is_object() {
-            return Err(ToolError::InvalidArgs(
-                "arguments must be an object".to_owned(),
-            ));
-        }
-        tool.execute_dyn(arguments, ctx, out).await
+        ctx: &'a ToolCtx,
+        out: &'a mut ToolStream,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
+        Box::pin(async move {
+            let name = arg_name(&args)?;
+            let Some(tool) = self.catalog.get(&name) else {
+                return Err(ToolError::InvalidArgs(format!(
+                    "no MCP tool named {name}. Call search_tool with name \"list\"."
+                )));
+            };
+            let arguments = args
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            if !arguments.is_object() {
+                return Err(ToolError::InvalidArgs(
+                    "arguments must be an object".to_owned(),
+                ));
+            }
+            tool.execute_dyn(arguments, ctx, out).await
+        })
     }
 }
 
@@ -816,49 +821,66 @@ mod tests {
         calls: std::sync::Mutex<Vec<serde_json::Value>>,
     }
 
-    #[async_trait::async_trait]
     impl crate::mcp_client::JsonRpcChannel for ScriptedMcp {
-        async fn request(
-            &self,
+        fn request<'a>(
+            &'a self,
             _id: u64,
-            method: &str,
+            method: &'a str,
             params: serde_json::Value,
-        ) -> Result<serde_json::Value, crate::mcp_client::McpError> {
-            match method {
-                "initialize" => Ok(serde_json::json!({"protocolVersion": "2025-06-18"})),
-                "tools/list" => Ok(serde_json::json!({
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<serde_json::Value, crate::mcp_client::McpError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                match method {
+                    "initialize" => Ok(serde_json::json!({"protocolVersion": "2025-06-18"})),
+                    "tools/list" => Ok(serde_json::json!({
                     "tools": [
-                        {
-                            "name": "lookup",
-                            "description": "Look up a doc",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {"query": {"type": "string"}},
-                                "required": ["query"]
-                            },
-                            "annotations": {"readOnlyHint": true}
-                        },
-                        {
-                            "name": "write-note",
-                            "description": "Write a note",
-                            "inputSchema": {"type": "object"},
-                            "annotations": {"readOnlyHint": false}
-                        }
+                    {
+                    "name": "lookup",
+                    "description": "Look up a doc",
+                    "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"]
+                    },
+                    "annotations": {"readOnlyHint": true}
+                    },
+                    {
+                    "name": "write-note",
+                    "description": "Write a note",
+                    "inputSchema": {"type": "object"},
+                    "annotations": {"readOnlyHint": false}
+                    }
                     ]
-                })),
-                "tools/call" => {
-                    self.calls.lock().expect("calls").push(params);
-                    Ok(serde_json::json!({
+                    })),
+                    "tools/call" => {
+                        self.calls.lock().expect("calls").push(params);
+                        Ok(serde_json::json!({
                         "content": [{"type": "text", "text": "pong"}],
                         "isError": false
-                    }))
+                        }))
+                    }
+                    other => Err(crate::mcp_client::McpError::protocol(other)),
                 }
-                other => Err(crate::mcp_client::McpError::protocol(other)),
-            }
+            })
         }
 
-        async fn notify(&self, _method: &str) -> Result<(), crate::mcp_client::McpError> {
-            Ok(())
+        fn notify<'a>(
+            &'a self,
+            _method: &'a str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<(), crate::mcp_client::McpError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Ok(()) })
         }
     }
 

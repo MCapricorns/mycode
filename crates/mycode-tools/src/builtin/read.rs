@@ -5,7 +5,6 @@
 //! chunked read under scan/line/deadline/cancel caps, UTF-8 (BOM stripped
 //! from displayed text; hash of raw bytes), and an opaque revision token.
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -34,7 +33,6 @@ pub struct ReadArgs {
     pub limit: Option<usize>,
 }
 
-#[async_trait]
 impl Tool for ReadTool {
     type Args = ReadArgs;
     type Output = ();
