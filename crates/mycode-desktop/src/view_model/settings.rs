@@ -62,8 +62,6 @@ pub struct SettingsState {
     pub providers_with_keys: Vec<String>,
     /// MCP key ids (form `mcp-<server>`) that have a stored key.
     pub mcp_with_keys: Vec<String>,
-    /// Whether durable usage records are written.
-    pub usage_enabled: bool,
     /// Subagent role enablement, model routes, and thinking overrides.
     pub subagents: mycode_config::SubagentSettings,
     /// Tool-runtime preferences, including the platform shell.
@@ -102,7 +100,6 @@ impl SettingsState {
             saved_reasoning: settings.reasoning_effort.clone(),
             providers_with_keys,
             mcp_with_keys: Vec::new(),
-            usage_enabled: settings.usage.enabled,
             subagents: settings.subagents.clone(),
             tools: settings.tools.clone(),
             saving: false,
@@ -120,9 +117,7 @@ impl SettingsState {
             web: mycode_config::WebSettings {
                 backends: self.web_backends.clone(),
             },
-            usage: mycode_config::UsageSettings {
-                enabled: self.usage_enabled,
-            },
+            usage: None,
             mcp_servers: self.mcp_servers.clone(),
             appearance: mycode_config::AppearanceSettings {
                 theme: self.theme.clone(),
@@ -237,7 +232,7 @@ pub enum SettingsSection {
     Mcp,
     /// Web search backends.
     Web,
-    /// Usage records and data export/import.
+    /// Data export/import.
     Data,
     /// Version, updates, and the provider catalog.
     About,
@@ -299,7 +294,7 @@ impl SettingsSection {
             Self::Skills => t("Slash commands", "斜杠命令"),
             Self::Mcp => t("Tool servers", "工具服务器"),
             Self::Web => t("Search backends", "搜索后端"),
-            Self::Data => t("Usage, export", "用量、导出"),
+            Self::Data => t("Export, import", "导出、导入"),
             Self::About => t("Version, updates", "版本、更新"),
         }
     }

@@ -356,3 +356,100 @@ fn torn_tail_is_truncated_and_unindexed_directories_are_ignored() {
         service.shutdown().await;
     });
 }
+
+/// Resident ledgers are capped, so a long-running process that opens many
+/// sessions reloads the least-recently-opened one from the index on demand.
+/// Reading back through the whole service proves the reload is transparent.
+#[test]
+fn reading_an_evicted_session_reloads_from_the_store() {
+    let scratch = Scratch::new();
+    runtime().block_on(async {
+        let service = SessionService::new(&scratch.home);
+        // One more session than the residency cap, each with its own events.
+        let mut sessions = Vec::new();
+        for index in 0..(crate::session::actor::MAX_RESIDENT_SESSIONS + 1) {
+            let created = service.create().await.expect("create");
+            let head = append_text(
+                &service,
+                &created.session_id,
+                &created.branch_id,
+                &HeadStamp::Empty,
+                &format!("only message of session {index}"),
+            )
+            .await;
+            sessions.push((created, head));
+        }
+        // The first-created session is the least recently loaded; opening the
+        // rest evicted it. A fresh read must reload it from the index.
+        let (first, first_head) = &sessions[0];
+        let opened = service
+            .open(&first.session_id)
+            .await
+            .expect("reopen evicted");
+        assert_eq!(opened.heads.len(), 1);
+        assert_eq!(opened.heads[0].head, *first_head);
+        let window = service
+            .read_payload_window(
+                &first.session_id,
+                &first.branch_id,
+                &opened.heads[0].head,
+                None,
+                16,
+            )
+            .await
+            .expect("window");
+        assert_eq!(window.items.len(), 1);
+        assert_eq!(
+            String::from_utf8_lossy(&window.items[0].payload),
+            "only message of session 0"
+        );
+        // A new append after the reload still commits at the durable tip.
+        append_text(
+            &service,
+            &first.session_id,
+            &first.branch_id,
+            first_head,
+            "after reload",
+        )
+        .await;
+        service.shutdown().await;
+    });
+}
+
+/// A live reservation holds payload bytes that exist nowhere durably yet, so
+/// eviction pressure from other sessions must never drop it.
+#[test]
+fn a_reserved_event_survives_other_sessions_churning() {
+    let scratch = Scratch::new();
+    runtime().block_on(async {
+        let service = SessionService::new(&scratch.home);
+        let created = service.create().await.expect("create");
+        let reservation = service
+            .reserve_event(
+                &created.session_id,
+                &created.branch_id,
+                EventKind::Message,
+                None,
+                b"pinned across churn",
+            )
+            .await
+            .expect("reserve");
+        for _ in 0..(crate::session::actor::MAX_RESIDENT_SESSIONS + 2) {
+            service.create().await.expect("create");
+        }
+        let appended = service
+            .append(
+                &created.session_id,
+                &created.branch_id,
+                &HeadStamp::Empty,
+                &reservation,
+            )
+            .await
+            .expect("reserved append must survive the churn");
+        assert_eq!(
+            appended.head,
+            HeadStamp::Event(reservation.event_id.clone())
+        );
+        service.shutdown().await;
+    });
+}

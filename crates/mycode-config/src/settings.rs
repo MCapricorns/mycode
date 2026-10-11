@@ -55,18 +55,16 @@ pub(super) const MAX_FIELD_BYTES: usize = 8 * 1024;
 /// Base URL maximum length.
 pub(super) const MAX_URL_BYTES: usize = 2 * 1024;
 
-/// Usage accounting settings.
+/// Legacy `usage` accounting document.
+///
+/// Durable usage records were removed. This shape stays deserializable so an
+/// older `settings.json` still loads; the value is ignored and never written.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct UsageSettings {
-    /// Built-in usage accounting enabled.
+pub struct LegacyUsageSettings {
+    /// Previously toggled durable usage records. Not consulted.
+    #[serde(default)]
     pub enabled: bool,
-}
-
-impl Default for UsageSettings {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
 }
 
 /// Palette ids the desktop can paint. Slate is the default.
@@ -169,8 +167,10 @@ pub struct AppSettings {
     pub providers: Vec<ProviderSettings>,
     /// Web search settings.
     pub web: WebSettings,
-    /// Usage settings.
-    pub usage: UsageSettings,
+    /// Legacy `usage` accounting toggle. Ignored when present; this build
+    /// writes no usage settings and drops the field on the next save.
+    #[serde(default, skip_serializing)]
+    pub usage: Option<LegacyUsageSettings>,
     /// MCP servers.
     pub mcp_servers: Vec<McpServerSettings>,
     /// Appearance.
@@ -197,7 +197,7 @@ impl Default for AppSettings {
             web: WebSettings {
                 backends: builtin_web_backends(),
             },
-            usage: UsageSettings { enabled: true },
+            usage: None,
             mcp_servers: Vec::new(),
             appearance: AppearanceSettings::default(),
             reasoning_effort: None,
@@ -503,6 +503,33 @@ fn is_https_url(value: &str) -> bool {
 mod tests {
     use super::{AppSettings, decode_settings, encode_settings};
     use crate::authority::AuthorityRevision;
+
+    #[test]
+    fn legacy_usage_field_is_tolerated_and_dropped() {
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 5,
+            "appearance": { "theme": "dark", "palette": "ocean", "language": "auto" },
+            "usage": { "enabled": false }
+        }"#;
+        let parsed = decode_settings(bytes).expect("legacy usage field still loads");
+        assert_eq!(
+            parsed.settings.usage,
+            Some(super::LegacyUsageSettings { enabled: false })
+        );
+        let revision = AuthorityRevision::new(5).expect("revision");
+        let rewritten = encode_settings(revision, &parsed.settings).expect("encode");
+        assert!(
+            String::from_utf8_lossy(&rewritten)
+                .find("\"usage\"")
+                .is_none(),
+            "a save drops the legacy field"
+        );
+        let parsed_again = decode_settings(&rewritten).expect("re-decode");
+        assert_eq!(parsed_again.settings.usage, None);
+        assert!(parsed_again.settings.validate().is_ok());
+    }
 
     #[test]
     fn legacy_appearance_without_font_size_defaults_to_medium() {

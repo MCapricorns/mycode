@@ -70,13 +70,15 @@ mod tests {
 
     #[test]
     fn stored_shell_of_any_kind_still_validates() {
-        let mut settings = AppSettings::default();
-        settings.tools = ToolsSettings {
-            shell: Some(ShellSettings {
-                kind: "cmd".into(),
-                program: r"C:\Windows\System32\cmd.exe".into(),
-                source: "user".into(),
-            }),
+        let mut settings = AppSettings {
+            tools: ToolsSettings {
+                shell: Some(ShellSettings {
+                    kind: "cmd".into(),
+                    program: r"C:\Windows\System32\cmd.exe".into(),
+                    source: "user".into(),
+                }),
+            },
+            ..AppSettings::default()
         };
         assert!(settings.validate().is_ok());
         settings.tools.shell.as_mut().unwrap().kind = "bash".into();

@@ -59,6 +59,7 @@ impl SessionCore {
         let mut ledger = SessionLedger::default();
         ledger.branches.insert(branch.clone(), BranchLedger::root());
         self.sessions.insert(session.clone(), ledger);
+        self.touch_resident(session);
         Ok(SessionPull::Complete(SessionResult::Created(
             CreatedResult {
                 session_id: session.clone(),
@@ -80,7 +81,7 @@ impl SessionCore {
     /// untouched: the host owns the deletion this covers. Reservations die
     /// with the ledger, so a later append can at worst fail `NotFound`.
     pub(super) fn action_evict(&mut self, session: &SessionId) -> Result<SessionPull, OpFail> {
-        self.sessions.remove(session);
+        self.forget_resident(session);
         Ok(SessionPull::Complete(SessionResult::Evicted))
     }
 
@@ -123,6 +124,8 @@ impl SessionCore {
             branch_id: branch.clone(),
             event_id: event_id.clone(),
         };
+        ledger.cap_event_reservations();
+        let seq = ledger.next_reservation_seq();
         ledger.event_reservations.insert(
             event_id,
             super::super::ledger::EventReservationRow {
@@ -130,6 +133,7 @@ impl SessionCore {
                 kind,
                 call_id,
                 payload: payload.to_vec(),
+                seq,
             },
         );
         Ok(SessionPull::Complete(SessionResult::ReservedEvent(view)))
@@ -239,9 +243,14 @@ impl SessionCore {
             new_branch_id: new_branch,
             mutation_digest: format_digest(&digest),
         };
+        ledger.cap_branch_reservations();
+        let seq = ledger.next_reservation_seq();
         ledger.branch_reservations.insert(
             reservation_id,
-            super::super::ledger::BranchReservationRow { view: view.clone() },
+            super::super::ledger::BranchReservationRow {
+                view: view.clone(),
+                seq,
+            },
         );
         Ok(SessionPull::Complete(SessionResult::ReservedBranch(view)))
     }

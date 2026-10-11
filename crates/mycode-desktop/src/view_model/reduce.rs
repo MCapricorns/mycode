@@ -14,7 +14,7 @@ use mycode_app::CHAT_CANCELLED;
 
 use super::{
     ActiveConversation, DesktopAction, MentionKind, SettingsState, TurnStats, UpdateState,
-    UsageTotal, WorkspaceState,
+    WorkspaceState,
 };
 
 pub(crate) use self::models::{
@@ -34,7 +34,7 @@ use self::projects::{
     workspace_renamed, workspace_root_added, workspace_root_removed, workspace_switched,
 };
 use self::streaming::{append_streaming, set_streaming_status};
-use self::usage::{clear_session_usage, include_usage_entries, rebuild_session_usage};
+use self::usage::clear_session_usage;
 
 /// A mid-turn summary arrives while the final reply is still only in the
 /// streaming bubble. Inserting it then paints the card above that reply.
@@ -109,8 +109,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.subagent_window = None;
             state.changes_panel_open = false;
             state.history_loading = false;
-            // The composer meter reads these fields directly. The open that
-            // follows targets this same new session, so it does not rebuild.
+            // The composer meter reads these fields directly; a fresh session
+            // starts with an empty meter.
             clear_session_usage(state);
         }
         DesktopAction::SessionDeleted => {
@@ -183,8 +183,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 if let Some(previous) = previous_session {
                     remember_session_model(state, &previous);
                 }
-                rebuild_session_usage(state);
-                state.live_turn = None;
+                clear_session_usage(state);
                 if !apply_session_model(state, &session_id) {
                     assign_fresh_session_model(state, &session_id);
                 }
@@ -331,54 +330,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.context_cache = context_cache;
             }
         }
-        DesktopAction::UsageRecorded {
-            provider,
-            model,
-            input,
-            context,
-            context_cache,
-            output,
-            cache,
-            elapsed_ms,
-            entry,
-        } => {
-            if let Some(conversation) = state.active.as_mut() {
-                conversation.entries.push(entry);
-            }
-            state.last_turn = Some(TurnStats {
-                model: model.clone(),
-                input,
-                output,
-                cache,
-                elapsed_ms,
-            });
-            let key = format!("{provider}/{model}");
-            // Merge with a rebuilt bare-model row from an earlier replay so
-            // the visible totals keep updating instead of freezing behind
-            // a stale first row.
-            let row =
-                match state.usage_totals.iter_mut().find(|row| {
-                    row.key == key || crate::view_model::usage_key_matches(&row.key, &key)
-                }) {
-                    Some(row) => row,
-                    None => {
-                        state.usage_totals.push(UsageTotal {
-                            key,
-                            ..UsageTotal::default()
-                        });
-                        state.usage_totals.last_mut().expect("just pushed")
-                    }
-                };
-            row.input = row.input.saturating_add(input);
-            row.output = row.output.saturating_add(output);
-            row.cache = row.cache.saturating_add(cache.unwrap_or_default());
-            row.requests = row.requests.saturating_add(1);
-            state.live_turn = None;
-            if context > 0 {
-                state.context_used = context;
-                state.context_cache = context_cache;
-            }
-        }
         DesktopAction::AskRequested(rows) => {
             state.ask_answers = vec![String::new(); rows.len()];
             state.pending_ask = Some(rows);
@@ -407,7 +358,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                     && active.older_before.as_deref() == Some(requested_before.as_str())
             });
             if applicable {
-                include_usage_entries(state, &entries);
                 let active = state.active.as_mut().expect("applicable conversation");
                 let mut older = entries;
                 older.append(&mut active.entries);
@@ -461,7 +411,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.streaming = None;
             }
             state.live_jobs.clear();
-            state.live_turn = None;
+            // The finished turn keeps its meter: the last live snapshot held
+            // the turn's sums, so it becomes the completed-turn stats.
+            state.last_turn = state.live_turn.take();
             state.sending = false;
         }
         DesktopAction::ChatFailed { message, head } => {
@@ -650,12 +602,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 } else {
                     false
                 }
-            });
-        }
-        DesktopAction::SettingsUsageToggled(enabled) => {
-            edit_settings(state, |settings| {
-                settings.usage_enabled = enabled;
-                true
             });
         }
         DesktopAction::SettingsBackendToggled(index, enabled) => {
@@ -1002,10 +948,27 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.update = UpdateState::Ready { version };
         }
     }
+    trim_resident_entries(state);
     if touches_providers {
         ensure_model_selection(state);
     }
     fill_open_slash(state);
+}
+
+/// Ceiling on entries held for one open conversation. The transcript pages
+/// from disk in both directions; past this the oldest rows drop out of the
+/// window and page back in on demand, so a long-running window stays
+/// bounded. Trimming runs in the same action as a prepend, so the scroll
+/// anchor compensates the net height change.
+const MAX_RESIDENT_ENTRIES: usize = 1500;
+
+fn trim_resident_entries(state: &mut WorkspaceState) {
+    if let Some(active) = state.active.as_mut()
+        && active.entries.len() > MAX_RESIDENT_ENTRIES
+    {
+        let excess = active.entries.len() - MAX_RESIDENT_ENTRIES;
+        active.entries.drain(..excess);
+    }
 }
 
 /// Rebuilds the open `/` menu from the catalogs this action may have changed.
@@ -1077,8 +1040,7 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
 mod tests {
     use super::reduce;
     use crate::view_model::{
-        ActiveConversation, ConversationEntry, DesktopAction, EntryKind, TurnStats, UsageTotal,
-        WorkspaceState,
+        ActiveConversation, ConversationEntry, DesktopAction, EntryKind, TurnStats, WorkspaceState,
     };
 
     fn user(id: &str, text: &str) -> ConversationEntry {
@@ -1105,6 +1067,27 @@ mod tests {
             }),
             ..WorkspaceState::default()
         }
+    }
+
+    #[test]
+    fn the_open_conversation_is_capped_at_the_resident_entry_ceiling() {
+        let entries: Vec<ConversationEntry> = (0..super::MAX_RESIDENT_ENTRIES + 400)
+            .map(|index| user(&format!("evt-{index}"), "row"))
+            .collect();
+        let mut state = open(entries, Some("cursor"));
+        reduce(&mut state, DesktopAction::HistoryLoadStarted);
+        let active = state.active.expect("conversation stays open");
+        assert_eq!(
+            active.entries.len(),
+            super::MAX_RESIDENT_ENTRIES,
+            "resident entries must be trimmed to the ceiling"
+        );
+        assert_eq!(
+            active.entries.last().expect("kept tail").event_id,
+            format!("evt-{}", super::MAX_RESIDENT_ENTRIES + 399),
+            "trimming drops the oldest rows, never the tail"
+        );
+        assert_eq!(active.older_before.as_deref(), Some("cursor"));
     }
 
     #[test]
@@ -1239,15 +1222,6 @@ mod tests {
 
     #[test]
     fn a_new_session_clears_the_previous_context_meter() {
-        let usage = ConversationEntry {
-            event_id: "use-1".to_owned(),
-            kind: EntryKind::Usage,
-            text: "deepseek/deepseek-v4-flash: 25000 in / 100 out · ctx 25000 · hit 24300 · cache 24300"
-                .into(),
-            call_id: None,
-            thinking: String::new(),
-            parent_call_id: None,
-        };
         let turn = TurnStats {
             model: "deepseek-v4-flash".to_owned(),
             input: 25_000,
@@ -1258,20 +1232,13 @@ mod tests {
         let mut state = WorkspaceState {
             context_used: 25_000,
             context_cache: 24_300,
-            usage_totals: vec![UsageTotal {
-                key: "deepseek/deepseek-v4-flash".to_owned(),
-                input: 25_000,
-                output: 100,
-                cache: 24_300,
-                requests: 1,
-            }],
             last_turn: Some(turn.clone()),
             live_turn: Some(turn),
             active: Some(ActiveConversation {
                 session_id: "old".to_owned(),
                 branch_id: "branch".to_owned(),
                 head: "use-1".to_owned(),
-                entries: vec![usage.clone()],
+                entries: vec![user("use-1", "hello")],
                 older_before: None,
                 streaming: None,
             }),
@@ -1297,31 +1264,31 @@ mod tests {
         );
         assert_eq!(state.context_used, 0);
         assert_eq!(state.context_cache, 0);
-        assert!(state.usage_totals.is_empty());
         assert!(state.last_turn.is_none());
         assert!(state.live_turn.is_none());
 
+        // Switching back does not resurrect the old session's meter: usage
+        // accounting is live-only, so a reopen starts from an empty meter.
         reduce(
             &mut state,
             DesktopAction::ConversationOpened(ActiveConversation {
                 session_id: "old".to_owned(),
                 branch_id: "branch".to_owned(),
                 head: "use-1".to_owned(),
-                entries: vec![usage],
+                entries: vec![user("use-1", "hello")],
                 older_before: None,
                 streaming: None,
             }),
         );
-        assert_eq!(state.context_used, 25_000);
-        assert_eq!(state.context_cache, 24_300);
-        assert_eq!(state.usage_totals.len(), 1);
-        assert!(state.last_turn.is_some());
+        assert_eq!(state.context_used, 0);
+        assert_eq!(state.context_cache, 0);
+        assert!(state.last_turn.is_none());
+        assert!(state.live_turn.is_none());
 
         reduce(&mut state, DesktopAction::ConversationParked);
         assert!(state.active.is_none());
         assert_eq!(state.context_used, 0);
         assert_eq!(state.context_cache, 0);
-        assert!(state.usage_totals.is_empty());
         assert!(state.last_turn.is_none());
 
         state.context_used = 25_000;
@@ -1329,6 +1296,44 @@ mod tests {
         reduce(&mut state, DesktopAction::SessionDeleted);
         assert_eq!(state.context_used, 0);
         assert_eq!(state.context_cache, 0);
+    }
+
+    #[test]
+    fn a_finished_turn_promotes_its_live_meter_to_last_turn() {
+        let mut state = open(Vec::new(), None);
+        reduce(
+            &mut state,
+            DesktopAction::UsageSnapshot {
+                model: "glm-5.3".to_owned(),
+                input: 100,
+                context: 12_000,
+                context_cache: 11_800,
+                output: 20,
+                cache: Some(11_800),
+                elapsed_ms: 40,
+            },
+        );
+        assert!(state.live_turn.is_some());
+        assert!(state.last_turn.is_none());
+        assert_eq!(state.context_used, 12_000);
+        assert_eq!(state.context_cache, 11_800);
+
+        reduce(
+            &mut state,
+            DesktopAction::ChatDone {
+                head: "evt-2".to_owned(),
+                entry: user("evt-2", "reply"),
+            },
+        );
+        let turn = state.last_turn.as_ref().expect("promoted stats");
+        assert_eq!(turn.model, "glm-5.3");
+        assert_eq!(turn.input, 100);
+        assert_eq!(turn.output, 20);
+        assert_eq!(turn.cache, Some(11_800));
+        assert!(state.live_turn.is_none());
+        // The meter is the latest prompt; the finished turn keeps it.
+        assert_eq!(state.context_used, 12_000);
+        assert_eq!(state.context_cache, 11_800);
     }
 
     #[test]

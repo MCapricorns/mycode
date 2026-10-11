@@ -365,8 +365,9 @@ impl Workspace {
 
     // ---- data export / import ----
 
-    /// Exports product data (settings, UI state, session ledgers) to
-    /// a file chosen in a save dialog. Secrets never travel.
+    /// Exports the product configuration (settings, UI state, provider API
+    /// keys) to a file chosen in a save dialog. Conversations never travel,
+    /// and the file carries the keys as plaintext JSON.
     pub(crate) fn on_export_data(&mut self, cx: &mut Context<Self>) {
         let directory = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let stamp = std::time::SystemTime::now()
@@ -386,8 +387,8 @@ impl Workspace {
         .detach();
     }
 
-    /// Applies one export bundle chosen in an open dialog. Existing sessions
-    /// are never overwritten.
+    /// Applies one export bundle chosen in an open dialog: settings, UI
+    /// state, and provider keys. Conversations are never imported.
     pub(crate) fn on_import_data(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
             files: true,

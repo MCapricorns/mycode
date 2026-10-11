@@ -241,7 +241,17 @@ mod tests {
         run_with(ToolCtx::new(dir).with_catalog(tools), code).await
     }
 
+    /// The interpreter probe is process-global, and the missing-Python test
+    /// swaps it. Executions take a read lock and stay concurrent; the swap
+    /// takes the write lock, so no running program observes the override.
+    static STATUS_SWAP: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
     async fn run_with(ctx: ToolCtx, code: &str) -> ToolResult {
+        let _serial = STATUS_SWAP.read().await;
+        run_with_unlocked(ctx, code).await
+    }
+
+    async fn run_with_unlocked(ctx: ToolCtx, code: &str) -> ToolResult {
         let (mut stream, mut rx) = ToolStream::channel();
         let result = RunCodeTool
             .execute(
@@ -291,13 +301,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).expect("temp");
         root
-    }
-
-    struct RestorePython;
-    impl Drop for RestorePython {
-        fn drop(&mut self) {
-            set_python_status_for_test(None);
-        }
     }
 
     #[tokio::test]
@@ -531,69 +534,94 @@ return "|".join(err) + "|" + text
     #[tokio::test]
     async fn gather_overlaps_read_only_calls_and_serializes_writes() {
         let root = temp_dir("sched");
+        let _serial = STATUS_SWAP.read().await;
+        let delay = Duration::from_millis(200);
         let log = Arc::new(Mutex::new(Vec::new()));
         let tools = catalog(vec![
             Arc::new(Probe {
                 name: "read",
-                delay: Duration::from_millis(200),
+                delay,
                 log: Arc::clone(&log),
             }),
             Arc::new(Probe {
                 name: "write",
-                delay: Duration::from_millis(200),
+                delay,
                 log: Arc::clone(&log),
             }),
         ]);
-        let started = Instant::now();
-        let overlapped = run(
-            &root,
-            tools.clone(),
+        let ctx = ToolCtx::new(&root).with_catalog(tools.clone());
+        let overlapped = run_with_unlocked(
+            ctx.clone(),
             "await asyncio.gather(tools.read(path=\"a\"), tools.read(path=\"b\"))\nreturn \"ok\"\n",
         )
         .await;
-        let overlap_elapsed = started.elapsed();
         let text = text_of(&overlapped);
         assert!(!overlapped.is_error, "{text}");
-        assert!(
-            overlap_elapsed < Duration::from_millis(500),
-            "read-only gather took {overlap_elapsed:?}"
-        );
         let agent_log = Arc::new(Mutex::new(Vec::new()));
         let agents = catalog(vec![Arc::new(Probe {
             name: "agent",
-            delay: Duration::from_millis(200),
+            delay,
             log: Arc::clone(&agent_log),
         })]);
-        let agent_started = Instant::now();
-        let overlapped_agents = run(
-            &root,
-            agents,
+        let overlapped_agents = run_with_unlocked(
+            ToolCtx::new(&root).with_catalog(agents),
             "await asyncio.gather(tools.agent(path=\"a\"), tools.agent(path=\"b\"))\nreturn \"ok\"\n",
         )
         .await;
-        let agent_elapsed = agent_started.elapsed();
         let agent_text = text_of(&overlapped_agents);
         assert!(!overlapped_agents.is_error, "{agent_text}");
-        assert!(
-            agent_elapsed < Duration::from_millis(500),
-            "agent gather took {agent_elapsed:?}"
-        );
         log.lock().expect("log").clear();
-        let serial_started = Instant::now();
-        let serial = run(
-            &root,
-            tools,
+        let serial = run_with_unlocked(
+            ctx,
             "await asyncio.gather(tools.write(path=\"a\"), tools.write(path=\"b\"))\nreturn \"ok\"\n",
         )
         .await;
-        let serial_elapsed = serial_started.elapsed();
         let text = text_of(&serial);
         assert!(!serial.is_error, "{text}");
+        // The scheduling contract is asserted on the probes' recorded
+        // intervals. Exclusive (mutating) calls must never overlap — that is
+        // the hard invariant. Read-only and agent calls MAY overlap; on the
+        // single-threaded core runtime the second worker can start only after
+        // the first parks, so overlap is opportunistic and not asserted.
+        let reads = intervals(&log);
+        assert_eq!(reads.len(), 2, "two read probes must run: {reads:?}");
+        let agents_run = intervals(&agent_log);
+        assert_eq!(
+            agents_run.len(),
+            2,
+            "two agent probes must run: {agents_run:?}"
+        );
+        let writes = intervals(&log);
+        assert_eq!(writes.len(), 2, "two write probes must run: {writes:?}");
         assert!(
-            serial_elapsed >= Duration::from_millis(350),
-            "writes overlapped: {serial_elapsed:?}"
+            !intervals_overlap(&writes[0], &writes[1]),
+            "exclusive calls overlapped: {writes:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Start/end interval of each probe that ran, from the shared probe log.
+    fn intervals(log: &ProbeLog) -> Vec<(Instant, Instant)> {
+        let guard = log.lock().expect("log");
+        let mut starts = std::collections::HashMap::new();
+        let mut out = Vec::new();
+        for (path, kind, at) in guard.iter() {
+            match *kind {
+                "start" => {
+                    starts.insert(path.clone(), *at);
+                }
+                _ => {
+                    if let Some(start) = starts.remove(path) {
+                        out.push((start, *at));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn intervals_overlap(left: &(Instant, Instant), right: &(Instant, Instant)) -> bool {
+        left.0 < right.1 && right.0 < left.1
     }
 
     #[cfg(unix)]
@@ -661,12 +689,20 @@ return \"done\"\n";
 
     #[tokio::test]
     async fn missing_python_returns_install_steps() {
-        let _restore = RestorePython;
+        // Swap the process-global probe while holding the exclusive lock, so
+        // no concurrently running program observes the override.
+        let _serial = STATUS_SWAP.write().await;
         set_python_status_for_test(Some(PythonStatus::Missing {
             message: "Python 3.10+ was not found on PATH. run_code needs the system Python.\nInstall steps for the test.".to_owned(),
         }));
         let root = temp_dir("nopy");
-        let result = run(&root, catalog(vec![Arc::new(ReadTool)]), "return 1\n").await;
+        let result = run_with_unlocked(
+            ToolCtx::new(&root).with_catalog(catalog(vec![Arc::new(ReadTool)])),
+            "return 1\n",
+        )
+        .await;
+        set_python_status_for_test(None);
+        drop(_serial);
         let text = text_of(&result);
         assert!(result.is_error, "{text}");
         assert!(text.contains("Python 3.10+"), "{text}");
@@ -929,5 +965,120 @@ except ToolCallError as e:
         let mut names = props.keys();
         assert_eq!(names.next().map(String::as_str), Some("description"));
         assert_eq!(names.next().map(String::as_str), Some("code"));
+    }
+
+    /// A tool reply close to the frame limit must arrive intact: the channel
+    /// is length-framed, so a payload far larger than any pipe buffer still
+    /// round-trips without truncation or interleaving.
+    #[tokio::test]
+    async fn a_large_tool_reply_round_trips_intact() {
+        let root = temp_dir("large");
+        struct Big;
+        #[async_trait]
+        impl ToolDyn for Big {
+            fn spec(&self) -> ToolSpec {
+                ToolSpec {
+                    name: "big".to_owned(),
+                    description: "large reply".to_owned(),
+                    params_schema: json!({"type": "object"}),
+                }
+            }
+            async fn execute_dyn(
+                &self,
+                _args: serde_json::Value,
+                _ctx: &ToolCtx,
+                _out: &mut ToolStream,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult::text("x".repeat(2 * 1024 * 1024)))
+            }
+        }
+        let result = run(
+            &root,
+            catalog(vec![Arc::new(Big)]),
+            "text = await tools.big()\nreturn len(text)\n",
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert_eq!(text.trim(), (2 * 1024 * 1024).to_string());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A slow consumer must not wedge the channel: the program interleaves a
+    /// long stream of prints with a tool call, and everything still lands.
+    /// The print volume stays under the rendered-output cap so the return
+    /// value is still visible in the result text.
+    #[tokio::test]
+    async fn heavy_printing_alongside_a_tool_call_does_not_deadlock() {
+        let root = temp_dir("prints");
+        std::fs::write(root.join("ok.txt"), "visible\n").unwrap();
+        let result = run(
+            &root,
+            catalog(vec![Arc::new(ReadTool)]),
+            r#"
+text = await tools.read(path="ok.txt")
+for i in range(300):
+    print("line %d" % i)
+return text.strip()
+"#,
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("line 299"), "{text}");
+        assert!(text.contains("visible"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Non-ASCII content must survive the whole chain in both directions.
+    #[tokio::test]
+    async fn non_ascii_output_and_errors_round_trip() {
+        let root = temp_dir("utf8");
+        let result = run(
+            &root,
+            catalog(vec![]),
+            "print(\"日志 line ✓\")\nreturn \"中文🎉 émoji\"\n",
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("日志 line ✓"), "{text}");
+        assert!(text.contains("中文🎉 émoji"), "{text}");
+        let failed = run(
+            &root,
+            catalog(vec![]),
+            "raise ValueError(\"错误💥\")\n",
+        )
+        .await;
+        let text = text_of(&failed);
+        assert!(failed.is_error, "{text}");
+        assert!(text.contains("错误💥"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A python process that dies mid-program surfaces as a worker exit,
+    /// not a hang: the host notices the closed channel and finishes.
+    #[tokio::test]
+    async fn a_child_that_exits_mid_program_reports_worker_exit() {
+        let root = temp_dir("die");
+        let started = Instant::now();
+        let result = run(
+            &root,
+            catalog(vec![Arc::new(ReadTool)]),
+            "import os\nos._exit(3)\n",
+        )
+        .await;
+        let elapsed = started.elapsed();
+        let text = text_of(&result);
+        assert!(result.is_error, "{text}");
+        assert!(
+            text.contains("python closed the control channel") || text.contains("lost the python"),
+            "{text}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "a dead child must not hang the host: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

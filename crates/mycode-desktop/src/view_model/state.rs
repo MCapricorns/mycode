@@ -11,7 +11,7 @@ use super::settings::{
     CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
     WebSubview,
 };
-use super::usage::{TurnStats, UsageTotal};
+use super::usage::TurnStats;
 
 /// The main area view: chat or full-page settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -102,9 +102,8 @@ pub(crate) struct WorkspaceState {
     pub pending_ask: Option<Vec<AskPrompt>>,
     /// Draft answers aligned with [`Self::pending_ask`].
     pub ask_answers: Vec<String>,
-    /// Cumulative usage per provider/model, in first-seen order.
-    pub usage_totals: Vec<UsageTotal>,
-    /// Most recent committed turn's timing and token metrics.
+    /// Most recent committed turn's timing and token metrics, promoted from
+    /// the live meter when the turn finishes.
     pub last_turn: Option<TurnStats>,
     /// Token counts for the turn that is still running, when the provider
     /// has reported any. Cleared when the turn commits or fails.
@@ -300,8 +299,6 @@ pub enum DesktopAction {
     LanguageMenuToggled(bool),
     /// The General-page font-family dropdown opened or closed.
     FontFamilyMenuToggled(bool),
-    /// The settings editor toggled durable usage records.
-    SettingsUsageToggled(bool),
     /// The settings editor added an MCP server.
     SettingsMcpAdded(mycode_config::McpServerSettings),
     /// The settings editor removed an MCP server.
@@ -353,18 +350,6 @@ pub enum DesktopAction {
         output: u64,
         cache: Option<u64>,
         elapsed_ms: u64,
-    },
-    /// A durable usage record arrived.
-    UsageRecorded {
-        provider: String,
-        model: String,
-        input: u64,
-        context: u64,
-        context_cache: u64,
-        output: u64,
-        cache: Option<u64>,
-        elapsed_ms: u64,
-        entry: ConversationEntry,
     },
     /// The agent asked the user structured questions.
     AskRequested(Vec<AskPrompt>),

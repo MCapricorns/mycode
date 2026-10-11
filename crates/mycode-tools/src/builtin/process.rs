@@ -25,11 +25,6 @@ pub(crate) use output::collect_child_output;
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 pub(crate) use output::collect_until_exit;
-#[cfg(any(
-    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "macos", target_arch = "aarch64")
-))]
-pub(crate) use output::drain_pipes;
 pub(crate) use output::{CapturedStream, MAX_OUTPUT_BYTES, decode_captured_text};
 
 use crate::tool::{ToolError, ToolResult};
@@ -364,6 +359,7 @@ impl UnixProcessGroupId {
 ///
 /// A child can fork between the walk and the signal. A few passes catch that
 /// without waiting on a process that is spawning forever.
+#[cfg(unix)]
 const DESCENDANT_KILL_PASSES: usize = 3;
 
 /// `SIGKILL` every descendant of `root`, not `root` itself.
@@ -431,7 +427,7 @@ fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
 
 /// Parent pid from `/proc/<pid>/stat`. `comm` may contain spaces and
 /// parentheses, so the parse starts after the last `)`.
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn ppid_from_stat(stat: &str) -> Option<libc::pid_t> {
     let rest = stat.rsplit_once(')')?.1;
     let mut fields = rest.split_whitespace();
@@ -489,7 +485,7 @@ fn list_descendants(_root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     Ok(Vec::new())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::ppid_from_stat;
 

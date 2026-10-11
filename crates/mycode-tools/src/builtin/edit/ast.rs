@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use gpui_kit::component::highlighter::{Language, LanguageRegistry};
 use tokio_util::sync::CancellationToken;
 use tree_sitter::{Query, QueryCursor, QueryCursorOptions, StreamingIterator};
 
@@ -17,6 +16,7 @@ use super::{MAX_CAPTURE_BYTES, MAX_MATCHES, UTF8_BOM};
 use crate::builtin::fs_search::MAX_PATTERN_BYTES;
 use crate::tool::ToolError;
 
+mod grammars;
 mod syntax;
 pub(super) use syntax::{parse_body, reject_new_syntax_errors};
 
@@ -53,21 +53,18 @@ const AST_CAPTURE_CANCEL_INTERVAL: usize = 256;
 /// Syntax-tree nodes visited between cancellation checks.
 const AST_SYNTAX_CANCEL_INTERVAL: usize = 256;
 
-/// Grammar name registered by gpui-kit (`"rust"`, `"tsx"`, …).
+/// Canonical tree-sitter grammar name (`"rust"`, `"tsx"`, …).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct AstLanguage(&'static str);
 
 impl AstLanguage {
     fn grammar(self) -> Result<tree_sitter::Language, ToolError> {
-        LanguageRegistry::singleton()
-            .language(self.0)
-            .and_then(|config| config.language)
-            .ok_or_else(|| {
-                ToolError::Execution(format!(
-                    "tree-sitter grammar for {} is not available",
-                    self.0
-                ))
-            })
+        grammars::grammar_language(self.0).ok_or_else(|| {
+            ToolError::Execution(format!(
+                "tree-sitter grammar for {} is not available",
+                self.0
+            ))
+        })
     }
 }
 
@@ -170,10 +167,10 @@ pub(super) fn resolve_language(named: Option<&str>, path: &str) -> Result<AstLan
     })
 }
 
-/// Maps a caller token onto a gpui-kit grammar name.
+/// Maps a caller token onto a canonical grammar name.
 ///
-/// gpui already aliases `rs`/`ts`/`py` and the rest of its registry.
-/// Extensions it does not alias (`h`, `jsx`, …) are folded here first.
+/// [`grammars`] aliases `rs`/`ts`/`py` and the rest of the registry.
+/// Tokens it does not alias (`h`, `jsx`, …) are folded here first.
 fn parse_language_name(name: &str) -> Option<AstLanguage> {
     lookup_grammar(match name {
         "c#" => "csharp",
@@ -202,14 +199,8 @@ fn infer_from_path(path: &str) -> Option<AstLanguage> {
 }
 
 fn lookup_grammar(token: &str) -> Option<AstLanguage> {
-    let language = Language::from_str(token);
-    if matches!(language, Language::Plain) {
-        return None;
-    }
-    let name = language.name();
-    LanguageRegistry::singleton()
-        .language(name)
-        .and_then(|config| config.language)
+    let name = grammars::grammar_name(token)?;
+    grammars::grammar_language(name)
         .is_some()
         .then_some(AstLanguage(name))
 }

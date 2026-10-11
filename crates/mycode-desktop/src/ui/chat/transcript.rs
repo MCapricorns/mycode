@@ -149,9 +149,6 @@ pub(super) fn render_entry(
             )
             .into_any_element()
         }
-        EntryKind::Usage => div()
-            .id(format!("entry-{}", entry.event_id))
-            .into_any_element(),
         // Unreachable through the only caller: the transcript collection
         // routes user rows and tool calls to their own builders before any
         // entry reaches this match. The arm only keeps the match total.

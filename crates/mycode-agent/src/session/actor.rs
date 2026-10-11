@@ -6,12 +6,20 @@
 //! session loads offset rows from the index; JSONL payloads are read by
 //! offset when a caller asks for them.
 //!
+//! Resident ledgers are capped ([`MAX_RESIDENT_SESSIONS`]): a long-running
+//! process otherwise kept one recovered ledger per session it had ever
+//! touched. Above the cap the least-recently-loaded quiescent ledger is
+//! dropped; the next request for that session reloads it from the index.
+//!
 //! The implementation is split by responsibility: this module owns the
 //! actor state machine (admission, staging, pull loop, action dispatch),
 //! [`recovery`] loads the offset index, and [`actions`] owns the durable
 //! effects of every terminal action.
 mod actions;
 mod recovery;
+
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -39,6 +47,13 @@ fn reject_bad_read_limit(limit: u16) -> Result<(), SessionError> {
     }
 }
 
+/// Resident ledgers kept at once. Above the cap the least-recently-loaded
+/// quiescent session is evicted; [`recovery`] reloads it on demand. A
+/// desktop keeps one conversation open at a time plus turns finishing in
+/// background sessions, so a single-digit cap leaves the hot set resident
+/// while months of opened sessions stop accumulating.
+pub(crate) const MAX_RESIDENT_SESSIONS: usize = 8;
+
 /// Infrastructure-level actor failures; domain failures travel inside
 /// [`SessionPull::Failed`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +72,11 @@ pub(crate) struct SessionCore {
     fence: Arc<GenerationFence>,
     admission: AdmissionLedger,
     sessions: HashMap<SessionId, SessionLedger>,
+    /// Monotonic clock stamping each session's last load; drives the
+    /// residency cap's least-recently-loaded eviction.
+    resident_clock: u64,
+    /// Last `resident_clock` value per resident session.
+    resident_touch: HashMap<SessionId, u64>,
     /// `None` when the index could not be opened. The next durable action
     /// tries again instead of retiring the worker.
     store: Option<SessionStore>,
@@ -172,6 +192,7 @@ enum Action {
 }
 
 /// Why a session index could not be loaded.
+#[derive(Debug)]
 pub(super) enum PlanError {
     NotFound,
     Corrupt,
@@ -179,6 +200,7 @@ pub(super) enum PlanError {
 }
 
 /// Classifies one action-path failure.
+#[derive(Debug)]
 enum OpFail {
     /// Durable substrate failure; fatal for the actor.
     Storage,
@@ -194,8 +216,54 @@ impl SessionCore {
             fence,
             admission: AdmissionLedger::new(),
             sessions: HashMap::new(),
+            resident_clock: 0,
+            resident_touch: HashMap::new(),
             store,
         }
+    }
+
+    /// Marks one session as just loaded, then enforces the residency cap.
+    ///
+    /// Eviction drops only quiescent ledgers: a live reservation holds
+    /// payload bytes that exist nowhere durably yet, so its session stays
+    /// resident until the reservation is consumed. A quiescent ledger is
+    /// byte-for-byte reconstructible from the index (the commit authority),
+    /// so dropping it cannot lose events or weaken a later head CAS.
+    pub(super) fn touch_resident(&mut self, session: &SessionId) {
+        self.resident_clock = self.resident_clock.saturating_add(1);
+        let touch = self.resident_clock;
+        self.resident_touch.insert(session.clone(), touch);
+        self.trim_resident_sessions();
+    }
+
+    /// Evicts least-recently-loaded quiescent ledgers above the cap.
+    fn trim_resident_sessions(&mut self) {
+        while self.sessions.len() > MAX_RESIDENT_SESSIONS {
+            let victim = self
+                .sessions
+                .iter()
+                .filter(|(_, ledger)| ledger.is_quiescent())
+                .min_by_key(|(session, _)| {
+                    self.resident_touch
+                        .get(*session)
+                        .copied()
+                        .unwrap_or_default()
+                })
+                .map(|(session, _)| session.clone());
+            let Some(victim) = victim else {
+                // Every candidate holds a live reservation; retry after the
+                // next load rather than dropping unpersisted payload bytes.
+                return;
+            };
+            self.sessions.remove(&victim);
+            self.resident_touch.remove(&victim);
+        }
+    }
+
+    /// Forgets the residency bookkeeping beside a ledger removal.
+    pub(super) fn forget_resident(&mut self, session: &SessionId) {
+        self.sessions.remove(session);
+        self.resident_touch.remove(session);
     }
 
     fn mint_admission(&self) -> Result<TaskOperationAdmission, SessionTaskError> {

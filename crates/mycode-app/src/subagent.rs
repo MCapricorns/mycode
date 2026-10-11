@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn child_registry_keeps_one_shell_tool_for_every_allowlist_alias() {
-        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-shell")).unwrap();
+        let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-shell")).unwrap();
         let aliases = [
             "read".to_owned(),
             "shell".to_owned(),
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn artisan_on_windows_powershell_does_not_receive_bash() {
-        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-ps")).unwrap();
+        let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-ps")).unwrap();
         let artisan = builtin_roles().role("artisan").expect("artisan").clone();
         let allowed = artisan.resolve_tools(
             &super::PARENT_TOOL_NAMES
@@ -989,7 +989,7 @@ mod tests {
 
     #[test]
     fn a_bash_allowlist_entry_still_launches_the_active_powershell_tool() {
-        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-alias")).unwrap();
+        let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-alias")).unwrap();
         let mut role = builtin_roles().role("artisan").expect("artisan").clone();
         role.tools = Some(vec!["read".into(), "bash".into()]);
         let allowed = role.resolve_tools(&["read".into(), "shell".into()]);
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn zsh_and_cmd_subagents_match_that_interpreter() {
-        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-zsh")).unwrap();
+        let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-zsh")).unwrap();
         let artisan = builtin_roles().role("artisan").expect("artisan").clone();
         let allowed = ["read".to_owned(), "shell".to_owned()];
         let zsh = mycode_tools::DetectedShell {
@@ -1081,7 +1081,7 @@ mod tests {
 
     #[test]
     fn scout_stays_read_only_and_does_not_list_a_shell() {
-        let home = HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-scout")).unwrap();
+        let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-scout")).unwrap();
         let scout = builtin_roles().role("scout").expect("scout").clone();
         let allowed = scout.resolve_tools(
             &super::PARENT_TOOL_NAMES
@@ -1191,7 +1191,7 @@ mod tests {
     #[test]
     fn artisan_gets_the_same_grouping_block_as_the_parent_tools() {
         let home =
-            HomeLayout::from_root(std::path::Path::new("/tmp/mycode-child-artisan-ptc")).unwrap();
+            HomeLayout::from_root(std::env::temp_dir().join("mycode-child-artisan-ptc")).unwrap();
         let artisan = builtin_roles().role("artisan").expect("artisan").clone();
         let allowed = artisan.resolve_tools(
             &super::PARENT_TOOL_NAMES

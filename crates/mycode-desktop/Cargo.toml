@@ -10,7 +10,10 @@ async-channel = { workspace = true }
 serde_json = { workspace = true }
 # `tree-sitter-languages` turns on gpui-kit's own grammars. Fenced code in
 # TextView is highlighted by that highlighter; this crate does not depend
-# on tree-sitter itself.
+# on tree-sitter itself. gpui-kit is the GUI framework and stays in this
+# binary only: gpui-base 0.7.1 links the smol runtime as a non-optional
+# native dependency (no feature drops it), so the desktop binary carries
+# smol beside tokio. Every other workspace crate is tokio-only.
 gpui-kit = { version = "0.7.1", features = ["tree-sitter-languages"] }
 notify = "8.2.0"
 mycode-app = { path = "../mycode-app" }

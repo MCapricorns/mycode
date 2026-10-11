@@ -340,29 +340,6 @@ pub enum BridgeEvent {
         /// Elapsed milliseconds since the turn started.
         elapsed_ms: u64,
     },
-    /// A durable usage record was committed.
-    UsageRecorded {
-        /// Session identity spelling.
-        session_id: String,
-        /// Provider identity.
-        provider: String,
-        /// Model id.
-        model: String,
-        /// Input tokens summed for this turn (billing).
-        input: u64,
-        /// Latest prompt size for the context meter.
-        context: u64,
-        /// Cache-read tokens on that latest prompt.
-        context_cache: u64,
-        /// Output tokens.
-        output: u64,
-        /// Prompt tokens served from the provider cache, when reported.
-        cache: Option<u64>,
-        /// Wall-clock turn duration in milliseconds.
-        elapsed_ms: u64,
-        /// Committed usage entry projection.
-        entry: ConversationEntry,
-    },
     /// The agent asked the user structured questions.
     AskRequested {
         /// Session identity spelling.

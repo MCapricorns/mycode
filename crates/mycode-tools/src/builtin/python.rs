@@ -1,10 +1,13 @@
 //! System Python 3 used by `run_code`.
 //!
-//! The probe runs once per process and is reused for every session in that
-//! process, so the system prompt and the interpreter stay stable for a
-//! session. A later install is picked up on the next launch.
+//! The interpreter is called by name (`py.exe -3`, `python3`, …) and resolved
+//! from `PATH` by the operating system. No absolute executable path is
+//! assembled or stored: the probe verifies the candidate by running it once
+//! per process, and every later `run_code` spawns the same name. A later
+//! install is picked up on the next launch. On Windows every spawn sets
+//! `CREATE_NO_WINDOW` so no console window flashes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -13,10 +16,15 @@ use std::time::Duration;
 pub const MIN_PYTHON_MAJOR: u32 = 3;
 pub const MIN_PYTHON_MINOR: u32 = 10;
 
+/// Windows `CREATE_NO_WINDOW`: no console is allocated for the child.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// One interpreter that passed the version check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PythonInterpreter {
-    /// Executable, or the `py` launcher.
+    /// Executable name, or the `py` launcher. Resolved from `PATH` by the OS
+    /// at spawn time; never an assembled absolute path.
     pub program: PathBuf,
     /// Extra arguments before `-u`, such as `py -3`.
     pub prefix: Vec<String>,
@@ -75,7 +83,7 @@ pub fn python_unavailable_message() -> Option<String> {
 #[must_use]
 pub fn python_install_steps() -> &'static str {
     if cfg!(windows) {
-        "Install Python 3.10 or newer from https://www.python.org/downloads/ and enable \"Add python.exe to PATH\", or run `winget install Python.Python.3.12`. The Microsoft Store alias under WindowsApps is skipped."
+        "Install Python 3.10 or newer from https://www.python.org/downloads/ and enable \"Add python.exe to PATH\", or run `winget install Python.Python.3.12`."
     } else if cfg!(target_os = "macos") {
         "Install Python 3.10 or newer with `brew install python`, or from https://www.python.org/downloads/."
     } else {
@@ -92,17 +100,12 @@ pub fn set_python_status_for_test(status: Option<PythonStatus>) {
 fn detect_python() -> PythonStatus {
     let mut too_old: Option<String> = None;
     for candidate in candidates() {
-        for program in search_path(candidate.name) {
-            if is_windowsapps_stub(&program) {
-                continue;
+        match probe(candidate.name, candidate.prefix) {
+            Ok(found) => return PythonStatus::Ready(found),
+            Err(ProbeError::TooOld(text)) => {
+                too_old.get_or_insert(text);
             }
-            match probe(&program, candidate.prefix) {
-                Ok(found) => return PythonStatus::Ready(found),
-                Err(ProbeError::TooOld(text)) => {
-                    too_old.get_or_insert(text);
-                }
-                Err(ProbeError::Skip) => {}
-            }
+            Err(ProbeError::Skip) => {}
         }
     }
     let message = if let Some(text) = too_old {
@@ -125,15 +128,15 @@ fn candidates() -> &'static [Candidate] {
     if cfg!(windows) {
         &[
             Candidate {
-                name: "py",
+                name: "py.exe",
                 prefix: &["-3"],
             },
             Candidate {
-                name: "python3",
+                name: "python.exe",
                 prefix: &[],
             },
             Candidate {
-                name: "python",
+                name: "python3.exe",
                 prefix: &[],
             },
         ]
@@ -151,54 +154,30 @@ fn candidates() -> &'static [Candidate] {
     }
 }
 
-/// The Windows Store stub (`...\WindowsApps\python.exe`) opens the Store
-/// instead of running Python. `py.exe` is the real launcher and is not skipped.
-///
-/// The check is textual so a Windows path is recognized on every host.
-#[must_use]
-pub fn is_windowsapps_stub(path: &Path) -> bool {
-    let text = path
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_ascii_lowercase();
-    let python = text.ends_with("/python.exe")
-        || text.ends_with("/python3.exe")
-        || text.ends_with("/python")
-        || text.ends_with("/python3");
-    python && text.contains("/windowsapps/")
+/// Applies the no-console creation flags for Windows probe spawns.
+#[cfg(windows)]
+fn no_window(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    // SAFETY of the flag value: CREATE_NO_WINDOW is a documented creation
+    // flag; the call itself is safe FFI through std.
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
-fn search_path(name: &str) -> Vec<PathBuf> {
-    let Some(path) = std::env::var_os("PATH") else {
-        return Vec::new();
-    };
-    let mut found = Vec::new();
-    for dir in std::env::split_paths(&path) {
-        if dir.as_os_str().is_empty() {
-            continue;
-        }
-        let direct = dir.join(name);
-        if direct.is_file() {
-            found.push(direct);
-            continue;
-        }
-        if cfg!(windows) && Path::new(name).extension().is_none() {
-            let exe = dir.join(format!("{name}.exe"));
-            if exe.is_file() {
-                found.push(exe);
-            }
-        }
-    }
-    found
-}
+#[cfg(not(windows))]
+fn no_window(_command: &mut std::process::Command) {}
 
 enum ProbeError {
     Skip,
     TooOld(String),
 }
 
-fn probe(program: &Path, prefix: &[&str]) -> Result<PythonInterpreter, ProbeError> {
-    let mut command = std::process::Command::new(program);
+/// Runs one candidate by name and keeps it when the version is new enough.
+///
+/// A Windows Store alias (`python.exe` under `WindowsApps`) opens the Store
+/// instead of running Python: it prints nothing useful and exits non-zero, so
+/// the probe skips it without ever assembling a path.
+fn probe(name: &str, prefix: &[&str]) -> Result<PythonInterpreter, ProbeError> {
+    let mut command = std::process::Command::new(name);
     command.args(prefix);
     command.arg("-c");
     command.arg(
@@ -207,6 +186,7 @@ fn probe(program: &Path, prefix: &[&str]) -> Result<PythonInterpreter, ProbeErro
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::null());
+    no_window(&mut command);
     let child = command.spawn().map_err(|_| ProbeError::Skip)?;
     let finished = wait_child(child, Duration::from_secs(8)).map_err(|_| ProbeError::Skip)?;
     if !finished.status.success() {
@@ -218,12 +198,11 @@ fn probe(program: &Path, prefix: &[&str]) -> Result<PythonInterpreter, ProbeErro
     };
     if major < MIN_PYTHON_MAJOR || (major == MIN_PYTHON_MAJOR && minor < MIN_PYTHON_MINOR) {
         return Err(ProbeError::TooOld(format!(
-            "Found Python {major}.{minor}.{patch} at {}, but run_code needs Python {MIN_PYTHON_MAJOR}.{MIN_PYTHON_MINOR} or newer.",
-            program.display()
+            "Found Python {major}.{minor}.{patch} at {name}, but run_code needs Python {MIN_PYTHON_MAJOR}.{MIN_PYTHON_MINOR} or newer.",
         )));
     }
     Ok(PythonInterpreter {
-        program: program.to_path_buf(),
+        program: PathBuf::from(name),
         prefix: prefix.iter().map(|part| (*part).to_owned()).collect(),
         version: format!("{major}.{minor}.{patch}"),
         major,
@@ -279,7 +258,7 @@ pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIN_PYTHON_MINOR, PythonStatus, is_windowsapps_stub, parse_version, python_install_steps,
+        MIN_PYTHON_MINOR, PythonInterpreter, PythonStatus, parse_version, python_install_steps,
         python_status,
     };
 
@@ -291,15 +270,31 @@ mod tests {
         assert!(parse_version("python 3.12.3").is_none());
     }
 
+    #[cfg(windows)]
     #[test]
-    fn windowsapps_python_stub_is_skipped() {
-        let stub =
-            std::path::Path::new(r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\python.exe");
-        assert!(is_windowsapps_stub(stub));
-        let real = std::path::Path::new(r"C:\Windows\py.exe");
-        assert!(!is_windowsapps_stub(real));
-        let program_files = std::path::Path::new(r"C:\Program Files\Python312\python.exe");
-        assert!(!is_windowsapps_stub(program_files));
+    fn the_windows_candidates_call_py_first_by_name() {
+        let candidates = super::candidates();
+        assert_eq!(candidates[0].name, "py.exe");
+        assert_eq!(candidates[0].prefix, &["-3"]);
+        for candidate in candidates {
+            assert!(
+                !candidate.name.contains('\\') && !candidate.name.contains('/'),
+                "{} must be a bare PATH-resolved name",
+                candidate.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_ready_interpreter_stores_the_name_not_an_assembled_path() {
+        let ready = PythonStatus::Ready(PythonInterpreter {
+            program: "py.exe".into(),
+            prefix: vec!["-3".to_owned()],
+            version: "3.14.1".to_owned(),
+            major: 3,
+            minor: 14,
+        });
+        assert!(ready.unavailable_message().is_none());
     }
 
     #[test]
@@ -307,7 +302,11 @@ mod tests {
         match python_status() {
             PythonStatus::Ready(found) => {
                 assert!(found.major > 3 || found.minor >= MIN_PYTHON_MINOR);
-                assert!(found.program.is_file() || found.program.exists());
+                assert!(
+                    found.program.is_relative(),
+                    "the program must stay a PATH-resolved name, got {}",
+                    found.program.display()
+                );
             }
             PythonStatus::Missing { message } => {
                 assert!(message.contains("3.10"));

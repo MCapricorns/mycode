@@ -101,23 +101,6 @@ pub fn delete_session_index(
     store::delete_indexed_session(home, session_id).map_err(store_error)
 }
 
-/// Indexes JSONL logs placed by an import when that session is not already
-/// indexed.
-///
-/// Returns whether a new index row was inserted. Invalid session ids and
-/// sessions already present are left untouched.
-///
-/// # Errors
-///
-/// Returns [`SessionError::Corrupt`] when a log cannot be decoded, and
-/// [`SessionError::Unavailable`] when the index cannot be written.
-pub fn index_imported_session(
-    home: &mycode_config::HomeLayout,
-    session_id: &str,
-) -> Result<bool, SessionError> {
-    store::index_jsonl_session(home, session_id).map_err(store_error)
-}
-
 fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, String> {
     let id = row.id.clone();
     let Some(session_id) = SessionId::parse(&row.id) else {
