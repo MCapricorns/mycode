@@ -17,6 +17,7 @@ pub(super) fn tool_started(
     call_id: String,
     name: String,
     target: String,
+    parent: Option<String>,
 ) {
     let label = tool_call_label(&name, &target);
     set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
@@ -30,6 +31,7 @@ pub(super) fn tool_started(
             text: label.into(),
             call_id: Some(call_id),
             thinking: String::new(),
+            parent_call_id: parent,
         });
     }
 }

@@ -193,10 +193,12 @@ impl Workspace {
         let path = skill.path.display();
         let title = skill.title;
         let text = if crate::i18n::is_chinese() {
-            format!("/{slug}\n\n遵循「{title}」技能。先阅读 `{path}`，再继续。\n")
+            format!(
+                "/{slug}\n\n遵循「{title}」技能。在 run_code 里用 await tools.read(path=\"{path}\") 读取并应用，再继续。\n"
+            )
         } else {
             format!(
-                "/{slug}\n\nFollow the `{title}` skill. Read `{path}` and apply it before continuing.\n"
+                "/{slug}\n\nFollow the `{title}` skill. Inside run_code, call await tools.read(path=\"{path}\") and apply it before continuing.\n"
             )
         };
         self.pending_composer_prefill = Some(text);

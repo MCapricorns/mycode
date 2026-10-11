@@ -159,6 +159,47 @@ impl ProcessTree {
     }
 }
 
+/// Enrolls a child started in its own process group, or on Windows assigns
+/// it to a kill-on-close Job. Call this immediately after spawn, before the
+/// child runs user code.
+///
+/// # Errors
+///
+/// Returns an error when the platform cannot build a process tree, the child
+/// has already exited, or Job assignment fails.
+pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    {
+        ProcessTree::enroll_unix(child)
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let pid = child
+            .id()
+            .ok_or_else(|| std::io::Error::other("child exited before enrollment"))?;
+        ProcessTree::enroll_leader_pid(pid)
+    }
+    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        use std::os::windows::io::AsRawHandle as _;
+        let job = windows::WindowsJob::new()?;
+        job.assign_handle(child.as_raw_handle())?;
+        Ok(ProcessTree::from_windows_job(job))
+    }
+    #[cfg(not(any(
+        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    )))]
+    {
+        let _ = child;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "this target has no process-tree enrollment",
+        ))
+    }
+}
+
 #[cfg(unix)]
 fn ignore_missing_process_group(result: std::io::Result<()>) -> std::io::Result<()> {
     result.or_else(|err| {

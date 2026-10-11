@@ -1268,6 +1268,7 @@ mod tests {
             content: vec![ContentBlock::Text(TextBlock::new(body))],
             is_error: false,
             details: None,
+            ptc_parent: None,
         }))
     }
 

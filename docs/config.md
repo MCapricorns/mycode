@@ -68,12 +68,12 @@
 
 | 角色 | 职责 |
 | --- | --- |
-| scout | 只读。适合较宽的代码库搜索、网页检索或文档摘录，返回短地图后停止。隔离是 `shared`，思考强度低。工具是 `read`、`grep`、`find`、`web_search`、`fetch_content`、`run_code`。项目覆盖也加不进改动工具。父代理按任务难度自己决定要不要派它；窄问题留在原地用 `run_code` |
+| scout | 只读。适合较宽的代码库搜索、网页检索或文档摘录，返回短地图后停止。隔离是 `shared`，思考强度低。工具是 `read`、`grep`、`find`、`web_search`、`fetch_content`、`run_code`。项目覆盖也加不进改动工具。它同样只能直接调用 `run_code`，程序里只有只读的 `tools.*`，可以用 `asyncio.gather` 并行搜索。Python 以 `-I` 和精简环境启动，并在用户代码前装 audit hook，拦截写、删、改名、建目录、subprocess、ctypes 和原始套接字。这个 hook 是尽力而为，不是安全边界。要不要把宽研究派给它，由父代理自己判断 |
 | artisan | 做到 brief 的结果，检查与改动相称，不提交、不推送。隔离是 `worktree`，思考强度高 |
 
 同名文件的覆盖顺序是：内置 → `<家目录>/agents/` → 项目 `.mycode/agents/`。每份角色文件最多 32 KiB，目录最多 32 个角色。frontmatter 声明隔离方式（`shared` 或 `worktree`）、默认思考强度和工具白名单。启用与否、实际模型在设置里，不写进角色文件。
 
-提示资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，再是家目录的 `AGENTS.md` 和用户主目录的 `.agents/AGENTS.md`。每份最多 64 KiB，最多 16 份，合计进 prompt 最多 96K 字符。技能是 `.agents` 和 `.agents/skills` 下的 `*.md` 或 `<名字>/SKILL.md`，工作区和用户主目录各扫一遍，同名时工作区优先；发现不设上限，进 system prompt 时最多 32 个。
+提示资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，再是家目录的 `AGENTS.md` 和用户主目录的 `.agents/AGENTS.md`。每份最多 64 KiB，最多 16 份，合计进 prompt 最多 96K 字符。技能是 `.agents` 和 `.agents/skills` 下的 `*.md` 或 `<名字>/SKILL.md`，工作区和用户主目录各扫一遍，同名时工作区优先；发现不设上限，进 system prompt 时最多 32 个。目录只列 slug、标题和路径。匹配时在 `run_code` 里 `await tools.read(path=...)` 读取正文，不要直接调用 `read`。子代理（含 scout）拿到同一份目录。
 
 ## 不放在这里的东西
 

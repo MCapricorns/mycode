@@ -514,7 +514,7 @@ pub(super) fn render_tool_block(
                         .text_xs()
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.foreground)
-                        .child(call.text.to_string()),
+                        .child(tool_title(tool, call.text.as_ref()).to_string()),
                 )
                 .child(tool_status_node(&status, failed, theme)),
         );
@@ -577,6 +577,20 @@ fn shows_diff_preview(tool: &str, text: &str) -> bool {
 /// The first token of a tool label is the tool name. The rest is the target.
 fn tool_name(label: &str) -> &str {
     label.split_whitespace().next().unwrap_or(label)
+}
+
+/// `run_code` cards are titled by the program description. Other cards keep
+/// the `name  target` label.
+fn tool_title<'a>(tool: &str, label: &'a str) -> &'a str {
+    if tool == "run_code" {
+        label
+            .split_once("  ")
+            .map(|(_, rest)| rest.trim())
+            .filter(|rest| !rest.is_empty())
+            .unwrap_or(label)
+    } else {
+        label
+    }
 }
 
 fn diff_added_line(line: &str) -> bool {
@@ -939,6 +953,7 @@ mod tests {
             text: text.into(),
             call_id: Some("call".into()),
             thinking: String::new(),
+            parent_call_id: None,
         }
     }
 
@@ -1026,6 +1041,7 @@ mod layout {
             text: text.into(),
             call_id: None,
             thinking,
+            parent_call_id: None,
         }
     }
 

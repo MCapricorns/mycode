@@ -17,7 +17,7 @@ use crate::state::{
     CoreState, UPDATE_USER_AGENT, refresh_catalog, set_project_dir, spawn_catalog_refresh,
     spawn_update_check,
 };
-use crate::tool_hosts::deliver_ask_answer;
+use crate::tool_hosts::{deliver_ask_answer, dismiss_ask};
 use crate::turn::{chat_turn, manual_compact};
 use crate::{BridgeCommand, BridgeReply, CatalogInfo, WithReply, protocol::SessionSummary};
 
@@ -270,7 +270,9 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::ExportData { .. } => BridgeReply::Exported(Err(message)),
         BridgeCommand::ImportData { .. } => BridgeReply::Imported(Err(message)),
         BridgeCommand::ListResources { .. } => BridgeReply::Resources(Err(message)),
-        BridgeCommand::AskAnswer { .. } => BridgeReply::AskAnswered(Err(message)),
+        BridgeCommand::AskAnswer { .. } | BridgeCommand::AskDismiss { .. } => {
+            BridgeReply::AskAnswered(Err(message))
+        }
         BridgeCommand::GetCatalog | BridgeCommand::RefreshCatalog => {
             BridgeReply::Catalog(Err(message))
         }
@@ -535,6 +537,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             session_id,
             answers,
         } => BridgeReply::AskAnswered(deliver_ask_answer(session_id, answers.clone())),
+        BridgeCommand::AskDismiss { session_id } => {
+            BridgeReply::AskAnswered(dismiss_ask(session_id))
+        }
         BridgeCommand::GetCatalog => BridgeReply::Catalog(Ok(state
             .catalog
             .read()

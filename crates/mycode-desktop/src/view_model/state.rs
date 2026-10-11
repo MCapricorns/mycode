@@ -323,6 +323,8 @@ pub enum DesktopAction {
         call_id: String,
         name: String,
         target: String,
+        /// Provider id of the enclosing `run_code` card, when this call is nested.
+        parent: Option<String>,
     },
     /// Incremental tool or subagent progress for the live status line.
     ToolProgress {

@@ -227,6 +227,20 @@ impl Workspace {
         self.on_answer_ask(answers, cx);
     }
 
+    pub(crate) fn on_dismiss_ask(&mut self, cx: &mut Context<Self>) {
+        let Some(conversation) = self.vm.active.clone() else {
+            return;
+        };
+        self.ask_input = None;
+        self.apply_action(DesktopAction::AskAnswered, cx);
+        self.dispatch(
+            BridgeCommand::AskDismiss {
+                session_id: conversation.session_id,
+            },
+            cx,
+        );
+    }
+
     fn on_answer_ask(&mut self, answers: Vec<String>, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.clone() else {
             return;
@@ -339,6 +353,10 @@ impl Workspace {
         }
         if !dismissed && self.vm.view == MainView::Settings {
             self.apply_action(DesktopAction::ShowMainView(MainView::Chat), cx);
+        }
+        if !dismissed && self.vm.pending_ask.is_some() {
+            self.on_dismiss_ask(cx);
+            dismissed = true;
         }
         if !dismissed && self.vm.sending {
             self.on_cancel_chat(cx);

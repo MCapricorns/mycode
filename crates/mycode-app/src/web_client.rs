@@ -88,8 +88,43 @@ const PERMANENT_EXTRACT_NOTE: &str = "Permanent failure for this URL: do not sle
 fn permanent_extract_failure(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("extract_failed")
-        || lower.contains("http 422")
         || lower.contains("unable to extract")
+        || http_status_between(&lower, 400, 499)
+}
+
+fn http_status_between(lower: &str, start: u16, end: u16) -> bool {
+    let mut rest = lower;
+    while let Some(index) = rest.find("http ") {
+        let after = &rest[index + 5..];
+        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if let Ok(code) = digits.parse::<u16>()
+            && (start..=end).contains(&code)
+        {
+            return true;
+        }
+        let skip = digits.len();
+        if skip >= after.len() {
+            break;
+        }
+        rest = &after[skip..];
+    }
+    false
+}
+
+fn permanent_fetch_page(url: &str, error: &WebError) -> Option<PageContent> {
+    let mut content = tool_failure("fetch", error);
+    if !permanent_extract_failure(&content) {
+        return None;
+    }
+    if !content.contains("do not sleep-retry") {
+        content.push(' ');
+        content.push_str(PERMANENT_EXTRACT_NOTE);
+    }
+    Some(PageContent {
+        url: url.to_owned(),
+        content,
+        truncated: false,
+    })
 }
 
 /// `error_code` and `message` from an AnySearch error object, as one line.
@@ -374,14 +409,27 @@ impl WebClient {
             "extrasMeta": false,
         }))
         .map_err(|_| WebError::Protocol)?;
-        let raw = self
+        let raw = match self
             .post(
                 "/v1/contents",
                 &body,
                 Duration::from_secs(guard::CONTENTS_TIMEOUT_SECS),
                 cancel,
             )
-            .await?;
+            .await
+        {
+            Ok(raw) => raw,
+            Err(error) => {
+                let pages: Vec<_> = urls
+                    .iter()
+                    .filter_map(|url| permanent_fetch_page(url, &error))
+                    .collect();
+                if pages.len() == urls.len() {
+                    return Ok(pages);
+                }
+                return Err(error);
+            }
+        };
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
         let pages_wire = payload["results"]
@@ -401,17 +449,31 @@ impl WebClient {
         for url in urls {
             let body = serde_json::to_vec(&serde_json::json!({ "url": url }))
                 .map_err(|_| WebError::Protocol)?;
-            let raw = self
+            let raw = match self
                 .post(
                     "/v1/extract",
                     &body,
                     Duration::from_secs(guard::CONTENTS_TIMEOUT_SECS),
                     cancel.clone(),
                 )
-                .await?;
+                .await
+            {
+                Ok(raw) => raw,
+                Err(error) => {
+                    if let Some(page) = permanent_fetch_page(url, &error) {
+                        pages.push(page);
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             let payload: serde_json::Value =
                 serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
             if let Some(error) = anysearch_rejected(&payload) {
+                if let Some(page) = permanent_fetch_page(url, &error) {
+                    pages.push(page);
+                    continue;
+                }
                 return Err(error);
             }
             let data = &payload["data"];
@@ -691,19 +753,87 @@ mod tests {
             "{search_tool}"
         );
         assert!(!search_tool.contains("sleep-retry"), "{search_tool}");
-        let fetch_error = client
+        let pages = client
             .contents(
                 &["https://example.com/docs".to_owned()],
                 CancellationToken::new(),
             )
             .await
-            .unwrap_err();
-        let fetch_tool = tool_failure("fetch", &fetch_error);
+            .expect("extract_failed is page text, not a tool error");
+        let fetch_tool = &pages[0].content;
         assert!(
             fetch_tool.contains("extract_failed")
                 && fetch_tool.contains("Unable to extract content from the URL.")
                 && fetch_tool.contains("do not sleep-retry"),
             "{fetch_tool}"
         );
+        assert_eq!(pages[0].url, "https://example.com/docs");
+    }
+
+    struct StatusFailure {
+        reason: String,
+    }
+
+    #[async_trait::async_trait]
+    impl WebTransport for StatusFailure {
+        async fn post_json(
+            &self,
+            _endpoint: &str,
+            _bearer: Option<&str>,
+            _body: &[u8],
+            _timeout: Duration,
+            _cancel: CancellationToken,
+        ) -> Result<Vec<u8>, WebError> {
+            Err(WebError::unavailable(self.reason.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn http_4xx_fetch_is_a_page_and_5xx_stays_an_error() {
+        let client = WebClient::new(
+            "https://api.anysearch.com",
+            None,
+            Arc::new(StatusFailure {
+                reason: "HTTP 422 Unprocessable Entity (extract_failed: Unable to extract content from the URL.)".to_owned(),
+            }),
+        )
+        .unwrap()
+        .with_kind(SearchKind::Anysearch);
+        let pages = client
+            .contents(
+                &["https://example.com/docs".to_owned()],
+                CancellationToken::new(),
+            )
+            .await
+            .expect("422 is final page text");
+        assert!(
+            pages[0].content.contains("HTTP 422"),
+            "{}",
+            pages[0].content
+        );
+        assert!(
+            pages[0].content.contains("do not sleep-retry"),
+            "{}",
+            pages[0].content
+        );
+
+        let down = WebClient::new(
+            "https://api.anysearch.com",
+            None,
+            Arc::new(StatusFailure {
+                reason: "HTTP 502 Bad Gateway".to_owned(),
+            }),
+        )
+        .unwrap()
+        .with_kind(SearchKind::Anysearch);
+        let error = down
+            .contents(
+                &["https://example.com/docs".to_owned()],
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("502 stays a transport error");
+        assert!(error.to_string().contains("HTTP 502"), "{error}");
+        assert!(!tool_failure("fetch", &error).contains("sleep-retry"));
     }
 }
