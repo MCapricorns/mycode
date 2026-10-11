@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-11
+
+### Changed
+
+- 四个平台构建通过的 `main` 推送自动发布。
+
 ## [0.11.1] - 2026-10-11
 
 ### Fixed
@@ -134,7 +140,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.2
 [0.11.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.1
 [0.11.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.0
 [0.10.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.10.3

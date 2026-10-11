@@ -4271,7 +4271,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-agent"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -4289,7 +4289,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-app"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "bytes",
  "jsonschema",
@@ -4313,7 +4313,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-config"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "rustix",
  "serde",
@@ -4325,7 +4325,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-core"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4336,7 +4336,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "gpui-kit",
  "mycode-app",
@@ -4352,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-providers"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "bytes",
  "mycode-config",
@@ -4366,7 +4366,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-tools"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "aho-corasick",
  "base64 0.23.1",
