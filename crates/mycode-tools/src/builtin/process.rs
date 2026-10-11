@@ -181,9 +181,13 @@ pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
     }
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
-        use std::os::windows::io::AsRawHandle as _;
         let job = windows::WindowsJob::new()?;
-        job.assign_handle(child.as_raw_handle())?;
+        // tokio::process::Child does not implement AsRawHandle. raw_handle is
+        // None once the child has been polled to completion.
+        let handle = child
+            .raw_handle()
+            .ok_or_else(|| std::io::Error::other("child exited before enrollment"))?;
+        job.assign_handle(handle)?;
         Ok(ProcessTree::from_windows_job(job))
     }
     #[cfg(not(any(
