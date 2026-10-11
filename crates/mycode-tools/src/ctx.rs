@@ -37,6 +37,10 @@ pub struct ToolCtx {
     /// Extra workspace roots. Absolute tool paths under one of these are
     /// re-anchored the same way the agent loop anchors a direct call.
     pub extra_roots: Vec<PathBuf>,
+    /// Host-published read-only anchor roots (the skills catalog). Only
+    /// read-only file tools anchor here, so `run_code` inner calls inherit
+    /// the same allowance while `edit` and `write` stay refused.
+    pub read_roots: Vec<PathBuf>,
     /// Tools a `run_code` program may call. Absent for ordinary tools.
     pub catalog: Option<ToolCatalog>,
     /// Wall-clock override for one `run_code` program. `None` uses the default.
@@ -53,6 +57,7 @@ impl ToolCtx {
             prepared_search: None,
             prepared_file: None,
             extra_roots: Vec::new(),
+            read_roots: Vec::new(),
             catalog: None,
             ptc_wall: None,
         }
@@ -91,6 +96,12 @@ impl ToolCtx {
     /// Allow absolute paths under these extra workspace folders.
     pub fn with_extra_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.extra_roots = roots;
+        self
+    }
+
+    /// Read-only anchor roots carried into `run_code` inner-call preflight.
+    pub fn with_read_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.read_roots = roots;
         self
     }
 

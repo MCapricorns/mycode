@@ -58,7 +58,7 @@
 
 `ui.json` 的上限同样是常量：最近项目 16、工作区 16、每个工作区的文件夹 8、会话→项目 256、会话→工作区 512、最近模型 8、星标模型 24。
 
-- **会话模型**：每个会话一条 `SessionModelPin`（服务商、模型、可选思考强度），最多 128 条，新的在前。切换会话时恢复各自的钉选，一个会话改模型不影响别的会话
+- **会话模型**：每个会话一条 `SessionModelPin`（服务商、模型、可选思考强度），最多 128 条，新的在前。切换会话时恢复各自的钉选，一个会话改模型不影响别的会话。`selectedReasoning` 是作曲栏最后一次选的强度，新会话从它起步（按模型公布的档位自适应收敛）
 - **信任的项目**：`trustedProjects` 是允许贡献 `.mycode/mcp.json` 的绝对路径，最多 64 个，满了不再加入。写入与比较用同一套规范化（去掉末尾斜杠；Windows 上折叠斜杠方向与 ASCII 大小写），侧栏、MCP 加载和信任列表共用，避免同一文件夹因斜杠或大小写被当成两个。打开文件夹不会自动信任。未信任时 `project_mcp_servers` 不打开该文件；已信任但文件不是合法 MCP JSON 或 stdio 命令是 shell 字符串时返回错误。项目里的服务器与设置里同 id 的服务器冲突时，项目那条覆盖
 - 删除会话时一并清掉它的项目、工作区和模型钉选
 
@@ -73,7 +73,7 @@
 
 同名文件的覆盖顺序是：内置 → `<家目录>/agents/` → 项目 `.mycode/agents/`。每份角色文件最多 32 KiB，目录最多 32 个角色。frontmatter 声明隔离方式（`shared` 或 `worktree`）、默认思考强度和工具白名单。启用与否、实际模型在设置里，不写进角色文件。
 
-提示资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，再是家目录的 `AGENTS.md` 和用户主目录的 `.agents/AGENTS.md`。每份最多 64 KiB，最多 16 份，合计进 prompt 最多 96K 字符。技能是 `.agents` 和 `.agents/skills` 下的 `*.md` 或 `<名字>/SKILL.md`，工作区和用户主目录各扫一遍，同名时工作区优先；发现不设上限，进 system prompt 时最多 32 个。目录只列 slug、标题和路径。匹配时在 `run_code` 里 `await tools.read(path=...)` 读取正文，不要直接调用 `read`。子代理（含 scout）拿到同一份目录。
+提示资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，再是家目录的 `AGENTS.md` 和用户主目录的 `.agents/AGENTS.md`。每份最多 64 KiB，最多 16 份，合计进 prompt 最多 96K 字符。技能是 `.agents` 和 `.agents/skills` 下的 `*.md` 或 `<名字>/SKILL.md`，工作区和用户主目录各扫一遍，同名时工作区优先；发现不设上限，进 system prompt 时最多 32 个。目录只列 slug、标题和路径。匹配时在 `run_code` 里 `await tools.read(path=...)` 读取正文，不要直接调用 `read`。用户主目录的 `.agents` 和 `.agents/skills` 是宿主发布的只读锚定根：`read` 可以按绝对路径读取其中的技能文件（子代理和 scout 同样如此），`edit` / `write` 对这两个根仍然拒绝。子代理（含 scout）拿到同一份目录。
 
 ## 不放在这里的东西
 

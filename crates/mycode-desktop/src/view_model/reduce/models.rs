@@ -281,7 +281,50 @@ pub(super) fn assign_fresh_session_model(state: &mut WorkspaceState, session_id:
         settings.reasoning = None;
     }
     ensure_model_selection(state);
+    // Provider and model stay per-session picks, but the reasoning effort
+    // is a preference: resolve the composer's last pick against the rungs
+    // the fresh model advertises, clamping to the strongest fit.
+    let levels = selected_reasoning_levels(state);
+    let seeded = state
+        .default_reasoning
+        .as_deref()
+        .and_then(|preferred| resolve_remembered_effort(&levels, preferred));
+    if let Some(settings) = state.settings.as_mut() {
+        settings.reasoning = seeded;
+    }
     remember_session_model(state, session_id);
+}
+
+/// Rank of one reasoning rung, weakest to strongest. Toggle-only and
+/// custom spellings have no rank and only match exactly.
+fn effort_rank(token: &str) -> Option<usize> {
+    match token {
+        "off" | "none" => Some(0),
+        "minimal" => Some(1),
+        "low" => Some(2),
+        "medium" => Some(3),
+        "high" => Some(4),
+        "xhigh" => Some(5),
+        "max" => Some(6),
+        _ => None,
+    }
+}
+
+/// Resolves a remembered effort against the rungs one model advertises.
+///
+/// The strongest advertised rung at or below the preference wins, so a
+/// remembered `max` lands on `high` for a model without it. Nothing
+/// qualifying leaves the effort unset (the provider default).
+fn resolve_remembered_effort(levels: &[String], preferred: &str) -> Option<String> {
+    if let Some(preferred_rank) = effort_rank(preferred) {
+        return levels
+            .iter()
+            .filter_map(|level| effort_rank(level).map(|rank| (rank, level)))
+            .filter(|(rank, _)| *rank <= preferred_rank)
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, level)| level.clone());
+    }
+    levels.iter().find(|level| level == &preferred).cloned()
 }
 
 #[cfg(test)]
@@ -322,6 +365,60 @@ mod tests {
         assert!(levels.iter().any(|item| item == "default"));
         assert!(levels.iter().any(|item| item == "high"));
         assert!(!levels.iter().any(|item| item == "xhigh"));
+    }
+
+    fn state_with_low_rung_model(default_reasoning: Option<&str>) -> WorkspaceState {
+        let document = mycode_config::AppSettings {
+            providers: vec![mycode_config::ProviderSettings {
+                id: "zai".to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: "https://zai.test".to_owned(),
+                models: vec!["glm".to_owned()],
+                enabled: true,
+                context_limit: None,
+                max_output: None,
+            }],
+            ..mycode_config::AppSettings::default()
+        };
+        WorkspaceState {
+            settings: Some(SettingsState::from_settings(&document, 1, Vec::new())),
+            catalog: Some(low_rung_catalog()),
+            default_reasoning: default_reasoning.map(str::to_owned),
+            ..WorkspaceState::default()
+        }
+    }
+
+    #[test]
+    fn fresh_session_seeds_the_remembered_reasoning_default() {
+        let mut state = state_with_low_rung_model(Some("low"));
+        super::assign_fresh_session_model(&mut state, "ses1-seed");
+        assert_eq!(
+            state.settings.as_ref().and_then(|settings| settings.reasoning.as_deref()),
+            Some("low"),
+            "the remembered default seeds a fresh session"
+        );
+    }
+
+    #[test]
+    fn a_remembered_rung_clamps_to_the_strongest_advertised_fit() {
+        let mut state = state_with_low_rung_model(Some("max"));
+        super::assign_fresh_session_model(&mut state, "ses1-clamp");
+        assert_eq!(
+            state.settings.as_ref().and_then(|settings| settings.reasoning.as_deref()),
+            Some("low"),
+            "max on a low-only model lands on low, not default"
+        );
+    }
+
+    #[test]
+    fn an_unranked_remembered_rung_never_guesses() {
+        let mut state = state_with_low_rung_model(Some("turbo"));
+        super::assign_fresh_session_model(&mut state, "ses1-custom");
+        assert_eq!(
+            state.settings.as_ref().and_then(|settings| settings.reasoning.as_deref()),
+            None,
+            "a custom rung only matches by exact spelling"
+        );
     }
 
     #[test]

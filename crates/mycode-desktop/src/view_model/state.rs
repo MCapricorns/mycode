@@ -176,6 +176,9 @@ pub(crate) struct WorkspaceState {
     pub selected_provider: Option<String>,
     /// Selected model id for the selected provider.
     pub selected_model: Option<String>,
+    /// Reasoning effort a fresh session starts from. The composer's last
+    /// pick; the per-session pin still overrides it once chosen.
+    pub default_reasoning: Option<String>,
     /// Whether the model picker is open.
     pub model_menu_open: bool,
     /// Provider whose models the open picker is showing. `None` is the
@@ -468,6 +471,8 @@ pub enum DesktopAction {
         selected_provider: Option<String>,
         /// Last selected model id.
         selected_model: Option<String>,
+        /// Reasoning effort fresh sessions start from.
+        selected_reasoning: Option<String>,
         /// Session-to-project bindings.
         session_projects: Vec<(String, String)>,
         /// Per-session model pins.

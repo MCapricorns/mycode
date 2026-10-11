@@ -45,6 +45,7 @@ pub use project_mcp::project_mcp_servers;
 #[doc(inline)]
 pub use resources::{
     MAX_SKILLS, ResourceFile, SkillFile, discover_resources, discover_skills,
+    skill_read_roots,
     render_resource_prompt, render_skill_catalog,
 };
 pub use secrets::{

@@ -140,6 +140,16 @@ pub trait Tool: Send + Sync + 'static {
         None
     }
 
+    /// Whether the tool only reads through the prepared file capability.
+    ///
+    /// Read-only content tools may anchor absolute paths against
+    /// host-published read roots outside the workspace (the skills
+    /// catalog); `edit` and `write` never do, so those roots stay
+    /// unwritable.
+    fn reads_only(&self) -> bool {
+        false
+    }
+
     /// Whether dispatch should bind a local file capability first.
     fn requires_file_preflight(&self) -> bool {
         self.file_access().is_some()
@@ -188,6 +198,10 @@ pub trait ToolDyn: Send + Sync {
     /// Access mode for a retained local file capability.
     fn file_access(&self) -> Option<FileAccess> {
         None
+    }
+    /// Whether the tool only reads the prepared file.
+    fn reads_only(&self) -> bool {
+        false
     }
     /// Whether dispatch should bind a local file capability first.
     fn requires_file_preflight(&self) -> bool {
@@ -284,6 +298,10 @@ impl<T: Tool> ToolDyn for T {
 
     fn file_access(&self) -> Option<FileAccess> {
         Tool::file_access(self)
+    }
+
+    fn reads_only(&self) -> bool {
+        Tool::reads_only(self)
     }
 
     fn requires_file_preflight(&self) -> bool {

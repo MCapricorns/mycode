@@ -252,6 +252,10 @@ pub struct UiState {
     /// Per-session provider, model, and reasoning. Newest first.
     #[serde(default)]
     pub session_models: Vec<SessionModelPin>,
+    /// Reasoning effort new sessions start from. The last effort picked
+    /// in the composer; per-session pins keep overriding it.
+    #[serde(default)]
+    pub selected_reasoning: Option<String>,
 }
 
 impl Default for UiState {
@@ -271,6 +275,7 @@ impl Default for UiState {
             recent_models: Vec::new(),
             starred_models: Vec::new(),
             session_models: Vec::new(),
+            selected_reasoning: None,
         }
     }
 }

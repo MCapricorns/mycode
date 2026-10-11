@@ -569,6 +569,7 @@ impl BridgeAgentHost {
             crate::turn::workspace_extra_roots(&self.home, &self.cwd)
         };
         extra_roots.sort();
+        let read_roots = mycode_config::skill_read_roots(crate::turn::os_user_home().as_deref());
         let system = subagent_system_prompt(
             role,
             &registry,
@@ -594,7 +595,8 @@ impl BridgeAgentHost {
                 .with_cancel(run_cancel)
                 .with_events(event_tx)
                 .with_cwd(run_dir)
-                .with_extra_roots(extra_roots);
+                .with_extra_roots(extra_roots)
+                .with_read_roots(read_roots);
             let outcome = agent.prompt(prompt, &env).await;
             forwarder.abort();
             if let Err(error) = outcome {

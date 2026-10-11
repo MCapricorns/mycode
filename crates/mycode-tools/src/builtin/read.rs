@@ -56,6 +56,10 @@ impl Tool for ReadTool {
         Some(FileAccess::ExistingContent)
     }
 
+    fn reads_only(&self) -> bool {
+        true
+    }
+
     async fn execute(
         &self,
         args: Self::Args,

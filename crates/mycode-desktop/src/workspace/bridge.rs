@@ -556,6 +556,7 @@ impl Workspace {
                         auto_update: ui_state.auto_update,
                         selected_provider: ui_state.selected_provider,
                         selected_model: ui_state.selected_model,
+                        selected_reasoning: ui_state.selected_reasoning,
                         session_projects: ui_state.session_projects,
                         session_models: ui_state.session_models,
                         workspaces: ui_state.workspaces,

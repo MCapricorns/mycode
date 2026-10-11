@@ -9,7 +9,7 @@ English notes are [below](#english).
 ## 功能
 
 - **工作区。** 一个工作区挂多个文件夹。会话属于工作区；当前文件夹解析相对路径，其它文件夹用绝对路径。
-- **对话。** 输入框旁切换模型和思考强度（档位来自 models.dev；每个会话记在 `ui.json`）。`/` 列出 `/new`、`/compact`、`/settings`、技能和 MCP。
+- **对话。** 输入框旁切换模型和思考强度（档位来自 models.dev；每个会话记在 `ui.json`，新会话从上次的选择起步并按模型档位自适应收敛）。`/` 列出 `/new`、`/compact`、`/settings`、技能和 MCP。
 - **上下文。** 大约用到窗口 85% 时自动压缩，也可以 `/compact`。最近约 2 万 token 原样保留，更早的内容写成摘要。账本不改写。
 - **工具。** 进程内的 `read`、`write`、`edit`、`find`、`grep`。进程工具只注册一个，启动时自动选定，会话内名字不变。Windows 优先 PowerShell 7（`pwsh`），然后 Windows PowerShell 5.1，最后才是 `cmd`。不选 Git Bash、MSYS2、Cygwin 或 WSL。Linux / macOS 用 `$SHELL` 里的 bash、zsh 或 sh，否则按平台回退到这些 shell。不读取 `MYCODE_SHELL`，也不使用设置里的 `tools.shell`。`mode` `script` 交给这个解释器；`mode` `program` 直接启动映像。
 - **程序化工具调用。** 模型只能直接调用 `run_code`。其它工具在系统 Python 3.10+ 里写成 `await tools.name(...)`。只读调用可以重叠；写操作按顺序单独执行。只有 `print` 和 `return` 回到上下文。没有 Python 时启动会提示。

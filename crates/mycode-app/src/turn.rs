@@ -300,6 +300,13 @@ pub(crate) fn workspace_extra_roots(
     roots
 }
 
+/// OS user home directory for global `.agents` discovery.
+pub(crate) fn os_user_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+}
+
 /// Compact environment facts for the system prompt: OS, arch, the session
 /// cwd, and the one shell tool `script` mode resolves to right now. Shared
 /// by the main session and subagent prompts so the model never guesses the
@@ -573,10 +580,9 @@ async fn run_chat_turn_on(
     let session_id = session_id.to_owned();
 
     let context_window = model_context_window(state, &provider, model);
-    let user_home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(std::path::PathBuf::from);
+    let user_home = os_user_home();
     let extra_roots = workspace_extra_roots(home, &cwd);
+    let read_roots = mycode_config::skill_read_roots(user_home.as_deref());
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
     let system_prompt = session_system_prompt(
@@ -1108,6 +1114,7 @@ async fn run_chat_turn_on(
         .with_events(agent_tx)
         .with_cwd(cwd)
         .with_extra_roots(extra_roots)
+        .with_read_roots(read_roots)
         .with_steer(Some(steer));
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
