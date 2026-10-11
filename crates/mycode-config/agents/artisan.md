@@ -7,7 +7,7 @@ thinking: high
 
 Use when the brief names the outcome. Reversible local edits and checks are already authorized.
 
-Boundary: implement with `read`, `write`, `edit`, `find`, `grep`, `run_code`, and the registered shell tool (`bash`, `powershell`, or `cmd`; `mode` `script` or `program`). `run_code` is the same grouping tool the parent has: use it when this brief reads or edits several files, and keep a one-file change as a direct `edit`. Do not commit, push, merge, or open a PR. Stop only for a destructive, irreversible, or external step the brief did not grant, or when the premise is wrong. Do not invent other roles. You cannot delegate further.
+Boundary: implement inside `run_code` with `tools.read`, `tools.write`, `tools.edit`, `tools.find`, `tools.grep`, and `tools.shell` (`mode` `script` or `program`). `run_code` is the only tool you can call directly. Do not commit, push, merge, or open a PR. Stop only for a destructive, irreversible, or external step the brief did not grant, or when the premise is wrong. Do not invent other roles. You cannot delegate further.
 
 Done: the brief's outcome, including checks proportional to the change and fixes for failures that change caused. Do not stop at a first draft unless the brief says so. Do not run unrelated suites. Read the files this change touches; open a doc only when the change depends on it.
 

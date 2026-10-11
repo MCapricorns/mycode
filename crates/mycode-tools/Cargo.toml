@@ -38,7 +38,6 @@ gpui-kit = { version = "0.7.1", default-features = false, features = [
     "tree-sitter-languages",
 ] }
 tree-sitter = "=0.26.13"
-rustpython-parser = "0.4.0"
 
 # Unix-only: terminate the platform shell's process group, perform
 # handle-relative no-follow opens for grep/find, and drive the file IO

@@ -19,9 +19,8 @@ use tokio_util::sync::CancellationToken;
 const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MYCode subagent. Finish the brief with the \
 tools you have. You cannot ask the user; reversible choices in the brief are authorized. \
 Report assumptions that matter, then stop. \
-`run_code` is the same grouping tool the parent has: use it for several reads, searches, \
-edits, or page fetches in this brief, including a rename across files, and return only \
-what the brief asks for. One obvious call stays direct. You cannot delegate further.";
+`run_code` is the only tool you can call directly; every other tool is `tools.*` inside \
+the program. Return only what the brief asks for. You cannot delegate further.";
 
 /// Parent-side tools a child can inherit when the role lists none.
 ///
@@ -353,7 +352,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .join("\n");
     let dispatch = [
         "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
-        "You decide whether to delegate. One `grep` or `find` that answers the question stays a direct call. A rename, or edits across several files, stays inline as one `run_code`. Do not spend one `edit` per file. Web research, vendor docs, and a repository-wide map fit `scout` (`agent` with agent \"scout\"): it returns a short map. Do not use the shell to curl docs or to map the repo; that output fills this chat. A narrow question does not need `scout`.",
+        "You decide whether to delegate. A narrow lookup is one `run_code` that calls `tools.grep` or `tools.find`. A rename, or edits across several files, is one `run_code` that calls `tools.edit`, not one edit per file. Web research, vendor docs, and a repository-wide map fit `scout` via `tools.agent` with agent \"scout\": it returns a short map. Do not use `tools.shell` to curl docs or to map the repo. A narrow question does not need `scout`. Delegating broad research to scout is your judgment.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
         "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
         "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
@@ -533,6 +532,18 @@ impl BridgeAgentHost {
                         let _ =
                             progress_sink.progress(agent_progress(&role_name, "step", &message));
                     }
+                    mycode_core::events::AgentEvent::PtcNested { kind, .. } => match kind {
+                        mycode_core::PtcNestedKind::Started { name, target } => {
+                            let label = mycode_core::tool_label(&name, &target);
+                            let _ =
+                                progress_sink.progress(agent_progress(&role_name, "tool", &label));
+                        }
+                        mycode_core::PtcNestedKind::Progress { message } => {
+                            let _ = progress_sink
+                                .progress(agent_progress(&role_name, "step", &message));
+                        }
+                        mycode_core::PtcNestedKind::Completed { .. } => {}
+                    },
                     _ => {}
                 }
             }
@@ -957,9 +968,10 @@ mod tests {
         assert!(prompt.contains("Windows PowerShell 5.1"), "{prompt}");
         assert!(prompt.contains("Do not use `&&`"), "{prompt}");
         assert!(prompt.contains("here-string"), "{prompt}");
-        assert!(prompt.contains("\n- powershell:"), "{prompt}");
+        assert!(prompt.contains("async def shell("), "{prompt}");
+        assert!(prompt.contains("`powershell`"), "{prompt}");
+        assert!(!prompt.contains("async def bash("), "{prompt}");
         assert!(!prompt.contains("\n- bash:"), "{prompt}");
-        assert!(!prompt.contains("\n- shell:"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");
         assert!(
             prompt.contains("a `powershell` script"),
@@ -1113,8 +1125,12 @@ mod tests {
         );
         assert!(registry.get("run_code").is_some(), "{:?}", registry.names());
         assert!(registry.get("edit").is_none());
-        assert!(prompt.contains("## Writing code for run_code"), "{prompt}");
-        assert!(prompt.contains("same `run_code` grouping"), "{prompt}");
+        assert!(
+            prompt.contains("only tool you can call directly"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("async def shell("), "{prompt}");
+        assert!(!prompt.contains("async def edit("), "{prompt}");
         assert!(prompt.contains("`goal`"), "{prompt}");
         assert!(
             !prompt.contains("Do not do that research inline"),
@@ -1152,13 +1168,17 @@ mod tests {
             "x86_64",
             &shell,
         );
-        let parent = mycode_tools::ToolRegistry::new();
-        mycode_tools::register_builtins(&parent);
-        let parent_prompt = mycode_agent::build_system_prompt(&parent);
         let child_block = mycode_agent::grouped_execution_block(&prompt).expect("child");
-        let parent_block = mycode_agent::grouped_execution_block(&parent_prompt).expect("parent");
-        assert_eq!(child_block, parent_block);
-        assert!(prompt.contains("same grouping tool"), "{prompt}");
+        assert!(
+            child_block.contains("only tool you can call directly"),
+            "{child_block}"
+        );
+        assert!(child_block.contains("async def shell("), "{child_block}");
+        assert!(child_block.contains("async def edit("), "{child_block}");
+        assert!(
+            prompt.contains("only tool you can call directly"),
+            "{prompt}"
+        );
         assert!(prompt.contains("cannot delegate further"), "{prompt}");
         assert!(
             !prompt.contains("Do not do that research inline"),

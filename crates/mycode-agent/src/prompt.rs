@@ -3,7 +3,6 @@
 use std::fmt::Write;
 
 use mycode_tools::ToolRegistry;
-use mycode_tools::builtin::{RUN_CODE_EXAMPLE_CODE, RUN_CODE_EXAMPLE_DESCRIPTION};
 
 /// Tool-list header. Deliberately not an identity sentence: every caller
 /// (session, subagent, compaction) opens its prompt with its own identity,
@@ -56,31 +55,190 @@ fn tool_calling(shell_tool: &str, grouped: bool) -> String {
     )
 }
 
-/// System-prompt contract for `run_code`, shaped like dsh's PTC instructions:
-/// both required arguments are named, then one complete call the model can copy.
-fn grouped_section(tools: &ToolRegistry) -> Option<String> {
-    let _registered = tools.get("run_code")?;
-    let description = serde_json::to_string(RUN_CODE_EXAMPLE_DESCRIPTION)
-        .expect("example description is a string");
-    let code = serde_json::to_string(RUN_CODE_EXAMPLE_CODE).expect("example code is a string");
-    Some(format!(
-        "<grouped_execution>\n\
-## Writing code for run_code\n\
-\n\
-`run_code` takes two required arguments: `description`, a short summary of what the program does, and `code` — the body of an async Python function. Top-level `await` and `return` work. The interpreter is embedded in mycode: Node.js is not used, and Python does not need to be installed. One obvious call stays direct. When a step needs several reads, greps, finds, edits, or page fetches, call `run_code` once:\n\
-\n\
-`run_code({{ description: {description}, code: {code} }})`\n\
-\n\
-Inside the program:\n\
-- Call tools as `await tools.name(arg=value)` with the same argument names as the direct tool.\n\
-- A failed tool raises. `except Exception as e` sees `e.toolName` and `e.message`.\n\
-- Independent read-only calls MAY overlap under `await gather(...)` (`read`, `grep`, `find`, `web_search`, and `fetch_content` run concurrently, up to 8 at a time; `write`, `edit`, and the shell run alone, in submission order). Sequence dependent work with `await`.\n\
-- Emit results with `return` and/or `print(...)`. Only what you print or return is program output, capped at 8000 bytes. Every other intermediate result stays out of the conversation, so extract just what you need.\n\
-- Do not call `run_code` from inside the program. The program stops after 48 tool calls, 20000 steps, or 120 seconds.\n\
-- One `grep` or `find` that answers the question stays a direct call, even across a couple of files. Use `run_code` when you must filter those hits or edit more than one file. A rename across files is one program, not one `edit` per file.\n\
-- Subset: assignment (`a, b = ...`, `obj[key] = value`, `+=`), if/else, `a if c else b`, for (including `for i, item in enumerate(...)`), while, try/except, lists, dicts (`get`/`items`/`keys`/`values`/`setdefault`/`update`/`in`), f-strings, list comprehensions, comparisons, + - * / (including `\"S\" * n`), `len`, `range`, `str`, `int`, `float`, `bool`, `list`, `dict`, `set`, `enumerate`, `zip`, `sorted`, `reversed`, `min`, `max`, `sum`, `abs`, `round`, `any`, `all`, `isinstance`, `repr`, slices `value[start:end]`, string split/strip/startswith/endswith/lower/upper/count/find/join/replace, list append/extend/pop/insert/index/sort. No import, classes, lambda, or match.\n\
-</grouped_execution>"
-    ))
+fn is_shell_name(name: &str) -> bool {
+    matches!(name, "powershell" | "bash" | "zsh" | "sh" | "cmd")
+}
+
+/// PTC contract plus the generated `tools.*` SDK. Stable for a registry:
+/// tool order is sorted and the Python probe is cached for the process.
+fn tools_section(tools: &ToolRegistry) -> Option<String> {
+    tools.get("run_code")?;
+    let mut section = String::from("<tools>\n");
+    if let Some(message) = mycode_tools::python_unavailable_message() {
+        section
+            .push_str("Python is unavailable. `run_code` cannot execute until it is installed.\n");
+        section.push_str(&message);
+        section.push_str("\n\n");
+    }
+    section.push_str(
+        "`run_code` is the only tool you can call directly — a tool call naming any other tool fails. Reach every tool the SDK declares below from inside the program.\n\n",
+    );
+    section.push_str("```python\n");
+    section.push_str(
+        "# run_code(description, code): description is a short summary shown in the UI; code is the body of an async function. Top-level await and return work.\n",
+    );
+    section.push_str(
+        "# Call tools as await tools.name(arg=value) or await tools.name({...}). A failed call raises ToolCallError (e.toolName, e.message); try/except it to continue.\n",
+    );
+    section.push_str(
+        "# Independent read-only calls MAY overlap under asyncio.gather (read, grep, find, web_search, fetch_content run concurrently; mutating calls run alone, in submission order).\n",
+    );
+    section.push_str(
+        "# Only print(...) and return reach the conversation. Other results stay out, so extract just what you need.\n",
+    );
+    for line in sdk_lines(tools) {
+        section.push_str(&line);
+        section.push('\n');
+    }
+    section.push_str("```\n\n");
+    section.push_str(
+        "Use `tools.shell(...)` to run external programs (build, test, lint, git, package managers, servers, project scripts); `tools.read` / `tools.grep` / `tools.find` / `tools.edit` / `tools.write` for files; `tools.web_search` / `tools.fetch_content` for the web. Never call `subprocess` or `os.system` from Python directly.\n",
+    );
+    if tools.get("agent").is_some() {
+        section
+            .push_str("Delegating broad research to scout via `tools.agent` is your judgment.\n");
+    }
+    section.push_str("</tools>");
+    Some(section)
+}
+
+fn sdk_lines(tools: &ToolRegistry) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut shell_spec = None;
+    let mut shell_name = None;
+    for name in tools.names() {
+        if name == "run_code" {
+            continue;
+        }
+        let Some(tool) = tools.get(&name) else {
+            continue;
+        };
+        let spec = tool.spec();
+        if is_shell_name(&name) {
+            if shell_spec.is_none() {
+                shell_name = Some(name);
+                shell_spec = Some(spec);
+            }
+            continue;
+        }
+        lines.push(sdk_entry(&name, &spec.description, &spec.params_schema));
+    }
+    if let Some(spec) = shell_spec {
+        let name = shell_name.as_deref().unwrap_or("shell");
+        let hint = match name {
+            "powershell" => "here-string edits go to python",
+            "bash" | "zsh" | "sh" => "quoted heredoc edits go to Python",
+            "cmd" => "prefer tools.write and tools.edit",
+            _ => "script or program mode",
+        };
+        let blurb =
+            format!("mode `script` runs `{name}` ({hint}); mode `program` launches one executable");
+        lines.push(sdk_entry("shell", &blurb, &spec.params_schema));
+    }
+    lines.sort();
+    lines
+}
+
+fn sdk_entry(name: &str, description: &str, schema: &serde_json::Value) -> String {
+    let comment = first_sentence(description).replace('\n', " ");
+    format!("# {name}: {comment}\n{}", python_signature(name, schema))
+}
+
+fn first_sentence(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut = flat.find(". ").map(|index| index + 1).unwrap_or(flat.len());
+    flat.chars().take(cut.min(180)).collect()
+}
+
+fn python_signature(name: &str, schema: &serde_json::Value) -> String {
+    let required = schema
+        .get("required")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut params = Vec::new();
+    if let Some(properties) = schema.get("properties").and_then(|value| value.as_object()) {
+        for (field, field_schema) in properties {
+            let (ty, nullable) = python_type(field_schema);
+            let optional = nullable || !required.iter().any(|name| name == field);
+            if optional {
+                params.push(format!("{field}: {ty} | None = None"));
+            } else {
+                params.push(format!("{field}: {ty}"));
+            }
+        }
+    }
+    if params.is_empty() {
+        format!("async def {name}() -> str: ...")
+    } else {
+        format!("async def {name}(*, {}) -> str: ...", params.join(", "))
+    }
+}
+
+fn python_type(schema: &serde_json::Value) -> (String, bool) {
+    if schema.get("enum").is_some() {
+        return ("str".to_owned(), false);
+    }
+    if let Some(types) = schema.get("type").and_then(|value| value.as_array()) {
+        let mut nullable = false;
+        let mut ty = None;
+        for item in types {
+            if item.as_str() == Some("null") {
+                nullable = true;
+                continue;
+            }
+            if ty.is_none()
+                && let Some(name) = item.as_str()
+            {
+                ty = Some(scalar_type(name));
+            }
+        }
+        return (ty.unwrap_or_else(|| "object".to_owned()), nullable);
+    }
+    if let Some(options) = schema
+        .get("anyOf")
+        .and_then(|value| value.as_array())
+        .filter(|items| !items.is_empty())
+    {
+        let mut nullable = false;
+        let mut ty = None;
+        for option in options {
+            if option.get("type").and_then(|value| value.as_str()) == Some("null") {
+                nullable = true;
+                continue;
+            }
+            if ty.is_none() {
+                ty = Some(python_type(option).0);
+            }
+        }
+        return (ty.unwrap_or_else(|| "object".to_owned()), nullable);
+    }
+    let ty = scalar_type(
+        schema
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("object"),
+    );
+    (ty, false)
+}
+
+fn scalar_type(name: &str) -> String {
+    match name {
+        "string" => "str",
+        "integer" => "int",
+        "number" => "float",
+        "boolean" => "bool",
+        "array" => "list",
+        "object" => "dict",
+        "null" => "None",
+        _ => "object",
+    }
+    .to_owned()
 }
 
 fn web_section(tools: &ToolRegistry) -> Option<&'static str> {
@@ -144,22 +302,38 @@ pub fn choice_scenarios() -> &'static [ChoiceScenario] {
     ]
 }
 
-/// Whether a model's first tool call matches the judgment for `weight`.
+fn program_code(arguments: &serde_json::Value) -> &str {
+    arguments
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+}
+
+/// Whether a model's first tool call matches PTC-only judgment for `weight`.
 ///
-/// A single search may be `grep`, `find`, or `run_code`. One edit may start
-/// with `read` or go straight to `edit` or `write`. Several edits are
-/// `run_code`. Broad research may be `scout` or inline `run_code`.
+/// Every task starts with `run_code`. A lookup's program calls `tools.grep`
+/// or `tools.find`. One edit's program calls `tools.edit` or `tools.write`.
+/// Broad research may call `tools.agent` for scout or stay inline; both are
+/// `run_code`.
 #[must_use]
 pub fn accept_choice(weight: TaskWeight, tool: &str, arguments: &serde_json::Value) -> bool {
+    if tool != "run_code" {
+        return false;
+    }
+    let code = program_code(arguments);
     match weight {
-        TaskWeight::Direct => matches!(tool, "read" | "edit" | "write"),
-        TaskWeight::Lookup => matches!(tool, "grep" | "find" | "run_code"),
-        TaskWeight::GroupInline => tool == "run_code",
-        TaskWeight::Broad => {
-            tool == "run_code"
-                || (tool == "agent"
-                    && arguments.get("agent").and_then(serde_json::Value::as_str) == Some("scout"))
+        TaskWeight::Direct => {
+            (code.contains("tools.edit")
+                || code.contains("tools.write")
+                || code.contains("tools.read"))
+                && !code.contains("tools.agent")
         }
+        TaskWeight::Lookup => {
+            code.contains("tools.grep")
+                || code.contains("tools.find")
+                || code.contains("tools.read")
+        }
+        TaskWeight::GroupInline | TaskWeight::Broad => true,
     }
 }
 
@@ -175,36 +349,29 @@ pub fn prompt_guides(prompt: &str, weight: TaskWeight) -> bool {
     }
     match weight {
         TaskWeight::Direct => {
-            prompt.contains("one obvious call stays direct")
-                || prompt.contains("One obvious call stays direct")
-        }
-        TaskWeight::Lookup => {
             prompt.contains("run_code")
-                && (prompt.contains("one obvious call stays direct")
-                    || prompt.contains("One obvious call stays direct")
-                    || prompt.contains("single grep")
-                    || prompt.contains("single `grep`"))
+                && (prompt.contains("tools.edit") || prompt.contains("tools.write"))
         }
+        TaskWeight::Lookup => prompt.contains("tools.grep") || prompt.contains("tools.find"),
         TaskWeight::GroupInline => {
             prompt.contains("run_code")
-                && (prompt.contains("several reads")
-                    || prompt.contains("several files")
-                    || prompt.contains("Simple lookups stay inline"))
+                && (prompt.contains("asyncio.gather") || prompt.contains("tools.edit"))
         }
         TaskWeight::Broad => {
-            prompt.contains("`scout`")
-                && (prompt.contains("You choose") || prompt.contains("You decide"))
+            prompt.contains("scout")
+                && (prompt.contains("judgment")
+                    || prompt.contains("your judgment")
+                    || prompt.contains("You decide"))
                 && prompt.contains("run_code")
         }
     }
 }
 
-/// The `<grouped_execution>` block. Identical for every registry that has
-/// `run_code`, parent or child.
+/// The `<tools>` block: the PTC rule plus the SDK for this registry.
 #[must_use]
 pub fn grouped_execution_block(prompt: &str) -> Option<&str> {
-    let start = prompt.find("<grouped_execution>")?;
-    let end = prompt[start..].find("</grouped_execution>")? + "</grouped_execution>".len();
+    let start = prompt.find("<tools>")?;
+    let end = prompt[start..].find("</tools>")? + "</tools>".len();
     Some(&prompt[start..start + end])
 }
 
@@ -214,7 +381,13 @@ pub fn build_system_prompt(tools: &ToolRegistry) -> String {
     prompt.push_str("\n\nAvailable tools:");
 
     let entries = tools.prompt_entries();
-    if entries.is_empty() {
+    if tools.get("run_code").is_some() {
+        prompt.push_str("\n- run_code: the only directly callable tool.");
+        if let Some(section) = tools_section(tools) {
+            prompt.push_str("\n\n");
+            prompt.push_str(&section);
+        }
+    } else if entries.is_empty() {
         prompt.push_str("\n(none)");
     } else {
         for (name, snippet) in entries {
@@ -234,17 +407,15 @@ pub fn build_system_prompt(tools: &ToolRegistry) -> String {
         }
     }
 
-    if let Some(section) = grouped_section(tools) {
-        prompt.push_str("\n\n");
-        prompt.push_str(&section);
-    }
     if let Some(section) = web_section(tools) {
         prompt.push_str("\n\n");
         prompt.push_str(section);
     }
-    if let Some(shell_tool) = shell_tool_name(tools) {
+    if tools.get("run_code").is_none()
+        && let Some(shell_tool) = shell_tool_name(tools)
+    {
         prompt.push_str("\n\n");
-        prompt.push_str(&tool_calling(&shell_tool, tools.get("run_code").is_some()));
+        prompt.push_str(&tool_calling(&shell_tool, false));
     }
     prompt
 }
@@ -356,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn grouping_block_is_identical_with_or_without_the_agent_tool() {
+    fn ptc_block_lists_only_the_registry_and_forbids_direct_calls() {
         let parent = ToolRegistry::new();
         register_builtins(&parent);
         let child = ToolRegistry::new();
@@ -367,19 +538,26 @@ mod tests {
         let child_prompt = build_system_prompt(&child);
         let parent_block = super::grouped_execution_block(&parent_prompt).expect("parent block");
         let child_block = super::grouped_execution_block(&child_prompt).expect("child block");
-        assert_eq!(parent_block, child_block);
-        assert!(parent_block.contains("two required arguments"));
-        assert!(parent_block.contains("description"));
-        assert!(parent_block.contains("code"));
-        assert!(parent_block.contains("run_code({ description:"));
-        assert!(parent_block.contains("gather"));
-        assert!(parent_block.contains("does not need to be installed"));
-        assert!(parent_block.contains("Node.js is not used"));
-        assert!(!parent_block.contains("JavaScript"));
+        assert!(
+            parent_block.contains("only tool you can call directly"),
+            "{parent_block}"
+        );
+        assert!(child_block.contains("only tool you can call directly"));
+        assert!(parent_block.contains("async def read("));
+        assert!(parent_block.contains("async def shell("), "{parent_block}");
+        assert!(child_block.contains("async def grep("));
+        assert!(!child_block.contains("async def shell("), "{child_block}");
+        assert!(!child_block.contains("async def write("));
+        assert!(parent_block.contains("tools.shell"));
+        assert!(parent_block.contains("Never call `subprocess`"));
+        assert!(!parent_block.contains("does not need to be installed"));
+        assert!(!parent_block.contains("one obvious call stays direct"));
         assert!(!parent_prompt.contains("console.log"));
-        assert!(parent_prompt.contains("only print and return"));
-        assert!(!parent_block.contains("Do not do that research inline"));
-        assert!(!parent_block.contains("`scout`"));
+        let again = build_system_prompt(&parent);
+        assert_eq!(
+            parent_prompt, again,
+            "the tools section must stay byte-stable"
+        );
     }
 
     #[test]
@@ -403,7 +581,7 @@ mod tests {
                 );
             }
         }
-        assert!(super::accept_choice(
+        assert!(!super::accept_choice(
             super::TaskWeight::Lookup,
             "grep",
             &serde_json::json!({"pattern": "dispatch_tool"})
@@ -411,7 +589,7 @@ mod tests {
         assert!(super::accept_choice(
             super::TaskWeight::Lookup,
             "run_code",
-            &serde_json::json!({"description": "Find dispatch", "code": "return 1"})
+            &serde_json::json!({"description": "Find dispatch", "code": "hits = await tools.grep(pattern='dispatch_tool')\nreturn hits"})
         ));
         assert!(!super::accept_choice(
             super::TaskWeight::Lookup,
@@ -428,15 +606,15 @@ mod tests {
             "agent",
             &serde_json::json!({"agent": "scout"})
         ));
-        assert!(super::accept_choice(
+        assert!(!super::accept_choice(
             super::TaskWeight::Direct,
             "edit",
             &serde_json::json!({"path": "src/a.rs"})
         ));
         assert!(super::accept_choice(
             super::TaskWeight::Direct,
-            "read",
-            &serde_json::json!({"path": "src/a.rs"})
+            "run_code",
+            &serde_json::json!({"description": "One edit", "code": "await tools.edit(path='src/a.rs')"})
         ));
         assert!(!super::accept_choice(
             super::TaskWeight::Direct,
@@ -445,8 +623,8 @@ mod tests {
         ));
         assert!(super::accept_choice(
             super::TaskWeight::Broad,
-            "agent",
-            &serde_json::json!({"agent": "scout", "prompt": "map auth"})
+            "run_code",
+            &serde_json::json!({"description": "Map auth", "code": "return await tools.agent(agent='scout', prompt='map auth')"})
         ));
         assert!(super::accept_choice(
             super::TaskWeight::Broad,

@@ -218,7 +218,18 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
             .to_owned()
     };
     let joined = match name {
-        "read" | "write" | "edit" => text("path"),
+        "read" => {
+            let path = text("path");
+            let offset = arguments.get("offset").and_then(serde_json::Value::as_u64);
+            let limit = arguments.get("limit").and_then(serde_json::Value::as_u64);
+            match (offset, limit) {
+                (Some(start), Some(limit)) => format!("{path} L{start}+{limit}"),
+                (Some(start), None) => format!("{path} L{start}"),
+                (None, Some(limit)) => format!("{path} +{limit}"),
+                (None, None) => path,
+            }
+        }
+        "write" | "edit" => text("path"),
         "grep" | "find" => join_target(&text("pattern"), &text("path")),
         "shell" | "powershell" | "bash" | "zsh" | "sh" | "cmd" => {
             if text("mode") == "program" {
@@ -289,6 +300,11 @@ pub struct ToolResultMessage {
     /// (structured diffs, cwd, …). Splitting `details` from `content` keeps
     /// tokens out of the model loop (pi's ToolResult pattern).
     pub details: Option<serde_json::Value>,
+    /// Set when this result is an inner `run_code` call. Ledger replay skips
+    /// it so the model only sees the program's print and return value.
+    /// The value is the parent call's ledger id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ptc_parent: Option<String>,
 }
 
 /// Why the model stopped generating.
