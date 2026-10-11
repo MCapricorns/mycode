@@ -124,6 +124,7 @@ fn file_stem(path: &Path) -> String {
 
 /// `bash`, `zsh`, or `sh`. Anything else, including `pwsh` and `fish`, is
 /// not a POSIX shell for this tool.
+#[cfg(not(windows))]
 fn posix_kind(path: &Path) -> Option<ShellKind> {
     match file_stem(path).as_str() {
         "bash" => Some(ShellKind::Bash),
@@ -188,7 +189,7 @@ pub(crate) fn select_shell_tiers(
 }
 
 /// `true` when `path` is the WSL launcher `bash.exe` under System32 or SysWOW64.
-#[cfg(any(windows, test))]
+#[cfg(test)]
 #[must_use]
 pub(crate) fn is_wsl_bash_launcher(path: &Path) -> bool {
     let text = path.to_string_lossy().replace('/', "\\");
@@ -328,7 +329,7 @@ fn detect_posix_shell() -> Option<DetectedShell> {
 ///
 /// `$SHELL` is first when it is an absolute `bash`, `zsh`, or `sh`. Relative
 /// values and other families (`pwsh`, `fish`, `nu`) are skipped.
-#[cfg(any(not(windows), test))]
+#[cfg(not(windows))]
 pub(crate) fn posix_shell_candidates(
     user_shell: Option<&OsStr>,
     path_var: Option<&OsStr>,
@@ -359,7 +360,7 @@ pub(crate) fn posix_shell_candidates(
 }
 
 /// First existing POSIX candidate.
-#[cfg(any(not(windows), test))]
+#[cfg(not(windows))]
 pub(crate) fn choose_posix_shell(
     user_shell: Option<&OsStr>,
     path_var: Option<&OsStr>,
@@ -584,12 +585,15 @@ pub(crate) fn is_windowsapps_package_pwsh(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DetectedShell, ShellImage, ShellKind, WindowsShellEnv, choose_posix_shell,
-        cmd_fallback_args, is_syswow64_powershell, is_windowsapps_execution_alias,
-        is_windowsapps_package_pwsh, is_wsl_bash_launcher, posix_shell_candidates, resolved_shell,
-        select_shell_tiers, windows_shell_tiers,
+        DetectedShell, ShellImage, ShellKind, WindowsShellEnv, cmd_fallback_args,
+        is_syswow64_powershell, is_windowsapps_execution_alias, is_windowsapps_package_pwsh,
+        is_wsl_bash_launcher, resolved_shell, select_shell_tiers, windows_shell_tiers,
     };
-    use std::ffi::{OsStr, OsString};
+    #[cfg(not(windows))]
+    use super::{choose_posix_shell, posix_shell_candidates};
+    #[cfg(not(windows))]
+    use std::ffi::OsStr;
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -636,6 +640,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn posix_shell_prefers_an_absolute_user_shell_then_the_platform_default() {
         let zsh = Path::new("/bin/zsh");
@@ -669,6 +674,7 @@ mod tests {
         assert!(choose_posix_shell(None, None, false, |_| false).is_none());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn relative_user_shell_is_not_searched() {
         let candidates = posix_shell_candidates(Some(OsStr::new("bash")), None, false);

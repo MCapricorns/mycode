@@ -1,11 +1,15 @@
 """Static bootstrap for one `run_code` process.
 
 Frames are a 4-byte big-endian length plus UTF-8 JSON on a private control
-channel: an inherited socket, a named pipe, or a token-authenticated TCP
-fallback. stdout and stderr stay free; `print` is forwarded as a log frame.
-User code is the body of an async function and keeps its own line numbers.
-A read-only (scout) process installs an audit hook before that code runs.
-The hook is best-effort: it is not a security boundary.
+channel: an inherited socket descriptor (Unix) or a token-authenticated
+loopback TCP socket. Windows does not use a named pipe here: the pipe handle
+that Python opens synchronously serializes pending reads and writes, so the
+blocked reader thread would deadlock every later frame write. TCP sockets
+carry the reader thread and the writer concurrently. stdout and stderr stay
+free; `print` is forwarded as a log frame. User code is the body of an async
+function and keeps its own line numbers. A read-only (scout) process installs
+an audit hook before that code runs. The hook is best-effort: it is not a
+security boundary.
 """
 
 import ast
@@ -17,12 +21,12 @@ import socket
 import struct
 import sys
 import threading
-import time
 import traceback
 
 _MAX_FRAME = 8 * 1024 * 1024
 _hold = None
 _fd = None
+_sock = None
 _write_lock = threading.Lock()
 _USER_LINES = []
 _loop = None
@@ -62,31 +66,37 @@ _FILE_MUTATION = {
 }
 
 
-def _recvn(fd, count):
+def _read_exact(count):
     buf = bytearray()
     while len(buf) < count:
-        chunk = os.read(fd, count - len(buf))
+        if _sock is not None:
+            chunk = _sock.recv(count - len(buf))
+        else:
+            chunk = os.read(_fd, count - len(buf))
         if not chunk:
             raise EOFError("control channel closed")
         buf += chunk
     return bytes(buf)
 
 
-def _write_all(fd, data):
+def _send_all(data):
+    if _sock is not None:
+        _sock.sendall(data)
+        return
     view = memoryview(data)
     while view:
-        written = os.write(fd, view)
+        written = os.write(_fd, view)
         if written <= 0:
             raise EOFError("control channel closed")
         view = view[written:]
 
 
 def _read_frame():
-    header = _recvn(_fd, 4)
+    header = _read_exact(4)
     length = struct.unpack(">I", header)[0]
     if length == 0 or length > _MAX_FRAME:
         raise ValueError("control frame length %s" % length)
-    return json.loads(_recvn(_fd, length).decode("utf-8"))
+    return json.loads(_read_exact(length).decode("utf-8"))
 
 
 def _write_frame(obj):
@@ -95,7 +105,7 @@ def _write_frame(obj):
         raise ValueError("control frame is too large")
     packet = struct.pack(">I", len(data)) + data
     with _write_lock:
-        _write_all(_fd, packet)
+        _send_all(packet)
 
 
 class ToolCallError(Exception):
@@ -344,25 +354,13 @@ async def _run_user(code):
 def _open_control():
     """Attach the channel the host prepared. The token stays in the environment
     only until the ready frame is sent."""
-    global _hold, _fd
+    global _hold, _fd, _sock
     inherited = os.environ.get("MYCODE_PTC_FD")
-    pipe = os.environ.get("MYCODE_PTC_PIPE")
     port = os.environ.get("MYCODE_PTC_PORT")
     if inherited:
         _hold = os.fdopen(int(inherited), "r+b", buffering=0)
         _fd = _hold.fileno()
         return
-    if pipe:
-        last = None
-        for _ in range(50):
-            try:
-                _hold = open(pipe, "r+b", buffering=0)
-                _fd = _hold.fileno()
-                return
-            except OSError as exc:
-                last = exc
-                time.sleep(0.05)
-        raise SystemExit("control pipe: %s" % last)
     if port:
         sock = socket.create_connection(("127.0.0.1", int(port)), timeout=30)
         try:
@@ -371,14 +369,44 @@ def _open_control():
             pass
         sock.settimeout(None)
         _hold = sock
+        _sock = sock
         _fd = sock.fileno()
         return
     raise SystemExit("no control channel")
 
 
 def _drop_channel_env():
-    for key in ("MYCODE_PTC_TOKEN", "MYCODE_PTC_FD", "MYCODE_PTC_PIPE", "MYCODE_PTC_PORT"):
+    for key in ("MYCODE_PTC_TOKEN", "MYCODE_PTC_FD", "MYCODE_PTC_PORT"):
         os.environ.pop(key, None)
+
+
+def _graceful_close():
+    """Tear the control channel down before interpreter shutdown.
+
+    The reader thread is a daemon blocked in recv. If process exit closes
+    the socket under it, Windows raises an RST that discards frames still
+    sitting in the host's receive buffer — the final done frame included.
+    Shutdown unblocks the reader, flushes the send side behind a clean FIN,
+    and close() then runs with no pending I/O.
+    """
+    global _hold, _sock, _fd
+    if _sock is not None:
+        try:
+            _sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            _sock.close()
+        except OSError:
+            pass
+    elif _hold is not None:
+        try:
+            _hold.close()
+        except OSError:
+            pass
+    _hold = None
+    _sock = None
+    _fd = None
 
 
 def main():
@@ -408,6 +436,7 @@ def main():
         _loop.run_until_complete(_run_user(code))
     finally:
         _loop.close()
+        _graceful_close()
 
 
 if __name__ == "__main__":

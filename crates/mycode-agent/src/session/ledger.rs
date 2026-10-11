@@ -100,7 +100,21 @@ pub(crate) struct SessionLedger {
     pub(crate) event_reservations: HashMap<SessionEventId, EventReservationRow>,
     /// Single-use branch reservations keyed by reservation identity.
     pub(crate) branch_reservations: HashMap<super::ids::BranchReservationId, BranchReservationRow>,
+    /// Issuance counter stamping reservation rows for oldest-first drops.
+    pub(crate) reservation_seq: u64,
 }
+
+/// Outstanding event reservations kept per session. A reserve whose append
+/// failed permanently (storage error, abandoned turn) is unreachable: the
+/// identity is single-use and random, so the row is pure residue holding
+/// up to [`super::dto::MAX_EVENT_PAYLOAD_BYTES`] of payload bytes. Real
+/// reserve→append pairs complete within one or two actor operations, so the
+/// cap is never in the live path.
+pub(crate) const MAX_EVENT_RESERVATIONS: usize = 64;
+
+/// Outstanding branch reservations kept per session. Same residue argument
+/// as [`MAX_EVENT_RESERVATIONS`]; the rows are small views.
+pub(crate) const MAX_BRANCH_RESERVATIONS: usize = 64;
 
 /// A live single-use event reservation.
 #[derive(Clone, Debug)]
@@ -114,6 +128,8 @@ pub(crate) struct EventReservationRow {
     /// Payload bytes held until the append commits them. Reservations do not
     /// survive process restart, so the bytes stay in the actor.
     pub(crate) payload: Vec<u8>,
+    /// Issuance order, for oldest-first residue drops.
+    pub(crate) seq: u64,
 }
 
 /// A live single-use branch reservation.
@@ -121,9 +137,36 @@ pub(crate) struct EventReservationRow {
 pub(crate) struct BranchReservationRow {
     /// The issued view.
     pub(crate) view: super::dto::BranchReservationView,
+    /// Issuance order, for oldest-first residue drops.
+    pub(crate) seq: u64,
 }
 
 impl SessionLedger {
+    /// Whether no reservation holds unpersisted bytes for this session. A
+    /// quiescent ledger is exactly reconstructible from the durable index.
+    pub(crate) fn is_quiescent(&self) -> bool {
+        self.event_reservations.is_empty() && self.branch_reservations.is_empty()
+    }
+
+    /// Stamps issuance order for one reservation row.
+    pub(crate) fn next_reservation_seq(&mut self) -> u64 {
+        self.reservation_seq = self.reservation_seq.saturating_add(1);
+        self.reservation_seq
+    }
+
+    /// Drops the oldest event reservation beyond the live-pair working set.
+    ///
+    /// Called before each insert so the table never outgrows
+    /// [`MAX_EVENT_RESERVATIONS`] rows in one long-lived session.
+    pub(crate) fn cap_event_reservations(&mut self) {
+        cap_reservation_table(&mut self.event_reservations, MAX_EVENT_RESERVATIONS);
+    }
+
+    /// Branch-reservation counterpart of [`Self::cap_event_reservations`].
+    pub(crate) fn cap_branch_reservations(&mut self) {
+        cap_reservation_table(&mut self.branch_reservations, MAX_BRANCH_RESERVATIONS);
+    }
+
     /// Returns every branch head in branch-ID byte order.
     pub(crate) fn heads(&self) -> Vec<BranchHead> {
         self.branches
@@ -283,4 +326,38 @@ fn snapshot_boundary(
             .map(|index| index + 1)
             .ok_or(SessionError::InvalidArgument),
     }
+}
+
+/// Issuance order shared by both reservation tables, for oldest-first drops.
+trait ReservationOrder {
+    fn issuance(&self) -> u64;
+}
+
+impl ReservationOrder for EventReservationRow {
+    fn issuance(&self) -> u64 {
+        self.seq
+    }
+}
+
+impl ReservationOrder for BranchReservationRow {
+    fn issuance(&self) -> u64 {
+        self.seq
+    }
+}
+
+/// Frees one table slot by dropping the oldest-issued row.
+fn cap_reservation_table<K: std::hash::Hash + Eq + Clone, V: ReservationOrder>(
+    table: &mut HashMap<K, V>,
+    cap: usize,
+) {
+    debug_assert!(cap > 0, "a zero cap would reject live reservations");
+    if table.len() < cap {
+        return;
+    }
+    let oldest = table
+        .iter()
+        .min_by_key(|(_, row)| row.issuance())
+        .map(|(id, _)| id.clone())
+        .expect("a nonempty table has an oldest row");
+    table.remove(&oldest);
 }

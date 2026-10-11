@@ -166,15 +166,11 @@ pub(super) fn render_chat(
         .child(
             div()
                 .id("conversation-frame")
-                .relative()
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .on_hover(cx.listener(|workspace, hovered, _, cx| {
-                    workspace.on_conversation_hover(hovered, cx);
-                }))
                 .child(
                     anchor.child(
                         div()
@@ -212,8 +208,7 @@ pub(super) fn render_chat(
                                 ),
                             ),
                     ),
-                )
-                .child(render_conversation_jumps(!show_welcome, workspace, cx)),
+                ),
         )
         // The model menu docks in-flow right above the composer: an
         // absolutely positioned overlay landed outside the visible window on
@@ -232,6 +227,13 @@ pub(super) fn render_chat(
         .when(workspace.vm().pending_ask.is_some(), |this| {
             this.child(ask::render_ask_panel(workspace, window, cx))
         })
+        // The jump-to-latest row rides the same docked pattern, right above
+        // the composer and outside it, and shows only while the transcript
+        // trails its tail.
+        .when(
+            !show_welcome && !workspace.conversation_follows_tail(),
+            |this| this.child(render_jump_to_latest(cx)),
+        )
         .child(composer::render_composer(workspace, window, cx))
         .into_any_element()
 }
@@ -327,6 +329,81 @@ fn child_tool_rows<'a>(
     rows
 }
 
+/// The jump-to-latest control, docked in-flow right above the composer. The
+/// click returns the transcript to its tail; the row unmounts on the next
+/// frame because the tail is followed again.
+fn render_jump_to_latest(cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id("conversation-jump-row")
+        .w_full()
+        .px_4()
+        .pb_1()
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .id("conversation-jump-latest")
+                .occlude()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(30.))
+                .rounded_full()
+                .border_1()
+                .border_color(super::skin::glass_border(theme))
+                .bg(super::skin::popover(theme))
+                .text_color(theme.muted_foreground)
+                .cursor_pointer()
+                .hover(|this| {
+                    this.bg(super::skin::frost_hover(theme))
+                        .text_color(theme.foreground)
+                })
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.scroll_conversation_to_bottom(cx);
+                }))
+                .child(
+                    gpui_kit::component::Icon::new(gpui_kit::assets::IconName::ArrowDown).small(),
+                ),
+        )
+}
+
+
+
+/// The control above a tail window. The count of remaining events is not
+/// known without reading them, so the label stays generic.
+fn render_older_chip(loading: bool, cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    let desk = crate::ui::desk::Desk::of(theme);
+    let label = if loading {
+        t("Loading earlier messages…", "正在加载更早的消息…")
+    } else {
+        t("Earlier messages", "更早的消息")
+    };
+    div()
+        .id("transcript-older")
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .py(px(8.))
+        .rounded(px(10.))
+        .when(!loading, |this| {
+            this.cursor_pointer()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_load_older(cx);
+                }))
+        })
+        .child(crate::ui::lamp(desk.violet))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(label),
+        )
+}
+
 #[cfg(test)]
 mod nesting_tests {
     use super::{TranscriptItem, child_tool_rows, collect_transcript_items, python_warning_banner};
@@ -392,126 +469,4 @@ mod nesting_tests {
         assert_eq!(items.len(), 1, "the inner card is not a sibling row");
         assert_eq!(child_tool_rows(&entries, Some("outer")).len(), 1);
     }
-}
-
-/// Hover-revealed jump arrows over the conversation column: a down arrow
-/// floating just above the composer when the tail is out of view, and an up
-/// arrow near the title bar when the first entry is scrolled away. Both sit
-/// outside the scroller so they do not travel with the transcript, and mount
-/// only while the pointer is over the column. The rows do not occlude, so
-/// the transcript below them still scrolls and takes clicks; the buttons
-/// occlude and `stop_propagation` keeps their click from starting a drag.
-fn render_conversation_jumps(
-    has_conversation: bool,
-    workspace: &Workspace,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    let hovered = has_conversation && workspace.conversation_hovered();
-    div()
-        .id("conversation-jumps")
-        .when(hovered && !workspace.conversation_near_top(), |this| {
-            this.child(jump_arrow_row(
-                "conversation-jump-top",
-                px(8.),
-                gpui_kit::assets::IconName::ArrowUp,
-                true,
-                cx,
-            ))
-        })
-        .when(hovered && !workspace.conversation_follows_tail(), |this| {
-            this.child(jump_arrow_row(
-                "conversation-jump-bottom",
-                px(10.),
-                gpui_kit::assets::IconName::ArrowDown,
-                false,
-                cx,
-            ))
-        })
-}
-
-/// One full-width row holding a centered circular jump arrow. Pinned to the
-/// column's top or bottom edge.
-fn jump_arrow_row(
-    id: &'static str,
-    edge: gpui_kit::Pixels,
-    icon: gpui_kit::assets::IconName,
-    to_top: bool,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let row = if to_top {
-        div().absolute().top(edge)
-    } else {
-        div().absolute().bottom(edge)
-    };
-    row.id(format!("{id}-row"))
-        .left_0()
-        .right_0()
-        .flex()
-        .justify_center()
-        .child(
-            div()
-                .id(id)
-                .occlude()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(30.))
-                .rounded_full()
-                .border_1()
-                .border_color(super::skin::glass_border(theme))
-                .bg(super::skin::popover(theme))
-                .text_color(theme.muted_foreground)
-                .cursor_pointer()
-                .hover(|this| {
-                    this.bg(super::skin::frost_hover(theme))
-                        .text_color(theme.foreground)
-                })
-                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    cx.stop_propagation();
-                    if to_top {
-                        workspace.scroll_conversation_to_top(cx);
-                    } else {
-                        workspace.scroll_conversation_to_bottom(cx);
-                    }
-                }))
-                .child(gpui_kit::component::Icon::new(icon).small()),
-        )
-}
-
-/// The control above a tail window. The count of remaining events is not
-/// known without reading them, so the label stays generic.
-fn render_older_chip(loading: bool, cx: &Context<Workspace>) -> impl IntoElement {
-    let theme = cx.theme();
-    let desk = crate::ui::desk::Desk::of(theme);
-    let label = if loading {
-        t("Loading earlier messages…", "正在加载更早的消息…")
-    } else {
-        t("Earlier messages", "更早的消息")
-    };
-    div()
-        .id("transcript-older")
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .py(px(8.))
-        .rounded(px(10.))
-        .when(!loading, |this| {
-            this.cursor_pointer()
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.on_load_older(cx);
-                }))
-        })
-        .child(crate::ui::lamp(desk.violet))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(label),
-        )
 }

@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows 上 `run_code` 不再挂死。Python 端以同步句柄打开命名管道，同一句柄同时只允许一个未完成 I/O：reader 线程阻塞在 `ReadFile` 时，主线程写 done / call / log 帧被永久挂起，每个程序都要等满 120 秒墙钟超时（"PTC 变慢"的根因）。控制通道在 Windows 上改用带一次性令牌的环回 TCP，socket 天然支持读写线程并发。
+- Python 进程退出改为先优雅关闭控制通道（shutdown 唤醒 reader、FIN 排空发送侧）再退出。此前进程退出会带着仍在 `recv` 的 reader 线程硬关 socket，Windows 发出的 RST 会丢弃接收方缓冲里尚未读走的最后一帧（`done`），宿主误报 `python closed the control channel`。
+- Windows 上不再拼装 `py.exe` 的绝对路径：探测和启动都直接按名调用 `py.exe -3`（`python.exe`、`python3.exe` 依次兜底），由系统从 PATH 解析；版本不对或商店别名会自然落到下个候选或安装指引。
+- Python 探测与每次 `run_code` 子进程启动都带 `CREATE_NO_WINDOW`，不再闪黑色控制台窗口；`py.exe` 拉起的 `python.exe` 同样继承该标志。
+- `run_code` 主循环把帧读取移到独立 reader 任务：回复写入与帧读取不再共享同一个 future，长度前缀帧在任意交错下完整送达。
+- mycode-tools 在 Windows 上的测试首次可以编译并通过（`ppid_from_stat` 的 `libc` 依赖只在 Unix 存在）；此前 `cargo test -p mycode-tools` 在 Windows 直接编译失败，管道问题完全没有测试覆盖。
+- 计时类并发测试改为基于探针起止区间的断言（互斥调用不得重叠），并对进程级 Python 探测覆盖加读写锁隔离，消除并行测试间的状态泄漏与负载抖动。
+- 工作区统一启用 `serde_json` 的 `preserve_order`：此前该特性只随桌面 UI 依赖链传入，`run_code` schema 的 `description` 先于 `code` 的契约在不同构建下不稳定。
+- 聊天滚动按钮重做：移除"滚动到最上"，只保留一个停靠在输入框上方的"滚动到最新"圆形按钮，未贴底时出现，点击可靠生效（旧的悬浮绝对定位箭头会飘进输入区且点击无效）。
+
+### Changed
+
+- 会话常驻内存治理：已打开会话的账本驻留数量有上限（LRU 驱逐、可从盘上按需重载，活跃回合与未落盘预留不会被驱逐）；事件 / 分支预留表有容量上限，最旧的废弃预留被丢弃；ask 路由槽位随回合结束自动回收。桌面端单个会话的转录条目驻留也有上限，超出时丢弃最旧行、可再次向前翻页。
+- 数据导出/导入改为 v2 范围：导出全部配置（设置含 MCP、UI 状态、`secrets.json` 里的 API 密钥），不再包含任何会话 / 对话数据；v1 包仍可导入（会话部分被忽略）。导出文件是含明文密钥的 JSON，界面有明确警示。
+- 删除"持久化用量记录"：不再按回合向会话账本写 Usage 事件，也不再在打开会话时重放汇总为每模型累计表；进行中的上下文计量（实时 token、缓存命中、最近回合统计）保留。旧设置文件里的 `usage` 字段可读入并被丢弃，旧账本里的 Usage 事件加载时跳过。
+- `mycode-tools` 不再依赖 gpui-kit：tree-sitter 语法表改为直接链接同一批语法 crate，`mycode-app` / 工具库的依赖图里不再出现 smol / gpui（桌面版因 GUI 框架本身仍包含 smol，tokio 之外无其它自有运行时）。
+
+### Added
+
+- `run_code` 管道专项测试：2 MiB 级工具回复完整往返、大量 print 与工具调用交织不死锁、非 ASCII 输出与报错双向 UTF-8、子进程中途 `os._exit` 以 worker-exit 快速返回而不是挂起。
+- 会话账本驱逐 / 预留上限 / ask 槽位回收的单元测试，以及导出导入 v2（含密钥、排除会话、v1 兼容、MCP 命令守卫）的测试。
+
 ## [0.11.0] - 2026-10-11
 
 ### Changed

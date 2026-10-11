@@ -55,56 +55,9 @@ pub(crate) fn project_replayed_entry(
                 parent_call_id: value["parent"].as_str().map(str::to_owned),
             })
         }
-        EventKind::Usage => Some(project_usage(event.event_id.as_str(), payload)),
-        // Legacy todo snapshots. They are not conversation and not usage.
-        EventKind::Task => None,
-    }
-}
-
-pub(crate) fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry {
-    let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
-    let provider = value["provider"].as_str().unwrap_or_default();
-    let model = value["model"].as_str().unwrap_or("unknown");
-    let input = value["input"].as_u64().unwrap_or_default();
-    let output = value["output"].as_u64().unwrap_or_default();
-    let cache = value["cache"].as_u64();
-    let elapsed_ms = value["elapsed_ms"].as_u64().unwrap_or_default();
-    // The spelling doubles as the rebuild input: the desktop replays these
-    // rows to restore per-model totals, so the key must be `provider/model`
-    // and the cache count must survive the projection.
-    let key = if provider.is_empty() {
-        model.to_owned()
-    } else {
-        format!("{provider}/{model}")
-    };
-    let context = value["context"].as_u64().unwrap_or(0);
-    let context_cache = value["context_cache"].as_u64().unwrap_or(0);
-    let mut text = format!("{key}: {input} in / {output} out");
-    if context > 0 {
-        text.push_str(&format!(" \u{b7} ctx {context}"));
-    }
-    if context_cache > 0 {
-        text.push_str(&format!(" \u{b7} hit {context_cache}"));
-    }
-    if let Some(cache) = cache {
-        text.push_str(&format!(" \u{b7} cache {cache}"));
-    }
-    if elapsed_ms > 0 {
-        let per_second = output as f64 / (elapsed_ms as f64 / 1000.0);
-        text.push_str(&format!(" \u{b7} {per_second:.0} tok/s"));
-    }
-    if let Some(cache) = cache
-        && input > 0
-    {
-        text.push_str(&format!(" \u{b7} {}% cached", cache * 100 / input));
-    }
-    ConversationEntry {
-        event_id: event_id.to_owned(),
-        kind: EntryKind::Usage,
-        text: text.into(),
-        call_id: None,
-        thinking: String::new(),
-        parent_call_id: None,
+        // Legacy durable usage records and todo snapshots. Neither is
+        // conversation; ledgers written by older builds still decode.
+        EventKind::Usage | EventKind::Task => None,
     }
 }
 
@@ -197,23 +150,26 @@ pub(crate) fn project_assistant_message(
 
 #[cfg(test)]
 mod tests {
-    use super::project_usage;
+    use mycode_agent::session::SessionEvent;
+
+    use super::project_replayed_entry;
+
+    fn event_of_kind(kind: mycode_agent::session::EventKind) -> SessionEvent {
+        SessionEvent {
+            event_id: mycode_agent::session::SessionEventId::parse(
+                "evt1-00000000000000000000000000000000",
+            )
+            .expect("event id"),
+            digest: "sha256:0".to_owned(),
+            bytes: 1,
+            kind,
+            call_id: None,
+        }
+    }
 
     #[test]
-    fn usage_projection_keeps_the_latest_cache_read() {
-        let payload = serde_json::json!({
-            "provider": "zai",
-            "model": "glm-5.3",
-            "input": 100,
-            "context": 12000,
-            "context_cache": 11800,
-            "output": 20,
-            "cache": 11800,
-        });
-        let bytes = serde_json::to_vec(&payload).unwrap();
-        let entry = project_usage("evt", &bytes);
-        assert!(entry.text.contains("ctx 12000"));
-        assert!(entry.text.contains("hit 11800"));
-        assert!(entry.text.contains("cache 11800"));
+    fn legacy_usage_events_replay_as_nothing() {
+        let event = event_of_kind(mycode_agent::session::EventKind::Usage);
+        assert!(project_replayed_entry(&event, b"{}").is_none());
     }
 }

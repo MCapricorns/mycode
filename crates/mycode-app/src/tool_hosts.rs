@@ -18,19 +18,44 @@ const ANYSEARCH_KEY_ENV: &str = "ANYSEARCH_API_KEY";
 /// Routes user answers from the UI to the pending `ask_user` tool.
 #[derive(Default)]
 struct AskRouter {
+    next: std::sync::atomic::AtomicU64,
     pending: std::sync::Mutex<
-        std::collections::HashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>,
+        std::collections::HashMap<String, PendingAsk>,
     >,
 }
 
+/// One registered answer channel with its issuance generation.
+struct PendingAsk {
+    generation: u64,
+    answer: tokio::sync::oneshot::Sender<Vec<String>>,
+}
+
 impl AskRouter {
-    fn register(&self, session_id: &str) -> tokio::sync::oneshot::Receiver<Vec<String>> {
+    fn register(
+        &self,
+        session_id: &str,
+    ) -> (tokio::sync::oneshot::Receiver<Vec<String>>, AskSlot) {
+        let generation = self
+            .next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.pending
             .lock()
             .expect("ask router")
-            .insert(session_id.to_owned(), tx);
-        rx
+            .insert(
+                session_id.to_owned(),
+                PendingAsk {
+                    generation,
+                    answer: tx,
+                },
+            );
+        (
+            rx,
+            AskSlot {
+                session_id: session_id.to_owned(),
+                generation,
+            },
+        )
     }
 
     fn deliver(&self, session_id: &str, answers: Vec<String>) -> bool {
@@ -38,7 +63,7 @@ impl AskRouter {
             .lock()
             .expect("ask router")
             .remove(session_id)
-            .is_some_and(|tx| tx.send(answers).is_ok())
+            .is_some_and(|ask| ask.answer.send(answers).is_ok())
     }
 
     fn dismiss(&self, session_id: &str) -> bool {
@@ -48,13 +73,50 @@ impl AskRouter {
             .remove(session_id)
             .is_some()
     }
+
+    /// Removes one registration, but only when it still maps to that slot's
+    /// issuance. A follow-up turn for the same session re-registers with a
+    /// newer generation and must not lose its channel to the old turn's exit.
+    fn retire(&self, slot: &AskSlot) {
+        let mut pending = self.pending.lock().expect("ask router");
+        if pending
+            .get(&slot.session_id)
+            .is_some_and(|ask| ask.generation == slot.generation)
+        {
+            pending.remove(&slot.session_id);
+        }
+    }
+}
+
+/// Removes one session's registered ask channel when its turn's tool
+/// registry (the last owner of the channel) is dropped.
+///
+/// Without this, every session that ever ran a turn left one dead sender in
+/// the process-wide router, including sessions the user later deleted.
+pub(crate) struct AskSlot {
+    session_id: String,
+    generation: u64,
+}
+
+impl Drop for AskSlot {
+    fn drop(&mut self) {
+        if let Some(router) = ASK_ROUTER.get() {
+            router.retire(self);
+        }
+    }
 }
 
 /// Process-wide ask router; one pending ask per session.
 static ASK_ROUTER: std::sync::OnceLock<AskRouter> = std::sync::OnceLock::new();
 
-/// Registers a new answer channel for this session, replacing any previous one.
-pub(crate) fn register_ask(session_id: &str) -> tokio::sync::oneshot::Receiver<Vec<String>> {
+/// Registers a new answer channel for this session, replacing any previous
+/// one. The returned slot removes the registration when the turn ends.
+pub(crate) fn register_ask(
+    session_id: &str,
+) -> (
+    tokio::sync::oneshot::Receiver<Vec<String>>,
+    AskSlot,
+) {
     ASK_ROUTER
         .get_or_init(AskRouter::default)
         .register(session_id)
@@ -85,6 +147,9 @@ pub(crate) struct BridgeAskChannel {
     pub(crate) session_id: String,
     pub(crate) events: crate::BridgeEventTx,
     pub(crate) answer: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<Vec<String>>>>,
+    /// Held for its Drop: retires the router registration when this turn's
+    /// tool registry goes away.
+    pub(crate) _slot: AskSlot,
 }
 
 #[async_trait::async_trait]
@@ -249,5 +314,41 @@ impl mycode_tools::builtin::WebHost for BridgeWebHost {
                 truncated: page.truncated,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{deliver_ask_answer, dismiss_ask, register_ask};
+
+    #[test]
+    fn a_turns_exit_retires_only_its_own_registration() {
+        let (_first_rx, first_slot) = register_ask("ses1-ask-generations");
+        let (_second_rx, _second_slot) = register_ask("ses1-ask-generations");
+        // The first turn's registry drops; the newer registration must stay.
+        drop(first_slot);
+        assert!(
+            deliver_ask_answer("ses1-ask-generations", vec!["yes".to_owned()]).is_ok(),
+            "the successor turn's registration was retired by the old turn"
+        );
+    }
+
+    #[test]
+    fn dropping_the_slot_removes_the_pending_entry() {
+        let (_rx, slot) = register_ask("ses2-ask-retire");
+        drop(_rx);
+        drop(slot);
+        assert!(deliver_ask_answer("ses2-ask-retire", Vec::new()).is_err());
+        assert!(dismiss_ask("ses2-ask-retire").is_err());
+    }
+
+    #[test]
+    fn an_answered_ask_leaves_no_entry_behind() {
+        let (rx, slot) = register_ask("ses3-ask-answer");
+        assert!(deliver_ask_answer("ses3-ask-answer", vec!["a".to_owned()]).is_ok());
+        let answers = rx.blocking_recv().expect("delivered answers");
+        assert_eq!(answers, vec!["a".to_owned()]);
+        drop(slot);
+        assert!(dismiss_ask("ses3-ask-answer").is_err());
     }
 }

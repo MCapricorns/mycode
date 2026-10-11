@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::BridgeEvent;
 use crate::ledger::{HeadWriter, head_spelling, ledger_history, render_error};
 use crate::oauth::resolve_request_auth;
-use crate::projection::{project_assistant_message, project_tool_result_message, project_usage};
+use crate::projection::{project_assistant_message, project_tool_result_message};
 use crate::protocol::CHAT_CANCELLED;
 use crate::state::{CoreState, model_context_window, model_output_limit};
 use crate::tool_hosts::{BridgeAskChannel, BridgeWebHost, register_ask};
@@ -439,7 +439,6 @@ async fn run_chat_turn(
         session,
         branch,
         expected_head,
-        provider_id,
         model,
         reasoning,
         cwd,
@@ -461,7 +460,6 @@ async fn run_chat_turn_on(
     session: SessionId,
     branch: BranchId,
     expected_head: HeadStamp,
-    provider_id: &str,
     model: &str,
     reasoning: Option<&str>,
     cwd: PathBuf,
@@ -496,8 +494,6 @@ async fn run_chat_turn_on(
     let history = ledger_history(&state.service, &session, &branch, &expected_head)
         .await
         .map_err(render_error)?;
-    let usage_enabled = settings.usage.enabled;
-    let usage_provider = provider_id.to_owned();
     let usage_model = model.to_owned();
     let head_stamp_text = head_spelling(&expected_head);
     let writer = HeadWriter::new(
@@ -519,11 +515,12 @@ async fn run_chat_turn_on(
         // to the UI over the event channel and waits on the shared router.
         let ask_events = events.clone();
         let ask_session = session_id.to_owned();
-        let answer_rx = register_ask(&ask_session);
+        let (answer_rx, ask_slot) = register_ask(&ask_session);
         let channel: Arc<dyn mycode_tools::builtin::AskChannel> = Arc::new(BridgeAskChannel {
             session_id: ask_session,
             events: ask_events,
             answer: tokio::sync::Mutex::new(Some(answer_rx)),
+            _slot: ask_slot,
         });
         registry.register(Arc::new(mycode_tools::builtin::AskTool::new(channel)));
         // `agent` delegates scoped work to a catalog role; slots, isolation,
@@ -1020,20 +1017,6 @@ async fn run_chat_turn_on(
                         // assistant message" used to clear the live bubble
                         // after the step was the whole turn.
                         if let Some(entry) = last_step {
-                            // Same accounting as a turn that ends with a
-                            // message: this path's billing and context meter
-                            // used to be silently dropped.
-                            commit_turn_usage(
-                                &writer,
-                                &pump_events,
-                                &pump_session_id,
-                                &usage_provider,
-                                &usage_model,
-                                &turn_usage,
-                                turn_started,
-                                usage_enabled,
-                            )
-                            .await;
                             pump_deferred
                                 .publish(&writer, &pump_events, &pump_session_id)
                                 .await;
@@ -1061,21 +1044,10 @@ async fn run_chat_turn_on(
                             match writer.write(EventKind::Message, &payload).await {
                                 Ok(event_id) => {
                                     let entry = project_assistant_message(&event_id, assistant);
-                                    commit_turn_usage(
-                                        &writer,
-                                        &pump_events,
-                                        &pump_session_id,
-                                        &usage_provider,
-                                        &usage_model,
-                                        &turn_usage,
-                                        turn_started,
-                                        usage_enabled,
-                                    )
-                                    .await;
                                     // The summary card follows the assistant
-                                    // message and the usage row, so it cannot
-                                    // split a tool call from its result. ChatDone
-                                    // then carries the head that includes it.
+                                    // message, so it cannot split a tool call
+                                    // from its result. ChatDone then carries
+                                    // the head that includes it.
                                     pump_deferred
                                         .publish(&writer, &pump_events, &pump_session_id)
                                         .await;
@@ -1312,62 +1284,10 @@ impl Drop for SteerGuard {
 /// Token usage summed across every response cycle of one turn.
 ///
 /// Providers report usage per cycle, so a turn that calls tools reports
-/// several times. `seen` distinguishes "no usage reported" from a genuine
-/// zero, which keeps the ledger from recording a usage event the provider
-/// never sent.
-/// Writes the turn's usage row after a finished turn. Both terminal paths —
-/// the final assistant message and a turn whose last committed event was a
-/// tool step — call this, so the accounting never depends on how the turn
-/// ended.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the fields mirror the usage row the turn already assembles"
-)]
-async fn commit_turn_usage(
-    writer: &HeadWriter,
-    events: &crate::BridgeEventTx,
-    session_id: &str,
-    provider: &str,
-    model: &str,
-    usage: &TurnUsage,
-    started: std::time::Instant,
-    usage_enabled: bool,
-) {
-    if !usage_enabled || !usage.seen {
-        return;
-    }
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    let usage_payload = serde_json::json!({
-        "provider": provider,
-        "model": model,
-        "input": usage.input,
-        "context": usage.latest_input,
-        "context_cache": usage.latest_cache,
-        "output": usage.output,
-        "cache": usage.cache,
-        "elapsed_ms": elapsed_ms,
-    });
-    if let Ok(bytes) = serde_json::to_vec(&usage_payload)
-        && let Ok(usage_event) = writer.write(EventKind::Usage, &bytes).await
-    {
-        let _ = events.try_send(BridgeEvent::UsageRecorded {
-            session_id: session_id.to_owned(),
-            provider: provider.to_owned(),
-            model: model.to_owned(),
-            input: usage.input,
-            context: usage.latest_input,
-            context_cache: usage.latest_cache,
-            output: usage.output,
-            cache: usage.cache,
-            elapsed_ms,
-            entry: project_usage(&usage_event, &bytes),
-        });
-    }
-}
-
+/// several times. The sums feed the live [`BridgeEvent::UsageSnapshot`]
+/// meter; nothing is persisted to the ledger.
 #[derive(Debug, Default)]
 struct TurnUsage {
-    seen: bool,
     input: u64,
     /// Most recent request's prompt tokens. The context meter uses this
     /// instead of `input`, which sums every tool round.
@@ -1381,7 +1301,6 @@ struct TurnUsage {
 
 impl TurnUsage {
     fn fold(&mut self, usage: &mycode_core::Usage) {
-        self.seen = true;
         self.input = self.input.saturating_add(usage.input_tokens);
         let prompt = if usage.prompt_tokens > 0 {
             usage.prompt_tokens
@@ -1650,7 +1569,6 @@ mod tests {
             created.session_id.clone(),
             created.branch_id.clone(),
             head,
-            "local",
             "test-model",
             None,
             cwd,
@@ -2024,7 +1942,6 @@ mod tests {
             fixture.session.clone(),
             fixture.branch.clone(),
             head,
-            "local",
             "test-model",
             None,
             fixture.cwd.clone(),
@@ -2146,7 +2063,6 @@ mod tests {
                 session,
                 branch,
                 head,
-                "local",
                 "test-model",
                 None,
                 cwd,

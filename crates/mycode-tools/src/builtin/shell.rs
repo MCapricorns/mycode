@@ -1198,13 +1198,13 @@ mod mode_tests {
         let encoded = args.last().expect("payload");
         let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
             .expect("base64");
-        let script = String::from_utf16(
-            &bytes
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                .collect::<Vec<_>>(),
-        )
-        .expect("utf-16");
+        let mut units = Vec::with_capacity(bytes.len() / 2);
+        let mut offset = 0;
+        while offset + 1 < bytes.len() {
+            units.push(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]));
+            offset += 2;
+        }
+        let script = String::from_utf16(&units).expect("utf-16");
         assert!(script.contains("ls -la"), "{script}");
         assert!(!script.contains("Get-ChildItem"), "{script}");
         assert!(script.contains("[Console]::OutputEncoding"), "{script}");

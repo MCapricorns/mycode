@@ -15,9 +15,11 @@ use super::{OpFail, PlanError, SessionCore};
 
 impl SessionCore {
     /// Loads one session's offset index into the actor when it is not already
-    /// resident. Payload bytes stay on disk.
+    /// resident. Payload bytes stay on disk. Every load refreshes the
+    /// residency recency stamp; inserting a new ledger enforces the cap.
     pub(super) fn ensure_loaded(&mut self, session: &SessionId) -> Result<(), PlanError> {
         if self.sessions.contains_key(session) {
+            self.touch_resident(session);
             return Ok(());
         }
         if self.store.is_none() {
@@ -88,6 +90,7 @@ impl SessionCore {
                 ..SessionLedger::default()
             },
         );
+        self.touch_resident(session);
         Ok(())
     }
 

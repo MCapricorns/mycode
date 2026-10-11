@@ -1,13 +1,17 @@
 //! One fresh system-Python process per `run_code` invocation.
 //!
 //! Tool calls arrive on a length-framed control channel, not on stdout. The
-//! channel is an inherited socket (Unix), a named pipe (Windows), or a
-//! loopback TCP socket that still requires the per-run token. The token is
-//! passed in the child environment, never on the command line, and checked
-//! before the program is sent. Each call is prepared and executed with
-//! [`crate::prepare_tool_ctx`], the same preflight a direct call uses.
-//! Read-only calls and `agent` may overlap; mutating calls wait until the
-//! ones submitted before them have finished, then run alone.
+//! channel is an inherited socket (Unix) or a loopback TCP socket that
+//! requires the per-run token. Windows deliberately uses no named pipe:
+//! Python opens a synchronous pipe handle, and such a handle serializes
+//! pending I/O, so the blocked reader thread deadlocked every later frame
+//! write from the event loop. A TCP socket carries the reader thread and the
+//! writer concurrently. The token is passed in the child environment, never
+//! on the command line, and checked before the program is sent. Each call is
+//! prepared and executed with [`crate::prepare_tool_ctx`], the same preflight
+//! a direct call uses. Read-only calls and `agent` may overlap; mutating
+//! calls wait until the ones submitted before them have finished, then run
+//! alone.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -262,6 +266,19 @@ async fn run_child(
     .await?;
 
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<FinishedCall>();
+    // A dedicated reader task owns the read half: the loop below then parks
+    // on channels only, and frames keep flowing while a reply is written.
+    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<Result<ChildFrame, String>>();
+    let reader_ctx = ctx.clone();
+    tokio::spawn(async move {
+        loop {
+            let frame = read_child_frame(&mut reader, &reader_ctx, deadline).await;
+            let closed = frame.is_err();
+            if frame_tx.send(frame).is_err() || closed {
+                return;
+            }
+        }
+    });
     let mut queue: VecDeque<QueuedCall> = VecDeque::new();
     let mut inflight: Vec<(u64, bool)> = Vec::new();
     let calls = Arc::new(AtomicU32::new(0));
@@ -311,7 +328,10 @@ async fn run_child(
                     );
                 }
             }
-            incoming = read_child_frame(&mut reader, &ctx, deadline) => {
+            incoming = frame_rx.recv() => {
+                let Some(incoming) = incoming else {
+                    break stopped("worker-exit", "python closed the control channel", logs, &notes);
+                };
                 match incoming {
                     Ok(ChildFrame::Log { text }) => append_log(&mut logs, &text),
                     Ok(ChildFrame::Warn { text }) => {
@@ -727,7 +747,6 @@ type ControlWrite = Box<dyn AsyncWrite + Unpin + Send>;
 struct ControlEnv {
     token: String,
     fd: Option<i32>,
-    pipe: Option<String>,
     port: Option<u16>,
 }
 
@@ -737,12 +756,6 @@ enum PendingControl {
         host: tokio::net::UnixStream,
         child: Option<std::os::unix::net::UnixStream>,
         fd: i32,
-        token: String,
-    },
-    #[cfg(windows)]
-    Pipe {
-        server: tokio::net::windows::named_pipe::NamedPipeServer,
-        name: String,
         token: String,
     },
     Tcp {
@@ -783,10 +796,6 @@ async fn open_control() -> Result<PendingControl, String> {
     if let Ok(control) = unix_control() {
         return Ok(control);
     }
-    #[cfg(windows)]
-    if let Ok(control) = pipe_control() {
-        return Ok(control);
-    }
     tcp_control().await
 }
 
@@ -802,21 +811,6 @@ fn unix_control() -> std::io::Result<PendingControl> {
         host,
         child: Some(child),
         fd,
-        token: fresh_token(),
-    })
-}
-
-#[cfg(windows)]
-fn pipe_control() -> std::io::Result<PendingControl> {
-    let name = format!(r"\\.\pipe\mycode-ptc-{}", uuid::Uuid::new_v4().simple());
-    let server = tokio::net::windows::named_pipe::ServerOptions::new()
-        .first_pipe_instance(true)
-        .reject_remote_clients(true)
-        .max_instances(1)
-        .create(name.as_str())?;
-    Ok(PendingControl::Pipe {
-        server,
-        name,
         token: fresh_token(),
     })
 }
@@ -843,20 +837,11 @@ impl PendingControl {
             Self::Unix { fd, token, .. } => ControlEnv {
                 token: token.clone(),
                 fd: Some(*fd),
-                pipe: None,
-                port: None,
-            },
-            #[cfg(windows)]
-            Self::Pipe { name, token, .. } => ControlEnv {
-                token: token.clone(),
-                fd: None,
-                pipe: Some(name.clone()),
                 port: None,
             },
             Self::Tcp { port, token, .. } => ControlEnv {
                 token: token.clone(),
                 fd: None,
-                pipe: None,
                 port: Some(*port),
             },
         }
@@ -878,22 +863,6 @@ impl PendingControl {
             #[cfg(unix)]
             Self::Unix { host, token, .. } => {
                 let (mut reader, writer) = box_split(host);
-                expect_ready(&mut reader, &token, ctx, deadline).await?;
-                Ok((reader, writer))
-            }
-            #[cfg(windows)]
-            Self::Pipe { server, token, .. } => {
-                tokio::select! {
-                    biased;
-                    () = ctx.cancel.cancelled() => return Err("program cancelled".to_owned()),
-                    () = tokio::time::sleep_until(deadline.into()) => {
-                        return Err("python did not connect before the startup limit".to_owned());
-                    }
-                    connected = server.connect() => {
-                        connected.map_err(|error| format!("python did not connect: {error}"))?;
-                    }
-                }
-                let (mut reader, writer) = box_split(server);
                 expect_ready(&mut reader, &token, ctx, deadline).await?;
                 Ok((reader, writer))
             }
@@ -979,9 +948,6 @@ fn spawn_python(
     if let Some(fd) = control.fd {
         command.env("MYCODE_PTC_FD", fd.to_string());
     }
-    if let Some(pipe) = &control.pipe {
-        command.env("MYCODE_PTC_PIPE", pipe);
-    }
     if let Some(port) = control.port {
         command.env("MYCODE_PTC_PORT", port.to_string());
     }
@@ -989,6 +955,13 @@ fn spawn_python(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
     command.kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        // py.exe is only a launcher; the real python.exe is its child. Both
+        // inherit the creation flags, so no console window appears for either.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     #[cfg(unix)]
     {
         command.process_group(0);
@@ -1050,6 +1023,23 @@ impl OnceLockBootstrap {
     }
 }
 
+async fn drain_pipe(pipe: impl AsyncReadExt + Unpin, slot: Arc<std::sync::Mutex<String>>) {
+    let mut pipe = pipe;
+    let mut buf = [0_u8; 4096];
+    loop {
+        match pipe.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(count) => {
+                if let Ok(mut guard) = slot.lock()
+                    && guard.len() < 64 * 1024
+                {
+                    guard.push_str(&String::from_utf8_lossy(&buf[..count]));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod channel_tests {
     use super::{box_split, encode_frame, expect_ready, tokens_match};
@@ -1106,19 +1096,3 @@ mod channel_tests {
     }
 }
 
-async fn drain_pipe(pipe: impl AsyncReadExt + Unpin, slot: Arc<std::sync::Mutex<String>>) {
-    let mut pipe = pipe;
-    let mut buf = [0_u8; 4096];
-    loop {
-        match pipe.read(&mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(count) => {
-                if let Ok(mut guard) = slot.lock()
-                    && guard.len() < 64 * 1024
-                {
-                    guard.push_str(&String::from_utf8_lossy(&buf[..count]));
-                }
-            }
-        }
-    }
-}

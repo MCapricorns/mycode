@@ -30,14 +30,47 @@ jsonschema.workspace = true
 blake3.workspace = true
 sha2.workspace = true
 uuid.workspace = true
-# Grammars come from gpui-kit's registry. This pin is the same tree-sitter
-# gpui-component links (`links = "tree-sitter"`). gpui-component 0.7.1 still
-# requires `tree-sitter ^0.26.13`, so 0.27 cannot be linked beside it. gpui
-# does not re-export Parser or Query, so the runtime crate stays direct.
-gpui-kit = { version = "0.7.1", default-features = false, features = [
-    "tree-sitter-languages",
-] }
+# Grammar crates for the edit tool's `ast` operations. Version requirements
+# mirror gpui-component 0.7.1 (the desktop GUI's grammar source), so a
+# mycode-desktop build unifies on one locked version per grammar instead of
+# compiling each grammar twice. tree-sitter is pinned exactly because it has
+# `links = "tree-sitter"` and gpui-component 0.7.1 requires ^0.26.13, so a
+# second core version cannot be linked beside it.
 tree-sitter = "=0.26.13"
+tree-sitter-astro-next = "0.1.1"
+tree-sitter-bash = "0.23.3"
+tree-sitter-c = "0.24.1"
+tree-sitter-c-sharp = "0.23.1"
+tree-sitter-cmake = "0.7.1"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-css = "0.23.2"
+tree-sitter-diff = "0.1.0"
+tree-sitter-elixir = "0.3"
+tree-sitter-embedded-template = "0.23.0"
+tree-sitter-go = "0.23.4"
+tree-sitter-graphql = "0.1.0"
+tree-sitter-html = "0.23.2"
+tree-sitter-java = "0.23.5"
+tree-sitter-javascript = "0.23.1"
+tree-sitter-jsdoc = "0.23.2"
+tree-sitter-json = "0.24.8"
+tree-sitter-kotlin-sg = "0.4.0"
+tree-sitter-lua = "0.4.1"
+tree-sitter-make = "1.1.1"
+tree-sitter-md = "0.5.1"
+tree-sitter-php = "0.24.2"
+tree-sitter-proto = "0.2.0"
+tree-sitter-python = "0.23.6"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-rust = "0.24.0"
+tree-sitter-scala = "0.23.4"
+tree-sitter-sequel = "0.3.8"
+tree-sitter-svelte-next = "0.1.1"
+tree-sitter-swift = "0.7.0"
+tree-sitter-toml-ng = "0.7.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.7.1"
+tree-sitter-zig = "1.1.2"
 
 # Unix-only: terminate the platform shell's process group, perform
 # handle-relative no-follow opens for grep/find, and drive the file IO

@@ -69,15 +69,14 @@ pub(crate) fn write_owned_test_bytes(
 }
 #[doc(inline)]
 pub use settings::{
-    AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, MAX_AUTHORITY_DOCUMENT_BYTES,
-    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS,
-    MAX_SUBAGENT_CONCURRENCY, MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings,
+    AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, LegacyUsageSettings,
+    MAX_AUTHORITY_DOCUMENT_BYTES, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
+    MAX_PROVIDERS, MAX_SUBAGENT_CONCURRENCY, MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings,
     SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SYSTEM_FONT_FAMILY, ShellSettings,
-    SubagentRoleSettings, SubagentSettings, ToolsSettings, UsageSettings, VALID_FONT_FAMILIES,
-    VALID_FONT_SIZES, VALID_LANGUAGES, VALID_PALETTES, WebBackendSettings, WebSettings,
-    builtin_mcp_servers, builtin_web_backends, canonical_font_family, default_user_agent,
-    is_mcp_executable, read_app_settings, read_app_settings_with_repair, replace_app_settings,
-    split_command_line,
+    SubagentRoleSettings, SubagentSettings, ToolsSettings, VALID_FONT_FAMILIES, VALID_FONT_SIZES,
+    VALID_LANGUAGES, VALID_PALETTES, WebBackendSettings, WebSettings, builtin_mcp_servers,
+    builtin_web_backends, canonical_font_family, default_user_agent, is_mcp_executable,
+    read_app_settings, read_app_settings_with_repair, replace_app_settings, split_command_line,
 };
 #[doc(inline)]
 pub use subagents::{

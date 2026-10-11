@@ -202,13 +202,15 @@ mod tests {
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
         }
         let home = HomeLayout::from_root(&root).expect("layout");
-        let mut settings = AppSettings::default();
-        settings.tools = ToolsSettings {
-            shell: Some(ShellSettings {
-                kind: "bash".into(),
-                program: "/bin/bash".into(),
-                source: "user".into(),
-            }),
+        let settings = AppSettings {
+            tools: ToolsSettings {
+                shell: Some(ShellSettings {
+                    kind: "bash".into(),
+                    program: "/bin/bash".into(),
+                    source: "user".into(),
+                }),
+            },
+            ..AppSettings::default()
         };
         let revision =
             mycode_config::replace_app_settings(&home, AuthorityRevision::ABSENT, &settings)

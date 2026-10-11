@@ -42,7 +42,6 @@ pub enum EntryKind {
     AssistantMessage,
     ToolCall,
     ToolResult,
-    Usage,
 }
 
 /// One entry of a conversation transcript.

@@ -24,7 +24,10 @@ license = "Apache-2.0"
 # `rc` serializes `Arc<T>`. Requests share `Arc<Message>` and `Arc<[ToolSpec]>`;
 # without it the provider size check cannot encode a request.
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = "1.0.151"
+# preserve_order: JSON objects keep declaration order in every build. The
+# run_code schema promises `description` before `code`, and gpui-pre only
+# carried this feature into builds that linked the desktop UI toolkit.
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
 base64 = "0.23.1"
 thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["rt", "macros", "sync", "time"] }

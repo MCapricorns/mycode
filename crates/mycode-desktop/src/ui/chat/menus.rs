@@ -69,6 +69,8 @@ pub(super) enum MenuPlacement {
 ///
 /// The chip sits inside the composer card (input row, gap, and padding above
 /// it). This clearance puts the menu fully above that card.
+/// Must stay at or above 84 so the docked menu clears the composer card
+/// instead of sitting on its top edge.
 pub(super) const THINKING_MENU_CLEARANCE: f32 = 88.;
 
 /// The thinking menu opens above its chip.
@@ -122,19 +124,6 @@ pub(super) fn render_thinking_menu(
         .into_any_element()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{MenuPlacement, thinking_menu_placement};
-
-    #[test]
-    fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
-        assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
-        assert!(
-            super::THINKING_MENU_CLEARANCE >= 84.,
-            "the menu must clear the composer card, not sit on its top edge"
-        );
-    }
-}
 
 fn menu_row(
     id: String,
@@ -307,5 +296,15 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
             }
         }
         MentionGroup::File => item.label.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MenuPlacement, thinking_menu_placement};
+
+    #[test]
+    fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
+        assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
     }
 }

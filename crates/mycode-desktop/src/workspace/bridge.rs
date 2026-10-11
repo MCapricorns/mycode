@@ -100,33 +100,6 @@ impl Workspace {
                     elapsed_ms,
                 }
             }
-            BridgeEvent::UsageRecorded {
-                session_id,
-                provider,
-                model,
-                input,
-                context,
-                context_cache,
-                output,
-                cache,
-                elapsed_ms,
-                entry,
-            } => {
-                if !matches_active(&session_id) {
-                    return;
-                }
-                DesktopAction::UsageRecorded {
-                    provider,
-                    model,
-                    input,
-                    context,
-                    context_cache,
-                    output,
-                    cache,
-                    elapsed_ms,
-                    entry,
-                }
-            }
             BridgeEvent::AskRequested {
                 session_id,
                 questions,
@@ -442,24 +415,21 @@ impl Workspace {
                 );
             }
             BridgeReply::Imported(Ok(summary)) => {
-                // Reload everything the bundle may have replaced.
+                // Reload everything the bundle replaced: settings, key
+                // markers, and UI state. Sessions were not touched.
                 self.dispatch(BridgeCommand::LoadSettings, cx);
                 self.dispatch(BridgeCommand::LoadUiState, cx);
-                self.dispatch(BridgeCommand::ListSessions, cx);
-                if summary.sessions > 0 {
-                    self.apply_action(
-                        DesktopAction::Failed(format!(
-                            "{}{}{}",
-                            crate::i18n::t("imported ", "已导入 "),
-                            summary.sessions,
-                            crate::i18n::t(
-                                " new session(s); restart to see restored history",
-                                " 个新会话；重启后可看到恢复的历史",
-                            )
-                        )),
-                        cx,
-                    );
-                }
+                let message = if summary.secrets > 0 {
+                    format!(
+                        "{} {} {}",
+                        crate::i18n::t("imported configuration and", "已导入配置和"),
+                        summary.secrets,
+                        crate::i18n::t("API key(s)", "个 API 密钥")
+                    )
+                } else {
+                    crate::i18n::t("imported configuration", "已导入配置").to_owned()
+                };
+                self.push_toast(message, crate::workspace::ToastKind::Info, cx);
             }
             BridgeReply::Imported(Err(message)) => {
                 self.apply_action(

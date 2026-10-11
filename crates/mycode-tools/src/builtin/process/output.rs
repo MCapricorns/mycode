@@ -113,7 +113,7 @@ where
 /// # Errors
 ///
 /// Returns the first I/O error from either pipe.
-pub(crate) async fn drain_pipes<Out, Err>(
+async fn drain_pipes<Out, Err>(
     stdout_pipe: &mut Option<Out>,
     stderr_pipe: &mut Option<Err>,
     stdout: &mut CapturedStream,

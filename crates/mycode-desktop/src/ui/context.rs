@@ -12,7 +12,6 @@ use gpui_kit::{
 };
 
 use crate::i18n::t;
-use crate::view_model::cache_percent;
 use crate::workspace::Workspace;
 
 /// How many dirty files the inspector preview lists before the rest are only
@@ -746,36 +745,24 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
     let provider = vm.selected_provider.clone().unwrap_or_default();
     let thinking = crate::view_model::selected_reasoning_level(vm);
     let context_window = model_context_window(vm);
-    // Prefer the exact provider/model row, then any provider with that model,
-    // then the model the last turn actually ran on — the panel should never
-    // go blank while a conversation has accounting.
-    let exact_key = match (provider.is_empty(), selected_model.as_deref()) {
-        (false, Some(model)) => Some(format!("{provider}/{model}")),
-        _ => None,
-    };
-    let usage = exact_key
-        .as_deref()
-        .and_then(|key| vm.usage_totals.iter().find(|row| row.key == key))
-        .or_else(|| {
-            selected_model.as_deref().and_then(|model| {
-                vm.usage_totals
-                    .iter()
-                    .find(|row| crate::view_model::usage_key_matches(&row.key, model))
-            })
-        })
-        .or_else(|| {
-            vm.last_turn.as_ref().and_then(|turn| {
-                vm.usage_totals
-                    .iter()
-                    .find(|row| crate::view_model::usage_key_matches(&row.key, &turn.model))
-            })
-        });
     let model_of = |turn: &crate::view_model::TurnStats| {
         selected_model
             .as_deref()
             .is_none_or(|selected| turn.model == selected)
     };
-    let live = vm.live_turn.as_ref().filter(|turn| model_of(turn));
+    // Usage accounting is live-only: the running turn reports through the
+    // live meter, and a finished turn keeps its sums as the last-turn row.
+    let turn_row = vm
+        .live_turn
+        .as_ref()
+        .filter(|turn| model_of(turn))
+        .map(|turn| (t("Live", "实时"), turn))
+        .or_else(|| {
+            vm.last_turn
+                .as_ref()
+                .filter(|turn| model_of(turn))
+                .map(|turn| (t("Last turn", "上一轮"), turn))
+        });
 
     div()
         .id("model-usage")
@@ -826,37 +813,9 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 theme,
             ))
         })
-        .when_some(usage, |this, row| {
-            // Session-lifetime totals. The context meter above is the latest
-            // prompt; these rows accumulate every turn, so their cache count
-            // is larger by design. The caption keeps the two scopes apart.
-            this.child(caption_line(t("Session totals", "会话累计"), theme))
-                .child(stat_line(
-                    t("Input", "输入"),
-                    &super::compact_count(row.input),
-                    theme,
-                ))
-                .child(stat_line(
-                    t("Output", "输出"),
-                    &super::compact_count(row.output),
-                    theme,
-                ))
-                .when(row.cache > 0, |this| {
-                    let value = match cache_percent(row.cache, row.input) {
-                        Some(share) => format!("{} · {share}%", super::compact_count(row.cache)),
-                        None => super::compact_count(row.cache),
-                    };
-                    this.child(stat_line(t("Cache", "缓存"), &value, theme))
-                })
-                .child(stat_line(
-                    t("Turns", "轮次"),
-                    &row.requests.to_string(),
-                    theme,
-                ))
-        })
-        .when_some(live, |this, turn| {
+        .when_some(turn_row, |this, (label, turn)| {
             this.child(stat_line(
-                t("Live", "实时"),
+                label,
                 &format!(
                     "{} {} · {} {}",
                     super::compact_count(turn.input),
@@ -867,7 +826,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 theme,
             ))
         })
-        .when(usage.is_none() && live.is_none(), |this| {
+        .when(turn_row.is_none(), |this| {
             this.child(
                 div()
                     .text_xs()
@@ -934,22 +893,6 @@ fn stat_line(label: &str, value: &str, theme: &Theme) -> impl IntoElement {
                 .text_color(theme.foreground)
                 .child(value.to_owned()),
         )
-}
-
-/// A quiet divider that names the scope of the rows under it.
-fn caption_line(label: &str, theme: &Theme) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(label.to_owned()),
-        )
-        .child(div().flex_1().h(px(1.)).bg(theme.border.opacity(0.6)))
 }
 
 /// The context bar row. The right-hand pieces come from the same

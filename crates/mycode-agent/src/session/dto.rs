@@ -32,7 +32,8 @@ pub enum EventKind {
     ToolCall,
     /// A completed tool result; `call_id` is `Some`.
     ToolResult,
-    /// A bounded usage record.
+    /// Legacy durable usage record. This build writes none; existing ledgers
+    /// still decode, and replay skips the payload.
     Usage,
     /// Legacy wire tag 4. Existing ledgers still open; replay skips the
     /// payload. New reservations of this kind are rejected.

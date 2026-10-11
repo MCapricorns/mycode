@@ -34,10 +34,7 @@ pub(crate) use self::reduce::{
     reasoning_levels_for, reduce, selected_model_supports_reasoning, selected_reasoning_levels,
 };
 pub(crate) use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
-pub(crate) use self::usage::{
-    ContextMeterParts, TurnStats, UsageTotal, cache_percent, compact_count, context_meter_parts,
-    parse_context_cache, parse_context_tokens, parse_usage_text, usage_key_matches,
-};
+pub(crate) use self::usage::{ContextMeterParts, TurnStats, compact_count, context_meter_parts};
 
 // Kept public API: the `DesktopAction` vocabulary is `pub`, so its payload
 // types must be too (`private_interfaces`).
