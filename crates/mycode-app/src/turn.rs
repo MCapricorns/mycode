@@ -1163,7 +1163,8 @@ async fn run_chat_turn_on(
         .with_cwd(cwd)
         .with_extra_roots(extra_roots)
         .with_read_roots(read_roots)
-        .with_steer(Some(steer));
+        .with_steer(Some(steer))
+        .with_ptc_session(session_id.clone());
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
     // Drain the pump before returning. An agent error already became

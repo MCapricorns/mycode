@@ -38,6 +38,11 @@ pub(super) enum ChildFrame {
         value: Option<Value>,
         #[serde(default)]
         error: Option<DoneError>,
+        /// `Some(false)` when the child refuses another program on this
+        /// process (a live thread, or bootstrap internals it can no longer
+        /// trust). Absent means the process can take another program.
+        #[serde(default)]
+        warm: Option<bool>,
     },
 }
 
@@ -60,6 +65,10 @@ pub(super) enum HostFrame {
         tools: Vec<String>,
         restricted: bool,
         warn_process: bool,
+        /// Working directory for this call. The warm interpreter `chdir`s
+        /// here before user code so a later call does not keep the previous
+        /// one.
+        cwd: String,
     },
     #[serde(rename = "reply")]
     Reply {
@@ -168,7 +177,7 @@ mod tests {
         let (body, rest) = split_frame(&frame).unwrap().unwrap();
         assert!(rest.is_empty());
         match decode_child(body).unwrap() {
-            ChildFrame::Done { value, error } => {
+            ChildFrame::Done { value, error, .. } => {
                 assert!(value.is_none());
                 let error = error.expect("error");
                 assert_eq!(error.kind, "exception");
