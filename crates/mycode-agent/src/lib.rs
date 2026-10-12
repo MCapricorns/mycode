@@ -38,8 +38,8 @@ pub use agent::{Agent, AgentConfig};
 pub use env::{SteerInbox, TurnEnv};
 pub use hooks::HookRunner;
 pub use prompt::{
-    ChoiceScenario, TaskWeight, accept_choice, build_system_prompt, choice_scenarios,
-    grouped_execution_block, prompt_guides,
+    ChoiceScenario, TaskWeight, accept_choice, accept_scenario, build_system_prompt,
+    choice_scenarios, grouped_execution_block, prompt_guides,
 };
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
