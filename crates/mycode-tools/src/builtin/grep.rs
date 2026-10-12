@@ -879,10 +879,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-grep-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(root.join("sub")).expect("dir");
         std::fs::write(root.join("sub/a.txt"), "alpha needle\nsecond line\n").expect("file");

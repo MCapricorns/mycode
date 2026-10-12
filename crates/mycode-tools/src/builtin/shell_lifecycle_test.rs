@@ -23,10 +23,7 @@ fn scratch_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "mycode-shell-{label}-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or(0)
+        crate::unix_now().as_nanos()
     ));
     std::fs::create_dir_all(&dir).expect("scratch dir");
     dir

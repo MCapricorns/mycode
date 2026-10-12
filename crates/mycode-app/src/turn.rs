@@ -1475,10 +1475,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-turn-compact-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("scratch");
         #[cfg(unix)]
@@ -1751,10 +1748,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-prompt-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+            crate::unix_now().as_nanos()
         ));
         let _guard = TempDir(root.clone());
         fs::create_dir_all(root.join(".agents")).unwrap();

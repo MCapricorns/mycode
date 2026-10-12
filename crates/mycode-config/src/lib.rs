@@ -45,8 +45,7 @@ pub use project_mcp::project_mcp_servers;
 #[doc(inline)]
 pub use resources::{
     MAX_SKILLS, ResourceFile, SkillFile, discover_resources, discover_skills,
-    skill_read_roots,
-    render_resource_prompt, render_skill_catalog,
+    render_resource_prompt, render_skill_catalog, skill_read_roots,
 };
 pub use secrets::{
     MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_PATH,
@@ -92,3 +91,11 @@ pub use ui_state::{
     revoke_project_trust, same_project_path, session_model, toggle_star, trust_project,
     upsert_session_model,
 };
+
+/// Returns the wall-clock duration since the Unix epoch, saturating at zero
+/// when the system clock predates the epoch.
+pub(crate) fn unix_now() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}

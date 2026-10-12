@@ -163,10 +163,7 @@ pub(crate) fn bound_mcp_result(dir: &std::path::Path, text: &str) -> String {
     let id = format!(
         "mcp-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
+        crate::unix_now().as_nanos()
     );
     let path = dir.join(format!("{id}.txt"));
     let stored = match std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&path, text)) {
@@ -764,10 +761,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "mycode-mcp-result-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         let text = "y".repeat(30 * 1024);
         let shown = bound_mcp_result(&dir, &text);
@@ -943,10 +937,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-mcp-ptc-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
         let ctx = mycode_tools::ToolCtx::new(&root)

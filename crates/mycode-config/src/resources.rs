@@ -282,10 +282,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "mycode-skills-{label}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+            crate::unix_now().as_nanos()
         ));
         fs::create_dir_all(&path).unwrap();
         TempDir(path)
@@ -307,7 +304,13 @@ mod tests {
         );
         fs::create_dir_all(home.0.join(".agents").join("skills")).unwrap();
         let roots = super::skill_read_roots(Some(&home.0));
-        assert_eq!(roots, vec![home.0.join(".agents"), home.0.join(".agents").join("skills")]);
+        assert_eq!(
+            roots,
+            vec![
+                home.0.join(".agents"),
+                home.0.join(".agents").join("skills")
+            ]
+        );
     }
 
     #[test]

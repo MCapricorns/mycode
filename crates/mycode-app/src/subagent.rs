@@ -116,10 +116,7 @@ pub(crate) struct WorktreeLease {
 impl WorktreeLease {
     /// Creates a detached worktree of the current repository HEAD.
     pub(crate) fn acquire(home: &HomeLayout, repo: &Path) -> Result<Self, String> {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or_default();
+        let stamp = crate::unix_now().as_millis();
         let id = format!("agent-{}-{stamp}", std::process::id());
         let leases = home.root().join(WORKTREE_LEASE_DIR);
         std::fs::create_dir_all(&leases).map_err(|error| format!("lease dir: {error}"))?;
@@ -842,10 +839,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-wt-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         let repo = root.join("repo");
         let home_root = root.join("home");
@@ -1157,10 +1151,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-scout-skill-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         let skill = root.join(".agents").join("skills").join("aaa-ptc");
         std::fs::create_dir_all(&skill).unwrap();
@@ -1285,10 +1276,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-subagent-auth-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
         #[cfg(unix)]

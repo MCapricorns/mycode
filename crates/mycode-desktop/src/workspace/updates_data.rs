@@ -370,10 +370,7 @@ impl Workspace {
     /// and the file carries the keys as plaintext JSON.
     pub(crate) fn on_export_data(&mut self, cx: &mut Context<Self>) {
         let directory = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or_default();
+        let stamp = crate::unix_now().as_secs();
         let suggested = format!("mycode-export-{stamp}.json");
         let receiver = cx.prompt_for_new_path(&directory, Some(&suggested));
         cx.spawn(async move |this, cx| {

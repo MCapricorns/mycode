@@ -248,10 +248,7 @@ fn unique_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "{prefix}-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
+        crate::unix_now().as_nanos()
     ));
     fs::create_dir_all(&path).expect("base dir");
     path
