@@ -13,7 +13,7 @@
 | 模块 | 干什么 |
 | --- | --- |
 | `message` | `Message`：`User` / `Assistant` / `ToolResult`；内容块 `Text`、`Thinking`（带可选 `signature` 和 `replay`）、`ToolCall`、`Image`。serde 用外部标签。`SharedMessage = Arc<Message>`，历史和请求共享同一份消息。`Usage` 带输入、输出、缓存读写和 `prompt_tokens`（给上下文计量用）。`tool_target` / `tool_label` 给界面一行字：读了哪个文件、搜了什么、跑了哪条命令。`interrupted_response_text` 是流中断时那一行 `[error] the response was interrupted: …` |
-| `events` | 循环向外广播的 `AgentEvent`：`TurnStarted`、`MessageDelta`、`MessageAdded`、`ToolStarted` / `ToolProgress` / `ToolCompleted`、`TurnEnded(Completed \| Aborted)`、`Error`。必须 `Clone`，因为 agent 用 `tokio::broadcast` 分发 |
+| `events` | 循环向外广播的 `AgentEvent`：`TurnStarted`、`MessageDelta`、`MessageAdded`、`ToolStarted` / `ToolProgress` / `ToolCompleted`、`CacheDisrupted`（回合中压缩改写了前缀，排在下一次响应之前）、`TurnEnded(Completed \| Aborted)`、`Error`。必须 `Clone`，因为 agent 用 `tokio::broadcast` 分发 |
 | `ids` | `CallId`，把一次工具调用和它的结果对上 |
 | `tool` | `ToolSpec`：名字、说明、一份 JSON Schema。模型看见的规格和运行时校验用同一份。`inline_schema_refs` 把本地 `$ref` 展开、去掉 `$defs`，循环引用或超过 32 层收成 `{type: object}` |
 | `provider` | `Provider` trait、`Request`、`ReasoningLevel`、`StreamEvent`、有界 `EventStream`、已脱敏的 `ProviderError` |

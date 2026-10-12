@@ -11,7 +11,7 @@ use super::settings::{
     CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
     WebSubview,
 };
-use super::usage::TurnStats;
+use super::usage::{CacheAlert, CacheBreak, CacheWatch, TurnStats};
 
 /// The main area view: chat or full-page settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -115,6 +115,12 @@ pub(crate) struct WorkspaceState {
     /// Cache-read tokens on the latest prompt. `0` when the provider reported
     /// none. Shown on the composer chip row and the inspector context meter.
     pub context_cache: u64,
+    /// Armed after compaction or a steer until the next prompt reports usage.
+    /// The baseline is the hit percent already on the meter.
+    pub cache_watch: Option<CacheWatch>,
+    /// Details warning after that prompt's cache hit collapses. Cleared when
+    /// a later prompt is warm again, or when the open session changes.
+    pub cache_alert: Option<CacheAlert>,
     /// Active composer mention autocomplete, when a trigger is typed.
     pub mention: Option<ComposerMention>,
     /// In-flight Copilot device-flow sign-in, when any.
@@ -438,6 +444,9 @@ pub enum DesktopAction {
         /// Ledger head spelling, or empty when the head must not move.
         head: String,
     },
+    /// Compaction or a steer rewrote the prompt prefix. The next usage
+    /// snapshot is compared with the cache hit already on the meter.
+    CacheBreakArmed(CacheBreak),
     /// A steer was committed on the active session while the turn kept running.
     SteerCommitted {
         /// Session identity spelling.
