@@ -144,3 +144,76 @@ pub(crate) fn resume_thread_handle(thread: &OwnedHandle) -> std::io::Result<()> 
     }
     Ok(())
 }
+
+/// Resumes the primary thread of a process that is still `CREATE_SUSPENDED`.
+///
+/// `process` must stay open across this call. The pid is taken from that
+/// handle, so a reused pid cannot be resumed. Toolhelp is used because the
+/// `CreateProcessW` thread handle was not kept.
+pub(crate) fn resume_suspended_primary_thread(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> std::io::Result<()> {
+    use std::mem::size_of;
+    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows_sys::Win32::System::Threading::{GetProcessId, OpenThread, THREAD_SUSPEND_RESUME};
+
+    // SAFETY: `process` is a live handle borrowed from the caller.
+    // `GetProcessId` does not retain it.
+    let pid = unsafe { GetProcessId(process) };
+    if pid == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `TH32CS_SNAPTHREAD` ignores the process-id argument. Failure
+    // returns `INVALID_HANDLE_VALUE` and does not allocate a snapshot.
+    let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if raw_snapshot.is_null() || raw_snapshot == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `CreateToolhelp32Snapshot` returned a fresh owned handle.
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(raw_snapshot) };
+    let mut entry = THREADENTRY32 {
+        dwSize: u32::try_from(size_of::<THREADENTRY32>()).expect("THREADENTRY32 fits u32"),
+        ..THREADENTRY32::default()
+    };
+    // SAFETY: `snapshot` is live and `entry.dwSize` is the documented size.
+    // `Thread32First` writes one entry or returns zero.
+    if unsafe { Thread32First(snapshot.as_raw_handle(), &raw mut entry) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut thread_id = None;
+    let mut count = 0u32;
+    loop {
+        if entry.th32OwnerProcessID == pid {
+            count = count.saturating_add(1);
+            thread_id = Some(entry.th32ThreadID);
+        }
+        // SAFETY: `snapshot` and `entry` stay valid for this call. A zero
+        // result ends the walk, including `ERROR_NO_MORE_FILES`.
+        if unsafe { Thread32Next(snapshot.as_raw_handle(), &raw mut entry) } == 0 {
+            break;
+        }
+    }
+    drop(snapshot);
+    if count != 1 {
+        return Err(std::io::Error::other(format!(
+            "suspended child had {count} threads; expected the primary thread only"
+        )));
+    }
+    let Some(thread_id) = thread_id else {
+        return Err(std::io::Error::other("suspended child thread id missing"));
+    };
+    // SAFETY: `OpenThread` returns a fresh owned handle, or null. The handle
+    // is not inheritable. The process is still suspended, so this thread id
+    // cannot have exited and been reused.
+    let raw_thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
+    if raw_thread.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `OpenThread` returned a fresh owned handle.
+    let thread = unsafe { OwnedHandle::from_raw_handle(raw_thread) };
+    resume_thread_handle(&thread)
+}

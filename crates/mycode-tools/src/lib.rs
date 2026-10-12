@@ -51,6 +51,10 @@ pub use roots::anchor_tool_path;
 pub use stream::{ToolProgress, ToolStream, ToolStreamItem, ToolStreamReceiver};
 pub use tool::{Tool, ToolDyn, ToolError, ToolResult};
 
+/// Resumes the only thread of a Windows process created with `CREATE_SUSPENDED`.
+#[cfg(windows)]
+pub use builtin::process::resume_suspended_primary_thread;
+
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
 /// when the system clock predates the epoch.
 #[cfg(test)]
