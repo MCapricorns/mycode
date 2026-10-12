@@ -3,7 +3,8 @@
 //! Model and reasoning sit as small controls inside the bar. While a turn is
 //! running the arrow slot is Stop: it ends the whole turn, including every
 //! subagent. Text sent during that turn is a steer to the main model and does
-//! not cancel the children.
+//! not cancel the children. Running scouts and artisans sit above the card,
+//! each with its own cancel.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -68,6 +69,12 @@ pub(super) fn render_composer(
         Some(render_queued_followups(queued, cx).into_any_element())
     } else {
         None
+    };
+    let running = workspace.vm().live_jobs.clone();
+    let running_panel = if running.is_empty() {
+        None
+    } else {
+        Some(render_running_subagents(running, cx).into_any_element())
     };
     if workspace.composer_steer != sending {
         workspace.composer_steer = sending;
@@ -155,6 +162,7 @@ pub(super) fn render_composer(
                 .min_w_0()
                 .flex()
                 .flex_col()
+                .when_some(running_panel, |this, running| this.child(running))
                 .when_some(queue_panel, |this, queue| this.child(queue))
                 .child(
                     div()
@@ -332,6 +340,131 @@ fn composer_text_button(
 }
 
 /// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
+fn render_running_subagents(
+    jobs: Vec<crate::view_model::LiveJob>,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    let desk = Desk::of(theme);
+    let capped = crate::view_model::capped_artisan_count(&jobs);
+    let count = jobs.len();
+    div()
+        .id("running-subagents")
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .pb_1()
+        .when(capped > 0, |this| {
+            this.child(
+                div()
+                    .id("running-subagents-cap")
+                    .text_xs()
+                    .whitespace_normal()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(6.))
+                    .bg(theme.warning.opacity(0.18))
+                    .text_color(theme.warning_foreground)
+                    .child(crate::view_model::capped_artisan_status(capped)),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(crate::ui::lamp(desk.amber))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(desk.faint)
+                        .child(format!("{}  {count}", t("RUNNING", "运行中"))),
+                ),
+        )
+        .child(
+            div()
+                .id("running-subagents-list")
+                .w_full()
+                .max_h(px(168.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(jobs.into_iter().enumerate().map(|(index, job)| {
+                    let call_id = job.call_id.clone();
+                    let cancel_id = job.call_id.clone();
+                    let title = job.title();
+                    let step = job.step_label();
+                    let warned = job.capped;
+                    div()
+                        .id(format!("running-subagent-{index}"))
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.))
+                        .px_1()
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .hover(|row| row.bg(skin::frost_hover(theme)))
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_open_subagent(&call_id, cx);
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .min_w_0()
+                                .child(crate::ui::lamp(if warned {
+                                    theme.warning
+                                } else {
+                                    desk.amber
+                                }))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .truncate()
+                                        .text_color(theme.foreground)
+                                        .child(title),
+                                )
+                                .child(
+                                    div()
+                                        .id(format!("running-subagent-cancel-{index}"))
+                                        .flex_shrink_0()
+                                        .px_1()
+                                        .text_xs()
+                                        .cursor_pointer()
+                                        .text_color(theme.muted_foreground)
+                                        .hover(|this| this.text_color(theme.danger))
+                                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                                            cx.stop_propagation();
+                                            workspace.on_cancel_subagent(&cancel_id, cx);
+                                        }))
+                                        .child(t("Cancel", "取消")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .pl(px(15.))
+                                .text_xs()
+                                .truncate()
+                                .text_color(if warned {
+                                    theme.warning_foreground
+                                } else {
+                                    theme.muted_foreground
+                                })
+                                .child(step),
+                        )
+                })),
+        )
+}
+
 fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let desk = Desk::of(theme);
