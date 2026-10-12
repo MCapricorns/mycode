@@ -93,9 +93,14 @@ pub struct TurnEnv<'a> {
     /// Session key for the warm `run_code` interpreter. `None` cold-starts
     /// Python on every call. Scout and the main agent still use separate
     /// processes: isolation is part of the pool key, not this string.
-    /// Opt-in OS sandboxing ignores this key and cold-starts every call.
+    /// OS sandboxing ignores this key and cold-starts every call when the
+    /// effective flag is on.
     pub ptc_session: Option<String>,
-    /// Opt-in OS helper for `shell` and `run_code`. Default off.
+    /// Effective OS helper for `shell` and `run_code`.
+    ///
+    /// The settings default is on. The host sets this from the effective
+    /// value, which is off on Windows so shell and `run_code` still run.
+    /// `true` still fail-closes when the helper is missing.
     pub os_sandbox: bool,
 }
 
@@ -122,7 +127,7 @@ impl<'a> TurnEnv<'a> {
         }
     }
 
-    /// Opt `shell` and `run_code` into the best-effort OS helper.
+    /// Enable or disable the best-effort OS helper for `shell` and `run_code`.
     pub fn with_os_sandbox(mut self, enabled: bool) -> Self {
         self.os_sandbox = enabled;
         self

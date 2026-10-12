@@ -40,7 +40,10 @@ pub use builtin::shell::{
     DetectedShell, ShellKind, active_shell, detect_default_shell, render_environment_block,
     resolved_shell, script_shell_line,
 };
-pub use builtin::{ShellTool, os_sandbox_prompt_note, register_builtins, release_ptc_session};
+pub use builtin::{
+    ShellTool, os_sandbox_prompt_note, os_sandbox_status_note, os_sandbox_unsupported_prompt_note,
+    register_builtins, release_ptc_session,
+};
 pub use ctx::ToolCtx;
 pub use invoke::prepare_tool_ctx;
 pub use registry::{ToolCatalog, ToolRegistry};

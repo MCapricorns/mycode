@@ -337,6 +337,10 @@ fn section_keywords(section: SettingsSection) -> &'static [&'static str] {
             "主题",
             "font",
             "字体",
+            "sandbox",
+            "沙箱",
+            "os sandbox",
+            "操作系统沙箱",
         ],
         SettingsSection::Models => &[
             "models",
