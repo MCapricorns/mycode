@@ -36,8 +36,12 @@ use crate::view_model::WorkspaceState;
 use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
 use crate::workspace::Workspace;
 
-/// Bottom composer: a rounded card across the chat column, with the model
-/// and thinking controls as quiet text buttons.
+/// Centered composer measure. Narrower than the chat pane; prose and tool
+/// cards stay full width and left-aligned.
+const COMPOSER_MAX_PX: f32 = 720.;
+
+/// Bottom composer: a short centered card, with the model and thinking
+/// controls as quiet text buttons. The field soft-wraps and grows with the draft.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
     window: &mut Window,
@@ -137,90 +141,96 @@ pub(super) fn render_composer(
     div()
         .id("composer")
         .flex()
-        .flex_col()
+        .flex_row()
+        .justify_center()
         .w_full()
         .px_4()
-        .pt_2()
-        .pb_4()
-        .when_some(queue_panel, |this, queue| {
-            this.child(div().w_full().child(queue))
-        })
+        .pt(skin::space(1))
+        .pb(skin::space(3))
         .child(
             div()
-                .id("composer-card")
+                .id("composer-column")
+                .w_full()
+                .max_w(px(COMPOSER_MAX_PX))
+                .min_w_0()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .px_3()
-                .pt_2()
-                .pb_2()
-                .w_full()
-                .rounded(skin::radius_lg())
-                .border_1()
-                .border_color(skin::glass_border(theme))
-                .bg(skin::popover(theme))
+                .when_some(queue_panel, |this, queue| this.child(queue))
                 .child(
                     div()
-                        .id("composer-input")
+                        .id("composer-card")
                         .flex()
-                        .flex_row()
-                        .items_center()
+                        .flex_col()
+                        .gap(skin::space(1))
+                        .px(skin::space(3))
+                        .py(skin::space(1))
                         .w_full()
-                        .min_w_0()
-                        .min_h(px(36.))
-                        .text_sm()
+                        .rounded(skin::radius_lg())
+                        .border_1()
+                        .border_color(skin::glass_border(theme))
+                        .bg(skin::popover(theme))
                         .child(
                             div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .child(Textarea::new(&composer).appearance(false).bordered(false)),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("composer-chip-row")
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_1()
-                        .w_full()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .id("composer-plus")
-                                .size(px(28.))
+                                .id("composer-input")
                                 .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(10.))
-                                .cursor_pointer()
-                                .text_color(theme.muted_foreground)
-                                .hover(|this| this.bg(theme.secondary_hover))
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_open_project_dialog(cx);
-                                }))
-                                .child(Icon::new(IconName::Plus).small()),
+                                .flex_col()
+                                .w_full()
+                                .min_w_0()
+                                .h_auto()
+                                .min_h(px(22.))
+                                .text_sm()
+                                .child(
+                                    Textarea::new(&composer)
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .w_full(),
+                                ),
                         )
-                        .child(composer_text_button(
-                            "project",
-                            project_chip_label,
-                            false,
-                            px(140.),
-                            |workspace, _window, cx| {
-                                workspace.on_open_project_dialog(cx);
-                            },
-                            cx,
-                        ))
-                        .child(model_chip)
-                        .when_some(thinking_chip, |this, chip| this.child(chip))
-                        .child(div().flex_1().min_w(px(8.)))
-                        .when_some(context_meter(workspace), |this, meter| {
-                            this.child(composer_meter_chip(meter, theme))
-                        })
-                        .child(composer_round_button(sending, can_send, cx)),
+                        .child(
+                            div()
+                                .id("composer-chip-row")
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_1()
+                                .w_full()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .id("composer-plus")
+                                        .size(skin::space(6))
+                                        .flex()
+                                        .flex_shrink_0()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(10.))
+                                        .cursor_pointer()
+                                        .text_color(theme.muted_foreground)
+                                        .hover(|this| this.bg(theme.secondary_hover))
+                                        .on_click(cx.listener(|workspace, _, _, cx| {
+                                            workspace.on_open_project_dialog(cx);
+                                        }))
+                                        .child(Icon::new(IconName::Plus).small()),
+                                )
+                                .child(composer_text_button(
+                                    "project",
+                                    project_chip_label,
+                                    false,
+                                    px(140.),
+                                    |workspace, _window, cx| {
+                                        workspace.on_open_project_dialog(cx);
+                                    },
+                                    cx,
+                                ))
+                                .child(model_chip)
+                                .when_some(thinking_chip, |this, chip| this.child(chip))
+                                .child(div().flex_1().min_w(px(8.)))
+                                .when_some(context_meter(workspace), |this, meter| {
+                                    this.child(composer_meter_chip(meter, theme))
+                                })
+                                .child(composer_round_button(sending, can_send, cx)),
+                        ),
                 ),
         )
 }
@@ -244,7 +254,7 @@ fn composer_round_button(
         } else {
             "composer-send"
         })
-        .size(px(30.))
+        .size(skin::space(6))
         .flex_shrink_0()
         .ml_auto()
         .rounded(px(10.))
@@ -538,5 +548,87 @@ mod tests {
         assert!(!COMPOSER_PLACEHOLDER.1.contains("对话"));
         assert_eq!(STEER_PLACEHOLDER.0, "Steer without interrupting");
         assert_eq!(STEER_PLACEHOLDER.1, "追加引导,不打断当前任务");
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod wrap_layout {
+    use gpui_kit::component::input::{Textarea, TextareaState};
+    use gpui_kit::test::{TestSupportExt as _, TestWindowExt as _};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui_kit::{
+        AppContext as _, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+        Styled, TestAppContext, Window, div, px, size,
+    };
+
+    struct WrapProbe {
+        state: Entity<TextareaState>,
+        width: f32,
+    }
+
+    impl Render for WrapProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                div()
+                    .id("wrap-box")
+                    .w(px(self.width))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .id("composer-input")
+                            .w_full()
+                            .min_w_0()
+                            .h_auto()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                Textarea::new(&self.state)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .w_full(),
+                            )
+                            .test_support(),
+                    )
+                    .test_support(),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_long_draft_wraps_and_grows_inside_the_composer_width(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let width = 360.;
+        let held: Rc<RefCell<Option<Entity<TextareaState>>>> = Rc::new(RefCell::new(None));
+        let slot = held.clone();
+        let handle = cx.open_window(size(px(800.), px(400.)), move |window, cx| {
+            let state = cx.new(|cx| {
+                TextareaState::new(window, cx)
+                    .soft_wrap(true)
+                    .auto_grow(1, 8)
+            });
+            *slot.borrow_mut() = Some(state.clone());
+            WrapProbe { state, width }
+        });
+        let state = held.borrow().clone().expect("textarea");
+        cx.update_window(handle.into(), |_, window, cx| {
+            let draft = "wrap this sentence ".repeat(12);
+            state.update(cx, |state, cx| state.set_value(draft, window, cx));
+            window.render_frame(cx);
+            window.render_frame(cx);
+            let box_bounds = window.find("wrap-box").bounds();
+            let input = window.find("composer-input").bounds();
+            assert!(
+                input.right() <= box_bounds.right() + px(1.)
+                    && input.size.width <= box_bounds.size.width + px(1.),
+                "the field must stay inside the composer width: input {input:?} box {box_bounds:?}"
+            );
+            assert!(
+                input.size.height > px(28.),
+                "a long draft must wrap onto another line instead of scrolling sideways: {input:?}"
+            );
+        })
+        .unwrap();
     }
 }

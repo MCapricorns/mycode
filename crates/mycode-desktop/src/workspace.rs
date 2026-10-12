@@ -274,6 +274,7 @@ impl Workspace {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder(crate::ui::composer_placeholder(false))
+                .soft_wrap(true)
                 .auto_grow(1, 10)
                 .submit_on_enter(true)
         });

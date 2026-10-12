@@ -84,8 +84,9 @@ pub(super) fn space(steps: u32) -> gpui_kit::Pixels {
     px(SPACE_PX * steps as f32)
 }
 
-/// Reading measure for prose. Code blocks and tables may use the full column.
-pub(super) const PROSE_MAX_PX: f32 = 750.;
+/// Left-aligned reading cap. The column shares the tool-card gutter and only
+/// stops growing on an ultrawide pane, so it is not a centered 750px measure.
+pub(super) const PROSE_MAX_PX: f32 = 1200.;
 
 pub(super) fn prose_max() -> gpui_kit::Pixels {
     px(PROSE_MAX_PX)
