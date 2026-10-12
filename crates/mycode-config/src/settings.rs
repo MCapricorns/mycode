@@ -23,7 +23,8 @@ pub use mcp::{
 };
 pub use providers::{MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings};
 pub use subagent_roles::{
-    DEFAULT_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings,
+    DEFAULT_SUBAGENT_CONCURRENCY, DEFAULT_SUBAGENT_TIMEOUT_SECS, MAX_SUBAGENT_CONCURRENCY,
+    MAX_SUBAGENT_TIMEOUT_SECS, SubagentRoleSettings, SubagentSettings,
 };
 pub use tools_shell::{ShellSettings, ToolsSettings};
 pub use user_agent::default_user_agent;
@@ -701,6 +702,24 @@ mod tests {
         assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionExhausted);
         let kept = std::fs::read(&path).expect("original remains");
         assert!(kept.windows(2).any(|window| window == b",}"), "{kept:?}");
+    }
+
+    #[test]
+    fn missing_subagent_timeout_uses_the_default_wall_clock() {
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 1,
+            "subagents": { "maxConcurrent": 2 }
+        }"#;
+        let parsed = decode_settings(bytes).expect("older subagent settings");
+        assert_eq!(parsed.settings.subagents.max_concurrent, 2);
+        assert_eq!(parsed.settings.subagents.timeout_secs, 0);
+        assert_eq!(
+            parsed.settings.subagents.effective_timeout_secs(),
+            super::DEFAULT_SUBAGENT_TIMEOUT_SECS
+        );
+        assert!(parsed.settings.validate().is_ok());
     }
 
     struct TempDir(std::path::PathBuf);

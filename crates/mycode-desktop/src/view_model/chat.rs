@@ -55,6 +55,64 @@ pub(crate) struct LiveJob {
     pub step: String,
     /// Recent progress lines for the detail window.
     pub log: Vec<String>,
+    /// An artisan is waiting because every concurrency slot is taken.
+    pub capped: bool,
+}
+
+impl LiveJob {
+    /// Role plus the short brief, so a row reads as `scout · map the crate`.
+    #[must_use]
+    pub(crate) fn title(&self) -> String {
+        let role = if self.role.is_empty() {
+            "agent"
+        } else {
+            self.role.as_str()
+        };
+        if self.label.is_empty() {
+            role.to_owned()
+        } else {
+            format!("{role} · {}", self.label)
+        }
+    }
+
+    /// Progress line for a row. Token steps are localized; a cap warning is
+    /// already a sentence.
+    #[must_use]
+    pub(crate) fn step_label(&self) -> String {
+        match self.step.as_str() {
+            "" | "starting" => crate::i18n::t("starting", "启动中").to_owned(),
+            "queued" => crate::i18n::t("queued", "排队中").to_owned(),
+            other => other.to_owned(),
+        }
+    }
+}
+
+/// How many listed jobs are artisans waiting past the concurrency cap.
+#[must_use]
+pub(crate) fn capped_artisan_count(jobs: &[LiveJob]) -> usize {
+    jobs.iter()
+        .filter(|job| job.capped && job.role == "artisan")
+        .count()
+}
+
+/// Status and banner copy for artisans queued past the concurrency cap.
+#[must_use]
+pub(crate) fn capped_artisan_status(count: usize) -> String {
+    if count == 1 {
+        crate::i18n::t(
+            "1 artisan queued past the concurrency cap",
+            "1 个 artisan 超过并发上限在排队",
+        )
+        .to_owned()
+    } else {
+        format!(
+            "{count} {}",
+            crate::i18n::t(
+                "artisans queued past the concurrency cap",
+                "个 artisan 超过并发上限在排队",
+            )
+        )
+    }
 }
 
 /// The mention trigger parsed from the composer draft.
@@ -84,6 +142,24 @@ pub(crate) fn session_title_matches(title: &str, filter: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::session_title_matches;
+
+    #[test]
+    fn a_live_job_title_names_the_role() {
+        let job = super::LiveJob {
+            role: "scout".to_owned(),
+            label: "map tokio".to_owned(),
+            ..super::LiveJob::default()
+        };
+        assert_eq!(job.title(), "scout · map tokio");
+        assert_eq!(
+            super::LiveJob {
+                role: "artisan".to_owned(),
+                ..super::LiveJob::default()
+            }
+            .title(),
+            "artisan"
+        );
+    }
 
     #[test]
     fn title_filter_is_case_insensitive_and_blank_matches_all() {

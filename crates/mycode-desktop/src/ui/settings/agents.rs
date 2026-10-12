@@ -19,8 +19,10 @@ use crate::ui::model_picker::{ModelPickerTarget, model_display_name, render_mode
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
-/// The settings copy hard-codes this default. Keep it aligned with config.
+/// The settings copy hard-codes these defaults. Keep them aligned with config.
 const _: () = assert!(mycode_config::DEFAULT_SUBAGENT_CONCURRENCY == 4);
+const _: () = assert!(mycode_config::DEFAULT_SUBAGENT_TIMEOUT_SECS == 20 * 60);
+const _: () = assert!(mycode_config::MAX_SUBAGENT_TIMEOUT_SECS == 2 * 60 * 60);
 
 pub(super) fn render_agents_section(
     workspace: &mut Workspace,
@@ -31,6 +33,7 @@ pub(super) fn render_agents_section(
         return div().into_any_element();
     };
     let max_concurrent = settings.subagents.max_concurrent;
+    let timeout_secs = settings.subagents.timeout_secs;
     let theme = cx.theme().clone();
     let catalog = workspace.agent_roles();
     let (primary, additional) = group_settings_roles(&catalog);
@@ -68,6 +71,27 @@ pub(super) fn render_agents_section(
                         };
                         let mut next = settings.subagents;
                         next.max_concurrent = next_concurrency(next.max_concurrent);
+                        workspace.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+                    }))
+                    .into_any_element(),
+            ),
+            super::widgets::settings_row(
+                "agents-timeout",
+                t("Wall-clock timeout", "墙钟超时"),
+                Some(t(
+                    "0 = default (20m). Waiting for a slot does not count",
+                    "0 = 默认 (20 分钟)。排队等待不计入",
+                )),
+                Button::new("agents-timeout-cycle")
+                    .label(timeout_button_label(timeout_secs))
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        let Some(settings) = workspace.vm().settings.clone() else {
+                            return;
+                        };
+                        let mut next = settings.subagents;
+                        next.timeout_secs = next_timeout(next.timeout_secs);
                         workspace.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
                     }))
                     .into_any_element(),
@@ -123,6 +147,36 @@ fn next_concurrency(current: u32) -> u32 {
         0
     } else {
         current + 1
+    }
+}
+
+/// Presets the settings button cycles. `0` is the default sentinel.
+const TIMEOUT_PRESETS_SECS: [u32; 7] = [0, 300, 600, 1_200, 1_800, 3_600, 7_200];
+
+fn next_timeout(current: u32) -> u32 {
+    TIMEOUT_PRESETS_SECS
+        .into_iter()
+        .find(|preset| *preset > current)
+        .unwrap_or(0)
+}
+
+fn timeout_button_label(secs: u32) -> String {
+    if secs == 0 {
+        format!(
+            "{} ({})",
+            t("default", "默认"),
+            format_timeout(mycode_config::DEFAULT_SUBAGENT_TIMEOUT_SECS)
+        )
+    } else {
+        format_timeout(secs)
+    }
+}
+
+fn format_timeout(secs: u32) -> String {
+    if secs > 0 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
     }
 }
 
@@ -376,7 +430,7 @@ fn title_case(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::next_concurrency;
+    use super::{next_concurrency, next_timeout};
 
     #[test]
     fn settings_roles_are_scout_and_artisan() {
@@ -447,5 +501,20 @@ mod tests {
         assert_eq!(next_concurrency(4), 5);
         assert_eq!(next_concurrency(mycode_config::MAX_SUBAGENT_CONCURRENCY), 0);
         assert_eq!(mycode_config::DEFAULT_SUBAGENT_CONCURRENCY, 4);
+    }
+
+    #[test]
+    fn timeout_cycle_walks_the_presets_and_wraps() {
+        assert_eq!(next_timeout(0), 300);
+        assert_eq!(next_timeout(90), 300);
+        assert_eq!(next_timeout(1_200), 1_800);
+        assert_eq!(next_timeout(mycode_config::MAX_SUBAGENT_TIMEOUT_SECS), 0);
+        assert!(
+            super::timeout_button_label(0).contains("20m"),
+            "{}",
+            super::timeout_button_label(0)
+        );
+        assert_eq!(super::timeout_button_label(90), "90s");
+        assert_eq!(super::timeout_button_label(600), "10m");
     }
 }

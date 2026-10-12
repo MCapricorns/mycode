@@ -77,7 +77,7 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 | 工具 | 宿主提供什么 |
 | --- | --- |
 | `ask_user` | 把 1–4 个问题送到界面，等用户答完再继续。在脚本里拒绝问题会抛出可捕获的 `ToolCallError`，程序继续。停止整个回合会中止程序 |
-| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，在脚本里是 `await tools.agent(...)`，没有 `task` 别名。`asyncio.gather` 里的多个 `tools.agent` 会并行；能写的角色用 worktree，不共用会话目录。宿主仍限制同时跑几个。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
+| `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，在脚本里是 `await tools.agent(...)`，没有 `task` 别名。`asyncio.gather` 里的多个 `tools.agent` 会并行；能写的角色用 worktree，不共用会话目录。宿主仍限制同时跑几个。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理有墙钟超时：`subagents.timeoutSecs` 为 `0` 时默认 20 分钟（1200 秒），上限 2 小时，排队等待不计入。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
 | `run_code` | 模型唯一能直接调用的工具。参数是 `description` 然后 `code`：`code` 是系统 Python 3.10+ 里一段 async 函数体。其它工具只能写成 `await tools.name(...)`，名字不是标识符时用 `await tools["name"](...)`。每次新进程、精简环境。控制通道在 Unix 上是继承的套接字对（没有落在文件系统上的套接字），令牌从这根套接字交给子进程。Windows 以及套接字对打不开时用带一次性令牌的 `127.0.0.1` TCP，令牌在一个 `0600` 文件里，读完即删。令牌不放在命令行，也不放进环境变量。核对之后才下发程序。内层调用经过同一套路径预检。`read`、`grep`、`find`、`web_search`、`fetch_content` 和 `agent` 可 `asyncio.gather` 重叠；`write`、`edit`、`shell` 按提交顺序单独执行。只有 `print` 和 `return` 回到模型。一次最多 48 次工具调用、8 路并行、32 个未完成调用、120 秒；回到模型的文本上限 8000 字节。程序里的 `read` 不带 `[revision ...]` 标签。找不到 Python 时返回按操作系统写的安装步骤，窗口用同一段说明做横幅 |
 | `web_search` / `fetch_content` | 有界 HTTP：每次最多 8 条结果 / 8 个 URL。搜索结果是标题、URL 和最多 240 字符的摘要，重复 URL 丢掉，相同查询缓存 10 分钟。`fetch_content` 带 `goal` 时只返回匹配摘录（每页约 1200 字符）；不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)` |
 

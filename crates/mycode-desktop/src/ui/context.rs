@@ -237,6 +237,7 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let jobs = workspace.vm().live_jobs.clone();
+    let capped = crate::view_model::capped_artisan_count(&jobs);
     let summary = if jobs.len() == 1 {
         t("1 running", "1 个运行中").to_owned()
     } else {
@@ -261,24 +262,26 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                         .child(summary),
                 ),
         )
+        .when(capped > 0, |this| {
+            this.child(
+                div()
+                    .id("subagents-cap")
+                    .text_xs()
+                    .whitespace_normal()
+                    .px_2()
+                    .py_1()
+                    .rounded(super::skin::radius_control())
+                    .bg(theme.warning.opacity(0.18))
+                    .text_color(theme.warning_foreground)
+                    .child(crate::view_model::capped_artisan_status(capped)),
+            )
+        })
         .children(jobs.into_iter().enumerate().map(|(index, job)| {
             let call_id = job.call_id.clone();
             let cancel_id = job.call_id.clone();
-            let role = if job.role.is_empty() {
-                "agent".to_owned()
-            } else {
-                job.role.clone()
-            };
-            let title = if job.label.is_empty() {
-                role.clone()
-            } else {
-                job.label.clone()
-            };
-            let step = if job.step.is_empty() {
-                t("starting", "启动中").to_owned()
-            } else {
-                job.step.clone()
-            };
+            let title = job.title();
+            let step = job.step_label();
+            let warned = job.capped;
             div()
                 .id(format!("subagent-{index}"))
                 .flex()
@@ -299,7 +302,7 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                         .items_center()
                         .gap_2()
                         .min_w_0()
-                        .child(super::lamp(desk.amber))
+                        .child(super::lamp(if warned { theme.warning } else { desk.amber }))
                         .child(
                             div()
                                 .flex_1()
@@ -313,19 +316,21 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                             div()
                                 .id(format!("subagent-cancel-{index}"))
                                 .flex_shrink_0()
+                                .px_1()
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .size(px(18.))
+                                .h(px(18.))
                                 .rounded(px(4.))
                                 .cursor_pointer()
+                                .text_xs()
                                 .text_color(theme.muted_foreground)
                                 .hover(|this| this.text_color(theme.danger))
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
                                     cx.stop_propagation();
                                     workspace.on_cancel_subagent(&cancel_id, cx);
                                 }))
-                                .child(Icon::new(IconName::X).xsmall()),
+                                .child(t("Cancel", "取消")),
                         ),
                 )
                 .child(
@@ -333,7 +338,11 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                         .pl(px(15.))
                         .text_xs()
                         .truncate()
-                        .text_color(theme.muted_foreground)
+                        .text_color(if warned {
+                            theme.warning_foreground
+                        } else {
+                            theme.muted_foreground
+                        })
                         .child(step),
                 )
         }))

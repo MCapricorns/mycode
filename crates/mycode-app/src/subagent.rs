@@ -1,5 +1,6 @@
 //! Role-aware `agent` host: catalog resolution, tool allowlists, isolation,
-//! per-role model routes, and the parent-prompt delegation directive.
+//! per-role model routes, the parent-prompt delegation directive, and the
+//! wall-clock limit on a running child.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
 use mycode_tools::{ToolDyn, ToolRegistry};
 use tokio::sync::Semaphore;
+use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 /// Subagent system brief: one-shot work, no user channel.
@@ -349,17 +351,26 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .map(|role| role.catalog_line())
         .collect::<Vec<_>>()
         .join("\n");
+    let cap = settings.effective_concurrency();
+    let timeout_secs = settings.effective_timeout_secs();
     let dispatch = [
         "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
         "You decide whether to delegate. A narrow lookup is one `run_code` that calls `tools.grep` or `tools.find`. A rename, or edits across several files, is one `run_code` that calls `tools.edit`, not one edit per file. Prefer `tools.agent` with agent \"scout\" for web research, vendor docs, and a repository-wide map: several scout calls may overlap inside `asyncio.gather`, and each returns a short map. Do not spend this chat on a long chain of `web_search` and `fetch_content` for that kind of task. A `fetch_content` result that reports HTTP 4xx or extract_failed is final for that URL. A narrow question does not need `scout`. Delegating broad research to scout is your judgment.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
         "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
         "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
-        "Send one self-contained brief. The child has no parent conversation and returns once. Independent `tools.agent` calls overlap, including inside `asyncio.gather`. Write-capable roles use a worktree, so concurrent artisans do not share the session checkout. The host still caps how many run at once.",
     ];
+    let limit = format!(
+        "Send one self-contained brief. The child has no parent conversation and returns once. \
+         Independent `tools.agent` calls overlap, including inside `asyncio.gather`. \
+         Write-capable roles use a worktree, so concurrent artisans do not share the session checkout. \
+         The host runs at most {cap} subagents at once. An artisan started past that cap waits, and the user is warned. \
+         Each child stops after {timeout_secs} seconds of wall-clock time; time spent waiting for a slot does not count."
+    );
     let dispatch_block = dispatch
         .iter()
         .map(|line| format!("- {line}"))
+        .chain(std::iter::once(format!("- {limit}")))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
@@ -417,9 +428,28 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
             let isolation = resolve_isolation(&role, request.isolation.as_deref());
             let _ = progress.progress(agent_progress(&role.name, "queued", &request.description));
             let _ = progress.progress(agent_progress(&role.name, "prompt", &request.prompt));
-            let permit = tokio::select! {
-            permit = self.slots.acquire() => permit.map_err(|_| fail("agent slots closed".to_owned()))?,
-            _ = cancel.cancelled() => return Err(fail("agent cancelled".to_owned())),
+            // `try_acquire` is the cap check: a waiter is past the limit.
+            // Only an artisan raises the user-facing warning; scouts still wait.
+            let permit = match self.slots.try_acquire() {
+                Ok(permit) => permit,
+                Err(tokio::sync::TryAcquireError::Closed) => {
+                    return Err(fail("agent slots closed".to_owned()));
+                }
+                Err(tokio::sync::TryAcquireError::NoPermits) => {
+                    if let Some(detail) = artisan_cap_detail(
+                        &role.name,
+                        0,
+                        self.settings.subagents.effective_concurrency(),
+                    ) {
+                        let _ = progress.progress(agent_progress(&role.name, "capped", &detail));
+                    }
+                    tokio::select! {
+                        permit = self.slots.acquire() => {
+                            permit.map_err(|_| fail("agent slots closed".to_owned()))?
+                        }
+                        _ = cancel.cancelled() => return Err(fail("agent cancelled".to_owned())),
+                    }
+                }
             };
             let lease = if isolation == RoleIsolation::Worktree {
                 let home = self.home.clone();
@@ -451,10 +481,12 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
 }
 
 impl BridgeAgentHost {
-    /// Runs the nested agent until it finishes or the parent cancels.
+    /// Runs the nested agent until it finishes, the parent cancels, or the
+    /// wall-clock budget elapses.
     ///
-    /// There is no wall-clock timeout. A long artisan or scout run stays
-    /// alive until the model stops or the caller cancels.
+    /// The budget starts here, after a concurrency slot is held, so time
+    /// spent queued does not count. A timeout cancels the child token and
+    /// aborts the task.
     async fn drive_subagent(
         &self,
         request: &mycode_tools::builtin::SubagentRequest,
@@ -465,6 +497,9 @@ impl BridgeAgentHost {
         lease: Option<&WorktreeLease>,
     ) -> Result<String, mycode_tools::ToolError> {
         let fail = |message: String| mycode_tools::ToolError::Execution(message);
+        let started = Instant::now();
+        let budget =
+            Duration::from_secs(u64::from(self.settings.subagents.effective_timeout_secs()));
         let run_dir = lease
             .map(|lease| lease.path.clone())
             .unwrap_or_else(|| self.cwd.clone());
@@ -587,6 +622,12 @@ impl BridgeAgentHost {
         let mut agent = Agent::new(config);
         let prompt = Message::User(mycode_core::UserMessage::text(request.prompt.clone()));
         let role_name = role.name.clone();
+        let remaining = budget.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            forwarder.abort();
+            forget_subagent_cancel(&self.cancels, call_id, &cancel_key);
+            return Err(fail(subagent_timeout_message(&role_name, budget.as_secs())));
+        }
         let run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
                 .with_cancel(run_cancel)
@@ -617,22 +658,14 @@ impl BridgeAgentHost {
             }
             Ok(answer)
         });
-        let outcome = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                child_cancel.cancel();
-                Err(fail(format!("subagent {role_name} cancelled")))
+        let outcome = match finish_subagent_task(run, cancel, &child_cancel, remaining).await {
+            SubagentFinish::Cancelled => Err(fail(format!("subagent {role_name} cancelled"))),
+            SubagentFinish::TimedOut => {
+                Err(fail(subagent_timeout_message(&role_name, budget.as_secs())))
             }
-            _ = child_cancel.cancelled() => {
-                Err(fail(format!("subagent {role_name} cancelled")))
-            }
-            joined = run => joined.unwrap_or_else(|error| Err(fail(format!("subagent task failed: {error}")))),
+            SubagentFinish::Finished(result) => result,
         };
-        if !call_id.is_empty()
-            && let Ok(mut slots) = self.cancels.lock()
-        {
-            slots.remove(&cancel_key);
-        }
+        forget_subagent_cancel(&self.cancels, call_id, &cancel_key);
         outcome
     }
 
@@ -672,6 +705,77 @@ impl BridgeAgentHost {
         .map_err(|error| format!("role '{role}' provider setup failed: {error:?}"))?;
         resolved.headers.extend(extra_headers);
         Ok(resolved)
+    }
+}
+
+/// Progress detail when an artisan cannot take a concurrency slot.
+///
+/// Scouts share the semaphore and still wait, without this warning.
+/// `permits_available` is `0` after `try_acquire` reports no permits.
+fn artisan_cap_detail(role: &str, permits_available: usize, cap: u32) -> Option<String> {
+    if role == "artisan" && permits_available == 0 {
+        Some(cap.to_string())
+    } else {
+        None
+    }
+}
+
+fn subagent_timeout_message(role: &str, secs: u64) -> String {
+    format!("subagent {role} timed out after {secs}s")
+}
+
+/// How one nested agent task stopped.
+#[derive(Debug)]
+enum SubagentFinish {
+    /// The parent turn or `CancelSubagent` fired.
+    Cancelled,
+    /// The wall-clock budget elapsed. The task was aborted.
+    TimedOut,
+    /// The task returned an answer or a tool error.
+    Finished(Result<String, mycode_tools::ToolError>),
+}
+
+/// Waits for the nested task, the cancel tokens, or the remaining budget.
+///
+/// Parent cancel and an explicit child cancel win over a timeout that
+/// becomes ready in the same poll. A finished task wins over the timeout.
+/// A timeout cancels the child token and aborts the task so the run cannot
+/// keep editing after the tool result has returned.
+async fn finish_subagent_task(
+    mut run: tokio::task::JoinHandle<Result<String, mycode_tools::ToolError>>,
+    cancel: &CancellationToken,
+    child_cancel: &CancellationToken,
+    timeout: Duration,
+) -> SubagentFinish {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            child_cancel.cancel();
+            SubagentFinish::Cancelled
+        }
+        _ = child_cancel.cancelled() => SubagentFinish::Cancelled,
+        joined = &mut run => SubagentFinish::Finished(joined.unwrap_or_else(|error| {
+            Err(mycode_tools::ToolError::Execution(format!(
+                "subagent task failed: {error}"
+            )))
+        })),
+        _ = tokio::time::sleep(timeout) => {
+            child_cancel.cancel();
+            run.abort();
+            SubagentFinish::TimedOut
+        }
+    }
+}
+
+fn forget_subagent_cancel(
+    cancels: &std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+    call_id: &str,
+    cancel_key: &str,
+) {
+    if !call_id.is_empty()
+        && let Ok(mut slots) = cancels.lock()
+    {
+        slots.remove(cancel_key);
     }
 }
 
@@ -815,6 +919,8 @@ fn child_registry_with(
 mod tests {
     use super::{WorktreeLease, format_subagent_handoff, handoff_worktree};
     use mycode_config::{HomeLayout, SubagentSettings, builtin_roles};
+    use tokio::time::Duration;
+    use tokio_util::sync::CancellationToken;
 
     fn git(repo: &std::path::Path, args: &[&str]) {
         let output = super::git_command()
@@ -879,6 +985,13 @@ mod tests {
         assert!(text.contains("not a diff"));
         assert!(text.contains("one `artisan` at a time"));
         assert!(text.contains("clearly independent"));
+        assert!(text.contains("wall-clock"));
+        assert!(text.contains("the user is warned"));
+        assert!(text.contains(&format!(
+            "at most {} subagents",
+            mycode_config::DEFAULT_SUBAGENT_CONCURRENCY
+        )));
+        assert!(text.contains(&mycode_config::DEFAULT_SUBAGENT_TIMEOUT_SECS.to_string()));
         assert!(!text.contains("steward"));
         assert!(!text.contains("sentinel"));
         assert!(!text.contains("`exec`"));
@@ -1261,6 +1374,67 @@ mod tests {
         let mut explicit = settings;
         explicit.max_concurrent = 2;
         assert_eq!(explicit.effective_concurrency(), 2);
+    }
+
+    #[test]
+    fn only_an_artisan_with_no_permit_is_past_the_cap() {
+        assert_eq!(
+            super::artisan_cap_detail("artisan", 0, 4).as_deref(),
+            Some("4")
+        );
+        assert!(super::artisan_cap_detail("scout", 0, 4).is_none());
+        assert!(super::artisan_cap_detail("artisan", 1, 4).is_none());
+        assert_eq!(
+            super::agent_progress("artisan", "capped", "4"),
+            "agent|artisan|capped|4"
+        );
+        assert_eq!(
+            super::subagent_timeout_message("scout", 1200),
+            "subagent scout timed out after 1200s"
+        );
+    }
+
+    #[tokio::test]
+    async fn wall_clock_timeout_aborts_a_run_that_does_not_finish() {
+        let cancel = CancellationToken::new();
+        let child = CancellationToken::new();
+        let run = tokio::spawn(async {
+            std::future::pending::<()>().await;
+            Ok::<String, mycode_tools::ToolError>("never".to_owned())
+        });
+        let outcome =
+            super::finish_subagent_task(run, &cancel, &child, Duration::from_millis(40)).await;
+        assert!(matches!(outcome, super::SubagentFinish::TimedOut));
+        assert!(child.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn a_finished_run_beats_the_wall_clock() {
+        let cancel = CancellationToken::new();
+        let child = CancellationToken::new();
+        let run = tokio::spawn(async { Ok::<String, mycode_tools::ToolError>("done".to_owned()) });
+        let outcome =
+            super::finish_subagent_task(run, &cancel, &child, Duration::from_secs(2)).await;
+        match outcome {
+            super::SubagentFinish::Finished(Ok(text)) => assert_eq!(text, "done"),
+            other => panic!("expected a finished run, got {other:?}"),
+        }
+        assert!(!child.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn parent_cancel_stops_the_run_before_the_wall_clock() {
+        let cancel = CancellationToken::new();
+        let child = CancellationToken::new();
+        cancel.cancel();
+        let run = tokio::spawn(async {
+            std::future::pending::<()>().await;
+            Ok::<String, mycode_tools::ToolError>("no".to_owned())
+        });
+        let outcome =
+            super::finish_subagent_task(run, &cancel, &child, Duration::from_secs(30)).await;
+        assert!(matches!(outcome, super::SubagentFinish::Cancelled));
+        assert!(child.is_cancelled());
     }
 
     #[tokio::test]
