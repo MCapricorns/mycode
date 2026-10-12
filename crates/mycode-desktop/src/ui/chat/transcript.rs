@@ -18,8 +18,9 @@ use crate::workspace::Workspace;
 
 /// The in-flight assistant turn: a live status line, then thinking and text.
 ///
-/// Subagent progress lives on this one status line and in the inspector
-/// panel; the transcript itself stays free of per-child rows.
+/// Subagent progress lives on this one status line, the running list above
+/// the composer, and the inspector panel. The transcript itself stays free
+/// of per-child rows.
 pub(super) fn render_streaming_entry(
     streaming: &StreamingReply,
     workspace: &Workspace,
