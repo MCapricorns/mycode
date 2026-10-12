@@ -10,8 +10,11 @@
 //! errors; an invalid Windows Job handle is not treated as evidence that
 //! members exited.
 mod output;
+mod pathext;
 #[cfg(windows)]
 mod windows;
+
+pub use pathext::first_program_on_path;
 
 use std::sync::OnceLock;
 
@@ -516,6 +519,10 @@ mod resume_source {
         assert!(
             source.contains("windows_batch_command_line_utf16"),
             "batch launchers need cmd.exe escaping"
+        );
+        assert!(
+            source.contains("PATHEXT"),
+            "bare names must follow PATHEXT so npx resolves to npx.cmd"
         );
         assert!(
             source.contains("parent process"),
