@@ -723,7 +723,6 @@ def _expect_workflow_contract() -> None:
     )
     _expect("native_image_launches" not in workflow, "shell smoke test is back in ci")
     _expect("cargo fmt" not in workflow, "fmt gate is back in ci")
-    _expect("cargo clippy" not in workflow, "clippy gate is back in ci")
     release_targets = (
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
@@ -746,8 +745,8 @@ def _expect_workflow_contract() -> None:
     _expect("libclang-dev" in release_build, "libclang dev package missing from the Linux build")
     _expect("linux-gpui-deps" not in workflow, "Linux GPUI composite action is wired again")
     _expect(
-        workflow.count("runs-on: ubuntu-latest") == 3,
-        "release-plan, release-publish, and release-cleanup should be the only literal ubuntu-latest jobs",
+        workflow.count("runs-on: ubuntu-latest") == 4,
+        "check, release-plan, release-publish, and release-cleanup should be the only literal ubuntu-latest jobs",
     )
     _expect("cargo-audit" not in workflow, "cargo-audit job remains")
     for job in ("release-plan", "release-publish", "release-cleanup"):
@@ -825,13 +824,39 @@ def _expect_workflow_contract() -> None:
     )
     _expect("\n  core:\n" not in workflow, "core quality job is back")
     _expect("\n  desktop:\n" not in workflow, "desktop quality job is back")
+    release_build_job = _yaml_job(workflow, "release-build")
+    check = _yaml_job(workflow, "check")
     _expect(
-        "github.event_name == 'pull_request'" in _yaml_job(workflow, "release-build"),
-        "pull requests do not build from the shared workflow",
+        "github.event_name == 'pull_request'" not in release_build_job,
+        "pull requests still run release builds",
     )
     _expect(
-        "cargo_release_build.sh" in _yaml_job(workflow, "release-build"),
+        "github.event_name == 'push'" in release_build_job,
+        "release builds are not limited to pushes",
+    )
+    _expect(
+        "cargo test --workspace" in check,
+        "pull request CI does not test the workspace",
+    )
+    _expect(
+        "cargo clippy --workspace --all-targets" in check,
+        "pull request CI does not clippy the workspace",
+    )
+    _expect("-D warnings" in check, "clippy warnings are not denied")
+    _expect("--locked" in check, "pull request CI does not use the lockfile")
+    _expect(
+        "cargo build --release" not in check and "cargo_release_build.sh" not in check,
+        "pull request CI runs a release build",
+    )
+    _expect("cargo clippy" not in release_build_job, "release builds run clippy")
+    _expect("cargo test" not in release_build_job, "release builds run tests")
+    _expect(
+        "cargo_release_build.sh" in release_build_job,
         "crates.io network retry is missing from the build",
+    )
+    _expect(
+        "needs.check.result == 'success'" in _yaml_job(workflow, "release-publish"),
+        "publish does not wait for the workspace check",
     )
     # README and CHANGELOG describe four release platforms, including Linux x86_64.
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -864,6 +889,28 @@ def _expect_workflow_contract() -> None:
         "x86_64-unknown-linux-gnu" in changelog,
         "Linux archive missing from changelog",
     )
+    _expect("cargo test --workspace" in intro, "changelog policy omits PR workspace tests")
+    _expect(
+        "cargo clippy --workspace --all-targets" in intro,
+        "changelog policy omits PR clippy",
+    )
+    _expect("-D warnings" in intro, "changelog policy omits denying clippy warnings")
+    _expect("fat LTO" in intro, "changelog policy omits the release LTO split")
+    _expect("pull request 不发版" in intro, "changelog policy no longer says PRs do not release")
+    for path, label in (
+        (ROOT / "docs/architecture.md", "architecture"),
+        (ROOT / "docs/desktop.md", "desktop"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        _expect("cargo test --workspace" in text, f"{label} docs omit workspace tests")
+        _expect(
+            "cargo clippy --workspace --all-targets" in text,
+            f"{label} docs omit clippy",
+        )
+        _expect("-D warnings" in text, f"{label} docs omit denying clippy warnings")
+        _expect("fat LTO" in text, f"{label} docs omit the release LTO split")
+    _expect("pull_request (check):" in workflow, "workflow header does not document PR CI")
+    _expect("No fat LTO" in workflow, "workflow header does not keep release LTO off PR CI")
     _expect_single_workflow(workflow)
 
 
@@ -881,7 +928,7 @@ def _trigger_block(workflow: str) -> str:
 
 
 def _expect_single_workflow(workflow: str) -> None:
-    """One file builds every pull request and publishes a new main version."""
+    """One file checks every pull request and publishes a new main version."""
 
     names = sorted(path.name for path in (ROOT / ".github/workflows").glob("*.y*ml"))
     _expect(
@@ -906,24 +953,28 @@ def _expect_single_workflow(workflow: str) -> None:
     _expect(jobs_at != -1, "ci.yml is missing jobs:")
     jobs = re.findall(r"(?m)^  ([a-z0-9-]+):\n", workflow[jobs_at:])
     _expect(
-        jobs == ["release-plan", "release-build", "release-publish", "release-cleanup"],
+        jobs == ["check", "release-plan", "release-build", "release-publish", "release-cleanup"],
         f"ci.yml jobs are {jobs}",
     )
 
     build = _yaml_job(workflow, "release-build")
-    _expect(re.search(r"(?m)^    if:", build), "shared build job has no job-level if")
-    _expect(re.search(r"(?m)^    needs:", build), "shared build job does not wait for the plan")
-    _expect("ubuntu-latest" in build, "pull request Linux runner missing")
-    _expect("windows-11-arm" in build, "Windows ARM64 pull request runner missing")
+    _expect(re.search(r"(?m)^    if:", build), "release build job has no job-level if")
+    _expect(re.search(r"(?m)^    needs:", build), "release build job does not wait for the plan")
+    _expect("ubuntu-latest" in build, "release Linux runner missing")
+    _expect("windows-11-arm" in build, "Windows ARM64 release runner missing")
     for target in (
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
         "aarch64-apple-darwin",
         "x86_64-unknown-linux-gnu",
     ):
-        _expect(target in build, f"missing pull request platform {target}")
-    _expect("Package (Linux)" in build, "Linux packaging step missing from pull requests")
-    _expect("libxkbcommon-dev" in build, "Linux GPUI packages missing from pull requests")
+        _expect(target in build, f"missing release platform {target}")
+    _expect("Package (Linux)" in build, "Linux packaging step missing from release builds")
+    _expect("libxkbcommon-dev" in build, "Linux GPUI packages missing from release builds")
+    check = _yaml_job(workflow, "check")
+    _expect("runs-on: ubuntu-latest" in check, "workspace check is not on ubuntu-latest")
+    _expect("cargo test --workspace" in check, "workspace check does not test")
+    _expect("components: clippy" in check, "workspace check does not install clippy")
     _expect(
         "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" in workflow,
         "Linux zip missing from the workflow",
