@@ -65,6 +65,8 @@ pub(crate) fn display_exit(status: &std::process::ExitStatus) -> i32 {
 }
 
 #[cfg(windows)]
+pub use windows::WindowsStdioProcess;
+#[cfg(windows)]
 pub(crate) use windows::{WindowsJob, current_process_is_in_job, resume_thread_handle};
 
 /// Serializes host-controlled write/edit/shell operations so they cannot
@@ -154,14 +156,18 @@ impl ProcessTree {
     }
 }
 
-/// Enrolls a child started in its own process group, or on Windows assigns
-/// a `CREATE_SUSPENDED` child to a kill-on-close Job and resumes it. Call
-/// this immediately after spawn, before the child runs user code.
+/// Enrolls a child started in its own process group. Call this immediately
+/// after spawn, before the child runs user code.
+///
+/// Windows warm Python and MCP stdio enroll in their own `CreateProcessW`
+/// path and resume `PROCESS_INFORMATION.hThread` there. This function is the
+/// Unix process-group path.
 ///
 /// # Errors
 ///
-/// Returns an error when the platform cannot build a process tree, the child
-/// has already exited, or Job assignment fails.
+/// Returns an error when the platform cannot build a process tree or the
+/// child has already exited.
+#[cfg(not(windows))]
 pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
     #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
     {
@@ -174,27 +180,9 @@ pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
             .ok_or_else(|| std::io::Error::other("child exited before enrollment"))?;
         ProcessTree::enroll_leader_pid(pid)
     }
-    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        let job = windows::WindowsJob::new()?;
-        // tokio::process::Child does not implement AsRawHandle. raw_handle is
-        // None once the child has been polled to completion.
-        let handle = child
-            .raw_handle()
-            .ok_or_else(|| std::io::Error::other("child exited before enrollment"))?;
-        job.assign_handle(handle)?;
-        // Resume only after the Job owns the process. A failure terminates
-        // the Job so a suspended child cannot stay up outside the caller.
-        if let Err(error) = windows::resume_suspended_primary_thread(handle) {
-            let _ = job.terminate();
-            return Err(error);
-        }
-        Ok(ProcessTree::from_windows_job(job))
-    }
     #[cfg(not(any(
         all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64"),
-        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     )))]
     {
         let _ = child;
@@ -203,24 +191,6 @@ pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
             "this target has no process-tree enrollment",
         ))
     }
-}
-
-/// Resumes the only thread of a process created with `CREATE_SUSPENDED`.
-///
-/// The caller must still hold `process`, so the pid cannot be reused while
-/// Toolhelp looks up the thread. `tokio::process::Command` does not return
-/// the `CreateProcessW` thread handle. Exactly one thread is required; that
-/// is the suspended primary thread.
-///
-/// # Errors
-///
-/// Returns an error when the process id cannot be read, the thread snapshot
-/// fails, the process does not have exactly one thread, or resume fails.
-#[cfg(windows)]
-pub fn resume_suspended_primary_thread(
-    process: std::os::windows::io::RawHandle,
-) -> std::io::Result<()> {
-    windows::resume_suspended_primary_thread(process)
 }
 
 #[cfg(unix)]
@@ -507,6 +477,27 @@ fn direct_children(parent: libc::pid_t) -> Vec<libc::pid_t> {
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn list_descendants(_root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     Ok(Vec::new())
+}
+
+#[cfg(test)]
+mod resume_source {
+    #[test]
+    fn windows_resume_uses_the_createprocess_thread_handle() {
+        let source = include_str!("process/windows.rs");
+        assert!(
+            !source.contains("CreateToolhelp32Snapshot"),
+            "resume must not snapshot threads"
+        );
+        assert!(
+            !source.contains("expected the primary thread only"),
+            "a single-thread check races antivirus injections"
+        );
+        assert!(
+            source.contains("information.hThread"),
+            "resume the CreateProcessW thread handle"
+        );
+        assert!(source.contains("resume_thread_handle"));
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

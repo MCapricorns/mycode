@@ -1,4 +1,5 @@
-//! MSVC-style Windows argv quoting for the `shell` program launch.
+//! MSVC-style Windows argv quoting for `CreateProcessW` launches.
+#![cfg_attr(not(windows), allow(dead_code))]
 //!
 //! `CreateProcessW` receives a single UTF-16 command line. argv0 is always
 //! quoted. Empty arguments and arguments containing whitespace or `"` are
@@ -18,7 +19,7 @@ pub(super) const WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS: usize = 32_767;
 ///
 /// Returns [`ToolError::InvalidArgs`] when an argument contains an interior
 /// NUL or the encoded command line exceeds 32,767 UTF-16 units including NUL.
-pub(super) fn windows_command_line_utf16(
+pub(crate) fn windows_command_line_utf16(
     argv0: &OsStr,
     args: &[String],
 ) -> Result<Vec<u16>, ToolError> {
@@ -108,5 +109,43 @@ fn reject_nul(value: &str, what: &str) -> Result<(), ToolError> {
         )))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::windows_command_line_utf16;
+
+    fn decode(units: &[u16]) -> String {
+        String::from_utf16(units).expect("command line is valid UTF-16")
+    }
+
+    #[test]
+    fn quotes_spaces_empty_args_quotes_and_trailing_backslashes() {
+        let line = windows_command_line_utf16(
+            OsStr::new(r"C:\Program Files\py.exe"),
+            &[
+                "-u".to_owned(),
+                String::new(),
+                "a b".to_owned(),
+                "x\"y".to_owned(),
+                "tail \\".to_owned(),
+            ],
+        )
+        .expect("command line");
+        assert_eq!(
+            decode(&line),
+            "\"C:\\Program Files\\py.exe\" -u \"\" \"a b\" \"x\\\"y\" \"tail \\\\\""
+        );
+    }
+
+    #[test]
+    fn rejects_an_interior_nul() {
+        let error =
+            windows_command_line_utf16(OsStr::new("py"), &["a\0b".to_owned()]).expect_err("nul");
+        let text = error.to_string();
+        assert!(text.contains("NUL"), "{text}");
     }
 }

@@ -111,8 +111,14 @@ pub(super) fn render_chat(
         (show_welcome, has_older, elements, streaming_element)
     };
     let scroll_handle = workspace.conversation_scroll_handle().clone();
-    let anchor =
-        scroll_hold::ScrollAnchor::new(scroll_handle.clone(), workspace.take_scroll_anchor());
+    let appearance = workspace
+        .take_appearance_scroll()
+        .map(|(pinned, offset_y)| scroll_hold::AppearanceHold { pinned, offset_y });
+    let anchor = scroll_hold::ScrollAnchor::new(
+        scroll_handle.clone(),
+        workspace.take_scroll_anchor(),
+        appearance,
+    );
     let probe = anchor.probe();
     let theme = cx.theme();
     // Details docks into the row on a wide window, so this pane is already
@@ -506,7 +512,7 @@ fn render_jump_to_latest(cx: &Context<Workspace>) -> impl IntoElement {
         .id("conversation-jump-row")
         .w_full()
         .px_4()
-        .pb_1()
+        .pb(px(menus::JUMP_LATEST_ROW_PAD))
         .flex()
         .justify_center()
         .child(
@@ -516,7 +522,7 @@ fn render_jump_to_latest(cx: &Context<Workspace>) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(30.))
+                .size(px(menus::JUMP_LATEST_BUTTON_PX))
                 .rounded_full()
                 .border_1()
                 .border_color(super::skin::glass_border(theme))

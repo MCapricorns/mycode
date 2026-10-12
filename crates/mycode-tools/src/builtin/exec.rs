@@ -19,8 +19,9 @@
 //! cleanup ownership. Launch is Windows x64, Windows ARM64, Linux x86_64 GNU,
 //! and macOS Apple Silicon. Other Unix (musl, Android, BSD) is unsupported.
 //! Windows x64 and Windows ARM64 share the `CreateProcessW` path.
-#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod argv;
+#[cfg(windows)]
+pub(crate) use argv::windows_command_line_utf16;
 mod env;
 mod image;
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]

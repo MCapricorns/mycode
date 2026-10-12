@@ -5,7 +5,21 @@
 //! breakaway, so descendants stay in it when they call `CreateProcess`,
 //! including Windows stand-ins for a detached Unix child. `TerminateJobObject`
 //! ends that whole tree.
+//!
+//! Resume uses `PROCESS_INFORMATION.hThread` from that `CreateProcessW` call.
+//! A Toolhelp snapshot is not a substitute: antivirus software can inject a
+//! thread before the snapshot, so a "exactly one thread" check rejects a
+//! still-suspended primary thread.
+use std::ffi::{OsStr, OsString};
+use std::io;
+use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
+use std::os::windows::process::ExitStatusExt as _;
+use std::path::Path;
+use std::process::ExitStatus;
+use std::ptr::{null, null_mut};
+
+use crate::builtin::exec::windows_command_line_utf16;
 
 /// RAII owner for a Windows Job Object configured to kill all members when its
 /// last handle closes. `OwnedHandle` provides the matching `CloseHandle`.
@@ -145,75 +159,459 @@ pub(crate) fn resume_thread_handle(thread: &OwnedHandle) -> std::io::Result<()> 
     Ok(())
 }
 
-/// Resumes the primary thread of a process that is still `CREATE_SUSPENDED`.
-///
-/// `process` must stay open across this call. The pid is taken from that
-/// handle, so a reused pid cannot be resumed. Toolhelp is used because the
-/// `CreateProcessW` thread handle was not kept.
-pub(crate) fn resume_suspended_primary_thread(
-    process: windows_sys::Win32::Foundation::HANDLE,
-) -> std::io::Result<()> {
-    use std::mem::size_of;
-    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
-    };
-    use windows_sys::Win32::System::Threading::{GetProcessId, OpenThread, THREAD_SUSPEND_RESUME};
+/// A suspended-child guard. Drop terminates the process unless disarmed after
+/// the main thread has been resumed and the caller owns the handles.
+struct UnresumedChild {
+    process: Option<OwnedHandle>,
+    thread: OwnedHandle,
+    job: Option<WindowsJob>,
+    armed: bool,
+}
 
-    // SAFETY: `process` is a live handle borrowed from the caller.
-    // `GetProcessId` does not retain it.
-    let pid = unsafe { GetProcessId(process) };
-    if pid == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `TH32CS_SNAPTHREAD` ignores the process-id argument. Failure
-    // returns `INVALID_HANDLE_VALUE` and does not allocate a snapshot.
-    let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if raw_snapshot.is_null() || raw_snapshot == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `CreateToolhelp32Snapshot` returned a fresh owned handle.
-    let snapshot = unsafe { OwnedHandle::from_raw_handle(raw_snapshot) };
-    let mut entry = THREADENTRY32 {
-        dwSize: u32::try_from(size_of::<THREADENTRY32>()).expect("THREADENTRY32 fits u32"),
-        ..THREADENTRY32::default()
-    };
-    // SAFETY: `snapshot` is live and `entry.dwSize` is the documented size.
-    // `Thread32First` writes one entry or returns zero.
-    if unsafe { Thread32First(snapshot.as_raw_handle(), &raw mut entry) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut thread_id = None;
-    let mut count = 0u32;
-    loop {
-        if entry.th32OwnerProcessID == pid {
-            count = count.saturating_add(1);
-            thread_id = Some(entry.th32ThreadID);
+impl Drop for UnresumedChild {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
         }
-        // SAFETY: `snapshot` and `entry` stay valid for this call. A zero
-        // result ends the walk, including `ERROR_NO_MORE_FILES`.
-        if unsafe { Thread32Next(snapshot.as_raw_handle(), &raw mut entry) } == 0 {
-            break;
+        if let Some(job) = &self.job {
+            let _ = job.terminate();
+        }
+        if let Some(process) = &self.process {
+            let _ = terminate_process(process);
         }
     }
-    drop(snapshot);
-    if count != 1 {
-        return Err(std::io::Error::other(format!(
-            "suspended child had {count} threads; expected the primary thread only"
-        )));
+}
+
+/// Stdio child started with `CreateProcessW` while suspended.
+///
+/// The main thread is `PROCESS_INFORMATION.hThread` from that call. It is
+/// resumed only after the process is inside a kill-on-close Job. Pipe ends
+/// the parent keeps are tokio stdio types so callers can read and write them
+/// the same way as `tokio::process::Child`.
+pub struct WindowsStdioProcess {
+    process: OwnedHandle,
+    pid: u32,
+    /// Parent write end when stdin was requested as a pipe.
+    pub stdin: Option<tokio::process::ChildStdin>,
+    /// Parent read end of the stdout pipe.
+    pub stdout: Option<tokio::process::ChildStdout>,
+    /// Parent read end of the stderr pipe.
+    pub stderr: Option<tokio::process::ChildStderr>,
+    job: Option<WindowsJob>,
+    kill_on_drop: bool,
+    exit: Option<ExitStatus>,
+}
+
+impl WindowsStdioProcess {
+    /// Spawns `program` suspended, enrolls it in a kill-on-close Job, then
+    /// resumes `PROCESS_INFORMATION.hThread`.
+    ///
+    /// `program` without a directory is searched on `PATH` from `env` because
+    /// `lpApplicationName` is null. A program with a directory is passed as
+    /// `lpApplicationName` and is not searched. stdout and stderr are pipes.
+    /// `stdin_piped` selects a pipe or the NUL device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the command line, pipes, `CreateProcessW`, Job
+    /// assignment, or resume fails. A process that was created is terminated
+    /// before the error returns, so a suspended child is not left running.
+    pub fn spawn(
+        program: &Path,
+        args: &[String],
+        cwd: Option<&Path>,
+        env: &[(OsString, OsString)],
+        stdin_piped: bool,
+        kill_on_drop: bool,
+    ) -> io::Result<Self> {
+        use std::mem::size_of;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+        };
+
+        let mut command = windows_command_line_utf16(program.as_os_str(), args)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        command.push(0);
+        let application = if program_has_directory(program) {
+            Some(wide_nul(program.as_os_str())?)
+        } else {
+            None
+        };
+        let directory = match cwd {
+            Some(cwd) => Some(wide_nul(cwd.as_os_str())?),
+            None => None,
+        };
+        let env_block = unicode_env_block(env);
+
+        let (stdin_parent, stdin_child) = if stdin_piped {
+            let (read, write) = inheritable_pipe()?;
+            clear_inherit(&write)?;
+            (Some(write), read)
+        } else {
+            (None, open_nul()?)
+        };
+        let (stdout_read, stdout_write) = inheritable_pipe()?;
+        let (stderr_read, stderr_write) = inheritable_pipe()?;
+        clear_inherit(&stdout_read)?;
+        clear_inherit(&stderr_read)?;
+
+        let startup = STARTUPINFOW {
+            cb: u32::try_from(size_of::<STARTUPINFOW>()).expect("STARTUPINFOW fits u32"),
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdInput: stdin_child.as_raw_handle(),
+            hStdOutput: stdout_write.as_raw_handle(),
+            hStdError: stderr_write.as_raw_handle(),
+            ..STARTUPINFOW::default()
+        };
+        let mut information = PROCESS_INFORMATION::default();
+        let application_ptr = application.as_ref().map_or(null(), |wide| wide.as_ptr());
+        let directory_ptr = directory.as_ref().map_or(null(), |wide| wide.as_ptr());
+        // SAFETY: `command` is NUL-terminated UTF-16. `application` and
+        // `directory`, when present, are too. The environment block is
+        // double-NUL terminated. The three std handles are live and
+        // inheritable for this call. On FALSE, no process handles are returned.
+        let created = unsafe {
+            CreateProcessW(
+                application_ptr,
+                command.as_mut_ptr(),
+                null(),
+                null(),
+                1,
+                CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                env_block.as_ptr().cast(),
+                directory_ptr,
+                &raw const startup,
+                &raw mut information,
+            )
+        };
+        drop(stdin_child);
+        drop(stdout_write);
+        drop(stderr_write);
+        if created == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: CreateProcessW succeeded. Both handles are uniquely owned.
+        let process = unsafe { OwnedHandle::from_raw_handle(information.hProcess) };
+        let thread = unsafe { OwnedHandle::from_raw_handle(information.hThread) };
+        let mut pending = UnresumedChild {
+            process: Some(process),
+            thread,
+            job: None,
+            armed: true,
+        };
+        if information.dwProcessId == 0 {
+            return Err(io::Error::other(
+                "CreateProcessW returned a zero process id",
+            ));
+        }
+        let job = WindowsJob::new()?;
+        let process_handle = pending
+            .process
+            .as_ref()
+            .expect("suspended process handle")
+            .as_raw_handle();
+        job.assign_handle(process_handle)?;
+        pending.job = Some(job);
+        resume_thread_handle(&pending.thread)?;
+        let process = pending.process.take().expect("suspended process handle");
+        let job = pending.job.take();
+        pending.armed = false;
+        drop(pending);
+        let reap = |error: io::Error| {
+            if let Some(job) = &job {
+                let _ = job.terminate();
+            }
+            let _ = terminate_process(&process);
+            error
+        };
+        let stdin = stdin_parent.map(adopt_stdin).transpose().map_err(reap)?;
+        let stdout = Some(adopt_stdout(stdout_read).map_err(reap)?);
+        let stderr = Some(adopt_stderr(stderr_read).map_err(reap)?);
+        Ok(Self {
+            process,
+            pid: information.dwProcessId,
+            stdin,
+            stdout,
+            stderr,
+            job,
+            kill_on_drop,
+            exit: None,
+        })
     }
-    let Some(thread_id) = thread_id else {
-        return Err(std::io::Error::other("suspended child thread id missing"));
+
+    /// Process id while the child has not been observed to exit.
+    #[must_use]
+    pub fn id(&self) -> Option<u32> {
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+        if self.exit.is_some() {
+            return None;
+        }
+        // SAFETY: `process` is a live process handle. A zero timeout only
+        // observes whether it is already signaled.
+        let waited = unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) };
+        if waited == WAIT_TIMEOUT {
+            Some(self.pid)
+        } else if waited == WAIT_OBJECT_0 {
+            None
+        } else {
+            Some(self.pid)
+        }
+    }
+
+    /// Ends the kill-on-close Job, including descendants.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `TerminateJobObject` error when the Job is still open.
+    pub fn terminate_job(&self) -> io::Result<()> {
+        match &self.job {
+            Some(job) => job.terminate(),
+            None => Ok(()),
+        }
+    }
+
+    /// Terminates the process. An already-exited process is success.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `TerminateProcess` error when the process is still running.
+    pub fn start_kill(&mut self) -> io::Result<()> {
+        terminate_process(&self.process)
+    }
+
+    /// Waits until the process exits, then returns its status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the wait or the exit-code query fails.
+    pub async fn wait(&mut self) -> io::Result<ExitStatus> {
+        use windows_sys::Win32::Foundation::WAIT_FAILED;
+        use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
+
+        if let Some(status) = self.exit {
+            return Ok(status);
+        }
+        let process = self.process.try_clone()?;
+        let status = tokio::task::spawn_blocking(move || {
+            // SAFETY: `process` is a live owned handle. `INFINITE` waits until
+            // the process object is signaled.
+            let waited = unsafe { WaitForSingleObject(process.as_raw_handle(), INFINITE) };
+            if waited == WAIT_FAILED {
+                return Err(io::Error::last_os_error());
+            }
+            exit_status(&process)
+        })
+        .await
+        .map_err(|error| io::Error::other(format!("process wait task failed: {error}")))??;
+        self.exit = Some(status);
+        Ok(status)
+    }
+
+    /// Terminates the process and waits for it to exit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when terminate or wait fails.
+    pub async fn kill(&mut self) -> io::Result<()> {
+        self.start_kill()?;
+        self.wait().await.map(|_| ())
+    }
+
+    /// Exit status when the process has already exited.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process handle cannot be queried.
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+        if let Some(status) = self.exit {
+            return Ok(Some(status));
+        }
+        // SAFETY: `process` is a live process handle. A zero timeout does not
+        // block.
+        let waited = unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) };
+        if waited == WAIT_TIMEOUT {
+            return Ok(None);
+        }
+        if waited != WAIT_OBJECT_0 {
+            return Err(io::Error::last_os_error());
+        }
+        let status = exit_status(&self.process)?;
+        self.exit = Some(status);
+        Ok(Some(status))
+    }
+}
+
+impl Drop for WindowsStdioProcess {
+    fn drop(&mut self) {
+        if !self.kill_on_drop {
+            return;
+        }
+        if let Some(job) = &self.job {
+            let _ = job.terminate();
+        }
+        let _ = terminate_process(&self.process);
+    }
+}
+
+fn adopt_stdin(handle: OwnedHandle) -> io::Result<tokio::process::ChildStdin> {
+    tokio::process::ChildStdin::from_std(std::process::ChildStdin::from(handle))
+}
+
+fn adopt_stdout(handle: OwnedHandle) -> io::Result<tokio::process::ChildStdout> {
+    tokio::process::ChildStdout::from_std(std::process::ChildStdout::from(handle))
+}
+
+fn adopt_stderr(handle: OwnedHandle) -> io::Result<tokio::process::ChildStderr> {
+    tokio::process::ChildStderr::from_std(std::process::ChildStderr::from(handle))
+}
+
+fn program_has_directory(program: &Path) -> bool {
+    use std::path::Component;
+    program.components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir
+        )
+    }) || program
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+}
+
+fn wide_nul(value: &OsStr) -> io::Result<Vec<u16>> {
+    let mut wide: Vec<u16> = value.encode_wide().collect();
+    if wide.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path contains an interior NUL",
+        ));
+    }
+    wide.push(0);
+    Ok(wide)
+}
+
+fn unicode_env_block(entries: &[(OsString, OsString)]) -> Vec<u16> {
+    let mut block = Vec::new();
+    for (key, value) in entries {
+        block.extend(key.encode_wide());
+        block.push(u16::from(b'='));
+        block.extend(value.encode_wide());
+        block.push(0);
+    }
+    block.push(0);
+    if block.len() < 2 {
+        block = vec![0, 0];
+    }
+    block
+}
+
+fn inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
+    use std::mem::size_of;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::System::Pipes::CreatePipe;
+
+    let mut sa = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
+            .expect("SECURITY_ATTRIBUTES fits u32"),
+        lpSecurityDescriptor: null_mut(),
+        bInheritHandle: 1,
     };
-    // SAFETY: `OpenThread` returns a fresh owned handle, or null. The handle
-    // is not inheritable. The process is still suspended, so this thread id
-    // cannot have exited and been reused.
-    let raw_thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
-    if raw_thread.is_null() {
-        return Err(std::io::Error::last_os_error());
+    let mut read = null_mut();
+    let mut write = null_mut();
+    // SAFETY: `sa.nLength` is set. Both out-handles are writable HANDLE slots.
+    let ok = unsafe { CreatePipe(&raw mut read, &raw mut write, &raw mut sa, 0) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
     }
-    // SAFETY: `OpenThread` returned a fresh owned handle.
-    let thread = unsafe { OwnedHandle::from_raw_handle(raw_thread) };
-    resume_thread_handle(&thread)
+    // SAFETY: CreatePipe returned two uniquely owned handles.
+    Ok(unsafe {
+        (
+            OwnedHandle::from_raw_handle(read),
+            OwnedHandle::from_raw_handle(write),
+        )
+    })
+}
+
+fn clear_inherit(handle: &OwnedHandle) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+    // SAFETY: `handle` is live. Clearing HANDLE_FLAG_INHERIT is documented.
+    let ok = unsafe { SetHandleInformation(handle.as_raw_handle(), HANDLE_FLAG_INHERIT, 0) };
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn open_nul() -> io::Result<OwnedHandle> {
+    use std::mem::size_of;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let mut wide: Vec<u16> = OsStr::new(r"\\.\NUL").encode_wide().collect();
+    wide.push(0);
+    let mut sa = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
+            .expect("SECURITY_ATTRIBUTES fits u32"),
+        lpSecurityDescriptor: null_mut(),
+        bInheritHandle: 1,
+    };
+    // SAFETY: `wide` is NUL-terminated UTF-16 for the NUL device. The
+    // security attributes request an inheritable read handle.
+    let raw = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &raw mut sa,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned a fresh owned HANDLE.
+    Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+fn exit_status(process: &OwnedHandle) -> io::Result<ExitStatus> {
+    use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+
+    let mut code = 0u32;
+    // SAFETY: `process` is a live process handle and `code` is writable output.
+    if unsafe { GetExitCodeProcess(process.as_raw_handle(), &raw mut code) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(ExitStatus::from_raw(code))
+}
+
+fn terminate_process(process: &OwnedHandle) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+
+    // SAFETY: `process` is a live process handle with PROCESS_TERMINATE.
+    if unsafe { TerminateProcess(process.as_raw_handle(), 1) } != 0 {
+        return Ok(());
+    }
+    let terminate_error = io::Error::last_os_error();
+    // TerminateProcess reports access denied after the process has exited.
+    // A signaled process handle means there is nothing left to kill.
+    // SAFETY: `process` is live and has SYNCHRONIZE. A zero timeout only
+    // observes the current signaled state.
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == WAIT_OBJECT_0 {
+        Ok(())
+    } else {
+        Err(terminate_error)
+    }
 }
