@@ -9,6 +9,7 @@
 ### Added
 
 - Details 的实时 / 上一轮用量显示本轮缓存命中率。压缩或追加引导之后，如果下一次请求的命中率大幅下跌，Details 会留下警告并弹出提示。
+- 全局命令面板。macOS 用 `Cmd-K`，Windows 和 Linux 用 `Ctrl-K`。可搜索会话、模型、斜杠命令和设置页。
 
 ### Changed
 
