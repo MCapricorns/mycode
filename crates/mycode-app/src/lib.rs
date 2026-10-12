@@ -282,6 +282,15 @@ pub enum BridgeCommand {
     },
 }
 
+/// Why the next prompt may miss the provider cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheDisruption {
+    /// A compaction summary replaced the head of the prompt.
+    Compaction,
+    /// A steer was appended inside the running turn.
+    Steer,
+}
+
 /// A streaming event from an active model turn.
 #[derive(Debug, Clone)]
 pub enum BridgeEvent {
@@ -421,6 +430,18 @@ pub enum BridgeEvent {
     CopilotSignInFailed {
         /// Rendered failure for the sign-in panel.
         message: String,
+    },
+    /// The next provider request follows a rewrite of the cached prefix.
+    ///
+    /// Sent before that request's [`BridgeEvent::UsageSnapshot`], including
+    /// when a mid-turn compaction defers its transcript card until the turn
+    /// commits. The desktop compares the next prompt's cache hit with the
+    /// one already on the meter.
+    PromptCacheWatch {
+        /// Session identity spelling.
+        session_id: String,
+        /// What rewrote the prefix.
+        cause: CacheDisruption,
     },
     /// A compaction summary was written and should appear in the transcript.
     /// Manual `/compact` and automatic compaction both emit this. The text

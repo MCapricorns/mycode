@@ -48,6 +48,13 @@ pub enum AgentEvent {
         call_id: CallId,
         kind: PtcNestedKind,
     },
+    /// The next provider request follows a compaction that rewrote the prefix.
+    ///
+    /// Emitted from `before_request`, after the previous response is already
+    /// on this bus and before the new request's deltas. The UI must not hear
+    /// about it on a side channel: a slow consumer would otherwise pair the
+    /// warning with the previous prompt.
+    CacheDisrupted,
     /// The current turn ended.
     TurnEnded(TurnOutcome),
     /// An error occurred within the Agent loop.

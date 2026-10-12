@@ -108,6 +108,8 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToastKind {
     Info,
+    /// A cache collapse or another condition the user should notice.
+    Warning,
     Error,
 }
 

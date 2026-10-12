@@ -835,6 +835,9 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             .as_deref()
             .is_none_or(|selected| turn.model == selected)
     };
+    // Copied before `turn_row` borrows `vm`. The warning outlives the turn
+    // row: it is the prompt after a rewrite, not the summed hit.
+    let cache_alert = vm.cache_alert;
     // Usage accounting is live-only: the running turn reports through the
     // live meter, and a finished turn keeps its sums as the last-turn row.
     let turn_row = vm
@@ -848,6 +851,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 .filter(|turn| model_of(turn))
                 .map(|turn| (t("Last turn", "上一轮"), turn))
         });
+    let show_turn = turn_row.is_some();
 
     div()
         .id("model-usage")
@@ -873,6 +877,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         .child(stat_line(
             t("Thinking", "思考"),
             &super::chat::reasoning_row_label(thinking),
+            theme.foreground,
             theme,
         ))
         .when(context_window > 0, |this| {
@@ -899,6 +904,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             ))
         })
         .when_some(turn_row, |this, (label, turn)| {
+            let hit = crate::view_model::turn_cache_hit(turn);
             this.child(stat_line(
                 label,
                 &format!(
@@ -908,10 +914,25 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                     super::compact_count(turn.output),
                     t("out", "出")
                 ),
+                theme.foreground,
+                theme,
+            ))
+            .when_some(hit, |row, percent| {
+                row.child(stat_line(
+                    t("Cache hit", "缓存命中"),
+                    &format!("{percent}%"),
+                    theme.foreground,
+                    theme,
+                ))
+            })
+        })
+        .when_some(cache_alert, |this, alert| {
+            this.child(cache_collapse_note(
+                crate::view_model::cache_alert_text(&alert),
                 theme,
             ))
         })
-        .when(turn_row.is_none(), |this| {
+        .when(!show_turn && cache_alert.is_none(), |this| {
             this.child(
                 div()
                     .text_xs()
@@ -959,7 +980,12 @@ pub(crate) fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u6
     override_context.or(catalog_context).unwrap_or(0)
 }
 
-fn stat_line(label: &str, value: &str, theme: &Theme) -> impl IntoElement {
+fn stat_line(
+    label: &str,
+    value: &str,
+    value_color: gpui_kit::Hsla,
+    theme: &Theme,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -975,9 +1001,22 @@ fn stat_line(label: &str, value: &str, theme: &Theme) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(theme.foreground)
+                .text_color(value_color)
                 .child(value.to_owned()),
         )
+}
+
+/// Persistent Details warning after compaction or a steer drops the cache.
+fn cache_collapse_note(text: String, theme: &Theme) -> impl IntoElement {
+    div()
+        .px_2()
+        .py_1()
+        .rounded(super::skin::radius_sm())
+        .bg(theme.warning.opacity(0.18))
+        .text_color(theme.warning_foreground)
+        .text_xs()
+        .whitespace_normal()
+        .child(text)
 }
 
 /// The context bar row. The right-hand pieces come from the same

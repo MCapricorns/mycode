@@ -34,7 +34,10 @@ pub(crate) use self::reduce::{
     reasoning_levels_for, reduce, selected_model_supports_reasoning, selected_reasoning_levels,
 };
 pub(crate) use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
-pub(crate) use self::usage::{ContextMeterParts, TurnStats, compact_count, context_meter_parts};
+pub(crate) use self::usage::{
+    CacheAlert, ContextMeterParts, TurnStats, cache_alert_text, compact_count, context_meter_parts,
+    turn_cache_hit,
+};
 
 // Kept public API: the `DesktopAction` vocabulary is `pub`, so its payload
 // types must be too (`private_interfaces`).
@@ -43,3 +46,4 @@ pub use self::settings::{
     WebSubview,
 };
 pub use self::state::{DesktopAction, MainView, UpdateState};
+pub use self::usage::CacheBreak;

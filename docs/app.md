@@ -51,7 +51,9 @@
 
 ## 用量与上下文
 
-提供商每轮都报用量，泵按回合累加，每轮发一次 `UsageSnapshot`，结束时写入 `Usage` 事件并发 `UsageRecorded`。`input` / `output` / `cache` 是整回合的和，用于计费；`context` 是最近一次请求的提示大小（`prompt_tokens`，OpenAI 式已含缓存读，Anthropic 由适配器加上缓存读），`context_cache` 是这次请求命中的缓存读。桌面的上下文计量用 `context`，不是多轮工具的总和。
+提供商每轮都报用量，泵按回合累加，每轮发一次 `UsageSnapshot`。`input` / `output` / `cache` 是整回合的和，用于计费；Details 的「实时 / 上一轮」用这个和显示本轮缓存命中率（缓存读为 0 或提供商没报时不显示，避免把从不报缓存的模型写成 0%）。`context` 是最近一次请求的提示大小（`prompt_tokens`，OpenAI 式已含缓存读，Anthropic 由适配器加上缓存读），`context_cache` 是这次请求命中的缓存读。上下文条和输入框的环用 `context`，不跟本轮命中率混在一起。
+
+压缩改写前缀（回合前、回合中的 hook、手动 `/compact`）或本回合注入 steer 时，核心在下一次请求之前发 `PromptCacheWatch`。桌面拿当时的命中率做基线。下一次有大小的请求如果从至少 50% 掉到一半以下、并且至少少 30 个点，Details 留下警告，同时弹出同样的句子。命中回到 50% 以上，或换会话，警告消失。回合中的压缩卡片仍等到回复提交后再画，但监视在 hook 里就已经发出，所以骤降不会被当成普通的一轮波动。
 
 ## 子代理
 
