@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-12
+
 ### Fixed
 
 - `shell` 的 `program` 模式会执行直接 shebang 包装（例如 `#!/bin/bash` 的 `/usr/bin/google-chrome`，或 `#!/usr/bin/env python3`）：钉住解释器映像，把脚本路径和 `args` 作为 argv 传进去，不拼 shell 命令字符串。`-c`、`env -S` 和批处理仍拒绝，错误写明改用 `mode` `script` 或自己指定解释器。
@@ -165,7 +167,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.5...HEAD
+[0.11.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.5
 [0.11.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.2
 [0.11.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.1
 [0.11.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.0
