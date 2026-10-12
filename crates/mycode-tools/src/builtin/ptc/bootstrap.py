@@ -1,4 +1,4 @@
-"""Static bootstrap for one `run_code` process.
+"""Static bootstrap for a warm `run_code` process.
 
 Frames are a 4-byte big-endian length plus UTF-8 JSON on a private control
 channel: an inherited socket descriptor (Unix) or a token-authenticated
@@ -7,16 +7,22 @@ that Python opens synchronously serializes pending reads and writes, so the
 blocked reader thread would deadlock every later frame write. TCP sockets
 carry the reader thread and the writer concurrently. stdout and stderr stay
 free; `print` is forwarded as a log frame. User code is the body of an async
-function and keeps its own line numbers. A read-only (scout) process installs
-an audit hook before that code runs. The hook is best-effort: it is not a
-security boundary.
+function and keeps its own line numbers.
+
+The process stays up after a program finishes and waits for the next boot.
+Each boot rebuilds the user namespace and restores modules, builtins,
+`sys.path`, and the environment captured before any user code. A read-only
+(scout) process is started with `-I` and installs an audit hook once, before
+user code. The hook is best-effort: it is not a security boundary.
 """
 
 import ast
 import asyncio
+import builtins
 import io
 import json
 import os
+import queue
 import socket
 import struct
 import sys
@@ -35,6 +41,17 @@ _next_id = 1
 _id_lock = threading.Lock()
 _warned = set()
 _tools = set()
+_inbox = queue.Queue()
+_BASE_MODULES = {}
+_BASE_ENV = {}
+_BASE_PATH = []
+_BASE_BUILTINS = {}
+_BASE_OS = {}
+_BASE_MAIN = {}
+_BASE_THREADS = 1
+_CHDIR = os.chdir
+# Replaced by user code, these make the next boot untrustworthy.
+_CRITICAL = ("_write_frame", "_read_frame", "_reader", "_inbox", "_loop", "_rpc", "_install_hook")
 
 _PROCESS = {
     "os.system",
@@ -153,15 +170,23 @@ def _reader():
             message = _read_frame()
         except Exception:
             _fail_pending("control channel closed")
+            _inbox.put(None)
             return
-        if message.get("type") != "reply":
+        if not isinstance(message, dict):
             continue
-        ident = message.get("id")
-        with _id_lock:
-            future = _pending.pop(ident, None)
-        if future is None or _loop is None:
+        if message.get("type") == "reply":
+            ident = message.get("id")
+            with _id_lock:
+                future = _pending.pop(ident, None)
+            if future is None or _loop is None:
+                continue
+            try:
+                _loop.call_soon_threadsafe(_settle, future, message)
+            except RuntimeError:
+                _inbox.put(None)
+                return
             continue
-        _loop.call_soon_threadsafe(_settle, future, message)
+        _inbox.put(message)
 
 
 def _settle(future, message):
@@ -344,11 +369,46 @@ async def _exec_user(code):
     return await namespace["__mycode_main__"]()
 
 
+async def _cancel_stray_tasks():
+    current = asyncio.current_task()
+    stray = [
+        task
+        for task in asyncio.all_tasks()
+        if task is not current and not task.done()
+    ]
+    for task in stray:
+        task.cancel()
+    if stray:
+        await asyncio.gather(*stray, return_exceptions=True)
+
+
+def _can_stay_warm():
+    if threading.active_count() > _BASE_THREADS:
+        return False
+    main = sys.modules[__name__].__dict__
+    for key in _CRITICAL:
+        baseline = _BASE_MAIN.get(key)
+        if baseline is not None and main.get(key) is not baseline:
+            return False
+    with _id_lock:
+        if _pending:
+            return False
+    return True
+
+
+async def _finish(payload):
+    await _cancel_stray_tasks()
+    payload["warm"] = _can_stay_warm()
+    with _id_lock:
+        _pending.clear()
+    _write_frame(payload)
+
+
 async def _run_user(code):
     try:
         result = await _exec_user(code)
     except Exception as exc:
-        _write_frame(
+        await _finish(
             {
                 "type": "done",
                 "error": {"kind": "exception", "message": _format_exc(exc)},
@@ -358,7 +418,7 @@ async def _run_user(code):
     try:
         json.dumps(result)
     except TypeError as exc:
-        _write_frame(
+        await _finish(
             {
                 "type": "done",
                 "error": {
@@ -368,7 +428,126 @@ async def _run_user(code):
             }
         )
         return
-    _write_frame({"type": "done", "value": result})
+    await _finish({"type": "done", "value": result})
+
+
+def _capture_baseline():
+    """Snapshot interpreter state after the hook and before user code."""
+    global _BASE_MODULES, _BASE_ENV, _BASE_PATH, _BASE_BUILTINS, _BASE_OS, _BASE_MAIN
+    global _BASE_THREADS, _CHDIR
+    _BASE_MODULES = dict(sys.modules)
+    _BASE_ENV = dict(os.environ)
+    _BASE_PATH = list(sys.path)
+    _BASE_BUILTINS = dict(builtins.__dict__)
+    _BASE_OS = dict(os.__dict__)
+    _BASE_THREADS = threading.active_count()
+    _CHDIR = os.chdir
+    # Taken last so the snapshot sees the containers above. The snapshot's
+    # own `_BASE_MAIN` entry still points at the previous dict; restore skips
+    # that key so it cannot wipe this snapshot.
+    _BASE_MAIN = dict(sys.modules[__name__].__dict__)
+
+
+def _restore_modules():
+    current = sys.modules
+    for name in list(current):
+        if name not in _BASE_MODULES:
+            current.pop(name, None)
+    for name, module in _BASE_MODULES.items():
+        if current.get(name) is not module:
+            current[name] = module
+
+
+def _restore_main():
+    main = sys.modules[__name__].__dict__
+    for key in list(main):
+        if key not in _BASE_MAIN:
+            del main[key]
+    for key, value in _BASE_MAIN.items():
+        # Assigned for every boot after this restore. `_BASE_MAIN` is this
+        # snapshot; writing the stale entry back would drop it.
+        if key in ("_tools", "_USER_LINES", "_next_id", "_BASE_MAIN"):
+            continue
+        if main.get(key) is not value:
+            main[key] = value
+    _warned.clear()
+
+
+def _restore_builtins():
+    current = builtins.__dict__
+    for key in list(current):
+        if key not in _BASE_BUILTINS:
+            try:
+                del current[key]
+            except Exception:
+                pass
+    for key, value in _BASE_BUILTINS.items():
+        if current.get(key) is not value:
+            try:
+                current[key] = value
+            except Exception:
+                pass
+
+
+def _restore_os():
+    """Undo monkeypatches on the existing `os` module object.
+
+    Replacing the module in `sys.modules` is handled separately. Internal
+    `os` state (open fds, the environ mapping object) is not rebuilt here.
+    """
+    current = os.__dict__
+    for key, value in _BASE_OS.items():
+        if key.startswith("_"):
+            continue
+        if current.get(key) is not value:
+            try:
+                current[key] = value
+            except Exception:
+                pass
+    for key in list(current):
+        if key.startswith("_") or key in _BASE_OS:
+            continue
+        try:
+            del current[key]
+        except Exception:
+            pass
+
+
+def _restore_for_call():
+    _restore_modules()
+    _restore_main()
+    _restore_builtins()
+    _restore_os()
+    try:
+        os.environ.clear()
+        os.environ.update(_BASE_ENV)
+    except Exception:
+        pass
+    try:
+        sys.path[:] = list(_BASE_PATH)
+    except Exception:
+        sys.path = list(_BASE_PATH)
+    sys.stdout = _Log()
+    sys.stderr = _Log()
+
+
+def _begin_call(boot):
+    """Reset user-visible state, then apply this boot. Isolation is fixed."""
+    global _USER_LINES, _tools
+    _restore_for_call()
+    code = boot.get("code") or ""
+    if not isinstance(code, str):
+        code = ""
+    _USER_LINES = code.splitlines()
+    tools = boot.get("tools") or []
+    _tools = set(tools) if isinstance(tools, list) else set()
+    cwd = boot.get("cwd") or ""
+    if isinstance(cwd, str) and cwd:
+        _CHDIR(cwd)
+    isolated = bool(getattr(sys.flags, "isolated", 0))
+    if bool(boot.get("restricted")) != isolated:
+        raise SystemExit("python isolation does not match the process")
+    return code
 
 
 def _open_control():
@@ -455,36 +634,55 @@ def _graceful_close():
 
 
 def main():
-    global _loop, _tools, _USER_LINES
+    global _loop
     token = _open_control()
     _write_frame({"type": "ready", "token": token})
     # Drop the local before user code runs. The listener is already closed
     # once the host accepts this ready frame; keeping the secret in `main`
     # would still let `inspect` read it off this frame.
     del token
-    boot = _read_frame()
-    if boot.get("type") != "boot":
-        raise SystemExit("expected boot")
-    code = boot.get("code") or ""
-    _USER_LINES = code.splitlines()
-    _tools = set(boot.get("tools") or [])
-    restricted = bool(boot.get("restricted"))
-    warn_process = bool(boot.get("warn_process"))
     _drop_channel_env()
     sys.stdout = _Log()
     sys.stderr = _Log()
     # The event loop opens a self-pipe. Install the audit hook after that,
-    # and before user code, so scout still blocks later sockets.
+    # once, so a later boot cannot skip it and scout still blocks sockets
+    # opened after the first program. `-I` is a process flag: a boot cannot
+    # turn isolation off, and a non-isolated process cannot claim to be scout.
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
     threading.Thread(target=_reader, name="mycode-ptc", daemon=True).start()
-    if restricted or warn_process:
-        _install_hook(restricted, warn_process and not restricted)
-    try:
-        _loop.run_until_complete(_run_user(code))
-    finally:
-        _loop.close()
-        _graceful_close()
+    isolated = bool(getattr(sys.flags, "isolated", 0))
+    _install_hook(isolated, not isolated)
+    _capture_baseline()
+    while True:
+        boot = _inbox.get()
+        if not isinstance(boot, dict):
+            break
+        if boot.get("type") == "shutdown":
+            break
+        if boot.get("type") != "boot":
+            continue
+        try:
+            code = _begin_call(boot)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            _write_frame(
+                {
+                    "type": "done",
+                    "error": {"kind": "exception", "message": _format_exc(exc)},
+                    "warm": True,
+                }
+            )
+            continue
+        try:
+            _loop.run_until_complete(_run_user(code))
+        except BaseException:
+            _graceful_close()
+            raise
+        if _loop.is_closed():
+            break
+    _graceful_close()
 
 
 if __name__ == "__main__":

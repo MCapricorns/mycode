@@ -628,13 +628,15 @@ impl BridgeAgentHost {
             forget_subagent_cancel(&self.cancels, call_id, &cancel_key);
             return Err(fail(subagent_timeout_message(&role_name, budget.as_secs())));
         }
+        let ptc_session = self.session_id.clone();
         let run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
                 .with_cancel(run_cancel)
                 .with_events(event_tx)
                 .with_cwd(run_dir)
                 .with_extra_roots(extra_roots)
-                .with_read_roots(read_roots);
+                .with_read_roots(read_roots)
+                .with_ptc_session(ptc_session);
             let outcome = agent.prompt(prompt, &env).await;
             forwarder.abort();
             if let Err(error) = outcome {
