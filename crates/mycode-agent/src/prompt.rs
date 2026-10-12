@@ -83,6 +83,9 @@ fn tools_section(tools: &ToolRegistry) -> Option<String> {
     section.push_str(
         "# Only print(...) and return reach the conversation. Other results stay out, so extract just what you need.\n",
     );
+    section.push_str(
+        "# Each call starts from fresh globals. Names, imports, and environment edits from an earlier call are not there. The interpreter may already be warm.\n",
+    );
     for line in sdk_lines(tools) {
         section.push_str(&line);
         section.push('\n');

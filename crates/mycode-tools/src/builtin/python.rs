@@ -3,8 +3,9 @@
 //! The interpreter is called by name (`py.exe -3`, `python3`, …) and resolved
 //! from `PATH` by the operating system. No absolute executable path is
 //! assembled or stored: the probe verifies the candidate by running it once
-//! per process, and every later `run_code` spawns the same name. A later
-//! install is picked up on the next launch. On Windows every spawn sets
+//! per process, and a cold start spawns that same name. A warm session reuses
+//! the process; the next cold start still uses the probed name. A later
+//! install is picked up on the next cold start. On Windows every spawn sets
 //! `CREATE_NO_WINDOW` so no console window flashes.
 
 use std::path::PathBuf;

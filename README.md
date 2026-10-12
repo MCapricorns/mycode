@@ -32,7 +32,7 @@ cargo build --release -p mycode-desktop
 
 未设置 `MYCODE_HOME` 时，数据在 `~/.mycode`：`settings.json`（不含密钥）、`secrets.json`、`ui.json`、会话和 `agents/`。
 
-模型发出的工具调用只有 `run_code`。脚本在新的系统 Python 进程里跑，通过带令牌的控制通道调用 `await tools.read(...)`、`tools.edit(...)`、`tools.shell(...)` 和其它工具。只读调用可以重叠；写操作按顺序单独执行。只有 `print` 和 `return` 回到对话。`scout` 的 Python 以 `-I` 启动，并加一道尽力而为的 audit hook。细节和残留风险在 [docs/tools.md](docs/tools.md)。
+模型发出的工具调用只有 `run_code`。脚本在会话复用的系统 Python 进程里跑，通过带令牌的控制通道调用 `await tools.read(...)`、`tools.edit(...)`、`tools.shell(...)` 和其它工具。两次调用之间用户全局会清掉。只读调用可以重叠；写操作按顺序单独执行。只有 `print` 和 `return` 回到对话。`scout` 的 Python 以 `-I` 启动并单独复用，并加一道尽力而为的 audit hook。细节和残留风险在 [docs/tools.md](docs/tools.md)。
 
 ## 文档
 
@@ -78,7 +78,7 @@ Open a folder and type. `/` lists `/new`, `/compact`, `/settings`, skills, and M
 
 `MYCODE_HOME` defaults to `~/.mycode` (`settings.json` without secrets, `secrets.json`, `ui.json`, sessions, and `agents/`).
 
-The only tool call the model emits is `run_code`. The script runs in a fresh system Python process and reaches `await tools.read(...)`, `tools.edit(...)`, `tools.shell(...)`, and the rest over a token-checked control channel. Read-only calls may overlap; writes run alone, in order. Only `print` and `return` come back. `scout` starts Python with `-I` and a best-effort audit hook. Details and residual risk: [docs/tools.md](docs/tools.md).
+The only tool call the model emits is `run_code`. The script runs in a system Python process that stays warm for the session and reaches `await tools.read(...)`, `tools.edit(...)`, `tools.shell(...)`, and the rest over a token-checked control channel. User globals are reset between calls. Read-only calls may overlap; writes run alone, in order. Only `print` and `return` come back. `scout` keeps its own `-I` process and a best-effort audit hook. Details and residual risk: [docs/tools.md](docs/tools.md).
 
 ### Docs
 
