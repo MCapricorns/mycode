@@ -1022,8 +1022,8 @@ fn truncated_sides(old: &[&str], new: &[&str], line_bytes: usize, max_emitted: u
 
 fn push_preview_line(out: &mut String, sign: char, line: &str, line_bytes: usize) {
     let (cut, truncated) = crate::builtin::truncate_bytes(line, line_bytes);
-    // `++` / `--` are the markers the transcript paints bright green and red.
-    out.push(sign);
+    // One `+` or `-`, then a space. The transcript paints those lines green
+    // and red. A doubled sign was showing up as `++` / `--` in the preview.
     out.push(sign);
     out.push(' ');
     out.push_str(&cut.replace('\r', "\\r"));
@@ -1040,6 +1040,20 @@ pub(super) fn snippet(text: &str) -> String {
         visible.push('\u{2026}');
     }
     visible
+}
+
+#[cfg(test)]
+mod diff_preview_tests {
+    use super::line_diff_preview;
+
+    #[test]
+    fn changed_lines_use_a_single_sign() {
+        let preview = line_diff_preview("alpha\nbeta\n", "alpha\ngamma\n");
+        assert!(preview.contains("- beta\n"), "{preview}");
+        assert!(preview.contains("+ gamma\n"), "{preview}");
+        assert!(!preview.contains("-- "), "{preview}");
+        assert!(!preview.contains("++ "), "{preview}");
+    }
 }
 
 #[cfg(test)]

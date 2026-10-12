@@ -1,5 +1,5 @@
-//! The chat column: centered conversation transcript, the pending-ask panel,
-//! and the integrated composer carrying the project and model chips.
+//! The chat column: conversation transcript, the pending-ask panel, and the
+//! integrated composer. Both fill the strip between the sidebar and Details.
 mod ask;
 mod composer;
 mod menus;
@@ -22,9 +22,6 @@ use gpui_kit::{
 use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind};
 use crate::workspace::Workspace;
-
-/// Conversation column. Side whitespace keeps the transcript in a readable measure.
-pub(super) const COLUMN_MAX: gpui_kit::Pixels = px(760.);
 
 pub(super) fn render_chat(
     workspace: &mut Workspace,
@@ -135,6 +132,18 @@ pub(super) fn render_chat(
         scroll_hold::ScrollAnchor::new(scroll_handle.clone(), workspace.take_scroll_anchor());
     let probe = anchor.probe();
     let theme = cx.theme();
+    // Details docks into the row on a wide window, so this pane is already
+    // the strip between the sidebar and that column. When the card floats,
+    // reserve its width or the transcript and composer slide underneath it.
+    let details_docked = super::DeskLayout::docks_inspector(window)
+        && workspace.vm().inspector_open
+        && workspace.vm().inspector_pinned;
+    let chat_width = f32::from(window.viewport_size().width) - super::sidebar::WIDTH_PX;
+    let details_reserve = super::context::chat_right_reserve(
+        workspace.vm().inspector_open,
+        details_docked,
+        chat_width,
+    );
     div()
         .id("chat")
         .flex_1()
@@ -143,6 +152,7 @@ pub(super) fn render_chat(
         .flex()
         .flex_col()
         .bg(super::skin::ambient(theme))
+        .when(details_reserve > 0., |this| this.pr(px(details_reserve)))
         .when(
             python_warning_banner(workspace.python_warning()).is_some(),
             |this| {

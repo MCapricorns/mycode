@@ -247,7 +247,7 @@ pub(super) fn render_mention_layer(
         .flex()
         .justify_center()
         .child(
-            div().w_full().max_w(super::COLUMN_MAX).child(
+            div().w_full().child(
                 menu_panel("mention-menu", theme)
                     .w_full()
                     .max_h(px(300.))

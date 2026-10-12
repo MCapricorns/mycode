@@ -281,7 +281,9 @@ fn assistant_block(
         })
 }
 
-/// The centered transcript column inside the conversation scroller.
+/// The transcript column inside the conversation scroller. It fills the chat
+/// pane (the strip between the sidebar and Details) instead of a fixed
+/// measure shared with the composer.
 ///
 /// `flex_none` keeps the column at the height of its rows. A shrinkable
 /// `overflow_hidden` child of the scroller is given a minimum height of zero
@@ -294,8 +296,6 @@ pub(super) fn transcript_stack() -> gpui_kit::Stateful<gpui_kit::Div> {
         .min_w_0()
         .h_auto()
         .flex_none()
-        .max_w(super::COLUMN_MAX)
-        .mx_auto()
         .flex()
         .flex_col()
         .gap_3()
@@ -542,7 +542,7 @@ fn tool_status(tool: &str, result: Option<&ConversationEntry>) -> String {
         let added = text.lines().filter(|line| diff_added_line(line)).count();
         let removed = text.lines().filter(|line| diff_removed_line(line)).count();
         if added + removed > 0 {
-            return format!("++{added} --{removed}");
+            return format!("+{added} -{removed}");
         }
     }
     let first = text
@@ -556,9 +556,10 @@ fn tool_status(tool: &str, result: Option<&ConversationEntry>) -> String {
     }
 }
 
-/// Edit results use `++ ` / `-- ` markers. Page text from `fetch_content` and
-/// `web_search` often starts lines with `- ` (a list), which is not a deletion.
-/// Counting those lines painted a successful fetch as `DIFF ++0 --11`.
+/// Edit results use `+ ` / `- ` markers. Older results used `++ ` / `-- `,
+/// which still count. Page text from `fetch_content` and `web_search` often
+/// starts lines with `- ` (a list), which is not a deletion. Counting those
+/// lines painted a successful fetch as a diff.
 fn tool_paints_diff(tool: &str) -> bool {
     !matches!(tool, "fetch_content" | "web_search")
 }
@@ -597,6 +598,32 @@ fn diff_removed_line(line: &str) -> bool {
     (line.starts_with("-- ") || line.starts_with("- ")) && !line.starts_with("---")
 }
 
+/// `+3 -1` from [`tool_status`]. Only digit counts match, so a status line
+/// that merely contains " -" stays plain text.
+fn diff_counts(status: &str) -> Option<(&str, &str)> {
+    let (added, removed) = status.split_once(" -")?;
+    let added = added.strip_prefix('+')?;
+    if added.is_empty()
+        || removed.is_empty()
+        || !added.bytes().all(|byte| byte.is_ascii_digit())
+        || !removed.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((added, removed))
+}
+
+/// One `+` or `-` on screen. Older previews stored a doubled sign.
+fn diff_line_text(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("++ ") {
+        format!("+ {rest}")
+    } else if let Some(rest) = line.strip_prefix("-- ") {
+        format!("- {rest}")
+    } else {
+        line.to_owned()
+    }
+}
+
 fn diff_green() -> gpui_kit::Hsla {
     gpui_kit::rgb(0x3D_FF_9A).into()
 }
@@ -606,9 +633,7 @@ fn diff_red() -> gpui_kit::Hsla {
 }
 
 fn tool_status_node(status: &str, failed: bool, theme: &Theme) -> gpui_kit::AnyElement {
-    if let Some((added, removed)) = status.split_once(" --")
-        && let Some(added) = added.strip_prefix("++")
-    {
+    if let Some((added, removed)) = diff_counts(status) {
         return div()
             .flex()
             .flex_row()
@@ -617,8 +642,8 @@ fn tool_status_node(status: &str, failed: bool, theme: &Theme) -> gpui_kit::AnyE
             .flex_shrink_0()
             .text_xs()
             .font_family(theme.mono_font_family.clone())
-            .child(div().text_color(diff_green()).child(format!("++{added}")))
-            .child(div().text_color(diff_red()).child(format!("--{removed}")))
+            .child(div().text_color(diff_green()).child(format!("+{added}")))
+            .child(div().text_color(diff_red()).child(format!("-{removed}")))
             .into_any_element();
     }
     div()
@@ -707,8 +732,8 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
                         .text_color(theme.muted_foreground)
                         .child(t("DIFF", "差异")),
                 )
-                .child(div().text_color(diff_green()).child(format!("++{added}")))
-                .child(div().text_color(diff_red()).child(format!("--{removed}"))),
+                .child(div().text_color(diff_green()).child(format!("+{added}")))
+                .child(div().text_color(diff_red()).child(format!("-{removed}"))),
         )
         .children(lines.iter().take(shown).map(|line| {
             let (color, bg) = if diff_added_line(line) {
@@ -728,7 +753,7 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
                 .px_2()
                 .text_color(color)
                 .bg(bg)
-                .child((*line).to_owned())
+                .child(diff_line_text(line))
         }))
         .when(lines.len() > shown, |this| {
             this.child(preview_caption(
@@ -939,7 +964,7 @@ pub(super) fn render_user_entry(
 
 #[cfg(test)]
 mod tests {
-    use super::{shows_diff_preview, tool_status};
+    use super::{diff_counts, diff_line_text, shows_diff_preview, tool_status};
     use crate::view_model::{ConversationEntry, EntryKind};
 
     fn result_entry(text: &str) -> ConversationEntry {
@@ -953,7 +978,7 @@ mod tests {
         }
     }
 
-    /// Eleven markdown list lines are what QA saw as `DIFF ++0 --11`.
+    /// Eleven markdown list lines are what QA saw counted as deletions.
     fn eleven_list_lines(header: &str) -> String {
         let mut page = format!("{header}\n");
         for n in 1..=11 {
@@ -967,7 +992,7 @@ mod tests {
         let page = eleven_list_lines("[https://example.com/a]");
         let status = tool_status("fetch_content", Some(&result_entry(&page)));
         assert_eq!(status, "[https://example.com/a]");
-        assert_ne!(status, "++0 --11");
+        assert_ne!(status, "+0 -11");
         assert!(!shows_diff_preview("fetch_content", &page));
     }
 
@@ -983,10 +1008,24 @@ mod tests {
     fn edit_removals_still_summarize_as_a_diff() {
         let mut text = String::from("edited src/lib.rs\n");
         for n in 1..=11 {
-            text.push_str(&format!("-- line {n}\n"));
+            text.push_str(&format!("- line {n}\n"));
         }
-        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "++0 --11");
+        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "+0 -11");
+        assert_eq!(diff_counts("+0 -11"), Some(("0", "11")));
         assert!(shows_diff_preview("edit", &text));
+    }
+
+    #[test]
+    fn legacy_doubled_signs_still_count_and_display_as_one() {
+        let mut text = String::from("edited src/lib.rs\n");
+        text.push_str("++ kept\n");
+        text.push_str("-- gone\n");
+        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "+1 -1");
+        assert_eq!(diff_line_text("++ kept"), "+ kept");
+        assert_eq!(diff_line_text("-- gone"), "- gone");
+        assert_eq!(diff_line_text("+ kept"), "+ kept");
+        assert_eq!(diff_line_text("+++ b/file.rs"), "+++ b/file.rs");
+        assert_eq!(diff_line_text("--- a/file.rs"), "--- a/file.rs");
     }
 
     #[test]

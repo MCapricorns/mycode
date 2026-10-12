@@ -34,7 +34,6 @@ pub(crate) fn render_ask_panel(
             div()
                 .id("ask-card")
                 .w_full()
-                .max_w(super::COLUMN_MAX)
                 .flex()
                 .flex_col()
                 .gap_3()
