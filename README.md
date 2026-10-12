@@ -2,9 +2,9 @@
 
 本地优先的桌面编码代理。对话和工具都在你的电脑上；你自己带 API 密钥。
 
-![一次画完的鹈鹕 SVG：run_code 卡片里嵌着 read、edit 和 shell](docs/images/hero.png)
+![一次画完的鹈鹕 SVG：编辑差异、shell，以及收起的工具摘要](docs/images/hero.png)
 
-一次画完的鹈鹕 SVG。`run_code` 下面是嵌套的 read、edit 和 shell 卡片。
+一次画完的鹈鹕 SVG。对话里是 edit 差异、shell，以及收成一行的工具摘要。
 
 ## 功能
 

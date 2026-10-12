@@ -12,7 +12,7 @@ use mycode_config::HomeLayout;
 use mycode_core::Message;
 use mycode_core::{AssistantMessage, ToolResultMessage, UserMessage};
 
-use crate::projection::project_replayed_entry;
+use crate::projection::{meter_snapshot, project_replayed_entry};
 use crate::protocol::{
     ActiveConversation, ConversationEntry, EntryKind, OlderTranscript, SessionSummary,
 };
@@ -105,7 +105,7 @@ pub(crate) async fn read_branch(
     branch: &BranchId,
     snapshot_head: &HeadStamp,
 ) -> Result<ActiveConversation, SessionError> {
-    let (entries, older_before) =
+    let (entries, older_before, context_used, context_cache) =
         project_window(service, session, branch, snapshot_head, None).await?;
     Ok(ActiveConversation {
         session_id: session.as_str().to_owned(),
@@ -114,6 +114,8 @@ pub(crate) async fn read_branch(
         entries,
         older_before,
         streaming: None,
+        context_used,
+        context_cache,
     })
 }
 
@@ -137,9 +139,10 @@ pub(crate) async fn load_older(
     }
     let cursor = SessionEventId::parse(before)
         .ok_or_else(|| "the history cursor is not a valid event id".to_owned())?;
-    let (entries, older) = project_window(service, session, branch, expected_head, Some(&cursor))
-        .await
-        .map_err(render_error)?;
+    let (entries, older, _, _) =
+        project_window(service, session, branch, expected_head, Some(&cursor))
+            .await
+            .map_err(render_error)?;
     Ok(OlderTranscript {
         session_id: session.as_str().to_owned(),
         branch_id: branch.as_str().to_owned(),
@@ -156,17 +159,28 @@ async fn project_window(
     branch: &BranchId,
     snapshot_head: &HeadStamp,
     before: Option<&SessionEventId>,
-) -> Result<(Vec<ConversationEntry>, Option<String>), SessionError> {
+) -> Result<(Vec<ConversationEntry>, Option<String>, u64, u64), SessionError> {
     let window = service
         .read_payload_window(session, branch, snapshot_head, before, VISIBLE_EVENTS)
         .await?;
     let mut entries = Vec::with_capacity(window.items.len());
+    let mut context_used = 0u64;
+    let mut context_cache = 0u64;
     for loaded in &window.items {
+        if let Some((context, cache)) = meter_snapshot(loaded.event.kind, &loaded.payload) {
+            context_used = context;
+            context_cache = cache;
+        }
         if let Some(entry) = project_replayed_entry(&loaded.event, &loaded.payload) {
             entries.push(entry);
         }
     }
-    Ok((entries, window.older.map(|event| event.as_str().to_owned())))
+    Ok((
+        entries,
+        window.older.map(|event| event.as_str().to_owned()),
+        context_used,
+        context_cache,
+    ))
 }
 
 /// Walks every committed event of one branch snapshot in ledger order,
@@ -653,6 +667,64 @@ mod tests {
             assert_eq!(page.entries.last().expect("page").text.as_ref(), "m4");
             assert!(page.older.is_none());
             assert_eq!(page.requested_before, cursor);
+            service.shutdown().await;
+        });
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn opening_a_session_restores_the_last_usage_snapshot() {
+        let (root, home) = scratch();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let service = SessionService::new(&home);
+            let created = service.create().await.expect("create");
+            let mut head = HeadStamp::Empty;
+            let assistant = mycode_core::AssistantMessage {
+                blocks: vec![mycode_core::ContentBlock::Text(
+                    mycode_core::TextBlock::new("done"),
+                )],
+                usage: Some(mycode_core::Usage {
+                    input_tokens: 1_000,
+                    output_tokens: 10,
+                    cache_read_tokens: Some(800),
+                    cache_write_tokens: None,
+                    prompt_tokens: 1_200,
+                }),
+                stop_reason: mycode_core::StopReason::Stop,
+            };
+            let assistant_bytes = serde_json::to_vec(&assistant).expect("assistant");
+            for (kind, payload) in [
+                (EventKind::Message, assistant_bytes.as_slice()),
+                (
+                    EventKind::Usage,
+                    br#"{"provider":"deepseek","model":"deepseek-v4-flash","input":900,"context":42365,"context_cache":41472,"output":40,"cache":41472,"elapsed_ms":12}"#.as_slice(),
+                ),
+            ] {
+                let reservation = service
+                    .reserve_event(&created.session_id, &created.branch_id, kind, None, payload)
+                    .await
+                    .expect("reserve");
+                head = service
+                    .append(
+                        &created.session_id,
+                        &created.branch_id,
+                        &head,
+                        &reservation,
+                    )
+                    .await
+                    .expect("append")
+                    .head;
+            }
+            let opened = open_conversation(&service, &created.session_id)
+                .await
+                .expect("open");
+            assert_eq!(opened.context_used, 42_365);
+            assert_eq!(opened.context_cache, 41_472);
+            assert_eq!(opened.entries.len(), 1, "the usage event stays off the transcript");
             service.shutdown().await;
         });
         let _ = std::fs::remove_dir_all(root);

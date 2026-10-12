@@ -360,7 +360,15 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
         .map(|id| {
             palette_cell(id, selected, &theme)
                 .on_hover(cx.listener(move |workspace, hovered: &bool, _, cx| {
-                    workspace.set_palette_preview(hovered.then_some(id), cx);
+                    // A neighbor's hover-out can run after this cell's
+                    // hover-in. Only the cell that still owns the preview
+                    // may clear it, or a later swatch (Ember, Aurora) never
+                    // sticks.
+                    if *hovered {
+                        workspace.set_palette_preview(Some(id), cx);
+                    } else if workspace.palette_preview() == Some(id) {
+                        workspace.set_palette_preview(None, cx);
+                    }
                 }))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_select_palette(id, cx);

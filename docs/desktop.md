@@ -73,17 +73,17 @@ BridgeCommand → CoreBridge
 
 ## 界面截图
 
-![三个 scout 并行：Tokio、async-std 和 smol 都在跑](images/subagents.png)
+![三个 scout 查完 Tokio、async-std 和 smol，回复里是对照表](images/subagents.png)
 
-三个只读 scout 同时在查 Rust 异步运行时。状态行写着 3 subagents running。
+三个只读 scout 查了 Rust 异步运行时。回复把对照表铺开。
 
-![思考菜单打开，锚在 Thinking 按钮上方](images/thinking-menu.png)
+![思考菜单打开，锚在思考芯片上方，当前档是 Max](images/thinking-menu.png)
 
-思考菜单贴在 Thinking 按钮上方，底不透明，当前档是 High · deep。
+思考菜单贴在思考芯片上方，底不透明，当前档是 Max。
 
-![设置的通用与外观页：语言、色板、字体和字号](images/settings.png)
+![设置的通用页：语言、深浅色、色板预览、字体和字号](images/settings.png)
 
-设置的通用页：语言、六块色板、界面字体和字号。
+设置的通用页：语言、深色或浅色、六块色板和对话预览、界面字体和字号。
 
 ## 不放在这里的东西
 
