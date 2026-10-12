@@ -99,6 +99,7 @@ impl OsSandboxPolicy {
 
 /// Helper plus the argument vector that follows it. The vector does not
 /// repeat the helper path; the caller uses that path as `argv0`.
+#[derive(Debug)]
 pub(crate) struct PlannedSandbox {
     pub(crate) helper_program: String,
     pub(crate) args: Vec<String>,
