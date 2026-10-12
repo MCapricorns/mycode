@@ -54,6 +54,7 @@ pub use tool::{Tool, ToolDyn, ToolError, ToolResult};
 /// Windows stdio child resumed from `PROCESS_INFORMATION.hThread`.
 #[cfg(windows)]
 pub use builtin::process::WindowsStdioProcess;
+pub use builtin::process::first_program_on_path;
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
 /// when the system clock predates the epoch.

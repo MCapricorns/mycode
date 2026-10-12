@@ -313,9 +313,9 @@ impl JsonRpcChannel for StdioChannel {
 /// Resolves `command` to something the OS can launch.
 ///
 /// A command carrying a path separator is used as written. A bare name is
-/// searched on `PATH`; on Windows every `PATHEXT` extension is tried per
-/// directory in order, so `npx` resolves to `npx.cmd` and `uvx` to
-/// `uvx.exe`. `None` means nothing matched.
+/// searched on `PATH`; on Windows the launchable `PATHEXT` extensions are
+/// tried per directory in order (`.com`, `.exe`, `.bat`, `.cmd`), so `npx`
+/// resolves to `npx.cmd` and `uvx` to `uvx.exe`. `None` means nothing matched.
 fn resolve_program(command: &str) -> Option<PathBuf> {
     let command = command.trim();
     if command.is_empty() {
@@ -339,31 +339,8 @@ fn resolve_program(command: &str) -> Option<PathBuf> {
 #[cfg(windows)]
 fn resolve_on_path_windows(command: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
-    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
-    let extensions: Vec<String> = pathext
-        .split(';')
-        .filter(|ext| !ext.is_empty())
-        .map(|ext| ext.to_ascii_lowercase())
-        .collect();
-    let has_extension = Path::new(command).extension().is_some();
-    for dir in std::env::split_paths(&path_var) {
-        if dir.as_os_str().is_empty() {
-            continue;
-        }
-        if has_extension {
-            let candidate = dir.join(command);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        for ext in &extensions {
-            let candidate = dir.join(format!("{command}{ext}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    let pathext = std::env::var("PATHEXT").unwrap_or_default();
+    mycode_tools::first_program_on_path(command, &path_var, &pathext)
 }
 
 /// Environment variables a stdio MCP child may inherit.

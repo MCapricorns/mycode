@@ -129,8 +129,9 @@ pub(crate) fn is_batch_script(program: &OsStr) -> bool {
 /// Command line for `cmd.exe /e:ON /v:OFF /d /c`, without a trailing NUL.
 ///
 /// `.bat` and `.cmd` files are parsed by cmd.exe, not `CommandLineToArgvW`.
-/// `%` is rewritten so it is not an environment expansion, `"` is doubled,
-/// and `\r` / `\n` are rejected because they truncate the command.
+/// `%` in the script path and in arguments is rewritten so it is not an
+/// environment expansion. `"` in an argument is doubled. An argument that
+/// contains `\r` or `\n` is rejected because it truncates the command.
 ///
 /// # Errors
 ///
@@ -149,7 +150,9 @@ pub(crate) fn windows_batch_command_line_utf16(
     }
     let mut cmd: Vec<u16> = "cmd.exe /e:ON /v:OFF /d /c \"".encode_utf16().collect();
     cmd.push(u16::from(b'"'));
-    cmd.extend_from_slice(&script_units);
+    // The path sits inside the same `/c` string as the arguments, so cmd.exe
+    // expands `%` here too. Guard it the same way as an argument.
+    append_bat_percent_units(&mut cmd, &script_units);
     cmd.push(u16::from(b'"'));
     for arg in args {
         if arg.contains('\r') || arg.contains('\n') {
@@ -194,8 +197,7 @@ fn append_bat_arg(cmd: &mut Vec<u16>, arg: &str) {
                 cmd.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
                 cmd.push(u16::from(b'"'));
             } else if unit == u16::from(b'%') || unit == u16::from(b'\r') {
-                // Zero-length `%cd:~,%` so cmd.exe does not expand `%VAR%`.
-                cmd.extend("%%cd:~,".encode_utf16());
+                push_percent_guard(cmd);
             }
             backslashes = 0;
         }
@@ -205,6 +207,25 @@ fn append_bat_arg(cmd: &mut Vec<u16>, arg: &str) {
         cmd.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
         cmd.push(u16::from(b'"'));
     }
+}
+
+/// Copy UTF-16 units, guarding `%` and `\r` the way [`append_bat_arg`] does.
+fn append_bat_percent_units(cmd: &mut Vec<u16>, units: &[u16]) {
+    for &unit in units {
+        if unit == u16::from(b'%') || unit == u16::from(b'\r') {
+            push_percent_guard(cmd);
+        }
+        cmd.push(unit);
+    }
+}
+
+/// Zero-length `%cd:~,%` so cmd.exe does not expand `%VAR%`.
+///
+/// Command extensions (`/e:ON`) are on. `%cd:~,%` is a substring of the
+/// always-defined `cd` variable with both indexes omitted, so it expands to
+/// nothing and the `%` that follows is not the start of a variable.
+fn push_percent_guard(cmd: &mut Vec<u16>) {
+    cmd.extend("%%cd:~,".encode_utf16());
 }
 
 #[cfg(test)]
@@ -268,6 +289,20 @@ mod tests {
             decode(&line),
             "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\Tools\\npx.cmd\" \
              \"%%cd:~,%PATH%%cd:~,%\" \"say \"\"hi\"\"\" \"a&b\"\""
+        );
+    }
+
+    #[test]
+    fn batch_script_path_escapes_percent_like_an_argument() {
+        let line = windows_batch_command_line_utf16(
+            OsStr::new(r"C:\Tools\100%done\npx.cmd"),
+            &["%PATH%".to_owned()],
+        )
+        .expect("batch command line");
+        assert_eq!(
+            decode(&line),
+            "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\Tools\\100%%cd:~,%done\\npx.cmd\" \
+             \"%%cd:~,%PATH%%cd:~,%\"\""
         );
     }
 
