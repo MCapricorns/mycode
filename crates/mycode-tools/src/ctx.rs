@@ -50,7 +50,12 @@ pub struct ToolCtx {
     /// `None` or empty spawns a process for this call and tears it down.
     /// The same key plus the catalog's isolation mode (scout versus the main
     /// agent) share one interpreter. User globals are reset between calls.
+    /// Ignored when [`ToolCtx::os_sandbox`] is set, so a sandboxed call does
+    /// not reuse a process whose binds came from an earlier cwd.
     pub ptc_session: Option<String>,
+    /// Opt-in OS helper for `shell` and `run_code`. Default off. When on, the
+    /// helper is best-effort write confinement, not a security boundary.
+    pub os_sandbox: bool,
 }
 
 impl ToolCtx {
@@ -67,7 +72,15 @@ impl ToolCtx {
             catalog: None,
             ptc_wall: None,
             ptc_session: None,
+            os_sandbox: false,
         }
+    }
+
+    /// Opt into the OS helper for this invocation. Off unless set.
+    #[must_use]
+    pub fn with_os_sandbox(mut self, enabled: bool) -> Self {
+        self.os_sandbox = enabled;
+        self
     }
 
     /// Shorten or extend the `run_code` wall clock for this invocation.

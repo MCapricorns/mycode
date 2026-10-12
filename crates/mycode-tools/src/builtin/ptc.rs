@@ -1400,4 +1400,134 @@ return 'started'\n",
         super::runtime::release_session(&session);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Documents residuals the audit hook does not close. A failure here means
+    /// the hook started blocking one of these, and the docs must change with it.
+    #[tokio::test]
+    async fn scout_hook_still_allows_memfd_and_stdout_writes() {
+        let root = temp_dir("scout-residual");
+        let result = run(
+            &root,
+            catalog(vec![]),
+            r#"
+import os, sys
+notes = []
+notes.append("isolated" if sys.flags.isolated else "not-isolated")
+notes.append("no-user-site" if sys.flags.no_user_site else "user-site")
+try:
+    os.write(1, b"residual-stdout\n")
+    notes.append("stdout-write")
+except PermissionError:
+    notes.append("stdout-blocked")
+try:
+    fd = os.memfd_create("probe")
+    os.write(fd, b"anon")
+    os.close(fd)
+    notes.append("memfd")
+except PermissionError:
+    notes.append("memfd-blocked")
+except AttributeError:
+    notes.append("memfd-absent")
+try:
+    flags = os.O_RDWR
+    if hasattr(os, "O_TMPFILE"):
+        flags |= os.O_TMPFILE
+    os.open(".", flags, 0o600)
+    notes.append("tmpfile-open")
+except PermissionError:
+    notes.append("tmpfile")
+except OSError:
+    notes.append("tmpfile")
+try:
+    import ctypes
+    ctypes.CDLL(None)
+    notes.append("ctypes-open")
+except PermissionError:
+    notes.append("ctypes")
+try:
+    open("nope.txt", "w").write("x")
+    notes.append("file-open")
+except PermissionError:
+    notes.append("file")
+return "|".join(notes)
+"#,
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(
+            text.contains("|no-user-site|")
+                || text.starts_with("no-user-site|")
+                || text.contains("isolated|no-user-site"),
+            "{text}"
+        );
+        assert!(!text.contains("not-isolated"), "{text}");
+        assert!(text.contains("stdout-write"), "{text}");
+        assert!(!text.contains("stdout-blocked"), "{text}");
+        assert!(
+            text.contains("|memfd|") || text.contains("|memfd-absent"),
+            "{text}"
+        );
+        assert!(!text.contains("memfd-blocked"), "{text}");
+        assert!(text.contains("|tmpfile"), "{text}");
+        assert!(!text.contains("tmpfile-open"), "{text}");
+        assert!(text.contains("|ctypes"), "{text}");
+        assert!(!text.contains("ctypes-open"), "{text}");
+        assert!(text.contains("|file"), "{text}");
+        assert!(!text.contains("file-open"), "{text}");
+        assert!(!root.join("nope.txt").exists(), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The main agent's Python is not started with `-I` and can write files.
+    /// The audit hook does not apply to that process.
+    #[tokio::test]
+    async fn main_python_is_not_isolated_and_can_write_the_workspace() {
+        let root = temp_dir("main-residual");
+        let result = run(
+            &root,
+            catalog(vec![Arc::new(WriteTool)]),
+            r#"
+import sys, pathlib
+pathlib.Path("created-by-main.txt").write_text("yes\n")
+return f"isolated={int(sys.flags.isolated)}|no_user_site={int(sys.flags.no_user_site)}"
+"#,
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("isolated=0"), "{text}");
+        assert!(text.contains("no_user_site=0"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("created-by-main.txt")).unwrap_or_default(),
+            "yes\n",
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Opt-in helper: the control channel still works, or the call fails closed.
+    #[tokio::test]
+    async fn opt_in_os_sandbox_keeps_the_control_channel_or_fails_closed() {
+        let root = temp_dir("sandbox-ptc");
+        std::fs::write(root.join("ok.txt"), "visible\n").unwrap();
+        let ctx = ToolCtx::new(&root)
+            .with_catalog(catalog(vec![Arc::new(ReadTool)]))
+            .with_os_sandbox(true);
+        let result = run_with(
+            ctx,
+            "import sys\ntext = open('ok.txt', encoding='utf-8').read()\nreturn f'isolated={int(sys.flags.isolated)}|{text.strip()}'\n",
+        )
+        .await;
+        let text = text_of(&result);
+        if crate::builtin::sandbox::helper_available() {
+            assert!(!result.is_error, "{text}");
+            assert!(text.contains("isolated=1"), "{text}");
+            assert!(text.contains("visible"), "{text}");
+        } else {
+            assert!(result.is_error, "{text}");
+            assert!(text.contains("does not fall back"), "{text}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

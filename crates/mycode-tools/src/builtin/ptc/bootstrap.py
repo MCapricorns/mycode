@@ -287,7 +287,10 @@ def _write_open(args):
     if any(mark in mode for mark in ("w", "a", "x", "+")):
         return True
     write_bits = 0
-    for bit in ("O_WRONLY", "O_RDWR", "O_APPEND", "O_CREAT", "O_TRUNC"):
+    # O_TMPFILE is only useful with O_RDWR or O_WRONLY, which are already
+    # here. Named so a later edit does not treat that flag as read-only.
+    # os.write on an existing fd and os.memfd_create do not emit these events.
+    for bit in ("O_WRONLY", "O_RDWR", "O_APPEND", "O_CREAT", "O_TRUNC", "O_TMPFILE"):
         write_bits |= getattr(os, bit, 0)
     return bool(flags & write_bits)
 

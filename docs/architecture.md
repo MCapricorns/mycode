@@ -90,5 +90,5 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
 - 生产环境的回合钩子只有请求前压缩，子代理连这个也没有。没有工具前观察者，也不再为改文件装快照。
 - 项目里的 `.mycode/mcp.json` 只有在项目菜单里信任该文件夹后才会加载。
-- 模型只能直接调用 `run_code`。程序在系统 Python 里跑，同一会话按隔离模式复用已经启动的解释器，用户全局在两次调用之间清掉。内层 `tools.*` 走同一套路径预检。控制通道在 Unix 上是继承的套接字对，Windows 上是带令牌的 `127.0.0.1` TCP；令牌仍在下发第一段程序前核对。scout 单独用 `-I` 进程和 audit hook，拦截写、元数据修改、sqlite3、子进程、`forkpty`、`kill`、ctypes 和新建套接字；这是尽力而为，不是安全边界。主代理的 Python 与 shell 权限相同。`asyncio.gather` 里的 `tools.agent` 并行。技能用 `tools.read` 按目录里的路径加载。MCP 工具名是 `server__tool`。残留风险写在 [tools.md](tools.md)。
+- 模型只能直接调用 `run_code`。程序在系统 Python 里跑，同一会话按隔离模式复用已经启动的解释器，用户全局在两次调用之间清掉。打开 `tools.osSandbox` 时不复用，每次冷启动。内层 `tools.*` 走同一套路径预检。控制通道在 Unix 上是继承的套接字对，Windows 上是带令牌的 `127.0.0.1` TCP；令牌仍在下发第一段程序前核对。scout 单独用 `-I` 进程和 audit hook，拦截写、元数据修改、sqlite3、子进程、`forkpty`、`kill`、ctypes 和新建套接字；`-I` 和这道 hook 都是尽力而为，不是安全边界。主代理的 Python 与 shell 权限相同。`tools.osSandbox` 默认关闭；打开后 Linux 的 bubblewrap 或 macOS 的 seatbelt 只做尽力而为的写范围限制，失败时不退回无沙箱执行，也不能写成硬隔离。`asyncio.gather` 里的 `tools.agent` 并行。技能用 `tools.read` 按目录里的路径加载。MCP 工具名是 `server__tool`。残留风险写在 [tools.md](tools.md)。
 - 进程工具的 `script` 模式可以改文件：bash 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`program` 模式不经过 shell。`write` 和 `edit` 仍然可用，但只能从 `run_code` 里调用。Windows 上的侦查、编码和 stderr 清洗见 [tools.md](tools.md)。
