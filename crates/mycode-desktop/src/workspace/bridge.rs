@@ -1,7 +1,5 @@
 //! The bridge half of the workspace: folding core events and replies into
 //! actions, and driving one model turn end to end.
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{Context, Window};
 
 use mycode_app::{BranchId, BridgeCommand, BridgeEvent, BridgeReply, SessionId};
@@ -393,13 +391,7 @@ impl Workspace {
                     .as_ref()
                     .is_some_and(|settings| settings.dirty || settings.saving);
                 if !preserve_editor {
-                    if cx.theme().mode != ThemeMode::Dark {
-                        Theme::change(ThemeMode::Dark, None, cx);
-                    }
-                    crate::ui::desk::apply_palette(Theme::global_mut(cx), &state.palette);
-                    self.applied_font_size.clear();
-                    self.applied_font_family.clear();
-                    Theme::sync_base(cx);
+                    self.paint_appearance(&state.theme, &state.palette, cx);
                     self.ua_sync_pending = true;
                 }
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
