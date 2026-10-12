@@ -1,11 +1,12 @@
 //! Assistant markdown: prose is left-aligned with the tool cards, while fenced
 //! code and tables use the full column. Tables scroll sideways, stripe their rows,
-//! and keep the header pinned above a scrolling body.
+//! and keep the header pinned above a scrolling body. Bold and inline code inside
+//! a cell render as text styles; the markers themselves are not shown.
 use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
+    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, TestSupportExt as _, div, px, rems,
 };
 
@@ -277,7 +278,7 @@ fn column_widths(rows: &[Vec<String>]) -> Vec<f32> {
                 .iter()
                 .map(|row| {
                     row.get(column)
-                        .map(|cell| cell.chars().count())
+                        .map(|cell| inline_visible_chars(cell))
                         .unwrap_or(0)
                 })
                 .max()
@@ -285,6 +286,113 @@ fn column_widths(rows: &[Vec<String>]) -> Vec<f32> {
             (chars as f32).mul_add(7.4, 28.).max(88.)
         })
         .collect()
+}
+
+/// One inline run inside a table cell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum InlineSpan {
+    Text(String),
+    /// `**...**`. Nested bold is left literal; inline code inside is parsed.
+    Bold(Vec<InlineSpan>),
+    /// `` `...` ``. The backticks are not part of the text.
+    Code(String),
+}
+
+/// Visible characters after bold and inline-code markers are removed.
+fn inline_visible_chars(source: &str) -> usize {
+    fn count(spans: &[InlineSpan]) -> usize {
+        spans
+            .iter()
+            .map(|span| match span {
+                InlineSpan::Text(text) | InlineSpan::Code(text) => text.chars().count(),
+                InlineSpan::Bold(inner) => count(inner),
+            })
+            .sum()
+    }
+    count(&inline_spans(source))
+}
+
+/// Splits a cell into bold, inline code, and plain text.
+///
+/// An unclosed `**` or backtick stays literal so a streaming cell is not
+/// eaten early. Markers need a non-empty interior.
+fn inline_spans(source: &str) -> Vec<InlineSpan> {
+    parse_inline(source, true)
+}
+
+fn parse_inline(source: &str, allow_bold: bool) -> Vec<InlineSpan> {
+    let bytes = source.as_bytes();
+    let mut spans = Vec::new();
+    let mut text_start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let bold = allow_bold && bytes[index..].starts_with(b"**");
+        if bold
+            && let Some(rel) = source[index + 2..].find("**")
+            && rel > 0
+        {
+            push_text(&mut spans, source, text_start, index);
+            let inner = &source[index + 2..index + 2 + rel];
+            spans.push(InlineSpan::Bold(parse_inline(inner, false)));
+            index += 2 + rel + 2;
+            text_start = index;
+            continue;
+        }
+        if bytes[index] == b'`'
+            && let Some(rel) = source[index + 1..].find('`')
+            && rel > 0
+        {
+            push_text(&mut spans, source, text_start, index);
+            spans.push(InlineSpan::Code(
+                source[index + 1..index + 1 + rel].to_owned(),
+            ));
+            index += 1 + rel + 1;
+            text_start = index;
+            continue;
+        }
+        let step = source[index..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+        index += step;
+    }
+    push_text(&mut spans, source, text_start, source.len());
+    spans
+}
+
+fn push_text(spans: &mut Vec<InlineSpan>, source: &str, start: usize, end: usize) {
+    if start < end {
+        spans.push(InlineSpan::Text(source[start..end].to_owned()));
+    }
+}
+
+fn render_inline(source: &str, theme: &Theme) -> impl IntoElement {
+    div().flex().flex_row().items_center().min_w_0().children(
+        inline_spans(source)
+            .into_iter()
+            .map(|span| render_span(span, theme)),
+    )
+}
+
+fn render_span(span: InlineSpan, theme: &Theme) -> AnyElement {
+    match span {
+        InlineSpan::Text(text) => div().child(text).into_any_element(),
+        InlineSpan::Code(text) => div()
+            .font_family(theme.mono_font_family.clone())
+            .px(px(3.))
+            .rounded(px(3.))
+            .bg(theme.secondary)
+            .child(text)
+            .into_any_element(),
+        InlineSpan::Bold(parts) => div()
+            .font_weight(FontWeight::BOLD)
+            .flex()
+            .flex_row()
+            .items_center()
+            .children(parts.into_iter().map(|part| render_span(part, theme)))
+            .into_any_element(),
+    }
 }
 
 fn table_row(
@@ -319,7 +427,7 @@ fn table_row(
                 .text_sm()
                 .whitespace_nowrap()
                 .when(!last, |this| this.border_r_1().border_color(theme.border))
-                .child(text)
+                .child(render_inline(&text, theme))
         }))
 }
 
@@ -358,5 +466,50 @@ mod tests {
         let blocks = split_markdown(header);
         assert!(matches!(blocks.first(), Some(MarkdownBlock::Prose(_))));
         assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn table_cells_render_bold_and_inline_code_without_markers() {
+        use super::{InlineSpan, inline_spans, inline_visible_chars};
+
+        assert_eq!(
+            inline_spans("**Tokio**"),
+            vec![InlineSpan::Bold(vec![InlineSpan::Text("Tokio".into())])]
+        );
+        assert_eq!(inline_spans("`mio`"), vec![InlineSpan::Code("mio".into())]);
+        assert_eq!(
+            inline_spans("uses `mio` and **Tokio**"),
+            vec![
+                InlineSpan::Text("uses ".into()),
+                InlineSpan::Code("mio".into()),
+                InlineSpan::Text(" and ".into()),
+                InlineSpan::Bold(vec![InlineSpan::Text("Tokio".into())]),
+            ]
+        );
+        assert_eq!(
+            inline_spans("**bold `code`**"),
+            vec![InlineSpan::Bold(vec![
+                InlineSpan::Text("bold ".into()),
+                InlineSpan::Code("code".into()),
+            ])]
+        );
+        assert_eq!(
+            inline_spans("**not closed"),
+            vec![InlineSpan::Text("**not closed".into())]
+        );
+        assert_eq!(
+            inline_spans("`not closed"),
+            vec![InlineSpan::Text("`not closed".into())]
+        );
+        assert_eq!(inline_visible_chars("**Tokio**"), 5);
+        assert_eq!(inline_visible_chars("`mio`"), 3);
+        assert_eq!(inline_visible_chars("plain"), 5);
+        assert_eq!(
+            inline_spans("运行时 `mio`"),
+            vec![
+                InlineSpan::Text("运行时 ".into()),
+                InlineSpan::Code("mio".into()),
+            ]
+        );
     }
 }

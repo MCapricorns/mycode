@@ -35,6 +35,7 @@ pub(super) fn render_streaming_entry(
         streaming.status.clone()
     };
     desk_shell(
+        "streaming",
         t("live", "实时").to_owned(),
         theme,
         div()
@@ -166,6 +167,7 @@ fn desk_block(
     content: impl IntoElement,
 ) -> impl IntoElement {
     desk_shell(
+        &entry.event_id,
         short_stamp(&entry.event_id),
         theme,
         div()
@@ -181,10 +183,16 @@ fn desk_block(
     )
 }
 
-fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl IntoElement {
-    // The event id overlays the row and stays out of the layout, so user and
-    // agent prose share the tool cards' left edge. A reserved gutter on both
-    // sides centered the column and left large empty margins.
+fn desk_shell(
+    id: &str,
+    stamp: String,
+    theme: &Theme,
+    content: impl IntoElement,
+) -> impl IntoElement {
+    // The event id stays out of the layout, so user and agent prose share the
+    // tool cards' left edge. It used to sit on the leading edge and painted
+    // over the "You" label (a tail such as 256206). It now rests on the
+    // trailing edge, hidden until the row is hovered.
     div()
         .group("ledger-row")
         .relative()
@@ -194,16 +202,18 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
         .flex_none()
         .child(
             div()
+                .id(SharedString::from(format!("ledger-stamp-{id}")))
                 .absolute()
-                .left_0()
+                .right(px(4.))
                 .top(px(2.))
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
                 .text_color(Desk::of(theme).faint)
                 .whitespace_nowrap()
-                .opacity(0.)
-                .group_hover("ledger-row", |this| this.opacity(1.))
-                .child(stamp),
+                .invisible()
+                .group_hover("ledger-row", |style| style.visible())
+                .child(stamp)
+                .test_support(),
         )
         .child(content)
 }
@@ -622,6 +632,7 @@ pub(super) fn render_user_entry(
         .id(format!("entry-{}", entry.event_id))
         .group("user-entry")
         .child(desk_shell(
+            &entry.event_id,
             short_stamp(&entry.event_id),
             theme,
             markdown::prose_measure(column),
@@ -940,6 +951,47 @@ mod layout {
             assert!(
                 last.bottom() > scroller.bottom() + px(8.),
                 "rows should keep their height and scroll, not shrink into the viewport: last {last:?} scroller {scroller:?}"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn ledger_stamp_does_not_cover_the_you_label(cx: &mut TestAppContext) {
+        struct StampProbe;
+        impl Render for StampProbe {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let theme = cx.theme().clone();
+                div().size_full().p(px(16.)).child(super::desk_shell(
+                    "probe",
+                    "256206".into(),
+                    &theme,
+                    // The speaker name hugs its text, the same way the real
+                    // "You" label does. A full-width row would overlap the
+                    // trailing stamp even when the word itself does not.
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_row()
+                        .child(div().id("you-label").child("You").test_support()),
+                ))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let handle = cx.open_window(size(px(800.), px(240.)), |_, _| StampProbe);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let label = window.find("you-label").bounds();
+            let stamp = window.find("ledger-stamp-probe");
+            let stamp_bounds = stamp.bounds();
+            assert!(
+                !stamp.visible(),
+                "the event id must stay hidden until the row is hovered"
+            );
+            assert!(
+                stamp_bounds.origin.x >= label.right() - px(1.)
+                    || stamp_bounds.right() <= label.origin.x + px(1.),
+                "ledger stamp {stamp_bounds:?} overlaps the You label {label:?}"
             );
         })
         .unwrap();

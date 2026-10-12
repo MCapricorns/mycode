@@ -166,6 +166,9 @@ pub struct Workspace {
     command_palette: Option<Entity<CommandState>>,
     /// The next frame should focus the palette search field.
     palette_focus_pending: bool,
+    /// The next frame should focus the workspace node. Set when settings
+    /// opens, because the previously focused composer is no longer mounted.
+    settings_focus_pending: bool,
     /// Filter for the add-from-catalog model checklist.
     preset_model_search_input: Option<Entity<InputState>>,
     provider_key_inputs: HashMap<String, Entity<InputState>>,
@@ -316,6 +319,7 @@ impl Workspace {
             session_filter_input: None,
             command_palette: None,
             palette_focus_pending: false,
+            settings_focus_pending: false,
             preset_model_search_input: None,
             provider_key_inputs: HashMap::new(),
             provider_key_replace: HashSet::new(),
@@ -903,10 +907,22 @@ impl Workspace {
 
     /// Switches the main area between chat and settings.
     pub(crate) fn on_show_main_view(&mut self, view: MainView, cx: &mut Context<Self>) {
+        let entering_settings = view == MainView::Settings && self.vm.view != MainView::Settings;
         self.apply_action(DesktopAction::ShowMainView(view), cx);
-        if view == MainView::Settings {
+        if entering_settings {
+            self.settings_focus_pending = true;
             self.refresh_skills(cx);
         }
+    }
+
+    /// Whether this frame should focus the workspace node so Settings Escape
+    /// reaches the root key listener.
+    pub(crate) fn take_settings_focus(&mut self) -> bool {
+        let pending = self.settings_focus_pending && self.vm.view == MainView::Settings;
+        if self.settings_focus_pending {
+            self.settings_focus_pending = false;
+        }
+        pending
     }
 
     pub(crate) fn on_toggle_model_menu(
