@@ -71,7 +71,9 @@ pub(super) fn render_tool_block(
                         .text_color(theme.foreground)
                         .child(tool_title(tool, call.text.as_ref()).to_string()),
                 )
-                .child(tool_status_node(&status, failed, theme)),
+                .when(!status.is_empty(), |row| {
+                    row.child(tool_status_node(&status, failed, theme))
+                }),
         );
     if expanded && let Some(result) = result {
         let body = div()
@@ -276,15 +278,91 @@ pub(super) fn tool_status(tool: &str, result: Option<&ConversationEntry>) -> Str
             return format!("+{added} -{removed}");
         }
     }
-    let first = text
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("");
-    if first.is_empty() {
-        t("done", "完成").to_owned()
-    } else {
-        ellipsis(first, 48)
+    if text.trim().is_empty() {
+        return t("done", "完成").to_owned();
     }
+    status_snippet(text)
+}
+
+/// First line that reads as output, or nothing when every line is decoration
+/// or a raw byte window such as `|347270:347292`.
+fn status_snippet(text: &str) -> String {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || decoration_line(line) || raw_span_line(line) {
+            continue;
+        }
+        // Drop a markdown heading marker and the rule characters that frame
+        // ASCII art (`....Pelican....`, `# Tokio`). Digits and brackets stay.
+        let line = line.trim_matches(|c: char| c.is_whitespace() || is_rule_char(c));
+        if line.is_empty() || decoration_line(line) || raw_span_line(line) {
+            continue;
+        }
+        return ellipsis(line, 48);
+    }
+    String::new()
+}
+
+/// A line is noise only when it is rules and box drawing, plus optional
+/// whitespace (`=====`, `-------`, `────`). Digits and brackets are output:
+/// `42`, `3.14`, and `[1, 2, 3]` are summaries. A banner that still contains
+/// a word (`===== tokio =====`) is noise when rule glyphs dominate it. Dots
+/// are not counted in that check, so an ASCII-art row keeps the lettering
+/// after the edges are stripped.
+fn decoration_line(line: &str) -> bool {
+    let mut saw_ink = false;
+    for c in line.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        saw_ink = true;
+        if !is_rule_char(c) {
+            saw_ink = false;
+            break;
+        }
+    }
+    if saw_ink {
+        return true;
+    }
+    let chars: Vec<char> = line.chars().collect();
+    let rules = chars.iter().filter(|c| is_banner_rule(**c)).count();
+    rules >= 6 && rules.saturating_mul(2) >= chars.len()
+}
+
+/// Rule and box-drawing glyphs. Whitespace is handled by the caller.
+fn is_rule_char(c: char) -> bool {
+    matches!(c, '=' | '-' | '_' | '*' | '~' | '#' | '.' | '|' | '+')
+        || ('\u{2500}'..='\u{257F}').contains(&c)
+}
+
+/// Glyphs that mark a text banner. `.` is omitted so a pelican row of dots
+/// is not discarded before its lettering is trimmed.
+fn is_banner_rule(c: char) -> bool {
+    matches!(c, '=' | '-' | '_' | '*' | '#' | '|' | '+' | '~')
+}
+
+/// A digit-heavy `|start:end` window from a raw output dump.
+fn raw_span_line(line: &str) -> bool {
+    let sample: String = line.chars().take(48).collect();
+    let len = sample.chars().count();
+    if len == 0 {
+        return false;
+    }
+    let digits = sample.chars().filter(|c| c.is_ascii_digit()).count();
+    if digits.saturating_mul(2) < len {
+        return false;
+    }
+    let core = sample
+        .trim()
+        .trim_matches(|c: char| matches!(c, '|' | '…' | '.' | ' '));
+    let Some((left, right)) = core.split_once(':') else {
+        return false;
+    };
+    let right = right.trim_end_matches(['…', '.']);
+    !left.is_empty()
+        && !right.is_empty()
+        && left.chars().all(|c| c.is_ascii_digit())
+        && right.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Only edit and write previews use `+ ` / `- ` as a diff. Markdown from an
@@ -745,6 +823,45 @@ mod tests {
         let text = "wrote src/new.rs\n+ alpha\n+ beta\n";
         assert_eq!(tool_status("write", Some(&result_entry(text))), "+2 -0");
         assert!(shows_diff_preview("write", text));
+    }
+
+    #[test]
+    fn raw_output_banners_are_not_the_summary() {
+        let banner = "===== tokio =====\n|347270:347292…\n-------\n";
+        assert_eq!(tool_status("bash", Some(&result_entry(banner))), "");
+        let with_text = "===== tokio =====\n-------\ncompiled 3 files\n";
+        assert_eq!(
+            tool_status("bash", Some(&result_entry(with_text))),
+            "compiled 3 files"
+        );
+        assert_eq!(tool_status("bash", Some(&result_entry("   \n"))), "done");
+    }
+
+    #[test]
+    fn numbers_and_brackets_are_the_summary() {
+        assert_eq!(tool_status("bash", Some(&result_entry("42\n"))), "42");
+        assert_eq!(tool_status("bash", Some(&result_entry("3.14\n"))), "3.14");
+        assert_eq!(
+            tool_status("bash", Some(&result_entry("[1, 2, 3]\n"))),
+            "[1, 2, 3]"
+        );
+    }
+
+    #[test]
+    fn ascii_art_dots_and_markdown_headings_are_trimmed() {
+        let pelican = format!("{}Pelican", ".".repeat(60));
+        assert_eq!(
+            tool_status("bash", Some(&result_entry(&pelican))),
+            "Pelican"
+        );
+        assert_eq!(
+            tool_status(
+                "bash",
+                Some(&result_entry("# Tokio Runtime — Fact Sheet\n"))
+            ),
+            "Tokio Runtime — Fact Sheet"
+        );
+        assert_eq!(tool_status("bash", Some(&result_entry("...\n"))), "");
     }
 
     #[test]
