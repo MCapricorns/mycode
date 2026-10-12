@@ -1,13 +1,13 @@
-//! Dark palettes. Spec colors stay opaque; chrome applies its own alpha in
-//! `ui/skin` over the window blur. The page is a near-solid dark base with
-//! only a hint of the palette wash, so the conversation is not sitting on
-//! a loud gradient.
+//! Palettes in dark and light. Spec colors stay opaque; chrome applies its
+//! own alpha in `ui/skin` over the window blur. The page is a near-solid base
+//! with only a hint of the palette wash, so the conversation is not sitting
+//! on a loud gradient.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
 
 use gpui_kit::Hsla;
-use gpui_kit::component::theme::Theme;
+use gpui_kit::component::theme::{Theme, ThemeMode};
 
 fn hex(value: u32) -> Hsla {
     gpui_kit::rgb(value).into()
@@ -17,6 +17,25 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
     let mut color = hex(value);
     color.a = alpha;
     color
+}
+
+/// Canonical appearance id. Unknown values fall back to dark.
+#[must_use]
+pub fn normalize_theme(theme: &str) -> &'static str {
+    mycode_config::VALID_THEMES
+        .into_iter()
+        .find(|id| *id == theme)
+        .unwrap_or("dark")
+}
+
+/// GPUI mode for a stored appearance id.
+#[must_use]
+pub fn theme_mode(theme: &str) -> ThemeMode {
+    if normalize_theme(theme) == "light" {
+        ThemeMode::Light
+    } else {
+        ThemeMode::Dark
+    }
 }
 
 /// Canonical palette id. Unknown values fall back to slate.
@@ -54,12 +73,45 @@ pub struct PaletteSwatch {
 }
 
 /// Preview colors for one palette id. Unknown ids use the slate spec.
+///
+/// `light` selects the light page of that hue. The swatch and the chat
+/// preview both read this, so a hover and a saved pick show the same colors
+/// `apply_palette` will paint.
 #[must_use]
-pub fn palette_swatch_colors(palette: &str) -> PaletteSwatch {
-    let spec = spec_for(normalize_palette(palette));
+pub fn palette_swatch_colors(palette: &str, light: bool) -> PaletteSwatch {
+    let spec = spec_for_mode(normalize_palette(palette), light);
     PaletteSwatch {
         base: hex(spec.bg),
         accent: hex(spec.accent),
+    }
+}
+
+/// Colors for the settings chat preview of one palette.
+#[derive(Clone, Copy, Debug)]
+pub struct ChatPreview {
+    pub page: Hsla,
+    pub ink: Hsla,
+    pub muted: Hsla,
+    pub accent: Hsla,
+    pub bubble: Hsla,
+    pub green: Hsla,
+    pub red: Hsla,
+    pub line: Hsla,
+}
+
+/// Sample-chat colors for a palette in the current appearance.
+#[must_use]
+pub fn chat_preview(palette: &str, light: bool) -> ChatPreview {
+    let spec = spec_for_mode(normalize_palette(palette), light);
+    ChatPreview {
+        page: hex(spec.bg),
+        ink: hex(spec.ink),
+        muted: hex(spec.dim),
+        accent: hex(spec.accent),
+        bubble: hex(spec.tint),
+        green: hex(spec.green),
+        red: hex(spec.red),
+        line: hex(spec.line),
     }
 }
 
@@ -334,6 +386,14 @@ struct Spec {
     info: u32,
 }
 
+fn spec_for_mode(palette: &str, light: bool) -> Spec {
+    if light {
+        light_spec_for(palette)
+    } else {
+        spec_for(palette)
+    }
+}
+
 fn spec_for(palette: &str) -> Spec {
     match palette {
         "ocean" => Spec {
@@ -435,14 +495,115 @@ fn spec_for(palette: &str) -> Spec {
     }
 }
 
+fn light_spec_for(palette: &str) -> Spec {
+    match palette {
+        "ocean" => Spec {
+            bg: 0xF3F8FD,
+            wash: 0xD7E9FA,
+            surface: 0xFFFFFF,
+            card: 0xE5F0FA,
+            hover: 0xD4E6F6,
+            ink: 0x102033,
+            dim: 0x3A5168,
+            line: 0xC5D8EA,
+            accent: 0x0B6BCB,
+            accent_ink: 0xFFFFFF,
+            tint: 0xD6E9FA,
+            green: 0x0F7A45,
+            red: 0xB42318,
+            info: 0x1A5F86,
+        },
+        "forest" => Spec {
+            bg: 0xF4FAF6,
+            wash: 0xD7F0E2,
+            surface: 0xFFFFFF,
+            card: 0xE5F4EB,
+            hover: 0xD3EBDD,
+            ink: 0x122418,
+            dim: 0x3A5646,
+            line: 0xC5E0D0,
+            accent: 0x0E7A3D,
+            accent_ink: 0xFFFFFF,
+            tint: 0xD5F0E1,
+            green: 0x0F7A45,
+            red: 0xB42318,
+            info: 0x1A5F4A,
+        },
+        "dusk" => Spec {
+            bg: 0xF8F5FC,
+            wash: 0xEADFF6,
+            surface: 0xFFFFFF,
+            card: 0xF0E8F8,
+            hover: 0xE4D8F2,
+            ink: 0x241432,
+            dim: 0x534060,
+            line: 0xDCCFEA,
+            accent: 0x7A3EBF,
+            accent_ink: 0xFFFFFF,
+            tint: 0xE9DCF6,
+            green: 0x0F7A45,
+            red: 0xB42318,
+            info: 0x5A3A78,
+        },
+        "ember" => Spec {
+            bg: 0xFDF7F3,
+            wash: 0xF8E4D6,
+            surface: 0xFFFFFF,
+            card: 0xF8EBE3,
+            hover: 0xF3DDD0,
+            ink: 0x2C160C,
+            dim: 0x5C4032,
+            line: 0xEAD4C4,
+            accent: 0xC2410C,
+            accent_ink: 0xFFFFFF,
+            tint: 0xF8E2D4,
+            green: 0x0F7A45,
+            red: 0xB42318,
+            info: 0x8A4B24,
+        },
+        "aurora" => Spec {
+            bg: 0xF2FBFA,
+            wash: 0xD4F4F0,
+            surface: 0xFFFFFF,
+            card: 0xE3F6F3,
+            hover: 0xD2EEEA,
+            ink: 0x0C2422,
+            dim: 0x355652,
+            line: 0xC2E4DF,
+            accent: 0x0F766E,
+            accent_ink: 0xFFFFFF,
+            tint: 0xD2F3EF,
+            green: 0x0F7A45,
+            red: 0xB42318,
+            info: 0x1A5F58,
+        },
+        _ => Spec {
+            bg: 0xF6F7FB,
+            wash: 0xE4E8F4,
+            surface: 0xFFFFFF,
+            card: 0xECEFF6,
+            hover: 0xE0E5F0,
+            ink: 0x1A2030,
+            dim: 0x3E475C,
+            line: 0xD0D6E4,
+            accent: 0x2F4FBF,
+            accent_ink: 0xFFFFFF,
+            tint: 0xE2E8F8,
+            green: 0x0F7A45,
+            red: 0xB42318,
+            info: 0x1F4E72,
+        },
+    }
+}
+
 /// Applies the default slate palette. Used before settings have loaded.
 pub fn apply(theme: &mut Theme) {
     apply_palette(theme, "slate");
 }
 
-/// Applies one named palette. The window is always dark.
+/// Applies one named palette in the theme's current light or dark mode.
 pub fn apply_palette(theme: &mut Theme, palette: &str) {
-    let spec = spec_for(normalize_palette(palette));
+    let spec = spec_for_mode(normalize_palette(palette), !theme.mode.is_dark());
     paint(theme, &spec);
     sync_controls(theme);
 }
@@ -465,8 +626,8 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     let red = hex(spec.red);
     let info = hex(spec.info);
 
-    theme.radius = gpui_kit::px(10.);
-    theme.radius_lg = gpui_kit::px(12.);
+    theme.radius = super::skin::radius_sm();
+    theme.radius_lg = super::skin::radius_md();
     theme.shadow = false;
 
     theme.background = bg;
@@ -527,9 +688,9 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.colors.list_head = surface;
     theme.table = surface;
     theme.table_hover = hover;
-    theme.table_even = surface;
-    theme.table_head = surface;
-    theme.table_head_foreground = dim;
+    theme.table_even = soften(surface, hover, 0.55);
+    theme.table_head = card;
+    theme.table_head_foreground = ink;
     theme.scrollbar = bg;
     theme.scrollbar_thumb = line;
     theme.scrollbar_thumb_hover = dim;
@@ -579,6 +740,20 @@ fn sync_controls(theme: &mut Theme) {
     theme.tokens.primary_foreground = theme.primary_foreground.into();
     theme.tokens.secondary = theme.secondary.into();
     theme.tokens.secondary_foreground = theme.foreground.into();
+}
+
+/// Diff ink pulled slightly toward the page foreground so the red and green
+/// stay readable without the neon preview colors.
+#[must_use]
+pub(crate) fn diff_ink(theme: &Theme, added: bool) -> Hsla {
+    let base = if added { theme.green } else { theme.red };
+    soften(base, theme.foreground, 0.12)
+}
+
+/// Soft row wash behind a diff line.
+#[must_use]
+pub(crate) fn diff_wash(ink: Hsla) -> Hsla {
+    ink.opacity(0.14)
 }
 
 /// Semantic signal colors. `amber` follows the active palette accent so a
@@ -645,15 +820,56 @@ mod tests {
     fn palette_swatch_uses_the_same_spec_as_apply_palette() {
         for id in mycode_config::VALID_PALETTES {
             let spec = super::spec_for(id);
-            let preview = super::palette_swatch_colors(id);
+            let preview = super::palette_swatch_colors(id, false);
             assert_eq!(preview.base, super::hex(spec.bg));
             assert_eq!(preview.accent, super::hex(spec.accent));
             assert_ne!(spec.bg, spec.accent, "{id} base and accent must differ");
+            let light = super::light_spec_for(id);
+            let light_preview = super::palette_swatch_colors(id, true);
+            assert_eq!(light_preview.base, super::hex(light.bg));
+            assert_eq!(light_preview.accent, super::hex(light.accent));
         }
-        let slate = super::palette_swatch_colors("nope");
+        let slate = super::palette_swatch_colors("nope", false);
         let spec = super::spec_for("slate");
         assert_eq!(slate.base, super::hex(spec.bg));
         assert_eq!(slate.accent, super::hex(spec.accent));
+    }
+
+    #[test]
+    fn light_palettes_keep_ink_and_descriptions_readable() {
+        for id in mycode_config::VALID_PALETTES {
+            let spec = super::light_spec_for(id);
+            let bg = super::hex(spec.bg);
+            let ink = super::hex(spec.ink);
+            let dim = super::hex(spec.dim);
+            let card = super::hex(spec.card);
+            assert!(
+                contrast(ink, bg) >= 7.0,
+                "{id}: light ink on the page is {:.2}",
+                contrast(ink, bg)
+            );
+            assert!(
+                contrast(dim, bg) >= 4.5,
+                "{id}: light description text on the page is {:.2}",
+                contrast(dim, bg)
+            );
+            assert!(
+                contrast(dim, card) >= 4.5,
+                "{id}: light description text on a card is {:.2}",
+                contrast(dim, card)
+            );
+            assert_ne!(spec.bg, super::spec_for(id).bg);
+        }
+        assert_eq!(super::normalize_theme("light"), "light");
+        assert_eq!(super::normalize_theme("nope"), "dark");
+        assert_eq!(
+            super::theme_mode("light"),
+            gpui_kit::component::theme::ThemeMode::Light
+        );
+        assert_eq!(
+            super::theme_mode("dark"),
+            gpui_kit::component::theme::ThemeMode::Dark
+        );
     }
 
     #[test]

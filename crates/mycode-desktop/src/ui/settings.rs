@@ -27,7 +27,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px, rems,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use crate::i18n::t;
@@ -144,14 +144,14 @@ pub(super) fn render_settings_view(
                             div()
                                 .id("settings-content-inner")
                                 .mx_auto()
-                                .max_w(rems(52.))
+                                .max_w(px(960.))
                                 .w_full()
                                 .h_auto()
                                 .flex_none()
                                 .flex()
                                 .flex_col()
                                 .justify_start()
-                                .gap_4()
+                                .gap(crate::ui::skin::space(6))
                                 .px_6()
                                 .py_4()
                                 .child(

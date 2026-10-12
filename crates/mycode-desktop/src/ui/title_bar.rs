@@ -11,7 +11,6 @@
 //! the title strip is `Drag`. Windows `zoom()` only maximizes, so the max
 //! button uses `WindowControlArea::Max` and lets the caption proc toggle.
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Sizable as _,
 };
@@ -92,20 +91,8 @@ pub(super) fn render_title_bar(
             .into(),
         MainView::Settings => t("Settings", "设置").into(),
     };
-    // The chip tracks the whole self-update pipeline: offering, downloading,
-    // or staged. Its click always opens the update dialog.
-    let update_label: Option<SharedString> = match &workspace.vm().update {
-        UpdateState::Available { version, .. } => {
-            Some(format!("v{version} {}", t("available", "可用")).into())
-        }
-        UpdateState::Downloading { version } => {
-            Some(format!("v{version} {}", t("downloading…", "下载中…")).into())
-        }
-        UpdateState::Ready { version } => {
-            Some(format!("v{version} {}", t("ready", "已就绪")).into())
-        }
-        _ => None,
-    };
+    // A small dot tracks the self-update pipeline. Its click opens the dialog.
+    let update_dot = update_dot_color(&workspace.vm().update, &theme);
     div()
         .id("title-bar")
         .flex()
@@ -119,7 +106,7 @@ pub(super) fn render_title_bar(
         .bg(skin::glass(&theme))
         .child(drag_region(subtitle, window, cx))
         .child(title_controls(
-            update_label,
+            update_dot,
             workspace.vm().view == MainView::Chat,
             workspace.vm().inspector_open,
             window,
@@ -209,8 +196,20 @@ impl Render for TitleDrag {
     }
 }
 
+fn update_dot_color(
+    state: &UpdateState,
+    theme: &gpui_kit::component::theme::Theme,
+) -> Option<gpui_kit::Hsla> {
+    match state {
+        UpdateState::Available { .. } => Some(theme.primary),
+        UpdateState::Downloading { .. } => Some(theme.primary),
+        UpdateState::Ready { .. } => Some(theme.green),
+        _ => None,
+    }
+}
+
 fn title_controls(
-    update_label: Option<SharedString>,
+    update_dot: Option<gpui_kit::Hsla>,
     show_inspector: bool,
     inspector_open: bool,
     window: &mut Window,
@@ -244,18 +243,26 @@ fn title_controls(
                 }),
             ))
         })
-        .when_some(update_label, |this, label| {
+        .when_some(update_dot, |this, color| {
+            let hover = cx.theme().secondary_hover;
             this.child(
-                Button::new("title-update")
-                    .label(label)
-                    .small()
-                    .warning()
+                div()
+                    .id("title-update")
+                    .occlude()
+                    .size(px(16.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .rounded(skin::radius_xs())
+                    .hover(move |this| this.bg(hover))
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.apply_action(
                             crate::view_model::DesktopAction::UpdateDialogToggled(true),
                             cx,
                         );
-                    })),
+                    }))
+                    .child(div().size(skin::space(2)).rounded_full().bg(color)),
             )
         })
         .child(window_controls(window, cx))

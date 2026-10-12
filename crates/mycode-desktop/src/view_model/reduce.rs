@@ -103,6 +103,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             });
             remember_session_model(state, &session_id);
             state.live_jobs.clear();
@@ -175,6 +177,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.history_loading = false;
             }
             let session_id = conversation.session_id.clone();
+            let restored_used = conversation.context_used;
+            let restored_cache = conversation.context_cache;
             state.active = Some(conversation);
             for session in &mut state.sessions {
                 session.active = session.session_id == session_id;
@@ -184,6 +188,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                     remember_session_model(state, &previous);
                 }
                 clear_session_usage(state);
+                // The tail already carries the last prompt's usage. Put it
+                // back on the live meter so the cache ring paints before the
+                // next turn.
+                state.context_used = restored_used;
+                state.context_cache = restored_cache;
                 if !apply_session_model(state, &session_id) {
                     assign_fresh_session_model(state, &session_id);
                 }
@@ -502,6 +511,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             let palette = crate::ui::desk::normalize_palette(&palette).to_owned();
             if let Some(settings) = state.settings.as_mut() {
                 settings.palette = palette;
+                mark_settings_dirty(settings);
+            }
+        }
+        DesktopAction::SettingsThemeSelected(theme) => {
+            let theme = crate::ui::desk::normalize_theme(&theme).to_owned();
+            if let Some(settings) = state.settings.as_mut() {
+                settings.theme = theme;
                 mark_settings_dirty(settings);
             }
         }
@@ -1067,6 +1083,8 @@ mod tests {
                 entries,
                 older_before: older.map(str::to_owned),
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         }
@@ -1206,6 +1224,8 @@ mod tests {
             entries: Vec::new(),
             older_before: None,
             streaming: None,
+            context_used: 0,
+            context_cache: 0,
         });
         reduce(
             &mut state,
@@ -1244,6 +1264,8 @@ mod tests {
                 entries: vec![user("use-1", "hello")],
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
@@ -1270,8 +1292,8 @@ mod tests {
         assert!(state.last_turn.is_none());
         assert!(state.live_turn.is_none());
 
-        // Switching back does not resurrect the old session's meter: usage
-        // accounting is live-only, so a reopen starts from an empty meter.
+        // A reopen whose tail has no usage snapshot stays empty. The previous
+        // session's in-memory meter does not leak across.
         reduce(
             &mut state,
             DesktopAction::ConversationOpened(ActiveConversation {
@@ -1281,10 +1303,32 @@ mod tests {
                 entries: vec![user("use-1", "hello")],
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
         );
         assert_eq!(state.context_used, 0);
         assert_eq!(state.context_cache, 0);
+        assert!(state.last_turn.is_none());
+        assert!(state.live_turn.is_none());
+
+        // Reopening a session whose tail recorded a prompt restores that
+        // meter. The ring must not wait for another turn.
+        reduce(
+            &mut state,
+            DesktopAction::ConversationOpened(ActiveConversation {
+                session_id: "metered".to_owned(),
+                branch_id: "branch".to_owned(),
+                head: "use-2".to_owned(),
+                entries: vec![user("use-2", "hello")],
+                older_before: None,
+                streaming: None,
+                context_used: 42_365,
+                context_cache: 41_472,
+            }),
+        );
+        assert_eq!(state.context_used, 42_365);
+        assert_eq!(state.context_cache, 41_472);
         assert!(state.last_turn.is_none());
         assert!(state.live_turn.is_none());
 
@@ -1358,6 +1402,8 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
@@ -1392,6 +1438,8 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
@@ -1446,6 +1494,8 @@ mod tests {
                     thinking: "weigh the matches".to_owned(),
                     status: String::new(),
                 }),
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
@@ -1543,6 +1593,8 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
         );
         assert_eq!(state.composer_draft, "explain the build");
@@ -1584,6 +1636,8 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
@@ -1622,6 +1676,8 @@ mod tests {
                     thinking: String::new(),
                     status: "working".to_owned(),
                 }),
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
@@ -1665,6 +1721,8 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
