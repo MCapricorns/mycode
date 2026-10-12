@@ -206,6 +206,7 @@ mod tests {
                     program: "/bin/bash".into(),
                     source: "user".into(),
                 }),
+                os_sandbox: false,
             },
             ..AppSettings::default()
         };

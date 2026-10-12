@@ -611,7 +611,7 @@ async fn run_chat_turn_on(
     let read_roots = mycode_config::skill_read_roots(user_home.as_deref());
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
-    let system_prompt = session_system_prompt(
+    let mut system_prompt = session_system_prompt(
         home,
         &cwd,
         &registry,
@@ -620,6 +620,10 @@ async fn run_chat_turn_on(
         &directive,
         user_home.as_deref(),
     );
+    if settings.tools.os_sandbox {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(mycode_tools::os_sandbox_prompt_note());
+    }
     let overhead_tokens = crate::compaction::estimate_prefix_tokens(
         std::slice::from_ref(&system_prompt),
         &registry.model_specs(),
@@ -1164,7 +1168,8 @@ async fn run_chat_turn_on(
         .with_extra_roots(extra_roots)
         .with_read_roots(read_roots)
         .with_steer(Some(steer))
-        .with_ptc_session(session_id.clone());
+        .with_ptc_session(session_id.clone())
+        .with_os_sandbox(settings.tools.os_sandbox);
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
     // Drain the pump before returning. An agent error already became
@@ -1789,6 +1794,10 @@ mod tests {
         assert!(
             !prompt.contains("translated"),
             "prompt must not describe bash-to-PowerShell translation:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("os_sandbox: on"),
+            "the helper note is opt-in and stays off the default prompt:\n{prompt}"
         );
     }
 

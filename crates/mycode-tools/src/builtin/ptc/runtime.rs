@@ -334,14 +334,20 @@ async fn run_session(
     catalog: &ToolCatalog,
     out: &ToolStream,
 ) -> ProgramOutcome {
-    let key = ctx
-        .ptc_session
-        .as_deref()
-        .filter(|session| !session.is_empty())
-        .map(|session| PoolKey {
-            session: session.to_owned(),
-            restricted,
-        });
+    // Sandbox binds are fixed when the process starts. Reusing that process
+    // would apply the first call's write set to a later cwd, so an opt-in
+    // sandbox always cold-starts. The warm pool stays for the default path.
+    let key = if ctx.os_sandbox {
+        None
+    } else {
+        ctx.ptc_session
+            .as_deref()
+            .filter(|session| !session.is_empty())
+            .map(|session| PoolKey {
+                session: session.to_owned(),
+                restricted,
+            })
+    };
     let (mut worker, reused, doomed) = if let Some(key) = &key {
         let (idle, doomed) = take_idle(key);
         match idle {
@@ -448,7 +454,21 @@ async fn spawn_warm(
             ));
         }
     };
-    let mut child = match spawn_python(interpreter, restricted, &bootstrap, &spec, ctx, &env) {
+    let write = if restricted {
+        crate::builtin::sandbox::SandboxWrite::ReadOnly
+    } else {
+        crate::builtin::sandbox::SandboxWrite::Workspace
+    };
+    let sandbox = crate::builtin::sandbox::OsSandboxPolicy::for_tool(ctx, write);
+    let mut child = match spawn_python(
+        interpreter,
+        restricted,
+        &bootstrap,
+        &spec,
+        ctx,
+        &env,
+        sandbox.as_ref(),
+    ) {
         Ok(child) => child,
         Err(message) => return Err(stopped("exception", &message, String::new(), &[])),
     };
@@ -821,7 +841,7 @@ async fn run_one(call: QueuedCall, parent: &ToolCtx, out: &ToolStream) -> Finish
     )
     .await
     {
-        Ok(ctx) => ctx,
+        Ok(ctx) => ctx.with_os_sandbox(parent.os_sandbox),
         Err(message) => {
             return finish_call(call, out, &nested_id, ToolResult::error(message));
         }
@@ -1298,14 +1318,33 @@ fn spawn_python(
     control: &ControlEnv,
     ctx: &ToolCtx,
     env: &[(std::ffi::OsString, std::ffi::OsString)],
+    sandbox: Option<&crate::builtin::sandbox::OsSandboxPolicy>,
 ) -> Result<Child, String> {
-    let mut command = Command::new(&interpreter.program);
-    command.args(&interpreter.prefix);
-    if restricted {
-        command.arg("-I");
-    }
-    command.arg("-u");
-    command.arg(bootstrap);
+    let mut command = if let Some(policy) = sandbox {
+        let mut user_args = interpreter.prefix.clone();
+        if restricted {
+            user_args.push("-I".to_owned());
+        }
+        user_args.push("-u".to_owned());
+        user_args.push(bootstrap.display().to_string());
+        let interpreter_program = interpreter.program.to_str().ok_or_else(|| {
+            "os sandbox: python program path is not Unicode. This setting does not fall back to unsandboxed execution.".to_owned()
+        })?;
+        let planned = crate::builtin::sandbox::plan(policy, interpreter_program, &user_args)
+            .map_err(|error| error.to_string())?;
+        let mut command = Command::new(&planned.helper_program);
+        command.args(&planned.args);
+        command
+    } else {
+        let mut command = Command::new(&interpreter.program);
+        command.args(&interpreter.prefix);
+        if restricted {
+            command.arg("-I");
+        }
+        command.arg("-u");
+        command.arg(bootstrap);
+        command
+    };
     command.current_dir(&ctx.cwd);
     command.env_clear();
     for (key, value) in env {

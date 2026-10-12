@@ -411,7 +411,9 @@ pub(crate) async fn dispatch_tool_call(
     .await
     {
         Ok(ctx) => {
-            let mut ctx = ctx.with_catalog(ToolCatalog::from_registry(env.tools));
+            let mut ctx = ctx
+                .with_catalog(ToolCatalog::from_registry(env.tools))
+                .with_os_sandbox(env.os_sandbox);
             if let Some(session) = env.ptc_session.as_deref() {
                 ctx = ctx.with_ptc_session(session);
             }
