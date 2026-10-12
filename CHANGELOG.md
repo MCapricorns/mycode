@@ -9,6 +9,7 @@
 ### Changed
 
 - pull request 的 CI 改为 Linux 上的 `cargo test --workspace` 与 `cargo clippy --workspace --all-targets -- -D warnings`，不再为 PR 打四个平台的 fat LTO 发布包。发布构建仍只在推到 `main` 时跑，并且要等同一份检查通过才打标签。
+- `ptc_eval` 补上分组读写、单文件 `tools.write`、技能 `SKILL.md`、MCP `server__tool`（含关键字括号调用）、多路 scout、`tools.shell` 跑测试，以及 `fetch_content` 4xx 不再重试。评分拒绝直接点名工具、`tools.bash` 这类别名、空程序、注释或字符串里的假调用，以及把只读或 shell 当成一次编辑。慢场景默认不打模型，设置 `MYCODE_PTC_EVAL_SLOW=1` 才跑；没有密钥时 live eval 仍跳过。
 
 ## [0.11.8] - 2026-10-12
 

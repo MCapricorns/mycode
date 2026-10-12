@@ -327,14 +327,22 @@ fn web_section(tools: &ToolRegistry) -> Option<&'static str> {
 /// not require one answer when both are reasonable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskWeight {
-    /// One edit. The program calls `tools.edit` or `tools.write`.
+    /// One edit or one new file. `tools.edit` or `tools.write`, not scout or shell.
     Direct,
-    /// Several lookups or edits in one step. Group them inline with `run_code`.
+    /// Several lookups or edits in one program. Not scout, and not a shell script.
     GroupInline,
-    /// One search. A direct `grep` or `find` is enough; `run_code` is also fine.
+    /// One search. `tools.grep`, `tools.find`, or `tools.read`. Not scout or shell.
     Lookup,
-    /// Broad research. `scout` is a fit; inline `run_code` is also allowed.
+    /// Broad research. `scout` or a non-empty inline `run_code` are both fine.
     Broad,
+    /// Load one skill by reading its `SKILL.md` path inside the program.
+    Skill,
+    /// One named SDK call (`server__tool`, or brackets when the name is not an identifier).
+    SdkCall,
+    /// A build, test, or git command via `tools.shell`, not `tools.bash`.
+    Process,
+    /// Two or more `tools.agent` calls with agent `"scout"`. Not artisan or web fetches.
+    Scout,
 }
 
 /// One scripted task the choice eval scores.
@@ -346,9 +354,20 @@ pub struct ChoiceScenario {
     pub task: &'static str,
     /// What the prompt should make reasonable.
     pub weight: TaskWeight,
+    /// Live model eval skips this unless `MYCODE_PTC_EVAL_SLOW=1`.
+    pub slow: bool,
+    /// `tools.*` names the program must call, besides the weight's own rule.
+    pub require: &'static [&'static str],
+    /// `tools.*` names the program must not call.
+    pub forbid: &'static [&'static str],
+    /// Substring the program must contain outside comments, or empty.
+    pub needle: &'static str,
 }
 
 /// Scripted tasks. Simple work stays inline; broad research may go to scout.
+///
+/// The first three are the default live set. The rest are marked [`ChoiceScenario::slow`]
+/// so a configured model run stays small unless `MYCODE_PTC_EVAL_SLOW=1`.
 #[must_use]
 pub fn choice_scenarios() -> &'static [ChoiceScenario] {
     &[
@@ -356,16 +375,118 @@ pub fn choice_scenarios() -> &'static [ChoiceScenario] {
             id: "narrow-search",
             task: "In src/turn.rs only, which lines contain the exact identifier dispatch_tool? Return path:line. This is one file; do the lookup in the current program.",
             weight: TaskWeight::Lookup,
+            slow: false,
+            require: &[],
+            forbid: &[],
+            needle: "",
         },
         ChoiceScenario {
             id: "one-edit",
             task: "In src/a.rs, replace the single typo recieve with receive. That is the entire change. Do it with the edit tool inside one program.",
             weight: TaskWeight::Direct,
+            slow: false,
+            require: &[],
+            forbid: &[],
+            needle: "",
         },
         ChoiceScenario {
             id: "broad-research",
             task: "Before any edit, map how authentication works across every crate in this repository and check the vendor's current documentation for token refresh. Return a short map.",
             weight: TaskWeight::Broad,
+            slow: false,
+            require: &[],
+            forbid: &[],
+            needle: "",
+        },
+        ChoiceScenario {
+            id: "grouped-reads",
+            task: "Read src/a.rs and src/b.rs in this program. Call tools.read once per file (asyncio.gather is fine). Do not call tools.agent or tools.shell.",
+            weight: TaskWeight::GroupInline,
+            slow: true,
+            require: &["read"],
+            forbid: &["agent", "shell"],
+            needle: "",
+        },
+        ChoiceScenario {
+            id: "grouped-edits",
+            task: "In src/a.rs and src/b.rs, replace the typo recieve with receive. Do both edits in this program with tools.edit. Do not use tools.shell or tools.agent.",
+            weight: TaskWeight::GroupInline,
+            slow: true,
+            require: &["edit"],
+            forbid: &["shell", "agent"],
+            needle: "recieve",
+        },
+        ChoiceScenario {
+            id: "one-write",
+            task: "Create notes/flag.txt containing exactly ok. That is the entire change. Use tools.write inside this program. Do not use tools.shell, tools.bash, or tools.agent.",
+            weight: TaskWeight::Direct,
+            slow: true,
+            require: &["write"],
+            forbid: &["shell", "edit"],
+            needle: "notes/flag.txt",
+        },
+        ChoiceScenario {
+            id: "skill-review",
+            task: "The review skill matches this task. Its file is .agents/skills/review/SKILL.md. Load that SKILL.md with tools.read inside this program and return the body. Do not call read directly, do not use tools.shell, and do not edit the skill.",
+            weight: TaskWeight::Skill,
+            slow: true,
+            require: &["read"],
+            forbid: &["shell", "edit", "write", "skill"],
+            needle: ".agents/skills/review/SKILL.md",
+        },
+        ChoiceScenario {
+            id: "mcp-docs-lookup",
+            task: "The docs MCP server is already in the SDK as docs__lookup. Inside this program call docs__lookup with query \"token refresh\" and return the text. Do not call search_tool, use_tool, shell, or the bare name lookup.",
+            weight: TaskWeight::SdkCall,
+            slow: true,
+            require: &["docs__lookup"],
+            forbid: &["search_tool", "use_tool", "shell", "lookup"],
+            needle: "token refresh",
+        },
+        ChoiceScenario {
+            id: "mcp-get-page",
+            task: "Call the MCP tool whose Python name is docs__get_page (the server tool get-page, sanitized). Inside this program use await tools.docs__get_page(query=\"install\") or tools[\"docs__get_page\"]. Do not call get-page, docs.get-page, search_tool, or shell.",
+            weight: TaskWeight::SdkCall,
+            slow: true,
+            require: &["docs__get_page"],
+            forbid: &["search_tool", "use_tool", "shell"],
+            needle: "install",
+        },
+        ChoiceScenario {
+            id: "keyword-class",
+            task: "The tool name class is a Python keyword. Inside this program call await tools[\"class\"](query=\"ptc\") or await tools['class'](query=\"ptc\"). Do not write tools.class(...), and do not use shell, agent, search_tool, or use_tool.",
+            weight: TaskWeight::SdkCall,
+            slow: true,
+            require: &["class"],
+            forbid: &["shell", "agent", "search_tool", "use_tool"],
+            needle: "ptc",
+        },
+        ChoiceScenario {
+            id: "scout-gather",
+            task: "Map shutdown for Tokio, async-std, and smol. These are three independent briefs. Inside this program, call tools.agent with agent \"scout\" for each, using asyncio.gather so they overlap. Do not call artisan, web_search, or fetch_content.",
+            weight: TaskWeight::Scout,
+            slow: true,
+            require: &["agent"],
+            forbid: &["web_search", "fetch_content", "shell"],
+            needle: "asyncio.gather",
+        },
+        ChoiceScenario {
+            id: "cargo-test",
+            task: "Run cargo test -p mycode-agent and return whether it passed. Use tools.shell inside this program. Do not call bash, powershell, edit, or write.",
+            weight: TaskWeight::Process,
+            slow: true,
+            require: &["shell"],
+            forbid: &["bash", "powershell", "edit", "write", "agent"],
+            needle: "cargo test -p mycode-agent",
+        },
+        ChoiceScenario {
+            id: "lookup-no-refetch",
+            task: "fetch_content already reported HTTP 404 for https://example.invalid/auth. Do not call fetch_content or web_search again. In src/auth.rs only, find the identifier refresh_token with tools.grep or tools.read inside this program.",
+            weight: TaskWeight::Lookup,
+            slow: true,
+            require: &[],
+            forbid: &["fetch_content", "web_search", "agent", "shell"],
+            needle: "refresh_token",
         },
     ]
 }
@@ -377,45 +498,360 @@ fn program_code(arguments: &serde_json::Value) -> &str {
         .unwrap_or("")
 }
 
+const SHELL_ALIASES: &[&str] = &["bash", "powershell", "zsh", "sh", "cmd"];
+
+fn is_ident_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+/// Bytes that are real code. Comments are always masked. String literals are
+/// masked only when `blank_strings` is set, so a path inside quotes still
+/// counts while `tools.grep` inside a comment or a string does not.
+fn region_mask(code: &str, blank_strings: bool) -> Vec<bool> {
+    let chars: Vec<(usize, char)> = code.char_indices().collect();
+    let mut mask = vec![true; code.len()];
+    let mut index = 0;
+    while index < chars.len() {
+        let (start, ch) = chars[index];
+        if ch == '#' {
+            index = blank_comment(&mut mask, &chars, index, start);
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            index = skip_string(&mut mask, &chars, index, blank_strings);
+            continue;
+        }
+        index += 1;
+    }
+    mask
+}
+
+fn blank(mask: &mut [bool], start: usize, end: usize) {
+    for slot in &mut mask[start..end] {
+        *slot = false;
+    }
+}
+
+fn blank_comment(mask: &mut [bool], chars: &[(usize, char)], index: usize, start: usize) -> usize {
+    let mut next = index + 1;
+    while next < chars.len() && chars[next].1 != '\n' {
+        next += 1;
+    }
+    let end = chars.get(next).map(|(byte, _)| *byte).unwrap_or(mask.len());
+    blank(mask, start, end);
+    next
+}
+
+fn skip_string(
+    mask: &mut [bool],
+    chars: &[(usize, char)],
+    index: usize,
+    blank_strings: bool,
+) -> usize {
+    let quote = chars[index].1;
+    let start = chars[index].0;
+    let triple =
+        index + 2 < chars.len() && chars[index + 1].1 == quote && chars[index + 2].1 == quote;
+    let mut next = index + if triple { 3 } else { 1 };
+    while next < chars.len() {
+        if !triple && chars[next].1 == '\\' {
+            next += 1;
+            if next < chars.len() {
+                next += 1;
+            }
+            continue;
+        }
+        if triple
+            && next + 2 < chars.len()
+            && chars[next].1 == quote
+            && chars[next + 1].1 == quote
+            && chars[next + 2].1 == quote
+        {
+            next += 3;
+            break;
+        }
+        if !triple && chars[next].1 == quote {
+            next += 1;
+            break;
+        }
+        next += 1;
+    }
+    if blank_strings {
+        let end = chars.get(next).map(|(byte, _)| *byte).unwrap_or(mask.len());
+        blank(mask, start, end);
+    }
+    next
+}
+
+fn in_code(mask: &[bool], start: usize, end: usize) -> bool {
+    mask.get(start..end)
+        .is_some_and(|slots| slots.iter().all(|slot| *slot))
+}
+
+fn each_tool_call<'a>(code: &'a str, mut visit: impl FnMut(&'a str)) {
+    let mask = region_mask(code, true);
+    let marker = "tools";
+    let mut offset = 0;
+    while let Some(rel) = code[offset..].find(marker) {
+        let index = offset + rel;
+        let after = index + marker.len();
+        let before_ok = index == 0
+            || code[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| !is_ident_char(ch));
+        if before_ok
+            && in_code(&mask, index, after)
+            && let Some(name) = tool_name_at(&code[after..])
+        {
+            visit(name);
+        }
+        offset = after;
+    }
+}
+
+fn tool_name_at(rest: &str) -> Option<&str> {
+    let trimmed = rest.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('.') {
+        let name = take_ident(rest)?;
+        return Some(name);
+    }
+    let rest = trimmed.strip_prefix('[')?.trim_start();
+    let name = quoted_name(rest)?;
+    if name.is_empty() { None } else { Some(name) }
+}
+
+fn take_ident(text: &str) -> Option<&str> {
+    let end = text
+        .char_indices()
+        .find(|(_, ch)| !is_ident_char(*ch))
+        .map(|(index, _)| index)
+        .unwrap_or(text.len());
+    if end == 0 { None } else { Some(&text[..end]) }
+}
+
+fn quoted_name(text: &str) -> Option<&str> {
+    let quote = text.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let body = &text[quote.len_utf8()..];
+    let end = body.find(quote)?;
+    Some(&body[..end])
+}
+
 /// True when `code` calls `name` as `tools.name` or `tools["name"]`.
+///
+/// The character before `tools` must not be an identifier character, so
+/// `mytools.grep` and `tools.grep_extra` do not count. Comments and string
+/// literals do not count. Bracket calls may include whitespace:
+/// `tools[ "name" ]`.
 fn calls_tool(code: &str, name: &str) -> bool {
-    let dotted = format!("tools.{name}");
-    let dotted_hit = code.match_indices(&dotted).any(|(index, _)| {
-        let after = index + dotted.len();
-        !code[after..]
+    let mut found = false;
+    each_tool_call(code, |called| {
+        if called == name {
+            found = true;
+        }
+    });
+    found
+}
+
+fn tool_call_count(code: &str, name: &str) -> usize {
+    let mut count = 0;
+    each_tool_call(code, |called| {
+        if called == name {
+            count += 1;
+        }
+    });
+    count
+}
+
+fn any_tool_call(code: &str) -> bool {
+    let mut found = false;
+    each_tool_call(code, |_| found = true);
+    found
+}
+
+fn calls_shell_alias(code: &str) -> bool {
+    SHELL_ALIASES.iter().any(|name| calls_tool(code, name))
+}
+
+fn calls_shell_family(code: &str) -> bool {
+    calls_tool(code, "shell") || calls_shell_alias(code)
+}
+
+fn file_calls(code: &str) -> usize {
+    ["grep", "find", "read", "edit", "write"]
+        .into_iter()
+        .map(|name| tool_call_count(code, name))
+        .sum()
+}
+
+/// `agent="scout"`, `agent = 'scout'`, or `"agent": "scout"` in real code.
+fn assigns_string(code: &str, field: &str, value: &str) -> bool {
+    let mask = region_mask(code, true);
+    let mut offset = 0;
+    while let Some(rel) = code[offset..].find(field) {
+        let index = offset + rel;
+        let after = index + field.len();
+        let before_ok = index == 0
+            || code[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| !is_ident_char(ch));
+        let after_ok = code[after..]
             .chars()
             .next()
-            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    });
-    dotted_hit
-        || code.contains(&format!("tools[\"{name}\"]"))
-        || code.contains(&format!("tools['{name}']"))
+            .is_none_or(|ch| !is_ident_char(ch));
+        if before_ok && after_ok && in_code(&mask, index, after) {
+            let rest = code[after..].trim_start();
+            if let Some(rest) = rest.strip_prefix('=').or_else(|| rest.strip_prefix(':')) {
+                let rest = rest.trim_start();
+                if rest.starts_with(&format!("\"{value}\""))
+                    || rest.starts_with(&format!("'{value}'"))
+                {
+                    return true;
+                }
+            }
+        }
+        offset = after;
+    }
+    false
+}
+
+fn outside_comments(code: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mask = region_mask(code, false);
+    let mut offset = 0;
+    while let Some(rel) = code[offset..].find(needle) {
+        let index = offset + rel;
+        let end = index + needle.len();
+        if in_code(&mask, index, end) {
+            return true;
+        }
+        offset = index + needle.len().max(1);
+    }
+    false
+}
+
+fn calls_required(code: &str, name: &str) -> bool {
+    if is_python_attribute(name) {
+        return calls_tool(code, name);
+    }
+    // Keywords and other non-identifiers are only valid as tools["name"].
+    let mut found = false;
+    let mask = region_mask(code, true);
+    let marker = "tools";
+    let mut offset = 0;
+    while let Some(rel) = code[offset..].find(marker) {
+        let index = offset + rel;
+        let after = index + marker.len();
+        let before_ok = index == 0
+            || code[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| !is_ident_char(ch));
+        if before_ok && in_code(&mask, index, after) {
+            let trimmed = code[after..].trim_start();
+            if let Some(rest) = trimmed.strip_prefix('[')
+                && quoted_name(rest.trim_start()) == Some(name)
+            {
+                found = true;
+                break;
+            }
+        }
+        offset = after;
+    }
+    found
 }
 
 /// Whether a model's first tool call matches PTC-only judgment for `weight`.
 ///
-/// Every task starts with `run_code`. A lookup's program calls `tools.grep`
-/// or `tools.find`. One edit's program calls `tools.edit` or `tools.write`.
-/// Broad research may call `tools.agent` for scout or stay inline; both are
-/// `run_code`.
+/// Every task starts with `run_code` and a non-empty program. A lookup calls
+/// `tools.grep`, `tools.find`, or `tools.read`. One edit calls `tools.edit`
+/// or `tools.write`. A group calls at least two file tools. Broad research
+/// may call `tools.agent` for scout or stay inline. Shell aliases
+/// (`tools.bash` and the other interpreter names) count as shell.
 #[must_use]
 pub fn accept_choice(weight: TaskWeight, tool: &str, arguments: &serde_json::Value) -> bool {
     if tool != "run_code" {
         return false;
     }
     let code = program_code(arguments);
+    if code.trim().is_empty() {
+        return false;
+    }
     match weight {
         TaskWeight::Direct => {
             (calls_tool(code, "edit") || calls_tool(code, "write"))
                 && !calls_tool(code, "agent")
-                && !calls_tool(code, "shell")
+                && !calls_shell_family(code)
         }
         TaskWeight::Lookup => {
             (calls_tool(code, "grep") || calls_tool(code, "find") || calls_tool(code, "read"))
                 && !calls_tool(code, "agent")
+                && !calls_shell_family(code)
         }
-        TaskWeight::GroupInline | TaskWeight::Broad => true,
+        TaskWeight::GroupInline => {
+            file_calls(code) >= 2 && !calls_tool(code, "agent") && !calls_shell_family(code)
+        }
+        TaskWeight::Broad => true,
+        TaskWeight::Skill => {
+            calls_tool(code, "read")
+                && outside_comments(code, "SKILL.md")
+                && !calls_shell_family(code)
+                && !calls_tool(code, "edit")
+                && !calls_tool(code, "write")
+                && !calls_tool(code, "agent")
+                && !calls_tool(code, "skill")
+                && !calls_tool(code, "skills")
+        }
+        TaskWeight::SdkCall => {
+            any_tool_call(code)
+                && !calls_shell_family(code)
+                && !calls_tool(code, "agent")
+                && !calls_tool(code, "search_tool")
+                && !calls_tool(code, "use_tool")
+        }
+        TaskWeight::Process => {
+            calls_tool(code, "shell")
+                && !calls_shell_alias(code)
+                && !calls_tool(code, "agent")
+                && !calls_tool(code, "edit")
+                && !calls_tool(code, "write")
+        }
+        TaskWeight::Scout => {
+            tool_call_count(code, "agent") >= 2
+                && assigns_string(code, "agent", "scout")
+                && !assigns_string(code, "agent", "artisan")
+                && !calls_tool(code, "web_search")
+                && !calls_tool(code, "fetch_content")
+                && !calls_shell_family(code)
+        }
     }
+}
+
+/// Weight rule plus the scenario's required names, forbidden names, and needle.
+#[must_use]
+pub fn accept_scenario(
+    scenario: &ChoiceScenario,
+    tool: &str,
+    arguments: &serde_json::Value,
+) -> bool {
+    if !accept_choice(scenario.weight, tool, arguments) {
+        return false;
+    }
+    let code = program_code(arguments);
+    if !outside_comments(code, scenario.needle) {
+        return false;
+    }
+    scenario
+        .require
+        .iter()
+        .all(|name| calls_required(code, name))
+        && scenario.forbid.iter().all(|name| !calls_tool(code, name))
 }
 
 /// Whether `prompt` states the judgment for `weight` without forbidding the
@@ -444,6 +880,17 @@ pub fn prompt_guides(prompt: &str, weight: TaskWeight) -> bool {
                     || prompt.contains("your judgment")
                     || prompt.contains("You decide"))
                 && prompt.contains("run_code")
+        }
+        TaskWeight::Skill => {
+            (prompt.contains("tools.read") || prompt.contains("await tools.read"))
+                && (prompt.contains("SKILL.md") || prompt.contains("<skills>"))
+        }
+        TaskWeight::SdkCall => prompt.contains("server__tool") || prompt.contains("tools[\""),
+        TaskWeight::Process => prompt.contains("tools.shell"),
+        TaskWeight::Scout => {
+            prompt.contains("scout")
+                && prompt.contains("tools.agent")
+                && prompt.contains("asyncio.gather")
         }
     }
 }
@@ -654,6 +1101,26 @@ mod tests {
             super::prompt_guides(&prompt, super::TaskWeight::GroupInline),
             "{prompt}"
         );
+        assert!(
+            super::prompt_guides(&prompt, super::TaskWeight::Process),
+            "{prompt}"
+        );
+        assert!(
+            super::prompt_guides(&prompt, super::TaskWeight::SdkCall),
+            "{prompt}"
+        );
+        assert!(
+            !super::prompt_guides(&prompt, super::TaskWeight::Scout),
+            "without agent, scout gather is not guided:\n{prompt}"
+        );
+        assert!(
+            !super::prompt_guides(&prompt, super::TaskWeight::Skill),
+            "the tools block does not list the skill catalog:\n{prompt}"
+        );
+        assert!(super::prompt_guides(
+            "<skills>\nload it inside `run_code` with `await tools.read(path=\"...\")` on that SKILL.md path\n</skills>",
+            super::TaskWeight::Skill
+        ));
         for scenario in super::choice_scenarios() {
             if scenario.weight == super::TaskWeight::Broad {
                 assert!(
@@ -687,10 +1154,15 @@ mod tests {
             "bash",
             &serde_json::json!({"command": "rg dispatch"})
         ));
-        assert!(super::accept_choice(
+        assert!(!super::accept_choice(
             super::TaskWeight::GroupInline,
             "run_code",
             &serde_json::json!({"description": "Find dispatch", "code": "return 1"})
+        ));
+        assert!(super::accept_choice(
+            super::TaskWeight::GroupInline,
+            "run_code",
+            &serde_json::json!({"description": "Read both", "code": "a, b = await asyncio.gather(tools.read(path='src/a.rs'), tools.read(path='src/b.rs'))\nreturn a"})
         ));
         assert!(!super::accept_choice(
             super::TaskWeight::GroupInline,
@@ -732,6 +1204,86 @@ mod tests {
             "web_search",
             &serde_json::json!({"query": "auth"})
         ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Broad,
+            "run_code",
+            &serde_json::json!({"description": "Map auth", "code": "   "})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find", "code": "# await tools.grep(pattern='dispatch_tool')\nreturn 'src/turn.rs:1'"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find", "code": "note = \"await tools.grep(pattern='dispatch_tool')\"\nreturn note"})
+        ));
+        assert!(super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find", "code": "hits = await tools.grep(pattern=\"tools.shell\")\nreturn hits"})
+        ));
+        assert!(super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find", "code": "hits = await tools[ \"grep\" ](pattern='dispatch_tool')\nreturn hits"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find", "code": "return await mytools.grep(pattern='dispatch_tool')"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find", "code": "return await tools.grep_extra(pattern='dispatch_tool')"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Direct,
+            "run_code",
+            &serde_json::json!({"description": "One edit", "code": "await tools.edit(path='src/a.rs')\nawait tools.bash(command='true')"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find", "code": "await tools.grep(pattern='dispatch_tool')\nawait tools.shell(command='rg dispatch')"})
+        ));
+    }
+
+    #[test]
+    fn scout_guidance_appears_when_agent_is_registered() {
+        struct Host;
+
+        impl mycode_tools::builtin::AgentHost for Host {
+            fn run_subagent<'a>(
+                &'a self,
+                _request: mycode_tools::builtin::SubagentRequest,
+                _progress: &'a mycode_tools::ToolStream,
+                _cancel: &'a tokio_util::sync::CancellationToken,
+                _call_id: &'a str,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<String, mycode_tools::ToolError>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async { Err(mycode_tools::ToolError::Execution("unused".to_owned())) })
+            }
+        }
+
+        let registry = ToolRegistry::new();
+        register_builtins(&registry);
+        registry.register(Arc::new(mycode_tools::builtin::AgentTool::new(Arc::new(
+            Host,
+        ))));
+        let prompt = build_system_prompt(&registry);
+        assert!(
+            super::prompt_guides(&prompt, super::TaskWeight::Scout),
+            "{prompt}"
+        );
+        assert!(prompt.contains("agent \"scout\""), "{prompt}");
     }
 
     #[test]
