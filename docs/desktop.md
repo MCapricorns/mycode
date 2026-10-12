@@ -15,7 +15,7 @@ BridgeCommand → CoreBridge
 再 reduce 一次，元素按新状态重画
 ```
 
-视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口：`ci.yml` 在四个原生 runner 上编译并打包发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64），没有 fmt / clippy 任务。macOS 构建另外把二进制装进 `MYCode.app` 并产出 dmg 安装镜像（`scripts/make_dmg.sh`）。拉取请求只上传构建产物。推到 main 时同一条流水线再打标签并发布 GitHub Release。
+视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口。pull request 只在 Linux 上跑整个 workspace 的 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO），不编译发布版，也不上传安装包。推到 main 时，四个原生 runner 才编译并打包发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64；`[profile.release]` 是 fat LTO）。没有 fmt 任务。macOS 发布构建另外把二进制装进 `MYCode.app` 并产出 dmg 安装镜像（`scripts/make_dmg.sh`）。同一份 Linux 检查和四个发布构建都成功后，流水线才打标签并发布 GitHub Release。
 
 ## 模块
 

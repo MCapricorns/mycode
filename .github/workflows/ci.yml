@@ -1,11 +1,19 @@
 # One workflow for pull requests and for main.
 #
-# pull_request: compile and package mycode-desktop on the four native
-# runners, upload the archives as actions artifacts, and stop. No tag,
-# no GitHub Release, no version bump.
+# pull_request (check): Linux only, dev/test profile. Runs
+# `cargo test --workspace` and
+# `cargo clippy --workspace --all-targets -- -D warnings`
+# on ubuntu-latest, with `--locked`. The whole workspace is covered.
+# No fat LTO, no `cargo build --release`, no packaging, no tag, no
+# GitHub Release, no version bump. Release builds stay on the main push
+# so a pull request does not wait on four LTO links.
 #
-# push to main: plan the release, build the same four targets, and when
-# the workspace version is new, tag that commit and publish the archives.
+# push to main: the same Linux check, plus plan the release and build the
+# four native release binaries. Release builds use `[profile.release]`
+# (fat LTO, one codegen unit) through cargo_release_build.sh. They do
+# not run tests or clippy. A publish waits until the check and all four
+# builds succeed. When the workspace version is new, tag that commit and
+# publish the archives.
 # release-plan chooses `v<workspace version>` when that tag is free. When
 # the tag already exists, it bumps the patch in Cargo.toml, Cargo.lock,
 # and CHANGELOG.md on a temporary commit and pushes only
@@ -22,12 +30,12 @@
 # windows-latest is x64. Windows ARM64 uses the native windows-11-arm
 # image; it is not a cross-compile from windows-latest. The Ubuntu runner
 # installs the GPUI system packages, then compiles the Linux x86_64
-# product. There is no fmt or clippy job. cargo build retries crates.io
+# product. There is no fmt job. cargo build retries crates.io
 # DNS and download failures (the macOS release of 797dfde died resolving
 # index.crates.io). Compile errors are not retried.
 #
-# After those four builds succeed and the plan asked to publish,
-# release-publish creates the tag and uploads the archives from that
+# After the Linux check and those four builds succeed and the plan asked
+# to publish, release-publish creates the tag and uploads the archives from that
 # commit, then advances main. The advance fast-forwards when it can.
 # When main moved during the build, the version bump is replayed onto
 # current main and pushed without force. The temporary ref is deleted
@@ -38,9 +46,9 @@
 # version ref and the later main update are pushed with GITHUB_TOKEN,
 # which does not start another workflow run. release-plan also ignores
 # github-actions[bot], so a replayed version bump cannot publish a
-# second patch. release-plan, release-publish, and release-cleanup run
-# on ubuntu-latest.
-# They do not compile the product.
+# second patch. check, release-plan, release-publish, and release-cleanup
+# run on ubuntu-latest. check compiles and tests the workspace. The other
+# three do not compile the product.
 #
 # Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon, Linux x86_64):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
@@ -70,6 +78,68 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  check:
+    # Dev/test profile only. Pull requests run this job and nothing else.
+    # A main push runs it beside the release builds; publish waits for it.
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Linux system packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxcb1-dev \
+            libxcb-composite0-dev \
+            libxcb-cursor-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-util-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xkb-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libssl-dev \
+            clang \
+            libclang-dev
+
+      - name: cargo test --workspace
+        shell: bash
+        env:
+          CARGO_NET_RETRY: "10"
+          CARGO_HTTP_TIMEOUT: "60"
+        run: cargo test --workspace --locked
+
+      - name: cargo clippy --workspace --all-targets
+        shell: bash
+        env:
+          CARGO_NET_RETRY: "10"
+          CARGO_HTTP_TIMEOUT: "60"
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
   release-plan:
     # github-actions[bot] is the GITHUB_TOKEN pusher. Ignore it so the
     # version bump that lands on main cannot plan another patch release.
@@ -179,10 +249,10 @@ jobs:
             --github-output "${GITHUB_OUTPUT}"
 
   release-build:
-    # Pull requests build the merge ref. A main push builds after the
-    # plan, including when that plan is not publishing a release.
+    # Main pushes only. A pull request does not build release binaries.
+    # The plan still runs this job when it is not publishing a release.
     needs: release-plan
-    if: always() && (github.event_name == 'pull_request' || needs.release-plan.result == 'success')
+    if: github.event_name == 'push' && needs.release-plan.result == 'success'
     name: release-build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -205,7 +275,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'push' && needs.release-plan.outputs.sha || github.sha }}
+          ref: ${{ needs.release-plan.outputs.sha }}
 
       - name: Resolve package tag
         shell: bash
@@ -339,8 +409,8 @@ jobs:
           if-no-files-found: error
 
   release-publish:
-    needs: [release-plan, release-build]
-    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success'
+    needs: [release-plan, release-build, check]
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success' && needs.check.result == 'success'
     name: release-publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
