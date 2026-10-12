@@ -1,9 +1,12 @@
 //! `run_code` — the only tool the model can call directly.
 //!
-//! The program runs in a fresh system Python process. Other tools are
-//! `await tools.name(...)` inside that program and go through the same
-//! preflight as a direct call. Only `print` and `return` come back to the
-//! model. Inner calls are nested UI events, not model history.
+//! The program runs in the system Python. A session reuses one warm
+//! interpreter per isolation mode so later calls skip a cold start; user
+//! globals are reset between calls. Calls with no session key still get a
+//! fresh process. Other tools are `await tools.name(...)` inside that
+//! program and go through the same preflight as a direct call. Only `print`
+//! and `return` come back to the model. Inner calls are nested UI events,
+//! not model history.
 
 mod protocol;
 mod runtime;
@@ -19,6 +22,15 @@ use crate::stream::ToolStream;
 use crate::tool::{Tool, ToolError, ToolResult};
 
 use runtime::{ProgramOutcome, execute_program};
+
+/// Stops the warm Python interpreters for `session`.
+///
+/// Both the main-agent process and the scout (`-I`) process are dropped.
+/// The next `run_code` in that session cold-starts. Safe when no interpreter
+/// is warm.
+pub fn release_ptc_session(session: &str) {
+    runtime::release_session(session);
+}
 
 /// Example `description` embedded in the system prompt.
 pub const RUN_CODE_EXAMPLE_DESCRIPTION: &str = "List rust files that mention dispatch";
@@ -66,8 +78,9 @@ impl Tool for RunCodeTool {
          then `code`: `description` is a short summary shown in the UI, and \
          `code` is the body of an async function (top-level await and return \
          work). Call tools as `await tools.name(...)` per the system prompt. \
-         Only what you print or return comes back. Each call runs in a fresh \
-         system Python process."
+         Only what you print or return comes back. The session keeps one warm \
+         system Python process, but each call starts from fresh globals: \
+         names, imports, and environment edits from an earlier call are gone."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -1097,6 +1110,294 @@ return text.strip()
             elapsed < Duration::from_secs(20),
             "a dead child must not hang the host: {elapsed:?}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn session_name(label: &str) -> String {
+        format!(
+            "ptc-{label}-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        )
+    }
+
+    async fn program(ctx: &ToolCtx, code: &str) -> super::runtime::ProgramOutcome {
+        let _serial = STATUS_SWAP.read().await;
+        let catalog = ctx.catalog.clone().expect("catalog");
+        let (stream, mut rx) = ToolStream::channel();
+        let outcome = super::runtime::execute_program(code, ctx, &catalog, &stream).await;
+        drop(stream);
+        while rx.recv().await.is_some() {}
+        outcome
+    }
+
+    fn outcome_pid(outcome: &super::runtime::ProgramOutcome) -> String {
+        assert!(
+            outcome.error.is_none(),
+            "{}",
+            outcome
+                .error
+                .as_ref()
+                .map(|error| error.message.as_str())
+                .unwrap_or("missing error")
+        );
+        outcome.value.clone().unwrap_or_default()
+    }
+
+    /// Two calls in one session must share a process, and names assigned by
+    /// the first script must be gone in the second. A different session, and
+    /// a session after release, cold-start again.
+    #[tokio::test]
+    async fn warm_python_is_reused_and_user_globals_do_not_leak() {
+        let root_a = temp_dir("warm-a");
+        let root_b = temp_dir("warm-b");
+        let session = session_name("warm");
+        let other = session_name("other");
+        let tools = catalog(vec![Arc::new(ReadTool)]);
+        let ctx_a = ToolCtx::new(&root_a)
+            .with_catalog(tools.clone())
+            .with_ptc_session(&session);
+        let started = Instant::now();
+        let first = program(
+            &ctx_a,
+            "\
+import os, sys, builtins, types\n\
+sentinel = 'leak-secret'\n\
+builtins.mycode_sentinel = 'leak-secret'\n\
+os.environ['MYCODE_PTC_LEAK'] = 'leak-secret'\n\
+mod = types.ModuleType('mycode_leak_mod')\n\
+mod.value = 'leak-secret'\n\
+sys.modules['mycode_leak_mod'] = mod\n\
+return str(os.getpid())\n",
+        )
+        .await;
+        let cold = started.elapsed();
+        assert!(!first.reused, "first call must cold-start ({cold:?})");
+        let pid = outcome_pid(&first);
+
+        let started = Instant::now();
+        let second = program(
+            &ctx_a,
+            r#"
+import os, sys, builtins
+notes = []
+try:
+    sentinel
+    notes.append('global')
+except NameError:
+    notes.append('global-reset')
+notes.append('builtin' if hasattr(builtins, 'mycode_sentinel') else 'builtin-reset')
+notes.append('env' if os.environ.get('MYCODE_PTC_LEAK') else 'env-reset')
+notes.append('module' if 'mycode_leak_mod' in sys.modules else 'module-reset')
+notes.append(str(os.getpid()))
+return '|'.join(notes)
+"#,
+        )
+        .await;
+        let warm = started.elapsed();
+        assert!(
+            second.reused,
+            "second call cold-started (cold {cold:?}, warm {warm:?})"
+        );
+        let text = outcome_pid(&second);
+        assert!(
+            text.contains("global-reset"),
+            "globals leaked: {text} cold={cold:?} warm={warm:?}"
+        );
+        assert!(text.contains("builtin-reset"), "{text}");
+        assert!(text.contains("env-reset"), "{text}");
+        assert!(text.contains("module-reset"), "{text}");
+        assert!(text.ends_with(&pid), "pid changed on the warm call: {text}");
+
+        let ctx_b = ToolCtx::new(&root_b)
+            .with_catalog(tools.clone())
+            .with_ptc_session(&session);
+        let cwd = program(&ctx_b, "import os\nreturn os.getcwd()\n").await;
+        assert!(cwd.reused, "changing cwd cold-started the interpreter");
+        let got = outcome_pid(&cwd);
+        let expected = root_b.canonicalize().expect("cwd");
+        let actual = std::path::PathBuf::from(got.trim())
+            .canonicalize()
+            .expect("python cwd");
+        assert_eq!(actual, expected, "warm process kept the previous cwd");
+
+        let foreign = program(
+            &ToolCtx::new(&root_a)
+                .with_catalog(tools)
+                .with_ptc_session(&other),
+            "import os\nreturn str(os.getpid())\n",
+        )
+        .await;
+        assert!(
+            !foreign.reused,
+            "a different session reused the interpreter"
+        );
+        assert_ne!(outcome_pid(&foreign), pid, "sessions shared a process");
+
+        super::runtime::release_session(&session);
+        let again = program(&ctx_a, "import os\nreturn str(os.getpid())\n").await;
+        assert!(!again.reused, "release_session left the interpreter warm");
+        assert_ne!(outcome_pid(&again), pid, "released session kept its pid");
+        super::runtime::release_session(&session);
+        super::runtime::release_session(&other);
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
+    }
+
+    /// Scout stays on `-I` with the audit hook across a warm reuse, and does
+    /// not share that process with the main agent in the same session.
+    #[tokio::test]
+    async fn scout_warm_python_keeps_isolation_and_resets_globals() {
+        let root = temp_dir("scout-warm");
+        std::fs::write(root.join("ok.txt"), "visible\n").unwrap();
+        let session = session_name("scout");
+        let scout = ToolCtx::new(&root)
+            .with_catalog(catalog(vec![Arc::new(ReadTool)]))
+            .with_ptc_session(&session);
+        let first = program(
+            &scout,
+            "\
+import os, sys\n\
+sentinel = 'leak-secret'\n\
+return str(os.getpid()) + '|' + str(sys.flags.isolated)\n",
+        )
+        .await;
+        assert!(!first.reused, "scout's first call must cold-start");
+        let text = outcome_pid(&first);
+        let (pid, isolated) = text.trim().split_once('|').expect("pid|flag");
+        assert_eq!(
+            isolated, "1",
+            "scout process was not started with -I: {text}"
+        );
+        let pid = pid.to_owned();
+
+        let second = program(
+            &scout,
+            r#"
+import os, sys, pathlib
+notes = []
+try:
+    sentinel
+    notes.append('leaked')
+except NameError:
+    notes.append('reset')
+try:
+    pathlib.Path('nope.txt').write_text('x')
+    notes.append('wrote')
+except Exception:
+    notes.append('blocked')
+notes.append(str(os.getpid()))
+notes.append(str(sys.flags.isolated))
+text = await tools.read(path='ok.txt')
+notes.append(text.strip())
+return '|'.join(notes)
+"#,
+        )
+        .await;
+        assert!(
+            second.reused,
+            "scout cold-started on the second call: {:?}",
+            second.error
+        );
+        let body = outcome_pid(&second);
+        assert!(body.starts_with("reset|blocked|"), "{body}");
+        assert!(body.contains(&format!("|{pid}|1|")), "{body}");
+        assert!(body.ends_with("visible"), "{body}");
+        assert!(!root.join("nope.txt").exists(), "{body}");
+
+        let main = program(
+            &ToolCtx::new(&root)
+                .with_catalog(catalog(vec![Arc::new(WriteTool)]))
+                .with_ptc_session(&session),
+            "import os, sys\nreturn str(os.getpid()) + '|' + str(sys.flags.isolated)\n",
+        )
+        .await;
+        assert!(
+            !main.reused,
+            "the main agent reused scout's isolated interpreter"
+        );
+        let main_text = outcome_pid(&main);
+        let (main_pid, main_flag) = main_text.trim().split_once('|').expect("pid|flag");
+        assert_eq!(main_flag, "0", "{main_text}");
+        assert_ne!(main_pid, pid, "scout and the main agent shared a process");
+
+        super::runtime::release_session(&session);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A timed-out program must not leave the warm interpreter inside that
+    /// program. The next call cold-starts and returns.
+    #[tokio::test]
+    async fn timeout_discards_the_warm_worker() {
+        let root = temp_dir("warm-timeout");
+        let session = session_name("timeout");
+        let tools = catalog(vec![Arc::new(ReadTool)]);
+        let slow = ToolCtx::new(&root)
+            .with_catalog(tools.clone())
+            .with_ptc_session(&session)
+            .with_ptc_wall(Duration::from_secs(1));
+        let started = Instant::now();
+        let timed = program(&slow, "import time\ntime.sleep(30)\nreturn 'late'\n").await;
+        assert!(timed.error.is_some(), "the sleep should hit the wall clock");
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "timeout did not return: {:?}",
+            started.elapsed()
+        );
+        let started = Instant::now();
+        let next = program(
+            &ToolCtx::new(&root)
+                .with_catalog(tools)
+                .with_ptc_session(&session),
+            "import os\nreturn str(os.getpid())\n",
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(
+            !next.reused,
+            "timed-out interpreter was reused after {elapsed:?}"
+        );
+        assert!(next.error.is_none(), "{:?}", next.error);
+        assert!(
+            elapsed < Duration::from_secs(8),
+            "next call waited on the timed-out program: {elapsed:?}"
+        );
+        super::runtime::release_session(&session);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A thread the reset cannot join makes the child refuse another boot.
+    /// The host drops that process instead of handing it to the next call.
+    #[tokio::test]
+    async fn a_live_thread_drops_the_warm_interpreter() {
+        let root = temp_dir("warm-thread");
+        let session = session_name("thread");
+        let ctx = ToolCtx::new(&root)
+            .with_catalog(catalog(vec![]))
+            .with_ptc_session(&session);
+        let first = program(
+            &ctx,
+            "\
+import threading, time\n\
+threading.Thread(target=time.sleep, args=(30,), daemon=True).start()\n\
+return 'started'\n",
+        )
+        .await;
+        assert!(first.error.is_none(), "{:?}", first.error);
+        assert_eq!(first.value.as_deref(), Some("started"));
+        let started = Instant::now();
+        let second = program(&ctx, "import os\nreturn str(os.getpid())\n").await;
+        let elapsed = started.elapsed();
+        assert!(
+            !second.reused,
+            "a process with a live thread was reused after {elapsed:?}"
+        );
+        assert!(second.error.is_none(), "{:?}", second.error);
+        assert!(
+            elapsed < Duration::from_secs(8),
+            "next call waited on the leftover thread: {elapsed:?}"
+        );
+        super::runtime::release_session(&session);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

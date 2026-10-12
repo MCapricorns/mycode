@@ -45,6 +45,12 @@ pub struct ToolCtx {
     pub catalog: Option<ToolCatalog>,
     /// Wall-clock override for one `run_code` program. `None` uses the default.
     pub ptc_wall: Option<Duration>,
+    /// Session whose warm Python interpreter this call may reuse.
+    ///
+    /// `None` or empty spawns a process for this call and tears it down.
+    /// The same key plus the catalog's isolation mode (scout versus the main
+    /// agent) share one interpreter. User globals are reset between calls.
+    pub ptc_session: Option<String>,
 }
 
 impl ToolCtx {
@@ -60,12 +66,26 @@ impl ToolCtx {
             read_roots: Vec::new(),
             catalog: None,
             ptc_wall: None,
+            ptc_session: None,
         }
     }
 
     /// Shorten or extend the `run_code` wall clock for this invocation.
     pub fn with_ptc_wall(mut self, wall: Duration) -> Self {
         self.ptc_wall = Some(wall);
+        self
+    }
+
+    /// Reuse the warm Python interpreter for this session.
+    ///
+    /// An empty key disables reuse for the call.
+    pub fn with_ptc_session(mut self, session: impl Into<String>) -> Self {
+        let session = session.into();
+        self.ptc_session = if session.is_empty() {
+            None
+        } else {
+            Some(session)
+        };
         self
     }
 

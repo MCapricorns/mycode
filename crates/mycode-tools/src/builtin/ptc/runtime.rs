@@ -1,25 +1,33 @@
-//! One fresh system-Python process per `run_code` invocation.
+//! System-Python process for `run_code`.
+//!
+//! A call with a session key reuses a warm interpreter for that session and
+//! isolation mode (main agent or scout). The first call still cold-starts:
+//! sealing, the token handshake, and `-I` for scout happen at spawn and are
+//! not repeated or relaxed on later calls. The token is checked before any
+//! program is sent. On Unix it crosses the inherited socket and is not an
+//! environment variable. On TCP it is a 0600 file, unlinked once the ready
+//! frame arrives; only that path is placed in the environment. It is never
+//! put on the command line. Calls with no session key still spawn and tear
+//! down a process each time.
 //!
 //! Tool calls arrive on a length-framed control channel, not on stdout. The
 //! channel is an inherited socket (Unix) or a loopback TCP socket that
-//! requires the per-run token. Windows deliberately uses no named pipe:
+//! requires the per-process token. Windows deliberately uses no named pipe:
 //! Python opens a synchronous pipe handle, and such a handle serializes
 //! pending I/O, so the blocked reader thread deadlocked every later frame
 //! write from the event loop. A TCP socket carries the reader thread and the
-//! writer concurrently. The token is checked before the program is sent. On
-//! Unix it crosses the inherited socket and is not an environment variable.
-//! On TCP it is a 0600 file, unlinked once the ready frame arrives; only that
-//! path is placed in the environment. It is never put on the command line.
-//! Each call is
-//! prepared and executed with [`crate::prepare_tool_ctx`], the same preflight
-//! a direct call uses. Read-only calls and `agent` may overlap; mutating
-//! calls wait until the ones submitted before them have finished, then run
-//! alone.
+//! writer concurrently. Each call is prepared and executed with
+//! [`crate::prepare_tool_ctx`], the same preflight a direct call uses.
+//! Read-only calls and `agent` may overlap; mutating calls wait until the
+//! ones submitted before them have finished, then run alone. User globals do
+//! not survive into the next program; the child restores them before the
+//! next boot.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use mycode_core::message::ContentBlock;
@@ -28,6 +36,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 
 use super::protocol::{ChildFrame, HostFrame, decode_child, encode_frame};
 use crate::builtin::process::{ProcessTree, enroll_spawned};
@@ -76,8 +85,12 @@ pub(super) struct ProgramOutcome {
     pub error: Option<ProgramError>,
     /// Inner calls, for the tool-result details object.
     pub calls: Vec<CallNote>,
+    /// True when this call skipped `spawn_python` and ran on an interpreter
+    /// already warm for the same session and isolation mode.
+    pub reused: bool,
 }
 
+#[derive(Debug)]
 pub(super) struct ProgramError {
     pub kind: &'static str,
     pub message: String,
@@ -138,6 +151,10 @@ impl Drop for RunningChild {
 
 /// Runs `code` on the system Python. Inner calls go through the shared
 /// preflight and emit nested UI events on `out`.
+///
+/// When `ctx` carries a session key, a warm interpreter for that session and
+/// isolation mode is reused. Otherwise the process is spawned for this call
+/// and torn down afterward.
 pub(super) async fn execute_program(
     code: &str,
     ctx: &ToolCtx,
@@ -154,22 +171,205 @@ pub(super) async fn execute_program(
                     .unwrap_or_else(|| "Python is not available".to_owned()),
             }),
             calls: Vec::new(),
+            reused: false,
         };
     };
     let restricted = catalog_is_restricted(catalog);
     let tools = sdk_names(catalog);
-    match run_child(&interpreter, code, restricted, &tools, ctx, catalog, out).await {
-        Ok(outcome) => outcome,
-        Err(message) => ProgramOutcome {
-            logs: String::new(),
-            value: None,
-            error: Some(ProgramError {
-                kind: "exception",
-                message,
-            }),
-            calls: Vec::new(),
-        },
+    run_session(&interpreter, code, restricted, &tools, ctx, catalog, out).await
+}
+
+/// Idle interpreters kept per session. Two covers a parent turn and one
+/// overlapping subagent without holding a process per call.
+const MAX_IDLE_PER_KEY: usize = 2;
+/// Checked when a later `run_code` touches the pool, and on session release.
+const IDLE_TTL: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PoolKey {
+    session: String,
+    restricted: bool,
+}
+
+struct IdleWorker {
+    worker: WarmWorker,
+    since: Instant,
+}
+
+struct Driven {
+    outcome: ProgramOutcome,
+    recycle: bool,
+}
+
+struct WarmWorker {
+    running: RunningChild,
+    frames: mpsc::UnboundedReceiver<Result<ChildFrame, String>>,
+    writer: ControlWrite,
+    raw_out: Arc<Mutex<String>>,
+    raw_err: Arc<Mutex<String>>,
+    /// Programs parked on this process. Zero until the first one finishes.
+    runs: u32,
+}
+
+impl WarmWorker {
+    fn alive(&mut self) -> bool {
+        matches!(self.running.child.try_wait(), Ok(None))
     }
+}
+
+fn pool() -> &'static Mutex<HashMap<PoolKey, Vec<IdleWorker>>> {
+    static POOL: OnceLock<Mutex<HashMap<PoolKey, Vec<IdleWorker>>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_pool() -> std::sync::MutexGuard<'static, HashMap<PoolKey, Vec<IdleWorker>>> {
+    pool().lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// Sessions whose interpreters must not be parked again.
+///
+/// Delete can race a call that is about to return its worker. The set is
+/// remembered for the process lifetime; session ids are not reused.
+fn closed_sessions() -> &'static Mutex<HashSet<String>> {
+    static CLOSED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    CLOSED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn lock_closed() -> std::sync::MutexGuard<'static, HashSet<String>> {
+    closed_sessions()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
+fn reap_expired(slots: &mut HashMap<PoolKey, Vec<IdleWorker>>) -> Vec<WarmWorker> {
+    let now = Instant::now();
+    let mut doomed = Vec::new();
+    slots.retain(|_, idle| {
+        let mut keep = Vec::new();
+        for mut entry in idle.drain(..) {
+            let stale = now.duration_since(entry.since) > IDLE_TTL;
+            if stale || !entry.worker.alive() {
+                doomed.push(entry.worker);
+            } else {
+                keep.push(entry);
+            }
+        }
+        *idle = keep;
+        !idle.is_empty()
+    });
+    doomed
+}
+
+fn take_idle(key: &PoolKey) -> (Option<WarmWorker>, Vec<WarmWorker>) {
+    let mut slots = lock_pool();
+    let doomed = reap_expired(&mut slots);
+    let found = slots
+        .get_mut(key)
+        .and_then(|idle| idle.pop().map(|entry| entry.worker));
+    if slots.get(key).is_some_and(|idle| idle.is_empty()) {
+        slots.remove(key);
+    }
+    drop(slots);
+    (found, doomed)
+}
+
+fn park(key: PoolKey, worker: WarmWorker) {
+    // Closed lock before the pool lock. `release_session` uses the same order.
+    let closed = lock_closed();
+    if closed.contains(&key.session) {
+        drop(closed);
+        drop(worker);
+        return;
+    }
+    let mut slots = lock_pool();
+    let expired = reap_expired(&mut slots);
+    let idle = slots.entry(key).or_default();
+    idle.push(IdleWorker {
+        worker,
+        since: Instant::now(),
+    });
+    let mut overflow = Vec::new();
+    if idle.len() > MAX_IDLE_PER_KEY {
+        let extra = idle.len() - MAX_IDLE_PER_KEY;
+        overflow.extend(idle.drain(..extra).map(|entry| entry.worker));
+    }
+    drop(slots);
+    drop(closed);
+    drop(expired);
+    drop(overflow);
+}
+
+/// Drops every warm interpreter for `session` (both isolation modes).
+///
+/// A call that is still winding down will not park its process afterward.
+pub(super) fn release_session(session: &str) {
+    if session.is_empty() {
+        return;
+    }
+    let mut closed = lock_closed();
+    closed.insert(session.to_owned());
+    let mut slots = lock_pool();
+    let keys: Vec<PoolKey> = slots
+        .keys()
+        .filter(|key| key.session == session)
+        .cloned()
+        .collect();
+    let mut doomed = Vec::new();
+    for key in keys {
+        if let Some(idle) = slots.remove(&key) {
+            doomed.extend(idle.into_iter().map(|entry| entry.worker));
+        }
+    }
+    drop(slots);
+    drop(closed);
+    drop(doomed);
+}
+
+async fn run_session(
+    interpreter: &PythonInterpreter,
+    code: &str,
+    restricted: bool,
+    tools: &[String],
+    ctx: &ToolCtx,
+    catalog: &ToolCatalog,
+    out: &ToolStream,
+) -> ProgramOutcome {
+    let key = ctx
+        .ptc_session
+        .as_deref()
+        .filter(|session| !session.is_empty())
+        .map(|session| PoolKey {
+            session: session.to_owned(),
+            restricted,
+        });
+    let (mut worker, reused, doomed) = if let Some(key) = &key {
+        let (idle, doomed) = take_idle(key);
+        match idle {
+            Some(worker) => (worker, true, doomed),
+            None => match spawn_warm(interpreter, restricted, ctx).await {
+                Ok(worker) => (worker, false, doomed),
+                Err(outcome) => {
+                    drop(doomed);
+                    return outcome;
+                }
+            },
+        }
+    } else {
+        match spawn_warm(interpreter, restricted, ctx).await {
+            Ok(worker) => (worker, false, Vec::new()),
+            Err(outcome) => return outcome,
+        }
+    };
+    drop(doomed);
+    let mut driven = drive_worker(&mut worker, code, restricted, tools, ctx, catalog, out).await;
+    driven.outcome.reused = reused;
+    if driven.recycle
+        && let Some(key) = key
+    {
+        worker.runs = worker.runs.saturating_add(1);
+        park(key, worker);
+    }
+    driven.outcome
 }
 
 fn catalog_is_restricted(catalog: &ToolCatalog) -> bool {
@@ -212,32 +412,52 @@ fn resolve_tool(catalog: &ToolCatalog, name: &str) -> Option<(String, Arc<dyn To
     catalog.get(name).map(|tool| (name.to_owned(), tool))
 }
 
-async fn run_child(
+fn boot_failure(message: String) -> ProgramOutcome {
+    let kind = if message == "program cancelled" {
+        "abort"
+    } else if message.contains("startup") || message.contains("time limit") {
+        "timeout"
+    } else {
+        "protocol"
+    };
+    stopped(kind, &message, String::new(), &[])
+}
+
+async fn spawn_warm(
     interpreter: &PythonInterpreter,
-    code: &str,
     restricted: bool,
-    tools: &[String],
-    parent: &ToolCtx,
-    catalog: &ToolCatalog,
-    out: &ToolStream,
-) -> Result<ProgramOutcome, String> {
-    // Cancelling this token stops inner tools without cancelling the turn.
-    // A parent interrupt cancels it too, because it is a child token.
-    let program_cancel = parent.cancel.child_token();
-    let mut ctx = parent.clone();
-    ctx.cancel = program_cancel.clone();
-    let mut control = open_control().await?;
+    ctx: &ToolCtx,
+) -> Result<WarmWorker, ProgramOutcome> {
+    let mut control = match open_control().await {
+        Ok(control) => control,
+        Err(message) => return Err(stopped("exception", &message, String::new(), &[])),
+    };
     let spec = control.env_spec();
-    let bootstrap = bootstrap_path()?;
-    let env = crate::builtin::exec::snapshot_child_environment()
-        .map_err(|error| format!("python environment: {error}"))?;
-    let mut child = spawn_python(interpreter, restricted, &bootstrap, &spec, &ctx, &env)?;
+    let bootstrap = match bootstrap_path() {
+        Ok(path) => path,
+        Err(message) => return Err(stopped("exception", &message, String::new(), &[])),
+    };
+    let env = match crate::builtin::exec::snapshot_child_environment() {
+        Ok(env) => env,
+        Err(error) => {
+            return Err(stopped(
+                "exception",
+                &format!("python environment: {error}"),
+                String::new(),
+                &[],
+            ));
+        }
+    };
+    let mut child = match spawn_python(interpreter, restricted, &bootstrap, &spec, ctx, &env) {
+        Ok(child) => child,
+        Err(message) => return Err(stopped("exception", &message, String::new(), &[])),
+    };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let tree = enroll_spawned(&child).ok();
     let mut running = RunningChild { child, tree };
-    let raw_out = Arc::new(std::sync::Mutex::new(String::new()));
-    let raw_err = Arc::new(std::sync::Mutex::new(String::new()));
+    let raw_out = Arc::new(Mutex::new(String::new()));
+    let raw_err = Arc::new(Mutex::new(String::new()));
     if let Some(pipe) = stdout {
         let slot = Arc::clone(&raw_out);
         tokio::spawn(drain_pipe(pipe, slot));
@@ -249,194 +469,254 @@ async fn run_child(
 
     control.release_local_end();
     let wall = ctx.ptc_wall.unwrap_or(DEFAULT_WALL);
-    let deadline = Instant::now() + wall;
     let startup = Instant::now() + STARTUP_TIMEOUT.min(wall);
-    let (mut reader, mut writer) = match control.handshake(&ctx, startup).await {
+    let (mut reader, writer) = match control.handshake(ctx, startup).await {
         Ok(io) => io,
         Err(message) => {
             running.kill_tree();
-            let kind = if message == "program cancelled" {
-                "abort"
-            } else if message.contains("startup") || message.contains("time limit") {
-                "timeout"
-            } else {
-                "protocol"
-            };
-            return Ok(stopped(kind, &message, String::new(), &[]));
+            return Err(boot_failure(message));
         }
     };
-    write_host(
-        &mut writer,
-        &HostFrame::Boot {
-            code: code.to_owned(),
-            tools: tools.to_vec(),
-            restricted,
-            warn_process: !restricted,
-        },
-    )
-    .await?;
-
-    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<FinishedCall>();
-    // A dedicated reader task owns the read half: the loop below then parks
-    // on channels only, and frames keep flowing while a reply is written.
-    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<Result<ChildFrame, String>>();
-    let reader_ctx = ctx.clone();
+    let (frame_tx, frames) = mpsc::unbounded_channel::<Result<ChildFrame, String>>();
     tokio::spawn(async move {
         loop {
-            let frame = read_child_frame(&mut reader, &reader_ctx, deadline).await;
+            let frame = read_frame_idle(&mut reader).await;
             let closed = frame.is_err();
             if frame_tx.send(frame).is_err() || closed {
                 return;
             }
         }
     });
+    Ok(WarmWorker {
+        running,
+        frames,
+        writer,
+        raw_out,
+        raw_err,
+        runs: 0,
+    })
+}
+
+async fn drive_worker(
+    worker: &mut WarmWorker,
+    code: &str,
+    restricted: bool,
+    tools: &[String],
+    parent: &ToolCtx,
+    catalog: &ToolCatalog,
+    out: &ToolStream,
+) -> Driven {
+    worker
+        .raw_out
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
+    worker
+        .raw_err
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
+    // Cancelling this token stops inner tools without cancelling the turn.
+    // A parent interrupt cancels it too, because it is a child token.
+    let program_cancel = parent.cancel.child_token();
+    let mut ctx = parent.clone();
+    ctx.cancel = program_cancel.clone();
+    let wall = ctx.ptc_wall.unwrap_or(DEFAULT_WALL);
+    let deadline = Instant::now() + wall;
+    let cwd = ctx.cwd.display().to_string();
+    if write_host(
+        &mut worker.writer,
+        &HostFrame::Boot {
+            code: code.to_owned(),
+            tools: tools.to_vec(),
+            restricted,
+            warn_process: !restricted,
+            cwd,
+        },
+    )
+    .await
+    .is_err()
+    {
+        return Driven {
+            outcome: stopped("worker-exit", "lost the python process", String::new(), &[]),
+            recycle: false,
+        };
+    }
+
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<FinishedCall>();
     let mut queue: VecDeque<QueuedCall> = VecDeque::new();
     let mut inflight: Vec<(u64, bool)> = Vec::new();
     let calls = Arc::new(AtomicU32::new(0));
     let mut logs = String::new();
     let mut notes = Vec::new();
     let mut exclusive = false;
-
-    let outcome = loop {
-        pump(
-            &mut queue,
-            &mut inflight,
-            &mut exclusive,
-            &done_tx,
-            &ctx,
-            catalog,
-            out,
-        );
-        tokio::select! {
-            biased;
-            _ = ctx.cancel.cancelled() => {
-                break stopped("abort", "program cancelled", logs, &notes);
-            }
-            _ = tokio::time::sleep_until(deadline.into()) => {
-                break stopped(
-                    "timeout",
-                    &format!("program exceeded {} seconds", wall.as_secs()),
-                    logs,
-                    &notes,
-                );
-            }
-            finished = done_rx.recv() => {
-                if ctx.cancel.is_cancelled() {
+    let mut recycle = false;
+    let outcome = {
+        let writer = &mut worker.writer;
+        let frame_rx = &mut worker.frames;
+        loop {
+            pump(
+                &mut queue,
+                &mut inflight,
+                &mut exclusive,
+                &done_tx,
+                &ctx,
+                catalog,
+                out,
+            );
+            tokio::select! {
+                biased;
+                _ = ctx.cancel.cancelled() => {
                     break stopped("abort", "program cancelled", logs, &notes);
                 }
-                let Some(finished) = finished else { continue };
-                inflight.retain(|(id, _)| *id != finished.id);
-                if finished.exclusive {
-                    exclusive = false;
-                }
-                notes.push(finished.note);
-                if write_host(&mut writer, &finished.reply).await.is_err() {
+                _ = tokio::time::sleep_until(deadline.into()) => {
                     break stopped(
-                        "worker-exit",
-                        "lost the python process while answering a tool",
+                        "timeout",
+                        &format!("program exceeded {} seconds", wall.as_secs()),
                         logs,
                         &notes,
                     );
                 }
-            }
-            incoming = frame_rx.recv() => {
-                let Some(incoming) = incoming else {
-                    break stopped("worker-exit", "python closed the control channel", logs, &notes);
-                };
-                match incoming {
-                    Ok(ChildFrame::Log { text }) => append_log(&mut logs, &text),
-                    Ok(ChildFrame::Warn { text }) => {
-                        append_log(&mut logs, &format!(
-                            "warning: Python called {text}; use tools.shell(...) for external programs instead of subprocess or os.system\n"
-                        ));
+                finished = done_rx.recv() => {
+                    if ctx.cancel.is_cancelled() {
+                        break stopped("abort", "program cancelled", logs, &notes);
                     }
-                    Ok(ChildFrame::Call { id, name, args }) => {
-                        let ordinal = calls.fetch_add(1, Ordering::Relaxed);
-                        if ordinal >= MAX_CALLS {
-                            break stopped(
-                                "budget",
-                                &format!("program exceeded {MAX_CALLS} tool calls"),
-                                logs,
-                                &notes,
-                            );
+                    let Some(finished) = finished else { continue };
+                    inflight.retain(|(id, _)| *id != finished.id);
+                    if finished.exclusive {
+                        exclusive = false;
+                    }
+                    notes.push(finished.note);
+                    if write_host(writer, &finished.reply).await.is_err() {
+                        break stopped(
+                            "worker-exit",
+                            "lost the python process while answering a tool",
+                            logs,
+                            &notes,
+                        );
+                    }
+                }
+                incoming = frame_rx.recv() => {
+                    let Some(incoming) = incoming else {
+                        break stopped("worker-exit", "python closed the control channel", logs, &notes);
+                    };
+                    match incoming {
+                        Ok(ChildFrame::Log { text }) => append_log(&mut logs, &text),
+                        Ok(ChildFrame::Warn { text }) => {
+                            append_log(&mut logs, &format!(
+                                "warning: Python called {text}; use tools.shell(...) for external programs instead of subprocess or os.system\n"
+                            ));
                         }
-                        if inflight.len() + queue.len() >= MAX_PENDING {
-                            let reply = HostFrame::Reply {
-                                id,
-                                ok: false,
-                                value: None,
-                                message: Some(format!(
-                                    "too many tool calls are already waiting (limit {MAX_PENDING})"
-                                )),
-                                tool: Some(name),
-                            };
-                            if write_host(&mut writer, &reply).await.is_err() {
-                                break stopped("worker-exit", "lost the python process", logs, &notes);
+                        Ok(ChildFrame::Call { id, name, args }) => {
+                            let ordinal = calls.fetch_add(1, Ordering::Relaxed);
+                            if ordinal >= MAX_CALLS {
+                                break stopped(
+                                    "budget",
+                                    &format!("program exceeded {MAX_CALLS} tool calls"),
+                                    logs,
+                                    &notes,
+                                );
                             }
-                            continue;
-                        }
-                        match accept_call(catalog, id, &name, args) {
-                            CallDecision::Queue(queued) => queue.push_back(queued),
-                            CallDecision::Reject(reply) => {
-                                if write_host(&mut writer, &reply).await.is_err() {
+                            if inflight.len() + queue.len() >= MAX_PENDING {
+                                let reply = HostFrame::Reply {
+                                    id,
+                                    ok: false,
+                                    value: None,
+                                    message: Some(format!(
+                                        "too many tool calls are already waiting (limit {MAX_PENDING})"
+                                    )),
+                                    tool: Some(name),
+                                };
+                                if write_host(writer, &reply).await.is_err() {
                                     break stopped("worker-exit", "lost the python process", logs, &notes);
+                                }
+                                continue;
+                            }
+                            match accept_call(catalog, id, &name, args) {
+                                CallDecision::Queue(queued) => queue.push_back(queued),
+                                CallDecision::Reject(reply) => {
+                                    if write_host(writer, &reply).await.is_err() {
+                                        break stopped("worker-exit", "lost the python process", logs, &notes);
+                                    }
                                 }
                             }
                         }
-                    }
-                    Ok(ChildFrame::Done { value, error }) => {
-                        if let Some(error) = error {
-                            let kind = match error.kind.as_str() {
-                                "invalid-output" => "invalid-output",
-                                "output-limit" => "output-limit",
-                                "timeout" => "timeout",
-                                _ => "exception",
-                            };
+                        Ok(ChildFrame::Done { value, error, warm }) => {
+                            recycle = warm.unwrap_or(true)
+                                && inflight.is_empty()
+                                && queue.is_empty();
+                            if let Some(error) = error {
+                                let kind = match error.kind.as_str() {
+                                    "invalid-output" => "invalid-output",
+                                    "output-limit" => "output-limit",
+                                    "timeout" => "timeout",
+                                    _ => "exception",
+                                };
+                                break ProgramOutcome {
+                                    logs,
+                                    value: None,
+                                    error: Some(ProgramError {
+                                        kind,
+                                        message: error.message,
+                                    }),
+                                    calls: notes.clone(),
+                                    reused: false,
+                                };
+                            }
                             break ProgramOutcome {
                                 logs,
-                                value: None,
-                                error: Some(ProgramError {
-                                    kind,
-                                    message: error.message,
-                                }),
+                                value: value
+                                    .as_ref()
+                                    .map(render_return)
+                                    .filter(|text| !text.is_empty()),
+                                error: None,
                                 calls: notes.clone(),
+                                reused: false,
                             };
                         }
-                        break ProgramOutcome {
-                            logs,
-                            value: value
-                                .as_ref()
-                                .map(render_return)
-                                .filter(|text| !text.is_empty()),
-                            error: None,
-                            calls: notes.clone(),
-                        };
-                    }
-                    Ok(ChildFrame::Ready { .. }) => {
-                        break stopped("protocol", "unexpected ready frame", logs, &notes);
-                    }
-                    Err(message) => {
-                        let kind = if message == "program cancelled" {
-                            "abort"
-                        } else if message.contains("time limit") {
-                            "timeout"
-                        } else {
-                            "worker-exit"
-                        };
-                        break stopped(kind, &message, logs, &notes);
+                        Ok(ChildFrame::Ready { .. }) => {
+                            break stopped("protocol", "unexpected ready frame", logs, &notes);
+                        }
+                        Err(message) => {
+                            let kind = if message == "program cancelled" {
+                                "abort"
+                            } else if message.contains("time limit") {
+                                "timeout"
+                            } else {
+                                "worker-exit"
+                            };
+                            break stopped(kind, &message, logs, &notes);
+                        }
                     }
                 }
             }
         }
     };
 
+    if recycle {
+        loop {
+            match worker.frames.try_recv() {
+                Ok(_) => recycle = false,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    recycle = false;
+                    break;
+                }
+            }
+        }
+    }
     program_cancel.cancel();
-    running.kill_tree();
-    let _ = tokio::time::timeout(Duration::from_secs(2), running.child.wait()).await;
+    if recycle && !worker.alive() {
+        recycle = false;
+    }
+    if !recycle {
+        worker.running.kill_tree();
+        let _ = tokio::time::timeout(Duration::from_secs(2), worker.running.child.wait()).await;
+    }
     let mut outcome = outcome;
-    append_raw(&mut outcome.logs, &raw_out, "stdout");
-    append_raw(&mut outcome.logs, &raw_err, "stderr");
-    Ok(outcome)
+    append_raw(&mut outcome.logs, &worker.raw_out, "stdout");
+    append_raw(&mut outcome.logs, &worker.raw_err, "stderr");
+    Driven { outcome, recycle }
 }
 
 fn stopped(kind: &'static str, message: &str, logs: String, calls: &[CallNote]) -> ProgramOutcome {
@@ -448,6 +728,7 @@ fn stopped(kind: &'static str, message: &str, logs: String, calls: &[CallNote]) 
             message: message.to_owned(),
         }),
         calls: calls.to_vec(),
+        reused: false,
     }
 }
 
@@ -709,6 +990,24 @@ fn append_raw(logs: &mut String, slot: &std::sync::Mutex<String>, label: &str) {
         logs.push('\n');
     }
     append_log(logs, &format!("[{label}]\n{raw}\n"));
+}
+
+async fn read_frame_idle(reader: &mut ControlRead) -> Result<ChildFrame, String> {
+    let mut header = [0_u8; 4];
+    reader
+        .read_exact(&mut header)
+        .await
+        .map_err(|_| "python closed the control channel".to_owned())?;
+    let len = u32::from_be_bytes(header) as usize;
+    if len == 0 || len > super::protocol::MAX_FRAME_BYTES {
+        return Err(format!("control frame length {len} is not allowed"));
+    }
+    let mut body = vec![0_u8; len];
+    reader
+        .read_exact(&mut body)
+        .await
+        .map_err(|_| "python closed the control channel".to_owned())?;
+    decode_child(&body)
 }
 
 async fn read_child_frame(
@@ -1059,6 +1358,23 @@ fn spawn_python(
                 }
                 #[cfg(target_os = "linux")]
                 {
+                    // A warm interpreter outlives one call. If this host
+                    // exits, the kernel kills it even while user code is
+                    // blocked. A parent that died before `prctl` has already
+                    // reparented us; exit rather than stay up.
+                    let rc = libc::prctl(
+                        libc::PR_SET_PDEATHSIG,
+                        libc::SIGKILL as libc::c_ulong,
+                        0,
+                        0,
+                        0,
+                    );
+                    if rc == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::getppid() == 1 {
+                        libc::_exit(1);
+                    }
                     let rc = libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
                     if rc == -1 {
                         return Err(std::io::Error::last_os_error());

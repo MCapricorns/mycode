@@ -410,7 +410,13 @@ pub(crate) async fn dispatch_tool_call(
     )
     .await
     {
-        Ok(ctx) => ctx.with_catalog(ToolCatalog::from_registry(env.tools)),
+        Ok(ctx) => {
+            let mut ctx = ctx.with_catalog(ToolCatalog::from_registry(env.tools));
+            if let Some(session) = env.ptc_session.as_deref() {
+                ctx = ctx.with_ptc_session(session);
+            }
+            ctx
+        }
         Err(message) => return completed_error(env, &call_id, call, message),
     };
     let (mut producer, mut consumer) = ToolStream::channel();

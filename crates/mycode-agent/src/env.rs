@@ -90,6 +90,10 @@ pub struct TurnEnv<'a> {
     /// Steers to fold into this turn at the next loop boundary.
     /// `None` for a turn that does not accept them (a nested agent).
     pub steer: Option<Arc<SteerInbox>>,
+    /// Session key for the warm `run_code` interpreter. `None` cold-starts
+    /// Python on every call. Scout and the main agent still use separate
+    /// processes: isolation is part of the pool key, not this string.
+    pub ptc_session: Option<String>,
 }
 
 impl<'a> TurnEnv<'a> {
@@ -110,6 +114,7 @@ impl<'a> TurnEnv<'a> {
             extra_roots: Vec::new(),
             read_roots: Vec::new(),
             steer: None,
+            ptc_session: None,
         }
     }
 
@@ -146,6 +151,19 @@ impl<'a> TurnEnv<'a> {
     /// Accept steers into this turn. Drained at loop boundaries only.
     pub fn with_steer(mut self, steer: Option<Arc<SteerInbox>>) -> Self {
         self.steer = steer;
+        self
+    }
+
+    /// Reuse one warm Python interpreter for `run_code` in this session.
+    ///
+    /// An empty key leaves calls on the cold-start path.
+    pub fn with_ptc_session(mut self, session: impl Into<String>) -> Self {
+        let session = session.into();
+        self.ptc_session = if session.is_empty() {
+            None
+        } else {
+            Some(session)
+        };
         self
     }
 }
