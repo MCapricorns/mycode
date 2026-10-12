@@ -13,6 +13,12 @@ pub const MAX_SUBAGENT_CONCURRENCY: u32 = 6;
 ///
 /// Zero selects this default. It does not mean "run no subagents".
 pub const DEFAULT_SUBAGENT_CONCURRENCY: u32 = 4;
+/// Wall-clock seconds used when `timeout_secs` is `0`.
+///
+/// Zero selects this default. It does not disable the limit.
+pub const DEFAULT_SUBAGENT_TIMEOUT_SECS: u32 = 20 * 60;
+/// Upper bound on an explicit subagent wall-clock limit: 2 hours.
+pub const MAX_SUBAGENT_TIMEOUT_SECS: u32 = 2 * 60 * 60;
 
 /// One role's model route and reasoning override.
 ///
@@ -53,6 +59,13 @@ pub struct SubagentSettings {
     /// delegation or mean zero running agents.
     #[serde(default)]
     pub max_concurrent: u32,
+    /// Wall-clock limit for one running subagent, in seconds.
+    ///
+    /// `0` uses [`DEFAULT_SUBAGENT_TIMEOUT_SECS`]. It does not mean the run
+    /// may continue without a limit. Time spent waiting for a concurrency
+    /// slot does not count.
+    #[serde(default)]
+    pub timeout_secs: u32,
 }
 
 impl SubagentSettings {
@@ -79,6 +92,18 @@ impl SubagentSettings {
             DEFAULT_SUBAGENT_CONCURRENCY
         } else {
             self.max_concurrent
+        }
+    }
+
+    /// Wall-clock budget for one running subagent, in seconds.
+    ///
+    /// A stored `0` resolves to [`DEFAULT_SUBAGENT_TIMEOUT_SECS`].
+    #[must_use]
+    pub fn effective_timeout_secs(&self) -> u32 {
+        if self.timeout_secs == 0 {
+            DEFAULT_SUBAGENT_TIMEOUT_SECS
+        } else {
+            self.timeout_secs
         }
     }
 
@@ -112,6 +137,11 @@ impl AppSettings {
         if self.subagents.max_concurrent > MAX_SUBAGENT_CONCURRENCY {
             return Err(invalid(&format!(
                 "subagents.maxConcurrent: must be 0 (the default of {DEFAULT_SUBAGENT_CONCURRENCY}, not zero agents) through {MAX_SUBAGENT_CONCURRENCY}"
+            )));
+        }
+        if self.subagents.timeout_secs > MAX_SUBAGENT_TIMEOUT_SECS {
+            return Err(invalid(&format!(
+                "subagents.timeoutSecs: must be 0 (the default of {DEFAULT_SUBAGENT_TIMEOUT_SECS} seconds, not unlimited) through {MAX_SUBAGENT_TIMEOUT_SECS}"
             )));
         }
         if self.subagents.roles.len() > MAX_SUBAGENT_ROLES {
@@ -168,5 +198,51 @@ impl AppSettings {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_SUBAGENT_TIMEOUT_SECS, MAX_SUBAGENT_TIMEOUT_SECS, SubagentSettings};
+    use crate::AppSettings;
+
+    #[test]
+    fn zero_timeout_is_the_default_wall_clock() {
+        let settings = SubagentSettings::default();
+        assert_eq!(settings.timeout_secs, 0);
+        assert_eq!(
+            settings.effective_timeout_secs(),
+            DEFAULT_SUBAGENT_TIMEOUT_SECS
+        );
+        assert_ne!(settings.effective_timeout_secs(), 0);
+        let mut explicit = settings;
+        explicit.timeout_secs = 30;
+        assert_eq!(explicit.effective_timeout_secs(), 30);
+    }
+
+    #[test]
+    fn a_missing_timeout_field_stays_at_the_default_sentinel() {
+        let parsed: SubagentSettings =
+            serde_json::from_str(r#"{"maxConcurrent":2}"#).expect("older settings");
+        assert_eq!(parsed.max_concurrent, 2);
+        assert_eq!(parsed.timeout_secs, 0);
+        assert_eq!(
+            parsed.effective_timeout_secs(),
+            DEFAULT_SUBAGENT_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn timeout_above_the_max_is_rejected() {
+        let mut settings = AppSettings::default();
+        settings.subagents.timeout_secs = MAX_SUBAGENT_TIMEOUT_SECS;
+        assert!(settings.validate().is_ok());
+        settings.subagents.timeout_secs = MAX_SUBAGENT_TIMEOUT_SECS + 1;
+        let error = settings.validate().expect_err("timeout too high");
+        assert!(
+            error.summary().contains("timeoutSecs"),
+            "{}",
+            error.summary()
+        );
     }
 }
