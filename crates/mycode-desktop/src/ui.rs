@@ -2,6 +2,7 @@
 //! fills the space up to Details, and an inspector on the right. The window
 //! is dark.
 mod chat;
+pub(crate) mod command_palette;
 mod context;
 pub(crate) mod desk;
 pub(crate) mod model_picker;
@@ -26,6 +27,7 @@ use crate::view_model::MainView;
 use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::composer_placeholder;
+pub(crate) use command_palette::ToggleCommandPalette;
 pub(crate) use settings::{BackendForm, McpForm, ProviderForm, build_mcp_server};
 
 /// How much of the desk chrome fits the current window width.
@@ -91,9 +93,10 @@ pub fn render_root(
         .flex_col()
         .size_full()
         .text_color(fg)
-        // Root focus plus the key listener below keep Escape alive even when
-        // no input holds focus: bubbled key events reach this node from any
-        // focused descendant, and from itself via the startup focus.
+        // Root focus plus the key listeners below keep Escape and the command
+        // palette shortcut alive even when no input holds focus. Capture sees
+        // the shortcut before a focused field can take the character. Bubble
+        // sees Escape after a focused field declines it.
         .track_focus(&focus_handle)
         // No opaque page here. Rails and the reading column paint their own
         // fills so the window blur shows through the chrome.
@@ -103,10 +106,24 @@ pub fn render_root(
                 workspace.on_drop_project(paths.paths(), cx);
             }),
         )
-        .on_key_down(cx.listener(|workspace, event: &KeyDownEvent, _, cx| {
+        .on_action(
+            cx.listener(|workspace, _: &ToggleCommandPalette, window, cx| {
+                workspace.toggle_command_palette(window, cx);
+            }),
+        )
+        .capture_key_down(cx.listener(|workspace, event: &KeyDownEvent, window, cx| {
+            if command_palette::is_command_palette_shortcut(&event.keystroke) {
+                cx.stop_propagation();
+                workspace.toggle_command_palette(window, cx);
+            } else if workspace.vm().command_palette_open && event.keystroke.key == "escape" {
+                cx.stop_propagation();
+                workspace.set_command_palette(false, window, cx);
+            }
+        }))
+        .on_key_down(cx.listener(|workspace, event: &KeyDownEvent, window, cx| {
             if event.keystroke.key == "escape" {
                 cx.stop_propagation();
-                workspace.on_escape(cx);
+                workspace.on_escape(window, cx);
             }
         }))
         .font_family(ui_font)
@@ -161,6 +178,9 @@ pub fn render_root(
         })
         .when(workspace.project_picker.is_some(), |this| {
             this.child(project_picker::render(workspace, cx))
+        })
+        .when(workspace.vm().command_palette_open, |this| {
+            this.child(command_palette::render(workspace, window, cx))
         })
         .child(render_toasts(workspace, cx))
 }

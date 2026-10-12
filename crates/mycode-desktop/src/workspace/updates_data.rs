@@ -261,9 +261,14 @@ impl Workspace {
 
     // ---- escape ----
 
-    /// Escape dismisses the topmost layer: the folder picker, then other
-    /// floating UI. With nothing open it leaves the settings view.
-    pub(crate) fn on_escape(&mut self, cx: &mut Context<Self>) {
+    /// Escape dismisses the topmost layer: the command palette, then the
+    /// folder picker, then other floating UI. With nothing open it leaves
+    /// the settings view.
+    pub(crate) fn on_escape(&mut self, window: &mut gpui_kit::Window, cx: &mut Context<Self>) {
+        if self.vm.command_palette_open {
+            self.set_command_palette(false, window, cx);
+            return;
+        }
         // One keypress closes one layer. Diff is painted above the drawer
         // and Details, so it goes first; the drawer next; then an unpinned
         // Details overlay. A pinned Details column is part of the desk, not

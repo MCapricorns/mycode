@@ -959,6 +959,12 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::UpdateStateChanged(update) => state.update = update,
         DesktopAction::UpdateDialogToggled(open) => state.update_dialog_open = open,
+        DesktopAction::CommandPaletteSet(open) => {
+            state.command_palette_open = open;
+            if open {
+                close_floating_menus(state);
+            }
+        }
         DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
         DesktopAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
         DesktopAction::UpdateStaged(prepared) => {

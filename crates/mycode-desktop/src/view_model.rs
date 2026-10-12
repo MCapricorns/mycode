@@ -6,6 +6,7 @@
 //! import facade; the declarations live in topical submodules and the
 //! transitions in [`reduce`].
 mod chat;
+mod command_palette;
 mod models;
 mod projects;
 mod settings;
@@ -23,6 +24,10 @@ pub(crate) use mycode_app::{
 
 pub(crate) use self::chat::{
     LiveJob, MentionGroup, MentionItem, MentionKind, session_title_matches,
+};
+pub(crate) use self::command_palette::{
+    PaletteCatalog, PaletteCommand, PaletteGroup, PaletteGroupId, PaletteItem, palette_catalog,
+    palette_item,
 };
 pub(crate) use self::models::{rank_model_ids, selected_reasoning_level};
 pub(crate) use self::projects::{

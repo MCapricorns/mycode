@@ -141,36 +141,38 @@ impl Workspace {
                 self.pending_composer_prefill = Some(text);
                 cx.notify();
             }
-            crate::view_model::MentionKind::Command => {
-                if insert == "/new" {
-                    if !crate::view_model::has_open_folder(&self.vm) {
-                        self.push_toast(
-                            crate::i18n::t(
-                                "Open a folder to get started.",
-                                "打开一个目录即可开始。",
-                            ),
-                            crate::workspace::ToastKind::Info,
-                            cx,
-                        );
-                    } else {
-                        self.on_new_session(cx);
-                    }
-                } else if insert == "/settings" {
-                    self.on_show_main_view(crate::view_model::MainView::Settings, cx);
-                } else if insert == "/compact" {
-                    self.on_compact(cx);
-                } else if let Some(spec) = insert.strip_prefix("mcp:") {
-                    self.insert_mcp_draft(spec, cx);
-                } else if let Some(slug) = insert.strip_prefix('/') {
-                    self.insert_skill_draft(slug, cx);
-                }
-                if self.pending_composer_prefill.is_none() {
-                    self.pending_composer_prefill = Some(String::new());
-                }
-                let draft = self.pending_composer_prefill.clone().unwrap_or_default();
-                self.apply_action(DesktopAction::ComposerChanged(draft), cx);
-            }
+            crate::view_model::MentionKind::Command => self.run_slash_command(&insert, cx),
         }
+    }
+
+    /// Runs one composer slash token: built-in commands, a skill, or MCP.
+    ///
+    /// The command palette accepts the same tokens as the `/` menu.
+    pub(super) fn run_slash_command(&mut self, insert: &str, cx: &mut Context<Self>) {
+        if insert == "/new" {
+            if !crate::view_model::has_open_folder(&self.vm) {
+                self.push_toast(
+                    crate::i18n::t("Open a folder to get started.", "打开一个目录即可开始。"),
+                    crate::workspace::ToastKind::Info,
+                    cx,
+                );
+            } else {
+                self.on_new_session(cx);
+            }
+        } else if insert == "/settings" {
+            self.on_show_main_view(crate::view_model::MainView::Settings, cx);
+        } else if insert == "/compact" {
+            self.on_compact(cx);
+        } else if let Some(spec) = insert.strip_prefix("mcp:") {
+            self.insert_mcp_draft(spec, cx);
+        } else if let Some(slug) = insert.strip_prefix('/') {
+            self.insert_skill_draft(slug, cx);
+        }
+        if self.pending_composer_prefill.is_none() {
+            self.pending_composer_prefill = Some(String::new());
+        }
+        let draft = self.pending_composer_prefill.clone().unwrap_or_default();
+        self.apply_action(DesktopAction::ComposerChanged(draft), cx);
     }
 
     pub(crate) fn on_refresh_skills(&mut self, cx: &mut Context<Self>) {
