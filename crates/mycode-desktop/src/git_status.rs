@@ -322,10 +322,7 @@ mod diff_tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-untracked-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+            crate::unix_now().as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("nested")).unwrap();

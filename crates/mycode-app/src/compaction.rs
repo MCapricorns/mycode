@@ -288,10 +288,7 @@ pub(crate) async fn compact_history(
         covered_messages: head_end,
         summary,
         model: scope.model.to_owned(),
-        created_at_unix: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or_default(),
+        created_at_unix: crate::unix_now().as_secs(),
     };
     if let Err(error) = mycode_config::write_compaction(scope.home, scope.session_id, &checkpoint) {
         return Compacted {
@@ -882,10 +879,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-compact-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("scratch");
         #[cfg(unix)]

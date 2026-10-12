@@ -943,10 +943,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!(
             "mycode-overlay-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
+            crate::unix_now().as_nanos()
         ));
         fs::create_dir_all(&base).expect("base dir");
         let lower_mnt = base.join("lower-mnt");

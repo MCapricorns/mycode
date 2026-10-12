@@ -5,8 +5,6 @@
 //! the original as `{name}.broken-<nanos>`. Session ledgers are not documents
 //! this module handles.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::error::ConfigErrorKind;
 use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
 use crate::{ConfigError, HomeLayout};
@@ -60,10 +58,7 @@ pub fn quarantine_owned_bytes(
     if relative.is_empty() || relative.contains(['/', '\\']) {
         return Err(ConfigError::new(ConfigErrorKind::PathEscape));
     }
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
+    let stamp = crate::unix_now().as_nanos();
     let backup = format!("{relative}.broken-{stamp}");
     if backup.len() > 200 || backup.ends_with(['.', ' ']) {
         return Err(ConfigError::new(ConfigErrorKind::PathEscape));
@@ -143,10 +138,7 @@ mod tests {
         let parent = std::env::temp_dir().join(format!(
             "mycode-repair-{label}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&parent).unwrap();
         let root = parent.join("home");

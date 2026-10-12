@@ -281,7 +281,6 @@ mod tests {
     use std::os::fd::AsFd;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, chown, symlink};
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use rustix::fs::{self as rfs};
     use rustix::process::geteuid;
@@ -298,10 +297,7 @@ mod tests {
 
     impl TempTree {
         fn new(label: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
+            let nanos = crate::unix_now().as_nanos();
             let path = std::env::temp_dir().join(format!(
                 "mycode-secure-fs-{label}-{}-{nanos}",
                 std::process::id()

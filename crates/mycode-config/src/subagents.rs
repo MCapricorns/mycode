@@ -483,10 +483,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-role-discover-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
+            crate::unix_now().as_nanos()
         ));
         let _cleanup = RemoveDir(&root);
         let agents = root.join("agents");

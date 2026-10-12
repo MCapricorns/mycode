@@ -285,8 +285,6 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_catalog_refresh_replaces_the_in_memory_catalog() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
         use mycode_config::{HomeLayout, locked_update_owned_file};
         use mycode_providers::catalog::store::{
             CACHE_FORMAT_VERSION, CACHE_KIND, CATALOG_CACHE_PATH, MAX_CACHE_BYTES,
@@ -298,10 +296,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-catalog-fresh-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("root");
         #[cfg(unix)]
@@ -310,11 +305,7 @@ mod tests {
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
         }
         let home = HomeLayout::from_root(&root).expect("home");
-        let fetched_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(1)
-            .max(1);
+        let fetched_at = crate::unix_now().as_secs().max(1);
         let body = serde_json::json!({
             "formatVersion": CACHE_FORMAT_VERSION,
             "kind": CACHE_KIND,
@@ -384,10 +375,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-max-output-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("root");
         #[cfg(unix)]
