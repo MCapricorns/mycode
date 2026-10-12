@@ -16,7 +16,7 @@
 
 ## 安装
 
-[Releases](https://github.com/MCapricorns/mycode/releases) 提供 Windows x64、Windows ARM64、macOS Apple Silicon（zip 和 dmg）和 Linux x86_64 的压缩包，旁边有 `.sha256`。没有 Intel macOS 包。dmg 里的 app 是 ad-hoc 签名，首次打开用右键「打开」，或 `xattr -d com.apple.quarantine /Applications/MYCode.app`。
+[Releases](https://github.com/MCapricorns/mycode/releases) 提供四个平台的压缩包：Windows x64、Windows ARM64、macOS Apple Silicon（zip 和 dmg）和 Linux x86_64（`x86_64-unknown-linux-gnu`），旁边有 `.sha256`。没有 Intel macOS 包。dmg 里的 app 是 ad-hoc 签名，首次打开用右键「打开」，或 `xattr -d com.apple.quarantine /Applications/MYCode.app`。说明用该版本的更新日志，再附上自上一个标签以来的 pull request。`github-actions[bot]` 写回版本时不会再开一次发布。
 
 从源码构建需要 Rust stable。Windows 用 MSVC。Linux x86_64 还需要 pkg-config、fontconfig、freetype、xkbcommon、X11、xcb、Wayland、OpenSSL 和 libclang 的开发包。
 
@@ -62,7 +62,7 @@ A finished pelican SVG. The `run_code` card contains nested read, edit, and shel
 
 ### Install
 
-[Releases](https://github.com/MCapricorns/mycode/releases) publish zips for Windows x64, Windows ARM64, macOS Apple Silicon (zip and dmg), and Linux x86_64, each with a `.sha256`. There is no Intel macOS build. The app inside the dmg is ad-hoc signed; right-click → Open once, or `xattr -d com.apple.quarantine /Applications/MYCode.app`.
+[Releases](https://github.com/MCapricorns/mycode/releases) publish one archive for each of the four platforms: Windows x64, Windows ARM64, macOS Apple Silicon (zip and dmg), and Linux x86_64 (`x86_64-unknown-linux-gnu`), each with a `.sha256`. There is no Intel macOS build. The app inside the dmg is ad-hoc signed; right-click → Open once, or `xattr -d com.apple.quarantine /Applications/MYCode.app`. The body starts with that version's changelog, then the pull requests since the previous tag. A version commit by `github-actions[bot]` does not start another release.
 
 Build from source with Rust stable. MSVC on Windows. Linux x86_64 also needs the pkg-config, fontconfig, freetype, xkbcommon, X11, xcb, Wayland, OpenSSL, and libclang development packages.
 
