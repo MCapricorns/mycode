@@ -23,6 +23,25 @@ const CHANGES_PREVIEW: usize = 6;
 pub(super) const INSPECTOR_DOCKED_WIDTH: f32 = 316.;
 /// Overlay Details card: 8px from the window edge plus a 320px card.
 pub(super) const INSPECTOR_OVERLAY_SPAN: f32 = 328.;
+
+/// Right inset for the chat column when Details floats over the conversation.
+///
+/// A docked Details column already occupies its own width in the row, so the
+/// chat pane must not reserve that strip a second time. When the card floats,
+/// the transcript and composer stop at its left edge instead of running
+/// underneath it. `chat_width` is the pane beside the sidebar; the reserve
+/// never eats the last [`MIN_CHAT_BESIDE_DETAILS`] pixels, so a narrow window
+/// still has a usable composer.
+pub(crate) const MIN_CHAT_BESIDE_DETAILS: f32 = 420.;
+
+pub(crate) fn chat_right_reserve(details_open: bool, details_docked: bool, chat_width: f32) -> f32 {
+    if !(details_open && !details_docked) {
+        return 0.;
+    }
+    let room = (chat_width - MIN_CHAT_BESIDE_DETAILS).max(0.);
+    INSPECTOR_OVERLAY_SPAN.min(room)
+}
+
 const INSPECTOR_OVERLAY_MARGIN: f32 = 8.;
 const INSPECTOR_OVERLAY_WIDTH: f32 = 320.;
 const CHANGES_DRAWER_WIDTH: f32 = 480.;
@@ -1129,6 +1148,25 @@ fn git_file_label(file: &crate::git_status::GitFile) -> String {
 #[cfg(test)]
 mod tests {
     use super::inspector_flags_after_pin;
+
+    #[test]
+    fn floating_details_reserves_the_overlay_and_a_docked_panel_does_not() {
+        let wide = super::INSPECTOR_OVERLAY_SPAN + super::MIN_CHAT_BESIDE_DETAILS + 80.;
+        assert_eq!(super::chat_right_reserve(false, false, wide), 0.);
+        assert_eq!(super::chat_right_reserve(false, true, wide), 0.);
+        assert_eq!(super::chat_right_reserve(true, true, wide), 0.);
+        assert_eq!(
+            super::chat_right_reserve(true, false, wide),
+            super::INSPECTOR_OVERLAY_SPAN
+        );
+        assert_eq!(
+            super::chat_right_reserve(true, false, super::MIN_CHAT_BESIDE_DETAILS),
+            0.,
+            "a pane that is already the minimum keeps its width"
+        );
+        let tight = super::MIN_CHAT_BESIDE_DETAILS + 100.;
+        assert_eq!(super::chat_right_reserve(true, false, tight), 100.);
+    }
 
     #[test]
     fn pinning_leaves_the_panel_open() {

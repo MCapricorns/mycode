@@ -36,7 +36,7 @@ use crate::view_model::WorkspaceState;
 use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
 use crate::workspace::Workspace;
 
-/// Bottom composer: a rounded card inset from the edges, with the model
+/// Bottom composer: a rounded card across the chat column, with the model
 /// and thinking controls as quiet text buttons.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
@@ -138,13 +138,12 @@ pub(super) fn render_composer(
         .id("composer")
         .flex()
         .flex_col()
-        .items_center()
         .w_full()
         .px_4()
         .pt_2()
         .pb_4()
         .when_some(queue_panel, |this, queue| {
-            this.child(div().w_full().max_w(super::COLUMN_MAX).child(queue))
+            this.child(div().w_full().child(queue))
         })
         .child(
             div()
@@ -156,7 +155,6 @@ pub(super) fn render_composer(
                 .pt_2()
                 .pb_2()
                 .w_full()
-                .max_w(super::COLUMN_MAX)
                 .rounded(px(16.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
@@ -218,6 +216,7 @@ pub(super) fn render_composer(
                         ))
                         .child(model_chip)
                         .when_some(thinking_chip, |this, chip| this.child(chip))
+                        .child(div().flex_1().min_w(px(8.)))
                         .when_some(context_meter(workspace), |this, meter| {
                             this.child(
                                 div()

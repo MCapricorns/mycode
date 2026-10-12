@@ -1,5 +1,5 @@
-//! GPUI rendering for the workspace: a frosted sidebar, a centered conversation,
-//! and an inspector that stays out of the way until it is opened. The window
+//! GPUI rendering for the workspace: a frosted sidebar, a conversation that
+//! fills the space up to Details, and an inspector on the right. The window
 //! is dark.
 mod chat;
 mod context;
@@ -47,6 +47,11 @@ impl DeskLayout {
         Self {
             wide: width >= Self::PIN_MIN,
         }
+    }
+
+    /// Wide enough that a pinned Details column can sit beside the chat.
+    pub(super) fn docks_inspector(window: &Window) -> bool {
+        Self::of(window).wide
     }
 }
 

@@ -24,7 +24,8 @@ use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
 
 /// Sidebar width. Narrow enough that the session list stays primary.
-const WIDTH: gpui_kit::Pixels = px(220.);
+pub(super) const WIDTH_PX: f32 = 220.;
+const WIDTH: gpui_kit::Pixels = px(WIDTH_PX);
 /// Workspace switcher row. The window-level menu sits just under this.
 const WORKSPACE_HEAD_H: f32 = 40.;
 /// Matches [`super::skin::glass_button`].
