@@ -26,7 +26,7 @@ cargo build --release -p mycode-desktop
 
 ## 快速开始
 
-打开一个文件夹，在输入框里说话。`/` 列出 `/new`、`/compact`、`/settings`、技能和 MCP。输入框旁切换模型和思考强度。
+打开一个文件夹，在输入框里说话。`/` 列出 `/new`、`/compact`、`/settings`、技能和 MCP。输入框旁切换模型和思考强度。`Cmd-K`（macOS）或 `Ctrl-K`（Windows、Linux）打开命令面板，可搜索会话、模型、斜杠命令和设置页。`↑` `↓` 移动，Enter 打开，Esc 关闭。
 
 ## 配置和 PTC
 
@@ -72,7 +72,7 @@ cargo build --release -p mycode-desktop
 
 ### Quick start
 
-Open a folder and type. `/` lists `/new`, `/compact`, `/settings`, skills, and MCP. Switch model and thinking effort beside the composer.
+Open a folder and type. `/` lists `/new`, `/compact`, `/settings`, skills, and MCP. Switch model and thinking effort beside the composer. `Cmd-K` on macOS, or `Ctrl-K` on Windows and Linux, opens the command palette: search sessions, models, slash commands, and settings pages. `↑` `↓` move, Enter opens, Esc closes.
 
 ### Config and PTC
 

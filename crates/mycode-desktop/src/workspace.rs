@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Root;
+use gpui_kit::component::command::CommandState;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext as _, Bounds, Context, Entity, Pixels, Window, WindowBounds};
@@ -18,6 +19,7 @@ use mycode_app::{BridgeCommand, BridgeEventRx, BridgeReply, CoreBridge};
 
 mod bridge;
 mod git;
+mod palette;
 mod projects;
 mod settings_editor;
 mod stream_frame;
@@ -83,6 +85,11 @@ fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
 /// Panics when the window cannot open; the process has no useful headless
 /// fallback by design.
 pub fn open_window(home: HomeLayout, cx: &mut App) {
+    cx.bind_keys([gpui_kit::KeyBinding::new(
+        "secondary-k",
+        crate::ui::ToggleCommandPalette,
+        None,
+    )]);
     let (bridge, events) = CoreBridge::start(home.clone());
     // Open as a regular window at the default bounds: the maximize-on-open
     // workaround for gpui's stale-scale sizing is retired by user request
@@ -155,6 +162,10 @@ pub struct Workspace {
     settings_search_input: Option<Entity<InputState>>,
     /// Sidebar filter over session titles already loaded from the index.
     session_filter_input: Option<Entity<InputState>>,
+    /// Search field and keyboard state for the global command palette.
+    command_palette: Option<Entity<CommandState>>,
+    /// The next frame should focus the palette search field.
+    palette_focus_pending: bool,
     /// Filter for the add-from-catalog model checklist.
     preset_model_search_input: Option<Entity<InputState>>,
     provider_key_inputs: HashMap<String, Entity<InputState>>,
@@ -303,6 +314,8 @@ impl Workspace {
             model_picker_input: None,
             settings_search_input: None,
             session_filter_input: None,
+            command_palette: None,
+            palette_focus_pending: false,
             preset_model_search_input: None,
             provider_key_inputs: HashMap::new(),
             provider_key_replace: HashSet::new(),

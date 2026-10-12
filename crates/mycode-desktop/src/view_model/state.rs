@@ -228,6 +228,8 @@ pub(crate) struct WorkspaceState {
     pub provider_kind_menu_open: bool,
     /// Whether the custom MCP form's transport dropdown is open.
     pub mcp_transport_menu_open: bool,
+    /// Whether the global command palette is open.
+    pub command_palette_open: bool,
 }
 /// Everything the UI can do to the state.
 #[derive(Clone, Debug, PartialEq)]
@@ -618,6 +620,11 @@ pub enum DesktopAction {
     UpdateStaged(PreparedUpdate),
     /// The update dialog opened or closed.
     UpdateDialogToggled(bool),
+    /// The global command palette opened or closed.
+    ///
+    /// Opening dismisses other floating menus so the palette is the only
+    /// layer asking for the keyboard.
+    CommandPaletteSet(bool),
 }
 
 /// Maximum composer text before the send is rejected locally.
