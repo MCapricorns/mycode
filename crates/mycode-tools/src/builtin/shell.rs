@@ -16,9 +16,12 @@
 //!
 //! Both modes pin the launched image, snapshot cwd/env/PATH once per call,
 //! allowlist the child environment, and use contained spawn. Execution is
-//! unsandboxed current-user file and network authority unless the opt-in OS
-//! helper is on. That helper is best-effort write confinement, not a sandbox
-//! boundary, and a missing helper fails the call. Environment filtering is
+//! unsandboxed current-user file and network authority unless the OS helper
+//! is on. `tools.osSandbox` defaults on for Linux bubblewrap and macOS
+//! seatbelt. Windows has no helper; the product path leaves this off and
+//! says the sandbox is not supported yet. The helper is best-effort write
+//! confinement, not a sandbox boundary, and a missing or forced helper fails
+//! the call. Environment filtering is
 //! not a sandbox. Valid calls run directly with no Core permission prompt.
 //! `write` and `edit` stay available. `read`, `grep`, and `find` stay
 //! in-process. File edits from either path are not undone.
@@ -1106,9 +1109,17 @@ mod mode_tests {
         assert!(
             bash_spec
                 .description
-                .contains("unsandboxed current-user execution")
+                .contains("`tools.osSandbox` defaults on")
         );
         assert!(bash_spec.description.contains("not a security boundary"));
+        assert!(bash_spec.description.contains("not supported yet"));
+        assert!(
+            bash_spec
+                .description
+                .contains("unsandboxed current-user execution")
+        );
+        assert!(bash_spec.description.contains("fails the call"));
+        assert!(!bash_spec.description.contains("opt-in"));
         assert!(!bash_spec.description.contains("Get-ChildItem"));
         let registry = ToolRegistry::new();
         registry.register(std::sync::Arc::new(powershell));

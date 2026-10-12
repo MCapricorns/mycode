@@ -602,7 +602,7 @@ impl BridgeAgentHost {
         };
         extra_roots.sort();
         let read_roots = mycode_config::skill_read_roots(crate::turn::os_user_home().as_deref());
-        let os_sandbox = self.settings.tools.os_sandbox;
+        let os_sandbox = self.settings.tools.effective_os_sandbox();
         let mut system = subagent_system_prompt(
             role,
             &registry,
@@ -612,10 +612,7 @@ impl BridgeAgentHost {
             std::env::consts::ARCH,
             &shell,
         );
-        if os_sandbox {
-            system.push_str("\n\n");
-            system.push_str(mycode_tools::os_sandbox_prompt_note());
-        }
+        crate::turn::push_os_sandbox_prompt(&mut system, &self.settings.tools);
         let mut config = AgentConfig::new()
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));

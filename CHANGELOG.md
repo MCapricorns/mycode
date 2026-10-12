@@ -12,13 +12,13 @@
 - 输入框上方和详情面板列出正在运行的 scout 和 artisan，每一行可以单独取消。artisan 因为并发上限在排队时，列表和状态行会警告。
 - Details 的实时 / 上一轮用量显示本轮缓存命中率。压缩或追加引导之后，如果下一次请求的命中率大幅下跌，Details 会留下警告并弹出提示。
 - 全局命令面板。macOS 用 `Cmd-K`，Windows 和 Linux 用 `Ctrl-K`。可搜索会话、模型、斜杠命令和设置页。
-- 可选的 `tools.osSandbox`，默认关闭，缺省不写进 `settings.json`。设为 true 时，Linux 用 bubblewrap、macOS 用 seatbelt 包住 shell 和 `run_code`：工作区、额外工作区根和临时目录可写，只读角色的 Python 把工作区只读挂上，其余路径只读，网络不隔离。助手缺失、无法钉住，或可写路径是文件系统根时，这次调用失败，不退回无沙箱执行。Windows 没有对应助手，打开该设置同样失败。这是尽力而为的写范围限制，不是安全边界。结果里的 `os_sandbox` 只表示用了哪个助手。打开沙箱时 `run_code` 不复用热进程。
+- `tools.osSandbox` 默认开启，缺省不写进 `settings.json`，设为 false 才关闭。Linux 用 bubblewrap、macOS 用 seatbelt 包住 shell 和 `run_code`：工作区、额外工作区根和临时目录可写，只读角色的 Python 把工作区只读挂上，其余路径只读，网络不隔离。助手缺失、无法钉住，或可写路径是文件系统根时，这次调用失败，不退回无沙箱执行。Windows 没有这两个助手：通用设置页标明「暂不支持」，不把开关画成打开；默认开启的产品路径不套沙箱，shell 和 `run_code` 照常运行。运行时若仍被强制打开，这次调用失败，不退回无沙箱执行。这是尽力而为的写范围限制，不是安全边界。结果里的 `os_sandbox` 只表示用了哪个助手。沙箱实际打开时 `run_code` 不复用热进程；Windows 产品路径不打开，热进程复用保持原样。
 
 ### Changed
 
 - pull request 的 CI 改为 Linux 上的 `cargo test --workspace` 与 `cargo clippy --workspace --all-targets -- -D warnings`，不再为 PR 打四个平台的 fat LTO 发布包。发布构建仍只在推到 `main` 时跑，并且要等同一份检查通过才打标签。
 - `ptc_eval` 补上分组读写、单文件 `tools.write`、技能 `SKILL.md`、MCP `server__tool`（含关键字括号调用）、多路 scout、`tools.shell` 跑测试，以及 `fetch_content` 4xx 不再重试。评分拒绝直接点名工具、`tools.bash` 这类别名、空程序、注释或字符串里的假调用，以及把只读或 shell 当成一次编辑。慢场景默认不打模型，设置 `MYCODE_PTC_EVAL_SLOW=1` 才跑；没有密钥时 live eval 仍跳过。
-- 同一会话里的 `run_code` 复用已经启动的系统 Python，后续调用不再冷启动。用户全局、本次导入和对环境的修改会在下一次调用前清掉。scout 仍用单独的 `-I` 进程和 audit hook。取消、超时或解释器退出会丢掉这个进程。`tools.osSandbox` 为 true 时不复用。
+- 同一会话里的 `run_code` 复用已经启动的系统 Python，后续调用不再冷启动。用户全局、本次导入和对环境的修改会在下一次调用前清掉。scout 仍用单独的 `-I` 进程和 audit hook。取消、超时或解释器退出会丢掉这个进程。`tools.osSandbox` 在 Linux / macOS 上生效时不复用。Windows 产品路径不打开沙箱，仍复用。
 - scout 的 audit hook 把 `O_TMPFILE` 算进 `os.open` 的写标志（它本来就和 `O_RDWR` / `O_WRONLY` 一起出现）。`-I` 和 hook 仍然是尽力而为。探针记下仍然开放的残留：已打开描述符上的 `os.write`、`os.memfd_create`，以及主代理 Python 不加 `-I`、可以直接写工作区。未开沙箱时 shell 仍能写工作区外面的路径。
 
 ## [0.11.8] - 2026-10-12

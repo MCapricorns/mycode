@@ -53,8 +53,13 @@ pub struct ToolCtx {
     /// Ignored when [`ToolCtx::os_sandbox`] is set, so a sandboxed call does
     /// not reuse a process whose binds came from an earlier cwd.
     pub ptc_session: Option<String>,
-    /// Opt-in OS helper for `shell` and `run_code`. Default off. When on, the
-    /// helper is best-effort write confinement, not a security boundary.
+    /// Whether this call runs inside the OS helper.
+    ///
+    /// Settings default `tools.osSandbox` to on. The host passes the effective
+    /// value: on for Linux and macOS when the setting is on, off for the
+    /// Windows product path so shell and `run_code` still run. `true` still
+    /// fail-closes when bubblewrap or seatbelt is missing. There is no
+    /// unsandboxed fallback.
     pub os_sandbox: bool,
 }
 
@@ -76,7 +81,10 @@ impl ToolCtx {
         }
     }
 
-    /// Opt into the OS helper for this invocation. Off unless set.
+    /// Enable or disable the OS helper for this invocation.
+    ///
+    /// Off unless the host sets it. The settings default is on; this flag
+    /// stays off until that host applies the effective value.
     #[must_use]
     pub fn with_os_sandbox(mut self, enabled: bool) -> Self {
         self.os_sandbox = enabled;

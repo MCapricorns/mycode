@@ -1,9 +1,12 @@
-//! Opt-in OS confinement for `shell` and `run_code`.
+//! OS confinement for `shell` and `run_code`.
 //!
-//! The setting defaults off. When it is on, Linux wraps the child with
-//! bubblewrap and macOS wraps it with `sandbox-exec` (seatbelt). Windows has
-//! no helper. A missing helper, a filesystem-root writable path, or a path
-//! that cannot be quoted fails the call. There is no unsandboxed fallback.
+//! `tools.osSandbox` defaults on. When the effective flag is on, Linux wraps
+//! the child with bubblewrap and macOS wraps it with `sandbox-exec`
+//! (seatbelt). Windows has no helper. The product path leaves the effective
+//! flag off there so shell and `run_code` still run, and the settings page
+//! says the sandbox is not supported yet. A missing helper, a filesystem-root
+//! writable path, or a path that cannot be quoted fails the call. Forcing
+//! this policy on Windows does the same. There is no unsandboxed fallback.
 //!
 //! This is best-effort write confinement, not a security boundary. The
 //! filesystem is read-only except the session cwd, extra workspace roots, and
@@ -35,7 +38,7 @@ pub(crate) enum SandboxWrite {
     ReadOnly,
 }
 
-/// One opt-in launch. Absent means the child is started exactly as before.
+/// One sandboxed launch. Absent means the child is started without the helper.
 #[derive(Clone, Debug)]
 pub(crate) struct OsSandboxPolicy {
     write: SandboxWrite,
@@ -71,7 +74,10 @@ impl OsSandboxPolicy {
         }
     }
 
-    /// `None` when the tool context did not opt in.
+    /// `None` when this call's effective sandbox flag is off.
+    ///
+    /// A `true` flag still builds a policy on Windows. [`plan`] then fails
+    /// closed because that platform has no helper.
     pub(crate) fn for_tool(ctx: &ToolCtx, write: SandboxWrite) -> Option<Self> {
         if !ctx.os_sandbox {
             return None;
@@ -98,7 +104,7 @@ pub(crate) struct PlannedSandbox {
     pub(crate) args: Vec<String>,
 }
 
-/// Prompt sentence inserted only when the setting is on.
+/// Prompt sentence inserted when the effective sandbox flag is on.
 #[must_use]
 pub fn os_sandbox_prompt_note() -> &'static str {
     "os_sandbox: on. shell and run_code are wrapped by a best-effort OS helper \
@@ -107,6 +113,34 @@ Writes outside the session cwd, extra workspace folders, and the temp directory 
 are denied; a read-only role's Python workspace is read-only at that layer too. \
 Reads of the rest of the filesystem and the network stay available. Python -I \
 and the audit hook remain best-effort and are not a sandbox."
+}
+
+/// Prompt sentence for the Windows product path.
+///
+/// The stored setting defaults on, but there is no helper. The note says the
+/// sandbox is not supported yet so the model does not treat the call as
+/// confined. Forcing the helper still fails the call.
+#[must_use]
+pub fn os_sandbox_unsupported_prompt_note() -> &'static str {
+    "os_sandbox: not supported yet on Windows. There is no bubblewrap or \
+seatbelt helper. shell and run_code run without that confinement so they \
+still work. This is not an enabled sandbox with a silent unsandboxed \
+fallback. Forcing the helper fails the call."
+}
+
+/// System-prompt sentence for the product path, if one should be added.
+///
+/// `effective` is the host policy after the Windows product path.
+/// `platform_supported` is false on Windows.
+#[must_use]
+pub fn os_sandbox_status_note(effective: bool, platform_supported: bool) -> Option<&'static str> {
+    if effective {
+        Some(os_sandbox_prompt_note())
+    } else if !platform_supported {
+        Some(os_sandbox_unsupported_prompt_note())
+    } else {
+        None
+    }
 }
 
 /// Records which helper wrapped a finished shell result.
@@ -177,6 +211,11 @@ struct ResolvedHelper {
     kind: HelperKind,
 }
 
+#[cfg(any(test, not(any(target_os = "linux", target_os = "macos"))))]
+fn unsupported_platform_error() -> ToolError {
+    sandbox_error("this platform has no bubblewrap or seatbelt helper.")
+}
+
 fn resolve_helper() -> Result<ResolvedHelper, ToolError> {
     #[cfg(target_os = "linux")]
     {
@@ -188,9 +227,7 @@ fn resolve_helper() -> Result<ResolvedHelper, ToolError> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        Err(sandbox_error(
-            "this platform has no bubblewrap or seatbelt helper.",
-        ))
+        Err(unsupported_platform_error())
     }
 }
 
@@ -590,10 +627,54 @@ mod tests {
     }
 
     #[test]
-    fn an_opt_out_context_does_not_build_a_policy() {
+    fn the_windows_note_says_not_supported_yet_and_does_not_claim_the_helper_is_on() {
+        let note = os_sandbox_unsupported_prompt_note();
+        assert!(note.contains("not supported yet"));
+        assert!(!note.contains("os_sandbox: on"));
+        assert!(note.contains("fails the call"));
+        assert!(note.contains("silent unsandboxed"));
+        assert_eq!(
+            os_sandbox_status_note(true, true),
+            Some(os_sandbox_prompt_note())
+        );
+        assert_eq!(
+            os_sandbox_status_note(false, false).map(|text| text.contains("not supported yet")),
+            Some(true)
+        );
+        assert!(os_sandbox_status_note(false, true).is_none());
+        let forced = os_sandbox_status_note(true, false).expect("forced note");
+        assert!(forced.contains("os_sandbox: on"));
+        assert!(!forced.contains("not supported yet"));
+    }
+
+    #[test]
+    fn a_disabled_sandbox_does_not_build_a_policy() {
         let ctx = ToolCtx::new(std::env::temp_dir());
         assert!(!ctx.os_sandbox);
         assert!(OsSandboxPolicy::for_tool(&ctx, SandboxWrite::Workspace).is_none());
+    }
+
+    #[test]
+    fn a_forced_sandbox_flag_still_builds_a_policy() {
+        let ctx = ToolCtx::new(std::env::temp_dir()).with_os_sandbox(true);
+        assert!(OsSandboxPolicy::for_tool(&ctx, SandboxWrite::Workspace).is_some());
+    }
+
+    #[test]
+    fn forcing_the_helper_on_an_unsupported_platform_fails_closed() {
+        let text = unsupported_platform_error().to_string();
+        assert!(text.contains("no bubblewrap or seatbelt"));
+        assert!(text.contains("does not fall back"));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn plan_on_this_platform_fails_closed() {
+        let policy = OsSandboxPolicy::workspace(PathBuf::from("."), Vec::new(), Vec::new());
+        let error = plan(&policy, "cmd.exe", &[]).expect_err("no helper");
+        let text = error.to_string();
+        assert!(text.contains("does not fall back"));
+        assert!(text.contains("no bubblewrap or seatbelt"));
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
@@ -752,7 +833,7 @@ mod tests {
         );
     }
 
-    /// The opt-in flag has to survive `run_code`'s inner preflight. Otherwise
+    /// The sandbox flag has to survive `run_code`'s inner preflight. Otherwise
     /// a scout or main program can call `tools.shell` unsandboxed.
     #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
     #[tokio::test]
