@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use crate::i18n::t;
-use crate::ui::skin::{self, popover_panel};
+use crate::ui::skin::{self, menu_panel};
 use crate::view_model::{
     MentionGroup, MentionKind, preferred_slash_index, selected_reasoning_level,
 };
@@ -20,49 +20,45 @@ use crate::workspace::Workspace;
 /// Fixed row height that keeps the menu rows visually uniform.
 const MENU_ROW_HEIGHT: gpui_kit::Pixels = px(30.);
 
-/// The model picker, docked in-flow above the composer. Same provider step
+/// The model picker, anchored above the model chip. Same provider step
 /// and search list the settings page uses.
 pub(super) fn render_model_menu(
     workspace: &mut Workspace,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    div()
-        .id("model-menu-layer")
-        .w_full()
-        .px_4()
-        .pb_1()
-        .flex()
-        .flex_row()
-        .justify_center()
-        .child(
-            div()
-                .w_full()
-                .max_w(super::COLUMN_MAX)
-                .flex()
-                .flex_row()
-                .justify_end()
-                .child(crate::ui::model_picker::render_model_picker(
-                    workspace,
-                    window,
-                    crate::ui::model_picker::ModelPickerTarget::Session,
-                    cx,
-                )),
-        )
-        .into_any_element()
+    debug_assert_eq!(model_menu_anchor(), MenuAnchor::ChipStart);
+    anchor_edge(
+        div()
+            .id("model-menu-layer")
+            .absolute()
+            .bottom(px(THINKING_MENU_CLEARANCE))
+            .occlude(),
+        model_menu_anchor(),
+    )
+    .child(crate::ui::model_picker::render_model_picker(
+        workspace,
+        window,
+        crate::ui::model_picker::ModelPickerTarget::Session,
+        cx,
+    ))
+    .into_any_element()
 }
 
-/// Where the thinking menu sits.
+/// Where a composer menu sits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MenuPlacement {
-    /// Full-width row. Blanks the transcript under the row.
-    #[allow(dead_code)]
-    InFlowRow,
-    /// Right edge of the chat column, far from the Thinking chip.
-    #[allow(dead_code)]
-    ColumnRightEdge,
-    /// Directly above the Thinking chip. The transcript is not clipped.
+    /// Directly above its chip. The transcript is not clipped.
     AboveChip,
+}
+
+/// Which edge of the chip the menu shares, so a wide menu grows into the column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MenuAnchor {
+    /// Left edge of the chip. The model menu grows right.
+    ChipStart,
+    /// Right edge of the chip. The thinking menu grows left.
+    ChipEnd,
 }
 
 /// Pixels from the bottom of the Thinking chip to the bottom of the menu.
@@ -79,6 +75,28 @@ pub(super) fn thinking_menu_placement() -> MenuPlacement {
     MenuPlacement::AboveChip
 }
 
+/// The thinking menu shares the chip's right edge so it stays inside the column.
+#[must_use]
+pub(super) fn thinking_menu_anchor() -> MenuAnchor {
+    MenuAnchor::ChipEnd
+}
+
+/// The model menu shares the chip's left edge, above the model button.
+#[must_use]
+pub(super) fn model_menu_anchor() -> MenuAnchor {
+    MenuAnchor::ChipStart
+}
+
+fn anchor_edge(
+    layer: gpui_kit::Stateful<gpui_kit::Div>,
+    anchor: MenuAnchor,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    match anchor {
+        MenuAnchor::ChipStart => layer.left_0(),
+        MenuAnchor::ChipEnd => layer.right_0(),
+    }
+}
+
 /// Thinking effort as its own short list, opened from the composer button.
 pub(super) fn render_thinking_menu(
     workspace: &mut Workspace,
@@ -89,41 +107,45 @@ pub(super) fn render_thinking_menu(
     let selected = selected_reasoning_level(workspace.vm()).to_owned();
     let weak = cx.weak_entity();
     debug_assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
-    div()
-        .id("thinking-menu-layer")
-        .absolute()
-        .bottom(px(THINKING_MENU_CLEARANCE))
-        .left_0()
-        .occlude()
-        .child(
-            popover_panel("thinking-menu", theme)
-                .bg(skin::opaque_menu_fill(theme))
-                .w(px(220.))
-                .flex_none()
-                .p_1()
-                .flex()
-                .flex_col()
-                .children(levels.iter().map(|level| {
-                    let picked = level.clone();
-                    let weak = weak.clone();
-                    let on = level == &selected;
-                    menu_row(
-                        format!("thinking-row-{level}"),
-                        reasoning_row_label(level),
-                        on,
-                        move |_, _, cx| {
-                            let picked = picked.clone();
-                            let _ = weak.update(cx, |workspace, cx| {
-                                workspace.on_select_reasoning(&picked, cx);
-                            });
-                        },
-                        theme,
-                    )
-                })),
-        )
-        .into_any_element()
+    debug_assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);
+    anchor_edge(
+        div()
+            .id("thinking-menu-layer")
+            .absolute()
+            .bottom(px(THINKING_MENU_CLEARANCE))
+            .occlude(),
+        thinking_menu_anchor(),
+    )
+    .child(
+        menu_panel("thinking-menu", theme)
+            .w(px(220.))
+            .max_h(px(320.))
+            .overflow_y_scroll()
+            .flex_none()
+            .p_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(levels.iter().map(|level| {
+                let picked = level.clone();
+                let weak = weak.clone();
+                let on = level == &selected;
+                menu_row(
+                    format!("thinking-row-{level}"),
+                    reasoning_row_label(level),
+                    on,
+                    move |_, _, cx| {
+                        let picked = picked.clone();
+                        let _ = weak.update(cx, |workspace, cx| {
+                            workspace.on_select_reasoning(&picked, cx);
+                        });
+                    },
+                    theme,
+                )
+            })),
+    )
+    .into_any_element()
 }
-
 
 fn menu_row(
     id: String,
@@ -226,7 +248,7 @@ pub(super) fn render_mention_layer(
         .justify_center()
         .child(
             div().w_full().max_w(super::COLUMN_MAX).child(
-                popover_panel("mention-menu", theme)
+                menu_panel("mention-menu", theme)
                     .w_full()
                     .max_h(px(300.))
                     .overflow_y_scroll()
@@ -301,10 +323,18 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MenuPlacement, thinking_menu_placement};
+    use super::{
+        MenuAnchor, MenuPlacement, model_menu_anchor, thinking_menu_anchor, thinking_menu_placement,
+    };
 
     #[test]
     fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
         assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
+    }
+
+    #[test]
+    fn composer_menus_anchor_to_their_chips() {
+        assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);
+        assert_eq!(model_menu_anchor(), MenuAnchor::ChipStart);
     }
 }
