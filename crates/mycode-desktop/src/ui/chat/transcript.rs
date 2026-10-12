@@ -181,25 +181,21 @@ fn desk_block(
 }
 
 fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl IntoElement {
-    // The event id sits in a fixed gutter so the row does not jump on hover,
-    // and a matching spacer on the right keeps the prose column centered.
-    // `overflow_hidden` on this row collapses it inside the conversation
-    // scroller. Wrapping text stays in the column through `min_w_0`.
-    let gutter = skin::space(12);
+    // The event id overlays the row and stays out of the layout, so user and
+    // agent prose share the tool cards' left edge. A reserved gutter on both
+    // sides centered the column and left large empty margins.
     div()
         .group("ledger-row")
-        .flex()
-        .flex_row()
-        .items_start()
+        .relative()
         .w_full()
         .min_w_0()
         .h_auto()
         .flex_none()
         .child(
             div()
-                .w(gutter)
-                .flex_shrink_0()
-                .pt(px(3.))
+                .absolute()
+                .left_0()
+                .top(px(2.))
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
                 .text_color(Desk::of(theme).faint)
@@ -208,8 +204,7 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
                 .group_hover("ledger-row", |this| this.opacity(1.))
                 .child(stamp),
         )
-        .child(div().flex_1().min_w_0().h_auto().child(content))
-        .child(div().w(gutter).flex_shrink_0())
+        .child(content)
 }
 
 /// Avatar plus the speaker's name. The label truncates so a long model name

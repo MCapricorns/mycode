@@ -1,5 +1,5 @@
-//! Assistant markdown: prose stays on a centered measure, while fenced code
-//! and tables use the full column. Tables scroll sideways, stripe their rows,
+//! Assistant markdown: prose is left-aligned with the tool cards, while fenced
+//! code and tables use the full column. Tables scroll sideways, stripe their rows,
 //! and keep the header pinned above a scrolling body.
 use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::theme::Theme;
@@ -152,8 +152,8 @@ fn split_row(line: &str) -> Vec<String> {
     body.split('|').map(|cell| cell.trim().to_owned()).collect()
 }
 
-/// Renders assistant markdown. Prose is centered at about 750px. Code and
-/// tables keep the column width.
+/// Renders assistant markdown. Prose is left-aligned on the content column.
+/// Code and tables keep the full column width.
 pub(super) fn render_markdown(
     id: SharedString,
     text: SharedString,
@@ -191,15 +191,16 @@ pub(super) fn render_markdown(
         }))
 }
 
-/// Centers a block on the prose measure.
+/// Left-aligns a block on the same edge as the tool cards.
+///
+/// `max_w` only caps an ultrawide pane. The block is not centered, so a
+/// normal chat column matches the tool-card width.
 pub(super) fn prose_measure(child: impl IntoElement) -> impl IntoElement {
-    div().w_full().min_w_0().flex().justify_center().child(
-        div()
-            .w_full()
-            .max_w(skin::prose_max())
-            .min_w_0()
-            .child(child),
-    )
+    div()
+        .w_full()
+        .max_w(skin::prose_max())
+        .min_w_0()
+        .child(child)
 }
 
 fn text_view(id: String, text: String, _theme: &Theme, stream_fade: bool) -> impl IntoElement {
