@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use super::ResolveError;
 use super::env::{env_path, native_os_len, snapshot_child_environment, sort_env};
 use super::image::ImageKind;
+use super::image::Shebang;
 use super::resolve::{FileIdentity, PinnedImage, pin_program_with_path};
 use crate::tool::ToolError;
 
@@ -29,6 +30,8 @@ pub(crate) struct PreparedInvocation {
     cwd: PathBuf,
     env: Vec<(OsString, OsString)>,
     invocation_digest: [u8; 32],
+    /// Script path when `program` was a direct shebang wrapper.
+    wrapper: Option<String>,
 }
 
 impl PreparedInvocation {
@@ -95,7 +98,12 @@ impl PreparedInvocation {
     ) -> Result<Self, ResolveError> {
         let mut env = env.to_vec();
         sort_env(&mut env);
-        let pinned = pin_program_with_path(session_cwd, program, args, env_path(&env), cancel)?;
+        let path_var = env_path(&env);
+        let (pinned, launch_args, wrapper) =
+            pin_or_follow_shebang(session_cwd, program, args, path_var, cancel)?;
+        // A wrapper runs the interpreter. argv0 stays the interpreter image,
+        // not the script name the caller typed.
+        let argv0 = if wrapper.is_some() { None } else { argv0 };
         let argv0 = argv0.map_or_else(
             || {
                 pinned
@@ -111,18 +119,25 @@ impl PreparedInvocation {
             pinned.identity,
             &pinned.digest,
             &argv0,
-            args,
+            &launch_args,
             session_cwd,
             &env,
         );
         Ok(Self {
             pinned,
             argv0,
-            args: args.to_vec(),
+            args: launch_args,
             cwd: session_cwd.to_path_buf(),
             env,
             invocation_digest,
+            wrapper,
         })
+    }
+
+    /// Script path when this launch followed a shebang wrapper.
+    #[must_use]
+    pub(super) fn wrapper(&self) -> Option<&str> {
+        self.wrapper.as_deref()
     }
 
     /// SHA-256 over the canonical path, file identity, image digest, `argv0`,
@@ -174,6 +189,75 @@ impl PreparedInvocation {
     ) {
         (self.pinned, self.argv0, self.args, self.cwd, self.env)
     }
+}
+
+fn pin_or_follow_shebang(
+    session_cwd: &Path,
+    program: &str,
+    args: &[String],
+    path_var: Option<&OsStr>,
+    cancel: &CancellationToken,
+) -> Result<(PinnedImage, Vec<String>, Option<String>), ResolveError> {
+    match pin_program_with_path(session_cwd, program, args, path_var, cancel) {
+        Ok(pinned) => Ok((pinned, args.to_vec(), None)),
+        Err(ResolveError::Shebang { script, shebang }) => {
+            follow_shebang(session_cwd, args, path_var, cancel, &script, &shebang)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn follow_shebang(
+    session_cwd: &Path,
+    args: &[String],
+    path_var: Option<&OsStr>,
+    cancel: &CancellationToken,
+    script: &Path,
+    shebang: &Shebang,
+) -> Result<(PinnedImage, Vec<String>, Option<String>), ResolveError> {
+    let (interpreter, mut launch_args) = shebang.launch_target();
+    let script_arg = unicode_path(script)?;
+    launch_args.push(script_arg.clone());
+    launch_args.extend(args.iter().cloned());
+    match pin_program_with_path(session_cwd, &interpreter, &launch_args, path_var, cancel) {
+        Ok(pinned) => Ok((pinned, launch_args, Some(script_arg))),
+        Err(ResolveError::Shebang { .. }) => {
+            Err(ResolveError::Other(ToolError::InvalidArgs(format!(
+                "{script_arg} is a wrapper script ({}). program mode followed it to \
+                 `{interpreter}`, which is also a script. It follows only one shebang. \
+                 Launch the final image yourself with program set to that image and the \
+                 script path in args, or use mode script.",
+                shebang.line
+            ))))
+        }
+        Err(ResolveError::NotFound {
+            program: missing,
+            searched,
+        }) => {
+            let searched = searched
+                .map(|count| format!(" ({count} PATH directories searched)"))
+                .unwrap_or_default();
+            Err(ResolveError::Other(ToolError::InvalidArgs(format!(
+                "{script_arg} is a wrapper script ({}). program mode runs `{missing}` with \
+                 the script path and your args, but that interpreter was not found{searched}. \
+                 Use mode script, or pass the interpreter path as program.",
+                shebang.line
+            ))))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn unicode_path(path: &Path) -> Result<String, ResolveError> {
+    path.to_str()
+        .filter(|text| !text.contains('\0'))
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ResolveError::Other(ToolError::InvalidArgs(
+                "wrapper script path is not valid Unicode and cannot be passed as an argument"
+                    .into(),
+            ))
+        })
 }
 
 /// Length-framed SHA-256 over the effective launch identity.

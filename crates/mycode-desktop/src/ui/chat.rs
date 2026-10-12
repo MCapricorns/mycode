@@ -210,12 +210,6 @@ pub(super) fn render_chat(
                     ),
                 ),
         )
-        // The model menu docks in-flow right above the composer: an
-        // absolutely positioned overlay landed outside the visible window on
-        // mis-scaled displays, and a docked panel cannot be clipped away.
-        .when(workspace.vm().model_menu_open, |this| {
-            this.child(menus::render_model_menu(workspace, window, cx))
-        })
         .when(
             workspace
                 .vm()
@@ -367,8 +361,6 @@ fn render_jump_to_latest(cx: &Context<Workspace>) -> impl IntoElement {
                 ),
         )
 }
-
-
 
 /// The control above a tail window. The count of remaining events is not
 /// known without reading them, so the label stays generic.

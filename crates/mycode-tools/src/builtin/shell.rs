@@ -10,8 +10,9 @@
 //!   is bash, zsh, or sh, then the platform default (`zsh` on macOS, `bash`
 //!   elsewhere). Commands are not rewritten between shells.
 //! * `program` spawns `program` with an explicit `args` vector and does not
-//!   start a shell. Only a kernel-loadable PE, ELF, or Mach-O image is
-//!   accepted. Shebang scripts and batch files are rejected.
+//!   parse a shell command string. A PE, ELF, or Mach-O image runs directly.
+//!   A direct shebang wrapper runs its interpreter with the script path and
+//!   `args`. Batch files and shebang arguments such as `-c` are rejected.
 //!
 //! Both modes pin the launched image, snapshot cwd/env/PATH once per call,
 //! allowlist the child environment, and use contained spawn. Execution is
@@ -160,9 +161,10 @@ pub enum ShellMode {
 /// `command`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShellArgs {
-    /// `script` runs `command` in the platform shell. `program` spawns one
-    /// kernel-loadable image with `program` and `args` and does not start a shell.
-    /// Omitted `mode` means `script`.
+    /// `script` runs `command` in the platform shell. `program` runs one kernel
+    /// image, or a direct shebang wrapper via its interpreter, with `program`
+    /// and `args`. It does not parse a shell command string. Omitted `mode`
+    /// means `script`.
     #[serde(default)]
     #[schemars(default)]
     pub mode: ShellMode,

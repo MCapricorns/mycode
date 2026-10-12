@@ -1,10 +1,12 @@
 //! Live choice eval for grouping versus scout.
 //!
-//! The rubric is [`mycode_agent::accept_choice`]. A narrow multi-step task
-//! must come back as `run_code`. One edit must be a direct `edit` or
-//! `write`. Broad research may be `scout` or inline `run_code`. The test
-//! calls a model only when `MYCODE_PTC_EVAL_API_KEY` or `OPENAI_API_KEY`
-//! is set, plus `MYCODE_PTC_EVAL_BASE_URL` (default
+//! The rubric is [`mycode_agent::accept_choice`]. Every task is `run_code`.
+//! A narrow lookup's program calls `tools.grep`, `tools.find`, or `tools.read`
+//! (attribute or bracket form) and does not call `tools.agent`. One edit's
+//! program calls `tools.edit` or `tools.write` and does not call `tools.shell`
+//! or `tools.agent`. Broad research may delegate to scout or stay inline.
+//! The test calls a model only when `MYCODE_PTC_EVAL_API_KEY` or
+//! `OPENAI_API_KEY` is set, plus `MYCODE_PTC_EVAL_BASE_URL` (default
 //! `https://api.openai.com/v1`) and `MYCODE_PTC_EVAL_MODEL`.
 
 use mycode_agent::{accept_choice, build_system_prompt, choice_scenarios};
@@ -35,13 +37,14 @@ async fn live_model_chooses_by_difficulty_when_configured() {
     mycode_tools::register_builtins(&registry);
     let mut system = build_system_prompt(&registry);
     system.push_str(
-        "\n\nYou decide whether to delegate. A narrow lookup is one `run_code` whose code calls `tools.grep` or `tools.find`. One edit is `run_code` whose code calls `tools.edit` or `tools.write`. Web research and a repository-wide map may call `tools.agent` with agent \"scout\" inside that program. Delegating broad research to scout is your judgment. Do not call any tool except `run_code` directly.",
+        "\n\nYou decide whether to delegate. Call no tool except `run_code`. Inside the program, call tools as `tools.name(...)` or `tools[\"name\"](...)`.\nA narrow lookup of one file or one identifier uses `tools.grep`, `tools.find`, or `tools.read` in that program. Do not delegate that to `tools.agent`.\nOne typo or a single-file edit uses `tools.edit` or `tools.write` in that program. Do not use `tools.shell` or `tools.agent` for it.\nWeb research and a repository-wide map may call `tools.agent` with agent \"scout\", or stay inline with grep, find, web_search, and fetch_content. Delegating broad research to scout is your judgment.",
     );
     let tools = tool_specs(&registry);
     let client = reqwest::Client::new();
     let url = completions_url(&base);
+    let scenarios = choice_scenarios();
     let mut failures = Vec::new();
-    for scenario in choice_scenarios() {
+    for scenario in scenarios {
         match score_scenario(&client, &url, &key, &model, &system, &tools, scenario).await {
             Ok(line) => eprintln!("{line}"),
             Err(message) => {
@@ -50,6 +53,8 @@ async fn live_model_chooses_by_difficulty_when_configured() {
             }
         }
     }
+    let passed = scenarios.len() - failures.len();
+    eprintln!("ptc live eval score {passed}/{}", scenarios.len());
     assert!(
         failures.is_empty(),
         "ptc live eval scored every scenario; failures:\n{}",

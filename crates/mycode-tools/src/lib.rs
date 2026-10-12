@@ -19,7 +19,8 @@
 //!   minimal recovery surface and cannot depend on external search binaries.
 //!   The process tool is `powershell`, `bash`, `zsh`, `sh`, or `cmd`, whichever
 //!   matches the shell resolved at startup. `mode` `script` runs that interpreter
-//!   and `mode` `program` spawns a kernel-loadable image with no shell.
+//!   and `mode` `program` spawns a kernel image, or a direct shebang wrapper via
+//!   its interpreter, with no shell command string.
 
 pub mod builtin;
 pub mod ctx;

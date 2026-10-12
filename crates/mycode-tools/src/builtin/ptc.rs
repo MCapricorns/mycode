@@ -922,12 +922,35 @@ except ToolCallError as e:
         let result = run(
             &root,
             catalog(vec![]),
-            "import os\nreturn \"leaked\" if \"MYCODE_PTC_TOKEN\" in os.environ else \"clean\"\n",
+            "import os\nleaked = any(name in os.environ for name in ('MYCODE_PTC_TOKEN', 'MYCODE_PTC_FD', 'MYCODE_PTC_PORT', 'MYCODE_PTC_TOKEN_FILE'))\ntry:\n    raw = open('/proc/self/environ', 'rb').read()\n    leaked = leaked or b'MYCODE_PTC_TOKEN=' in raw\nexcept OSError:\n    pass\nreturn 'leaked' if leaked else 'clean'\n",
         )
         .await;
         let text = text_of(&result);
         assert!(!result.is_error, "{text}");
         assert!(text.contains("clean"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn scout_hook_blocks_sqlite_metadata_fork_and_os_open() {
+        let root = temp_dir("scout-hook");
+        let marker = root.join("keep.txt");
+        std::fs::write(&marker, b"x").unwrap();
+        let db = root.join("evil.db");
+        let code = format!(
+            "import os, sqlite3\ndb = {db}\nmarker = {marker}\nnotes = []\ntry:\n    sqlite3.connect(db)\n    notes.append('sqlite-open')\nexcept PermissionError:\n    notes.append('sqlite')\ntry:\n    os.chmod(marker, 0o777)\n    notes.append('chmod-open')\nexcept PermissionError:\n    notes.append('chmod')\ntry:\n    os.forkpty()\n    notes.append('fork-open')\nexcept PermissionError:\n    notes.append('fork')\nexcept AttributeError:\n    notes.append('fork')\ntry:\n    fd = os.open(db, os.O_WRONLY | os.O_CREAT, 0o644)\n    os.close(fd)\n    notes.append('osopen-open')\nexcept PermissionError:\n    notes.append('osopen')\nreturn '|'.join(notes)\n",
+            db = serde_json::to_string(&db.display().to_string()).unwrap(),
+            marker = serde_json::to_string(&marker.display().to_string()).unwrap(),
+        );
+        let result = run(&root, catalog(vec![]), &code).await;
+        let text = text_of(&result);
+        assert!(!result.is_error, "{text}");
+        assert!(text.contains("sqlite"), "{text}");
+        assert!(text.contains("chmod"), "{text}");
+        assert!(text.contains("fork"), "{text}");
+        assert!(text.contains("osopen"), "{text}");
+        assert!(!text.contains("-open"), "{text}");
+        assert!(!db.exists(), "sqlite bypass wrote {}", db.display());
         let _ = std::fs::remove_dir_all(&root);
     }
 

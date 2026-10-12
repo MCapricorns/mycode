@@ -173,6 +173,11 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .text_color(theme.popover_foreground)
 }
 
+/// Thinking and model menus. Opaque so the transcript does not show through.
+pub(super) fn menu_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
+    popover_panel(id, theme).bg(opaque_menu_fill(theme))
+}
+
 fn with_alpha(mut color: Hsla, alpha: f32) -> Hsla {
     color.a = alpha.clamp(0., 1.);
     color

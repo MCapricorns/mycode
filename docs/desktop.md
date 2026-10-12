@@ -40,7 +40,7 @@ BridgeCommand → CoreBridge
 | `git_status` | 只读 `git status --porcelain=v1`（带 `--no-optional-locks`，不抢 `index.lock`）和 `git diff HEAD`。最多保留 80 个改动文件，改名行打开新路径的 diff |
 | `i18n` | `auto` 跟系统语言，否则用设置里的 `en` / `zh` |
 
-视觉是 Desk：窗口使用系统模糊（macOS 视觉效果、Windows DWM、Wayland 上的 KDE 模糊）。标题栏、侧栏、详情面板和菜单是半透明毛玻璃；对话和设置的阅读区更接近实色，保证文字对比。页面是接近实色的深色底，只带一点色板的渐变。色板来自设置，默认石板灰，另外还有海洋、森林、暮色、余烬和极光。通用页把这六个色板排成一行固定宽度的色块（卡片太窄时换行），选中是一圈细环。界面字体是 `appearance.fontFamily`：缺省、空字符串或 `system` 用操作系统界面字体，另外可以选本机能够加载的 Inter、Segoe UI、PingFang、Noto Sans。字号是 `appearance.fontSize`。这三项改完立刻上屏，并写入 `settings.json`，下次启动再读回来。界面只有深色；设置里不是 `dark` 的主题或已删除的旧色板会让整份 `settings.json` 备份后重置（见 config.md）。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块单色渲染（tree-sitter 语法高亮已移除，二进制减半）。
+视觉是 Desk：窗口使用系统模糊（macOS 视觉效果、Windows DWM、Wayland 上的 KDE 模糊）。标题栏、侧栏和详情面板是半透明毛玻璃。思考菜单和模型菜单是不透明实底，分别锚在 Thinking 按钮的右缘和模型按钮的左缘，底边停在输入卡片上方；条目多过窗口时在菜单内部滚动，不把文字裁掉。对话和设置的阅读区更接近实色，保证文字对比。页面是接近实色的深色底，只带一点色板的渐变。色板来自设置，默认石板灰，另外还有海洋、森林、暮色、余烬和极光。通用页把这六个色板排成一行固定宽度的色块（卡片太窄时换行），选中是一圈细环。界面字体是 `appearance.fontFamily`：缺省、空字符串或 `system` 用操作系统界面字体，另外可以选本机能够加载的 Inter、Segoe UI、PingFang、Noto Sans。字号是 `appearance.fontSize`。这三项改完立刻上屏，并写入 `settings.json`，下次启动再读回来。界面只有深色；设置里不是 `dark` 的主题或已删除的旧色板会让整份 `settings.json` 备份后重置（见 config.md）。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块单色渲染（tree-sitter 语法高亮已移除，二进制减半）。
 
 ## 窗口里有什么
 
@@ -70,6 +70,20 @@ BridgeCommand → CoreBridge
 打开的文件夹由系统文件事件监视（`notify` 的默认后端：macOS 为 FSEvents，Windows 为 `ReadDirectoryChangesW`）。`.git` 里对象库、日志、hooks 和 `*.lock` 的变化不触发刷新。变化先合并约 300ms，再在工作线程读一次 `git status`；切换文件夹会丢掉旧文件夹还在跑的读取。自动检查更新在启动时跑一次，进程活过大约一天后再跑一次。失败会提示；已是最新不提示。
 
 `SendMessage` 和 `RecallMessage` 带上界面看到的账本头。核心拒绝过期头时，界面保持原对话并提示，不本地假装已经撤回。`RecallMessage` 只截断对话；编辑会把原文填回输入框。工作区里的文件不会被恢复或删除。
+
+## 界面截图
+
+![三个 scout 并行：Tokio、async-std 和 smol 都在跑](images/subagents.png)
+
+三个只读 scout 同时在查 Rust 异步运行时。状态行写着 3 subagents running。
+
+![思考菜单打开，锚在 Thinking 按钮上方](images/thinking-menu.png)
+
+思考菜单贴在 Thinking 按钮上方，底不透明，当前档是 High · deep。
+
+![设置的通用与外观页：语言、色板、字体和字号](images/settings.png)
+
+设置的通用页：语言、六块色板、界面字体和字号。
 
 ## 不放在这里的东西
 
