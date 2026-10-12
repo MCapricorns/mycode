@@ -35,20 +35,14 @@ fn edit_hint(shell_tool: &str) -> &'static str {
     }
 }
 
-fn tool_calling(shell_tool: &str, grouped: bool) -> String {
+fn tool_calling(shell_tool: &str) -> String {
     let hint = edit_hint(shell_tool);
-    let grouped_line = if grouped {
-        "- When one step needs several reads, greps, finds, edits, or page fetches, call `run_code` once. One obvious call stays direct.\n"
-    } else {
-        ""
-    };
     format!(
         "<tool_calling>\n\
 - Independent calls in one response run together. Do not wait between them.\n\
-{grouped_line}\
 - Read existing content before changing it. Prefer `read`, `grep`, and `find` to inspect files.\n\
 - `write`, `edit`, and `{shell_tool}` can all change files. {hint}\n\
-- Use `{shell_tool}` with `mode` `program` for one kernel-loadable program and an explicit argument vector. That path does not start a shell.\n\
+- Use `{shell_tool}` with `mode` `program` for one kernel image, or a direct shebang wrapper, and an explicit argument vector. That path does not parse a shell command string.\n\
 - Never use `{shell_tool}` to talk to the user.\n\
 - Editing or recalling a chat message does not restore or delete workspace files.\n\
 </tool_calling>"
@@ -333,7 +327,7 @@ fn web_section(tools: &ToolRegistry) -> Option<&'static str> {
 /// not require one answer when both are reasonable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskWeight {
-    /// One obvious call. Stay on the direct tool.
+    /// One edit. The program calls `tools.edit` or `tools.write`.
     Direct,
     /// Several lookups or edits in one step. Group them inline with `run_code`.
     GroupInline,
@@ -360,17 +354,17 @@ pub fn choice_scenarios() -> &'static [ChoiceScenario] {
     &[
         ChoiceScenario {
             id: "narrow-search",
-            task: "In src/turn.rs and src/prompt.rs, which functions mention dispatch_tool? Return path:line only.",
+            task: "In src/turn.rs only, which lines contain the exact identifier dispatch_tool? Return path:line. This is one file; do the lookup in the current program.",
             weight: TaskWeight::Lookup,
         },
         ChoiceScenario {
             id: "one-edit",
-            task: "In src/a.rs line 3, change recieve to receive. That is the whole change.",
+            task: "In src/a.rs, replace the single typo recieve with receive. That is the entire change. Do it with the edit tool inside one program.",
             weight: TaskWeight::Direct,
         },
         ChoiceScenario {
             id: "broad-research",
-            task: "Map how authentication works across this repository and what the vendor's current docs say about token refresh. I need a short map before any edit.",
+            task: "Before any edit, map how authentication works across every crate in this repository and check the vendor's current documentation for token refresh. Return a short map.",
             weight: TaskWeight::Broad,
         },
     ]
@@ -381,6 +375,21 @@ fn program_code(arguments: &serde_json::Value) -> &str {
         .get("code")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
+}
+
+/// True when `code` calls `name` as `tools.name` or `tools["name"]`.
+fn calls_tool(code: &str, name: &str) -> bool {
+    let dotted = format!("tools.{name}");
+    let dotted_hit = code.match_indices(&dotted).any(|(index, _)| {
+        let after = index + dotted.len();
+        !code[after..]
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    });
+    dotted_hit
+        || code.contains(&format!("tools[\"{name}\"]"))
+        || code.contains(&format!("tools['{name}']"))
 }
 
 /// Whether a model's first tool call matches PTC-only judgment for `weight`.
@@ -397,15 +406,13 @@ pub fn accept_choice(weight: TaskWeight, tool: &str, arguments: &serde_json::Val
     let code = program_code(arguments);
     match weight {
         TaskWeight::Direct => {
-            (code.contains("tools.edit")
-                || code.contains("tools.write")
-                || code.contains("tools.read"))
-                && !code.contains("tools.agent")
+            (calls_tool(code, "edit") || calls_tool(code, "write"))
+                && !calls_tool(code, "agent")
+                && !calls_tool(code, "shell")
         }
         TaskWeight::Lookup => {
-            code.contains("tools.grep")
-                || code.contains("tools.find")
-                || code.contains("tools.read")
+            (calls_tool(code, "grep") || calls_tool(code, "find") || calls_tool(code, "read"))
+                && !calls_tool(code, "agent")
         }
         TaskWeight::GroupInline | TaskWeight::Broad => true,
     }
@@ -489,7 +496,7 @@ pub fn build_system_prompt(tools: &ToolRegistry) -> String {
         && let Some(shell_tool) = shell_tool_name(tools)
     {
         prompt.push_str("\n\n");
-        prompt.push_str(&tool_calling(&shell_tool, false));
+        prompt.push_str(&tool_calling(&shell_tool));
     }
     prompt
 }
@@ -665,6 +672,16 @@ mod tests {
             "run_code",
             &serde_json::json!({"description": "Find dispatch", "code": "hits = await tools.grep(pattern='dispatch_tool')\nreturn hits"})
         ));
+        assert!(super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Find dispatch", "code": "hits = await tools[\"grep\"](pattern='dispatch_tool')\nreturn hits"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Lookup,
+            "run_code",
+            &serde_json::json!({"description": "Delegate", "code": "return await tools.agent(agent='scout', prompt='find dispatch')"})
+        ));
         assert!(!super::accept_choice(
             super::TaskWeight::Lookup,
             "bash",
@@ -694,6 +711,11 @@ mod tests {
             super::TaskWeight::Direct,
             "run_code",
             &serde_json::json!({"description": "One edit", "code": "return 1"})
+        ));
+        assert!(!super::accept_choice(
+            super::TaskWeight::Direct,
+            "run_code",
+            &serde_json::json!({"description": "One edit", "code": "await tools.shell(command='sed -i s/recieve/receive/ src/a.rs')"})
         ));
         assert!(super::accept_choice(
             super::TaskWeight::Broad,

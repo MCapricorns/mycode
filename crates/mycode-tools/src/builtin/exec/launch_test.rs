@@ -83,6 +83,91 @@ fn launch_target() -> (String, Vec<String>, &'static str, Option<&'static str>) 
     )
 }
 
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shebang_wrapper_runs_its_interpreter() {
+    let dir = std::env::temp_dir().join(format!("mycode-shebang-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("wrap.sh");
+    std::fs::write(&script, "#!/bin/bash\nprintf 'wrapper-ok %s\\n' \"$1\"\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&script).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script, perms).unwrap();
+    let program = script.to_str().expect("script path").to_owned();
+    let tool = ShellTool::with_default_timeout(30);
+    let ctx = ToolCtx::new(&dir);
+    let mut out = ToolStream::closed();
+    let result = tool
+        .execute(
+            ShellArgs {
+                mode: ShellMode::Program,
+                command: None,
+                program: Some(program),
+                args: vec!["shebang-ok".to_owned()],
+                timeout_secs: Some(30),
+            },
+            &ctx,
+            &mut out,
+        )
+        .await
+        .expect("shebang wrapper should run");
+    let text = text_of(&result);
+    assert!(!result.is_error, "{text}");
+    assert!(text.contains("wrapper-ok shebang-ok"), "{text}");
+    let details = result.details.expect("details");
+    let image = if cfg!(target_os = "linux") {
+        "elf"
+    } else {
+        "mach-o"
+    };
+    assert!(
+        details["image"].as_str().unwrap_or("").starts_with(image),
+        "{details}"
+    );
+    let wrapper = details["wrapper"].as_str().unwrap_or("");
+    assert!(wrapper.ends_with("wrap.sh"), "{details}");
+    assert!(
+        details["program"].as_str().unwrap_or("").contains("bash"),
+        "{details}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shebang_command_flag_names_the_next_step() {
+    let dir = std::env::temp_dir().join(format!("mycode-shebang-c-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("bad.sh");
+    std::fs::write(&script, "#!/bin/bash -c\necho hi\n").unwrap();
+    let program = script.to_str().expect("script path").to_owned();
+    let tool = ShellTool::with_default_timeout(30);
+    let ctx = ToolCtx::new(&dir);
+    let mut out = ToolStream::closed();
+    let error = tool
+        .execute(
+            ShellArgs {
+                mode: ShellMode::Program,
+                command: None,
+                program: Some(program),
+                args: Vec::new(),
+                timeout_secs: Some(30),
+            },
+            &ctx,
+            &mut out,
+        )
+        .await
+        .expect_err("shebang -c must be rejected");
+    let text = error.to_string();
+    assert!(text.contains("-c"), "{text}");
+    assert!(text.contains("mode script"), "{text}");
+    assert!(!text.contains("kernel-loadable images only"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn text_of(result: &ToolResult) -> String {
     result
         .content

@@ -52,6 +52,8 @@ pub(super) struct DoneError {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub(super) enum HostFrame {
+    #[serde(rename = "token")]
+    Token { token: String },
     #[serde(rename = "boot")]
     Boot {
         code: String,

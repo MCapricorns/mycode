@@ -38,10 +38,15 @@ _tools = set()
 
 _PROCESS = {
     "os.system",
+    "os.popen",
     "os.exec",
     "os.spawn",
     "os.posix_spawn",
     "os.fork",
+    "os.forkpty",
+    "os.kill",
+    "os.killpg",
+    "os.startfile",
     "subprocess.Popen",
 }
 _SOCKET = {
@@ -49,6 +54,7 @@ _SOCKET = {
     "socket.bind",
     "socket.connect",
     "socket.getaddrinfo",
+    "socket.getnameinfo",
 }
 _FILE_MUTATION = {
     "os.remove",
@@ -63,6 +69,19 @@ _FILE_MUTATION = {
     "os.truncate",
     "os.link",
     "os.symlink",
+    "os.chmod",
+    "os.lchmod",
+    "os.fchmod",
+    "os.chown",
+    "os.lchown",
+    "os.fchown",
+    "os.utime",
+    "os.chflags",
+    "os.lchflags",
+    "os.setxattr",
+    "os.removexattr",
+    "os.mkfifo",
+    "os.mknod",
 }
 
 
@@ -233,10 +252,13 @@ def _warn(event):
 def _write_open(args):
     mode = ""
     flags = 0
-    if len(args) >= 2 and isinstance(args[1], str):
-        mode = args[1]
-    if len(args) >= 3 and isinstance(args[2], int):
-        flags = args[2]
+    # `open(path, mode, flags)` puts the mode string in args[1]. `os.open`
+    # emits `open(path, None, flags)`, so the write bits can sit in any slot.
+    for item in tuple(args)[1:4]:
+        if isinstance(item, str) and not mode:
+            mode = item
+        elif isinstance(item, int):
+            flags |= item
     if any(mark in mode for mark in ("w", "a", "x", "+")):
         return True
     write_bits = 0
@@ -253,6 +275,7 @@ def _install_hook(restricted, warn_process):
             event in _PROCESS
             or event.startswith("os.exec")
             or event.startswith("os.spawn")
+            or event.startswith("os.posix_spawn")
         )
         if process:
             if restricted:
@@ -260,19 +283,16 @@ def _install_hook(restricted, warn_process):
             if warn_process:
                 _warn(event)
             return
-        if event.startswith("ctypes."):
-            if restricted:
-                raise PermissionError("scout python blocked ctypes")
+        if not restricted:
             return
+        if event.startswith("ctypes.") or event.startswith("sqlite3."):
+            raise PermissionError("scout python blocked %s" % event)
         if event in _SOCKET:
-            if restricted:
-                raise PermissionError("scout python blocked a network socket")
-            return
+            raise PermissionError("scout python blocked a network socket")
         if event in _FILE_MUTATION or (event == "open" and _write_open(tuple(args))):
-            if restricted:
-                raise PermissionError(
-                    "scout python blocked a file write, create, delete, or rename"
-                )
+            raise PermissionError(
+                "scout python blocked a file write, create, delete, or rename"
+            )
 
     sys.addaudithook(hook)
 
@@ -352,15 +372,22 @@ async def _run_user(code):
 
 
 def _open_control():
-    """Attach the channel the host prepared. The token stays in the environment
-    only until the ready frame is sent."""
+    """Attach the channel the host prepared and return the handshake token.
+
+    Unix delivers the token on the inherited socket, so it is never part of
+    the exec environment (`/proc/self/environ` keeps that initial block).
+    TCP reads it from a 0600 file and deletes the file before ready is sent.
+    """
     global _hold, _fd, _sock
     inherited = os.environ.get("MYCODE_PTC_FD")
     port = os.environ.get("MYCODE_PTC_PORT")
     if inherited:
         _hold = os.fdopen(int(inherited), "r+b", buffering=0)
         _fd = _hold.fileno()
-        return
+        message = _read_frame()
+        if message.get("type") != "token":
+            raise SystemExit("expected token")
+        return str(message.get("token") or "")
     if port:
         sock = socket.create_connection(("127.0.0.1", int(port)), timeout=30)
         try:
@@ -371,12 +398,30 @@ def _open_control():
         _hold = sock
         _sock = sock
         _fd = sock.fileno()
-        return
+        return _read_token_file()
     raise SystemExit("no control channel")
 
 
+def _read_token_file():
+    path = os.environ.get("MYCODE_PTC_TOKEN_FILE")
+    if not path:
+        return ""
+    with open(path, "r", encoding="utf-8") as handle:
+        token = handle.read().strip()
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return token
+
+
 def _drop_channel_env():
-    for key in ("MYCODE_PTC_TOKEN", "MYCODE_PTC_FD", "MYCODE_PTC_PORT"):
+    for key in (
+        "MYCODE_PTC_TOKEN",
+        "MYCODE_PTC_FD",
+        "MYCODE_PTC_PORT",
+        "MYCODE_PTC_TOKEN_FILE",
+    ):
         os.environ.pop(key, None)
 
 
@@ -411,9 +456,12 @@ def _graceful_close():
 
 def main():
     global _loop, _tools, _USER_LINES
-    token = os.environ.get("MYCODE_PTC_TOKEN") or ""
-    _open_control()
+    token = _open_control()
     _write_frame({"type": "ready", "token": token})
+    # Drop the local before user code runs. The listener is already closed
+    # once the host accepts this ready frame; keeping the secret in `main`
+    # would still let `inspect` read it off this frame.
+    del token
     boot = _read_frame()
     if boot.get("type") != "boot":
         raise SystemExit("expected boot")

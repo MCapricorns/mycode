@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::ResolveError;
 use super::env::is_searchable_path_entry;
-use super::image::{ImageKind, classify_image, read_pe_tail};
+use super::image::{ImageKind, classify_image, parse_shebang, read_pe_tail};
 use super::spawn::{SpawnFailure, SpawnGate};
 use crate::builtin::fs_search::lexical_normalize;
 #[cfg(windows)]
@@ -400,6 +400,11 @@ fn pin_candidate(path: &Path, cancel: &CancellationToken) -> Result<PinnedImage,
         )));
     }
     let header = read_header(&mut file)?;
+    if header.starts_with(b"#!") {
+        let shebang = parse_shebang(&header)?;
+        let script = canonical_from_handle(&file)?;
+        return Err(ResolveError::Shebang { script, shebang });
+    }
     let pe_tail = read_pe_tail(&mut file, &header)?;
     let kind = classify_image(&header, pe_tail.as_ref())?;
     #[cfg(windows)]
