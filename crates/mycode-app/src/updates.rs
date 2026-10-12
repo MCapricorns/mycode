@@ -639,10 +639,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "mycode-update-script-{label}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir

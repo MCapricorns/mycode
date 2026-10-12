@@ -391,10 +391,7 @@ pub(crate) async fn resolve_request_auth(
         return Ok((token, extra));
     }
     if let Some(mut secret) = parse_oauth_secret(stored_key) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or_default();
+        let now = crate::unix_now().as_secs();
         if secret.expired(now) {
             let call = oauth_call();
             // GitHub Copilot stores a device token, not an OAuth refresh grant.
@@ -436,10 +433,7 @@ async fn ensure_copilot_bearer(
     copilot: &tokio::sync::Mutex<Option<(String, u64)>>,
     github_token: &str,
 ) -> Result<String, String> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
+    let now = crate::unix_now().as_secs();
     let mut cache = copilot.lock().await;
     if let Some((token, expires_at)) = cache.as_ref()
         && *expires_at > now.saturating_add(60)

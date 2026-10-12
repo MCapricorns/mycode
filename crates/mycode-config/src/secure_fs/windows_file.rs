@@ -517,7 +517,6 @@ pub(super) fn set_delete(file: &File) -> Result<(), ConfigError> {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::{
         AppSettings, AuthorityRevision, HomeLayout, read_app_settings, replace_app_settings,
@@ -529,10 +528,7 @@ mod tests {
 
     impl TempTree {
         fn new(label: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
+            let nanos = crate::unix_now().as_nanos();
             let path = std::env::temp_dir().join(format!(
                 "mycode-secure-fs-{label}-{}-{nanos}",
                 std::process::id()

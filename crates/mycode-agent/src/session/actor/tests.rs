@@ -25,10 +25,7 @@ impl Scratch {
         let root = std::env::temp_dir().join(format!(
             "mycode-actor-{}-{}-{n}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("scratch dir");
         #[cfg(unix)]

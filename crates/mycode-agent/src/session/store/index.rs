@@ -1,7 +1,6 @@
 //! SQLite index for session titles, branch heads, and JSONL byte offsets.
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use mycode_config::HomeLayout;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -908,11 +907,7 @@ fn table_ready(conn: &Connection) -> Result<bool, StoreError> {
 }
 
 fn now_ms() -> Result<u64, StoreError> {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| StoreError::Storage)?
-        .as_millis();
-    u64::try_from(millis).map_err(|_| StoreError::Storage)
+    u64::try_from(crate::unix_now().as_millis()).map_err(|_| StoreError::Storage)
 }
 
 fn i64_from(value: u64) -> Result<i64, StoreError> {
