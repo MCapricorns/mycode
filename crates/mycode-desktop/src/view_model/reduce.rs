@@ -34,7 +34,7 @@ use self::projects::{
     workspace_renamed, workspace_root_added, workspace_root_removed, workspace_switched,
 };
 use self::streaming::{append_streaming, set_streaming_status};
-use self::usage::clear_session_usage;
+use self::usage::{arm_cache_watch, clear_session_usage, observe_cache_hit};
 
 /// A mid-turn summary arrives while the final reply is still only in the
 /// streaming bubble. Inserting it then paints the card above that reply.
@@ -338,6 +338,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.context_used = context;
                 state.context_cache = context_cache;
             }
+            // The watch compares this prompt, not the summed turn. A size of
+            // zero leaves the watch armed for the next real reading.
+            observe_cache_hit(state, context, context_cache);
         }
         DesktopAction::AskRequested(rows) => {
             state.ask_answers = vec![String::new(); rows.len()];
@@ -446,6 +449,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.live_turn = None;
             state.sending = false;
         }
+        DesktopAction::CacheBreakArmed(cause) => arm_cache_watch(state, cause),
         DesktopAction::SteerCommitted {
             session_id,
             head,

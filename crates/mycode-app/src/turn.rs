@@ -123,7 +123,7 @@ async fn show_compaction_summary(
         .map(|head| head.head.clone())
         .ok_or_else(|| "could not open the session".to_owned())?;
     let writer = HeadWriter::new(state.service.clone(), session.clone(), branch.clone(), head);
-    publish_visible_summary(&writer, events, session_id, summary).await
+    publish_visible_summary(&writer, events, session_id, summary, true).await
 }
 
 /// Summaries produced inside `before_request`. The hook must not append a
@@ -136,9 +136,17 @@ struct DeferredSummaries {
 }
 
 impl DeferredSummaries {
-    async fn stash(&self, summary: Option<String>) {
+    /// Stores a summary for the deferred transcript card.
+    ///
+    /// Returns whether a new summary was stored. The caller signals
+    /// [`mycode_core::events::AgentEvent::CacheDisrupted`] on the agent bus
+    /// in that case, so the pump forwards the cache watch in bus order.
+    async fn stash(&self, summary: Option<String>) -> bool {
         if let Some(summary) = summary {
             self.pending.lock().await.push(summary);
+            true
+        } else {
+            false
         }
     }
 
@@ -148,9 +156,23 @@ impl DeferredSummaries {
             std::mem::take(&mut *pending)
         };
         for summary in summaries {
-            let _ = publish_visible_summary(writer, events, session_id, &summary).await;
+            // `false`: stash already armed the watch, before this request.
+            // Arming again from the late card would compare the next turn
+            // with the post-compaction prompt.
+            let _ = publish_visible_summary(writer, events, session_id, &summary, false).await;
         }
     }
+}
+
+fn watch_prompt_cache(
+    events: &crate::BridgeEventTx,
+    session_id: &str,
+    cause: crate::CacheDisruption,
+) {
+    let _ = events.send(BridgeEvent::PromptCacheWatch {
+        session_id: session_id.to_owned(),
+        cause,
+    });
 }
 
 async fn publish_visible_summary(
@@ -158,6 +180,7 @@ async fn publish_visible_summary(
     events: &crate::BridgeEventTx,
     session_id: &str,
     summary: &str,
+    watch_cache: bool,
 ) -> Result<(), String> {
     let payload = crate::compaction::display_summary_text(summary);
     let event_id = writer
@@ -172,6 +195,9 @@ async fn publish_visible_summary(
         thinking: String::new(),
         parent_call_id: None,
     };
+    if watch_cache {
+        watch_prompt_cache(events, session_id, crate::CacheDisruption::Compaction);
+    }
     let _ = events.send(BridgeEvent::SummaryShown {
         session_id: session_id.to_owned(),
         entry,
@@ -616,7 +642,7 @@ async fn run_chat_turn_on(
     };
     let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
     if let Some(summary) = compacted.summary.as_deref() {
-        let _ = publish_visible_summary(&writer, events, &session_id, summary).await;
+        let _ = publish_visible_summary(&writer, events, &session_id, summary, true).await;
     }
     let history = compacted.messages;
 
@@ -636,6 +662,7 @@ async fn run_chat_turn_on(
     let compact_head = head_stamp_text.clone();
     let deferred = DeferredSummaries::default();
     let hook_deferred = deferred.clone();
+    let hook_bus = agent_tx.clone();
     let hooks = HookRunner::default().with_before_request(move |mut request| {
         let home = compact_home.clone();
         let wire = compact_wire.clone();
@@ -644,6 +671,7 @@ async fn run_chat_turn_on(
         let branch_id = compact_branch.clone();
         let head = compact_head.clone();
         let deferred = hook_deferred.clone();
+        let bus = hook_bus.clone();
         async move {
             let scope = crate::compaction::CompactScope {
                 home: &home,
@@ -662,7 +690,13 @@ async fn run_chat_turn_on(
                 crate::compaction::compact_history(&scope, request.messages, false).await;
             // Stash only. A ledger append here sits between this turn's
             // tool calls and their results.
-            deferred.stash(compacted.summary).await;
+            if deferred.stash(compacted.summary).await {
+                // Bus order: the previous response is already queued, and
+                // this request's deltas come after. The pump turns this
+                // into PromptCacheWatch, so the warning attaches to the
+                // prompt that actually lost the prefix.
+                let _ = bus.send(mycode_core::events::AgentEvent::CacheDisrupted);
+            }
             request.messages = compacted.messages;
             request
         }
@@ -890,6 +924,13 @@ async fn run_chat_turn_on(
                                     head: writer.head().await,
                                     entry,
                                 });
+                                // The steer is already in the next request.
+                                // Arm before that request's usage snapshot.
+                                watch_prompt_cache(
+                                    &pump_events,
+                                    &pump_session_id,
+                                    crate::CacheDisruption::Steer,
+                                );
                             }
                             Err(error) => {
                                 emit_chat_failed(
@@ -965,6 +1006,13 @@ async fn run_chat_turn_on(
                             return;
                         }
                     }
+                }
+                mycode_core::events::AgentEvent::CacheDisrupted => {
+                    watch_prompt_cache(
+                        &pump_events,
+                        &pump_session_id,
+                        crate::CacheDisruption::Compaction,
+                    );
                 }
                 mycode_core::events::AgentEvent::TurnStarted => {}
                 mycode_core::events::AgentEvent::TurnEnded(outcome) => {
@@ -1776,6 +1824,22 @@ mod tests {
             .find(&format!("- {}", root.join("b").display()))
             .unwrap();
         assert!(a < b);
+    }
+
+    #[tokio::test]
+    async fn mid_turn_stash_defers_the_card_and_the_pump_watch_is_compaction() {
+        let deferred = super::DeferredSummaries::default();
+        assert!(!deferred.stash(None).await);
+        assert!(deferred.stash(Some("goals and files".to_owned())).await);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        super::watch_prompt_cache(&tx, "ses-1", crate::CacheDisruption::Compaction);
+        match rx.try_recv().expect("watch") {
+            crate::BridgeEvent::PromptCacheWatch { session_id, cause } => {
+                assert_eq!(session_id, "ses-1");
+                assert_eq!(cause, crate::CacheDisruption::Compaction);
+            }
+            other => panic!("expected a cache watch, got {other:?}"),
+        }
     }
 
     #[tokio::test]
