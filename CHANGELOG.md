@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Details 的实时 / 上一轮用量显示本轮缓存命中率。压缩或追加引导之后，如果下一次请求的命中率大幅下跌，Details 会留下警告并弹出提示。
+
 ### Changed
 
 - pull request 的 CI 改为 Linux 上的 `cargo test --workspace` 与 `cargo clippy --workspace --all-targets -- -D warnings`，不再为 PR 打四个平台的 fat LTO 发布包。发布构建仍只在推到 `main` 时跑，并且要等同一份检查通过才打标签。

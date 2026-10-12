@@ -210,16 +210,10 @@ fn render_toasts(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEle
         .items_end()
         .gap_2()
         .children(toasts.iter().map(|toast| {
-            let error = toast.kind == ToastKind::Error;
-            let fill = if error {
-                theme.danger.opacity(0.92)
-            } else {
-                skin::toast_fill(theme)
-            };
-            let ink = if error {
-                theme.danger_foreground
-            } else {
-                theme.foreground
+            let (fill, ink) = match toast.kind {
+                ToastKind::Error => (theme.danger.opacity(0.92), theme.danger_foreground),
+                ToastKind::Warning => (theme.warning.opacity(0.92), theme.warning_foreground),
+                ToastKind::Info => (skin::toast_fill(theme), theme.foreground),
             };
             div()
                 .id(format!("toast-{}", toast.id))

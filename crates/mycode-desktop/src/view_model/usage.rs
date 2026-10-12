@@ -121,6 +121,108 @@ pub(crate) fn cache_percent(cache: u64, input: u64) -> Option<u64> {
     (base > 0).then_some((cache.min(base) * 100) / base)
 }
 
+/// Lowest hit percent treated as a warm prompt cache.
+const WARM_CACHE_HIT: u64 = 50;
+/// Point drop required, along with a halving, before a dip is a collapse.
+const CACHE_COLLAPSE_DROP: u64 = 30;
+
+/// Whole-percent cache hit for one turn's summed usage.
+///
+/// `None` when the provider reported no cache read. A zero read is stored
+/// as `None` on [`TurnStats::cache`], same as an omitted field, so a model
+/// that never reports cache does not show a fake `0%`.
+#[must_use]
+pub(crate) fn turn_cache_hit(turn: &TurnStats) -> Option<u64> {
+    cache_percent(turn.cache.unwrap_or(0), turn.input)
+}
+
+/// Why a prompt prefix was rewritten. `Both` is two rewrites before the
+/// next usage snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheBreak {
+    /// Compaction replaced the head of the prompt.
+    Compaction,
+    /// A steer was inserted into the running turn.
+    Steer,
+    /// Compaction and a steer both landed before the next prompt.
+    Both,
+}
+
+impl CacheBreak {
+    pub(crate) fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Compaction, Self::Compaction) => Self::Compaction,
+            (Self::Steer, Self::Steer) => Self::Steer,
+            _ => Self::Both,
+        }
+    }
+}
+
+/// Armed after compaction or a steer until the next prompt reports a size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CacheWatch {
+    pub cause: CacheBreak,
+    /// Hit percent of the prompt before the rewrite. `None` is cold.
+    pub before: Option<u64>,
+}
+
+/// Shown when the prompt after a rewrite misses a previously warm cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CacheAlert {
+    pub cause: CacheBreak,
+    /// Hit percent before the rewrite.
+    pub before: u64,
+    /// Hit percent of the prompt after the rewrite. `0` is a total miss.
+    pub after: u64,
+}
+
+/// True when a warm cache hit fell far enough to call it a collapse.
+///
+/// The earlier reading must be at least [`WARM_CACHE_HIT`]. The later one
+/// must be at most half of that and at least [`CACHE_COLLAPSE_DROP`] points
+/// lower. A missing later reading counts as 0%. A cold-to-colder change is
+/// not a collapse.
+#[must_use]
+pub(crate) fn cache_hit_collapsed(before: Option<u64>, after: Option<u64>) -> bool {
+    let Some(before) = before
+        .map(|hit| hit.min(100))
+        .filter(|hit| *hit >= WARM_CACHE_HIT)
+    else {
+        return false;
+    };
+    let after = after.unwrap_or(0).min(100);
+    after.saturating_mul(2) <= before && before.saturating_sub(after) >= CACHE_COLLAPSE_DROP
+}
+
+/// The warning can leave once a later prompt is warm again.
+#[must_use]
+pub(crate) fn cache_hit_recovered(after: Option<u64>) -> bool {
+    after.is_some_and(|hit| hit >= WARM_CACHE_HIT)
+}
+
+/// Sentence for the Details warning and the toast. Both languages stay
+/// next to each other; the numbers fill `{before}` and `{after}`.
+#[must_use]
+pub(crate) fn cache_alert_text(alert: &CacheAlert) -> String {
+    let template = match alert.cause {
+        CacheBreak::Compaction => crate::i18n::t(
+            "Cache hit fell from {before}% to {after}% after compaction.",
+            "压缩后缓存命中从 {before}% 降到 {after}%。",
+        ),
+        CacheBreak::Steer => crate::i18n::t(
+            "Cache hit fell from {before}% to {after}% after a steer.",
+            "追加引导后缓存命中从 {before}% 降到 {after}%。",
+        ),
+        CacheBreak::Both => crate::i18n::t(
+            "Cache hit fell from {before}% to {after}% after compaction and a steer.",
+            "压缩和追加引导后缓存命中从 {before}% 降到 {after}%。",
+        ),
+    };
+    template
+        .replace("{before}", &alert.before.to_string())
+        .replace("{after}", &alert.after.to_string())
+}
+
 /// Metrics for one turn's token accounting: `live_turn` while the turn runs,
 /// promoted to `last_turn` when it commits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,7 +241,11 @@ pub(crate) struct TurnStats {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_percent, context_meter_label, context_meter_parts, format_context_meter};
+    use super::{
+        CacheAlert, CacheBreak, TurnStats, cache_alert_text, cache_hit_collapsed,
+        cache_hit_recovered, cache_percent, context_meter_label, context_meter_parts,
+        format_context_meter, turn_cache_hit,
+    };
 
     #[test]
     fn context_meter_shows_cache_reads_and_hides_an_empty_session() {
@@ -177,5 +283,85 @@ mod tests {
         );
         assert_eq!(cache_percent(11_800, 545), Some(95));
         assert_eq!(cache_percent(100, 400), Some(25));
+    }
+
+    #[test]
+    fn a_turn_cache_hit_uses_the_summed_tokens() {
+        let openai = TurnStats {
+            model: "m".to_owned(),
+            input: 3_000,
+            output: 40,
+            cache: Some(900),
+            elapsed_ms: 1,
+        };
+        assert_eq!(turn_cache_hit(&openai), Some(30));
+        // Anthropic bills cache reads outside input. The share is against
+        // the sum, same as one prompt.
+        let anthropic = TurnStats {
+            model: "m".to_owned(),
+            input: 150,
+            output: 40,
+            cache: Some(1_300),
+            elapsed_ms: 1,
+        };
+        assert_eq!(turn_cache_hit(&anthropic), Some(89));
+        let uncached = TurnStats {
+            cache: None,
+            input: 3_000,
+            ..openai
+        };
+        assert_eq!(turn_cache_hit(&uncached), None);
+    }
+
+    #[test]
+    fn cache_collapse_requires_a_warm_prompt_and_a_sharp_drop() {
+        assert!(cache_hit_collapsed(Some(92), Some(8)));
+        assert!(cache_hit_collapsed(Some(92), None));
+        assert!(cache_hit_collapsed(Some(80), Some(40)));
+        assert!(cache_hit_collapsed(Some(50), Some(20)));
+        assert!(!cache_hit_collapsed(Some(80), Some(50)));
+        assert!(!cache_hit_collapsed(Some(50), Some(25)));
+        assert!(!cache_hit_collapsed(Some(49), Some(0)));
+        assert!(!cache_hit_collapsed(None, Some(0)));
+        assert!(!cache_hit_collapsed(Some(100), Some(70)));
+        assert!(cache_hit_recovered(Some(50)));
+        assert!(cache_hit_recovered(Some(80)));
+        assert!(!cache_hit_recovered(Some(49)));
+        assert!(!cache_hit_recovered(None));
+    }
+
+    #[test]
+    fn cache_alert_names_the_cause_and_both_percents() {
+        let alert = CacheAlert {
+            cause: CacheBreak::Compaction,
+            before: 92,
+            after: 8,
+        };
+        assert_eq!(
+            cache_alert_text(&alert),
+            "Cache hit fell from 92% to 8% after compaction."
+        );
+        assert_eq!(
+            cache_alert_text(&CacheAlert {
+                cause: CacheBreak::Steer,
+                ..alert
+            }),
+            "Cache hit fell from 92% to 8% after a steer."
+        );
+        assert_eq!(
+            cache_alert_text(&CacheAlert {
+                cause: CacheBreak::Both,
+                ..alert
+            }),
+            "Cache hit fell from 92% to 8% after compaction and a steer."
+        );
+        assert_eq!(
+            CacheBreak::Compaction.merge(CacheBreak::Steer),
+            CacheBreak::Both
+        );
+        assert_eq!(
+            CacheBreak::Steer.merge(CacheBreak::Steer),
+            CacheBreak::Steer
+        );
     }
 }

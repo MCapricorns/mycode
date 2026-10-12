@@ -4,7 +4,9 @@ use gpui_kit::{Context, Window};
 
 use mycode_app::{BranchId, BridgeCommand, BridgeEvent, BridgeReply, SessionId};
 
-use crate::view_model::{CHAT_CANCELLED, DesktopAction, SettingsState, UpdateState};
+use crate::view_model::{
+    CHAT_CANCELLED, CacheBreak, DesktopAction, SettingsState, UpdateState, cache_alert_text,
+};
 use crate::workspace::Workspace;
 
 impl Workspace {
@@ -88,15 +90,39 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::UsageSnapshot {
-                    model,
-                    input,
-                    context,
-                    context_cache,
-                    output,
-                    cache,
-                    elapsed_ms,
+                let previous = self.vm.cache_alert;
+                self.apply_action(
+                    DesktopAction::UsageSnapshot {
+                        model,
+                        input,
+                        context,
+                        context_cache,
+                        output,
+                        cache,
+                        elapsed_ms,
+                    },
+                    cx,
+                );
+                if self.vm.cache_alert != previous
+                    && let Some(alert) = self.vm.cache_alert
+                {
+                    self.push_toast(
+                        cache_alert_text(&alert),
+                        crate::workspace::ToastKind::Warning,
+                        cx,
+                    );
                 }
+                return;
+            }
+            BridgeEvent::PromptCacheWatch { session_id, cause } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                let cause = match cause {
+                    mycode_app::CacheDisruption::Compaction => CacheBreak::Compaction,
+                    mycode_app::CacheDisruption::Steer => CacheBreak::Steer,
+                };
+                DesktopAction::CacheBreakArmed(cause)
             }
             BridgeEvent::AskRequested {
                 session_id,
