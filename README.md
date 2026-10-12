@@ -2,7 +2,7 @@
 
 本地优先的桌面编码代理。对话和工具都在你的电脑上；你自己带 API 密钥。
 
-![一次画完的鹈鹕 SVG：收起的工具摘要和图层对照表](docs/images/hero.png)
+![一次画完的鹈鹕 SVG：收起的工具摘要和图层对照表](docs/images/hero-v0.11.11.png)
 
 一次画完的鹈鹕 SVG。工具调用收成一行，回复里是图层对照表。输入框居中，旁边是缓存环。
 
@@ -48,7 +48,7 @@ cargo build --release -p mycode-desktop
 
 mycode is a local-first desktop coding agent. The conversation and tools stay on your machine. You bring the API keys.
 
-![A finished pelican SVG: collapsed tool summaries and a comparison table](docs/images/hero.png)
+![A finished pelican SVG: collapsed tool summaries and a comparison table](docs/images/hero-v0.11.11.png)
 
 A finished pelican SVG. Tool calls collapse to one line, and the reply includes a comparison table. The composer stays centered, with a cache ring.
 

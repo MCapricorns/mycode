@@ -132,6 +132,13 @@ struct ScrollHold {
     content_height: Pixels,
 }
 
+/// Scroll position captured before a theme change. Applied the next time the
+/// conversation column is painted, including when that paint is a later view.
+struct AppearanceScroll {
+    pinned: bool,
+    offset_y: Pixels,
+}
+
 pub struct Workspace {
     vm: WorkspaceState,
     /// Owned home the process opened with. Role discovery reads `agents/` here.
@@ -234,6 +241,8 @@ pub struct Workspace {
     /// children. gpui's offset grows more negative toward the bottom, so the
     /// correction subtracts the content-height growth.
     scroll_hold: Option<ScrollHold>,
+    /// Restored on the next conversation paint after a theme change.
+    appearance_scroll: Option<AppearanceScroll>,
     /// Latest git status for the open folder.
     git: crate::git_status::GitSnapshot,
     /// Platform watcher for the open folder. Dropping it stops refresh.
@@ -351,6 +360,7 @@ impl Workspace {
             project_picker: None,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
             scroll_hold: None,
+            appearance_scroll: None,
             git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
             git_watcher: None,
             git_generation: 0,
@@ -617,6 +627,15 @@ impl Workspace {
         self.scroll_hold
             .take()
             .map(|hold| (hold.offset_y, hold.content_height))
+    }
+
+    /// Theme-change scroll hold, consumed by the next conversation paint.
+    ///
+    /// The bool is whether the column was pinned to the tail.
+    pub(crate) fn take_appearance_scroll(&mut self) -> Option<(bool, Pixels)> {
+        self.appearance_scroll
+            .take()
+            .map(|hold| (hold.pinned, hold.offset_y))
     }
 
     /// True when the conversation column is within a few pixels of the bottom.
@@ -1080,6 +1099,7 @@ impl Workspace {
             .as_ref()
             .map(|settings| settings.palette.clone())
             .unwrap_or_else(|| "slate".to_owned());
+        self.capture_appearance_scroll();
         self.paint_appearance(theme_id, &palette, cx);
         self.apply_action(
             DesktopAction::SettingsThemeSelected(theme_id.to_owned()),
@@ -1417,6 +1437,13 @@ impl Workspace {
         let offset = self.conversation_scroll.offset().y;
         let max = self.conversation_scroll.max_offset().y;
         offset - max < px(24.)
+    }
+
+    fn capture_appearance_scroll(&mut self) {
+        self.appearance_scroll = Some(AppearanceScroll {
+            pinned: self.conversation_follows_tail(),
+            offset_y: self.conversation_scroll.offset().y,
+        });
     }
 
     fn capture_scroll_hold(&mut self) {

@@ -16,17 +16,30 @@ use gpui_kit::{
     LayoutId, ParentElement, Pixels, ScrollHandle, Window, point, px,
 };
 
+/// Scroll position captured before a theme change relayouts the transcript.
+pub(super) struct AppearanceHold {
+    /// The transcript was sitting on its tail, so the next layout stays there.
+    pub(super) pinned: bool,
+    /// Offset to restore when the transcript was not pinned.
+    pub(super) offset_y: Pixels,
+}
+
 pub(super) struct ScrollAnchor {
     handle: ScrollHandle,
     previous_offset_y: Pixels,
     previous_height: Pixels,
     active: bool,
+    appearance: Option<AppearanceHold>,
     slot: Rc<Cell<Option<LayoutId>>>,
     child: Option<AnyElement>,
 }
 
 impl ScrollAnchor {
-    pub(super) fn new(handle: ScrollHandle, anchor: Option<(Pixels, Pixels)>) -> Self {
+    pub(super) fn new(
+        handle: ScrollHandle,
+        anchor: Option<(Pixels, Pixels)>,
+        appearance: Option<AppearanceHold>,
+    ) -> Self {
         let (previous_offset_y, previous_height, active) = match anchor {
             Some((offset_y, height)) => (offset_y, height, true),
             None => (px(0.), px(0.), false),
@@ -36,6 +49,7 @@ impl ScrollAnchor {
             previous_offset_y,
             previous_height,
             active,
+            appearance,
             slot: Rc::new(Cell::new(None)),
             child: None,
         }
@@ -89,6 +103,21 @@ impl Element for ScrollAnchor {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if let Some(appearance) = self.appearance.take() {
+            let x = self.handle.offset().x;
+            if appearance.pinned {
+                // The scroller applies this during its own prepaint, using the
+                // content height from this frame. That is `-max`, which
+                // [`theme_scroll_y`] returns for a pinned tail.
+                self.handle.scroll_to_bottom();
+            } else {
+                // A positive offset is not a position in this scroller. The
+                // child clamps a too-negative offset to the new bottom, which
+                // is the same rule as [`theme_scroll_y`] once `max` is known.
+                let y = theme_scroll_y(false, appearance.offset_y, px(f32::MAX));
+                self.handle.set_offset(point(x, y));
+            }
+        }
         if self.active
             && let Some(layout_id) = self.slot.get()
         {
@@ -193,5 +222,36 @@ impl IntoElement for ContentProbe {
 impl ParentElement for ContentProbe {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.child = elements.into_iter().next();
+    }
+}
+
+/// Offset after a theme relayout.
+///
+/// A pinned tail moves to the new bottom. Any other offset is kept, then
+/// clamped when the content became shorter than that offset.
+pub(super) fn theme_scroll_y(pinned: bool, previous_offset_y: Pixels, max_after: Pixels) -> Pixels {
+    if pinned {
+        return -max_after;
+    }
+    if previous_offset_y < -max_after {
+        -max_after
+    } else if previous_offset_y > px(0.) {
+        px(0.)
+    } else {
+        previous_offset_y
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::theme_scroll_y;
+    use gpui_kit::px;
+
+    #[test]
+    fn theme_switch_pins_the_tail_and_keeps_a_mid_scroll() {
+        assert_eq!(theme_scroll_y(true, px(-800.), px(1600.)), px(-1600.));
+        assert_eq!(theme_scroll_y(false, px(-400.), px(1600.)), px(-400.));
+        assert_eq!(theme_scroll_y(false, px(-800.), px(400.)), px(-400.));
+        assert_eq!(theme_scroll_y(false, px(20.), px(400.)), px(0.));
     }
 }

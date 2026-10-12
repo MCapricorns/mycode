@@ -58,6 +58,7 @@ pub(super) struct DoneError {
 #[serde(tag = "type")]
 pub(super) enum HostFrame {
     #[serde(rename = "token")]
+    #[cfg_attr(not(unix), allow(dead_code))]
     Token { token: String },
     #[serde(rename = "boot")]
     Boot {

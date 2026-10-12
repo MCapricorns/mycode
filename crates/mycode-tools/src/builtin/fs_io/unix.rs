@@ -811,17 +811,25 @@ pub(super) fn sync_parent(dir: &File) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
     use std::ffi::OsStr;
+    #[cfg(target_os = "linux")]
     use std::fs;
+    #[cfg(target_os = "linux")]
     use std::io;
+    #[cfg(target_os = "linux")]
     use std::os::fd::AsFd;
+    #[cfg(target_os = "linux")]
     use std::path::{Path, PathBuf};
+    #[cfg(target_os = "linux")]
     use std::process::{Command, Output};
 
+    #[cfg(target_os = "linux")]
     use super::{
-        ChildOpen, FileKind, MountToken, create_mode_probe, create_temp, ensure_directory,
-        open_allowed_root, open_child, same_mount,
+        ChildOpen, FileKind, create_mode_probe, create_temp, ensure_directory, open_allowed_root,
+        open_child,
     };
+    use super::{MountToken, same_mount};
 
     fn token(device: u64, mount_id: Option<u64>) -> MountToken {
         MountToken { device, mount_id }

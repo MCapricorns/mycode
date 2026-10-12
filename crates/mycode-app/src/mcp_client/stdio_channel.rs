@@ -4,13 +4,13 @@
 //! resolve script launchers such as `npx`/`uvx` (installed as `npx.cmd`,
 //! which `CreateProcess` never finds because it only appends `.exe`) and
 //! spawn without a console window (the desktop binary runs windowed, so a
-//! child console would flash on every connect). Both live in
-//! [`configure_command`].
+//! child console would flash on every connect). Resolution lives in
+//! [`resolve_program`]. The process is created suspended, placed in a
+//! kill-on-close Job, and resumed from `PROCESS_INFORMATION.hThread`.
 
 use std::collections::VecDeque;
-#[cfg(windows)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -20,8 +20,17 @@ use std::pin::Pin;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(not(windows))]
 use tokio::process::Child;
 use tokio::sync::Mutex;
+
+#[cfg(windows)]
+use mycode_tools::WindowsStdioProcess;
+
+#[cfg(windows)]
+type HostChild = WindowsStdioProcess;
+#[cfg(not(windows))]
+type HostChild = Child;
 
 use super::{JsonRpcChannel, MAX_MESSAGE_BYTES, McpError};
 
@@ -38,7 +47,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_millis(1500);
 /// [`MAX_MESSAGE_BYTES`] per line and the stderr tail is retained for error
 /// messages.
 pub struct StdioChannel {
-    child: Mutex<Child>,
+    child: Mutex<HostChild>,
     stdin: Mutex<Option<tokio::process::ChildStdin>>,
     stdout: Mutex<BufReader<tokio::process::ChildStdout>>,
     stderr_tail: Arc<StdMutex<VecDeque<String>>>,
@@ -46,9 +55,6 @@ pub struct StdioChannel {
     /// Process-group id captured at spawn. Shutdown signals the group.
     #[cfg(unix)]
     group_id: Option<i32>,
-    /// Kill-on-close job that owns the child and its descendants.
-    #[cfg(windows)]
-    job: Option<WindowsJob>,
 }
 
 impl StdioChannel {
@@ -74,23 +80,9 @@ impl StdioChannel {
                 "command not found on PATH: {command} (install it or use an absolute path)"
             ))
         })?;
-        let mut builder = tokio::process::Command::new(&program);
-        builder
-            .args(args)
-            .env_clear()
-            .envs(stdio_child_env(env))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        configure_command(&mut builder);
-        let mut child = builder.spawn().map_err(|error| {
-            McpError::transport(format!("failed to start {}: {error}", program.display()))
-        })?;
+        let mut child = launch_stdio_process(&program, args, env)?;
         #[cfg(unix)]
         let group_id = child.id().map(|pid| pid as i32);
-        #[cfg(windows)]
-        let job = assign_windows_job(&mut child)?;
         let stdin = child
             .stdin
             .take()
@@ -126,8 +118,6 @@ impl StdioChannel {
             timeout,
             #[cfg(unix)]
             group_id,
-            #[cfg(windows)]
-            job: Some(job),
         })
     }
 
@@ -150,8 +140,8 @@ impl StdioChannel {
             }
         }
         #[cfg(windows)]
-        if let Some(job) = &self.job {
-            let _ = job.terminate();
+        {
+            let _ = child.terminate_job();
         }
         let _ = child.kill().await;
     }
@@ -439,9 +429,10 @@ fn filter_stdio_env(
 /// on the core bridge thread, which stays up for the life of the process.
 /// The signal is not inherited across fork, so grandchildren are not covered.
 ///
-/// Windows creates the process suspended and without a console window.
-/// [`assign_windows_job`] attaches the kill-on-close Job before resume, so a
-/// `.cmd` launcher cannot start a grandchild outside the Job.
+/// Windows does not use this function. [`launch_stdio_process`] creates the
+/// process suspended, assigns a kill-on-close Job, and resumes
+/// `PROCESS_INFORMATION.hThread`.
+#[cfg(not(windows))]
 fn configure_command(builder: &mut tokio::process::Command) {
     #[cfg(unix)]
     {
@@ -475,111 +466,43 @@ fn configure_command(builder: &mut tokio::process::Command) {
             });
         }
     }
+}
+
+fn launch_stdio_process(
+    program: &Path,
+    args: &[String],
+    env: &[(String, String)],
+) -> Result<HostChild, McpError> {
     #[cfg(windows)]
     {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_SUSPENDED: u32 = 0x0000_0004;
-        builder.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+        use std::ffi::OsString;
+        let child_env: Vec<(OsString, OsString)> = stdio_child_env(env)
+            .into_iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect();
+        // `.cmd` launchers spawn the real server as a grandchild. The Job is
+        // assigned while the process is still suspended, then the main thread
+        // from CreateProcessW is resumed.
+        WindowsStdioProcess::spawn(program, args, None, &child_env, true, true).map_err(|error| {
+            McpError::transport(format!("failed to start {}: {error}", program.display()))
+        })
     }
-}
-
-#[cfg(windows)]
-struct WindowsJob {
-    handle: std::os::windows::io::OwnedHandle,
-}
-
-#[cfg(windows)]
-impl WindowsJob {
-    fn new() -> std::io::Result<Self> {
-        use std::mem::size_of;
-        use std::os::windows::io::{FromRawHandle, OwnedHandle};
-        use windows_sys::Win32::System::JobObjects::{
-            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
-        };
-
-        // SAFETY: both pointers are null, requesting an unnamed job. A
-        // non-null result is uniquely owned.
-        let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if raw_job.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: CreateJobObjectW returned a fresh owned HANDLE.
-        let handle = unsafe { OwnedHandle::from_raw_handle(raw_job) };
-        let job = Self { handle };
-        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let info_len = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
-            .expect("job limit structure fits u32");
-        // SAFETY: the job handle is live and `info` matches the documented type.
-        let configured = unsafe {
-            SetInformationJobObject(
-                job.raw(),
-                JobObjectExtendedLimitInformation,
-                std::ptr::from_ref(&info).cast(),
-                info_len,
-            )
-        };
-        if configured == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(job)
+    #[cfg(not(windows))]
+    {
+        let mut builder = tokio::process::Command::new(program);
+        builder
+            .args(args)
+            .env_clear()
+            .envs(stdio_child_env(env))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        configure_command(&mut builder);
+        builder.spawn().map_err(|error| {
+            McpError::transport(format!("failed to start {}: {error}", program.display()))
+        })
     }
-
-    fn assign(&self, process: windows_sys::Win32::Foundation::HANDLE) -> std::io::Result<()> {
-        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-        // SAFETY: both handles are live for this call.
-        if unsafe { AssignProcessToJobObject(self.raw(), process) } != 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
-    }
-
-    fn terminate(&self) -> std::io::Result<()> {
-        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
-        // SAFETY: the owned job handle remains live for this call.
-        if unsafe { TerminateJobObject(self.raw(), 1) } != 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
-    }
-
-    fn raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
-        use std::os::windows::io::AsRawHandle;
-        self.handle.as_raw_handle()
-    }
-}
-
-#[cfg(windows)]
-fn assign_windows_job(child: &mut Child) -> Result<WindowsJob, McpError> {
-    let job = WindowsJob::new().map_err(|error| {
-        McpError::transport(format!("failed to create MCP job object: {error}"))
-    })?;
-    // tokio::process::Child does not implement AsRawHandle. `raw_handle`
-    // is None only after the child has already exited.
-    let Some(handle) = child.raw_handle() else {
-        let _ = child.start_kill();
-        return Err(McpError::transport(
-            "MCP process exited before it could be assigned to a job".to_owned(),
-        ));
-    };
-    if let Err(error) = job.assign(handle) {
-        let _ = child.start_kill();
-        return Err(McpError::transport(format!(
-            "failed to assign MCP process to a job: {error}"
-        )));
-    }
-    if let Err(error) = mycode_tools::resume_suspended_primary_thread(handle) {
-        let _ = job.terminate();
-        let _ = child.start_kill();
-        return Err(McpError::transport(format!(
-            "failed to resume MCP process after job assignment: {error}"
-        )));
-    }
-    Ok(job)
 }
 
 #[cfg(test)]

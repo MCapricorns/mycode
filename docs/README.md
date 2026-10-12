@@ -15,4 +15,4 @@
 | [mycode-app](app.md) | 无界面的应用核：桥接、回合装配、压缩、用量、子代理、MCP、OAuth、网页、更新 |
 | [mycode-desktop](desktop.md) | GPUI 窗口：纯状态机、渲染、和工作区 |
 
-`mycode-core`、`mycode-tools`、`mycode-agent` 的模块注释直接指向对应文档。改行为时先改代码，再改这里。
+`mycode-core`、`mycode-tools`、`mycode-agent` 的模块注释直接指向对应文档。改行为时先改代码，再改这里。界面截图在 `docs/images/`；以后更新必须换新的带版本号的文件名，并改掉文档里的引用，不要覆盖旧文件。

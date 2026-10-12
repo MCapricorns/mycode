@@ -34,12 +34,21 @@ use mycode_core::message::ContentBlock;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpListener;
+#[cfg(not(windows))]
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
 use super::protocol::{ChildFrame, HostFrame, decode_child, encode_frame};
+#[cfg(windows)]
+use crate::builtin::process::WindowsStdioProcess;
+#[cfg(not(windows))]
 use crate::builtin::process::{ProcessTree, enroll_spawned};
+
+#[cfg(windows)]
+type HostChild = WindowsStdioProcess;
+#[cfg(not(windows))]
+type HostChild = Child;
 use crate::builtin::python::{PythonInterpreter, PythonStatus, python_status};
 use crate::ctx::ToolCtx;
 use crate::registry::ToolCatalog;
@@ -119,25 +128,33 @@ struct FinishedCall {
 }
 
 struct RunningChild {
-    child: Child,
+    child: HostChild,
+    #[cfg(not(windows))]
     tree: Option<ProcessTree>,
 }
 
 impl RunningChild {
     fn kill_tree(&mut self) {
-        if let Some(tree) = &self.tree {
-            let _ = tree.terminate(Some(&self.child));
-        } else if let Some(pid) = self.child.id() {
-            // Platforms without enrollment still signal the process group
-            // created by `process_group(0)`.
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
+        #[cfg(not(windows))]
+        {
+            if let Some(tree) = &self.tree {
+                let _ = tree.terminate(Some(&self.child));
+            } else if let Some(pid) = self.child.id() {
+                // Platforms without enrollment still signal the process group
+                // created by `process_group(0)`.
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = pid;
+                }
             }
-            #[cfg(not(unix))]
-            {
-                let _ = pid;
-            }
+        }
+        #[cfg(windows)]
+        {
+            let _ = self.child.terminate_job();
         }
         let _ = self.child.start_kill();
     }
@@ -475,27 +492,17 @@ async fn spawn_warm(
     };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let tree = match enroll_spawned(&child) {
-        Ok(tree) => Some(tree),
-        // The process group is already set. Enrollment only adds the
-        // descendant walk; `kill_tree` still signals the group by pid.
+    // Unix enrollment is a process group. Windows already assigned the Job
+    // and resumed `PROCESS_INFORMATION.hThread` inside `spawn_python`.
+    // The process group is already set. Enrollment only adds the
+    // descendant walk; `kill_tree` still signals the group by pid.
+    #[cfg(not(windows))]
+    let tree = enroll_spawned(&child).ok();
+    let mut running = RunningChild {
+        child,
         #[cfg(not(windows))]
-        Err(_) => None,
-        // A suspended interpreter that is not in the Job can outlive this
-        // process, and `py.exe` can still spawn `python.exe` outside it.
-        // Kill the suspended process and fail the call.
-        #[cfg(windows)]
-        Err(error) => {
-            let _ = child.start_kill();
-            return Err(stopped(
-                "exception",
-                &format!("python job enrollment failed: {error}"),
-                String::new(),
-                &[],
-            ));
-        }
+        tree,
     };
-    let mut running = RunningChild { child, tree };
     let raw_out = Arc::new(Mutex::new(String::new()));
     let raw_err = Arc::new(Mutex::new(String::new()));
     if let Some(pipe) = stdout {
@@ -1331,6 +1338,78 @@ async fn expect_ready(
     }
 }
 
+#[cfg(windows)]
+fn spawn_python(
+    interpreter: &PythonInterpreter,
+    restricted: bool,
+    bootstrap: &std::path::Path,
+    control: &ControlEnv,
+    ctx: &ToolCtx,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+    sandbox: Option<&crate::builtin::sandbox::OsSandboxPolicy>,
+) -> Result<HostChild, String> {
+    use std::ffi::OsString;
+
+    let (program, args) = if let Some(policy) = sandbox {
+        let mut user_args = interpreter.prefix.clone();
+        if restricted {
+            user_args.push("-I".to_owned());
+        }
+        user_args.push("-u".to_owned());
+        user_args.push(bootstrap.display().to_string());
+        let interpreter_program = interpreter.program.to_str().ok_or_else(|| {
+            "os sandbox: python program path is not Unicode. This setting does not fall back to unsandboxed execution.".to_owned()
+        })?;
+        let planned = crate::builtin::sandbox::plan(policy, interpreter_program, &user_args)
+            .map_err(|error| error.to_string())?;
+        (PathBuf::from(planned.helper_program), planned.args)
+    } else {
+        let mut args = interpreter.prefix.clone();
+        if restricted {
+            args.push("-I".to_owned());
+        }
+        args.push("-u".to_owned());
+        let script = bootstrap
+            .to_str()
+            .ok_or_else(|| format!("bootstrap path is not Unicode: {}", bootstrap.display()))?;
+        args.push(script.to_owned());
+        (interpreter.program.clone(), args)
+    };
+    // py.exe is only a launcher; python.exe is its child. CreateProcessW
+    // starts the process suspended, assigns the kill-on-close Job, then
+    // resumes PROCESS_INFORMATION.hThread. The launcher cannot start an
+    // interpreter outside the Job, and neither opens a console window.
+    let mut child_env = env.to_vec();
+    if let Some(fd) = control.fd {
+        child_env.push((
+            OsString::from("MYCODE_PTC_FD"),
+            OsString::from(fd.to_string()),
+        ));
+    }
+    if let Some(port) = control.port {
+        child_env.push((
+            OsString::from("MYCODE_PTC_PORT"),
+            OsString::from(port.to_string()),
+        ));
+    }
+    if let Some(path) = &control.token_file {
+        child_env.push((
+            OsString::from("MYCODE_PTC_TOKEN_FILE"),
+            path.as_os_str().to_os_string(),
+        ));
+    }
+    WindowsStdioProcess::spawn(
+        &program,
+        &args,
+        Some(ctx.cwd.as_path()),
+        &child_env,
+        false,
+        true,
+    )
+    .map_err(|error| format!("failed to start {}: {error}", interpreter.program.display()))
+}
+
+#[cfg(not(windows))]
 fn spawn_python(
     interpreter: &PythonInterpreter,
     restricted: bool,
@@ -1339,7 +1418,7 @@ fn spawn_python(
     ctx: &ToolCtx,
     env: &[(std::ffi::OsString, std::ffi::OsString)],
     sandbox: Option<&crate::builtin::sandbox::OsSandboxPolicy>,
-) -> Result<Child, String> {
+) -> Result<HostChild, String> {
     let mut command = if let Some(policy) = sandbox {
         let mut user_args = interpreter.prefix.clone();
         if restricted {
@@ -1386,17 +1465,6 @@ fn spawn_python(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
     command.kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        // py.exe is only a launcher; the real python.exe is its child. The
-        // process stays suspended until `enroll_spawned` has assigned the
-        // kill-on-close Job and resumed the primary thread, so the launcher
-        // cannot start an interpreter outside the Job. Both inherit the
-        // flags, so neither opens a console window.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_SUSPENDED: u32 = 0x0000_0004;
-        command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
-    }
     #[cfg(unix)]
     {
         command.process_group(0);
@@ -1472,7 +1540,10 @@ fn install_bootstrap() -> Result<PathBuf, String> {
         std::process::id(),
         uuid::Uuid::new_v4().simple()
     ));
+    #[cfg(unix)]
     let mut builder = std::fs::DirBuilder::new();
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -1631,6 +1702,7 @@ mod channel_tests {
         use tokio::net::TcpStream;
 
         let control = super::tcp_control().await.expect("bind");
+        #[cfg(unix)]
         let super::PendingControl::Tcp {
             listener,
             port,
@@ -1640,6 +1712,13 @@ mod channel_tests {
         else {
             panic!("tcp control did not bind a loopback listener");
         };
+        #[cfg(not(unix))]
+        let super::PendingControl::Tcp {
+            listener,
+            port,
+            token,
+            token_file: _token_file,
+        } = control;
         let token_for_child = token.clone();
         let ctx = ToolCtx::new(std::env::temp_dir());
         let deadline = Instant::now() + Duration::from_secs(3);

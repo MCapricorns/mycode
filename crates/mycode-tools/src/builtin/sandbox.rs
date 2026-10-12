@@ -202,6 +202,7 @@ pub(crate) fn plan(
 
 #[derive(Clone, Copy)]
 enum HelperKind {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Bubblewrap,
     #[cfg(target_os = "macos")]
     Seatbelt,
@@ -504,6 +505,7 @@ fn sandbox_error(detail: &str) -> ToolError {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn scratch(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "mycode-sandbox-{label}-{}-{}",
@@ -514,14 +516,17 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     struct Scratch(PathBuf);
 
+    #[cfg(unix)]
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
+    #[cfg(unix)]
     fn has_mount(args: &[String], flag: &str, path: &str) -> bool {
         args.windows(3)
             .any(|window| window[0] == flag && window[1] == path && window[2] == path)

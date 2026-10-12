@@ -74,15 +74,17 @@ BridgeCommand → CoreBridge
 
 ## 界面截图
 
-![三个 scout 查完 Tokio、async-std 和 smol，回复里是对照表](images/subagents.png)
+换截图时用新的带版本号的文件名，不要覆盖 `docs/images/` 里已有的 png。旧地址会被缓存，继续指向旧图。
+
+![三个 scout 查完 Tokio、async-std 和 smol，回复里是对照表](images/subagents-v0.11.11.png)
 
 三个只读 scout 查了 Rust 异步运行时。回复把对照表铺开。
 
-![思考菜单打开，锚在思考芯片上方，当前档是 Max](images/thinking-menu.png)
+![思考菜单打开，锚在思考芯片上方，当前档是 Max](images/thinking-menu-v0.11.11.png)
 
 思考菜单贴在思考芯片上方，底不透明，当前档是 Max。
 
-![设置的通用页：语言、深浅色、色板、字体，以及已打开的操作系统沙箱](images/settings.png)
+![设置的通用页：语言、深浅色、色板、字体，以及已打开的操作系统沙箱](images/settings-v0.11.11.png)
 
 设置的通用页：语言、深色或浅色、六块色板和对话预览、界面字体和字号。下面是工具卡片，操作系统沙箱开关是开的。
 

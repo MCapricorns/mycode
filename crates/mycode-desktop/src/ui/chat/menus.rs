@@ -61,13 +61,29 @@ pub(super) enum MenuAnchor {
     ChipEnd,
 }
 
+/// Diameter of the jump-to-latest button, in pixels.
+pub(super) const JUMP_LATEST_BUTTON_PX: f32 = 30.;
+
+/// Padding under the jump-to-latest row, in pixels.
+pub(super) const JUMP_LATEST_ROW_PAD: f32 = 4.;
+
+/// Gap between the jump-to-latest button and a menu above it, in pixels.
+const JUMP_LATEST_GAP: f32 = 8.;
+
+/// Clearance that already keeps a menu above the composer card.
+const COMPOSER_CARD_CLEARANCE: f32 = 88.;
+
 /// Pixels from the bottom of the Thinking chip to the bottom of the menu.
 ///
 /// The chip sits inside the composer card (input row, gap, and padding above
-/// it). This clearance puts the menu fully above that card.
+/// it). The base clearance puts the menu fully above that card. The jump
+/// button is the next row up, so the menu also clears that button. The menu
+/// paints with the composer, after the jump row; the extra gap is what keeps
+/// their pixels from stacking.
 /// Must stay at or above 84 so the docked menu clears the composer card
 /// instead of sitting on its top edge.
-pub(super) const THINKING_MENU_CLEARANCE: f32 = 88.;
+pub(super) const THINKING_MENU_CLEARANCE: f32 =
+    COMPOSER_CARD_CLEARANCE + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + JUMP_LATEST_GAP;
 
 /// The thinking menu opens above its chip.
 #[must_use]
@@ -324,12 +340,24 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        MenuAnchor, MenuPlacement, model_menu_anchor, thinking_menu_anchor, thinking_menu_placement,
+        JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MenuAnchor, MenuPlacement,
+        THINKING_MENU_CLEARANCE, model_menu_anchor, thinking_menu_anchor, thinking_menu_placement,
     };
 
     #[test]
     fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
         assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
+    }
+
+    #[test]
+    fn thinking_menu_clears_the_jump_button() {
+        const {
+            assert!(
+                THINKING_MENU_CLEARANCE >= 88. + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + 8.
+            );
+        }
+        assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
+        assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);
     }
 
     #[test]
