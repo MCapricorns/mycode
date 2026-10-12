@@ -335,8 +335,9 @@ async fn run_session(
     out: &ToolStream,
 ) -> ProgramOutcome {
     // Sandbox binds are fixed when the process starts. Reusing that process
-    // would apply the first call's write set to a later cwd, so an opt-in
-    // sandbox always cold-starts. The warm pool stays for the default path.
+    // would apply the first call's write set to a later cwd, so a call with
+    // the OS sandbox on always cold-starts. The warm pool stays when the
+    // flag is off, including the Windows product path.
     let key = if ctx.os_sandbox {
         None
     } else {

@@ -273,6 +273,9 @@ pub enum DesktopAction {
     SettingsFontSizeSelected(String),
     /// The user picked a UI font family. Empty or `system` is the OS UI font.
     SettingsFontFamilySelected(String),
+    /// The user toggled `tools.osSandbox`. Ignored by the Windows product path,
+    /// which shows that the sandbox is not supported yet instead of a switch.
+    SettingsOsSandboxToggled(bool),
     /// Opens, closes, or pins the right inspector. Layout only.
     InspectorChanged {
         /// Whether the inspector is visible.

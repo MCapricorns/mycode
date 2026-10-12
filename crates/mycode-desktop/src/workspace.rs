@@ -1279,6 +1279,20 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Persists the OS sandbox preference. Windows does not show this switch.
+    pub(crate) fn on_toggle_os_sandbox(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.tools.os_sandbox == enabled)
+        {
+            return;
+        }
+        self.apply_action(DesktopAction::SettingsOsSandboxToggled(enabled), cx);
+        self.on_save_settings(cx);
+    }
+
     /// Applies and persists the UI language. The whole window re-renders on
     /// the next frame, so no theme-style refresh is needed.
     pub(crate) fn on_select_language(&mut self, language: &str, cx: &mut Context<Self>) {

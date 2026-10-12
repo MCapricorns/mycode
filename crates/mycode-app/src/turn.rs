@@ -333,6 +333,22 @@ pub(crate) fn os_user_home() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// Appends the OS-sandbox sentence for the product path.
+///
+/// Linux and macOS get the helper note when the setting is on. Windows gets
+/// the "not supported yet" note and does not claim the helper is wrapping
+/// the call. An explicit opt-out on a supported platform adds nothing.
+pub(crate) fn push_os_sandbox_prompt(prompt: &mut String, tools: &mycode_config::ToolsSettings) {
+    let Some(note) = mycode_tools::os_sandbox_status_note(
+        tools.effective_os_sandbox(),
+        mycode_config::ToolsSettings::os_sandbox_platform_supported(),
+    ) else {
+        return;
+    };
+    prompt.push_str("\n\n");
+    prompt.push_str(note);
+}
+
 /// Compact environment facts for the system prompt: OS, arch, the session
 /// cwd, and the one shell tool `script` mode resolves to right now. Shared
 /// by the main session and subagent prompts so the model never guesses the
@@ -620,10 +636,7 @@ async fn run_chat_turn_on(
         &directive,
         user_home.as_deref(),
     );
-    if settings.tools.os_sandbox {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(mycode_tools::os_sandbox_prompt_note());
-    }
+    push_os_sandbox_prompt(&mut system_prompt, &settings.tools);
     let overhead_tokens = crate::compaction::estimate_prefix_tokens(
         std::slice::from_ref(&system_prompt),
         &registry.model_specs(),
@@ -1169,7 +1182,7 @@ async fn run_chat_turn_on(
         .with_read_roots(read_roots)
         .with_steer(Some(steer))
         .with_ptc_session(session_id.clone())
-        .with_os_sandbox(settings.tools.os_sandbox);
+        .with_os_sandbox(settings.tools.effective_os_sandbox());
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
     // Drain the pump before returning. An agent error already became
@@ -1545,6 +1558,10 @@ mod tests {
     async fn hook_compaction_waits_until_the_turn_commits() {
         let (root, home) = scratch();
         let mut settings = AppSettings::default();
+        // Compaction here is sized off a successful read. The product default
+        // turns the OS helper on; a missing bubblewrap fails that read closed
+        // and the short error never crosses the threshold.
+        settings.tools.os_sandbox = false;
         settings.providers.push(ProviderSettings {
             id: "local".to_owned(),
             kind: "openai-completions".to_owned(),
@@ -1797,7 +1814,37 @@ mod tests {
         );
         assert!(
             !prompt.contains("os_sandbox: on"),
-            "the helper note is opt-in and stays off the default prompt:\n{prompt}"
+            "the helper note is appended from settings, not baked into the environment block:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn os_sandbox_prompt_follows_the_product_path() {
+        let mut prompt = String::new();
+        super::push_os_sandbox_prompt(&mut prompt, &mycode_config::ToolsSettings::default());
+        if mycode_config::ToolsSettings::os_sandbox_platform_supported() {
+            assert!(prompt.contains("os_sandbox: on"), "{prompt}");
+            assert!(!prompt.contains("not supported yet"), "{prompt}");
+        } else {
+            assert!(prompt.contains("not supported yet"), "{prompt}");
+            assert!(!prompt.contains("os_sandbox: on"), "{prompt}");
+        }
+        let opted_out = mycode_config::ToolsSettings {
+            os_sandbox: false,
+            ..mycode_config::ToolsSettings::default()
+        };
+        let mut quiet = String::new();
+        super::push_os_sandbox_prompt(&mut quiet, &opted_out);
+        if mycode_config::ToolsSettings::os_sandbox_platform_supported() {
+            assert!(quiet.is_empty(), "{quiet}");
+        } else {
+            assert!(quiet.contains("not supported yet"), "{quiet}");
+            assert!(!quiet.contains("os_sandbox: on"), "{quiet}");
+        }
+        assert!(!opted_out.effective_os_sandbox());
+        assert_eq!(
+            mycode_config::ToolsSettings::default().effective_os_sandbox(),
+            mycode_config::ToolsSettings::os_sandbox_platform_supported()
         );
     }
 

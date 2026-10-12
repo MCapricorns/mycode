@@ -547,6 +547,15 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 mark_settings_dirty(settings);
             }
         }
+        DesktopAction::SettingsOsSandboxToggled(enabled) => {
+            edit_settings(state, |settings| {
+                if settings.tools.os_sandbox == enabled {
+                    return false;
+                }
+                settings.tools.os_sandbox = enabled;
+                true
+            });
+        }
         DesktopAction::InspectorChanged { open, pinned } => {
             state.inspector_open = open;
             state.inspector_pinned = pinned;
