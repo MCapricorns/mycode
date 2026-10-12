@@ -39,7 +39,10 @@ pub(super) fn settings_card(
                 .flex_col()
                 .justify_start()
                 .when(index > 0, |this| {
-                    this.mt_3().pt_3().border_t_1().border_color(theme.border)
+                    this.mt(crate::ui::skin::space(4))
+                        .pt(crate::ui::skin::space(4))
+                        .border_t_1()
+                        .border_color(theme.border)
                 })
                 .child(child)
         })
@@ -54,8 +57,8 @@ pub(super) fn settings_card(
         .flex()
         .flex_col()
         .justify_start()
-        .gap_3()
-        .p(px(20.))
+        .gap(crate::ui::skin::space(4))
+        .p(crate::ui::skin::space(6))
         .rounded(crate::ui::skin::radius_card())
         .border_1()
         .border_color(crate::ui::skin::glass_border(theme))
@@ -125,7 +128,7 @@ pub(super) fn settings_row(
                     this.child(
                         div()
                             .text_xs()
-                            .opacity(0.5)
+                            .opacity(0.88)
                             .whitespace_normal()
                             .child(description.to_owned()),
                     )
@@ -210,7 +213,7 @@ pub(super) fn row_header(title: &str, subtitle: String) -> gpui_kit::Div {
         .child(
             div()
                 .text_xs()
-                .opacity(0.6)
+                .opacity(0.88)
                 .whitespace_normal()
                 .child(subtitle),
         )
@@ -222,7 +225,7 @@ pub(super) fn labeled_field(label: &str, input: Entity<InputState>) -> impl Into
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_xs().opacity(0.6).child(label.to_owned()))
+        .child(div().text_xs().opacity(0.88).child(label.to_owned()))
         .child(div().h(px(28.)).child(Input::new(&input)))
 }
 
@@ -292,7 +295,7 @@ pub(super) fn dropdown_field(
                                     .w_full()
                                     .min_w_0()
                                     .text_xs()
-                                    .opacity(0.5)
+                                    .text_color(theme.muted_foreground)
                                     .whitespace_normal()
                                     .child(description.to_owned()),
                             )

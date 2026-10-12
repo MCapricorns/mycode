@@ -81,6 +81,11 @@ pub struct ActiveConversation {
     pub older_before: Option<String>,
     /// Live assistant reply while a model turn streams.
     pub streaming: Option<StreamingReply>,
+    /// Latest prompt size recovered from the opened tail. Zero when that
+    /// window has no usage snapshot.
+    pub context_used: u64,
+    /// Cache reads on [`Self::context_used`].
+    pub context_cache: u64,
 }
 
 /// One page of transcript older than the cursor the UI already shows.

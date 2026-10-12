@@ -1,15 +1,15 @@
 //! The transcript timeline: streaming bubble, committed entries, tool
 //! blocks, and user rows with their edit/recall hover actions.
 use gpui_kit::assets::IconName;
-use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, TestSupportExt as _, div, px, rems,
+    StatefulInteractiveElement, Styled, TestSupportExt as _, div, px,
 };
 
+use super::markdown;
 use crate::i18n::t;
 use crate::ui::skin;
 use crate::ui::{desk::Desk, ellipsis};
@@ -44,33 +44,35 @@ pub(super) fn render_streaming_entry(
             .flex()
             .flex_col()
             .gap_2()
-            .child(status_line(
+            .child(markdown::prose_measure(status_line(
                 "streaming-status",
                 &format!("{} · {status}", t("WORKING", "工作中")),
                 desk.amber,
                 theme,
-            ))
+            )))
             .when(show_reasoning && !streaming.thinking.is_empty(), |this| {
                 let id: SharedString = "streaming-thinking".into();
                 let open = workspace.thinking_open(&id);
                 let toggle_id = id.to_string();
-                this.child(thinking_box(
+                this.child(markdown::prose_measure(thinking_box(
                     id,
                     &streaming.thinking,
                     open,
+                    true,
                     theme,
                     cx.listener(move |workspace, _, _, cx| {
                         workspace.on_toggle_thinking(&toggle_id, cx);
                     }),
-                ))
+                )))
             })
             .when(!streaming.text.trim().is_empty(), |this| {
-                this.child(status_line(
+                this.child(markdown::prose_measure(speaker_row(
                     "streaming-agent-status",
-                    t("AGENT", "代理"),
+                    t("Agent", "代理"),
+                    IconName::Bot,
                     desk.green,
                     theme,
-                ))
+                )))
                 .child(agent_text(
                     "streaming-agent-md".into(),
                     streaming.text.clone().into(),
@@ -179,31 +181,72 @@ fn desk_block(
 }
 
 fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl IntoElement {
-    // `overflow_hidden` on this row, or on the `flex_1` column, collapses the
-    // row inside the conversation scroller: the reply clips away and the
-    // gutter paints as an empty separator. Wrapping text stays in the column
-    // through `min_w_0`; the scroller clips the horizontal axis.
+    // The event id overlays the row and stays out of the layout, so user and
+    // agent prose share the tool cards' left edge. A reserved gutter on both
+    // sides centered the column and left large empty margins.
     div()
-        .flex()
-        .flex_row()
-        .items_start()
-        .gap_3()
+        .group("ledger-row")
+        .relative()
         .w_full()
         .min_w_0()
         .h_auto()
         .flex_none()
         .child(
             div()
-                .w(px(64.))
-                .flex_shrink_0()
-                .pt(px(3.))
+                .absolute()
+                .left_0()
+                .top(px(2.))
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
                 .text_color(Desk::of(theme).faint)
                 .whitespace_nowrap()
+                .opacity(0.)
+                .group_hover("ledger-row", |this| this.opacity(1.))
                 .child(stamp),
         )
-        .child(div().flex_1().min_w_0().h_auto().child(content))
+        .child(content)
+}
+
+/// Avatar plus the speaker's name. The label truncates so a long model name
+/// cannot stretch the row.
+fn speaker_row(
+    id: impl Into<gpui_kit::ElementId>,
+    name: &str,
+    icon: IconName,
+    color: gpui_kit::Hsla,
+    theme: &Theme,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(skin::space(2))
+        .w_full()
+        .min_w_0()
+        .child(
+            div()
+                .size(skin::space(6))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(color.opacity(0.16))
+                .text_color(color)
+                .child(Icon::new(icon).xsmall()),
+        )
+        .child(
+            div()
+                .id(id)
+                .min_w_0()
+                .overflow_hidden()
+                .truncate()
+                .text_xs()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(theme.foreground)
+                .child(name.to_owned())
+                .test_support(),
+        )
 }
 
 /// A lamp plus a one-line label. The label truncates: a running status
@@ -257,21 +300,23 @@ fn assistant_block(
         .h_auto()
         .flex_none()
         .when(show_reasoning && !entry.thinking.is_empty(), |this| {
-            this.child(thinking_box(
+            this.child(markdown::prose_measure(thinking_box(
                 thinking_id,
                 &entry.thinking,
                 open,
+                false,
                 theme,
                 on_toggle,
-            ))
+            )))
         })
         .when(!entry.text.trim().is_empty(), |this| {
-            this.child(status_line(
+            this.child(markdown::prose_measure(speaker_row(
                 format!("agent-status-{}", entry.event_id),
-                t("AGENT", "代理"),
+                t("Agent", "代理"),
+                IconName::Bot,
                 desk.green,
                 theme,
-            ))
+            )))
             .child(agent_text(
                 format!("agent-md-{}", entry.event_id).into(),
                 SharedString::from(entry.text.trim()),
@@ -333,10 +378,10 @@ fn thinking_box(
     id: SharedString,
     text: &str,
     open: bool,
+    streaming: bool,
     theme: &Theme,
     on_toggle: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
 ) -> impl IntoElement {
-    let desk = Desk::of(theme);
     let toggle_id = id.to_string();
     let headline = thinking_headline(t("Thinking", "思考"), open, text);
     let body_id = SharedString::from(format!("thinking-body-{toggle_id}"));
@@ -348,13 +393,7 @@ fn thinking_box(
         .flex_none()
         .flex()
         .flex_col()
-        .gap_1()
-        .rounded(px(8.))
-        .border_l(px(2.))
-        .border_color(desk.amber)
-        .bg(desk.amber.opacity(0.10))
-        .px_2()
-        .py_1()
+        .gap(skin::space(1))
         .child(
             div()
                 .id(SharedString::from(format!("thinking-toggle-{toggle_id}")))
@@ -367,21 +406,10 @@ fn thinking_box(
                 .flex_none()
                 .min_h(px(22.))
                 .cursor_pointer()
-                .rounded(px(6.))
-                .hover(|row| row.bg(theme.secondary_hover.opacity(0.45)))
+                .rounded(skin::radius_xs())
+                .hover(|row| row.bg(theme.secondary_hover.opacity(0.35)))
                 .on_click(on_toggle)
-                .child(
-                    div()
-                        .id(SharedString::from(format!("thinking-label-{toggle_id}")))
-                        .min_w_0()
-                        .h_auto()
-                        .flex_none()
-                        .text_xs()
-                        .whitespace_nowrap()
-                        .text_color(theme.muted_foreground)
-                        .child(headline)
-                        .test_support(),
-                )
+                .child(thinking_line(&toggle_id, headline, streaming, theme))
                 .test_support(),
         )
         .when(open, |this| {
@@ -394,11 +422,40 @@ fn thinking_box(
                     .flex_none()
                     .whitespace_normal()
                     .text_xs()
+                    .italic()
                     .text_color(theme.muted_foreground)
                     .child(text.to_owned())
                     .test_support(),
             )
         })
+}
+
+fn thinking_line(
+    toggle_id: &str,
+    headline: String,
+    streaming: bool,
+    theme: &Theme,
+) -> impl IntoElement {
+    let label = div()
+        .id(SharedString::from(format!("thinking-label-{toggle_id}")))
+        .min_w_0()
+        .h_auto()
+        .flex_none()
+        .text_xs()
+        .italic()
+        .whitespace_nowrap()
+        .text_color(theme.muted_foreground)
+        .test_support();
+    if streaming {
+        label.child(
+            gpui_kit::component::shimmer::ShimmerText::new(headline)
+                .id(SharedString::from(format!("thinking-shimmer-{toggle_id}")))
+                .duration(std::time::Duration::from_millis(2400))
+                .spread(0.28),
+        )
+    } else {
+        label.child(headline)
+    }
 }
 
 /// Assistant reply bubble: Markdown via gpui-kit's TextView.
@@ -410,26 +467,14 @@ fn thinking_box(
 fn agent_text(
     id: SharedString,
     text: SharedString,
-    _theme: &Theme,
+    theme: &Theme,
     stream_fade: bool,
 ) -> impl IntoElement {
-    // The theme default leaves a full rem between paragraphs, which paints
-    // as a tall empty slab when a reply is short or still streaming.
-    let style = TextViewStyle::default().paragraph_gap(rems(0.35));
     div()
-        .id(SharedString::from(format!("reply-shell-{id}")))
         .w_full()
         .min_w_0()
-        .h_auto()
-        .flex_none()
         .text_sm()
-        .child(
-            TextView::markdown(id, text)
-                .style(style)
-                .selectable(true)
-                .stream_fade(stream_fade),
-        )
-        .test_support()
+        .child(markdown::render_markdown(id, text, theme, stream_fade))
 }
 
 /// Gutter stamp: the last 8 characters of the entry id. The id is a ledger
@@ -446,384 +491,6 @@ fn short_stamp(event_id: &str) -> String {
     tail
 }
 
-/// One tool row. The summary wraps inside the column instead of widening it.
-/// Clicking it reveals the result body without changing the tool call itself.
-pub(super) fn render_tool_block(
-    call: &ConversationEntry,
-    result: Option<&ConversationEntry>,
-    expanded: bool,
-    cx: &Context<Workspace>,
-) -> gpui_kit::AnyElement {
-    let theme = cx.theme();
-    let desk = Desk::of(theme);
-    let failed = result.is_some_and(|r| r.text.starts_with("failed:"));
-    let waiting = result.is_none();
-    let lamp_color = if failed {
-        desk.red
-    } else if waiting {
-        desk.amber
-    } else {
-        desk.green
-    };
-    let tool = tool_name(call.text.as_ref());
-    let status = tool_status(tool, result);
-    let event_id = call.event_id.clone();
-    let row = div()
-        .id(format!("tool-{}", call.event_id))
-        .flex()
-        .flex_col()
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .child(
-            div()
-                .id(format!("tool-summary-{}", call.event_id))
-                .flex()
-                .flex_row()
-                .items_start()
-                .gap_2()
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .min_h(px(28.))
-                .px_2()
-                .py(px(4.))
-                .rounded(px(8.))
-                .cursor_pointer()
-                .hover(|row| row.bg(theme.secondary_hover.opacity(0.55)))
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_toggle_tool_row(&event_id, cx);
-                }))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .pt(px(4.))
-                        .child(crate::ui::lamp(lamp_color)),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .w_full()
-                        .overflow_hidden()
-                        .whitespace_normal()
-                        .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.foreground)
-                        .child(tool_title(tool, call.text.as_ref()).to_string()),
-                )
-                .child(tool_status_node(&status, failed, theme)),
-        );
-    let row = if let (true, Some(result)) = (expanded, result) {
-        row.child(
-            div()
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .pt_1()
-                .pl(px(16.))
-                .child(result_body(tool, result, theme, &desk)),
-        )
-    } else {
-        row
-    };
-    row.into_any_element()
-}
-
-fn tool_status(tool: &str, result: Option<&ConversationEntry>) -> String {
-    let Some(result) = result else {
-        return t("in progress", "进行中").to_owned();
-    };
-    let text = result.text.as_ref();
-    if text.starts_with("failed:") {
-        return t("failed", "失败").to_owned();
-    }
-    if tool_paints_diff(tool) {
-        let added = text.lines().filter(|line| diff_added_line(line)).count();
-        let removed = text.lines().filter(|line| diff_removed_line(line)).count();
-        if added + removed > 0 {
-            return format!("+{added} -{removed}");
-        }
-    }
-    let first = text
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("");
-    if first.is_empty() {
-        t("done", "完成").to_owned()
-    } else {
-        ellipsis(first, 48)
-    }
-}
-
-/// Edit results use `+ ` / `- ` markers. Older results used `++ ` / `-- `,
-/// which still count. Page text from `fetch_content` and `web_search` often
-/// starts lines with `- ` (a list), which is not a deletion. Counting those
-/// lines painted a successful fetch as a diff.
-fn tool_paints_diff(tool: &str) -> bool {
-    !matches!(tool, "fetch_content" | "web_search")
-}
-
-fn shows_diff_preview(tool: &str, text: &str) -> bool {
-    tool_paints_diff(tool)
-        && text.lines().any(|line| {
-            diff_added_line(line) || diff_removed_line(line) || line.starts_with("[diff truncated]")
-        })
-}
-
-/// The first token of a tool label is the tool name. The rest is the target.
-fn tool_name(label: &str) -> &str {
-    label.split_whitespace().next().unwrap_or(label)
-}
-
-/// `run_code` cards are titled by the program description. Other cards keep
-/// the `name  target` label.
-fn tool_title<'a>(tool: &str, label: &'a str) -> &'a str {
-    if tool == "run_code" {
-        label
-            .split_once("  ")
-            .map(|(_, rest)| rest.trim())
-            .filter(|rest| !rest.is_empty())
-            .unwrap_or(label)
-    } else {
-        label
-    }
-}
-
-fn diff_added_line(line: &str) -> bool {
-    (line.starts_with("++ ") || line.starts_with("+ ")) && !line.starts_with("+++")
-}
-
-fn diff_removed_line(line: &str) -> bool {
-    (line.starts_with("-- ") || line.starts_with("- ")) && !line.starts_with("---")
-}
-
-/// `+3 -1` from [`tool_status`]. Only digit counts match, so a status line
-/// that merely contains " -" stays plain text.
-fn diff_counts(status: &str) -> Option<(&str, &str)> {
-    let (added, removed) = status.split_once(" -")?;
-    let added = added.strip_prefix('+')?;
-    if added.is_empty()
-        || removed.is_empty()
-        || !added.bytes().all(|byte| byte.is_ascii_digit())
-        || !removed.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    Some((added, removed))
-}
-
-/// One `+` or `-` on screen. Older previews stored a doubled sign.
-fn diff_line_text(line: &str) -> String {
-    if let Some(rest) = line.strip_prefix("++ ") {
-        format!("+ {rest}")
-    } else if let Some(rest) = line.strip_prefix("-- ") {
-        format!("- {rest}")
-    } else {
-        line.to_owned()
-    }
-}
-
-fn diff_green() -> gpui_kit::Hsla {
-    gpui_kit::rgb(0x3D_FF_9A).into()
-}
-
-fn diff_red() -> gpui_kit::Hsla {
-    gpui_kit::rgb(0xFF_4D_5A).into()
-}
-
-fn tool_status_node(status: &str, failed: bool, theme: &Theme) -> gpui_kit::AnyElement {
-    if let Some((added, removed)) = diff_counts(status) {
-        return div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .flex_shrink_0()
-            .text_xs()
-            .font_family(theme.mono_font_family.clone())
-            .child(div().text_color(diff_green()).child(format!("+{added}")))
-            .child(div().text_color(diff_red()).child(format!("-{removed}")))
-            .into_any_element();
-    }
-    div()
-        .flex_shrink_0()
-        .max_w(px(220.))
-        .truncate()
-        .text_xs()
-        .text_color(if failed {
-            diff_red()
-        } else {
-            theme.muted_foreground
-        })
-        .child(status.to_owned())
-        .into_any_element()
-}
-
-/// The tool result body: edit diffs and search hits render as a preview
-/// so additions, deletions, and matches stay visible. Other long output
-/// stays a dark CRT strip.
-fn result_body(
-    tool: &str,
-    result: &ConversationEntry,
-    theme: &Theme,
-    desk: &Desk,
-) -> impl IntoElement {
-    let text = result.text.to_string();
-    let failed = text.starts_with("failed:");
-    let lines: Vec<&str> = text.lines().collect();
-    if shows_diff_preview(tool, &text) {
-        diff_preview(&lines, theme, desk).into_any_element()
-    } else if matches!(tool, "grep" | "find" | "search") && !failed {
-        search_preview(tool, &lines, theme, desk).into_any_element()
-    } else if failed || text.len() > 300 || lines.len() > 6 {
-        div()
-            .w_full()
-            .min_w_0()
-            .overflow_hidden()
-            .px_2()
-            .py_1()
-            .text_xs()
-            .whitespace_normal()
-            .font_family(theme.mono_font_family.clone())
-            .bg(desk.screen.opacity(0.45))
-            .text_color(if failed { desk.red } else { desk.screen_dim })
-            .child(ellipsis(&text, 2000))
-            .into_any_element()
-    } else {
-        div()
-            .w_full()
-            .min_w_0()
-            .overflow_hidden()
-            .whitespace_normal()
-            .px_2()
-            .py_1()
-            .text_xs()
-            .font_family(theme.mono_font_family.clone())
-            .text_color(theme.muted_foreground)
-            .child(ellipsis(&text, 600))
-            .into_any_element()
-    }
-}
-
-fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
-    let added = lines.iter().filter(|line| diff_added_line(line)).count();
-    let removed = lines.iter().filter(|line| diff_removed_line(line)).count();
-    let shown = lines.len().min(80);
-    div()
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        .py_1()
-        .text_xs()
-        .font_family(theme.mono_font_family.clone())
-        .child(
-            div()
-                .px_2()
-                .py(px(2.))
-                .flex()
-                .flex_row()
-                .gap_2()
-                .font_family(theme.mono_font_family.clone())
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(t("DIFF", "差异")),
-                )
-                .child(div().text_color(diff_green()).child(format!("+{added}")))
-                .child(div().text_color(diff_red()).child(format!("-{removed}"))),
-        )
-        .children(lines.iter().take(shown).map(|line| {
-            let (color, bg) = if diff_added_line(line) {
-                let ink = diff_green();
-                (ink, ink.opacity(0.16))
-            } else if diff_removed_line(line) {
-                let ink = diff_red();
-                (ink, ink.opacity(0.16))
-            } else {
-                (theme.muted_foreground, theme.transparent)
-            };
-            div()
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_normal()
-                .px_2()
-                .text_color(color)
-                .bg(bg)
-                .child(diff_line_text(line))
-        }))
-        .when(lines.len() > shown, |this| {
-            this.child(preview_caption(
-                t("… more changes omitted", "… 更多改动已省略"),
-                desk.faint,
-                theme,
-            ))
-        })
-}
-
-fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
-    let hits = lines.iter().filter(|line| !line.starts_with('[')).count();
-    let label = if tool == "find" {
-        t("PATHS", "路径")
-    } else {
-        t("MATCHES", "匹配")
-    };
-    let shown = lines.len().min(40);
-    div()
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        .py_1()
-        .text_xs()
-        .font_family(theme.mono_font_family.clone())
-        .child(preview_caption(
-            &format!("{label}  {hits}"),
-            desk.amber,
-            theme,
-        ))
-        .children(lines.iter().take(shown).map(|line| {
-            let notice = line.starts_with('[');
-            div()
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_normal()
-                .px_2()
-                .text_color(if notice {
-                    theme.muted_foreground
-                } else {
-                    theme.foreground
-                })
-                .bg(if notice {
-                    theme.transparent
-                } else {
-                    desk.green.opacity(0.06)
-                })
-                .child((*line).to_owned())
-        }))
-        .when(lines.len() > shown, |this| {
-            this.child(preview_caption(
-                t("… more results omitted", "… 更多结果已省略"),
-                desk.faint,
-                theme,
-            ))
-        })
-}
-
-fn preview_caption(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoElement {
-    div()
-        .px_2()
-        .py(px(2.))
-        .text_color(color)
-        .child(label.to_owned())
-        .font_family(theme.mono_font_family.clone())
-}
-
 /// Compaction summary card. The text is the checkpoint summary, shown after
 /// both `/compact` and automatic compaction.
 pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> impl IntoElement {
@@ -834,8 +501,8 @@ pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> 
         .min_w_0()
         .flex()
         .flex_col()
-        .gap_1()
-        .rounded(px(12.))
+        .gap(skin::space(1))
+        .rounded(skin::radius_md())
         .border_1()
         .border_color(theme.border)
         .bg(theme.muted.opacity(0.65))
@@ -872,37 +539,32 @@ pub(super) fn render_user_entry(
     // Left-aligned ledger row. Hover edit/recall actions sit inline to the
     // right of the text.
     let mut column = div()
-        .flex_1()
+        .w_full()
         .min_w_0()
         .flex()
         .flex_col()
-        .gap_1()
-        .child(status_line(
+        .gap(skin::space(1))
+        .child(speaker_row(
             format!("you-status-{}", entry.event_id),
-            t("YOU", "你"),
+            t("You", "你"),
+            IconName::UserRound,
             desk.cyan,
             theme,
         ))
         .child(
             div()
-                .flex()
-                .flex_row()
-                .gap_2()
                 .w_full()
                 .min_w_0()
-                .rounded(px(12.))
-                .bg(theme.accent.opacity(0.28))
-                .px_3()
-                .py_2()
+                .rounded(skin::radius_lg())
+                .bg(theme.accent.opacity(0.16))
+                .border_1()
+                .border_color(theme.border.opacity(0.65))
+                .px(skin::space(3))
+                .py(skin::space(2))
                 .text_sm()
-                .child(div().text_color(desk.cyan).child("▸"))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .whitespace_normal()
-                        .child(SharedString::from(&entry.text)),
-                ),
+                .whitespace_normal()
+                .text_color(theme.foreground)
+                .child(SharedString::from(&entry.text)),
         );
     if can_rewind {
         column = column.child(
@@ -958,76 +620,16 @@ pub(super) fn render_user_entry(
     div()
         .id(format!("entry-{}", entry.event_id))
         .group("user-entry")
-        .child(desk_shell(short_stamp(&entry.event_id), theme, column))
+        .child(desk_shell(
+            short_stamp(&entry.event_id),
+            theme,
+            markdown::prose_measure(column),
+        ))
         .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{diff_counts, diff_line_text, shows_diff_preview, tool_status};
-    use crate::view_model::{ConversationEntry, EntryKind};
-
-    fn result_entry(text: &str) -> ConversationEntry {
-        ConversationEntry {
-            event_id: "evt".into(),
-            kind: EntryKind::ToolResult,
-            text: text.into(),
-            call_id: Some("call".into()),
-            thinking: String::new(),
-            parent_call_id: None,
-        }
-    }
-
-    /// Eleven markdown list lines are what QA saw counted as deletions.
-    fn eleven_list_lines(header: &str) -> String {
-        let mut page = format!("{header}\n");
-        for n in 1..=11 {
-            page.push_str(&format!("- line {n}\n"));
-        }
-        page
-    }
-
-    #[test]
-    fn fetch_content_list_lines_are_not_a_diff() {
-        let page = eleven_list_lines("[https://example.com/a]");
-        let status = tool_status("fetch_content", Some(&result_entry(&page)));
-        assert_eq!(status, "[https://example.com/a]");
-        assert_ne!(status, "+0 -11");
-        assert!(!shows_diff_preview("fetch_content", &page));
-    }
-
-    #[test]
-    fn web_search_snippets_are_not_a_diff() {
-        let text = "[https://example.com] Docs\n- alpha\n- beta\n";
-        let status = tool_status("web_search", Some(&result_entry(text)));
-        assert_eq!(status, "[https://example.com] Docs");
-        assert!(!shows_diff_preview("web_search", text));
-    }
-
-    #[test]
-    fn edit_removals_still_summarize_as_a_diff() {
-        let mut text = String::from("edited src/lib.rs\n");
-        for n in 1..=11 {
-            text.push_str(&format!("- line {n}\n"));
-        }
-        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "+0 -11");
-        assert_eq!(diff_counts("+0 -11"), Some(("0", "11")));
-        assert!(shows_diff_preview("edit", &text));
-    }
-
-    #[test]
-    fn legacy_doubled_signs_still_count_and_display_as_one() {
-        let mut text = String::from("edited src/lib.rs\n");
-        text.push_str("++ kept\n");
-        text.push_str("-- gone\n");
-        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "+1 -1");
-        assert_eq!(diff_line_text("++ kept"), "+ kept");
-        assert_eq!(diff_line_text("-- gone"), "- gone");
-        assert_eq!(diff_line_text("+ kept"), "+ kept");
-        assert_eq!(diff_line_text("+++ b/file.rs"), "+++ b/file.rs");
-        assert_eq!(diff_line_text("--- a/file.rs"), "--- a/file.rs");
-    }
-
     #[test]
     fn collapsed_thinking_headline_is_one_summary_row() {
         let trace = "reasoning step 0 weighs the next edit\nsecond line";

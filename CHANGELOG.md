@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-10-12
+
+### Fixed
+
+- 打开已有会话时，从账本尾部最后一条用量快照恢复上下文计量和缓存命中环，不必再等新的一轮。
+- 设置里每个色板悬停都会更新对话预览。后一个色块不再被前一个色块的移出事件清掉。
+
+### Changed
+
+- 对话左侧的事件 id 默认隐藏，悬停该行才显示。你和代理各有头像与名字，用户消息是一条淡色气泡。正文与工具卡片同一左缘，超宽窗口才停在约 1200px，不再居中。代码块和表格可以用整列宽度。输入框仍居中，但更窄、默认更矮，打字时自动换行并随内容增高。
+- 工具卡片按工具显示图标，并用颜色点表示进行中、成功和失败。`+N -M` 只出现在 `edit` / `write` 上：此前除网页工具外，所有以 `- ` 开头的行都被当成删除，agent / scout 的 Markdown 列表会显示成 `+0 -21`。连续的工具调用收成一行，例如 `read 3 files, edited 4`，点击展开。差异行带行号，红绿比以前柔和。
+- 思考不再是输入框样式，改成一行灰色斜体加箭头；流式输出时有轻微闪烁。
+- Markdown 标题缩小。表格可以横向滚动，斑马纹，表头在表体滚动时留在上方。
+- 输入栏的目录、模型和思考强度是无边框的灰色斜体芯片，只带一个箭头。用量是小芯片，缓存命中率是一枚小环。标题栏的黄色 `vX ready` 换成一个小圆点，点击仍打开更新对话框。
+- 设置卡片加宽，分组间距加大，说明文字对比更高。选择色板时有一段实时对话预览。圆角和间距收成 4px 的主题刻度。现有色板增加浅色模式。
+
 ## [0.11.7] - 2026-10-12
 
 ### Changed
@@ -180,7 +196,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.7...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.8...HEAD
+[0.11.8]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.8
 [0.11.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.7
 [0.11.6]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.6
 [0.11.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.5

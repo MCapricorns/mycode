@@ -5,10 +5,9 @@ use crate::view_model::WorkspaceState;
 
 /// Drops the previous session's meter and turn stats.
 ///
-/// Usage accounting is live-only: `last_turn` and `live_turn` carry what the
-/// provider reported for turns the user watched in this session, so switching
-/// conversations must not keep painting the previous prompt size, cache read,
-/// or totals.
+/// `last_turn` and `live_turn` belong to turns watched in this process.
+/// Opening another session fills `context_used` / `context_cache` again from
+/// that session's ledger snapshot.
 pub(super) fn clear_session_usage(state: &mut WorkspaceState) {
     state.last_turn = None;
     state.live_turn = None;

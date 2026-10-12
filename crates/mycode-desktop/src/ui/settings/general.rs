@@ -42,6 +42,12 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.palette.clone())
         .unwrap_or_else(|| "slate".to_owned());
+    let theme_id = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.theme.clone())
+        .unwrap_or_else(|| "dark".to_owned());
     let configured_language = workspace
         .vm()
         .settings
@@ -72,7 +78,12 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.effective_user_agent.clone())
         .unwrap_or_default();
-    let palette_row = palette_field(&palette, cx);
+    let preview_id = workspace
+        .palette_preview()
+        .unwrap_or(palette.as_str())
+        .to_owned();
+    let theme_row = appearance_theme_field(&theme_id, cx);
+    let palette_row = palette_field(&palette, &theme_id, &preview_id, cx);
     let font_family_row = font_family_field(&font_family, workspace.vm().font_family_menu_open, cx);
     let font_row = font_size_field(&font_size, cx);
     let language_row = dropdown_field(
@@ -121,7 +132,7 @@ pub(super) fn render_general_section(
         .child(
             div()
                 .text_xs()
-                .opacity(0.5)
+                .text_color(cx.theme().muted_foreground)
                 .child(format!("{}: {effective_ua}", t("Effective", "生效值"))),
         )
         .into_any_element();
@@ -144,6 +155,7 @@ pub(super) fn render_general_section(
             theme,
             vec![
                 language_row,
+                theme_row,
                 palette_row,
                 font_family_row,
                 font_row,
@@ -159,7 +171,12 @@ pub(super) fn render_general_section(
 /// Cells share one width, so the last row stays on the left. The row is a
 /// flex wrap, not a grid: grid row tracks still grew into the settings
 /// scrollport and hid the font controls in that gap.
-fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
+fn palette_field(
+    selected: &str,
+    theme_id: &str,
+    preview: &str,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     div()
         .id("row-palette")
         .w_full()
@@ -182,12 +199,19 @@ fn palette_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
                         .whitespace_normal()
                         .child(t("Palette", "色板")),
                 )
-                .child(div().text_xs().opacity(0.5).whitespace_normal().child(t(
-                    "A quiet dark page. Pick a hue.",
-                    "安静的深色页面。选一个色调。",
-                ))),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_normal()
+                        .child(t(
+                            "Pick a hue. The preview follows the swatch under the pointer.",
+                            "选一个色调。预览跟着指针下的色块走。",
+                        )),
+                ),
         )
         .child(palette_choices(selected, cx))
+        .child(palette_chat_preview(preview, theme_id == "light"))
         .test_support()
         .into_any_element()
 }
@@ -270,7 +294,7 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
                         .w_full()
                         .min_w_0()
                         .text_xs()
-                        .opacity(0.5)
+                        .text_color(cx.theme().muted_foreground)
                         .whitespace_normal()
                         .child(t(
                             "S / M / L / XL, about 12 / 13 / 14 / 16 px. Chat, the sidebar, and settings follow it immediately.",
@@ -289,12 +313,63 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
         .into_any_element()
 }
 
+fn appearance_theme_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
+    let options = [("dark", t("Dark", "深色")), ("light", t("Light", "浅色"))]
+        .into_iter()
+        .map(|(id, label)| (id.to_owned(), label.to_owned()))
+        .collect::<Vec<_>>();
+    div()
+        .id("row-appearance-theme")
+        .w_full()
+        .h_auto()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(crate::ui::skin::space(2))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(div().text_sm().child(t("Appearance", "外观")))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_normal()
+                        .child(t(
+                            "Dark or light. Every palette has both.",
+                            "深色或浅色。每个色板都有这两种。",
+                        )),
+                ),
+        )
+        .child(choice_chips(
+            "appearance-theme",
+            &options,
+            selected,
+            |workspace, value, cx| workspace.on_select_theme(value, cx),
+            cx,
+        ))
+        .into_any_element()
+}
+
 fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     let theme = cx.theme().clone();
     let cells = mycode_config::VALID_PALETTES
         .into_iter()
         .map(|id| {
             palette_cell(id, selected, &theme)
+                .on_hover(cx.listener(move |workspace, hovered: &bool, _, cx| {
+                    // A neighbor's hover-out can run after this cell's
+                    // hover-in. Only the cell that still owns the preview
+                    // may clear it, or a later swatch (Ember, Aurora) never
+                    // sticks.
+                    if *hovered {
+                        workspace.set_palette_preview(Some(id), cx);
+                    } else if workspace.palette_preview() == Some(id) {
+                        workspace.set_palette_preview(None, cx);
+                    }
+                }))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_select_palette(id, cx);
                 }))
@@ -303,6 +378,90 @@ fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
         })
         .collect::<Vec<_>>();
     palette_swatches(cells)
+}
+
+fn palette_chat_preview(palette: &str, light: bool) -> AnyElement {
+    let colors = crate::ui::desk::chat_preview(palette, light);
+    div()
+        .id("palette-chat-preview")
+        .w_full()
+        .max_w(px(420.))
+        .h_auto()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(crate::ui::skin::space(2))
+        .p(crate::ui::skin::space(3))
+        .rounded(crate::ui::skin::radius_md())
+        .bg(colors.page)
+        .border_1()
+        .border_color(colors.line)
+        .child(preview_speaker(t("You", "你"), colors.accent, colors.ink))
+        .child(
+            div()
+                .rounded(crate::ui::skin::radius_lg())
+                .bg(colors.bubble)
+                .px(crate::ui::skin::space(3))
+                .py(crate::ui::skin::space(2))
+                .text_xs()
+                .text_color(colors.ink)
+                .child(t("Compare the two approaches.", "比较这两种做法。")),
+        )
+        .child(preview_speaker(
+            t("Agent", "代理"),
+            colors.accent,
+            colors.ink,
+        ))
+        .child(
+            div()
+                .text_xs()
+                .text_color(colors.ink)
+                .child(t("Here is a short answer.", "这是一段简短的回答。")),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(crate::ui::skin::space(2))
+                .child(
+                    div()
+                        .size(crate::ui::skin::space(2))
+                        .rounded_full()
+                        .bg(colors.green),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted)
+                        .child("edit  notes.md"),
+                )
+                .child(div().text_xs().text_color(colors.green).child("+2"))
+                .child(div().text_xs().text_color(colors.red).child("-1")),
+        )
+        .test_support()
+        .into_any_element()
+}
+
+fn preview_speaker(name: &str, accent: gpui_kit::Hsla, ink: gpui_kit::Hsla) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(crate::ui::skin::space(2))
+        .child(
+            div()
+                .size(crate::ui::skin::space(4))
+                .rounded_full()
+                .bg(accent.opacity(0.2)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(ink)
+                .child(name.to_owned()),
+        )
 }
 
 /// Fixed cells on a wrapping row. Six fill one row; a narrower card wraps
@@ -347,7 +506,7 @@ fn palette_cell(
     let cell_px = px(crate::ui::desk::PALETTE_CELL_PX);
     let swatch_px = px(crate::ui::desk::PALETTE_SWATCH_PX);
     let on = selected == id;
-    let colors = crate::ui::desk::palette_swatch_colors(id);
+    let colors = crate::ui::desk::palette_swatch_colors(id, !theme.is_dark());
     let ring = if on { colors.accent } else { theme.border };
     let hover_ring = colors.accent;
     div()

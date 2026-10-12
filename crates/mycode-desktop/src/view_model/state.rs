@@ -259,6 +259,8 @@ pub enum DesktopAction {
     SettingsLanguageSelected(String),
     /// The user picked a color palette; persists with settings.
     SettingsPaletteSelected(String),
+    /// The user picked dark or light; persists with settings.
+    SettingsThemeSelected(String),
     /// The user picked an interface font size (`s`, `m`, `l`, `xl`).
     SettingsFontSizeSelected(String),
     /// The user picked a UI font family. Empty or `system` is the OS UI font.

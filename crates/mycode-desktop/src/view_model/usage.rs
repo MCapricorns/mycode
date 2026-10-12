@@ -24,6 +24,8 @@ pub(crate) struct ContextMeterParts {
     /// The share is `cache_percent(cached, used)` for this prompt, not the
     /// lifetime token sum.
     pub hit: String,
+    /// Whole-percent cache hit, when there is one to draw.
+    pub hit_percent: Option<u64>,
 }
 
 /// Splits the latest prompt into a window ratio, a cache-hit percent, and a
@@ -50,10 +52,16 @@ pub(crate) fn context_meter_parts(
     } else {
         String::new()
     };
-    let hit = cache_percent(cached, used)
+    let hit_percent = cache_percent(cached, used);
+    let hit = hit_percent
         .map(|share| format!("{hit_word} {share}%"))
         .unwrap_or_default();
-    ContextMeterParts { ratio, cache, hit }
+    ContextMeterParts {
+        ratio,
+        cache,
+        hit,
+        hit_percent,
+    }
 }
 
 /// Context-meter text. `cached_word` is the localized "cached" label.
@@ -151,6 +159,7 @@ mod tests {
         assert_eq!(parts.ratio, "12.0k / 1.0M");
         assert_eq!(parts.cache, "11.8k cached");
         assert_eq!(parts.hit, "cache hit 98%");
+        assert_eq!(parts.hit_percent, Some(98));
         let uncached = context_meter_parts(12_000, 1_000_000, 0, "cached", "cache hit");
         assert!(uncached.cache.is_empty());
         assert!(uncached.hit.is_empty());

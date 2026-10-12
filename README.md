@@ -2,9 +2,9 @@
 
 本地优先的桌面编码代理。对话和工具都在你的电脑上；你自己带 API 密钥。
 
-![一次画完的鹈鹕 SVG：run_code 卡片里嵌着 read、edit 和 shell](docs/images/hero.png)
+![一次画完的鹈鹕 SVG：收起的工具摘要和图层对照表](docs/images/hero.png)
 
-一次画完的鹈鹕 SVG。`run_code` 下面是嵌套的 read、edit 和 shell 卡片。
+一次画完的鹈鹕 SVG。工具调用收成一行，回复里是图层对照表。输入框居中，旁边是缓存环。
 
 ## 功能
 
@@ -12,7 +12,7 @@
 - 模型只能调用 `run_code`。其它工具在系统 Python 3.10+ 里写成 `await tools.<name>(...)`。
 - 只读的 `scout` 和有界的 `artisan`，也可以在 `agents/` 里加角色。
 - 内置 [models.dev](https://models.dev) 目录。Copilot、Codex 和 xAI 用设备码登录。
-- 中英界面，深色主题。
+- 中英界面，深色和浅色主题。
 
 ## 安装
 
@@ -48,9 +48,9 @@ cargo build --release -p mycode-desktop
 
 mycode is a local-first desktop coding agent. The conversation and tools stay on your machine. You bring the API keys.
 
-![A finished pelican SVG session: a run_code card with nested read, edit, and shell cards](docs/images/hero.png)
+![A finished pelican SVG: collapsed tool summaries and a comparison table](docs/images/hero.png)
 
-A finished pelican SVG. The `run_code` card contains nested read, edit, and shell cards.
+A finished pelican SVG. Tool calls collapse to one line, and the reply includes a comparison table. The composer stays centered, with a cache ring.
 
 ### Features
 
@@ -58,7 +58,7 @@ A finished pelican SVG. The `run_code` card contains nested read, edit, and shel
 - The model can call only `run_code`. Every other tool is `await tools.<name>(...)` in system Python 3.10+.
 - Read-only `scout` and bounded `artisan`, or custom roles under `agents/`.
 - Built-in [models.dev](https://models.dev) catalog. Copilot, Codex, and xAI sign in with a device code.
-- English and Chinese UI, dark theme.
+- English and Chinese UI, dark and light themes.
 
 ### Install
 
