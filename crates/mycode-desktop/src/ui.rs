@@ -86,6 +86,12 @@ pub fn render_root(
     let ui_font = theme.font_family.clone();
     let fg = theme.foreground;
     let focus_handle = workspace.focus_handle().clone();
+    // Opening settings unmounts the composer and the sidebar control that
+    // was focused. A stale focus handle is not in this frame, so key dispatch
+    // never reaches the listeners below. Park focus on the workspace node.
+    if workspace.take_settings_focus() {
+        focus_handle.focus(window, cx);
+    }
     div()
         .id("workspace")
         .relative()
@@ -95,8 +101,10 @@ pub fn render_root(
         .text_color(fg)
         // Root focus plus the key listeners below keep Escape and the command
         // palette shortcut alive even when no input holds focus. Capture sees
-        // the shortcut before a focused field can take the character. Bubble
-        // sees Escape after a focused field declines it.
+        // the shortcut before a focused field can take the character. Settings
+        // Escape is captured too: the search field and the unmounted composer
+        // would otherwise swallow it, and Back to desk advertises Esc.
+        // Bubble still sees Escape on the desk after a focused field declines it.
         .track_focus(&focus_handle)
         // No opaque page here. Rails and the reading column paint their own
         // fills so the window blur shows through the chrome.
@@ -115,9 +123,15 @@ pub fn render_root(
             if command_palette::is_command_palette_shortcut(&event.keystroke) {
                 cx.stop_propagation();
                 workspace.toggle_command_palette(window, cx);
-            } else if workspace.vm().command_palette_open && event.keystroke.key == "escape" {
+            } else if event.keystroke.key == "escape"
+                && (workspace.vm().command_palette_open
+                    || workspace.vm().view == MainView::Settings)
+            {
+                // Capture, not bubble: a focused settings field declines Escape
+                // before the root's bubble listener runs. The palette is the
+                // top layer and is closed first inside `on_escape`.
                 cx.stop_propagation();
-                workspace.set_command_palette(false, window, cx);
+                workspace.on_escape(window, cx);
             }
         }))
         .on_key_down(cx.listener(|workspace, event: &KeyDownEvent, window, cx| {

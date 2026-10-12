@@ -42,6 +42,47 @@ pub(crate) fn top_dismiss_layer(
     }
 }
 
+/// Where one Escape press goes inside Settings. Each arm matches the back
+/// control that page actually draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettingsBack {
+    /// Provider detail's back returns to the provider list.
+    CloseProviderDetail,
+    /// A catalog preset's back returns to the catalog, not the provider list.
+    ClosePreset,
+    /// Catalog or custom-endpoint back returns to the provider list.
+    ModelsList,
+    /// Custom web-backend back returns to the backend list.
+    WebList,
+    /// Catalog, JSON, or custom MCP back returns to the server list.
+    McpList,
+    /// Back to desk.
+    Desk,
+}
+
+/// The settings page Escape should open. Sub-pages step back once.
+pub(crate) fn settings_back_target(
+    section: crate::view_model::SettingsSection,
+    models: crate::view_model::ModelsSubview,
+    provider_open: bool,
+    preset_open: bool,
+    web: crate::view_model::WebSubview,
+    mcp: crate::view_model::McpSubview,
+) -> SettingsBack {
+    use crate::view_model::{McpSubview, ModelsSubview, SettingsSection, WebSubview};
+    match section {
+        SettingsSection::Models => match models {
+            ModelsSubview::List if provider_open => SettingsBack::CloseProviderDetail,
+            ModelsSubview::Catalog if preset_open => SettingsBack::ClosePreset,
+            ModelsSubview::Catalog | ModelsSubview::Custom => SettingsBack::ModelsList,
+            ModelsSubview::List => SettingsBack::Desk,
+        },
+        SettingsSection::Web if web != WebSubview::List => SettingsBack::WebList,
+        SettingsSection::Mcp if mcp != McpSubview::List => SettingsBack::McpList,
+        _ => SettingsBack::Desk,
+    }
+}
+
 impl Workspace {
     /// Parks until a day has passed, then runs the automatic update check.
     pub(super) fn spawn_update_recheck(&self, cx: &mut Context<Self>) {
@@ -262,8 +303,9 @@ impl Workspace {
     // ---- escape ----
 
     /// Escape dismisses the topmost layer: the command palette, then the
-    /// folder picker, then other floating UI. With nothing open it leaves
-    /// the settings view.
+    /// folder picker, then other floating UI. In settings it steps back one
+    /// page, matching that page's back button, and leaves for the desk only
+    /// from a top-level section.
     pub(crate) fn on_escape(&mut self, window: &mut gpui_kit::Window, cx: &mut Context<Self>) {
         if self.vm.command_palette_open {
             self.set_command_palette(false, window, cx);
@@ -277,7 +319,9 @@ impl Workspace {
             self.project_picker.is_some(),
             self.git_diff_panel_open,
             self.vm.changes_panel_open,
-            self.vm.inspector_open && !self.vm.inspector_pinned,
+            // The Details overlay is painted only on the desk. A leftover
+            // unpinned inspector must not consume Escape while Settings is up.
+            self.vm.inspector_open && !self.vm.inspector_pinned && self.vm.view == MainView::Chat,
         ) {
             match layer {
                 DismissLayer::Picker => {
@@ -315,49 +359,33 @@ impl Workspace {
         if dismissed {
             cx.notify();
         }
-        if !dismissed
-            && self.vm.view == MainView::Settings
-            && self.vm.settings_section == crate::view_model::SettingsSection::Models
-            && self.vm.models_subview != crate::view_model::ModelsSubview::List
-        {
-            self.apply_action(
-                DesktopAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
-                cx,
-            );
-            dismissed = true;
-        }
-        if !dismissed
-            && self.vm.view == MainView::Settings
-            && self.vm.settings_section == crate::view_model::SettingsSection::Models
-            && self.vm.provider_detail.is_some()
-        {
-            self.apply_action(DesktopAction::ProviderDetailOpened(None), cx);
-            dismissed = true;
-        }
-        if !dismissed
-            && self.vm.view == MainView::Settings
-            && self.vm.settings_section == crate::view_model::SettingsSection::Web
-            && self.vm.web_subview != crate::view_model::WebSubview::List
-        {
-            self.apply_action(
-                DesktopAction::ShowWebSubview(crate::view_model::WebSubview::List),
-                cx,
-            );
-            dismissed = true;
-        }
-        if !dismissed
-            && self.vm.view == MainView::Settings
-            && self.vm.settings_section == crate::view_model::SettingsSection::Mcp
-            && self.vm.mcp_subview != crate::view_model::McpSubview::List
-        {
-            self.apply_action(
-                DesktopAction::ShowMcpSubview(crate::view_model::McpSubview::List),
-                cx,
-            );
-            dismissed = true;
-        }
         if !dismissed && self.vm.view == MainView::Settings {
-            self.apply_action(DesktopAction::ShowMainView(MainView::Chat), cx);
+            // One level, matching the control on screen: a sub-page's own
+            // back button, or Back to desk when that is the only back control.
+            match settings_back_target(
+                self.vm.settings_section,
+                self.vm.models_subview,
+                self.vm.provider_detail.is_some(),
+                self.vm.active_preset.is_some(),
+                self.vm.web_subview,
+                self.vm.mcp_subview,
+            ) {
+                SettingsBack::CloseProviderDetail => self.on_close_provider_detail(cx),
+                SettingsBack::ClosePreset => self.on_close_preset(cx),
+                SettingsBack::ModelsList => {
+                    self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
+                }
+                SettingsBack::WebList => {
+                    self.on_show_web_subview(crate::view_model::WebSubview::List, cx);
+                }
+                SettingsBack::McpList => {
+                    self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
+                }
+                SettingsBack::Desk => {
+                    self.apply_action(DesktopAction::ShowMainView(MainView::Chat), cx);
+                }
+            }
+            dismissed = true;
         }
         if !dismissed && self.vm.pending_ask.is_some() {
             self.on_dismiss_ask(cx);
@@ -417,7 +445,8 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{DismissLayer, top_dismiss_layer};
+    use super::{DismissLayer, SettingsBack, settings_back_target, top_dismiss_layer};
+    use crate::view_model::{McpSubview, ModelsSubview, SettingsSection, WebSubview};
 
     #[test]
     fn escape_closes_one_layer_topmost_first() {
@@ -438,5 +467,90 @@ mod tests {
             Some(DismissLayer::Picker)
         );
         assert_eq!(top_dismiss_layer(false, false, false, false), None);
+    }
+
+    #[test]
+    fn settings_escape_matches_the_visible_back_button() {
+        let desk = |section| {
+            settings_back_target(
+                section,
+                ModelsSubview::List,
+                false,
+                false,
+                WebSubview::List,
+                McpSubview::List,
+            )
+        };
+        assert_eq!(desk(SettingsSection::General), SettingsBack::Desk);
+        assert_eq!(desk(SettingsSection::About), SettingsBack::Desk);
+        assert_eq!(
+            settings_back_target(
+                SettingsSection::Models,
+                ModelsSubview::List,
+                true,
+                false,
+                WebSubview::List,
+                McpSubview::List,
+            ),
+            SettingsBack::CloseProviderDetail
+        );
+        assert_eq!(
+            settings_back_target(
+                SettingsSection::Models,
+                ModelsSubview::Catalog,
+                false,
+                true,
+                WebSubview::List,
+                McpSubview::List,
+            ),
+            SettingsBack::ClosePreset
+        );
+        assert_eq!(
+            settings_back_target(
+                SettingsSection::Models,
+                ModelsSubview::Catalog,
+                false,
+                false,
+                WebSubview::List,
+                McpSubview::List,
+            ),
+            SettingsBack::ModelsList
+        );
+        assert_eq!(
+            settings_back_target(
+                SettingsSection::Models,
+                ModelsSubview::Custom,
+                false,
+                false,
+                WebSubview::List,
+                McpSubview::List,
+            ),
+            SettingsBack::ModelsList
+        );
+        assert_eq!(
+            settings_back_target(
+                SettingsSection::Web,
+                ModelsSubview::List,
+                false,
+                false,
+                WebSubview::Custom,
+                McpSubview::List,
+            ),
+            SettingsBack::WebList
+        );
+        for subview in [McpSubview::Catalog, McpSubview::Json, McpSubview::Custom] {
+            assert_eq!(
+                settings_back_target(
+                    SettingsSection::Mcp,
+                    ModelsSubview::List,
+                    false,
+                    false,
+                    WebSubview::List,
+                    subview,
+                ),
+                SettingsBack::McpList,
+                "{subview:?}"
+            );
+        }
     }
 }
