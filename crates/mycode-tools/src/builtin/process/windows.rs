@@ -19,6 +19,7 @@ use std::path::Path;
 use std::process::ExitStatus;
 use std::ptr::{null, null_mut};
 
+use super::first_program_on_path;
 use crate::builtin::exec::{
     is_batch_script, windows_batch_command_line_utf16, windows_command_line_utf16,
 };
@@ -209,12 +210,15 @@ impl WindowsStdioProcess {
     /// resumes `PROCESS_INFORMATION.hThread`.
     ///
     /// A program without a directory is resolved against `PATH` in `env`, then
-    /// the parent process `PATH`. A hit is passed as `lpApplicationName`.
-    /// When neither search finds a file, `lpApplicationName` is null and
-    /// `CreateProcessW` searches the parent process `PATH`, not the
-    /// environment block. A program that already contains a directory is
-    /// passed as `lpApplicationName` and is not searched. `.bat` and `.cmd`
-    /// files are launched through `cmd.exe` with batch escaping. Only the
+    /// the parent process `PATH`. A bare name is tried with each launchable
+    /// `PATHEXT` extension (`.com`, `.exe`, `.bat`, `.cmd`, in that order)
+    /// in each directory before the next, so `npx` resolves to `npx.cmd`.
+    /// A hit is passed as `lpApplicationName`. When neither search finds a
+    /// file, `lpApplicationName` is null and `CreateProcessW` searches the
+    /// parent process `PATH`, not the environment block. A program that
+    /// already contains a directory is passed as `lpApplicationName` and is
+    /// not searched. `.bat` and `.cmd` files are launched through `cmd.exe`
+    /// with batch escaping, including `%` in the script path. Only the
     /// child's stdio handles are inheritable. stdout and stderr are pipes.
     /// `stdin_piped` selects a pipe or the NUL device.
     ///
@@ -772,40 +776,106 @@ fn command_prompt() -> io::Result<Vec<u16>> {
 /// First existing file for a bare program name.
 ///
 /// Child `PATH` from `env` is searched before the parent process `PATH`.
-/// A name with no `.` is looked up as `name.exe`, matching `CreateProcessW`.
+/// A name with no `.` is tried as `name.com`, `name.exe`, `name.bat`, and
+/// `name.cmd` (the launchable `PATHEXT` order), so `npx` resolves to
+/// `npx.cmd` when that is the file on disk.
 fn resolve_bare_program(
     program: &Path,
     env: &[(OsString, OsString)],
 ) -> Option<std::path::PathBuf> {
     let name = program.file_name()?;
-    let name_text = name.to_string_lossy();
-    let candidate = if name_text.contains('.') {
-        name.to_os_string()
-    } else {
-        let mut exe = name.to_os_string();
-        exe.push(".exe");
-        exe
-    };
+    let pathext = pathext_value(env);
     let mut paths = Vec::new();
-    if let Some(value) = env_path(env) {
-        paths.push(value);
+    if let Some(value) = env_os(env, "PATH") {
+        paths.push(value.to_os_string());
     }
     if let Some(parent) = std::env::var_os("PATH") {
         paths.push(parent);
     }
     for path_var in paths {
-        for dir in std::env::split_paths(&path_var) {
-            let full = dir.join(&candidate);
-            if full.is_file() {
-                return Some(full);
-            }
+        if let Some(found) = first_program_on_path(&name.to_string_lossy(), &path_var, &pathext) {
+            return Some(found);
         }
     }
     None
 }
 
-fn env_path(env: &[(OsString, OsString)]) -> Option<OsString> {
+fn pathext_value(env: &[(OsString, OsString)]) -> String {
+    if let Some(value) = env_os(env, "PATHEXT") {
+        return value.to_string_lossy().into_owned();
+    }
+    std::env::var("PATHEXT").unwrap_or_default()
+}
+
+fn env_os<'a>(env: &'a [(OsString, OsString)], key: &str) -> Option<&'a OsStr> {
     env.iter()
-        .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case("PATH"))
-        .map(|(_, value)| value.clone())
+        .find(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.as_os_str())
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::resolve_bare_program;
+
+    static SCRATCH: AtomicU64 = AtomicU64::new(0);
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Self {
+            let n = SCRATCH.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("mycode-bare-{label}-{}-{n}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("scratch dir");
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn touch(dir: &Path, name: &str) {
+        fs::write(dir.join(name), b"").expect("touch");
+    }
+
+    fn env_with(path: &Path, pathext: &str) -> Vec<(OsString, OsString)> {
+        vec![
+            (OsString::from("PATH"), path.as_os_str().to_os_string()),
+            (OsString::from("PATHEXT"), OsString::from(pathext)),
+        ]
+    }
+
+    #[test]
+    fn bare_npx_resolves_to_npx_cmd() {
+        let scratch = Scratch::new("cmd");
+        touch(&scratch.0, "npx.cmd");
+        let found =
+            resolve_bare_program(Path::new("npx"), &env_with(&scratch.0, "")).expect("npx.cmd");
+        assert_eq!(found, scratch.0.join("npx.cmd"));
+    }
+
+    #[test]
+    fn pathext_order_picks_exe_before_cmd_and_honors_a_cmd_first_list() {
+        let scratch = Scratch::new("order");
+        touch(&scratch.0, "npx.exe");
+        touch(&scratch.0, "npx.cmd");
+        let exe = resolve_bare_program(
+            Path::new("npx"),
+            &env_with(&scratch.0, ".COM;.EXE;.BAT;.CMD"),
+        )
+        .expect("exe");
+        assert_eq!(exe, scratch.0.join("npx.exe"));
+        let cmd = resolve_bare_program(Path::new("npx"), &env_with(&scratch.0, ".CMD;.EXE"))
+            .expect("cmd");
+        assert_eq!(cmd, scratch.0.join("npx.cmd"));
+    }
 }
