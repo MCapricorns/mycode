@@ -155,8 +155,8 @@ impl ProcessTree {
 }
 
 /// Enrolls a child started in its own process group, or on Windows assigns
-/// it to a kill-on-close Job. Call this immediately after spawn, before the
-/// child runs user code.
+/// a `CREATE_SUSPENDED` child to a kill-on-close Job and resumes it. Call
+/// this immediately after spawn, before the child runs user code.
 ///
 /// # Errors
 ///
@@ -183,6 +183,12 @@ pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
             .raw_handle()
             .ok_or_else(|| std::io::Error::other("child exited before enrollment"))?;
         job.assign_handle(handle)?;
+        // Resume only after the Job owns the process. A failure terminates
+        // the Job so a suspended child cannot stay up outside the caller.
+        if let Err(error) = windows::resume_suspended_primary_thread(handle) {
+            let _ = job.terminate();
+            return Err(error);
+        }
         Ok(ProcessTree::from_windows_job(job))
     }
     #[cfg(not(any(
@@ -197,6 +203,24 @@ pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
             "this target has no process-tree enrollment",
         ))
     }
+}
+
+/// Resumes the only thread of a process created with `CREATE_SUSPENDED`.
+///
+/// The caller must still hold `process`, so the pid cannot be reused while
+/// Toolhelp looks up the thread. `tokio::process::Command` does not return
+/// the `CreateProcessW` thread handle. Exactly one thread is required; that
+/// is the suspended primary thread.
+///
+/// # Errors
+///
+/// Returns an error when the process id cannot be read, the thread snapshot
+/// fails, the process does not have exactly one thread, or resume fails.
+#[cfg(windows)]
+pub fn resume_suspended_primary_thread(
+    process: std::os::windows::io::RawHandle,
+) -> std::io::Result<()> {
+    windows::resume_suspended_primary_thread(process)
 }
 
 #[cfg(unix)]
