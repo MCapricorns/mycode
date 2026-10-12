@@ -174,7 +174,7 @@ or Mach-O image runs directly. A direct shebang wrapper runs its interpreter wit
 the script path and args. Batch files and a shebang argument of `-c` are rejected. \
 `write` and `edit` remain \
 available. `read`, `grep`, and `find` stay in-process. Do not use this tool to talk \
-to the user. Edits are not undone. Execution is unsandboxed current-user execution. \
+to the user. Edits are not undone. Execution is unsandboxed current-user execution unless the opt-in OS sandbox is enabled; that helper is best-effort write confinement, not a security boundary. \
 Captured stdout/stderr is truncated beyond 50 KiB. A non-zero exit is an error result, \
 not a tool failure. Default timeout: 120 s. There is no permission prompt. Output is \
 captured as UTF-8.";
@@ -192,7 +192,7 @@ directly. A direct shebang wrapper runs its interpreter with the script path and
 args. Batch files and a shebang argument of `-c` are rejected. `write` and `edit` \
 remain available. `read`, `grep`, and \
 `find` stay in-process. Do not use this tool to talk to the user. Edits are not \
-undone. Execution is unsandboxed current-user execution. Captured stdout/stderr is \
+undone. Execution is unsandboxed current-user execution unless the opt-in OS sandbox is enabled; that helper is best-effort write confinement, not a security boundary. Captured stdout/stderr is \
 truncated beyond 50 KiB. A non-zero exit is an error result, not a tool failure. \
 Default timeout: 120 s. There is no permission prompt. Output is captured as UTF-8.";
 
@@ -205,7 +205,7 @@ script. `mode` `program` spawns `program` with an explicit `args` vector and doe
 not start a shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. \
 `write` and `edit` remain available. `read`, `grep`, and `find` stay in-process. \
 Do not use this tool to talk to the user. Edits are not undone. Execution is \
-unsandboxed current-user execution. Captured stdout/stderr is truncated beyond \
+unsandboxed current-user execution unless the opt-in OS sandbox is enabled; that helper is best-effort write confinement, not a security boundary. Captured stdout/stderr is truncated beyond \
 50 KiB. A non-zero exit is an error result, not a tool failure. Default timeout: \
 120 s. There is no permission prompt.";
 
@@ -218,7 +218,7 @@ script. `mode` `program` spawns `program` with an explicit `args` vector and doe
 not start a shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. \
 `write` and `edit` remain available. `read`, `grep`, and `find` stay in-process. \
 Do not use this tool to talk to the user. Edits are not undone. Execution is \
-unsandboxed current-user execution. Captured stdout/stderr is truncated beyond \
+unsandboxed current-user execution unless the opt-in OS sandbox is enabled; that helper is best-effort write confinement, not a security boundary. Captured stdout/stderr is truncated beyond \
 50 KiB. A non-zero exit is an error result, not a tool failure. Default timeout: \
 120 s. There is no permission prompt.";
 
@@ -234,7 +234,9 @@ with the script path and args. Batch files and a shebang argument of `-c` are \
 rejected. `write` and `edit` remain \
 available. `read`, `grep`, and `find` stay in-process. Do not use this tool to \
 talk to the user. Edits are not undone. Execution is unsandboxed current-user \
-execution. Captured stdout/stderr is truncated beyond 50 KiB. A non-zero exit is \
+execution unless the opt-in OS sandbox is enabled; that helper is best-effort \
+write confinement, not a security boundary. Captured stdout/stderr is truncated \
+beyond 50 KiB. A non-zero exit is \
 an error result, not a tool failure. Default timeout: 120 s. There is no \
 permission prompt.";
 
@@ -246,7 +248,7 @@ Each call is a new process. Prefer `write` and `edit` for file changes. `mode` \
 `program` spawns `program` with an explicit `args` vector and does not start a \
 shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. `read`, \
 `grep`, and `find` stay in-process. Do not use this tool to talk to the user. \
-Edits are not undone. Execution is unsandboxed current-user execution. Captured \
+Edits are not undone. Execution is unsandboxed current-user execution unless the opt-in OS sandbox is enabled; that helper is best-effort write confinement, not a security boundary. Captured \
 stdout/stderr is truncated beyond 50 KiB. A non-zero exit is an error result, \
 not a tool failure. Default timeout: 120 s. There is no permission prompt.";
 

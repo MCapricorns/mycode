@@ -93,7 +93,10 @@ pub struct TurnEnv<'a> {
     /// Session key for the warm `run_code` interpreter. `None` cold-starts
     /// Python on every call. Scout and the main agent still use separate
     /// processes: isolation is part of the pool key, not this string.
+    /// Opt-in OS sandboxing ignores this key and cold-starts every call.
     pub ptc_session: Option<String>,
+    /// Opt-in OS helper for `shell` and `run_code`. Default off.
+    pub os_sandbox: bool,
 }
 
 impl<'a> TurnEnv<'a> {
@@ -115,7 +118,14 @@ impl<'a> TurnEnv<'a> {
             read_roots: Vec::new(),
             steer: None,
             ptc_session: None,
+            os_sandbox: false,
         }
+    }
+
+    /// Opt `shell` and `run_code` into the best-effort OS helper.
+    pub fn with_os_sandbox(mut self, enabled: bool) -> Self {
+        self.os_sandbox = enabled;
+        self
     }
 
     /// Use this cancellation token (builder style).

@@ -602,7 +602,8 @@ impl BridgeAgentHost {
         };
         extra_roots.sort();
         let read_roots = mycode_config::skill_read_roots(crate::turn::os_user_home().as_deref());
-        let system = subagent_system_prompt(
+        let os_sandbox = self.settings.tools.os_sandbox;
+        let mut system = subagent_system_prompt(
             role,
             &registry,
             &run_dir,
@@ -611,6 +612,10 @@ impl BridgeAgentHost {
             std::env::consts::ARCH,
             &shell,
         );
+        if os_sandbox {
+            system.push_str("\n\n");
+            system.push_str(mycode_tools::os_sandbox_prompt_note());
+        }
         let mut config = AgentConfig::new()
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));
@@ -636,7 +641,8 @@ impl BridgeAgentHost {
                 .with_cwd(run_dir)
                 .with_extra_roots(extra_roots)
                 .with_read_roots(read_roots)
-                .with_ptc_session(ptc_session);
+                .with_ptc_session(ptc_session)
+                .with_os_sandbox(os_sandbox);
             let outcome = agent.prompt(prompt, &env).await;
             forwarder.abort();
             if let Err(error) = outcome {
