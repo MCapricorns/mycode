@@ -2,9 +2,11 @@
 //!
 //! This module is not a tool. The model-facing name is the active shell tool
 //! (`powershell`, `bash`, or `cmd`). The caller supplies `program` plus
-//! `args`; this path never inserts a shell or parses shell syntax. Only PE,
-//! ELF, and Mach-O images are launched. Scripts require an explicit
-//! interpreter, or shell-tool `mode` `script`. Execution is unsandboxed
+//! `args`; this path never inserts a shell or parses shell syntax. PE, ELF,
+//! and Mach-O images launch directly. A direct shebang wrapper (one
+//! interpreter, at most one argument, no `-c` or `env -S`) is exec'd as that
+//! interpreter with the script path and `args`. Batch files and anything else
+//! require an explicit interpreter, or shell-tool `mode` `script`. Execution is unsandboxed
 //! current-user execution with normal file and network access; environment
 //! allowlisting is not isolation. There is no Core permission prompt: a
 //! registered, schema-valid shell-tool call is dispatched directly.
@@ -72,6 +74,13 @@ pub(crate) enum ResolveError {
         /// Absolute PATH entries searched; `None` when a path open missed.
         searched: Option<usize>,
     },
+    /// The resolved file is a direct shebang wrapper, not a kernel image.
+    Shebang {
+        /// Canonical path of the script.
+        script: std::path::PathBuf,
+        /// Parsed shebang line.
+        shebang: image::Shebang,
+    },
     /// Any other rejection; callers must fail closed.
     Other(ToolError),
 }
@@ -100,6 +109,7 @@ impl ResolveError {
     pub(crate) fn into_tool_error(self) -> ToolError {
         match self {
             not_found @ Self::NotFound { .. } => ToolError::InvalidArgs(not_found.to_string()),
+            shebang @ Self::Shebang { .. } => ToolError::InvalidArgs(shebang.to_string()),
             Self::Other(error) => error,
         }
     }
@@ -125,6 +135,13 @@ impl std::fmt::Display for ResolveError {
                 program,
                 searched: None,
             } => write!(f, "program {program} not found"),
+            Self::Shebang { script, shebang } => write!(
+                f,
+                "{} is a wrapper script ({}). program mode follows that shebang \
+                 by running the interpreter with the script path and args",
+                script.display(),
+                shebang.line
+            ),
             Self::Other(error) => write!(f, "{error}"),
         }
     }
@@ -151,6 +168,8 @@ pub(crate) struct PreparedIdentity {
     pub image: &'static str,
     /// Redacted environment lengths; values are never copied here.
     pub env_summary: Value,
+    /// Script path when `program` was a direct shebang wrapper.
+    pub wrapper: Option<String>,
 }
 
 /// Snapshots the allowlisted child environment for one structured launch.
@@ -195,6 +214,7 @@ pub(crate) fn prepared_identity(prepared: &PreparedInvocation) -> PreparedIdenti
         image_identity: prepared.image_identity().debug_token(),
         image: image_kind_label(prepared.image_kind()),
         env_summary: environment_summary(prepared.env(), MAX_ARGUMENT_LENGTH_SUMMARY),
+        wrapper: prepared.wrapper().map(str::to_owned),
     }
 }
 
@@ -241,9 +261,12 @@ pub(crate) fn apply_execution_details(
     if let Some(translated) = metadata.translated() {
         details["translated"] = json!(translated);
     }
+    if let Some(wrapper) = &identity.wrapper {
+        details["wrapper"] = json!(wrapper);
+    }
 }
 
-/// Spawns one kernel-loadable image for `shell` program mode.
+/// Spawns one kernel image, or a direct shebang wrapper, for `shell` program mode.
 ///
 /// # Errors
 ///
@@ -312,6 +335,7 @@ pub(crate) async fn launch_program(
         image_identity,
         image,
         env_summary,
+        wrapper,
     } = identity;
     let outcome = spawn::run_pinned(prepared, lease, &ctx.cancel, &mut deadline).await?;
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -341,6 +365,7 @@ pub(crate) async fn launch_program(
                 &image_identity,
                 &invocation_digest,
                 &env_summary,
+                wrapper.as_deref(),
             ))
         }
         RunOutcome::CollectFailed { error, teardown } => {
@@ -372,6 +397,7 @@ pub(crate) async fn launch_program(
                 &image_identity,
                 &invocation_digest,
                 &env_summary,
+                wrapper.as_deref(),
             ))
         }
         RunOutcome::Cancelled { teardown } => Err(command_cancelled_error(teardown.err())),
@@ -458,6 +484,7 @@ fn with_image_metadata(
     image_identity: &str,
     invocation_digest: &str,
     env_summary: &Value,
+    wrapper: Option<&str>,
 ) -> ToolResult {
     let details = result.details.as_mut().expect("details were populated");
     details["image"] = json!(image);
@@ -469,6 +496,9 @@ fn with_image_metadata(
     }
     if let Some(translated) = metadata.translated() {
         details["translated"] = json!(translated);
+    }
+    if let Some(wrapper) = wrapper {
+        details["wrapper"] = json!(wrapper);
     }
     result
 }

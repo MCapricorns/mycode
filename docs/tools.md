@@ -6,7 +6,7 @@
 模型的 tool_call（只能是 run_code）
     → Python 进程里的 await tools.name(...)
     → 长度前缀 JSON 控制通道
-    → 按名字取出 ToolDyn，走和原先直接调用相同的预检
+    → 按名字取出 ToolDyn，走同一套参数预检、路径锚点和权限检查
     → ToolResult
          content  回到脚本（失败则抛 ToolCallError）
          details  只给界面（diff、字节数），不进上下文
@@ -42,7 +42,7 @@
 | `edit` | 一个快照上的一批操作（最多 32 个），一次发布：`literal`（memmem / Aho-Corasick）、`fuzzy`（归一化后的 Levenshtein，只接受唯一且领先足够的最佳匹配）、有界 `regex`、行范围。也接受旧的 `{old_string, new_string}` 唯一替换。返回 revision 和有界 diff 摘要，不回整个文件。模糊匹配在分词和扫描候选窗口时每约 4 KiB 原文检查一次取消 |
 | `find` | 按 glob 找文件和目录，限制在搜索根内，遵守 `.gitignore`，跳过隐藏和被忽略的路径。默认最多报告 1000 条，排序后用 `/` 分隔。取消或超时返回错误，不给半截结果 |
 | `grep` | 进程内的内容搜索，默认字面量，`is_regex` 开正则，支持 include / exclude glob。默认最多报告 200 行 `path:line:text`，每行最多 500 字节。跳过隐藏和被忽略的文件 |
-| `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程启动工具。模型不能直接点名它，只能在 `run_code` 里写 `await tools.shell(...)`。注册表里的名字跟启动时解析到的解释器走，整个会话不变：PowerShell 是 `powershell`，bash 是 `bash`，zsh 是 `zsh`，POSIX sh 是 `sh`，只有 Windows 上两种 PowerShell 都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 直接启动一个可加载映像（PE / ELF / Mach-O），不经过 shell，shebang 脚本和批处理被拒 |
+| `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程启动工具。模型不能直接点名它，只能在 `run_code` 里写 `await tools.shell(...)`。注册表里的名字跟启动时解析到的解释器走，整个会话不变：PowerShell 是 `powershell`，bash 是 `bash`，zsh 是 `zsh`，POSIX sh 是 `sh`，只有 Windows 上两种 PowerShell 都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 启动，不解析 shell 命令字符串。PE / ELF / Mach-O 直接运行。直接 shebang 包装（一个解释器、最多一个参数，例如 `#!/bin/bash` 或 `#!/usr/bin/env python3`）改为执行那个解释器，脚本路径和 `args` 跟在后面。批处理和 shebang 参数 `-c` / `env -S` 被拒，错误里写下一步 |
 
 进程工具的两条模式共用启动路径：钉住程序身份、限制参数和环境变量、截断约 50 KiB 输出、默认 120 秒超时（`timeout_secs` 可改）。超时和取消时终止并回收整棵进程树，包括 `setsid` 脱离进程组的子孙，以及子 shell 退出后仍留在原进程组里的后台进程。shell 自己退出后工具就返回，不等后台子进程关掉继承的管道。丢掉 future 也会把清理交出去。非零退出码是 `is_error` 结果，不是循环故障。执行没有沙箱，环境变量白名单不是隔离。每次 `script` 都是新进程，`cd` 和变量赋值不会留到下一次调用。
 
@@ -78,7 +78,7 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 | --- | --- |
 | `ask_user` | 把 1–4 个问题送到界面，等用户答完再继续。在脚本里拒绝问题会抛出可捕获的 `ToolCallError`，程序继续。停止整个回合会中止程序 |
 | `agent` | 按角色再跑一个有白名单的子循环。只在能独立并行、边界清楚、并且能降低成本或提高完成质量时使用。工具名是 `agent`，在脚本里是 `await tools.agent(...)`，没有 `task` 别名。`asyncio.gather` 里的多个 `tools.agent` 会并行；能写的角色用 worktree，不共用会话目录。宿主仍限制同时跑几个。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时。并发默认 4；设置为 `0` 表示这个默认值，不是零个 |
-| `run_code` | 模型唯一能直接调用的工具。参数是 `description` 然后 `code`：`code` 是系统 Python 3.10+ 里一段 async 函数体。其它工具只能写成 `await tools.name(...)`，名字不是标识符时用 `await tools["name"](...)`。每次新进程、精简环境。控制通道优先是继承的 Unix 套接字或 Windows 命名管道，不行才用带一次性令牌的本机 TCP；令牌放在环境变量里，不放在命令行，核对之后才下发程序。内层调用经过和原先直接调用相同的路径预检。`read`、`grep`、`find`、`web_search`、`fetch_content` 和 `agent` 可 `asyncio.gather` 重叠；`write`、`edit`、`shell` 按提交顺序单独执行。只有 `print` 和 `return` 回到模型。一次最多 48 次工具调用、8 路并行、32 个未完成调用、120 秒；回到模型的文本上限 8000 字节。程序里的 `read` 不带 `[revision ...]` 标签。找不到 Python 时返回按操作系统写的安装步骤，窗口用同一段说明做横幅 |
+| `run_code` | 模型唯一能直接调用的工具。参数是 `description` 然后 `code`：`code` 是系统 Python 3.10+ 里一段 async 函数体。其它工具只能写成 `await tools.name(...)`，名字不是标识符时用 `await tools["name"](...)`。每次新进程、精简环境。控制通道在 Unix 上是继承的套接字对（没有落在文件系统上的套接字），令牌从这根套接字交给子进程。Windows 以及套接字对打不开时用带一次性令牌的 `127.0.0.1` TCP，令牌在一个 `0600` 文件里，读完即删。令牌不放在命令行，也不放进环境变量。核对之后才下发程序。内层调用经过同一套路径预检。`read`、`grep`、`find`、`web_search`、`fetch_content` 和 `agent` 可 `asyncio.gather` 重叠；`write`、`edit`、`shell` 按提交顺序单独执行。只有 `print` 和 `return` 回到模型。一次最多 48 次工具调用、8 路并行、32 个未完成调用、120 秒；回到模型的文本上限 8000 字节。程序里的 `read` 不带 `[revision ...]` 标签。找不到 Python 时返回按操作系统写的安装步骤，窗口用同一段说明做横幅 |
 | `web_search` / `fetch_content` | 有界 HTTP：每次最多 8 条结果 / 8 个 URL。搜索结果是标题、URL 和最多 240 字符的摘要，重复 URL 丢掉，相同查询缓存 10 分钟。`fetch_content` 带 `goal` 时只返回匹配摘录（每页约 1200 字符）；不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)` |
 
 网页后端由设置决定：启用的那个优先；都没启用时用第一个有钥匙（环境变量或 `web-<id>`）的后端。Querit 和自定义后端走 `POST {endpoint}/v1/search` 与 `/v1/contents`，AnySearch 走 `/v1/search` 与 `/v1/extract`。Querit 没钥匙时调用失败并提示去设置页粘贴或设 `QUERIT_API_KEY`；已启用的 AnySearch 没钥匙时匿名访问。
@@ -87,7 +87,18 @@ MCP 工具在脚本里叫 `server__tool`（例如 `await tools.docs__lookup(...)
 
 ## 改文件
 
-`write` 和 `edit` 仍然可用。进程工具的 `mode` `script` 也可以改文件：bash 里用 Python（`python3` 或 `python`）的引号 heredoc 或短脚本，PowerShell 里用 here-string 管道给 `python`。`mode` `program` 不经过 shell，只启动可加载映像。这些路径都不做文件快照。撤回或编辑一条对话不会把工作区文件恢复或删掉。
+`write` 和 `edit` 仍然可用。进程工具的 `mode` `script` 也可以改文件：bash 里用 Python（`python3` 或 `python`）的引号 heredoc 或短脚本，PowerShell 里用 here-string 管道给 `python`。`mode` `program` 不解析 shell 命令字符串。可加载映像直接启动；直接 shebang 包装改由它的解释器执行。这些路径都不做文件快照。撤回或编辑一条对话不会把工作区文件恢复或删掉。
+
+## 残留风险
+
+这些是现在代码的真实边界，不是还没做的待办。
+
+- **控制通道。** 令牌是两个 UUID v4 拼成的十六进制串，等长比较不提前返回。空令牌拒绝。帧是 4 字节大端长度加 UTF-8 JSON；长度为 0 或超过 8 MiB 的帧在分配缓冲之前拒绝，畸形 JSON 结束这次程序。Unix 用 `socketpair`，描述符不在文件系统上，令牌从这根套接字写给子进程，不进环境变量（`/proc/self/environ` 保留的是 exec 时的初始环境，`unsetenv` 清不掉）。Windows 不用命名管道（Python 对同步管道句柄的读写会互相卡住），只听 `127.0.0.1` 上的临时端口；令牌写在引导目录里一个 `0600` 文件，子进程读完就删，环境里只有这个路径。非环回地址的连接丢掉。一个不发 `ready` 或令牌不对的连接最多占 500 毫秒，然后继续等真正的解释器；连续 32 次失败就关掉这次程序。核对通过后监听套接字关闭。同一用户仍能在令牌文件删掉之前读到它，也能看见初始环境里的描述符号或文件路径；这和 shell 一样，不把同账户敌对进程算进边界。
+- **引导脚本。** 写在临时目录里一个随机名字的 `0700` 目录中，文件 `0600`，`create_new` 不覆盖已有文件。脚本内容本来就编进二进制，不是秘密。
+- **继承的文件描述符。** Linux 上在 exec 前用 `close_range(CLOSE_RANGE_CLOEXEC)` 把 3 号及以上的描述符标成 exec 时关闭，再只对控制通道清掉这个标志。其它 Unix 对 3 到 255 做同样的标记。
+- **scout。** 只读目录（没有 `write` / `edit` / `shell` / `agent`）时 Python 加 `-I`，环境是 shell 那份允许名单，用户代码前安装 audit hook。hook 拦截带写标志的 `open`（标志在任一参数槽里都算）、chmod/chown/utime/xattr、删改名和建目录、`sqlite3.*`（审计事件不带打开模式，所以只读连接也一起拒绝）、subprocess / exec / spawn / `forkpty` / `kill`、ctypes，以及新建套接字。`readOnlyHint` 只有 JSON 布尔 `true` 才算只读；缺省、`false` 或字符串 `"true"` 都不进 scout 的 MCP 目录。
+- **hook 挡不住的东西。** 已经打开的描述符上的 `os.write`（控制通道自己就这样写帧；宿主仍然只派发目录里的工具）。不经过解释器的本机代码，例如工作区里一个 `.so` 被 `import` 之后直接 syscall。`mmap` 如果能拿到可写映射。主代理的 Python 不加 `-I`，用户 site 的 `sitecustomize` 会在令牌从环境删掉之前运行；scout 有 `-I`，不会。这些都不是安全边界。主代理的 Python 与它的 shell 权限相同。
+- **`program` 模式的 shebang。** 只跟一层。解释器必须是可加载映像。`#!/usr/bin/env name` 会在允许的 PATH 里找 `name`。`-c`、`--command` 和 `env -S` 拒绝，错误说明改用 `mode` `script` 或自己把解释器放进 `program`。包装脚本的正文仍然按那个解释器执行，参数是 argv，不是拼进 `sh -c` 的字符串。批处理仍然拒绝。
 
 ## 不放在这里的东西
 

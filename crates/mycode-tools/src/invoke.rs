@@ -1,4 +1,4 @@
-//! Shared tool preflight used by a direct call and by a `run_code` inner call.
+//! Shared tool preflight for every tool execution, including a `run_code` inner call.
 //!
 //! Both paths anchor the path, bind the file or search capability, and then
 //! execute the same tool. There is no separate permission prompt: a

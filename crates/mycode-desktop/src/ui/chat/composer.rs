@@ -93,6 +93,27 @@ pub(super) fn render_composer(
             .children(menu)
             .into_any_element()
     });
+    let model_chip = {
+        let menu = workspace
+            .vm()
+            .model_menu_open
+            .then(|| super::menus::render_model_menu(workspace, window, cx));
+        div()
+            .relative()
+            .child(composer_text_button(
+                "model",
+                model_label.clone(),
+                workspace.vm().model_menu_open,
+                px(168.),
+                |workspace, window, cx| {
+                    let open = !workspace.vm().model_menu_open;
+                    workspace.on_toggle_model_menu(open, window, cx);
+                },
+                cx,
+            ))
+            .children(menu)
+            .into_any_element()
+    };
     let theme = cx.theme();
     let session_project = workspace
         .vm()
@@ -195,17 +216,7 @@ pub(super) fn render_composer(
                             },
                             cx,
                         ))
-                        .child(composer_text_button(
-                            "model",
-                            model_label,
-                            workspace.vm().model_menu_open,
-                            px(168.),
-                            |workspace, window, cx| {
-                                let open = !workspace.vm().model_menu_open;
-                                workspace.on_toggle_model_menu(open, window, cx);
-                            },
-                            cx,
-                        ))
+                        .child(model_chip)
                         .when_some(thinking_chip, |this, chip| this.child(chip))
                         .when_some(context_meter(workspace), |this, meter| {
                             this.child(

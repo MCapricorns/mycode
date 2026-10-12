@@ -5,6 +5,20 @@
 //! here; the platform launch path never calls `cmd.exe` or `ShellExecute`.
 use crate::tool::ToolError;
 
+/// One direct shebang: an interpreter path plus at most one argument.
+///
+/// This is the line the kernel would pass to `execve`. `env` names a single
+/// program (`python3`), not `env -S` or other flag soup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Shebang {
+    /// Interpreter token as written (`/bin/bash` or `/usr/bin/env`).
+    pub interpreter: String,
+    /// The single optional argument, if the line has one.
+    pub argument: Option<String>,
+    /// The shebang line without its trailing newline, for errors.
+    pub line: String,
+}
+
 /// Kind of kernel-loadable image proven from magic bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ImageKind {
@@ -42,28 +56,33 @@ const EM_RISCV: u16 = 243;
 
 /// Classifies a kernel-loadable image from a prefix of the file.
 ///
+/// Shebang scripts are not classified here. Call [`parse_shebang`] first and
+/// launch the interpreter; this function only accepts PE, ELF, and Mach-O.
+///
 /// `header` should contain at least the first 4 KiB when available. When the
 /// PE offset lies beyond `header`, `pe_tail` must contain the four signature
 /// bytes at that offset.
 ///
 /// # Errors
 ///
-/// Returns [`ToolError::InvalidArgs`] when the bytes are a shebang, a batch
-/// script, a DOS MZ stub without PE, or otherwise not a supported image.
+/// Returns [`ToolError::InvalidArgs`] when the bytes are a batch script, a
+/// DOS MZ stub without PE, or otherwise not a supported image.
 pub(super) fn classify_image(
     header: &[u8],
     pe_tail: Option<&[u8; 4]>,
 ) -> Result<ImageKind, ToolError> {
     if header.starts_with(b"#!") {
         return Err(ToolError::InvalidArgs(
-            "program is a shebang script; shell program mode runs kernel-loadable \
-             images only (pass an explicit interpreter, or use shell mode script)"
+            "program is a wrapper script. program mode follows a direct shebang \
+             before this check; use mode script if the interpreter cannot be launched"
                 .into(),
         ));
     }
     if looks_like_batch(header) {
         return Err(ToolError::InvalidArgs(
-            "program is a batch script; shell program mode never invokes cmd.exe".into(),
+            "program is a batch script. program mode never invokes cmd.exe. \
+             Use mode script, or pass cmd.exe as program and the script path in args."
+                .into(),
         ));
     }
     if header.starts_with(b"\x7fELF") {
@@ -205,6 +224,157 @@ fn looks_like_batch(header: &[u8]) -> bool {
     lower.starts_with("@echo") || lower.starts_with("rem ") || lower.starts_with(": ")
 }
 
+/// Parses a direct shebang from a file prefix.
+///
+/// One interpreter and at most one argument. `#!/usr/bin/env name` is allowed
+/// when `name` is a single program token. Command flags such as `-c` and
+/// `env -S` are rejected with an actionable error.
+///
+/// # Errors
+///
+/// Returns [`ToolError::InvalidArgs`] when the line is empty, too long, has
+/// more than one argument, or would execute code instead of a script.
+pub(super) fn parse_shebang(header: &[u8]) -> Result<Shebang, ToolError> {
+    let line_end = header
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(header.len());
+    let mut line = &header[..line_end];
+    if line.last() == Some(&b'\r') {
+        line = &line[..line.len() - 1];
+    }
+    if line.len() > 255 {
+        return Err(ToolError::InvalidArgs(
+            "program is a wrapper script whose shebang is longer than 255 bytes. \
+             The kernel would not execute that line. Use mode script, or pass the \
+             interpreter as program and the script path in args."
+                .into(),
+        ));
+    }
+    let text = String::from_utf8_lossy(line);
+    let text = text.trim();
+    let rest = text.strip_prefix("#!").unwrap_or(text).trim();
+    if rest.is_empty() {
+        return Err(ToolError::InvalidArgs(
+            "program is a wrapper script with an empty shebang. Use mode script, \
+             or pass the interpreter as program and the script path in args."
+                .into(),
+        ));
+    }
+    let mut parts = rest.split_whitespace();
+    let Some(interpreter) = parts.next() else {
+        return Err(ToolError::InvalidArgs(
+            "program is a wrapper script with an empty shebang. Use mode script, \
+             or pass the interpreter as program and the script path in args."
+                .into(),
+        ));
+    };
+    let argument = parts.next().map(str::to_owned);
+    if parts.next().is_some() {
+        return Err(ToolError::InvalidArgs(format!(
+            "program is a wrapper script ({text}). The kernel passes only one \
+             shebang argument, and this line has more. Use mode script, or launch \
+             the interpreter yourself: program=\"{interpreter}\" with the script path in args."
+        )));
+    }
+    if let Some(arg) = &argument
+        && is_command_flag(arg)
+    {
+        return Err(ToolError::InvalidArgs(format!(
+            "program is a wrapper script ({text}). program mode will not run it: \
+             the shebang argument `{arg}` would execute the next argument as code \
+             instead of as a script path. Use mode script, or pass the real image \
+             as program and the script path in args."
+        )));
+    }
+    if is_env_interpreter(interpreter) {
+        match argument.as_deref() {
+            None => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "program is a wrapper script ({text}). `env` has no program name. \
+                     Use an absolute interpreter, or `#!/usr/bin/env name`."
+                )));
+            }
+            Some(name) if !is_env_program_name(name) => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "program is a wrapper script ({text}). `env` must name one program \
+                     (for example `python3`), not `{name}`. program mode does not run \
+                     `env -S` or extra flags. Use mode script, or pass the interpreter \
+                     path as program."
+                )));
+            }
+            Some(_) => {}
+        }
+    } else if !is_absolute_interpreter(interpreter) {
+        return Err(ToolError::InvalidArgs(format!(
+            "program is a wrapper script ({text}). The interpreter `{interpreter}` is \
+             not an absolute path. Use `#!/usr/bin/env name` or an absolute interpreter, \
+             or use mode script."
+        )));
+    }
+    Ok(Shebang {
+        interpreter: interpreter.to_owned(),
+        argument,
+        line: text.to_owned(),
+    })
+}
+
+impl Shebang {
+    /// Interpreter to pin, plus argv inserted before the script path.
+    ///
+    /// `#!/usr/bin/env python3` pins `python3` and does not pass `python3`
+    /// again. `#!/bin/bash -e` pins `/bin/bash` and keeps `-e`.
+    #[must_use]
+    pub(super) fn launch_target(&self) -> (String, Vec<String>) {
+        if is_env_interpreter(&self.interpreter) {
+            let name = self
+                .argument
+                .clone()
+                .expect("parse_shebang rejects env without a program name");
+            (name, Vec::new())
+        } else {
+            let prefix = self.argument.clone().into_iter().collect();
+            (self.interpreter.clone(), prefix)
+        }
+    }
+}
+
+fn is_command_flag(arg: &str) -> bool {
+    let lower = arg.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "-c" | "--command" | "/c" | "-command" | "-encodedcommand" | "--%"
+    ) || lower.starts_with("-c=")
+}
+
+fn is_env_interpreter(interpreter: &str) -> bool {
+    interpreter == "env"
+        || interpreter.ends_with("/env")
+        || interpreter.ends_with("\\env")
+        || interpreter.ends_with("/env.exe")
+        || interpreter.ends_with("\\env.exe")
+}
+
+fn is_env_program_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '+' | '-'))
+}
+
+fn is_absolute_interpreter(interpreter: &str) -> bool {
+    if interpreter.starts_with('/') || interpreter.starts_with("\\\\") {
+        return true;
+    }
+    let bytes = interpreter.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
 /// Reads the four PE signature bytes at `lfanew` when they lie past `header`.
 ///
 /// # Errors
@@ -236,4 +406,37 @@ pub(super) fn read_pe_tail(
     file.seek(SeekFrom::Start(0))
         .map_err(|err| ToolError::InvalidArgs(format!("program could not be rewound: {err}")))?;
     Ok(Some(tail))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_command_flag, parse_shebang};
+
+    #[test]
+    fn a_direct_shebang_and_env_name_parse() {
+        let bash = parse_shebang(b"#!/bin/bash\n").expect("bash");
+        assert_eq!(bash.interpreter, "/bin/bash");
+        assert_eq!(bash.argument, None);
+        let flagged = parse_shebang(b"#!/bin/bash -e\r\n").expect("errexit");
+        assert_eq!(flagged.argument.as_deref(), Some("-e"));
+        let env = parse_shebang(b"#!/usr/bin/env python3\n").expect("env");
+        assert_eq!(env.interpreter, "/usr/bin/env");
+        assert_eq!(env.argument.as_deref(), Some("python3"));
+    }
+
+    #[test]
+    fn command_flags_and_env_soup_are_actionable() {
+        let dash_c = parse_shebang(b"#!/bin/bash -c\necho hi\n").expect_err("c");
+        let dash_c = dash_c.to_string();
+        assert!(dash_c.contains("-c"), "{dash_c}");
+        assert!(dash_c.contains("mode script"), "{dash_c}");
+        let env_s = parse_shebang(b"#!/usr/bin/env -S python3 -u\n").expect_err("env -S");
+        let env_s = env_s.to_string();
+        assert!(
+            env_s.contains("env -S") || env_s.contains("not `-S`"),
+            "{env_s}"
+        );
+        assert!(is_command_flag("-c"));
+        assert!(!is_command_flag("-e"));
+    }
 }

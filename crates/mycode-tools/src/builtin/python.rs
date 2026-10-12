@@ -97,6 +97,15 @@ pub fn set_python_status_for_test(status: Option<PythonStatus>) {
     *OVERRIDE.lock().unwrap_or_else(|err| err.into_inner()) = status;
 }
 
+/// The real probe, ignoring [`set_python_status_for_test`].
+///
+/// Other tests swap the process-global override. This read must not observe
+/// that swap.
+#[cfg(test)]
+fn probed_python_status() -> PythonStatus {
+    STATUS.get_or_init(detect_python).clone()
+}
+
 fn detect_python() -> PythonStatus {
     let mut too_old: Option<String> = None;
     for candidate in candidates() {
@@ -258,8 +267,8 @@ pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIN_PYTHON_MINOR, PythonInterpreter, PythonStatus, parse_version, python_install_steps,
-        python_status,
+        MIN_PYTHON_MINOR, PythonInterpreter, PythonStatus, parse_version, probed_python_status,
+        python_install_steps,
     };
 
     #[test]
@@ -299,7 +308,7 @@ mod tests {
 
     #[test]
     fn this_process_finds_python_or_explains_how() {
-        match python_status() {
+        match probed_python_status() {
             PythonStatus::Ready(found) => {
                 assert!(found.major > 3 || found.minor >= MIN_PYTHON_MINOR);
                 assert!(

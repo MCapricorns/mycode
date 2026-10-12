@@ -17,7 +17,7 @@ use gpui_kit::{
 };
 
 use crate::i18n::t;
-use crate::ui::skin::{self, popover_panel};
+use crate::ui::skin::{self, menu_panel};
 use crate::view_model::{DesktopAction, WorkspaceState};
 use crate::workspace::Workspace;
 
@@ -214,10 +214,13 @@ pub(crate) fn render_model_picker(
     } else {
         render_provider_step(workspace, &target, cx)
     };
-    popover_panel("model-picker", &theme)
+    menu_panel("model-picker", &theme)
         .w(px(340.))
+        .max_w_full()
+        .max_h(px(420.))
+        .overflow_y_scroll()
         .flex_none()
-        .p_2()
+        .p_1()
         .flex()
         .flex_col()
         .gap_1()

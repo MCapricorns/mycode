@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-12
+
+### Fixed
+
+- `shell` 的 `program` 模式会执行直接 shebang 包装（例如 `#!/bin/bash` 的 `/usr/bin/google-chrome`，或 `#!/usr/bin/env python3`）：钉住解释器映像，把脚本路径和 `args` 作为 argv 传进去，不拼 shell 命令字符串。`-c`、`env -S` 和批处理仍拒绝，错误写明改用 `mode` `script` 或自己指定解释器。
+- PTC 控制通道：卡住或不带正确令牌的本机 TCP 连接不再占满整个启动窗口；非环回地址直接丢掉。令牌不再放进环境变量（`/proc/self/environ` 会一直保留 exec 时的初始环境）：Unix 从继承的套接字对写给子进程，TCP 放在读完即删的 `0600` 文件里。引导脚本写进随机名的 `0700` 目录。Linux 上 exec 前把多余文件描述符标成 close-on-exec。
+- scout 的 audit hook 补上 `sqlite3`、chmod/chown/utime/xattr、`os.open` 的写标志（不论在哪个参数槽）、`forkpty` 和 `kill`。hook 仍然是尽力而为，不是安全边界；残留风险写在 `docs/tools.md`。
+- 思考菜单锚在 Thinking 按钮右缘，模型菜单锚在模型按钮左缘。两块菜单都是不透明实底，过高时在菜单内滚动。
+
+### Changed
+
+- README 收成一句话、一张主图、短功能列表、安装、快速开始，以及 PTC 的短说明。旧截图换成和画面一致的 `docs/images/`。细节留在 `docs/`。
+- `ptc_eval` 的场景写明「一个文件的查找」和「一次编辑」，评分接受 `tools.name` 和 `tools["name"]`，一次编辑不再把只读或 `tools.shell` 算通过。没有配置模型密钥时测试仍跳过。
+
 ## [0.11.4] - 2026-10-12
 
 ### Fixed
@@ -153,7 +167,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.5...HEAD
+[0.11.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.5
 [0.11.2]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.2
 [0.11.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.1
 [0.11.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.0
