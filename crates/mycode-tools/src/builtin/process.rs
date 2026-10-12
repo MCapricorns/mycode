@@ -479,6 +479,18 @@ fn list_descendants(_root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     Ok(Vec::new())
 }
 
+#[cfg(unix)]
+fn get_process_group(pid: libc::pid_t) -> std::io::Result<libc::pid_t> {
+    // SAFETY: `pid` was range-checked from Child::id and getpgid only observes
+    // process metadata. A return value of -1 is the documented failure value.
+    let group = unsafe { libc::getpgid(pid) };
+    if group == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(group)
+    }
+}
+
 #[cfg(test)]
 mod resume_source {
     #[test]
@@ -497,6 +509,18 @@ mod resume_source {
             "resume the CreateProcessW thread handle"
         );
         assert!(source.contains("resume_thread_handle"));
+        assert!(
+            source.contains("PROC_THREAD_ATTRIBUTE_HANDLE_LIST"),
+            "inherit only the child's stdio handles"
+        );
+        assert!(
+            source.contains("windows_batch_command_line_utf16"),
+            "batch launchers need cmd.exe escaping"
+        );
+        assert!(
+            source.contains("parent process"),
+            "document which PATH CreateProcessW searches"
+        );
     }
 }
 
@@ -510,17 +534,5 @@ mod tests {
         assert_eq!(ppid_from_stat("9 (sleep 303) S 5 9 9"), Some(5));
         assert_eq!(ppid_from_stat("3 (a) b) S 42 1 1"), Some(42));
         assert!(ppid_from_stat("no paren").is_none());
-    }
-}
-
-#[cfg(unix)]
-fn get_process_group(pid: libc::pid_t) -> std::io::Result<libc::pid_t> {
-    // SAFETY: `pid` was range-checked from Child::id and getpgid only observes
-    // process metadata. A return value of -1 is the documented failure value.
-    let group = unsafe { libc::getpgid(pid) };
-    if group == -1 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(group)
     }
 }

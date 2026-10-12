@@ -112,11 +112,106 @@ fn reject_nul(value: &str, what: &str) -> Result<(), ToolError> {
     }
 }
 
+/// ASCII symbols cmd.exe can leave unquoted in a batch argument.
+const BATCH_UNQUOTED: &str = "#$*+-./:?@\\_";
+
+/// Whether `program` is a `.bat` or `.cmd` launcher, ignoring ASCII case.
+#[must_use]
+pub(crate) fn is_batch_script(program: &OsStr) -> bool {
+    let text = program.to_string_lossy();
+    let file = text.rsplit(['\\', '/']).next().unwrap_or(text.as_ref());
+    let Some((_, ext)) = file.rsplit_once('.') else {
+        return false;
+    };
+    ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd")
+}
+
+/// Command line for `cmd.exe /e:ON /v:OFF /d /c`, without a trailing NUL.
+///
+/// `.bat` and `.cmd` files are parsed by cmd.exe, not `CommandLineToArgvW`.
+/// `%` is rewritten so it is not an environment expansion, `"` is doubled,
+/// and `\r` / `\n` are rejected because they truncate the command.
+///
+/// # Errors
+///
+/// Returns [`ToolError::InvalidArgs`] when the script path contains `"` or
+/// ends with `\`, an argument contains a NUL or a newline, or the encoded
+/// line exceeds 32,767 UTF-16 units including the terminator.
+pub(crate) fn windows_batch_command_line_utf16(
+    script: &OsStr,
+    args: &[String],
+) -> Result<Vec<u16>, ToolError> {
+    let script_units = encode_os(script)?;
+    if script_units.contains(&u16::from(b'"')) || script_units.last() == Some(&u16::from(b'\\')) {
+        return Err(ToolError::InvalidArgs(
+            "Windows batch script path may not contain `\"` or end with `\\`".into(),
+        ));
+    }
+    let mut cmd: Vec<u16> = "cmd.exe /e:ON /v:OFF /d /c \"".encode_utf16().collect();
+    cmd.push(u16::from(b'"'));
+    cmd.extend_from_slice(&script_units);
+    cmd.push(u16::from(b'"'));
+    for arg in args {
+        if arg.contains('\r') || arg.contains('\n') {
+            return Err(ToolError::InvalidArgs(
+                "batch file arguments must not contain a newline".into(),
+            ));
+        }
+        reject_nul(arg, "argument")?;
+        cmd.push(u16::from(b' '));
+        append_bat_arg(&mut cmd, arg);
+    }
+    cmd.push(u16::from(b'"'));
+    let with_terminator = cmd.len().saturating_add(1);
+    if with_terminator > WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS {
+        return Err(ToolError::InvalidArgs(format!(
+            "command line is too long for CreateProcessW's 32,767 UTF-16-code-unit limit \
+             (including the terminator): encoded length is {with_terminator}"
+        )));
+    }
+    Ok(cmd)
+}
+
+/// Quote one batch argument the way Rust's standard library does.
+fn append_bat_arg(cmd: &mut Vec<u16>, arg: &str) {
+    let mut quote = arg.is_empty() || arg.ends_with('\\');
+    for c in arg.chars() {
+        let ascii_needs_quotes =
+            c.is_ascii() && !(c.is_ascii_alphanumeric() || BATCH_UNQUOTED.contains(c));
+        if ascii_needs_quotes || c.is_control() {
+            quote = true;
+        }
+    }
+    if quote {
+        cmd.push(u16::from(b'"'));
+    }
+    let mut backslashes = 0usize;
+    for unit in arg.encode_utf16() {
+        if unit == u16::from(b'\\') {
+            backslashes += 1;
+        } else {
+            if unit == u16::from(b'"') {
+                cmd.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
+                cmd.push(u16::from(b'"'));
+            } else if unit == u16::from(b'%') || unit == u16::from(b'\r') {
+                // Zero-length `%cd:~,%` so cmd.exe does not expand `%VAR%`.
+                cmd.extend("%%cd:~,".encode_utf16());
+            }
+            backslashes = 0;
+        }
+        cmd.push(unit);
+    }
+    if quote {
+        cmd.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
+        cmd.push(u16::from(b'"'));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
 
-    use super::windows_command_line_utf16;
+    use super::{is_batch_script, windows_batch_command_line_utf16, windows_command_line_utf16};
 
     fn decode(units: &[u16]) -> String {
         String::from_utf16(units).expect("command line is valid UTF-16")
@@ -147,5 +242,42 @@ mod tests {
             windows_command_line_utf16(OsStr::new("py"), &["a\0b".to_owned()]).expect_err("nul");
         let text = error.to_string();
         assert!(text.contains("NUL"), "{text}");
+    }
+
+    #[test]
+    fn batch_scripts_are_detected_by_extension() {
+        assert!(is_batch_script(OsStr::new(r"C:\Tools\npx.cmd")));
+        assert!(is_batch_script(OsStr::new(r"C:\Tools\npx.CMD")));
+        assert!(is_batch_script(OsStr::new("run.bat")));
+        assert!(!is_batch_script(OsStr::new(r"C:\cmd\npx.exe")));
+        assert!(!is_batch_script(OsStr::new("npx")));
+    }
+
+    #[test]
+    fn batch_command_line_escapes_percent_quotes_and_ampersand() {
+        let line = windows_batch_command_line_utf16(
+            OsStr::new(r"C:\Tools\npx.cmd"),
+            &[
+                "%PATH%".to_owned(),
+                "say \"hi\"".to_owned(),
+                "a&b".to_owned(),
+            ],
+        )
+        .expect("batch command line");
+        assert_eq!(
+            decode(&line),
+            "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\Tools\\npx.cmd\" \
+             \"%%cd:~,%PATH%%cd:~,%\" \"say \"\"hi\"\"\" \"a&b\"\""
+        );
+    }
+
+    #[test]
+    fn batch_command_line_rejects_newlines_and_a_quoted_script() {
+        let newline = windows_batch_command_line_utf16(OsStr::new("npx.cmd"), &["a\nb".to_owned()])
+            .expect_err("newline");
+        assert!(newline.to_string().contains("newline"), "{newline}");
+        let quoted =
+            windows_batch_command_line_utf16(OsStr::new("np\"x.cmd"), &[]).expect_err("quote");
+        assert!(quoted.to_string().contains("batch script"), "{quoted}");
     }
 }

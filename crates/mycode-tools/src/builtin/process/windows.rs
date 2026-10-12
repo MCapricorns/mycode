@@ -19,7 +19,9 @@ use std::path::Path;
 use std::process::ExitStatus;
 use std::ptr::{null, null_mut};
 
-use crate::builtin::exec::windows_command_line_utf16;
+use crate::builtin::exec::{
+    is_batch_script, windows_batch_command_line_utf16, windows_command_line_utf16,
+};
 
 /// RAII owner for a Windows Job Object configured to kill all members when its
 /// last handle closes. `OwnedHandle` provides the matching `CloseHandle`.
@@ -206,9 +208,14 @@ impl WindowsStdioProcess {
     /// Spawns `program` suspended, enrolls it in a kill-on-close Job, then
     /// resumes `PROCESS_INFORMATION.hThread`.
     ///
-    /// `program` without a directory is searched on `PATH` from `env` because
-    /// `lpApplicationName` is null. A program with a directory is passed as
-    /// `lpApplicationName` and is not searched. stdout and stderr are pipes.
+    /// A program without a directory is resolved against `PATH` in `env`, then
+    /// the parent process `PATH`. A hit is passed as `lpApplicationName`.
+    /// When neither search finds a file, `lpApplicationName` is null and
+    /// `CreateProcessW` searches the parent process `PATH`, not the
+    /// environment block. A program that already contains a directory is
+    /// passed as `lpApplicationName` and is not searched. `.bat` and `.cmd`
+    /// files are launched through `cmd.exe` with batch escaping. Only the
+    /// child's stdio handles are inheritable. stdout and stderr are pipes.
     /// `stdin_piped` selects a pipe or the NUL device.
     ///
     /// # Errors
@@ -227,14 +234,28 @@ impl WindowsStdioProcess {
         use std::mem::size_of;
         use windows_sys::Win32::System::Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+            EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+            STARTUPINFOEXW, STARTUPINFOW,
         };
 
-        let mut command = windows_command_line_utf16(program.as_os_str(), args)
-            .map_err(|error| io::Error::other(error.to_string()))?;
+        let resolved = if program_has_directory(program) {
+            None
+        } else {
+            resolve_bare_program(program, env)
+        };
+        let launch = resolved.as_deref().unwrap_or(program);
+        let batch = is_batch_script(launch.as_os_str());
+        let mut command = if batch {
+            windows_batch_command_line_utf16(launch.as_os_str(), args)
+        } else {
+            windows_command_line_utf16(program.as_os_str(), args)
+        }
+        .map_err(|error| io::Error::other(error.to_string()))?;
         command.push(0);
-        let application = if program_has_directory(program) {
-            Some(wide_nul(program.as_os_str())?)
+        let application = if batch {
+            Some(command_prompt()?)
+        } else if program_has_directory(launch) {
+            Some(wide_nul(launch.as_os_str())?)
         } else {
             None
         };
@@ -256,21 +277,31 @@ impl WindowsStdioProcess {
         clear_inherit(&stdout_read)?;
         clear_inherit(&stderr_read)?;
 
-        let startup = STARTUPINFOW {
-            cb: u32::try_from(size_of::<STARTUPINFOW>()).expect("STARTUPINFOW fits u32"),
-            dwFlags: STARTF_USESTDHANDLES,
-            hStdInput: stdin_child.as_raw_handle(),
-            hStdOutput: stdout_write.as_raw_handle(),
-            hStdError: stderr_write.as_raw_handle(),
-            ..STARTUPINFOW::default()
+        let inherited = [
+            stdin_child.as_raw_handle(),
+            stdout_write.as_raw_handle(),
+            stderr_write.as_raw_handle(),
+        ];
+        let attributes = ProcThreadAttributeList::with_handles(&inherited)?;
+        let startup = STARTUPINFOEXW {
+            StartupInfo: STARTUPINFOW {
+                cb: u32::try_from(size_of::<STARTUPINFOEXW>()).expect("STARTUPINFOEXW fits u32"),
+                dwFlags: STARTF_USESTDHANDLES,
+                hStdInput: inherited[0],
+                hStdOutput: inherited[1],
+                hStdError: inherited[2],
+                ..STARTUPINFOW::default()
+            },
+            lpAttributeList: attributes.as_ptr(),
         };
         let mut information = PROCESS_INFORMATION::default();
         let application_ptr = application.as_ref().map_or(null(), |wide| wide.as_ptr());
         let directory_ptr = directory.as_ref().map_or(null(), |wide| wide.as_ptr());
         // SAFETY: `command` is NUL-terminated UTF-16. `application` and
         // `directory`, when present, are too. The environment block is
-        // double-NUL terminated. The three std handles are live and
-        // inheritable for this call. On FALSE, no process handles are returned.
+        // double-NUL terminated. The attribute list names the only three
+        // handles the child may inherit, and those handles are live for this
+        // call. On FALSE, no process handles are returned.
         let created = unsafe {
             CreateProcessW(
                 application_ptr,
@@ -278,13 +309,17 @@ impl WindowsStdioProcess {
                 null(),
                 null(),
                 1,
-                CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                CREATE_UNICODE_ENVIRONMENT
+                    | CREATE_NO_WINDOW
+                    | CREATE_SUSPENDED
+                    | EXTENDED_STARTUPINFO_PRESENT,
                 env_block.as_ptr().cast(),
                 directory_ptr,
-                &raw const startup,
+                (&raw const startup).cast(),
                 &raw mut information,
             )
         };
+        drop(attributes);
         drop(stdin_child);
         drop(stdout_write);
         drop(stderr_write);
@@ -614,4 +649,163 @@ fn terminate_process(process: &OwnedHandle) -> io::Result<()> {
     } else {
         Err(terminate_error)
     }
+}
+
+/// Inherited-handle list so a concurrent spawn cannot leak pipe ends into
+/// this child. The storage must outlive `CreateProcessW`.
+struct ProcThreadAttributeList {
+    list: windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST,
+    _storage: Vec<usize>,
+}
+
+impl ProcThreadAttributeList {
+    fn with_handles(handles: &[windows_sys::Win32::Foundation::HANDLE]) -> io::Result<Self> {
+        use std::mem::size_of;
+        use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+        use windows_sys::Win32::System::Threading::{
+            InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            UpdateProcThreadAttribute,
+        };
+
+        let mut bytes = 0_usize;
+        // SAFETY: a null list is the documented sizing call. `bytes` is valid
+        // output storage. The call fails with ERROR_INSUFFICIENT_BUFFER.
+        let sized = unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &raw mut bytes) };
+        let sizing_error = io::Error::last_os_error();
+        if sized != 0
+            || bytes == 0
+            || sizing_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
+        {
+            return Err(io::Error::other(format!(
+                "failed to size the inherited-handle attribute list: {sizing_error}"
+            )));
+        }
+        let units = bytes.div_ceil(size_of::<usize>());
+        let mut storage = vec![0_usize; units];
+        let list = storage.as_mut_ptr().cast();
+        // SAFETY: `storage` is aligned, writable, and at least `bytes` long.
+        if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &raw mut bytes) } == 0 {
+            return Err(io::Error::other(format!(
+                "failed to initialize the inherited-handle attribute list: {}",
+                io::Error::last_os_error()
+            )));
+        }
+        let attributes = Self {
+            list,
+            _storage: storage,
+        };
+        // SAFETY: `attributes.list` is initialized for one attribute.
+        // `handles` stays live through CreateProcessW. The byte count is the
+        // size of the HANDLE array.
+        let updated = unsafe {
+            UpdateProcThreadAttribute(
+                attributes.list,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                handles.as_ptr().cast(),
+                std::mem::size_of_val(handles),
+                null_mut(),
+                null(),
+            )
+        };
+        if updated == 0 {
+            return Err(io::Error::other(format!(
+                "failed to restrict inherited child handles: {}",
+                io::Error::last_os_error()
+            )));
+        }
+        Ok(attributes)
+    }
+
+    fn as_ptr(&self) -> windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.list
+    }
+}
+
+impl Drop for ProcThreadAttributeList {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
+        // SAFETY: `list` was initialized once and is deleted exactly once
+        // before its backing storage is released.
+        unsafe { DeleteProcThreadAttributeList(self.list) };
+    }
+}
+
+/// `System32\cmd.exe`, NUL-terminated, for `.bat` / `.cmd` launchers.
+fn command_prompt() -> io::Result<Vec<u16>> {
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+    let mut buf = vec![0u16; 261];
+    // SAFETY: `buf` is writable for its length. A large enough buffer receives
+    // a NUL-terminated system directory; the return value then excludes that
+    // NUL. A too-small buffer returns the required size including the NUL.
+    let written = unsafe {
+        GetSystemDirectoryW(
+            buf.as_mut_ptr(),
+            u32::try_from(buf.len()).unwrap_or(u32::MAX),
+        )
+    };
+    if written == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let written = usize::try_from(written).unwrap_or(usize::MAX);
+    if written >= buf.len() {
+        buf.resize(written, 0);
+        let written = unsafe {
+            GetSystemDirectoryW(
+                buf.as_mut_ptr(),
+                u32::try_from(buf.len()).unwrap_or(u32::MAX),
+            )
+        };
+        if written == 0 || usize::try_from(written).unwrap_or(usize::MAX) >= buf.len() {
+            return Err(io::Error::last_os_error());
+        }
+        buf.truncate(usize::try_from(written).unwrap_or(0));
+    } else {
+        buf.truncate(written);
+    }
+    buf.extend("\\cmd.exe".encode_utf16());
+    buf.push(0);
+    Ok(buf)
+}
+
+/// First existing file for a bare program name.
+///
+/// Child `PATH` from `env` is searched before the parent process `PATH`.
+/// A name with no `.` is looked up as `name.exe`, matching `CreateProcessW`.
+fn resolve_bare_program(
+    program: &Path,
+    env: &[(OsString, OsString)],
+) -> Option<std::path::PathBuf> {
+    let name = program.file_name()?;
+    let name_text = name.to_string_lossy();
+    let candidate = if name_text.contains('.') {
+        name.to_os_string()
+    } else {
+        let mut exe = name.to_os_string();
+        exe.push(".exe");
+        exe
+    };
+    let mut paths = Vec::new();
+    if let Some(value) = env_path(env) {
+        paths.push(value);
+    }
+    if let Some(parent) = std::env::var_os("PATH") {
+        paths.push(parent);
+    }
+    for path_var in paths {
+        for dir in std::env::split_paths(&path_var) {
+            let full = dir.join(&candidate);
+            if full.is_file() {
+                return Some(full);
+            }
+        }
+    }
+    None
+}
+
+fn env_path(env: &[(OsString, OsString)]) -> Option<OsString> {
+    env.iter()
+        .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| value.clone())
 }

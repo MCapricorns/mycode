@@ -21,7 +21,9 @@
 //! Windows x64 and Windows ARM64 share the `CreateProcessW` path.
 mod argv;
 #[cfg(windows)]
-pub(crate) use argv::windows_command_line_utf16;
+pub(crate) use argv::{
+    is_batch_script, windows_batch_command_line_utf16, windows_command_line_utf16,
+};
 mod env;
 mod image;
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
