@@ -8,7 +8,7 @@
 
 | 文件（家目录下） | 内容 |
 | --- | --- |
-| `settings.json` | `AppSettings`：外观、提供商、网页、MCP、子代理、shell、可选的 `tools.osSandbox`、User-Agent。上限 256 KiB |
+| `settings.json` | `AppSettings`：外观、提供商、网页、MCP、子代理、shell、默认开启的 `tools.osSandbox`、User-Agent。上限 256 KiB |
 | `secrets.json` | `providerKeys`：每个 id 一把钥匙。上限 64 KiB |
 | `ui.json` | 工作区、最近项目、会话归属、模型钉选、信任的项目。上限 256 KiB |
 | `sessions/<id>/compaction.json` | 压缩检查点 |
@@ -46,7 +46,7 @@
 - **User-Agent**：`userAgent`，缺省是 pi agent 形状 `pi (<平台> <版本>; <架构>)`
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`）。密钥不在此列
 - **思考强度**：`reasoningEffort` 是保存的默认值，必须是 models.dev 档位（`off`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）。会话里选的模型和强度不写这里，见下文 `ui.json`
-- **Shell**：没有可切换的 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。旧的 `tools.shell` 还能被读入，任何 `kind` 都不会让整份文档校验失败；启动时忽略它，并在写回时去掉。`MYCODE_SHELL` 不再覆盖选择，有具体取值时只提示一次。`tools.osSandbox` 默认 false，缺省时不写进文件。设为 true 才用 Linux bubblewrap 或 macOS seatbelt 包住 shell 和 `run_code`。这是尽力而为的写范围限制，不是安全边界；助手不存在就失败，不退回无沙箱执行。Windows 上打开它同样失败。审计 hook 和 Python `-I` 仍然是尽力而为，见 [tools.md](tools.md)
+- **Shell**：没有可切换的 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。旧的 `tools.shell` 还能被读入，任何 `kind` 都不会让整份文档校验失败；启动时忽略它，并在写回时去掉。`MYCODE_SHELL` 不再覆盖选择，有具体取值时只提示一次。`tools.osSandbox` 默认 true，缺省时不写进文件，设为 false 才关闭。Linux 用 bubblewrap、macOS 用 seatbelt 包住 shell 和 `run_code`。这是尽力而为的写范围限制，不是安全边界；助手不存在就失败，不退回无沙箱执行。Windows 没有这两个助手：通用设置页标明「暂不支持」，默认开启的产品路径不套沙箱，shell 和 `run_code` 照常运行；运行时若被强制打开则失败关闭。审计 hook 和 Python `-I` 仍然是尽力而为，见 [tools.md](tools.md)
 - **网页**：后端 `kind` 为 `querit`、`anysearch` 或 `custom`，端点必须是 https，最多启用一个。默认带 Querit 和 AnySearch 两行，均未启用。密钥先看环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`，再看 `secrets.json` 的 `web-<id>`
 - **MCP**：`transport` 为 `stdio`（单个可执行文件加 `args`，不接受 shell 字符串）或 `http`（https 端点，`keyHeader` 为 `bearer` 或 `x-api-key`）。每服务器最多 32 个额外环境变量。密钥用 `mcp-<id>`
 - **子代理**：哪些角色启用（没写的角色默认启用）、模型路由、思考强度、并发。`subagents.maxConcurrent` 为 `0` 时使用默认的 4 个并发子代理，不是关闭委派，也不是零个名额。显式上限最高 6。`subagents.timeoutSecs` 是单个子代理的墙钟超时（秒）：`0` 使用默认的 20 分钟（1200 秒），不是关闭超时；显式值最高 7200 秒（2 小时）。排队等待并发名额不计入这段时间
@@ -68,7 +68,7 @@
 
 | 角色 | 职责 |
 | --- | --- |
-| scout | 只读。适合较宽的代码库搜索、网页检索或文档摘录，返回短地图后停止。隔离是 `shared`，思考强度低。工具是 `read`、`grep`、`find`、`web_search`、`fetch_content`、`run_code`。项目覆盖也加不进改动工具。它同样只能直接调用 `run_code`，程序里只有只读的 `tools.*`，可以用 `asyncio.gather` 并行搜索。Python 以 `-I` 和精简环境启动，并在用户代码前装 audit hook，拦截写、删、改名、建目录、chmod/chown/utime/xattr、`sqlite3`、subprocess、`forkpty`、`kill`、ctypes 和新建套接字。同一会话会复用这个进程，用户全局在两次调用之间清掉；它不会改用主代理的解释器。`-I` 和这道 hook 都是尽力而为，不是安全边界。`tools.osSandbox` 为 true 时不复用进程，只读 Python 再套一层操作系统写限制，同样不是安全边界。残留风险见 [tools.md](tools.md)。要不要把宽研究派给它，由父代理自己判断 |
+| scout | 只读。适合较宽的代码库搜索、网页检索或文档摘录，返回短地图后停止。隔离是 `shared`，思考强度低。工具是 `read`、`grep`、`find`、`web_search`、`fetch_content`、`run_code`。项目覆盖也加不进改动工具。它同样只能直接调用 `run_code`，程序里只有只读的 `tools.*`，可以用 `asyncio.gather` 并行搜索。Python 以 `-I` 和精简环境启动，并在用户代码前装 audit hook，拦截写、删、改名、建目录、chmod/chown/utime/xattr、`sqlite3`、subprocess、`forkpty`、`kill`、ctypes 和新建套接字。同一会话会复用这个进程，用户全局在两次调用之间清掉；它不会改用主代理的解释器。`-I` 和这道 hook 都是尽力而为，不是安全边界。`tools.osSandbox` 在 Linux / macOS 上生效时不复用进程，只读 Python 再套一层操作系统写限制，同样不是安全边界。Windows 暂不支持这层，产品路径不套沙箱，热进程照常复用。残留风险见 [tools.md](tools.md)。要不要把宽研究派给它，由父代理自己判断 |
 | artisan | 做到 brief 的结果，检查与改动相称，不提交、不推送。隔离是 `worktree`，思考强度高 |
 
 同名文件的覆盖顺序是：内置 → `<家目录>/agents/` → 项目 `.mycode/agents/`。每份角色文件最多 32 KiB，目录最多 32 个角色。frontmatter 声明隔离方式（`shared` 或 `worktree`）、默认思考强度和工具白名单。启用与否、实际模型在设置里，不写进角色文件。

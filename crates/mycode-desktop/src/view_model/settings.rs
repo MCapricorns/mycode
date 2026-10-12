@@ -285,7 +285,10 @@ impl SettingsSection {
     /// One-line description shown in the page header and matched by nav search.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::General => t("Appearance, language, and identity", "外观、语言与身份"),
+            Self::General => t(
+                "Appearance, language, identity, and the OS sandbox",
+                "外观、语言、身份与操作系统沙箱",
+            ),
             Self::Models => t("Default model and providers", "默认模型与服务商"),
             Self::Agents => t(
                 "Scout, Artisan, and roles you add",
@@ -463,6 +466,34 @@ mod tests {
         let settings = vm.settings.as_ref().expect("settings");
         assert_eq!(settings.font_family, "system");
         assert_eq!(settings.edit_epoch, epoch);
+    }
+
+    #[test]
+    fn os_sandbox_toggle_round_trips_and_defaults_on() {
+        let document = mycode_config::AppSettings::default();
+        assert!(document.tools.os_sandbox);
+        let state = super::SettingsState::from_settings(&document, 1, Vec::new());
+        assert!(state.tools.os_sandbox);
+        let mut vm = super::super::WorkspaceState {
+            settings: Some(state),
+            ..super::super::WorkspaceState::default()
+        };
+        super::super::reduce(
+            &mut vm,
+            super::super::DesktopAction::SettingsOsSandboxToggled(true),
+        );
+        assert!(!vm.settings.as_ref().expect("settings").dirty);
+        super::super::reduce(
+            &mut vm,
+            super::super::DesktopAction::SettingsOsSandboxToggled(false),
+        );
+        let settings = vm.settings.as_ref().expect("settings");
+        assert!(settings.dirty);
+        assert!(!settings.tools.os_sandbox);
+        let stored = settings.to_settings();
+        assert!(!stored.tools.os_sandbox);
+        assert!(!stored.tools.effective_os_sandbox());
+        assert!(stored.validate().is_ok());
     }
 
     #[test]

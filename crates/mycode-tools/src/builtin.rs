@@ -34,7 +34,9 @@ pub use ptc::{
     RUN_CODE_EXAMPLE_CODE, RUN_CODE_EXAMPLE_DESCRIPTION, RunCodeTool, release_ptc_session,
 };
 pub use read::ReadTool;
-pub use sandbox::os_sandbox_prompt_note;
+pub use sandbox::{
+    os_sandbox_prompt_note, os_sandbox_status_note, os_sandbox_unsupported_prompt_note,
+};
 pub use shell::ShellTool;
 pub use web::{FetchContentTool, WebHit, WebHost, WebPage, WebSearchTool};
 pub use write::WriteTool;

@@ -7,7 +7,7 @@
 //! interpreter, at most one argument, no `-c` or `env -S`) is exec'd as that
 //! interpreter with the script path and `args`. Batch files and anything else
 //! require an explicit interpreter, or shell-tool `mode` `script`. Execution is
-//! unsandboxed current-user execution unless the opt-in OS helper is on.
+//! unsandboxed current-user execution unless the OS helper is on.
 //! That helper (bubblewrap or seatbelt) is best-effort write confinement, not
 //! a security boundary, and a missing helper fails the call. Environment
 //! allowlisting is not isolation. There is no Core permission prompt: a
@@ -231,7 +231,7 @@ fn image_kind_label(kind: image::ImageKind) -> &'static str {
 
 /// Spawns a prepared invocation for `shell` mode `program`.
 ///
-/// `sandbox` wraps the already pinned user image with the opt-in OS helper.
+/// `sandbox` wraps the already pinned user image with the OS helper.
 /// `None` keeps the direct launch. The helper is pinned and exec'd; the user
 /// image was verified immediately before that. There is no unsandboxed
 /// fallback when the helper cannot start.
