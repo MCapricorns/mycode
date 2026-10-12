@@ -475,7 +475,26 @@ async fn spawn_warm(
     };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let tree = enroll_spawned(&child).ok();
+    let tree = match enroll_spawned(&child) {
+        Ok(tree) => Some(tree),
+        // The process group is already set. Enrollment only adds the
+        // descendant walk; `kill_tree` still signals the group by pid.
+        #[cfg(not(windows))]
+        Err(_) => None,
+        // A suspended interpreter that is not in the Job can outlive this
+        // process, and `py.exe` can still spawn `python.exe` outside it.
+        // Kill the suspended process and fail the call.
+        #[cfg(windows)]
+        Err(error) => {
+            let _ = child.start_kill();
+            return Err(stopped(
+                "exception",
+                &format!("python job enrollment failed: {error}"),
+                String::new(),
+                &[],
+            ));
+        }
+    };
     let mut running = RunningChild { child, tree };
     let raw_out = Arc::new(Mutex::new(String::new()));
     let raw_err = Arc::new(Mutex::new(String::new()));
@@ -1369,10 +1388,14 @@ fn spawn_python(
     command.kill_on_drop(true);
     #[cfg(windows)]
     {
-        // py.exe is only a launcher; the real python.exe is its child. Both
-        // inherit the creation flags, so no console window appears for either.
+        // py.exe is only a launcher; the real python.exe is its child. The
+        // process stays suspended until `enroll_spawned` has assigned the
+        // kill-on-close Job and resumed the primary thread, so the launcher
+        // cannot start an interpreter outside the Job. Both inherit the
+        // flags, so neither opens a console window.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
     }
     #[cfg(unix)]
     {
@@ -1400,8 +1423,11 @@ fn spawn_python(
                 {
                     // A warm interpreter outlives one call. If this host
                     // exits, the kernel kills it even while user code is
-                    // blocked. A parent that died before `prctl` has already
-                    // reparented us; exit rather than stay up.
+                    // blocked. The signal is delivered when the thread that
+                    // spawned the child exits. This spawn runs on the core
+                    // runtime thread, which exits only with the process. A
+                    // parent that died before `prctl` has already reparented
+                    // us; exit rather than stay up.
                     let rc = libc::prctl(
                         libc::PR_SET_PDEATHSIG,
                         libc::SIGKILL as libc::c_ulong,

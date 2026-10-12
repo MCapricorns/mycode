@@ -432,16 +432,54 @@ fn filter_stdio_env(
     out
 }
 
-/// Platform launch flags: own process group on Unix, no console on Windows.
+/// Platform launch flags.
+///
+/// Unix puts the child in its own process group. Linux also asks the kernel
+/// to kill that process when the spawning thread dies. MCP stdio is spawned
+/// on the core bridge thread, which stays up for the life of the process.
+/// The signal is not inherited across fork, so grandchildren are not covered.
+///
+/// Windows creates the process suspended and without a console window.
+/// [`assign_windows_job`] attaches the kill-on-close Job before resume, so a
+/// `.cmd` launcher cannot start a grandchild outside the Job.
 fn configure_command(builder: &mut tokio::process::Command) {
     #[cfg(unix)]
     {
         builder.process_group(0);
     }
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: `pre_exec` runs in the forked child before exec. `prctl`
+        // only arms the parent-death signal and does not allocate or lock.
+        // The signal is tied to the thread that called `spawn`. A parent
+        // that is already gone has reparented this child to init; exit
+        // instead of staying up.
+        unsafe {
+            builder.pre_exec(|| {
+                // `prctl` and `getppid` do not allocate. Called once in the
+                // forked child, before any other thread exists.
+                let rc = libc::prctl(
+                    libc::PR_SET_PDEATHSIG,
+                    libc::SIGKILL as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                );
+                if rc == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() == 1 {
+                    libc::_exit(1);
+                }
+                Ok(())
+            });
+        }
+    }
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        builder.creation_flags(CREATE_NO_WINDOW);
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        builder.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
     }
 }
 
@@ -532,6 +570,13 @@ fn assign_windows_job(child: &mut Child) -> Result<WindowsJob, McpError> {
         let _ = child.start_kill();
         return Err(McpError::transport(format!(
             "failed to assign MCP process to a job: {error}"
+        )));
+    }
+    if let Err(error) = mycode_tools::resume_suspended_primary_thread(handle) {
+        let _ = job.terminate();
+        let _ = child.start_kill();
+        return Err(McpError::transport(format!(
+            "failed to resume MCP process after job assignment: {error}"
         )));
     }
     Ok(job)

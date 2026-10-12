@@ -23,10 +23,12 @@ import io
 import json
 import os
 import queue
+import select
 import socket
 import struct
 import sys
 import threading
+import time
 import traceback
 
 _MAX_FRAME = 8 * 1024 * 1024
@@ -169,9 +171,15 @@ def _reader():
         try:
             message = _read_frame()
         except Exception:
-            _fail_pending("control channel closed")
-            _inbox.put(None)
-            return
+            # The host closed the control connection. A cell blocked in user
+            # code never returns to the inbox, so this process has to die
+            # here. Scout's `-I` interpreter uses the same loop. `os._exit`
+            # is not a catchable `SystemExit`.
+            try:
+                _fail_pending("control channel closed")
+            except Exception:
+                pass
+            os._exit(1)
         if not isinstance(message, dict):
             continue
         if message.get("type") == "reply":
@@ -636,6 +644,44 @@ def _graceful_close():
     _fd = None
 
 
+def _watch_parent():
+    """Exit when the host process dies.
+
+    macOS has no parent-death signal. Closing the control socket is enough
+    only once this thread notices; a blocked cell would otherwise stay up.
+    `kqueue` reports the parent process exiting. Polling `getppid` covers a
+    kernel that rejects the watch.
+    """
+    parent = os.getppid()
+    if parent <= 1:
+        os._exit(1)
+    try:
+        _watch_parent_kqueue(parent)
+    except Exception:
+        while True:
+            time.sleep(0.2)
+            current = os.getppid()
+            if current != parent or current <= 1:
+                os._exit(1)
+
+
+def _watch_parent_kqueue(parent):
+    kq = select.kqueue()
+    event = select.kevent(
+        parent,
+        filter=select.KQ_FILTER_PROC,
+        flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+        fflags=select.KQ_NOTE_EXIT,
+    )
+    kq.control([event], 0, 0)
+    while True:
+        if kq.control(None, 1, 1.0):
+            os._exit(1)
+        current = os.getppid()
+        if current != parent or current <= 1:
+            os._exit(1)
+
+
 def main():
     global _loop
     token = _open_control()
@@ -654,6 +700,12 @@ def main():
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
     threading.Thread(target=_reader, name="mycode-ptc", daemon=True).start()
+    # Start before the thread snapshot. A later thread would make every
+    # program look like it leaked a thread and refuse to stay warm.
+    if sys.platform == "darwin":
+        threading.Thread(
+            target=_watch_parent, name="mycode-ptc-parent", daemon=True
+        ).start()
     isolated = bool(getattr(sys.flags, "isolated", 0))
     _install_hook(isolated, not isolated)
     _capture_baseline()

@@ -221,6 +221,10 @@ impl Drop for PendingLinuxSpawn {
 /// later descendant walk still sees a `setsid` grandchild whose intermediate
 /// parent has exited. The flag persists across exec and is not copied to
 /// children created by `fork`.
+///
+/// There is no `PR_SET_PDEATHSIG` here. This spawn runs on a Tokio blocking
+/// thread that can exit while the command is still running, and that signal
+/// fires when the spawning thread dies.
 fn become_child_subreaper() -> std::io::Result<()> {
     // SAFETY: called after fork in the single-threaded child. `prctl` with
     // `PR_SET_CHILD_SUBREAPER` only sets a process flag and does not allocate.

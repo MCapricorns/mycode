@@ -1530,4 +1530,252 @@ return f"isolated={int(sys.flags.isolated)}|no_user_site={int(sys.flags.no_user_
         }
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Kill the host while a cell is inside `time.sleep`. The interpreter
+    /// must die with it, for both the main agent and scout's `-I` process.
+    /// `Child::kill` signals the host pid only. Python is in its own process
+    /// group, so this does not deliver the signal directly.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn blocked_cell_dies_when_its_parent_is_killed() {
+        if std::env::var_os("MYCODE_PTC_REAP_HELPER").is_some() {
+            reap_blocked_cell().await;
+            return;
+        }
+        reap_blocked_cell_parent(false).await;
+        reap_blocked_cell_parent(true).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn reap_blocked_cell() {
+        let root = temp_dir("reap-cell");
+        let scout = std::env::var_os("MYCODE_PTC_REAP_SCOUT").is_some();
+        let tools = if scout {
+            catalog(vec![Arc::new(ReadTool)])
+        } else {
+            catalog(vec![Arc::new(ReadTool), Arc::new(WriteTool)])
+        };
+        let ctx = ToolCtx::new(&root)
+            .with_catalog(tools)
+            .with_os_sandbox(false)
+            .with_ptc_wall(Duration::from_secs(45));
+        let _ = run_with(ctx, "import time\ntime.sleep(30)\n").await;
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn reap_blocked_cell_parent(scout: bool) {
+        let root = temp_dir(if scout { "reap-scout" } else { "reap-main" });
+        let stdout_path = root.join("helper-stdout.txt");
+        let stderr_path = root.join("helper-stderr.txt");
+        let stdout = std::fs::File::create(&stdout_path).expect("helper stdout");
+        let stderr = std::fs::File::create(&stderr_path).expect("helper stderr");
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .arg("--exact")
+            .arg("builtin::ptc::tests::blocked_cell_dies_when_its_parent_is_killed")
+            .env("MYCODE_PTC_REAP_HELPER", "1")
+            .stdout(std::process::Stdio::from(stdout))
+            .stderr(std::process::Stdio::from(stderr));
+        if scout {
+            command.env("MYCODE_PTC_REAP_SCOUT", "1");
+        }
+        let helper = command.spawn().expect("spawn reap helper");
+        let helper_pid = helper.id();
+        let mut guard = ReapGuard {
+            helper: Some(helper),
+            python: None,
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut found = None;
+        while Instant::now() < deadline {
+            let status = guard
+                .helper
+                .as_mut()
+                .expect("helper")
+                .try_wait()
+                .expect("helper status");
+            if let Some(status) = status {
+                panic!(
+                    "helper exited before the cell slept ({status})\nstdout:\n{}\nstderr:\n{}",
+                    log_tail(&stdout_path),
+                    log_tail(&stderr_path)
+                );
+            }
+            for pid in direct_children(helper_pid) {
+                let args = process_cmdline(pid);
+                if args.contains("bootstrap.py") && cell_is_sleeping(pid) {
+                    found = Some((pid, args));
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let Some((python_pid, args)) = found else {
+            let _ = guard.helper.as_mut().expect("helper").kill();
+            panic!(
+                "python never reached sleep (scout={scout})\nchildren:\n{}\nstdout:\n{}\nstderr:\n{}",
+                describe_children(helper_pid),
+                log_tail(&stdout_path),
+                log_tail(&stderr_path)
+            );
+        };
+        let isolated = args.split_whitespace().any(|arg| arg == "-I");
+        assert_eq!(isolated, scout, "cmdline isolation flag: {args}");
+        guard.python = Some(i32::try_from(python_pid).expect("python pid fits i32"));
+        let mut helper = guard.helper.take().expect("helper");
+        helper.kill().expect("kill helper");
+        let _ = helper.wait().expect("reap helper");
+        let gone_deadline = Instant::now() + Duration::from_secs(3);
+        let mut state = String::new();
+        while Instant::now() < gone_deadline {
+            match proc_state(python_pid) {
+                None | Some('Z') => {
+                    guard.python = None;
+                    let _ = std::fs::remove_dir_all(&root);
+                    return;
+                }
+                Some(current) => {
+                    state = current.to_string();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+        panic!("python {python_pid} still alive after parent death (state={state}): {args}");
+    }
+
+    #[cfg(target_os = "linux")]
+    struct ReapGuard {
+        helper: Option<std::process::Child>,
+        python: Option<i32>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for ReapGuard {
+        fn drop(&mut self) {
+            if let Some(pid) = self.python.take() {
+                // SAFETY: `pid` is the interpreter this test spawned. `SIGKILL`
+                // runs only when the test failed and that process is still alive.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+            if let Some(mut helper) = self.helper.take() {
+                let _ = helper.kill();
+                let _ = helper.wait();
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn log_tail(path: &std::path::Path) -> String {
+        let bytes = std::fs::read(path).unwrap_or_default();
+        let start = bytes.len().saturating_sub(2000);
+        String::from_utf8_lossy(&bytes[start..]).into_owned()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn direct_children(parent: u32) -> Vec<u32> {
+        let mut pids = Vec::new();
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return pids;
+        };
+        let parent = parent.to_string();
+        for entry in entries.flatten() {
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Ok(pid) = name.parse::<u32>() else {
+                continue;
+            };
+            let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+                continue;
+            };
+            let is_child = status.lines().any(|line| {
+                line.strip_prefix("PPid:")
+                    .is_some_and(|value| value.trim() == parent)
+            });
+            if is_child {
+                pids.push(pid);
+            }
+        }
+        pids
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_cmdline(pid: u32) -> String {
+        let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        String::from_utf8_lossy(&bytes).replace('\0', " ")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn proc_state(pid: u32) -> Option<char> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let end = stat.rfind(')')?;
+        stat.get(end + 2..)?.chars().next()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cell_is_sleeping(pid: u32) -> bool {
+        let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+            return false;
+        };
+        for task in tasks.flatten() {
+            let Some(path) = task.path().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let wchan = std::fs::read_to_string(format!("{path}/wchan")).unwrap_or_default();
+            if wchan.contains("nanosleep") || wchan.contains("hrtimer") {
+                return true;
+            }
+            let syscall = std::fs::read_to_string(format!("{path}/syscall")).unwrap_or_default();
+            let number = syscall.split_whitespace().next().unwrap_or("");
+            if is_sleep_syscall(number) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn is_sleep_syscall(number: &str) -> bool {
+        // nanosleep and clock_nanosleep.
+        number == "35" || number == "230"
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    fn is_sleep_syscall(number: &str) -> bool {
+        number == "101" || number == "115"
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        not(any(target_arch = "x86_64", target_arch = "aarch64"))
+    ))]
+    fn is_sleep_syscall(number: &str) -> bool {
+        let _ = number;
+        false
+    }
+
+    #[cfg(target_os = "linux")]
+    fn describe_children(parent: u32) -> String {
+        direct_children(parent)
+            .into_iter()
+            .map(|pid| {
+                let wchan =
+                    std::fs::read_to_string(format!("/proc/{pid}/wchan")).unwrap_or_default();
+                let syscall =
+                    std::fs::read_to_string(format!("/proc/{pid}/syscall")).unwrap_or_default();
+                format!(
+                    "{pid} {:?} wchan={wchan:?} syscall={syscall:?}",
+                    process_cmdline(pid)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
