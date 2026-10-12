@@ -12,7 +12,7 @@
 - 模型只能调用 `run_code`。其它工具在系统 Python 3.10+ 里写成 `await tools.<name>(...)`。
 - 只读的 `scout` 和有界的 `artisan`，也可以在 `agents/` 里加角色。
 - 内置 [models.dev](https://models.dev) 目录。Copilot、Codex 和 xAI 用设备码登录。
-- 中英界面，深色主题。
+- 中英界面，深色和浅色主题。
 
 ## 安装
 

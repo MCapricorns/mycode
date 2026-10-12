@@ -155,7 +155,7 @@ pub(super) fn render_composer(
                 .pt_2()
                 .pb_2()
                 .w_full()
-                .rounded(px(16.))
+                .rounded(skin::radius_lg())
                 .border_1()
                 .border_color(skin::glass_border(theme))
                 .bg(skin::popover(theme))
@@ -218,55 +218,7 @@ pub(super) fn render_composer(
                         .when_some(thinking_chip, |this, chip| this.child(chip))
                         .child(div().flex_1().min_w(px(8.)))
                         .when_some(context_meter(workspace), |this, meter| {
-                            this.child(
-                                div()
-                                    .id("composer-context-meter")
-                                    .flex()
-                                    .flex_shrink_1()
-                                    .items_center()
-                                    .gap_1()
-                                    .min_w_0()
-                                    .max_w(px(280.))
-                                    .px_2()
-                                    .h(px(28.))
-                                    .text_xs()
-                                    .when(!meter.ratio.is_empty(), |row| {
-                                        row.child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_color(theme.muted_foreground)
-                                                .child(meter.ratio.clone()),
-                                        )
-                                    })
-                                    .when(!meter.hit.is_empty(), |row| {
-                                        let hit = if meter.ratio.is_empty() {
-                                            meter.hit.clone()
-                                        } else {
-                                            format!("· {}", meter.hit)
-                                        };
-                                        row.child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .text_color(theme.foreground)
-                                                .child(hit),
-                                        )
-                                    })
-                                    .when(!meter.cache.is_empty(), |row| {
-                                        let cache =
-                                            if meter.ratio.is_empty() && meter.hit.is_empty() {
-                                                meter.cache.clone()
-                                            } else {
-                                                format!("· {}", meter.cache)
-                                            };
-                                        row.child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .text_color(theme.foreground)
-                                                .child(cache),
-                                        )
-                                    }),
-                            )
+                            this.child(composer_meter_chip(meter, theme))
                         })
                         .child(composer_round_button(sending, can_send, cx)),
                 ),
@@ -347,11 +299,14 @@ fn composer_text_button(
         .flex_row()
         .items_center()
         .flex_shrink_1()
-        .min_w(px(72.))
+        .min_w(px(64.))
         .max_w(max_w)
-        .px_2()
-        .h(px(28.))
-        .rounded(px(10.))
+        .px(skin::space(2))
+        .h(skin::space(6))
+        .rounded(skin::radius_sm())
+        .border_1()
+        .border_color(skin::glass_border(theme))
+        .bg(skin::frost(theme))
         .text_xs()
         .cursor_pointer()
         .text_color(if open {
@@ -450,6 +405,80 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .child(Icon::new(IconName::X).xsmall()),
                 )
         }))
+}
+
+fn composer_meter_chip(
+    meter: crate::view_model::ContextMeterParts,
+    theme: &gpui_kit::component::theme::Theme,
+) -> impl IntoElement {
+    div()
+        .id("composer-context-meter")
+        .flex()
+        .flex_shrink_1()
+        .items_center()
+        .gap(skin::space(1))
+        .min_w_0()
+        .max_w(px(220.))
+        .px(skin::space(2))
+        .h(skin::space(6))
+        .rounded(skin::radius_sm())
+        .border_1()
+        .border_color(skin::glass_border(theme))
+        .bg(skin::frost(theme))
+        .text_xs()
+        .when_some(meter.hit_percent, |row, percent| {
+            row.child(cache_ring(percent, theme))
+        })
+        .when(!meter.ratio.is_empty(), |row| {
+            row.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.muted_foreground)
+                    .child(meter.ratio.clone()),
+            )
+        })
+        .when(!meter.cache.is_empty(), |row| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(theme.muted_foreground)
+                    .child(meter.cache.clone()),
+            )
+        })
+}
+
+/// A 16px ring whose stroke is the cache-hit share of the latest prompt.
+fn cache_ring(percent: u64, theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
+    let percent = percent.min(100);
+    let radius = 6.0_f32;
+    let circumference = std::f32::consts::PI * 2. * radius;
+    let dash = circumference * (percent as f32) / 100.;
+    let gap = circumference - dash;
+    let track = hsla_hex(theme.muted_foreground.opacity(0.35));
+    let ink = hsla_hex(theme.primary);
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="{track}" stroke-width="2"/><circle cx="8" cy="8" r="6" fill="none" stroke="{ink}" stroke-width="2" stroke-linecap="round" stroke-dasharray="{dash:.2} {gap:.2}" transform="rotate(-90 8 8)"/></svg>"#
+    );
+    div()
+        .id("composer-cache-ring")
+        .flex_shrink_0()
+        .size(skin::space(4))
+        .child(
+            Icon::default()
+                .data(svg.as_bytes())
+                .with_size(skin::space(4)),
+        )
+}
+
+fn hsla_hex(color: gpui_kit::Hsla) -> String {
+    let rgb = color.to_rgb();
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (rgb.r * 255.).round() as u8,
+        (rgb.g * 255.).round() as u8,
+        (rgb.b * 255.).round() as u8
+    )
 }
 
 /// Latest prompt size and cache read, shown on the chip row itself.

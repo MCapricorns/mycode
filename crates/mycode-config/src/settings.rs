@@ -67,6 +67,9 @@ pub struct LegacyUsageSettings {
     pub enabled: bool,
 }
 
+/// Painted appearance: dark or light. Each palette has both.
+pub const VALID_THEMES: [&str; 2] = ["dark", "light"];
+
 /// Palette ids the desktop can paint. Slate is the default.
 ///
 /// Six palettes, each a different hue. Older ids are not migrated; a file
@@ -123,7 +126,7 @@ pub fn canonical_font_family(value: &str) -> Option<&'static str> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceSettings {
-    /// Must be `dark`. Any other stored value fails validation, and startup
+    /// `dark` or `light`. Any other stored value fails validation, and startup
     /// replaces the whole document with defaults.
     pub theme: String,
     /// One of [`VALID_PALETTES`]. Slate is the default.
@@ -220,10 +223,13 @@ impl AppSettings {
         }
     }
 
-    /// The only painted theme.
+    /// Returns the effective appearance. Unknown values read as dark.
     #[must_use]
     pub fn effective_theme(&self) -> &'static str {
-        "dark"
+        VALID_THEMES
+            .into_iter()
+            .find(|id| *id == self.appearance.theme)
+            .unwrap_or("dark")
     }
 
     /// Returns the effective palette. Unknown values read as slate.
@@ -278,8 +284,8 @@ impl AppSettings {
         self.validate_providers()?;
         self.validate_web()?;
         self.validate_mcp()?;
-        if self.appearance.theme != "dark" {
-            return Err(invalid("appearance.theme: must be dark"));
+        if !VALID_THEMES.contains(&self.appearance.theme.as_str()) {
+            return Err(invalid("appearance.theme: must be dark or light"));
         }
         if !VALID_PALETTES.contains(&self.appearance.palette.as_str()) {
             return Err(invalid(&format!(
@@ -632,6 +638,18 @@ mod tests {
         let loaded = super::read_app_settings(&home).expect("read");
         assert_eq!(loaded.appearance.palette, "aurora");
         assert_eq!(loaded.appearance.font_size, "l");
+        settings.appearance.theme = "light".to_owned();
+        assert!(settings.validate().is_ok());
+        assert_eq!(settings.effective_theme(), "light");
+        settings.appearance.theme = "sepia".to_owned();
+        let error = settings.validate().expect_err("unknown theme");
+        assert!(
+            error.summary().contains("appearance.theme"),
+            "{}",
+            error.summary()
+        );
+        settings.appearance.theme = "dark".to_owned();
+
         assert_eq!(loaded.appearance.font_family, "Noto Sans");
         assert_eq!(loaded.effective_font_family(), "Noto Sans");
         assert_eq!(loaded.effective_palette(), "aurora");

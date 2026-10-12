@@ -76,14 +76,49 @@ pub(super) fn frost_accent(theme: &Theme) -> Hsla {
     theme.accent
 }
 
+/// Base step of the spacing scale. Padding, gaps, and radii are multiples of this.
+pub(super) const SPACE_PX: f32 = 4.;
+
+/// `steps` times [`SPACE_PX`].
+pub(super) fn space(steps: u32) -> gpui_kit::Pixels {
+    px(SPACE_PX * steps as f32)
+}
+
+/// Reading measure for prose. Code blocks and tables may use the full column.
+pub(super) const PROSE_MAX_PX: f32 = 750.;
+
+pub(super) fn prose_max() -> gpui_kit::Pixels {
+    px(PROSE_MAX_PX)
+}
+
+/// 4px. Dots, swatch corners, and the smallest chip.
+pub(super) fn radius_xs() -> gpui_kit::Pixels {
+    space(1)
+}
+
+/// 8px. Controls, rows, and compact chips.
+pub(super) fn radius_sm() -> gpui_kit::Pixels {
+    space(2)
+}
+
+/// 12px. Cards and panels.
+pub(super) fn radius_md() -> gpui_kit::Pixels {
+    space(3)
+}
+
+/// 16px. Composer and message bubbles.
+pub(super) fn radius_lg() -> gpui_kit::Pixels {
+    space(4)
+}
+
 /// Card corner radius.
 pub(super) fn radius_card() -> gpui_kit::Pixels {
-    px(12.)
+    radius_md()
 }
 
 /// Button and chip corner radius.
 pub(super) fn radius_control() -> gpui_kit::Pixels {
-    px(10.)
+    radius_sm()
 }
 
 /// Primary and secondary actions. Primary is a low-saturation tint with a
@@ -114,10 +149,10 @@ pub(super) fn glass_button(
         .flex_row()
         .items_center()
         .justify_center()
-        .gap_2()
-        .h(px(32.))
-        .px(px(12.))
-        .rounded(px(11.))
+        .gap(space(2))
+        .h(space(8))
+        .px(space(3))
+        .rounded(radius_sm())
         .border_1()
         .border_color(border)
         .bg(fill)

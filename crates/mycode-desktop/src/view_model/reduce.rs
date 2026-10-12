@@ -505,6 +505,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 mark_settings_dirty(settings);
             }
         }
+        DesktopAction::SettingsThemeSelected(theme) => {
+            let theme = crate::ui::desk::normalize_theme(&theme).to_owned();
+            if let Some(settings) = state.settings.as_mut() {
+                settings.theme = theme;
+                mark_settings_dirty(settings);
+            }
+        }
         DesktopAction::SettingsFontSizeSelected(font_size) => {
             if !mycode_config::VALID_FONT_SIZES.contains(&font_size.as_str()) {
                 return;

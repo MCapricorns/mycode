@@ -707,21 +707,91 @@ pub(super) fn render_diff_panel(
                 .py_2()
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
-                .children(lines.into_iter().enumerate().map(|(index, line)| {
-                    let (color, bg) = diff_line_paint(&line, theme);
-                    div()
-                        .id(format!("diff-line-{index}"))
-                        .px_3()
-                        .text_color(color)
-                        .bg(bg)
-                        .child(if line.is_empty() {
-                            " ".to_owned()
-                        } else {
-                            line
-                        })
-                })),
+                .children(numbered_diff_rows(&lines).into_iter().enumerate().map(
+                    |(index, row)| {
+                        let (color, bg) = diff_line_paint(&row.text, theme);
+                        div()
+                            .id(format!("diff-line-{index}"))
+                            .flex()
+                            .flex_row()
+                            .px_2()
+                            .text_color(color)
+                            .bg(bg)
+                            .child(
+                                div()
+                                    .w(px(36.))
+                                    .flex_shrink_0()
+                                    .text_right()
+                                    .text_color(theme.muted_foreground)
+                                    .child(row.number),
+                            )
+                            .child(div().min_w_0().pl_2().child(if row.text.is_empty() {
+                                " ".to_owned()
+                            } else {
+                                row.text
+                            }))
+                    },
+                )),
         )
         .into_any_element()
+}
+
+struct NumberedDiffRow {
+    number: String,
+    text: String,
+}
+
+fn numbered_diff_rows(lines: &[String]) -> Vec<NumberedDiffRow> {
+    let mut old_n = 1u32;
+    let mut new_n = 1u32;
+    let mut rows = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let Some((old, new)) = hunk_numbers(line) {
+            old_n = old;
+            new_n = new;
+            rows.push(NumberedDiffRow {
+                number: String::new(),
+                text: line.clone(),
+            });
+            continue;
+        }
+        let added = line.starts_with('+') && !line.starts_with("+++");
+        let removed = line.starts_with('-') && !line.starts_with("---");
+        let number = if added {
+            let value = new_n.to_string();
+            new_n += 1;
+            value
+        } else if removed {
+            let value = old_n.to_string();
+            old_n += 1;
+            value
+        } else if line.starts_with("diff ")
+            || line.starts_with("index ")
+            || line.starts_with("+++")
+            || line.starts_with("---")
+        {
+            String::new()
+        } else {
+            let value = new_n.to_string();
+            old_n += 1;
+            new_n += 1;
+            value
+        };
+        rows.push(NumberedDiffRow {
+            number,
+            text: line.clone(),
+        });
+    }
+    rows
+}
+
+fn hunk_numbers(line: &str) -> Option<(u32, u32)> {
+    let rest = line.strip_prefix("@@ ")?;
+    let (old, rest) = rest.split_once(' ')?;
+    let new = rest.split_once(' ').map(|(head, _)| head).unwrap_or(rest);
+    let old = old.strip_prefix('-')?.split(',').next()?;
+    let new = new.strip_prefix('+')?.split(',').next()?;
+    Some((old.parse().ok()?, new.parse().ok()?))
 }
 
 fn diff_lines(diff: &str) -> Vec<String> {
@@ -735,21 +805,17 @@ fn diff_line_paint(line: &str, theme: &Theme) -> (gpui_kit::Hsla, gpui_kit::Hsla
     let added = line.starts_with('+') && !line.starts_with("+++");
     let removed = line.starts_with('-') && !line.starts_with("---");
     if added {
-        let ink = vivid(0x3D_FF_9A);
-        return (ink, ink.opacity(0.14));
+        let ink = crate::ui::desk::diff_ink(theme, true);
+        return (ink, crate::ui::desk::diff_wash(ink));
     }
     if removed {
-        let ink = vivid(0xFF_5C_6A);
-        return (ink, ink.opacity(0.14));
+        let ink = crate::ui::desk::diff_ink(theme, false);
+        return (ink, crate::ui::desk::diff_wash(ink));
     }
     if line.starts_with("@@") {
         return (theme.primary, theme.transparent);
     }
     (theme.muted_foreground, theme.transparent)
-}
-
-fn vivid(hex: u32) -> gpui_kit::Hsla {
-    gpui_kit::rgb(hex).into()
 }
 
 fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
