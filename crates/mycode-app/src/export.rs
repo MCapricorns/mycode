@@ -96,10 +96,7 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
     Ok(ExportBundle {
         format_version: EXPORT_FORMAT_VERSION,
         kind: EXPORT_KIND.to_owned(),
-        exported_at_unix: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or_default(),
+        exported_at_unix: crate::unix_now().as_secs(),
         settings,
         ui_state,
         secrets: bundle_secrets(&secrets),
@@ -259,10 +256,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-export-{label}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
         #[cfg(unix)]

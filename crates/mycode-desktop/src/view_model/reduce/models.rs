@@ -393,7 +393,10 @@ mod tests {
         let mut state = state_with_low_rung_model(Some("low"));
         super::assign_fresh_session_model(&mut state, "ses1-seed");
         assert_eq!(
-            state.settings.as_ref().and_then(|settings| settings.reasoning.as_deref()),
+            state
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.reasoning.as_deref()),
             Some("low"),
             "the remembered default seeds a fresh session"
         );
@@ -404,7 +407,10 @@ mod tests {
         let mut state = state_with_low_rung_model(Some("max"));
         super::assign_fresh_session_model(&mut state, "ses1-clamp");
         assert_eq!(
-            state.settings.as_ref().and_then(|settings| settings.reasoning.as_deref()),
+            state
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.reasoning.as_deref()),
             Some("low"),
             "max on a low-only model lands on low, not default"
         );
@@ -415,7 +421,10 @@ mod tests {
         let mut state = state_with_low_rung_model(Some("turbo"));
         super::assign_fresh_session_model(&mut state, "ses1-custom");
         assert_eq!(
-            state.settings.as_ref().and_then(|settings| settings.reasoning.as_deref()),
+            state
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.reasoning.as_deref()),
             None,
             "a custom rung only matches by exact spelling"
         );

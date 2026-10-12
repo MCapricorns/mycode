@@ -47,3 +47,12 @@ pub use registry::{ToolCatalog, ToolRegistry};
 pub use roots::anchor_tool_path;
 pub use stream::{ToolProgress, ToolStream, ToolStreamItem, ToolStreamReceiver};
 pub use tool::{Tool, ToolDyn, ToolError, ToolResult};
+
+/// Returns the wall-clock duration since the Unix epoch, saturating at zero
+/// when the system clock predates the epoch.
+#[cfg(test)]
+pub(crate) fn unix_now() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}

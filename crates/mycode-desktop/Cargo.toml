@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-serde_json = { workspace = true }
 # Sync primitives only: the git watcher and status threads hand results to
 # the gpui executor through tokio channels, which are runtime-independent.
 tokio = { workspace = true, features = ["sync"] }

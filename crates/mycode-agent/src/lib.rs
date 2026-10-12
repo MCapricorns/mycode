@@ -41,3 +41,11 @@ pub use prompt::{
     ChoiceScenario, TaskWeight, accept_choice, build_system_prompt, choice_scenarios,
     grouped_execution_block, prompt_guides,
 };
+
+/// Returns the wall-clock duration since the Unix epoch, saturating at zero
+/// when the system clock predates the epoch.
+pub(crate) fn unix_now() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}

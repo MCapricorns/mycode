@@ -607,10 +607,7 @@ mod tests {
         let parent = std::env::temp_dir().join(format!(
             "mycode-appearance-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&parent).expect("temp parent");
         let guard = TempDir(parent);
@@ -662,10 +659,7 @@ mod tests {
         let parent = std::env::temp_dir().join(format!(
             "mycode-settings-comma-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+            crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&parent).expect("temp parent");
         let guard = TempDir(parent);

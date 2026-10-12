@@ -113,10 +113,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "mycode-invoke-{label}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+            crate::unix_now().as_nanos()
         ));
         fs::create_dir_all(&path).unwrap();
         TempDir(path)
@@ -126,8 +123,11 @@ mod tests {
         let dir = home.join(".agents").join("skills").join("probe");
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("SKILL.md");
-        fs::write(&path, "# probe
-").unwrap();
+        fs::write(
+            &path, "# probe
+",
+        )
+        .unwrap();
         path.display().to_string()
     }
 
@@ -136,7 +136,10 @@ mod tests {
         let workspace = temp("ws");
         let home = temp("home");
         let path = skill_file(&home.0);
-        let roots = vec![home.0.join(".agents"), home.0.join(".agents").join("skills")];
+        let roots = vec![
+            home.0.join(".agents"),
+            home.0.join(".agents").join("skills"),
+        ];
         let args = json!({"path": path});
         let ctx = prepare_tool_ctx(
             &workspace.0,
@@ -175,7 +178,10 @@ mod tests {
         let workspace = temp("ws3");
         let home = temp("home3");
         let path = skill_file(&home.0);
-        let roots = vec![home.0.join(".agents"), home.0.join(".agents").join("skills")];
+        let roots = vec![
+            home.0.join(".agents"),
+            home.0.join(".agents").join("skills"),
+        ];
         let args = json!({"path": path, "old_string": "a", "new_string": "b"});
         let ctx = prepare_tool_ctx(
             &workspace.0,

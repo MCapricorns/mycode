@@ -4309,7 +4309,6 @@ dependencies = [
  "mycode-providers",
  "mycode-tools",
  "notify",
- "serde_json",
  "tokio",
  "windows-sys 0.61.2",
  "winresource",
