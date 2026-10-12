@@ -8,6 +8,42 @@ use mycode_core::{AssistantMessage, ContentBlock};
 use crate::ledger::decode_text;
 use crate::protocol::{ConversationEntry, EntryKind};
 
+/// Latest prompt size carried by one ledger payload.
+///
+/// Current turns store it on the assistant message (`prompt_tokens` and
+/// `cache_read_tokens`). Older ledgers stored a `usage` event whose
+/// `context` / `context_cache` fields are the same meter. A payload with no
+/// positive prompt size is not a snapshot.
+pub(crate) fn meter_snapshot(kind: EventKind, payload: &[u8]) -> Option<(u64, u64)> {
+    let (context, cache) = match kind {
+        EventKind::Message => assistant_meter(payload)?,
+        EventKind::Usage => usage_event_meter(payload)?,
+        EventKind::ToolCall | EventKind::ToolResult | EventKind::Task => return None,
+    };
+    (context > 0).then_some((context, cache))
+}
+
+fn assistant_meter(payload: &[u8]) -> Option<(u64, u64)> {
+    let message: AssistantMessage = serde_json::from_slice(payload).ok()?;
+    let usage = message.usage?;
+    let context = if usage.prompt_tokens > 0 {
+        usage.prompt_tokens
+    } else {
+        usage.input_tokens
+    };
+    Some((context, usage.cache_read_tokens.unwrap_or(0)))
+}
+
+fn usage_event_meter(payload: &[u8]) -> Option<(u64, u64)> {
+    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let context = value.get("context")?.as_u64()?;
+    let cache = value
+        .get("context_cache")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    Some((context, cache))
+}
+
 pub(crate) fn project_replayed_entry(
     event: &SessionEvent,
     payload: &[u8],
@@ -171,5 +207,40 @@ mod tests {
     fn legacy_usage_events_replay_as_nothing() {
         let event = event_of_kind(mycode_agent::session::EventKind::Usage);
         assert!(project_replayed_entry(&event, b"{}").is_none());
+    }
+
+    #[test]
+    fn the_last_usage_snapshot_is_the_context_meter() {
+        let assistant = mycode_core::AssistantMessage {
+            blocks: vec![mycode_core::ContentBlock::Text(
+                mycode_core::TextBlock::new("done"),
+            )],
+            usage: Some(mycode_core::Usage {
+                input_tokens: 900,
+                output_tokens: 20,
+                cache_read_tokens: Some(41_472),
+                cache_write_tokens: None,
+                prompt_tokens: 42_365,
+            }),
+            stop_reason: mycode_core::StopReason::Stop,
+        };
+        let bytes = serde_json::to_vec(&assistant).expect("assistant");
+        assert_eq!(
+            super::meter_snapshot(mycode_agent::session::EventKind::Message, &bytes),
+            Some((42_365, 41_472))
+        );
+        let older = br#"{"context": 100, "context_cache": 80}"#;
+        assert_eq!(
+            super::meter_snapshot(mycode_agent::session::EventKind::Usage, older),
+            Some((100, 80))
+        );
+        assert!(super::meter_snapshot(mycode_agent::session::EventKind::Usage, b"{}").is_none());
+        assert!(
+            super::meter_snapshot(
+                mycode_agent::session::EventKind::Message,
+                b"plain user text"
+            )
+            .is_none()
+        );
     }
 }

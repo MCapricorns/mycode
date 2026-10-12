@@ -174,6 +174,8 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                context_used: 0,
+                context_cache: 0,
             }),
             ..WorkspaceState::default()
         };
