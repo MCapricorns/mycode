@@ -293,7 +293,7 @@ fn composer_round_button(
         })
 }
 
-/// Quiet text button in the composer footer.
+/// Plain footer control: muted italic label and a chevron, with no frame.
 fn composer_text_button(
     id: &str,
     label: SharedString,
@@ -303,33 +303,32 @@ fn composer_text_button(
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let ink = if open {
+        theme.foreground
+    } else {
+        theme.muted_foreground
+    };
     div()
         .id(format!("composer-{id}-chip"))
         .flex()
         .flex_row()
         .items_center()
         .flex_shrink_1()
-        .min_w(px(64.))
+        .gap(skin::space(1))
+        .min_w_0()
         .max_w(max_w)
-        .px(skin::space(2))
+        .px(skin::space(1))
         .h(skin::space(6))
-        .rounded(skin::radius_sm())
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .bg(skin::frost(theme))
         .text_xs()
+        .italic()
         .cursor_pointer()
-        .text_color(if open {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        })
-        .when(open, |this| this.bg(theme.accent.opacity(0.65)))
-        .hover(|this| this.bg(theme.secondary_hover).text_color(theme.foreground))
+        .text_color(ink)
+        .hover(|this| this.text_color(theme.foreground))
         .on_click(cx.listener(move |workspace, _, window, cx| {
             on_click(workspace, window, cx);
         }))
-        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(div().min_w_0().truncate().child(label))
+        .child(Icon::new(IconName::ChevronDown).xsmall().flex_shrink_0())
 }
 
 /// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
