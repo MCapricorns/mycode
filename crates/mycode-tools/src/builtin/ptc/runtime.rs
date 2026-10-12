@@ -6,8 +6,11 @@
 //! Python opens a synchronous pipe handle, and such a handle serializes
 //! pending I/O, so the blocked reader thread deadlocked every later frame
 //! write from the event loop. A TCP socket carries the reader thread and the
-//! writer concurrently. The token is passed in the child environment, never
-//! on the command line, and checked before the program is sent. Each call is
+//! writer concurrently. The token is checked before the program is sent. On
+//! Unix it crosses the inherited socket and is not an environment variable.
+//! On TCP it is a 0600 file, unlinked once the ready frame arrives; only that
+//! path is placed in the environment. It is never put on the command line.
+//! Each call is
 //! prepared and executed with [`crate::prepare_tool_ctx`], the same preflight
 //! a direct call uses. Read-only calls and `agent` may overlap; mutating
 //! calls wait until the ones submitted before them have finished, then run
@@ -44,6 +47,14 @@ const MAX_PENDING: usize = 32;
 pub(super) const DEFAULT_WALL: Duration = Duration::from_secs(120);
 /// How long to wait for the interpreter to connect.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long one unauthenticated TCP peer may sit before the listener moves on.
+///
+/// A local process that connects and stalls must not consume the whole startup
+/// window. The real interpreter's ready frame is a few hundred bytes sent
+/// immediately after connect.
+const HANDSHAKE_ATTEMPT: Duration = Duration::from_millis(500);
+/// Unauthenticated TCP accepts before the handshake fails closed.
+const MAX_HANDSHAKE_ATTEMPTS: u32 = 32;
 
 const SHELL_NAMES: &[&str] = &["powershell", "bash", "zsh", "sh", "cmd"];
 /// Tools that may overlap. `agent` is included because write-capable children
@@ -746,9 +757,19 @@ type ControlRead = Box<dyn AsyncRead + Unpin + Send>;
 type ControlWrite = Box<dyn AsyncWrite + Unpin + Send>;
 
 struct ControlEnv {
-    token: String,
     fd: Option<i32>,
     port: Option<u16>,
+    /// 0600 file holding the TCP token. Absent for the inherited socket.
+    token_file: Option<PathBuf>,
+}
+
+/// Deletes the TCP token file when the handshake finishes or is abandoned.
+struct TokenFile(PathBuf);
+
+impl Drop for TokenFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 enum PendingControl {
@@ -763,6 +784,7 @@ enum PendingControl {
         listener: TcpListener,
         port: u16,
         token: String,
+        token_file: TokenFile,
     },
 }
 
@@ -824,26 +846,52 @@ async fn tcp_control() -> Result<PendingControl, String> {
         .local_addr()
         .map_err(|error| format!("control socket: {error}"))?
         .port();
+    let token = fresh_token();
+    let token_file = write_token_file(&token)?;
     Ok(PendingControl::Tcp {
         listener,
         port,
-        token: fresh_token(),
+        token,
+        token_file,
     })
+}
+
+fn write_token_file(token: &str) -> Result<TokenFile, String> {
+    let bootstrap = bootstrap_path()?;
+    let dir = bootstrap
+        .parent()
+        .ok_or_else(|| "bootstrap directory is missing".to_owned())?;
+    let path = dir.join(format!("token-{}", uuid::Uuid::new_v4().simple()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|error| format!("control token file: {error}"))?;
+    std::io::Write::write_all(&mut file, token.as_bytes())
+        .map_err(|error| format!("control token file: {error}"))?;
+    Ok(TokenFile(path))
 }
 
 impl PendingControl {
     fn env_spec(&self) -> ControlEnv {
         match self {
             #[cfg(unix)]
-            Self::Unix { fd, token, .. } => ControlEnv {
-                token: token.clone(),
+            Self::Unix { fd, .. } => ControlEnv {
                 fd: Some(*fd),
                 port: None,
+                token_file: None,
             },
-            Self::Tcp { port, token, .. } => ControlEnv {
-                token: token.clone(),
+            Self::Tcp {
+                port, token_file, ..
+            } => ControlEnv {
                 fd: None,
                 port: Some(*port),
+                token_file: Some(token_file.0.clone()),
             },
         }
     }
@@ -863,13 +911,29 @@ impl PendingControl {
         match self {
             #[cfg(unix)]
             Self::Unix { host, token, .. } => {
-                let (mut reader, writer) = box_split(host);
+                let (mut reader, mut writer) = box_split(host);
+                // The token crosses the socketpair before exec, so it is not
+                // part of the initial environment block /proc keeps forever.
+                write_host(
+                    &mut writer,
+                    &HostFrame::Token {
+                        token: token.clone(),
+                    },
+                )
+                .await?;
                 expect_ready(&mut reader, &token, ctx, deadline).await?;
                 Ok((reader, writer))
             }
             Self::Tcp {
-                listener, token, ..
-            } => accept_tcp(listener, &token, ctx, deadline).await,
+                listener,
+                token,
+                token_file,
+                ..
+            } => {
+                let io = accept_tcp(listener, &token, ctx, deadline).await;
+                drop(token_file);
+                io
+            }
         }
     }
 }
@@ -880,34 +944,37 @@ async fn accept_tcp(
     ctx: &ToolCtx,
     deadline: Instant,
 ) -> Result<(ControlRead, ControlWrite), String> {
-    let mut rejects = 0u32;
+    let mut attempts = 0u32;
     loop {
-        if rejects >= 8 {
+        if attempts >= MAX_HANDSHAKE_ATTEMPTS {
             return Err("control token rejected".to_owned());
         }
-        let stream = tokio::select! {
+        if Instant::now() >= deadline {
+            return Err("python did not connect before the startup limit".to_owned());
+        }
+        let accepted = tokio::select! {
             biased;
             () = ctx.cancel.cancelled() => return Err("program cancelled".to_owned()),
             () = tokio::time::sleep_until(deadline.into()) => {
                 return Err("python did not connect before the startup limit".to_owned());
             }
-            accepted = listener.accept() => {
-                accepted
-                    .map(|(stream, _)| stream)
-                    .map_err(|error| format!("python did not connect: {error}"))?
-            }
+            accepted = listener.accept() => accepted,
         };
+        let (stream, peer) =
+            accepted.map_err(|error| format!("python did not connect: {error}"))?;
+        attempts += 1;
+        if !peer.ip().is_loopback() {
+            continue;
+        }
         stream
             .set_nodelay(true)
             .map_err(|error| format!("control socket: {error}"))?;
         let (mut reader, writer) = box_split(stream);
-        match expect_ready(&mut reader, token, ctx, deadline).await {
+        let slice = (Instant::now() + HANDSHAKE_ATTEMPT).min(deadline);
+        match expect_ready(&mut reader, token, ctx, slice).await {
             Ok(()) => return Ok((reader, writer)),
-            Err(message) if message == "control token rejected" => {
-                rejects += 1;
-                continue;
-            }
-            Err(message) => return Err(message),
+            Err(message) if message == "program cancelled" => return Err(message),
+            Err(_) => continue,
         }
     }
 }
@@ -945,12 +1012,17 @@ fn spawn_python(
     for (key, value) in env {
         command.env(key, value);
     }
-    command.env("MYCODE_PTC_TOKEN", &control.token);
+    // The token itself is not an environment variable. On Unix the child
+    // reads it from the inherited socket. On TCP it reads a 0600 file whose
+    // path is the only value that enters the initial environment block.
     if let Some(fd) = control.fd {
         command.env("MYCODE_PTC_FD", fd.to_string());
     }
     if let Some(port) = control.port {
         command.env("MYCODE_PTC_PORT", port.to_string());
+    }
+    if let Some(path) = &control.token_file {
+        command.env("MYCODE_PTC_TOKEN_FILE", path);
     }
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::piped());
@@ -967,12 +1039,15 @@ fn spawn_python(
     {
         command.process_group(0);
         let inherit = control.fd;
-        // SAFETY: runs in the forked child before exec. Clearing CLOEXEC lets
-        // the interpreter inherit one socket. `prctl` only sets the subreaper
-        // flag so grandchildren stay in this tree. Neither allocates, locks,
-        // or touches the environment. `prctl` is a no-op off Linux.
+        // SAFETY: runs in the forked child before exec. Inherited descriptors
+        // other than the control socket are marked close-on-exec so the
+        // interpreter cannot use the parent's pipes, listeners, or databases.
+        // CLOEXEC is then cleared on that one socket. `prctl` only sets the
+        // subreaper flag so grandchildren stay in this tree. None of this
+        // allocates, locks, or touches the environment. `prctl` is Linux-only.
         unsafe {
             command.pre_exec(move || {
+                seal_inherited_fds()?;
                 if let Some(fd) = inherit {
                     let flags = libc::fcntl(fd, libc::F_GETFD);
                     if flags == -1 {
@@ -1003,6 +1078,51 @@ fn bootstrap_path() -> Result<PathBuf, String> {
     PATH.get()
 }
 
+/// Writes the bootstrap into a fresh 0700 directory.
+///
+/// The name includes a random suffix so a pre-created symlink at a predictable
+/// temp path cannot redirect the write. `create_new` refuses to replace an
+/// existing file. The script is not a secret (it is compiled into the binary);
+/// the directory mode keeps other users from swapping it before exec.
+fn install_bootstrap() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!(
+        "mycode-ptc-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        // 0o700 survives a typical umask. `set_permissions` below covers a
+        // umask that still cleared a bit.
+        builder.mode(0o700);
+    }
+    builder
+        .create(&dir)
+        .map_err(|error| format!("bootstrap directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("bootstrap directory: {error}"))?;
+    }
+    let path = dir.join("bootstrap.py");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|error| format!("bootstrap file: {error}"))?;
+    std::io::Write::write_all(&mut file, include_str!("bootstrap.py").as_bytes())
+        .map_err(|error| format!("bootstrap file: {error}"))?;
+    Ok(path)
+}
+
 struct OnceLockBootstrap(std::sync::OnceLock<Result<PathBuf, String>>);
 
 impl OnceLockBootstrap {
@@ -1011,17 +1131,45 @@ impl OnceLockBootstrap {
     }
 
     fn get(&self) -> Result<PathBuf, String> {
-        self.0
-            .get_or_init(|| {
-                let path = std::env::temp_dir()
-                    .join(format!("mycode-ptc-bootstrap-{}.py", std::process::id()));
-                match std::fs::write(&path, include_str!("bootstrap.py")) {
-                    Ok(()) => Ok(path),
-                    Err(error) => Err(format!("bootstrap file: {error}")),
-                }
-            })
-            .clone()
+        self.0.get_or_init(install_bootstrap).clone()
     }
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn seal_inherited_fds() -> std::io::Result<()> {
+    // SAFETY: `close_range` with `CLOSE_RANGE_CLOEXEC` is async-signal-safe.
+    // It does not allocate, lock, or close the descriptors, so std's
+    // exec-error pipe still works if exec fails. The control fd is included
+    // and unmarked by the caller after this returns.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            3u32,
+            libc::c_uint::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        )
+    };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn seal_inherited_fds() -> std::io::Result<()> {
+    for fd in 3..256 {
+        // SAFETY: `fcntl(F_GETFD/F_SETFD)` is async-signal-safe and only
+        // toggles close-on-exec. A missing descriptor is skipped.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            continue;
+        }
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 async fn drain_pipe(pipe: impl AsyncReadExt + Unpin, slot: Arc<std::sync::Mutex<String>>) {
@@ -1095,5 +1243,40 @@ mod channel_tests {
         .await
         .expect("token");
     }
-}
 
+    #[tokio::test]
+    async fn a_stalled_tcp_peer_does_not_block_the_real_client() {
+        use tokio::net::TcpStream;
+
+        let control = super::tcp_control().await.expect("bind");
+        let super::PendingControl::Tcp {
+            listener,
+            port,
+            token,
+            token_file: _token_file,
+        } = control
+        else {
+            panic!("tcp control did not bind a loopback listener");
+        };
+        let token_for_child = token.clone();
+        let ctx = ToolCtx::new(std::env::temp_dir());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let host =
+            tokio::spawn(async move { super::accept_tcp(listener, &token, &ctx, deadline).await });
+        let _stall = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("stall connect");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let mut good = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("client connect");
+        let frame =
+            encode_frame(&serde_json::json!({"type": "ready", "token": token_for_child})).unwrap();
+        good.write_all(&frame).await.expect("ready");
+        let joined = tokio::time::timeout(Duration::from_secs(2), host)
+            .await
+            .expect("stalled peer held the handshake")
+            .expect("task");
+        assert!(joined.is_ok(), "{}", joined.err().unwrap_or_default());
+    }
+}

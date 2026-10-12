@@ -92,22 +92,22 @@ pub(crate) fn command_parameter_doc(kind: ShellKind) -> &'static str {
 pub(crate) fn mode_parameter_doc(kind: ShellKind) -> &'static str {
     match kind {
         ShellKind::Pwsh => {
-            "`script` (the default when `mode` is omitted) runs `command` in PowerShell 7. `program` spawns one kernel-loadable image with `program` and `args` and does not start PowerShell."
+            "`script` (the default when `mode` is omitted) runs `command` in PowerShell 7. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start PowerShell."
         }
         ShellKind::WindowsPowerShell => {
-            "`script` (the default when `mode` is omitted) runs `command` in Windows PowerShell 5.1. `program` spawns one kernel-loadable image with `program` and `args` and does not start PowerShell."
+            "`script` (the default when `mode` is omitted) runs `command` in Windows PowerShell 5.1. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start PowerShell."
         }
         ShellKind::Bash => {
-            "`script` (the default when `mode` is omitted) runs `command` in bash. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in bash. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
         }
         ShellKind::Zsh => {
-            "`script` (the default when `mode` is omitted) runs `command` in zsh. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in zsh. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
         }
         ShellKind::Sh => {
-            "`script` (the default when `mode` is omitted) runs `command` in POSIX sh. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in POSIX sh. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
         }
         ShellKind::Cmd => {
-            "`script` (the default when `mode` is omitted) runs `command` in cmd.exe. `program` spawns one kernel-loadable image with `program` and `args` and does not start a shell."
+            "`script` (the default when `mode` is omitted) runs `command` in cmd.exe. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
         }
     }
 }
@@ -169,8 +169,10 @@ Do not use bash syntax (`2>/dev/null`, `$(...)`, `<<` heredocs). Quote paths tha
 contain spaces; `\\` is the separator and `/` is also accepted. Each call is a new \
 process: `cd` and variable assignments do not persist. To edit a file from this tool, \
 pipe a literal here-string to Python (`@'...'@ | python -`). `mode` `program` spawns \
-`program` with an explicit `args` vector and does not start PowerShell; only a \
-kernel-loadable PE, ELF, or Mach-O image is accepted. `write` and `edit` remain \
+`program` with an explicit `args` vector and does not start PowerShell. A PE, ELF, \
+or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with \
+the script path and args. Batch files and a shebang argument of `-c` are rejected. \
+`write` and `edit` remain \
 available. `read`, `grep`, and `find` stay in-process. Do not use this tool to talk \
 to the user. Edits are not undone. Execution is unsandboxed current-user execution. \
 Captured stdout/stderr is truncated beyond 50 KiB. A non-zero exit is an error result, \
@@ -185,8 +187,10 @@ Use cmdlets (`Get-ChildItem`, `Select-String`), `$env:NAME`, and `2>$null` inste
 `2>/dev/null`. Quote paths that contain spaces. Each call is a new process: `cd` and \
 variable assignments do not persist. To edit a file, pipe a literal here-string to \
 Python (`@'...'@ | python -`). `mode` `program` spawns `program` with an explicit \
-`args` vector and does not start PowerShell; only a kernel-loadable PE, ELF, or \
-Mach-O image is accepted. `write` and `edit` remain available. `read`, `grep`, and \
+`args` vector and does not start PowerShell. A PE, ELF, or Mach-O image runs \
+directly. A direct shebang wrapper runs its interpreter with the script path and \
+args. Batch files and a shebang argument of `-c` are rejected. `write` and `edit` \
+remain available. `read`, `grep`, and \
 `find` stay in-process. Do not use this tool to talk to the user. Edits are not \
 undone. Execution is unsandboxed current-user execution. Captured stdout/stderr is \
 truncated beyond 50 KiB. A non-zero exit is an error result, not a tool failure. \
@@ -198,7 +202,7 @@ Use bash syntax: pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path
 separator is `/`. Each call is a new process; `cd` and exports do not persist. To \
 edit a file, run Python (`python3` or `python`) with a quoted heredoc or a short \
 script. `mode` `program` spawns `program` with an explicit `args` vector and does \
-not start a shell; only a kernel-loadable PE, ELF, or Mach-O image is accepted. \
+not start a shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. \
 `write` and `edit` remain available. `read`, `grep`, and `find` stay in-process. \
 Do not use this tool to talk to the user. Edits are not undone. Execution is \
 unsandboxed current-user execution. Captured stdout/stderr is truncated beyond \
@@ -211,7 +215,7 @@ Use zsh syntax: pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path 
 separator is `/`. Each call is a new process; `cd` and exports do not persist. To \
 edit a file, run Python (`python3` or `python`) with a quoted heredoc or a short \
 script. `mode` `program` spawns `program` with an explicit `args` vector and does \
-not start a shell; only a kernel-loadable PE, ELF, or Mach-O image is accepted. \
+not start a shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. \
 `write` and `edit` remain available. `read`, `grep`, and `find` stay in-process. \
 Do not use this tool to talk to the user. Edits are not undone. Execution is \
 unsandboxed current-user execution. Captured stdout/stderr is truncated beyond \
@@ -224,8 +228,10 @@ stderr. Use POSIX syntax: pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`.
 Do not rely on bash arrays or `[[ ]]`. The path separator is `/`. Each call is a \
 new process; `cd` and exports do not persist. To edit a file, run Python \
 (`python3` or `python`) with a quoted heredoc or a short script. `mode` `program` \
-spawns `program` with an explicit `args` vector and does not start a shell; only \
-a kernel-loadable PE, ELF, or Mach-O image is accepted. `write` and `edit` remain \
+spawns `program` with an explicit `args` vector and does not start a shell. A PE, \
+ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter \
+with the script path and args. Batch files and a shebang argument of `-c` are \
+rejected. `write` and `edit` remain \
 available. `read`, `grep`, and `find` stay in-process. Do not use this tool to \
 talk to the user. Edits are not undone. Execution is unsandboxed current-user \
 execution. Captured stdout/stderr is truncated beyond 50 KiB. A non-zero exit is \
@@ -238,7 +244,7 @@ and stderr. PowerShell was not found, so this is the last-resort shell. Use cmd 
 syntax: `%VAR%`, quoted Windows paths, and `&` or `&&` to chain. \
 Each call is a new process. Prefer `write` and `edit` for file changes. `mode` \
 `program` spawns `program` with an explicit `args` vector and does not start a \
-shell; only a kernel-loadable PE, ELF, or Mach-O image is accepted. `read`, \
+shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. `read`, \
 `grep`, and `find` stay in-process. Do not use this tool to talk to the user. \
 Edits are not undone. Execution is unsandboxed current-user execution. Captured \
 stdout/stderr is truncated beyond 50 KiB. A non-zero exit is an error result, \
@@ -247,30 +253,30 @@ not a tool failure. Default timeout: 120 s. There is no permission prompt.";
 const POWERSHELL_SNIPPET: &str = "\
 powershell: mode script runs one PowerShell command (command), including a \
 here-string piped to python that edits files; mode program runs one \
-kernel-loadable binary with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
+kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
 Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const BASH_SNIPPET: &str = "\
 bash: mode script runs one bash command (command), including a Python heredoc \
-or short script that edits files; mode program runs one kernel-loadable binary \
+or short script that edits files; mode program runs one kernel image or shebang wrapper \
 with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
 Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const ZSH_SNIPPET: &str = "\
 zsh: mode script runs one zsh command (command), including a Python heredoc \
-or short script that edits files; mode program runs one kernel-loadable binary \
+or short script that edits files; mode program runs one kernel image or shebang wrapper \
 with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
 Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const SH_SNIPPET: &str = "\
 sh: mode script runs one POSIX sh command (command), including a Python heredoc \
-or short script that edits files; mode program runs one kernel-loadable binary \
+or short script that edits files; mode program runs one kernel image or shebang wrapper \
 with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
 Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const CMD_SNIPPET: &str = "\
 cmd: mode script runs one cmd.exe command (command); mode program runs one \
-kernel-loadable binary with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
+kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
 Do not use this tool to fetch docs or map the repository; that belongs to `scout` or `grep`/`find`/`run_code`.";
 
 const POWERSHELL7_GUIDANCE: &str = "\
