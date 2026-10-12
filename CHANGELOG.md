@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-10-12
+
+### Fixed
+
+- 宿主进程异常退出，或控制连接关闭时，热的系统 Python 和 scout 的 `-I` 进程一起退出，包括正卡在程序里的那次调用。macOS 用 kqueue 监视父进程，父进程没了就退出。Windows 先挂起进程，挂上关闭即杀的 Job，再恢复主线程；挂载失败则这次调用失败，启动器不能把真正的解释器留在 Job 外面。
+- 桌面截图换成最终重拍。对照表不再露出原始标记，账本时间不再盖住 You，画面里没有鼠标指针。
+
+### Changed
+
+- MCP 的 stdio 子进程在 Linux 上随拉起它的线程退出而被杀掉，在 Windows 上同样先挂起再入 Job。`tools.shell` 仍不设父进程死亡信号，因为它跑在可能提前退出的阻塞线程上。
+
 ## [0.11.10] - 2026-10-12
 
 ### Changed
@@ -219,7 +230,8 @@
 - 四个平台的发布包：Windows x64（`x86_64-pc-windows-msvc`）、Windows ARM64（`aarch64-pc-windows-msvc`）、macOS Apple Silicon（`aarch64-apple-darwin`，zip 与 `.dmg`）、Linux x86_64（`x86_64-unknown-linux-gnu`），均附 `.sha256`。
 - Windows 上 `shell` 的脚本模式优先 PowerShell 7（`pwsh`），其次 Git bash，不侦查 Windows PowerShell 5.1。两者都没有时，运行时才退到 `cmd.exe`，并且不把这次退路写进设置。`pwsh` 以 UTF-16LE 的 `-EncodedCommand` 启动，并尽量把管道编码设为 UTF-8。标准输出和标准错误里的 CLIXML、`_xHHHH_` 转义和 ANSI 颜色会收成可读文本。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.10...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.11...HEAD
+[0.11.11]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.11
 [0.11.10]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.10
 [0.11.9]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.9
 [0.11.8]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.8
