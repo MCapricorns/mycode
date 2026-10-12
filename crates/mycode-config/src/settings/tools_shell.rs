@@ -49,6 +49,17 @@ pub struct ToolsSettings {
     /// Legacy shell override. Ignored when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<ShellSettings>,
+    /// Opt-in OS helper for `shell` and `run_code`. Default off.
+    ///
+    /// Linux uses bubblewrap and macOS uses seatbelt. The helper is
+    /// best-effort write confinement, not a security boundary. A missing
+    /// helper fails the call instead of running unsandboxed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub os_sandbox: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub(super) fn tools_are_default(tools: &ToolsSettings) -> bool {
@@ -77,6 +88,7 @@ mod tests {
                     program: r"C:\Windows\System32\cmd.exe".into(),
                     source: "user".into(),
                 }),
+                os_sandbox: false,
             },
             ..AppSettings::default()
         };
@@ -91,5 +103,30 @@ mod tests {
             parsed.tools.shell.as_ref().map(|shell| shell.kind.as_str()),
             Some("pwsh")
         );
+    }
+
+    #[test]
+    fn os_sandbox_defaults_off_and_round_trips() {
+        let defaults = AppSettings::default();
+        assert!(!defaults.tools.os_sandbox);
+        let encoded = serde_json::to_string(&defaults).expect("encode");
+        assert!(
+            !encoded.contains("osSandbox"),
+            "default settings omit the opt-in flag: {encoded}"
+        );
+        let enabled: AppSettings =
+            serde_json::from_str(r#"{"tools":{"osSandbox":true}}"#).expect("parse");
+        assert!(enabled.tools.os_sandbox);
+        assert!(enabled.validate().is_ok());
+        let both: AppSettings = serde_json::from_str(
+            r#"{"tools":{"osSandbox":true,"shell":{"kind":"bash","program":"/bin/bash"}}}"#,
+        )
+        .expect("legacy shell plus sandbox");
+        assert!(both.tools.os_sandbox);
+        assert_eq!(
+            both.tools.shell.as_ref().map(|shell| shell.kind.as_str()),
+            Some("bash")
+        );
+        assert!(both.validate().is_ok());
     }
 }
