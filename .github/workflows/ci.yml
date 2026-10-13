@@ -10,14 +10,14 @@
 #
 # push to main: the same Linux check, plus plan the release and build the
 # three native release binaries. Release builds use `[profile.release]`
-# (fat LTO, one codegen unit) through cargo_release_build.sh. They do
-# not run tests or clippy. A publish waits until the check and all three
+# (fat LTO, one codegen unit) through cargo_release_build.sh. They do not
+# run tests or clippy. A publish waits until the check and all three
 # builds succeed. When the workspace version is new, tag that commit and
 # publish the archives.
 # release-plan chooses `v<workspace version>` when that tag is free. When
 # the tag already exists, it bumps the patch in Cargo.toml, Cargo.lock,
 # and CHANGELOG.md on a temporary commit and pushes only
-# `ci/release-<version>-<run id>`. The four product builds check out that
+# `ci/release-<version>-<run id>`. The three product builds check out that
 # commit, so the version compiled into the binaries is the version that
 # will be tagged. A main push still builds when the plan decides not to
 # publish.
@@ -215,7 +215,7 @@ jobs:
               -m "chore(release): bump to ${VERSION}" \
               -m "Record the version published for this qualified main push."
             # Build this commit before main moves. release-publish tags
-            # it after the four platform archives exist, then
+            # it after the three platform archives exist, then
             # fast-forwards main or replays the bump onto current main.
             cleanup_ref="ci/release-${VERSION}-${GITHUB_RUN_ID}"
             git push origin "HEAD:refs/heads/${cleanup_ref}"
