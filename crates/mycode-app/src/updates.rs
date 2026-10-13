@@ -96,8 +96,10 @@ struct AssetJson {
 ///
 /// `Ok(None)` means there is nothing to install: the app is current, the
 /// target has no published archive, GitHub returned 404, or the tag is
-/// not a newer semver version. A supported target whose zip is missing
-/// is `Err`, not `None`.
+/// not a newer semver version. The version gate runs before the asset
+/// lookup, so an up-to-date app stays quiet even when the current release
+/// is missing its zip. A newer release whose zip is missing is `Err`, not
+/// `None`, so a broken release job is visible instead of silently ignored.
 ///
 /// # Errors
 ///
@@ -130,13 +132,10 @@ pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, Str
             brief_error(&error.to_string())
         )
     })?;
-    let Some(offer) = resolve_asset(&release.tag_name, &release.html_url, &release.assets)? else {
-        return Ok(None);
-    };
     if !is_newer(&release.tag_name, current_version()) {
         return Ok(None);
     }
-    Ok(Some(offer))
+    resolve_asset(&release.tag_name, &release.html_url, &release.assets)
 }
 
 /// First line of a transport error, bounded, so reqwest's full error chain
@@ -198,7 +197,7 @@ fn resolve_asset_for(
         return Ok(None);
     }
     // Published names look like
-    // `mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip`. The `.sha256`
+    // `mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip`. The `.sha256`
     // sidecar shares the prefix and must not be selected.
     let asset = assets.iter().find(|asset| {
         asset.name.starts_with("mycode-desktop-")
@@ -292,6 +291,12 @@ pub async fn download_update(
     })
 }
 
+/// Idle ceiling while waiting for response headers and between body
+/// chunks of an update download. The download itself is streaming: a
+/// total request timeout would cap a multi-hundred-megabyte asset at one
+/// fixed wall clock and fail every link slower than that.
+const DOWNLOAD_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+
 async fn fetch_to_file(
     user_agent: &str,
     url: &str,
@@ -304,8 +309,8 @@ async fn fetch_to_file(
         headers: Vec::new(),
         body: None,
         mode: mycode_providers::PinMode::PublicHttps,
-        timeout: Some(std::time::Duration::from_secs(30)),
-        read_timeout: None,
+        timeout: None,
+        read_timeout: Some(DOWNLOAD_IDLE),
         user_agent: Some(user_agent.to_owned()),
         follow_redirects: true,
         cancel: tokio_util::sync::CancellationToken::new(),
@@ -335,10 +340,13 @@ async fn fetch_to_file(
     });
     let mut downloaded: u64 = 0;
     loop {
-        let chunk = match response.chunk().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break,
-            Err(error) => return Err(format!("download stream failed: {error}")),
+        // `chunk` is cancel-safe, so the idle ceiling only fires on a
+        // connection that stopped delivering bytes.
+        let chunk = match tokio::time::timeout(DOWNLOAD_IDLE, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => chunk,
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => return Err(format!("download stream failed: {error}")),
+            Err(_) => return Err("download stalled: no data arrived in time".to_owned()),
         };
         downloaded += chunk.len() as u64;
         if downloaded > maximum {
@@ -368,9 +376,8 @@ fn verify_checksum(asset: &Path, checksum_file: &Path) -> Result<(), String> {
     if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("checksum sidecar malformed".to_owned());
     }
-    let bytes = std::fs::read(asset).map_err(|error| format!("asset read: {error}"))?;
-    let actual = sha256_hex(&bytes);
-    if actual != expected {
+    let actual = file_sha256_raw(asset)?;
+    if !actual.eq_ignore_ascii_case(expected.as_bytes()) {
         return Err("downloaded update failed its checksum verification".to_owned());
     }
     Ok(())
@@ -427,7 +434,25 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("asset entry: {error}"))?;
     let mut out =
         std::fs::File::create(&binary_path).map_err(|error| format!("stage binary: {error}"))?;
-    std::io::copy(&mut entry, &mut out).map_err(|error| format!("stage binary: {error}"))?;
+    // Chunked copy: a lying zip header could declare a small `size()` and
+    // still decompress more bytes, so the guard is enforced on what is
+    // actually written.
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut written: u64 = 0;
+    loop {
+        let read = entry
+            .read(&mut buffer)
+            .map_err(|error| format!("stage binary: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        written += read as u64;
+        if written > MAX_BINARY_BYTES {
+            return Err("archive entry oversized".to_owned());
+        }
+        out.write_all(&buffer[..read])
+            .map_err(|error| format!("stage binary: {error}"))?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -602,14 +627,47 @@ fn shell_single_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
+/// SHA-256 of one file, streamed so a multi-hundred-megabyte asset never
+/// sits whole in memory. The digest is lowercase hex.
 fn file_sha256(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("hash read: {error}"))?;
-    Ok(sha256_hex(&bytes))
+    Ok(hex_encode(&file_sha256_raw(path)?))
 }
 
+fn file_sha256_raw(path: &Path) -> Result<[u8; 32], String> {
+    let mut file = std::fs::File::open(path).map_err(|error| format!("hash read: {error}"))?;
+    let mut hasher = sha2::Sha256::new();
+    // Chunked reads: the digest crate's hasher does not implement
+    // `io::Write` here, and reading the whole file would buffer a
+    // multi-hundred-megabyte asset in memory just to hash it.
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("hash read: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+/// Lowercase hex without a `format!` allocation per byte.
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    out
+}
+
+/// Lowercase hex of one in-memory byte slice. Test fixtures build expected
+/// digests from it; production hashes files through [`file_sha256`].
+#[cfg(test)]
 fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex_encode(&sha2::Sha256::digest(bytes))
 }
 
 #[cfg(test)]

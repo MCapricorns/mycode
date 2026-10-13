@@ -30,6 +30,25 @@ impl ReqwestWebTransport {
 /// Bytes of a non-2xx body inspected for an AnySearch error object.
 const ERROR_BODY_LIMIT: usize = 8 * 1024;
 
+/// Reads the response body up to `limit` bytes and stops there.
+///
+/// The bound is enforced while reading, not after `bytes()` buffers the
+/// whole body: a broken backend that streams gigabytes must not be able
+/// to balloon this process's memory before the size check runs.
+async fn bounded_body(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<bytes::Bytes, WebError> {
+    let mut body = bytes::BytesMut::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| WebError::Protocol)? {
+        if body.len() + chunk.len() > limit {
+            return Err(WebError::Protocol);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body.freeze())
+}
+
 /// `HTTP {status}` plus AnySearch `error_code` and `message` when the body has them.
 ///
 /// A non-JSON body, or JSON without those fields, stays the status alone.
@@ -108,7 +127,7 @@ impl WebTransport for ReqwestWebTransport {
                 let bytes = tokio::select! {
                 biased;
                 () = cancel.cancelled() => return Err(WebError::Cancelled),
-                bytes = response.bytes() => bytes,
+                bytes = bounded_body(response, ERROR_BODY_LIMIT) => bytes,
                 };
                 let body = bytes.unwrap_or_default();
                 return Err(WebError::unavailable(http_error_reason(status, &body)));
@@ -116,7 +135,7 @@ impl WebTransport for ReqwestWebTransport {
             let bytes = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(WebError::Cancelled),
-            bytes = response.bytes() => bytes.map_err(|_| WebError::Protocol)?,
+            bytes = bounded_body(response, super::guard::MAX_RESPONSE_BYTES) => bytes?,
             };
             Ok(bytes.to_vec())
         })

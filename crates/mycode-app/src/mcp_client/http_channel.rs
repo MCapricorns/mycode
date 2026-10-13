@@ -16,6 +16,28 @@ use tokio::sync::RwLock;
 
 use super::{JsonRpcChannel, MAX_MESSAGE_BYTES, McpError};
 
+/// Bytes of a non-2xx body kept for the error excerpt.
+const ERROR_EXCERPT_BYTES: usize = 300;
+
+/// Reads the response body up to `limit` bytes, rejecting anything longer.
+///
+/// The bound applies while reading so a misbehaving endpoint cannot buffer
+/// an unbounded body before the size check runs.
+async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, McpError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| McpError::transport(format!("response body failed: {error}")))?
+    {
+        if body.len() + chunk.len() > limit {
+            return Err(McpError::Oversized);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// Credential header styles accepted for HTTP MCP servers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyHeader {
@@ -125,11 +147,10 @@ impl HttpChannel {
         if !status.is_success() {
             // The body usually names the cause (bad key, unknown session);
             // keep a short excerpt so the settings page can show it.
-            let excerpt = response
-                .bytes()
+            let excerpt = bounded_body(response, ERROR_EXCERPT_BYTES)
                 .await
-                .map(|bytes| String::from_utf8_lossy(&bytes[..bytes.len().min(300)]).into_owned())
                 .unwrap_or_default();
+            let excerpt = String::from_utf8_lossy(&excerpt).into_owned();
             let hint = match status.as_u16() {
                 401 | 403 => " — check the API key stored for this server",
                 404 => " — the session expired or the endpoint path is wrong",
@@ -153,13 +174,7 @@ impl HttpChannel {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| McpError::transport(format!("response body failed: {error}")))?;
-        if bytes.len() > MAX_MESSAGE_BYTES {
-            return Err(McpError::Oversized);
-        }
+        let bytes = bounded_body(response, MAX_MESSAGE_BYTES).await?;
         if content_type.contains("text/event-stream") {
             return sse_reply(&bytes);
         }
