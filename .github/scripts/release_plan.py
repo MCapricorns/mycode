@@ -653,7 +653,9 @@ def _expect_remote_tags() -> None:
 
 
 def _expect_output_writer() -> None:
-    target = Path("/tmp/mycode-release-plan-output.txt")
+    import tempfile
+
+    target = Path(tempfile.gettempdir()) / "mycode-release-plan-output.txt"
     if target.exists():
         target.unlink()
     write_github_output(
@@ -727,22 +729,24 @@ def _expect_workflow_contract() -> None:
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
         "aarch64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
     )
     release_build = _yaml_job(workflow, "release-build")
     _expect("windows-11-arm" in release_build, "Windows ARM64 release runner missing")
-    _expect("os: ubuntu-latest" in release_build, "Linux product compile is not on ubuntu-latest")
+    _expect(
+        "os: ubuntu-latest" not in release_build,
+        "a Linux product compile is back on ubuntu-latest",
+    )
     for target in release_targets:
         _expect(target in release_build, f"missing release platform {target}")
         _expect(
             f"mycode-desktop-<tag>-{target}.zip" in workflow,
             f"missing release asset comment {target}",
         )
-    _expect("Package (Linux)" in release_build, "Linux packaging step missing")
-    _expect("sha256sum" in release_build, "Linux archive hash is not sha256sum")
-    _expect("libxkbcommon-dev" in release_build, "Linux GPUI packages missing")
-    _expect("libssl-dev" in release_build, "OpenSSL dev package missing from the Linux build")
-    _expect("libclang-dev" in release_build, "libclang dev package missing from the Linux build")
+    _expect("Package (Linux)" not in release_build, "Linux packaging is back")
+    _expect(
+        "x86_64-unknown-linux-gnu" not in release_build,
+        "Linux release target is back",
+    )
     _expect("linux-gpui-deps" not in workflow, "Linux GPUI composite action is wired again")
     _expect(
         workflow.count("runs-on: ubuntu-latest") == 4,
@@ -819,8 +823,8 @@ def _expect_workflow_contract() -> None:
         "release planner self-test still waits for Linux",
     )
     _expect(
-        "runner.os == 'Linux'" in release_build,
-        "Linux install and packaging are not gated on the Linux runner",
+        "runner.os == 'Linux'" not in release_build,
+        "Linux install or packaging is back in release builds",
     )
     _expect("\n  core:\n" not in workflow, "core quality job is back")
     _expect("\n  desktop:\n" not in workflow, "desktop quality job is back")
@@ -858,32 +862,31 @@ def _expect_workflow_contract() -> None:
         "needs.check.result == 'success'" in _yaml_job(workflow, "release-publish"),
         "publish does not wait for the workspace check",
     )
-    # README and CHANGELOG describe four release platforms, including Linux x86_64.
+    # README and CHANGELOG describe three release platforms, with no Linux build.
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
-    _expect("四个平台" in readme, "Chinese docs dropped the four release platforms")
-    _expect("三个平台" not in readme, "Chinese docs still claim three release platforms")
+    _expect("四个平台" not in readme, "Chinese docs went back to four release platforms")
+    _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
     _expect("Windows ARM64" in readme, "Chinese docs dropped Windows ARM64")
     _expect("skips packaging" not in readme, "English skip rule remains")
-    _expect("four platform" in readme, "English docs dropped the four release platforms")
-    _expect("three platform" not in readme, "English docs still claim three release platforms")
+    _expect("four platform" not in readme, "English docs went back to four release platforms")
+    _expect("three platform" in readme, "English docs dropped the three release platforms")
     _expect("Windows ARM64" in readme, "English docs dropped Windows ARM64")
     _expect(
-        "x86_64-unknown-linux-gnu" in readme,
-        "README omits the Linux release zip",
+        "x86_64-unknown-linux-gnu" not in readme,
+        "README still ships a Linux release zip",
     )
     _expect(
-        "Linux x86_64" in readme,
-        "README omits Linux x86_64 from the release platforms",
+        "Linux x86_64" not in readme,
+        "README still lists Linux x86_64 as a release platform",
     )
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     intro, _, _ = changelog.partition("## [Unreleased]")
     _expect("还没有带齐三个平台压缩包" not in changelog, "three-platform skip rule remains")
     _expect("还没有带齐四个平台压缩包" not in changelog, "four-platform skip rule remains")
-    _expect("四个平台的 zip" in intro, "changelog policy is not four release platforms")
-    _expect("三个平台" not in intro, "changelog policy still says three platforms")
-    _expect("Linux x86_64" in intro, "changelog policy omits Linux x86_64")
-    _expect("不提供 Linux" not in intro, "changelog policy still withholds Linux")
+    _expect("四个平台的 zip" not in intro, "changelog policy went back to four release platforms")
+    _expect("三个平台的 zip" in intro, "changelog policy is not three release platforms")
+    _expect("Linux x86_64" not in intro, "changelog policy still ships Linux x86_64")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
     _expect(
         "x86_64-unknown-linux-gnu" in changelog,
@@ -960,24 +963,23 @@ def _expect_single_workflow(workflow: str) -> None:
     build = _yaml_job(workflow, "release-build")
     _expect(re.search(r"(?m)^    if:", build), "release build job has no job-level if")
     _expect(re.search(r"(?m)^    needs:", build), "release build job does not wait for the plan")
-    _expect("ubuntu-latest" in build, "release Linux runner missing")
+    _expect("ubuntu-latest" not in build, "a release Linux runner is back")
     _expect("windows-11-arm" in build, "Windows ARM64 release runner missing")
     for target in (
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
         "aarch64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
     ):
         _expect(target in build, f"missing release platform {target}")
-    _expect("Package (Linux)" in build, "Linux packaging step missing from release builds")
-    _expect("libxkbcommon-dev" in build, "Linux GPUI packages missing from release builds")
+    _expect("Package (Linux)" not in build, "Linux packaging step is back in release builds")
+    _expect("libxkbcommon-dev" not in build, "Linux GPUI packages are back in release builds")
     check = _yaml_job(workflow, "check")
     _expect("runs-on: ubuntu-latest" in check, "workspace check is not on ubuntu-latest")
     _expect("cargo test --workspace" in check, "workspace check does not test")
     _expect("components: clippy" in check, "workspace check does not install clippy")
     _expect(
-        "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" in workflow,
-        "Linux zip missing from the workflow",
+        "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" not in workflow,
+        "Linux zip is back in the workflow",
     )
     for job in ("core", "desktop"):
         _expect(f"\n  {job}:\n" not in workflow, f"{job} job is back")

@@ -9,9 +9,9 @@
 # so a pull request does not wait on four LTO links.
 #
 # push to main: the same Linux check, plus plan the release and build the
-# four native release binaries. Release builds use `[profile.release]`
+# three native release binaries. Release builds use `[profile.release]`
 # (fat LTO, one codegen unit) through cargo_release_build.sh. They do
-# not run tests or clippy. A publish waits until the check and all four
+# not run tests or clippy. A publish waits until the check and all three
 # builds succeed. When the workspace version is new, tag that commit and
 # publish the archives.
 # release-plan chooses `v<workspace version>` when that tag is free. When
@@ -26,15 +26,14 @@
 #   windows-latest  -> x86_64-pc-windows-msvc
 #   windows-11-arm  -> aarch64-pc-windows-msvc
 #   macos-latest    -> aarch64-apple-darwin
-#   ubuntu-latest   -> x86_64-unknown-linux-gnu
 # windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-# image; it is not a cross-compile from windows-latest. The Ubuntu runner
-# installs the GPUI system packages, then compiles the Linux x86_64
-# product. There is no fmt job. cargo build retries crates.io
+# image; it is not a cross-compile from windows-latest. There is no Linux
+# product build: the Linux runner only compiles and tests the workspace
+# for check. There is no fmt job. cargo build retries crates.io
 # DNS and download failures (the macOS release of 797dfde died resolving
 # index.crates.io). Compile errors are not retried.
 #
-# After the Linux check and those four builds succeed and the plan asked
+# After the Linux check and those three builds succeed and the plan asked
 # to publish, release-publish creates the tag and uploads the archives from that
 # commit, then advances main. The advance fast-forwards when it can.
 # When main moved during the build, the version bump is replayed onto
@@ -50,12 +49,11 @@
 # run on ubuntu-latest. check compiles and tests the workspace. The other
 # three do not compile the product.
 #
-# Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon, Linux x86_64):
+# Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.dmg        (+ .sha256)
-#   mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip    (+ .sha256)
 
 name: ci
 
@@ -269,9 +267,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: mycode-desktop
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            binary: mycode-desktop
     steps:
       - uses: actions/checkout@v5
         with:
@@ -292,42 +287,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install Linux system packages
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config \
-            libfontconfig1-dev \
-            libfreetype-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libxcb1-dev \
-            libxcb-composite0-dev \
-            libxcb-cursor-dev \
-            libxcb-icccm4-dev \
-            libxcb-image0-dev \
-            libxcb-keysyms1-dev \
-            libxcb-randr0-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-shm0-dev \
-            libxcb-util-dev \
-            libxcb-xfixes0-dev \
-            libxcb-xkb-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxrandr-dev \
-            libwayland-dev \
-            libssl-dev \
-            clang \
-            libclang-dev \
-            zip
 
       - name: Build release binary
         shell: bash
@@ -379,22 +338,6 @@ jobs:
             --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
             --version "${MYCODE_PACKAGE_TAG#v}" \
             --output "mycode-desktop-${MYCODE_PACKAGE_TAG}-${{ matrix.target }}.dmg"
-
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          tag="${MYCODE_PACKAGE_TAG}"
-          stage="mycode-desktop-$tag-${{ matrix.target }}"
-          mkdir -p "$stage"
-          chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
-          cp README.md "$stage/" 2>/dev/null || true
-          cp LICENSE "$stage/" 2>/dev/null || true
-          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
-          zip -r "$zip" "$stage"
-          hash=$(sha256sum "$zip" | awk '{print $1}')
-          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       - name: Upload assets
         uses: actions/upload-artifact@v7
