@@ -589,7 +589,7 @@ pub fn replace_ui_state(home: &crate::HomeLayout, state: &UiState) -> Result<(),
 #[serde(rename_all = "camelCase")]
 struct SerializedUiState {
     format_version: u32,
-    kind: String,
+    kind: &'static str,
     #[serde(flatten)]
     state: UiState,
 }
@@ -597,7 +597,7 @@ struct SerializedUiState {
 fn replace_bytes(state: &UiState) -> Result<Vec<u8>, ConfigError> {
     let document = SerializedUiState {
         format_version: UI_STATE_FORMAT_VERSION,
-        kind: UI_STATE_KIND.to_owned(),
+        kind: UI_STATE_KIND,
         state: state.clone(),
     };
     let mut bytes = serde_json::to_vec_pretty(&document)

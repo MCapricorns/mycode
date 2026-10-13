@@ -4,7 +4,7 @@
 //! relative path through [`HomeLayout`], then delegates handle-relative native
 //! operations to the active platform implementation.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
 use zeroize::Zeroizing;
@@ -130,4 +130,19 @@ fn require_file_name(path: &OwnedPath) -> Result<(), ConfigError> {
         return Err(ConfigError::new(ConfigErrorKind::PathEscape));
     }
     Ok(())
+}
+
+/// Persistent lock file name for one owned file (`<name>.lock`).
+pub(in crate::secure_fs) fn lock_name(destination: &OsStr) -> OsString {
+    let mut name = destination.to_os_string();
+    name.push(".lock");
+    name
+}
+
+/// Fresh hidden temporary name beside the file being replaced.
+pub(in crate::secure_fs) fn temporary_name(destination: &OsStr) -> OsString {
+    let mut name = OsString::from(".");
+    name.push(destination);
+    name.push(format!(".{}.tmp", uuid::Uuid::new_v4().simple()));
+    name
 }

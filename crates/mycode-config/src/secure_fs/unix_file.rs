@@ -8,10 +8,10 @@ use std::path::Path;
 
 use rustix::fs::{self as rfs, AtFlags, Mode, OFlags};
 use rustix::io::Errno;
-use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super as unix;
+use crate::secure_fs::owned_file::{lock_name, temporary_name};
 use crate::{ConfigError, ConfigErrorKind};
 
 const FILE_MODE: rfs::RawMode = 0o600;
@@ -392,19 +392,6 @@ fn sync_file(file: &File) -> Result<(), ConfigError> {
 #[cfg(not(target_vendor = "apple"))]
 fn sync_file(file: &File) -> Result<(), ConfigError> {
     rfs::fsync(file.as_fd()).map_err(|error| unix::map_errno(error, ConfigErrorKind::Io))
-}
-
-fn lock_name(destination: &OsStr) -> OsString {
-    let mut name = destination.to_os_string();
-    name.push(".lock");
-    name
-}
-
-fn temporary_name(destination: &OsStr) -> OsString {
-    let mut name = OsString::from(".");
-    name.push(destination);
-    name.push(format!(".{}.tmp", Uuid::new_v4().simple()));
-    name
 }
 
 fn io_error(error: io::Error) -> ConfigError {

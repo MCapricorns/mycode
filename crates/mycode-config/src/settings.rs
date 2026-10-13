@@ -204,9 +204,7 @@ impl Default for AppSettings {
             providers: Vec::new(),
             // Both first-class vendors ship ready; the user pastes an API
             // key and enables one. At most one backend may be enabled.
-            web: WebSettings {
-                backends: builtin_web_backends(),
-            },
+            web: WebSettings::default(),
             usage: None,
             mcp_servers: Vec::new(),
             appearance: AppearanceSettings::default(),
@@ -438,6 +436,12 @@ struct SerializedSettings<'a> {
     settings: &'a AppSettings,
 }
 
+/// Envelope plus the settings fields captured as a map.
+///
+/// `deny_unknown_fields` on [`AppSettings`] is silently ignored when the
+/// struct is deserialized through `#[serde(flatten)]`, so the envelope keeps
+/// the settings keys in a map and [`AppSettings`] decodes from that value,
+/// where an unknown key is rejected again instead of being silently dropped.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeserializedSettings {
@@ -445,7 +449,7 @@ struct DeserializedSettings {
     kind: String,
     revision: u64,
     #[serde(flatten)]
-    settings: AppSettings,
+    fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A decoded and validated settings document.
@@ -460,19 +464,22 @@ fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError>
 }
 
 fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
+    let rejection = || {
+        ConfigError::authority_rejection().with_detail(
+            "settings.json: unknown field, wrong type, or JSON that a comma repair cannot fix",
+        )
+    };
     let decoded =
-        crate::json_recover::decode_json::<DeserializedSettings>(bytes).map_err(|_| {
-            ConfigError::authority_rejection().with_detail(
-                "settings.json: unknown field, wrong type, or JSON that a comma repair cannot fix",
-            )
-        })?;
+        crate::json_recover::decode_json::<DeserializedSettings>(bytes).map_err(|_| rejection())?;
     let document = decoded.value;
     if document.format_version != SETTINGS_FORMAT_VERSION || document.kind != SETTINGS_KIND {
         return Err(ConfigError::authority_rejection()
             .with_detail("settings.json: formatVersion or kind does not match this build"));
     }
     let revision = AuthorityRevision::new(document.revision)?;
-    let settings = document.settings;
+    let settings =
+        serde_json::from_value::<AppSettings>(serde_json::Value::Object(document.fields))
+            .map_err(|_| rejection())?;
     // No in-place upgrade. A document that does not validate is rejected
     // and the caller replaces the file with defaults.
     settings.validate()?;
@@ -516,6 +523,49 @@ fn is_https_url(value: &str) -> bool {
 mod tests {
     use super::{AppSettings, decode_settings, encode_settings};
     use crate::authority::AuthorityRevision;
+
+    #[test]
+    fn unknown_settings_field_is_rejected_not_ignored() {
+        // `deny_unknown_fields` is inert under `#[serde(flatten)]`, so a
+        // misspelled field must still be rejected by the map-based decode.
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 1,
+            "appearance": { "theme": "dark", "palette": "slate", "language": "auto" },
+            "appearances": { "theme": "light" }
+        }"#;
+        let error = decode_settings(bytes)
+            .err()
+            .expect("unknown field is document damage");
+        assert_eq!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
+        assert!(
+            error.summary().contains("unknown field"),
+            "{}",
+            error.summary()
+        );
+
+        let nested = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 1,
+            "appearance": { "theme": "dark", "palette": "slate", "language": "auto", "humeur": "x" }
+        }"#;
+        let error = decode_settings(nested)
+            .err()
+            .expect("nested unknown field is rejected");
+        assert_eq!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
+
+        let legacy = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 2,
+            "usage": { "enabled": true },
+            "tools": { "shell": { "kind": "pwsh", "program": "C:\\pwsh.exe" }, "osSandbox": true }
+        }"#;
+        let parsed = decode_settings(legacy).expect("known legacy fields still load");
+        assert!(parsed.settings.validate().is_ok());
+    }
 
     #[test]
     fn legacy_usage_field_is_tolerated_and_dropped() {
