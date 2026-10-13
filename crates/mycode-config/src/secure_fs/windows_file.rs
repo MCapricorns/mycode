@@ -7,7 +7,6 @@ use std::mem::size_of;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
-use uuid::Uuid;
 use windows_sys::Wdk::Storage::FileSystem::{
     FILE_DISPOSITION_INFORMATION, FILE_RENAME_INFORMATION, FileDispositionInformation,
     FileRenameInformation, NtSetInformationFile,
@@ -22,6 +21,7 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use zeroize::Zeroizing;
 
 use super::{windows_acl, windows_open};
+use crate::secure_fs::owned_file::{lock_name, temporary_name};
 use crate::{ConfigError, ConfigErrorKind};
 
 const READ_FILE_ACCESS: u32 = GENERIC_READ | READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
@@ -426,19 +426,6 @@ fn reject_wrong_case(parent: &File, name: &OsStr) -> Result<(), ConfigError> {
         return Err(ConfigError::new(ConfigErrorKind::AccessControl));
     }
     Ok(())
-}
-
-fn lock_name(destination: &OsStr) -> OsString {
-    let mut name = destination.to_os_string();
-    name.push(".lock");
-    name
-}
-
-fn temporary_name(destination: &OsStr) -> OsString {
-    let mut name = OsString::from(".");
-    name.push(destination);
-    name.push(format!(".{}.tmp", Uuid::new_v4().simple()));
-    name
 }
 
 fn io_error(error: io::Error) -> ConfigError {
