@@ -2,9 +2,25 @@
 
 0.9.25 是第一次公开发布（init 第一版）。日期为发布日（UTC）。
 
-`main` 上四个平台构建成功后都会发布新的 GitHub Release 和新标签（四个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64）。pull request 不发版，也不跑发布构建：PR CI 只在 Linux 上执行 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO）。推到 `main` 时四个平台才做 fat LTO 发布构建；同一份检查通过且四个构建都成功后才打标签。说明先用本文件里该版本的条目，再附上自上一个标签以来合并的 pull request、这些 PR 关闭的 issue，以及比较链接。写回 main 使用 GITHUB_TOKEN，release-plan 会跳过 github-actions[bot]，避免同一次发布把补丁号再加一次。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，四个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。压缩包未签名。
+`main` 上三个平台构建成功后都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64、Windows ARM64、macOS Apple Silicon；没有 Linux 包）。pull request 不发版，也不跑发布构建：PR CI 只在 Linux 上执行 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO）。推到 `main` 时三个平台才做 fat LTO 发布构建；同一份检查通过且三个构建都成功后才打标签。说明先用本文件里该版本的条目，再附上自上一个标签以来合并的 pull request、这些 PR 关闭的 issue，以及比较链接。写回 main 使用 GITHUB_TOKEN，release-plan 会跳过 github-actions[bot]，避免同一次发布把补丁号再加一次。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，三个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。压缩包未签名。
 
 ## [Unreleased]
+
+## [0.11.13] - 2026-10-13
+
+### Changed
+
+- 回到原生工具：模型直接调用 `read`、`write`、`edit`、`grep`、`find` 和当前平台的一个 shell 工具，MCP 工具按原始名字直接调用。`run_code` 和它背后的常驻 Python、控制通道、嵌套卡片、预热进程池全部移除；Windows 上的管道、启动和生命周期问题随之消失。
+- 移除尽力而为的操作系统沙箱（`tools.osSandbox`）。旧的设置值仍能读入，启动时清掉。进程以当前用户权限运行，环境变量白名单仍然只是过滤环境。
+- 只发布 Windows x64、Windows ARM64 和 macOS Apple Silicon 三个平台；没有 Linux 安装包，Linux 上更新检查会说明没有对应平台的资源。
+- 思考强度档位标签改为英文（Default、Low、Medium、High、Max 等），中英文界面一致，不再被输入框旁的窄标签截断。
+- 上下文用量从对话一开始就显示在输入框旁（`0 / 窗口`），不再等第一次回复才出现。
+- 界面新增 Microsoft YaHei 字体选项（安装了才会列出）；工具行和代码块显式选用本机第一个可用的等宽字体。输入框下方的小标签不再斜体。
+
+### Fixed
+
+- 自动更新换好并校验新二进制后，旧版本的备份文件（`*.mycode-previous`）立即删除，不再在安装目录里堆积；staged 校验失败时也不再留下半截备份。
+- 思考菜单和模型菜单按窗口高度收紧最大高度，矮窗口里改为菜单内滚动，顶部选项不再被窗口边缘裁掉。
 
 ## [0.11.12] - 2026-10-12
 
