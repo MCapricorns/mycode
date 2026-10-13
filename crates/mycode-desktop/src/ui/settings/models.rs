@@ -56,6 +56,7 @@ fn render_models_list_page(
             workspace,
             window,
             crate::ui::model_picker::ModelPickerTarget::Session,
+            px(420.),
             cx,
         )
     });

@@ -213,6 +213,12 @@ const FONT_FACES: &[FontFace] = &[
         id: "PingFang",
         faces: &["PingFang SC", "PingFang TC", "PingFang HK", "PingFang"],
     },
+    // The Windows CJK UI font. Offered wherever it is installed so Chinese
+    // text can render in its native face instead of the Latin default.
+    FontFace {
+        id: "Microsoft YaHei",
+        faces: &["Microsoft YaHei", "Microsoft YaHei UI"],
+    },
     FontFace {
         id: "Noto Sans",
         faces: &["Noto Sans"],
@@ -227,6 +233,7 @@ pub fn font_family_label(id: &str) -> &'static str {
         Some("Segoe UI") => "Segoe UI",
         Some("PingFang") => "PingFang",
         Some("Noto Sans") => "Noto Sans",
+        Some("Microsoft YaHei") => "Microsoft YaHei",
         _ => crate::i18n::t("System", "系统"),
     }
 }
@@ -297,6 +304,30 @@ pub fn installed_font_names(cx: &gpui_kit::App) -> &'static [String] {
 /// System resolves through GPUI's `.SystemUIFont` and, when that lands on a
 /// concrete installed family, names that family so later text lookups hit the
 /// font cache. The settings document is not rewritten with that concrete name.
+/// Mono families tool rows and diffs may use, best first.
+const MONO_FONT_FACES: &[&str] = &[
+    "Cascadia Mono",
+    "Cascadia Code",
+    "Consolas",
+    "SF Mono",
+    "Menlo",
+    "JetBrains Mono",
+    "Fira Code",
+    "DejaVu Sans Mono",
+];
+
+/// First installed mono family, so tool output and diffs land in a real code
+/// font instead of whatever the toolkit default resolves to on this machine.
+#[must_use]
+pub fn mono_font_family(cx: &gpui_kit::App) -> gpui_kit::SharedString {
+    let installed = installed_font_names(cx);
+    MONO_FONT_FACES
+        .iter()
+        .find(|name| installed.iter().any(|have| have == *name))
+        .map(|name| (*name).into())
+        .unwrap_or_else(|| gpui_kit::SharedString::from("monospace"))
+}
+
 pub fn ui_font_family(stored: &str, cx: &gpui_kit::App) -> gpui_kit::SharedString {
     let installed = installed_font_names(cx);
     let paint = paint_font_family(stored, installed);

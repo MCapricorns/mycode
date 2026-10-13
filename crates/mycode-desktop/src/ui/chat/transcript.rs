@@ -690,7 +690,6 @@ mod layout {
             text: text.into(),
             call_id: None,
             thinking,
-            parent_call_id: None,
         }
     }
 

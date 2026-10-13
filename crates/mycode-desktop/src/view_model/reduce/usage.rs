@@ -117,7 +117,6 @@ mod tests {
             text: "done".into(),
             call_id: None,
             thinking: String::new(),
-            parent_call_id: None,
         }
     }
 

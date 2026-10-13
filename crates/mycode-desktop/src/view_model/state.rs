@@ -273,9 +273,6 @@ pub enum DesktopAction {
     SettingsFontSizeSelected(String),
     /// The user picked a UI font family. Empty or `system` is the OS UI font.
     SettingsFontFamilySelected(String),
-    /// The user toggled `tools.osSandbox`. Ignored by the Windows product path,
-    /// which shows that the sandbox is not supported yet instead of a switch.
-    SettingsOsSandboxToggled(bool),
     /// Opens, closes, or pins the right inspector. Layout only.
     InspectorChanged {
         /// Whether the inspector is visible.
@@ -283,7 +280,6 @@ pub enum DesktopAction {
         /// Whether a wide window docks it beside the conversation.
         pinned: bool,
     },
-    /// The user dismissed the composer mention menu without picking a row.
     /// The settings editor changed the User-Agent.
     SettingsUserAgentChanged(String),
     /// The settings editor toggled a provider row's enabled flag.
@@ -336,8 +332,6 @@ pub enum DesktopAction {
         call_id: String,
         name: String,
         target: String,
-        /// Provider id of the enclosing `run_code` card, when this call is nested.
-        parent: Option<String>,
     },
     /// Incremental tool or subagent progress for the live status line.
     ToolProgress {

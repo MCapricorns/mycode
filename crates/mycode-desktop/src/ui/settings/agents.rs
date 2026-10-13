@@ -206,6 +206,7 @@ fn role_card(
             workspace,
             window,
             ModelPickerTarget::Role(role.name.clone()),
+            px(420.),
             cx,
         )
     });

@@ -274,9 +274,6 @@ pub struct Workspace {
     /// Streaming thinking (`streaming-thinking`) starts expanded. Committed
     /// thinking starts collapsed. An id in this set is showing the other way.
     thinking_overrides: HashSet<String>,
-    /// Shown when the process probe did not find Python 3.10+. Stays up so
-    /// the missing interpreter is visible after the startup toast fades.
-    python_warning: Option<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Last UI font-family id applied to the theme. Empty until the first frame.
@@ -374,7 +371,6 @@ impl Workspace {
             expanded_tool_batches: HashSet::new(),
             palette_preview: None,
             thinking_overrides: HashSet::new(),
-            python_warning: mycode_tools::python_unavailable_message(),
             applied_font_size: String::new(),
             applied_font_family: String::new(),
             applied_language: u8::MAX,
@@ -397,17 +393,6 @@ impl Workspace {
                 workspace.on_composer_event(event, window, cx);
             })
             .detach();
-            if workspace.python_warning.is_some() {
-                workspace.push_toast(
-                    crate::i18n::t(
-                        "Python 3.10+ was not found. run_code cannot run until it is installed.",
-                        "未找到 Python 3.10+。装好之前 run_code 无法执行。",
-                    )
-                    .to_owned(),
-                    ToastKind::Error,
-                    cx,
-                );
-            }
             workspace.spawn_event_pump(events, cx);
             workspace.spawn_update_recheck(cx);
             workspace.dispatch(BridgeCommand::ListSessions, cx);
@@ -1189,10 +1174,12 @@ impl Workspace {
             return;
         }
         let family = crate::ui::desk::ui_font_family(family_id, cx);
+        let mono = crate::ui::desk::mono_font_family(cx);
         {
             let theme = Theme::global_mut(cx);
             crate::ui::desk::apply_font_size(theme, size_id);
             theme.font_family = family;
+            theme.mono_font_family = mono;
         }
         window.set_rem_size(px(crate::ui::desk::interface_rem_px(size_id)));
         Theme::sync_base(cx);
@@ -1313,20 +1300,6 @@ impl Workspace {
             self.thinking_overrides.insert(id.to_owned());
         }
         cx.notify();
-    }
-
-    /// Persists the OS sandbox preference. Windows does not show this switch.
-    pub(crate) fn on_toggle_os_sandbox(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.tools.os_sandbox == enabled)
-        {
-            return;
-        }
-        self.apply_action(DesktopAction::SettingsOsSandboxToggled(enabled), cx);
-        self.on_save_settings(cx);
     }
 
     /// Applies and persists the UI language. The whole window re-renders on
@@ -1494,10 +1467,6 @@ impl Workspace {
 
     pub(crate) fn vm(&self) -> &WorkspaceState {
         &self.vm
-    }
-
-    pub(crate) fn python_warning(&self) -> Option<&str> {
-        self.python_warning.as_deref()
     }
 
     pub(crate) fn toasts(&self) -> &[Toast] {
