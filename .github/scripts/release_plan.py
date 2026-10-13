@@ -33,7 +33,7 @@ WORKSPACE_PACKAGES = (
 )
 # Used only when a patch bump has nowhere else to take notes from.
 # Commit history is intentionally not rendered into the release body.
-DEFAULT_NOTES = "### Changed\n\n- 四个平台构建通过的 `main` 推送自动发布。\n"
+DEFAULT_NOTES = "### Changed\n\n- 三个平台构建通过的 `main` 推送自动发布。\n"
 STABLE_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
