@@ -285,10 +285,7 @@ impl SettingsSection {
     /// One-line description shown in the page header and matched by nav search.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::General => t(
-                "Appearance, language, identity, and the OS sandbox",
-                "外观、语言、身份与操作系统沙箱",
-            ),
+            Self::General => t("Appearance, language, and identity", "外观、语言与身份"),
             Self::Models => t("Default model and providers", "默认模型与服务商"),
             Self::Agents => t(
                 "Scout, Artisan, and roles you add",

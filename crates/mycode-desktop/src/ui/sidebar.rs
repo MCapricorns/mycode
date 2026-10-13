@@ -76,7 +76,6 @@ pub(super) fn render_sidebar(
 ) -> impl IntoElement {
     let roots = workspace.vm().workspace_roots.clone();
     let cwd = workspace.vm().project_dir.clone();
-    let sessions = workspace.vm().sessions.clone();
     let bindings = workspace.vm().session_projects.clone();
     let view = workspace.vm().view;
     let active_id =
@@ -86,6 +85,7 @@ pub(super) fn render_sidebar(
         .unwrap_or_else(|| t("Workspace", "工作区").to_owned());
     // Sessions of the workspace the sidebar shows. A session without a
     // membership predates named workspaces and belongs to the first one.
+    // The list is filtered by reference; only the shown rows are cloned.
     let in_workspace = |session: &SessionSummary| {
         crate::view_model::workspace_of_session(workspace.vm(), &session.session_id).is_some_and(
             |owner| {
@@ -95,14 +95,16 @@ pub(super) fn render_sidebar(
             },
         )
     };
-    let workspace_sessions: Vec<SessionSummary> = sessions
+    let workspace_sessions: Vec<SessionSummary> = workspace
+        .vm()
+        .sessions
         .iter()
         .filter(|session| in_workspace(session))
         .cloned()
         .collect();
     let session_count = workspace_sessions.len();
     let filter = workspace.vm().session_filter.clone();
-    let visible_sessions: Vec<SessionSummary> = workspace_sessions
+    let visible_sessions: Vec<&SessionSummary> = workspace_sessions
         .iter()
         .filter(|summary| {
             let project = bindings
@@ -111,7 +113,6 @@ pub(super) fn render_sidebar(
             let title = displayed_session_title(summary, project);
             crate::view_model::session_title_matches(&title, &filter)
         })
-        .cloned()
         .collect();
     let filter_miss = !filter.trim().is_empty() && visible_sessions.is_empty() && session_count > 0;
     let filter_input = workspace.session_filter_input();
@@ -324,7 +325,7 @@ fn folders_section(
 /// Sessions of the workspace the sidebar shows. Separate from folders.
 fn sessions_section(
     cx: &mut Context<Workspace>,
-    sessions: &[SessionSummary],
+    sessions: &[&SessionSummary],
     bindings: &[(String, String)],
     cwd: Option<&str>,
     session_count: usize,
@@ -391,7 +392,7 @@ fn sessions_section(
                             .child(t("No sessions yet", "还没有会话")),
                     )
                 })
-                .children(sessions.iter().map(|summary| {
+                .children(sessions.iter().copied().map(|summary| {
                     let project = bindings.iter().find_map(|(id, path)| {
                         (id == &summary.session_id).then_some(path.as_str())
                     });

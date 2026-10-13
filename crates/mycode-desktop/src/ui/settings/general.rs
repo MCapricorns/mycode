@@ -1,5 +1,5 @@
-//! The General settings page: language, palette, typeface, size, request identity,
-//! and the OS sandbox.
+//! The General settings page: language, palette, typeface, size, and request
+//! identity.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::theme::Theme;
@@ -12,7 +12,6 @@ use super::widgets::{choice_chips, dropdown_field, settings_card};
 use crate::i18n::{effective_language_id, t};
 use crate::workspace::Workspace;
 
-/// Badge on Windows. The switch is not shown, so the setting does not look on.
 /// Display label for one configured language id.
 fn language_label(id: &str) -> &'static str {
     match id {

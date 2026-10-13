@@ -338,12 +338,18 @@ enum TranscriptItem<'a> {
 /// else (assistant text, orphan results, usage markers) passes through.
 fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem<'_>> {
     let mut items = Vec::with_capacity(entries.len());
+    // Call ids whose tool call is already listed. Membership replaces a scan
+    // back over every earlier entry, which went quadratic on long tool runs.
+    let mut listed_calls: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut index = 0;
     while index < entries.len() {
         let entry = &entries[index];
         if entry.kind == EntryKind::UserMessage {
             items.push(TranscriptItem::User { entry, index });
         } else if entry.kind == EntryKind::ToolCall {
+            if let Some(call) = entry.call_id.as_deref() {
+                listed_calls.insert(call);
+            }
             let result = entry.call_id.as_deref().and_then(|call| {
                 entries[index + 1..].iter().find(|next| {
                     next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
@@ -359,10 +365,10 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
         {
             // A step that only issued tool calls. The tool rows carry it.
         } else if entry.kind == EntryKind::ToolResult
-            && entry.call_id.is_some()
-            && entries[..index]
-                .iter()
-                .any(|prev| prev.kind == EntryKind::ToolCall && prev.call_id == entry.call_id)
+            && entry
+                .call_id
+                .as_deref()
+                .is_some_and(|call| listed_calls.contains(call))
         {
             // Already shown inside its call's block above.
         } else {

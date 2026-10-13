@@ -231,12 +231,21 @@ pub(crate) fn read_diff(root: &Path, path: &str) -> String {
     t("No diff against HEAD.", "与 HEAD 无差异。").to_owned()
 }
 
+/// Byte cap for one diff-panel read.
+const DIFF_CAP_BYTES: usize = 12_000;
+
+/// Truncates past [`DIFF_CAP_BYTES`]. Diff text is UTF-8 file content, so the
+/// cut backs up to the nearest character boundary instead of slicing through
+/// a multi-byte sequence.
 fn cap_diff(text: &str) -> String {
-    if text.len() > 12_000 {
-        format!("{}…", &text[..12_000])
-    } else {
-        text.to_owned()
+    if text.len() <= DIFF_CAP_BYTES {
+        return text.to_owned();
     }
+    let mut end = DIFF_CAP_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 fn untracked(root: &Path, path: &str) -> bool {
@@ -367,6 +376,18 @@ mod diff_tests {
         let plain = super::parse_porcelain(" M keep -> name.txt\n");
         assert_eq!(plain.files[0].path, "keep -> name.txt");
         assert!(plain.files[0].previous.is_none());
+    }
+
+    #[test]
+    fn a_cap_inside_a_multibyte_character_truncates_at_the_boundary() {
+        let mut text = "a".repeat(super::DIFF_CAP_BYTES - 1);
+        text.push_str("中文内容");
+        let capped = super::cap_diff(&text);
+        assert_eq!(capped.len(), super::DIFF_CAP_BYTES - 1 + "…".len());
+        assert!(capped.starts_with(&"a".repeat(64)));
+        assert!(capped.ends_with('…'));
+        let short = super::cap_diff("tiny diff");
+        assert_eq!(short, "tiny diff");
     }
 
     #[test]
