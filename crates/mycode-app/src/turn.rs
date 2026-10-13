@@ -12,7 +12,7 @@ use mycode_config::{
 };
 use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
-use mycode_tools::{ToolDyn, ToolRegistry};
+use mycode_tools::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
@@ -579,18 +579,7 @@ async fn run_chat_turn_on(
         )));
         registry
     });
-    let mcp_catalog = crate::mcp_tools::McpCatalog::from_tools_with_warning(mcp_tools, mcp_warning);
-    if let Some(catalog) = mcp_catalog.clone() {
-        for tool in catalog.direct_tools() {
-            if registry.get(tool.spec().name.as_str()).is_none() {
-                registry.register(tool);
-            }
-        }
-        registry.register(Arc::new(crate::mcp_tools::SearchTool::new(Arc::clone(
-            &catalog,
-        ))));
-        registry.register(Arc::new(crate::mcp_tools::UseTool::new(catalog)));
-    }
+    let mcp_catalog = crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning);
 
     // The prompt is the latest user message. A trailing assistant or tool
     // result (an interrupted turn, or a write that landed after the user
@@ -1441,10 +1430,6 @@ mod tests {
     async fn hook_compaction_waits_until_the_turn_commits() {
         let (root, home) = scratch();
         let mut settings = AppSettings::default();
-        // Compaction here is sized off a successful read. The product default
-        // turns the OS helper on; a missing bubblewrap fails that read closed
-        // and the short error never crosses the threshold.
-        settings.tools.os_sandbox = false;
         settings.providers.push(ProviderSettings {
             id: "local".to_owned(),
             kind: "openai-completions".to_owned(),

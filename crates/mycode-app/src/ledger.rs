@@ -331,34 +331,20 @@ pub(crate) async fn send_message(
     expected_head: &HeadStamp,
     text: &str,
 ) -> Result<(String, ConversationEntry), SessionError> {
-    let payload = text.as_bytes().to_vec();
-    let reservation = service
-        .reserve_event(session, branch, EventKind::Message, None, &payload)
-        .await?;
-    let appended = match service
-        .append(session, branch, expected_head, &reservation)
-        .await
-    {
-        // A stale desktop head is not a lost session. The reservation was
-        // already consumed, so reserve again and commit at the durable tip.
-        Err(SessionError::Conflict(conflict)) => {
-            let reservation = service
-                .reserve_event(session, branch, EventKind::Message, None, &payload)
-                .await?;
-            service
-                .append(session, branch, &conflict.actual, &reservation)
-                .await?
-        }
-        other => other?,
-    };
-    let event_id = match appended.head {
-        HeadStamp::Event(event) => event,
-        HeadStamp::Empty => return Err(SessionError::Corrupt),
-    };
+    // The shared CAS append: reserve, compare-and-swap at the UI's head, and
+    // re-commit at the durable tip on a moved head. Identical to every other
+    // Message commit, so the retry loop lives in one place.
+    let writer = HeadWriter::new(
+        service.clone(),
+        session.clone(),
+        branch.clone(),
+        expected_head.clone(),
+    );
+    let event_id = writer.write(EventKind::Message, text.as_bytes()).await?;
     Ok((
-        event_id.as_str().to_owned(),
+        event_id.clone(),
         ConversationEntry {
-            event_id: event_id.as_str().to_owned(),
+            event_id,
             kind: EntryKind::UserMessage,
             text: text.into(),
             call_id: None,

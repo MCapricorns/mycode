@@ -14,7 +14,7 @@ use mycode_config::{
 };
 use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
-use mycode_tools::{ToolDyn, ToolRegistry};
+use mycode_tools::ToolRegistry;
 use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -193,7 +193,12 @@ pub(crate) fn capture_worktree_diff(path: &Path) -> String {
             out.push_str(&format!("worktree diff failed: {error}\n"));
         }
     }
+    // `core.quotepath=off` keeps non-ASCII file names as raw UTF-8 instead
+    // of octal escapes; the escaped spelling would fail the `path.join`
+    // lookup below on Windows and any non-ASCII path.
     match git_command()
+        .arg("-c")
+        .arg("core.quotepath=off")
         .arg("-C")
         .arg(path)
         .args(["status", "--porcelain", "-uall"])
@@ -533,19 +538,7 @@ impl BridgeAgentHost {
                 &allowed,
                 mycode_tools::ShellTool::forcing(shell.clone()),
             );
-            if let Some(catalog) =
-                crate::mcp_tools::McpCatalog::from_tools_with_warning(mcp_tools, mcp_warning)
-            {
-                for tool in catalog.direct_tools() {
-                    if registry.get(tool.spec().name.as_str()).is_none() {
-                        registry.register(tool);
-                    }
-                }
-                registry.register(Arc::new(crate::mcp_tools::SearchTool::new(Arc::clone(
-                    &catalog,
-                ))));
-                registry.register(Arc::new(crate::mcp_tools::UseTool::new(catalog)));
-            }
+            crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning);
             registry
         });
         let hooks = HookRunner::default();
@@ -774,10 +767,7 @@ fn thinking_for(role: &SubagentRole, settings: &SubagentSettings) -> RoleThinkin
 }
 
 fn append_child_skills(system: &mut String, cwd: &Path, extras: &[PathBuf]) {
-    let user_home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from);
-    let mut skills = mycode_config::discover_skills(cwd, user_home.as_deref());
+    let mut skills = mycode_config::discover_skills(cwd, crate::turn::os_user_home().as_deref());
     for extra in extras {
         for skill in mycode_config::discover_skills(extra, None) {
             if skills.iter().any(|existing| existing.slug == skill.slug) {

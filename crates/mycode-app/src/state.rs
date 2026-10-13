@@ -109,19 +109,21 @@ pub(crate) fn set_project_dir(
     session_id: &str,
     path: Option<&str>,
 ) -> Result<(), String> {
+    // Same poisoned-recovery form as the other `projects` lock sites: a
+    // panicked holder must not take the settings command down with it.
+    let mut projects = state
+        .projects
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(path) = path else {
-        state.projects.lock().expect("projects").remove(session_id);
+        projects.remove(session_id);
         return Ok(());
     };
     let directory = PathBuf::from(path);
     if !directory.is_absolute() || !directory.is_dir() {
         return Err("choose an existing directory".to_owned());
     }
-    state
-        .projects
-        .lock()
-        .expect("projects")
-        .insert(session_id.to_owned(), directory);
+    projects.insert(session_id.to_owned(), directory);
     Ok(())
 }
 
@@ -274,7 +276,7 @@ mod tests {
         let offer = UpdateOffer {
             version: "0.9.18".to_owned(),
             notes_url: "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18".to_owned(),
-            asset_url: "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip".to_owned(),
+            asset_url: "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
             checksum_url: "https://github.com/example/app.zip.sha256".to_owned(),
         };
         assert!(matches!(

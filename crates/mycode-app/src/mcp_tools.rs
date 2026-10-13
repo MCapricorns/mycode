@@ -434,6 +434,26 @@ fn arg_name(args: &Value) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError::InvalidArgs("name is required".to_owned()))
 }
 
+/// Builds the tool catalog from one connect and registers its bridge tools
+/// on `registry`: direct tools first (never shadowing an existing name),
+/// then `search_tool` and `use_tool`. Returns the catalog so the caller can
+/// render its prompt note.
+pub(crate) fn register_mcp_tools(
+    registry: &mycode_tools::ToolRegistry,
+    tools: Vec<Arc<DynamicMcpTool>>,
+    warning: Option<String>,
+) -> Option<Arc<McpCatalog>> {
+    let catalog = McpCatalog::from_tools_with_warning(tools, warning)?;
+    for tool in catalog.direct_tools() {
+        if registry.get(tool.spec().name.as_str()).is_none() {
+            registry.register(tool);
+        }
+    }
+    registry.register(Arc::new(SearchTool::new(Arc::clone(&catalog))));
+    registry.register(Arc::new(UseTool::new(Arc::clone(&catalog))));
+    Some(catalog)
+}
+
 /// Schema lookup for MCP tools that are not registered directly.
 pub(crate) struct SearchTool {
     catalog: Arc<McpCatalog>,
