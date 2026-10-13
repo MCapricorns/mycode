@@ -2,9 +2,9 @@
 //! of truth for credentials or product behavior.
 //!
 //! Holds recent projects, workspace folders, session bindings, the update
-//! preference, trusted project paths, and the model picker's recent,
-//! starred, and per-session pins so the desktop reopens where the user
-//! left off. Missing or invalid documents reset to defaults.
+//! preference, and the model picker's recent, starred, and per-session pins
+//! so the desktop reopens where the user left off. Missing or invalid
+//! documents reset to defaults.
 use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
@@ -34,8 +34,6 @@ pub const MAX_WORKSPACES: usize = 16;
 pub const MAX_WORKSPACE_NAME_CHARS: usize = 64;
 /// Maximum remembered session-to-workspace bindings.
 pub const MAX_SESSION_WORKSPACES: usize = 512;
-/// Maximum projects explicitly trusted for project MCP config.
-const MAX_TRUSTED_PROJECTS: usize = 64;
 /// Maximum length of one remembered session id.
 const MAX_SESSION_ID_BYTES: usize = 64;
 /// Maximum length of one remembered project path.
@@ -238,10 +236,6 @@ pub struct UiState {
     /// The workspace the sidebar shows.
     #[serde(default)]
     pub active_workspace: Option<String>,
-    /// Absolute project paths allowed to contribute `.mycode/mcp.json`.
-    /// Opening a folder does not add it here.
-    #[serde(default)]
-    pub trusted_projects: Vec<String>,
     /// Models picked from the composer or the default-model control, newest
     /// first. Advisory: a missing provider is dropped at render time.
     #[serde(default)]
@@ -271,7 +265,6 @@ impl Default for UiState {
             workspaces: Vec::new(),
             session_workspaces: Vec::new(),
             active_workspace: None,
-            trusted_projects: Vec::new(),
             recent_models: Vec::new(),
             starred_models: Vec::new(),
             session_models: Vec::new(),
@@ -375,14 +368,6 @@ impl UiState {
         {
             return Err(invalid());
         }
-        if self.trusted_projects.len() > MAX_TRUSTED_PROJECTS {
-            return Err(invalid());
-        }
-        for project in &self.trusted_projects {
-            if valid_project_path(project).is_none() {
-                return Err(invalid());
-            }
-        }
         if self.session_workspaces.len() > MAX_SESSION_WORKSPACES {
             return Err(invalid());
         }
@@ -454,7 +439,7 @@ fn valid_project_path(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
-/// Canonical project path for trust and sidebar comparison.
+/// Canonical project path for sidebar comparison.
 ///
 /// Trims surrounding whitespace, drops a trailing slash, and on Windows
 /// folds slash direction and ASCII case. An empty result means the path was
@@ -471,58 +456,13 @@ fn normalize_project_path(path: &str) -> String {
 
 /// Whether two project paths name the same folder.
 ///
-/// The sidebar, MCP project trust, and the trusted-project list all use this
-/// so a trailing slash (and, on Windows, letter case) cannot split one folder
-/// into two.
+/// The sidebar and the project lists all use this so a trailing slash (and,
+/// on Windows, letter case) cannot split one folder into two.
 #[must_use]
 pub fn same_project_path(left: &str, right: &str) -> bool {
     let left = normalize_project_path(left);
     let right = normalize_project_path(right);
     !left.is_empty() && left == right
-}
-
-/// Records `path` as allowed to contribute `.mycode/mcp.json`.
-///
-/// Opening a folder does not call this. An invalid path, or a new path when
-/// the list is already full, returns false and leaves the list unchanged. A
-/// path that is already trusted moves to the front.
-#[must_use]
-pub fn trust_project(projects: &mut Vec<String>, path: &str) -> bool {
-    let Some(path) = canonical_trusted_project(path) else {
-        return false;
-    };
-    if let Some(index) = projects
-        .iter()
-        .position(|existing| same_project_path(existing, &path))
-    {
-        projects.remove(index);
-        projects.insert(0, path);
-        return true;
-    }
-    if projects.len() >= MAX_TRUSTED_PROJECTS {
-        return false;
-    }
-    projects.insert(0, path);
-    true
-}
-
-/// Removes `path` from the trusted project list.
-///
-/// Returns whether the path was present. An invalid path returns false.
-#[must_use]
-pub fn revoke_project_trust(projects: &mut Vec<String>, path: &str) -> bool {
-    let Some(path) = canonical_trusted_project(path) else {
-        return false;
-    };
-    let before = projects.len();
-    projects.retain(|existing| !same_project_path(existing, &path));
-    projects.len() != before
-}
-
-fn canonical_trusted_project(path: &str) -> Option<String> {
-    let path = valid_project_path(path)?;
-    let path = normalize_project_path(&path);
-    (!path.is_empty()).then_some(path)
 }
 
 fn valid_session_id(value: &str) -> bool {
@@ -682,92 +622,25 @@ mod tests {
         assert!(state.validate().is_err());
     }
 
-    /// An absolute scratch path that is valid on the host running the test
-    /// (`/tmp` literals are not absolute on Windows).
-    fn absolute_scratch(label: &str) -> String {
-        std::env::temp_dir()
-            .join(label)
-            .to_string_lossy()
-            .into_owned()
-    }
-
     #[test]
-    fn trust_project_round_trips_and_rejects_a_relative_path() {
-        let mut projects = Vec::new();
-        assert!(!super::trust_project(&mut projects, "relative/path"));
-        assert!(projects.is_empty());
-        let first = absolute_scratch("mycode-trust-a");
-        let second = absolute_scratch("mycode-trust-b");
-        assert!(super::trust_project(&mut projects, &first));
-        assert!(super::trust_project(&mut projects, &second));
-        assert_eq!(
-            projects,
-            vec![
-                super::normalize_project_path(&second),
-                super::normalize_project_path(&first)
-            ]
-        );
-        assert!(super::revoke_project_trust(&mut projects, &first));
-        assert!(!super::revoke_project_trust(&mut projects, &first));
-        assert_eq!(projects, vec![super::normalize_project_path(&second)]);
-
-        let parent = std::env::temp_dir().join(format!(
-            "mycode-ui-trust-{}-{}",
-            std::process::id(),
-            crate::unix_now().as_nanos()
-        ));
-        std::fs::create_dir_all(&parent).expect("temp parent");
-        let root = parent.join("home");
-        std::fs::create_dir(&root).expect("home");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
-        }
-        let home = crate::HomeLayout::from_root(&root).expect("layout");
-        let mut state = super::UiState::default();
-        assert!(super::trust_project(&mut state.trusted_projects, &second));
-        super::replace_ui_state(&home, &state).expect("write");
-        let loaded = super::read_ui_state(&home).expect("read");
-        assert_eq!(
-            loaded.trusted_projects,
-            vec![super::normalize_project_path(&second)]
-        );
-        let _ = std::fs::remove_dir_all(&parent);
-    }
-
-    #[test]
-    fn trusted_project_collapses_a_trailing_slash() {
+    fn same_project_path_collapses_a_trailing_slash() {
         assert!(super::same_project_path("/tmp/app/", "/tmp/app"));
         assert!(!super::same_project_path("/tmp/app", "/tmp/other"));
-        let path = absolute_scratch("mycode-trust-slash");
-        let mut projects = Vec::new();
-        assert!(super::trust_project(&mut projects, &format!("{path}/")));
-        assert_eq!(projects, vec![super::normalize_project_path(&path)]);
-        assert!(super::trust_project(&mut projects, &path));
-        assert_eq!(projects.len(), 1);
-        assert!(super::revoke_project_trust(
-            &mut projects,
-            &format!("{path}/")
+        let path = std::env::temp_dir().join("mycode-path-slash");
+        assert!(super::same_project_path(
+            &format!("{}/", path.display()),
+            &path.to_string_lossy()
         ));
-        assert!(projects.is_empty());
     }
 
     #[cfg(windows)]
     #[test]
-    fn trusted_project_matches_windows_drive_case() {
+    fn same_project_path_matches_windows_drive_case() {
         assert!(super::same_project_path("C:\\Work\\App\\", "c:/work/app"));
         assert_eq!(
             super::normalize_project_path("C:/Work/App/"),
             "c:\\work\\app"
         );
-        let mut projects = Vec::new();
-        assert!(super::trust_project(&mut projects, "C:\\Work\\App\\"));
-        assert_eq!(projects, vec!["c:\\work\\app".to_owned()]);
-        assert!(super::trust_project(&mut projects, "c:/work/app"));
-        assert_eq!(projects.len(), 1);
-        assert!(super::revoke_project_trust(&mut projects, "C:/Work/App"));
-        assert!(projects.is_empty());
     }
 
     #[cfg(unix)]

@@ -66,7 +66,7 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 ~/.mycode/
 ├─ settings.json          提供商、MCP、网页、用量、外观、子代理、shell、User-Agent。不含密钥
 ├─ secrets.json           API 密钥、OAuth 令牌与网页 / MCP 凭证
-├─ ui.json                工作区、文件夹、会话归属、最近项目、信任的项目、每个会话的模型与思考档位。可丢弃
+├─ ui.json                工作区、文件夹、会话归属、最近项目、每个会话的模型与思考档位。可丢弃
 ├─ catalog-cache.json     models.dev 目录缓存
 ├─ sessions.db            会话索引（标题、分支头、JSONL 偏移）
 ├─ sessions/<id>/         `<branch>.jsonl`、`payloads/`、`compaction.json`
@@ -89,6 +89,5 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 - 持续集成分成两段，都写在 `.github/workflows/ci.yml`。pull request 只跑 `check`：在 `ubuntu-latest` 上执行 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（`--locked`，dev/test profile，覆盖整个 workspace）。这一段没有 fat LTO，不跑 `cargo build --release`，也不打安装包。推到 `main` 时同一份 `check` 再跑一遍，并在 Windows x64、Windows ARM64 和 macOS Apple Silicon 上做发布构建（`[profile.release]` 是 fat LTO、单个 codegen unit）。只有 `check` 和三个发布构建都成功，且版本还没有标签时，才打标签并发布。发布说明是该版本的 `CHANGELOG.md` 条目，加上自上一个标签以来的 pull request 和被关闭的 issue。`github-actions[bot]` 写回版本时不会再开一次发布。没有 fmt 任务。每周的 `models-snapshot.yml` 在目录快照变化时仍跑 `cargo test -p mycode-providers`。
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
 - 生产环境的回合钩子只有请求前压缩，子代理连这个也没有。没有工具前观察者，也不再为改文件装快照。
-- 项目里的 `.mycode/mcp.json` 只有在项目菜单里信任该文件夹后才会加载。
 - 模型直接调用注册表里的每个工具（`read`、`write`、`edit`、`grep`、`find`、当前平台的一个 shell、`agent`、`ask_user`、网页和 MCP）。scout 的目录是只读工具，注册时不会再给改动工具。技能用 `read` 按目录里的路径加载。MCP 工具按原始工具名注册。进程在当前用户权限下运行，没有 OS 级沙箱。边界写在 [tools.md](tools.md)。
 - 进程工具的 `script` 模式可以改文件：bash 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。`program` 模式不经过 shell。`write` 和 `edit` 是直接的模型工具。Windows 上的侦查、编码和 stderr 清洗见 [tools.md](tools.md)。
