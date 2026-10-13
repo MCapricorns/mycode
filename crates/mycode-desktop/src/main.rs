@@ -136,15 +136,6 @@ fn main() {
         emit_early_text(&text);
         std::process::exit(0);
     }
-    #[cfg(target_os = "linux")]
-    if let Some(message) = mycode_desktop::cli::linux_session_problem(
-        std::env::var_os("DISPLAY").as_deref(),
-        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
-        std::env::var_os("XDG_RUNTIME_DIR").as_deref(),
-    ) {
-        eprintln!("{message}");
-        std::process::exit(1);
-    }
     install_surface_panic_hook();
     // Remove staging directories left behind by earlier self-updates.
     // The apply helper returns before this, so it does not delete the

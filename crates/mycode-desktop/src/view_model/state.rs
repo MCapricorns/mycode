@@ -455,7 +455,6 @@ pub enum DesktopAction {
         /// Transcript row for that message.
         entry: ConversationEntry,
     },
-    /// Clear the surfaced error.
     /// Switch the main area between chat and settings.
     ShowMainView(MainView),
     /// Switch the settings secondary menu.

@@ -194,13 +194,13 @@ impl Workspace {
         };
         let path = skill.path.display();
         let title = skill.title;
+        // Native tools run directly: ask for a plain read of the skill file.
+        // (The retired run_code control channel used to wrap this request.)
         let text = if crate::i18n::is_chinese() {
-            format!(
-                "/{slug}\n\n遵循「{title}」技能。在 run_code 里用 await tools.read(path=\"{path}\") 读取并应用，再继续。\n"
-            )
+            format!("/{slug}\n\n遵循「{title}」技能。用 read 工具读取 {path} 并应用，再继续。\n")
         } else {
             format!(
-                "/{slug}\n\nFollow the `{title}` skill. Inside run_code, call await tools.read(path=\"{path}\") and apply it before continuing.\n"
+                "/{slug}\n\nFollow the `{title}` skill. Read {path} with the read tool and apply it before continuing.\n"
             )
         };
         self.pending_composer_prefill = Some(text);

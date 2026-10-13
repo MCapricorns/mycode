@@ -263,8 +263,8 @@ pub struct Workspace {
     git_diff_panel_open: bool,
     /// Tool rows the transcript is showing in full. Empty means one-line summaries.
     expanded_tools: HashSet<String>,
-    /// Consecutive tool runs the transcript has expanded. Keyed by the first
-    /// call's event id, or by the parent `run_code` id for nested calls.
+    /// Consecutive tool runs the transcript has expanded. Keyed by the run's
+    /// first call event id.
     expanded_tool_batches: HashSet<String>,
     /// Palette id under the pointer on the settings swatches. `None` shows
     /// the saved palette in the chat preview.

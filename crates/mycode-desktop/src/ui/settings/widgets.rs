@@ -231,8 +231,8 @@ pub(super) fn labeled_field(label: &str, input: Entity<InputState>) -> impl Into
 
 /// A dropdown row: label on the left, a button showing the current value on
 /// the right, and an inline option list that opens below the row. Shared by
-/// the General, Shell, Agents, Models, and MCP pages; each passes its own toggle
-/// and pick closures.
+/// the General, Models, and MCP pages; each passes its own toggle and pick
+/// closures.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn dropdown_field(
     id: &str,
