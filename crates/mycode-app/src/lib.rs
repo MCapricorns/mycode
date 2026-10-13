@@ -487,8 +487,16 @@ pub enum BridgeReply {
     Conversation(Result<ActiveConversation, String>),
     /// One older page of the open branch.
     Older(Result<OlderTranscript, String>),
-    /// Send result (new head plus committed entry).
-    Sent(Result<(String, ConversationEntry), String>),
+    /// Send result (new head plus committed entry). The session id rides
+    /// the reply even on failure, so the workspace can drop a send that
+    /// raced a session switch instead of applying it to the conversation
+    /// then open.
+    Sent {
+        /// Session the message targeted.
+        session: String,
+        /// New head plus committed entry, or why the send failed.
+        outcome: Result<(String, ConversationEntry), String>,
+    },
     /// Settings load result.
     Settings(Result<SettingsSnapshot, String>),
     /// Settings save result: the new revision.
