@@ -595,7 +595,8 @@ pub enum DesktopAction {
     McpTransportMenuToggled(bool),
     /// Self-update progress changed.
     UpdateStateChanged(UpdateState),
-    /// A release offer was resolved for the available update.
+    /// A release offer was resolved. Publishing it also flips the update
+    /// state to `Available`; the download button reads the stored offer.
     UpdateOfferFound(mycode_app::UpdateOffer),
     /// The auto-update preference changed.
     AutoUpdateToggled(bool),

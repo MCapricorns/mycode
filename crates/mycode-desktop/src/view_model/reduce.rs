@@ -955,7 +955,16 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 close_floating_menus(state);
             }
         }
-        DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
+        DesktopAction::UpdateOfferFound(offer) => {
+            // The offer and the Available flip are one transition: the
+            // download button's handler reads `last_offer`, so an
+            // Available state without a published offer is a dead button.
+            state.update = UpdateState::Available {
+                version: offer.version.clone(),
+                notes_url: offer.notes_url.clone(),
+            };
+            state.last_offer = Some(offer);
+        }
         DesktopAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
         DesktopAction::UpdateStaged(prepared) => {
             let version = state
@@ -1059,7 +1068,8 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
 mod tests {
     use super::reduce;
     use crate::view_model::{
-        ActiveConversation, ConversationEntry, DesktopAction, EntryKind, TurnStats, WorkspaceState,
+        ActiveConversation, ConversationEntry, DesktopAction, EntryKind, TurnStats, UpdateState,
+        WorkspaceState,
     };
 
     fn user(id: &str, text: &str) -> ConversationEntry {
@@ -1087,6 +1097,43 @@ mod tests {
             }),
             ..WorkspaceState::default()
         }
+    }
+
+    #[test]
+    fn an_offer_found_publishes_the_offer_and_flips_available_together() {
+        let offer = mycode_app::UpdateOffer {
+            version: "9.9.9".to_owned(),
+            notes_url: "https://example.com/releases/v9.9.9".to_owned(),
+            asset_url: "https://example.com/app.zip".to_owned(),
+            checksum_url: "https://example.com/app.zip.sha256".to_owned(),
+        };
+        let mut state = WorkspaceState::default();
+        reduce(&mut state, DesktopAction::UpdateOfferFound(offer.clone()));
+        // The download button's handler reads `last_offer`; an Available
+        // state without a published offer is a dead button.
+        assert_eq!(state.last_offer, Some(offer));
+        assert_eq!(
+            state.update,
+            UpdateState::Available {
+                version: "9.9.9".to_owned(),
+                notes_url: "https://example.com/releases/v9.9.9".to_owned(),
+            }
+        );
+        reduce(
+            &mut state,
+            DesktopAction::UpdateStaged(mycode_app::PreparedUpdate {
+                new_binary: std::path::PathBuf::from("stage/app.exe"),
+                stage_dir: std::path::PathBuf::from("stage"),
+                binary_sha256: "abc123".to_owned(),
+            }),
+        );
+        // Staging reports the offered version, not the running one.
+        assert_eq!(
+            state.update,
+            UpdateState::Ready {
+                version: "9.9.9".to_owned(),
+            }
+        );
     }
 
     #[test]
