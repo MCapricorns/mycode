@@ -1,30 +1,20 @@
 //! Project MCP servers from `<project>/.mycode/mcp.json`.
-//!
-//! The file is not opened until the project is trusted. Opening a folder
-//! does not trust it.
 
 use std::path::Path;
 
 use crate::settings::McpServerSettings;
 use crate::{mcp_import::parse_mcp_import, settings::is_mcp_executable};
 
-/// Reads project MCP servers when `trusted` is true.
+/// Reads project MCP servers.
 ///
-/// An untrusted project returns an empty list and does not open
-/// `.mycode/mcp.json`. A trusted project with no file returns an empty list.
-/// A trusted project whose file is not valid MCP JSON returns an error.
+/// A project with no file returns an empty list. A project whose file is
+/// not valid MCP JSON returns an error.
 ///
 /// # Errors
 ///
-/// Returns a message when a trusted project file cannot be read or parsed,
+/// Returns a message when the project file cannot be read or parsed,
 /// or when a stdio command is a shell string.
-pub fn project_mcp_servers(
-    project: &Path,
-    trusted: bool,
-) -> Result<Vec<McpServerSettings>, String> {
-    if !trusted {
-        return Ok(Vec::new());
-    }
+pub fn project_mcp_servers(project: &Path) -> Result<Vec<McpServerSettings>, String> {
     let file = project.join(".mycode").join("mcp.json");
     if !file.is_file() {
         if file.exists() {
@@ -67,11 +57,10 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_project_does_not_read_mcp_config() {
+    fn a_directory_in_place_of_the_config_errors() {
         let root = scratch("unread");
         std::fs::create_dir(root.join(".mycode").join("mcp.json")).unwrap();
-        assert!(project_mcp_servers(&root, false).unwrap().is_empty());
-        let error = project_mcp_servers(&root, true).unwrap_err();
+        let error = project_mcp_servers(&root).unwrap_err();
         assert!(
             error.contains("not a file") || error.contains("unreadable"),
             "{error}"
@@ -80,24 +69,24 @@ mod tests {
     }
 
     #[test]
-    fn trusted_project_returns_servers() {
-        let root = scratch("trusted");
+    fn a_project_returns_its_servers() {
+        let root = scratch("servers");
         std::fs::write(
             root.join(".mycode").join("mcp.json"),
             r#"{"mcpServers":{"local":{"command":"local-tool"}}}"#,
         )
         .unwrap();
-        let servers = project_mcp_servers(&root, true).unwrap();
+        let servers = project_mcp_servers(&root).unwrap();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].command.as_deref(), Some("local-tool"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn trusted_invalid_json_errors() {
+    fn invalid_json_errors() {
         let root = scratch("bad");
         std::fs::write(root.join(".mycode").join("mcp.json"), "{").unwrap();
-        assert!(project_mcp_servers(&root, true).is_err());
+        assert!(project_mcp_servers(&root).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

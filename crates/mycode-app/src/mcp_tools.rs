@@ -216,7 +216,7 @@ pub(crate) async fn connect_mcp_tools(
     let Ok(secrets) = mycode_config::read_provider_secrets(home) else {
         return (Vec::new(), None);
     };
-    let (servers, project_warning) = merged_mcp_servers(home, settings, project);
+    let (servers, project_warning) = merged_mcp_servers(settings, project);
     let fingerprint = mcp_fingerprint(&servers, &secrets);
     {
         let guard = pool.lock().await;
@@ -273,7 +273,6 @@ pub(crate) async fn connect_mcp_tools(
 }
 
 fn merged_mcp_servers(
-    home: &mycode_config::HomeLayout,
     settings: &AppSettings,
     project: Option<&std::path::Path>,
 ) -> (Vec<mycode_config::McpServerSettings>, Option<String>) {
@@ -286,16 +285,7 @@ fn merged_mcp_servers(
     let Some(project) = project else {
         return (servers, None);
     };
-    let trusted = mycode_config::read_ui_state(home)
-        .ok()
-        .is_some_and(|state| {
-            let text = project.to_string_lossy();
-            state
-                .trusted_projects
-                .iter()
-                .any(|item| mycode_config::same_project_path(item, text.as_ref()))
-        });
-    match mycode_config::project_mcp_servers(project, trusted) {
+    match mycode_config::project_mcp_servers(project) {
         Ok(extra) => {
             for server in extra.into_iter().filter(|server| server.enabled) {
                 if let Some(slot) = servers.iter_mut().find(|existing| existing.id == server.id) {

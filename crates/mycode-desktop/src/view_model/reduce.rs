@@ -766,7 +766,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             session_models,
             workspaces,
             session_workspaces,
-            trusted_projects,
             active_workspace: active,
             recent_models,
             starred_models,
@@ -777,7 +776,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.session_models = session_models;
             state.workspaces = workspaces;
             state.session_workspaces = session_workspaces;
-            state.trusted_projects = trusted_projects;
             state.active_workspace = active;
             state.recent_models = recent_models;
             state.starred_models = starred_models;
@@ -825,13 +823,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.recents.retain(|existing| existing != &project);
             state.recents.insert(0, project);
             state.recents.truncate(mycode_config::MAX_RECENT_PROJECTS);
-        }
-        DesktopAction::ProjectTrustChanged { project, trusted } => {
-            if trusted {
-                let _ = mycode_config::trust_project(&mut state.trusted_projects, &project);
-            } else {
-                let _ = mycode_config::revoke_project_trust(&mut state.trusted_projects, &project);
-            }
         }
         DesktopAction::SessionProjectBound {
             session_id,

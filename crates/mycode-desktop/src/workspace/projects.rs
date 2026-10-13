@@ -803,25 +803,6 @@ impl Workspace {
         self.persist_ui_state(cx);
     }
 
-    /// Trusts or revokes project MCP for one folder, then persists UI state.
-    ///
-    /// Opening a folder does not call this.
-    pub(crate) fn on_set_project_trust(
-        &mut self,
-        project: &str,
-        trusted: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_action(
-            DesktopAction::ProjectTrustChanged {
-                project: project.to_owned(),
-                trusted,
-            },
-            cx,
-        );
-        self.persist_ui_state(cx);
-    }
-
     /// Persists the durable UI state projection.
     pub(super) fn persist_ui_state(&self, cx: &mut Context<Self>) {
         let state = mycode_config::UiState {
@@ -838,7 +819,6 @@ impl Workspace {
             workspace_roots: self.vm.workspace_roots.clone(),
             workspaces: self.vm.workspaces.clone(),
             session_workspaces: self.vm.session_workspaces.clone(),
-            trusted_projects: self.vm.trusted_projects.clone(),
             active_workspace: self.vm.active_workspace.clone(),
             recent_models: self.vm.recent_models.clone(),
             starred_models: self.vm.starred_models.clone(),

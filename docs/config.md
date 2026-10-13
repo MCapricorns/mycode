@@ -10,7 +10,7 @@
 | --- | --- |
 | `settings.json` | `AppSettings`：外观、提供商、网页、MCP、子代理、User-Agent。上限 256 KiB |
 | `secrets.json` | `providerKeys`：每个 id 一把钥匙。上限 64 KiB |
-| `ui.json` | 工作区、最近项目、会话归属、模型钉选、信任的项目。上限 256 KiB |
+| `ui.json` | 工作区、最近项目、会话归属、模型钉选。上限 256 KiB |
 | `sessions/<id>/compaction.json` | 压缩检查点 |
 | `catalog-cache.json` | models.dev 目录缓存，归 `mycode-providers` 读写 |
 
@@ -31,8 +31,8 @@
 | `document_repair` | 把无法解析或无法校验的产品文档复制到 `.broken-*`，再发布默认内容 |
 | `settings` | `settings.json`。损坏时备份后回到默认设置（无提供商、两个未启用的内置网页后端） |
 | `secrets` | `secrets.json`：每个 id 一把密钥，按 id 排序。空字符串表示清除。损坏时备份后变成空存储，钥匙只留在备份里 |
-| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用和星标、每会话模型钉选、信任的项目、自动更新开关。只作界面恢复，不当作产品配置的真相 |
-| `project_mcp` | 读 `<项目>/.mycode/mcp.json`，只在项目已被信任时才打开 |
+| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用和星标、每会话模型钉选、自动更新开关。只作界面恢复，不当作产品配置的真相 |
+| `project_mcp` | 读 `<项目>/.mycode/mcp.json`。文件不是合法 MCP JSON 或 stdio 命令是 shell 字符串时返回错误；项目里的服务器与设置里同 id 的服务器冲突时，项目那条覆盖 |
 | `compaction` | `compaction.json`：摘要覆盖到哪条消息、哪个分支头，摘要最多 24000 字符。账本本身不改写 |
 | `subagents` | 内置 scout 与 artisan，再加上家目录 `agents/*.md` 和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |
 | `resources` | 发现 `AGENTS.md` / `MYCODE.md` 和 `.agents` 技能，裁剪后交给 system prompt |
@@ -59,7 +59,6 @@
 `ui.json` 的上限同样是常量：最近项目 16、工作区 16、每个工作区的文件夹 8、会话→项目 256、会话→工作区 512、最近模型 8、星标模型 24。
 
 - **会话模型**：每个会话一条 `SessionModelPin`（服务商、模型、可选思考强度），最多 128 条，新的在前。切换会话时恢复各自的钉选，一个会话改模型不影响别的会话。`selectedReasoning` 是作曲栏最后一次选的强度，新会话从它起步（按模型公布的档位自适应收敛）
-- **信任的项目**：`trustedProjects` 是允许贡献 `.mycode/mcp.json` 的绝对路径，最多 64 个，满了不再加入。写入与比较用同一套规范化（去掉末尾斜杠；Windows 上折叠斜杠方向与 ASCII 大小写），侧栏、MCP 加载和信任列表共用，避免同一文件夹因斜杠或大小写被当成两个。打开文件夹不会自动信任。未信任时 `project_mcp_servers` 不打开该文件；已信任但文件不是合法 MCP JSON 或 stdio 命令是 shell 字符串时返回错误。项目里的服务器与设置里同 id 的服务器冲突时，项目那条覆盖
 - 删除会话时一并清掉它的项目、工作区和模型钉选
 
 ## 角色和提示资源
