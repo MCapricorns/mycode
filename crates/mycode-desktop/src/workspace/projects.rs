@@ -437,22 +437,30 @@ impl Workspace {
         self.persist_ui_state(cx);
     }
 
-    /// Drops one linked folder. The open chat's working directory stays.
+    /// Drops one linked folder, including the one the open chat works in.
+    ///
+    /// Removing that folder parks the chat: the desk comes back and the
+    /// session keeps its binding, so opening the chat again re-adds the
+    /// folder.
     pub(crate) fn on_remove_workspace_root(&mut self, project: &str, cx: &mut Context<Self>) {
-        if self
+        let chat_uses_it = self
             .vm
             .project_dir
             .as_deref()
-            .is_some_and(|current| crate::view_model::same_project_path(current, project))
-        {
-            self.push_toast(
-                "This chat is using that folder",
-                crate::workspace::ToastKind::Info,
-                cx,
-            );
-            return;
-        }
+            .is_some_and(|current| crate::view_model::same_project_path(current, project));
         self.apply_action(DesktopAction::WorkspaceRootRemoved(project.to_owned()), cx);
+        if chat_uses_it {
+            if self
+                .focused_project
+                .as_deref()
+                .is_some_and(|focused| crate::view_model::same_project_path(focused, project))
+            {
+                self.focused_project = None;
+            }
+            self.park_conversation(cx);
+            self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
+            self.refresh_skills(cx);
+        }
         self.persist_ui_state(cx);
     }
 

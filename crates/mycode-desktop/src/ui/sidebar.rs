@@ -410,6 +410,7 @@ fn root_row(
     let theme = cx.theme();
     let is_cwd = cwd.is_some_and(|current| crate::view_model::same_project_path(current, root));
     let path = root.to_owned();
+    let remove = path.clone();
     let label: SharedString = project_label(root).into();
     div()
         .id(format!("workspace-root-{}", element_id(root)))
@@ -460,18 +461,15 @@ fn root_row(
                                 .text_color(theme.foreground)
                                 .child(label),
                         )
-                        .when(!is_cwd, |row| {
-                            let remove = path.clone();
-                            row.child(super::hover_delete_button(
-                                format!("workspace-root-remove-{index}"),
-                                IconName::X,
-                                "workspace-root",
-                                cx.listener(move |workspace, _, _, cx| {
-                                    workspace.on_remove_workspace_root(&remove, cx);
-                                }),
-                                cx,
-                            ))
-                        }),
+                        .child(super::hover_delete_button(
+                            format!("workspace-root-remove-{index}"),
+                            IconName::X,
+                            "workspace-root",
+                            cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_remove_workspace_root(&remove, cx);
+                            }),
+                            cx,
+                        )),
                 )
                 .child(
                     div()
