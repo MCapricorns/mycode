@@ -193,7 +193,6 @@ impl Workspace {
                     return;
                 }
                 let version = offer.version.clone();
-                let notes_url = offer.notes_url.clone();
                 self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
                 self.push_toast(
                     format!(
@@ -202,13 +201,6 @@ impl Workspace {
                         crate::i18n::t(", downloading…", ",正在下载…")
                     ),
                     crate::workspace::ToastKind::Info,
-                    cx,
-                );
-                self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Available {
-                        version,
-                        notes_url,
-                    }),
                     cx,
                 );
                 // An offer on the wire starts the download right away; the
@@ -623,14 +615,21 @@ impl Workspace {
                 }
             }
             BridgeReply::UpdateChecked(Ok(Some(offer))) => {
+                // A manual check can be answered after its download already
+                // started (an event offer landed mid-check); the state must
+                // not fall back to "available" nor start a second download.
+                if matches!(
+                    self.vm.update,
+                    UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+                ) {
+                    let _ = self.take_manual_update_check();
+                    return;
+                }
                 let version = offer.version.clone();
-                self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Available {
-                        version: offer.version,
-                        notes_url: offer.notes_url,
-                    }),
-                    cx,
-                );
+                // The offer action also flips the state to Available; the
+                // download button reads `last_offer`, so the two must land
+                // together or the button is dead.
+                self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
                 if self.take_manual_update_check() {
                     self.push_toast(
                         format!("v{version} {}", crate::i18n::t("is available", "可用")),
