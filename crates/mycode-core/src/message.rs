@@ -260,6 +260,8 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
             .to_owned(),
         "search_tool" | "use_tool" => text("name"),
         "agent" => join_target(&text("agent"), &text("description")),
+        // Retired tool. The arm stays so old session ledgers replay with the
+        // description the model originally sent.
         "run_code" => text("description"),
         _ => text("path"),
     };
@@ -283,7 +285,9 @@ fn join_target(left: &str, right: &str) -> String {
         (true, true) => String::new(),
         (false, true) => left.to_owned(),
         (true, false) => right.to_owned(),
-        (false, false) => format!("{left}  {right}"),
+        // The caller flattens whitespace runs, so a single space is what the
+        // UI sees.
+        (false, false) => format!("{left} {right}"),
     }
 }
 
@@ -320,18 +324,22 @@ pub enum StopReason {
 /// provider stream fails. Adapters and the agent share this spelling.
 #[must_use]
 pub fn interrupted_response_text(detail: &str) -> String {
+    const MAX_DETAIL_CHARS: usize = 240;
     let mut flat = String::new();
+    let mut kept = 0usize;
     for ch in detail.chars() {
-        if flat.chars().count() >= 240 {
+        if kept >= MAX_DETAIL_CHARS {
             break;
         }
         if ch.is_control() {
             if !flat.ends_with(' ') {
                 flat.push(' ');
+                kept += 1;
             }
             continue;
         }
         flat.push(ch);
+        kept += 1;
     }
     let flat = flat.trim();
     let detail = if flat.is_empty() {
@@ -374,7 +382,7 @@ pub struct BinaryData {
 
 #[cfg(test)]
 mod tests {
-    use super::tool_target;
+    use super::{interrupted_response_text, tool_target};
     use serde_json::json;
 
     #[test]
@@ -393,5 +401,35 @@ mod tests {
         assert_eq!(tool_target("agent", &delegated), "scout map the crate");
         assert_eq!(tool_target("task", &delegated), "");
         assert_eq!(tool_target("exec", &program), "");
+    }
+
+    #[test]
+    fn retired_run_code_replays_from_its_description() {
+        let args = json!({"code": "print(1)", "description": "plot the data"});
+        assert_eq!(tool_target("run_code", &args), "plot the data");
+    }
+
+    #[test]
+    fn interruption_note_flattens_controls_and_caps_length() {
+        assert_eq!(
+            interrupted_response_text("plain detail"),
+            "[error] the response was interrupted: plain detail"
+        );
+        // Control characters collapse into one space, and an all-control
+        // detail falls back to the generic line.
+        assert_eq!(
+            interrupted_response_text("a\r\n\r\n\tb"),
+            "[error] the response was interrupted: a b"
+        );
+        assert_eq!(
+            interrupted_response_text("\r\n\t"),
+            "[error] the response was interrupted: the response ended early"
+        );
+        // The budget counts characters, not bytes, so multibyte text keeps
+        // its full width.
+        let wide = "汉".repeat(300);
+        let note = interrupted_response_text(&wide);
+        let expected = format!("[error] the response was interrupted: {}", "汉".repeat(240));
+        assert_eq!(note, expected);
     }
 }

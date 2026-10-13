@@ -180,9 +180,15 @@ fn redact_json(value: &mut Value) {
     }
 }
 
+/// Lowercases a key and strips the `-` / `_` separators so header and field
+/// spellings (`X-Api-Key`, `api_key`, `apiKey`) compare equal.
+fn normalized_key(key: &str) -> String {
+    key.to_ascii_lowercase().replace(['-', '_'], "")
+}
+
 /// Classifies credential-like header and field names without provider policy.
 fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace(['-', '_'], "");
+    let normalized = normalized_key(key);
     normalized.ends_with("authorization")
         || normalized.ends_with("apikey")
         || normalized.ends_with("authkey")
@@ -411,14 +417,11 @@ fn line_value_end(message: &str, start: usize) -> usize {
 }
 
 fn is_cookie_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace(['-', '_'], "");
-    matches!(normalized.as_str(), "cookie" | "setcookie")
+    matches!(normalized_key(key).as_str(), "cookie" | "setcookie")
 }
 
 fn is_authorization_key(key: &str) -> bool {
-    key.to_ascii_lowercase()
-        .replace(['-', '_'], "")
-        .ends_with("authorization")
+    normalized_key(key).ends_with("authorization")
 }
 
 const fn is_key_byte(byte: u8) -> bool {
@@ -456,4 +459,120 @@ fn next_char_boundary(message: &str, cursor: usize) -> usize {
             .next()
             .expect("cursor is before the string end")
             .len_utf8()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sanitized(raw: &str) -> String {
+        ProviderError::with_message(ProviderErrorKind::Protocol, raw)
+            .message()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    #[test]
+    fn credential_assignments_and_tokens_are_redacted() {
+        assert_eq!(sanitized("password=hunter2"), "password=[REDACTED]");
+        assert_eq!(
+            sanitized("Authorization: Bearer abc.def.ghi"),
+            "Authorization: [REDACTED]"
+        );
+        assert_eq!(sanitized("Bearer sk-abc123 tail"), "[REDACTED] tail");
+        assert_eq!(sanitized("sk-abc123 tail"), "[REDACTED] tail");
+        assert_eq!(
+            sanitized("{\"api_key\": \"v\"}"),
+            "{\"api_key\":\"[REDACTED]\"}"
+        );
+        assert_eq!(sanitized("x-api-key: keyvalue"), "x-api-key: [REDACTED]");
+    }
+
+    #[test]
+    fn multibyte_text_never_panics_the_scanner() {
+        // Multibyte chars adjacent to assignments, quotes, and colons.
+        let cases = [
+            "错误 password=secret123 done",
+            "password=密码密码密码",
+            "éé\"api_key\": \"value\"",
+            "sk-ключ-123",
+            "Bearer токен",
+            "\"authorization\": «Bearer abc»",
+            "api_key=中文\r\nnext line",
+            "token:ççç",
+            "password=\"_unclosed 中文",
+            "日本語sk-abc def",
+            "cookie=a=b&中文=1",
+        ];
+        for case in cases {
+            let _ = sanitized(case);
+        }
+    }
+
+    #[test]
+    fn messages_are_truncated_and_scan_windows_bounded() {
+        let long = format!("{}{}", "a".repeat(600), " password=zzz");
+        let out = sanitized(&long);
+        assert!(out.ends_with("… [truncated]"), "{out}");
+        let huge = format!("{}{}", "b".repeat(100_000), " password=zzz");
+        let _ = sanitized(&huge);
+    }
+
+    #[test]
+    fn deterministic_fuzz_never_panics_the_scanner() {
+        // Pseudo-random mix of credential fragments, ASCII punctuation, and
+        // multibyte characters; only UTF-8-valid strings are produced.
+        let fragments = [
+            "password=",
+            "sk-",
+            "sk_",
+            "Bearer ",
+            "bearer\t",
+            "token:",
+            "\"",
+            "'",
+            "\\",
+            "}",
+            "]",
+            ",",
+            ";",
+            "&",
+            "#",
+            "|",
+            " ",
+            "\t",
+            "\n",
+            "\r",
+            "a",
+            "Z",
+            "0",
+            "_",
+            "-",
+            ".",
+            "é",
+            "汉",
+            "🦀",
+            "мир",
+            "key",
+            "api_key",
+            "authorization",
+            "cookie",
+            "=",
+            ":",
+        ];
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..20_000 {
+            let len = (next() % 24) as usize;
+            let text: String = (0..len)
+                .map(|_| fragments[(next() as usize) % fragments.len()])
+                .collect();
+            let _ = sanitized(&text);
+        }
+    }
 }
