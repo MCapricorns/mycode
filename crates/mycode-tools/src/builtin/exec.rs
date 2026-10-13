@@ -234,91 +234,17 @@ fn image_kind_label(kind: image::ImageKind) -> &'static str {
 
 /// Spawns a prepared invocation for `shell` mode `program`.
 ///
-/// `sandbox` wraps the already pinned user image with the OS helper.
-/// `None` keeps the direct launch. The helper is pinned and exec'd; the user
-/// image was verified immediately before that. There is no unsandboxed
-/// fallback when the helper cannot start.
-///
 /// # Errors
 ///
 /// Returns [`ToolError::Execution`] or [`ToolError::InvalidArgs`] when spawn
 /// itself fails. Collection failures are returned as [`RunOutcome`].
 pub(crate) async fn run_prepared(
     prepared: PreparedInvocation,
-    sandbox: Option<crate::builtin::sandbox::OsSandboxPolicy>,
     lease: ExecutionLease,
     cancel: &CancellationToken,
     deadline: &mut Pin<&mut Sleep>,
 ) -> Result<RunOutcome, ToolError> {
-    let prepared = match sandbox {
-        Some(policy) => {
-            let cancel = cancel.clone();
-            crate::builtin::blocking::run_blocking_supervised(
-                "os sandbox",
-                &cancel,
-                move |worker_cancel| wrap_with_os_sandbox(prepared, &policy, &worker_cancel),
-            )
-            .await?
-        }
-        None => prepared,
-    };
     spawn::run_pinned(prepared, lease, cancel, deadline).await
-}
-
-/// Pins the OS helper and makes it the image `spawn` will exec.
-///
-/// The user program path and arguments become the helper's command. The
-/// user image pin is dropped after its canonical path is copied; the caller
-/// already recorded that identity.
-fn wrap_with_os_sandbox(
-    prepared: PreparedInvocation,
-    policy: &crate::builtin::sandbox::OsSandboxPolicy,
-    cancel: &CancellationToken,
-) -> Result<PreparedInvocation, ToolError> {
-    let (pinned, _argv0, args, cwd, env) = prepared.into_spawn_parts();
-    let user_program = pinned
-        .canonical_path
-        .to_str()
-        .filter(|text| !text.is_empty())
-        .ok_or_else(|| {
-            ToolError::Execution(
-                "os sandbox: pinned program path is not Unicode. This setting does not fall back to unsandboxed execution.".into(),
-            )
-        })?
-        .to_owned();
-    drop(pinned);
-    let planned = crate::builtin::sandbox::plan(policy, &user_program, &args)?;
-    let pinned_helper = {
-        let path_var = env::env_path(&env);
-        resolve::pin_program_with_path(
-            &cwd,
-            &planned.helper_program,
-            &planned.args,
-            path_var,
-            cancel,
-        )
-        .map_err(|error| {
-            ToolError::Execution(format!(
-                "os sandbox helper could not be pinned ({error}). This setting does not fall back to unsandboxed execution."
-            ))
-        })?
-    };
-    let argv0 = pinned_helper
-        .canonical_path
-        .to_str()
-        .ok_or_else(|| {
-            ToolError::Execution(
-                "os sandbox: helper path is not Unicode. This setting does not fall back to unsandboxed execution.".into(),
-            )
-        })?
-        .to_owned();
-    Ok(PreparedInvocation::from_launcher(
-        pinned_helper,
-        argv0,
-        planned.args,
-        cwd,
-        env,
-    ))
 }
 
 /// Writes image, digest, identity, and redacted env summary onto tool details.
@@ -416,11 +342,7 @@ pub(crate) async fn launch_program(
         env_summary,
         wrapper,
     } = identity;
-    let sandbox = crate::builtin::sandbox::OsSandboxPolicy::for_tool(
-        ctx,
-        crate::builtin::sandbox::SandboxWrite::Workspace,
-    );
-    let outcome = run_prepared(prepared, sandbox, lease, &ctx.cancel, &mut deadline).await?;
+    let outcome = run_prepared(prepared, lease, &ctx.cancel, &mut deadline).await?;
     let duration_ms = started.elapsed().as_millis() as u64;
     match outcome {
         RunOutcome::Done {
@@ -430,28 +352,25 @@ pub(crate) async fn launch_program(
             metadata,
         } => {
             let execution_identity = execution_identity(&invocation_digest, metadata);
-            Ok(annotate_os_sandbox(
-                with_image_metadata(
-                    format_result(
-                        Some(status),
-                        &program,
-                        &argv,
-                        &execution_identity,
-                        &digest,
-                        stdout,
-                        stderr,
-                        duration_ms,
-                        false,
-                        None,
-                    ),
-                    image,
-                    metadata,
-                    &image_identity,
-                    &invocation_digest,
-                    &env_summary,
-                    wrapper.as_deref(),
+            Ok(with_image_metadata(
+                format_result(
+                    Some(status),
+                    &program,
+                    &argv,
+                    &execution_identity,
+                    &digest,
+                    stdout,
+                    stderr,
+                    duration_ms,
+                    false,
+                    None,
                 ),
-                ctx.os_sandbox,
+                image,
+                metadata,
+                &image_identity,
+                &invocation_digest,
+                &env_summary,
+                wrapper.as_deref(),
             ))
         }
         RunOutcome::CollectFailed { error, teardown } => {
@@ -465,28 +384,25 @@ pub(crate) async fn launch_program(
             metadata,
         } => {
             let execution_identity = execution_identity(&invocation_digest, metadata);
-            Ok(annotate_os_sandbox(
-                with_image_metadata(
-                    timed_out_result(
-                        &program,
-                        &argv,
-                        &execution_identity,
-                        &digest,
-                        stdout,
-                        stderr,
-                        duration_ms,
-                        timeout,
-                        teardown,
-                        started,
-                    ),
-                    image,
-                    metadata,
-                    &image_identity,
-                    &invocation_digest,
-                    &env_summary,
-                    wrapper.as_deref(),
+            Ok(with_image_metadata(
+                timed_out_result(
+                    &program,
+                    &argv,
+                    &execution_identity,
+                    &digest,
+                    stdout,
+                    stderr,
+                    duration_ms,
+                    timeout,
+                    teardown,
+                    started,
                 ),
-                ctx.os_sandbox,
+                image,
+                metadata,
+                &image_identity,
+                &invocation_digest,
+                &env_summary,
+                wrapper.as_deref(),
             ))
         }
         RunOutcome::Cancelled { teardown } => Err(command_cancelled_error(teardown.err())),
@@ -555,13 +471,6 @@ fn timed_out_result(
         true,
         Some(&notice),
     ))
-}
-
-fn annotate_os_sandbox(mut result: ToolResult, enabled: bool) -> ToolResult {
-    if enabled {
-        crate::builtin::sandbox::annotate(&mut result);
-    }
-    result
 }
 
 fn execution_identity(invocation_digest: &str, metadata: ExecutionMetadata) -> String {

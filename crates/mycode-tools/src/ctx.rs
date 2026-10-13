@@ -3,13 +3,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
 use crate::builtin::fs_io::PreparedFile;
 use crate::builtin::fs_search::PreparedSearch;
-use crate::registry::ToolCatalog;
 
 /// Everything a tool needs to execute an invocation.
 ///
@@ -38,29 +36,8 @@ pub struct ToolCtx {
     /// re-anchored the same way the agent loop anchors a direct call.
     pub extra_roots: Vec<PathBuf>,
     /// Host-published read-only anchor roots (the skills catalog). Only
-    /// read-only file tools anchor here, so `run_code` inner calls inherit
-    /// the same allowance while `edit` and `write` stay refused.
+    /// read-only file tools anchor here, so `edit` and `write` stay refused.
     pub read_roots: Vec<PathBuf>,
-    /// Tools a `run_code` program may call. Absent for ordinary tools.
-    pub catalog: Option<ToolCatalog>,
-    /// Wall-clock override for one `run_code` program. `None` uses the default.
-    pub ptc_wall: Option<Duration>,
-    /// Session whose warm Python interpreter this call may reuse.
-    ///
-    /// `None` or empty spawns a process for this call and tears it down.
-    /// The same key plus the catalog's isolation mode (scout versus the main
-    /// agent) share one interpreter. User globals are reset between calls.
-    /// Ignored when [`ToolCtx::os_sandbox`] is set, so a sandboxed call does
-    /// not reuse a process whose binds came from an earlier cwd.
-    pub ptc_session: Option<String>,
-    /// Whether this call runs inside the OS helper.
-    ///
-    /// Settings default `tools.osSandbox` to on. The host passes the effective
-    /// value: on for Linux and macOS when the setting is on, off for the
-    /// Windows product path so shell and `run_code` still run. `true` still
-    /// fail-closes when bubblewrap or seatbelt is missing. There is no
-    /// unsandboxed fallback.
-    pub os_sandbox: bool,
 }
 
 impl ToolCtx {
@@ -74,40 +51,7 @@ impl ToolCtx {
             prepared_file: None,
             extra_roots: Vec::new(),
             read_roots: Vec::new(),
-            catalog: None,
-            ptc_wall: None,
-            ptc_session: None,
-            os_sandbox: false,
         }
-    }
-
-    /// Enable or disable the OS helper for this invocation.
-    ///
-    /// Off unless the host sets it. The settings default is on; this flag
-    /// stays off until that host applies the effective value.
-    #[must_use]
-    pub fn with_os_sandbox(mut self, enabled: bool) -> Self {
-        self.os_sandbox = enabled;
-        self
-    }
-
-    /// Shorten or extend the `run_code` wall clock for this invocation.
-    pub fn with_ptc_wall(mut self, wall: Duration) -> Self {
-        self.ptc_wall = Some(wall);
-        self
-    }
-
-    /// Reuse the warm Python interpreter for this session.
-    ///
-    /// An empty key disables reuse for the call.
-    pub fn with_ptc_session(mut self, session: impl Into<String>) -> Self {
-        let session = session.into();
-        self.ptc_session = if session.is_empty() {
-            None
-        } else {
-            Some(session)
-        };
-        self
     }
 
     /// Replace the cancellation token (builder style).
@@ -140,15 +84,9 @@ impl ToolCtx {
         self
     }
 
-    /// Read-only anchor roots carried into `run_code` inner-call preflight.
+    /// Read-only anchor roots carried into read preflight.
     pub fn with_read_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.read_roots = roots;
-        self
-    }
-
-    /// Install the tool snapshot `run_code` dispatches into.
-    pub fn with_catalog(mut self, catalog: ToolCatalog) -> Self {
-        self.catalog = Some(catalog);
         self
     }
 

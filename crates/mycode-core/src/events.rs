@@ -39,15 +39,6 @@ pub enum AgentEvent {
         call_id: CallId,
         result: ToolResultMessage,
     },
-    /// A tool call inside `run_code`. Persisted for the UI only.
-    ///
-    /// These events are not appended to model history. `parent` is the
-    /// provider id of the enclosing `run_code` call.
-    PtcNested {
-        parent: CallId,
-        call_id: CallId,
-        kind: PtcNestedKind,
-    },
     /// The next provider request follows a compaction that rewrote the prefix.
     ///
     /// Emitted from `before_request`, after the previous response is already
@@ -59,18 +50,6 @@ pub enum AgentEvent {
     TurnEnded(TurnOutcome),
     /// An error occurred within the Agent loop.
     Error(MycodeError),
-}
-
-/// One phase of a tool call made from inside `run_code`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PtcNestedKind {
-    /// The inner call started.
-    Started { name: String, target: String },
-    /// Incremental output or a subagent step.
-    Progress { message: String },
-    /// The inner call finished. `result` is the UI card, not model history.
-    Completed { result: ToolResultMessage },
 }
 
 /// Incremental assistant content while streaming. See `docs/core.md`.

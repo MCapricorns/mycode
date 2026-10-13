@@ -193,7 +193,6 @@ async fn publish_visible_summary(
         text: payload.into(),
         call_id: None,
         thinking: String::new(),
-        parent_call_id: None,
     };
     if watch_cache {
         watch_prompt_cache(events, session_id, crate::CacheDisruption::Compaction);
@@ -333,22 +332,6 @@ pub(crate) fn os_user_home() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-/// Appends the OS-sandbox sentence for the product path.
-///
-/// Linux and macOS get the helper note when the setting is on. Windows gets
-/// the "not supported yet" note and does not claim the helper is wrapping
-/// the call. An explicit opt-out on a supported platform adds nothing.
-pub(crate) fn push_os_sandbox_prompt(prompt: &mut String, tools: &mycode_config::ToolsSettings) {
-    let Some(note) = mycode_tools::os_sandbox_status_note(
-        tools.effective_os_sandbox(),
-        mycode_config::ToolsSettings::os_sandbox_platform_supported(),
-    ) else {
-        return;
-    };
-    prompt.push_str("\n\n");
-    prompt.push_str(note);
-}
-
 /// Compact environment facts for the system prompt: OS, arch, the session
 /// cwd, and the one shell tool `script` mode resolves to right now. Shared
 /// by the main session and subagent prompts so the model never guesses the
@@ -392,11 +375,10 @@ The environment block names this OS and the one shell tool; write that shell's s
         system_prompt.push_str("\n\n<mcp>\n");
         system_prompt.push_str(note);
         system_prompt.push_str(
-            "Built-in tools and MCP tools are `await tools.<name>(...)` inside `run_code`. \
-MCP tools are named `server__tool`. A name that is not an identifier is \
-`await tools[\"name\"](...)`. For a deferred MCP tool, call `await tools.search_tool(...)` \
-with name \"list\", then with the exact name, then `await tools.use_tool(...)`. Do not \
-guess parameters.\n</mcp>",
+            "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
+call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
+guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
+response as `agent`.\n</mcp>",
         );
     }
     let mut roots: Vec<&std::path::Path> = extra_roots.iter().map(PathBuf::as_path).collect();
@@ -408,10 +390,10 @@ guess parameters.\n</mcp>",
         }
         let shell_tool = mycode_tools::resolved_shell().kind.tool_name();
         system_prompt.push_str(&format!(
-            "Relative paths stay in the session cwd. For the other folders, inside \
-`run_code` pass an absolute path to `tools.read`, `tools.write`, `tools.edit`, \
-`tools.find`, and `tools.grep`, or an absolute path inside `tools.shell` \
-(`mode` `script`, a `{shell_tool}` script). `tools.shell` starts in the session cwd.",
+            "Relative paths stay in the session cwd. For the other folders, pass an \
+absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
+path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in the session \
+cwd.",
         ));
     }
     system_prompt.push_str("\n\n");
@@ -434,9 +416,7 @@ pub(crate) fn push_skill_catalog(prompt: &mut String, mut skills: Vec<mycode_con
     {
         catalog.insert_str(
             close,
-            &format!(
-                "\n- and {hidden} more; inside run_code, await tools.read on the matching SKILL.md path"
-            ),
+            &format!("\n- and {hidden} more; read the matching SKILL.md by path"),
         );
     }
     prompt.push_str("\n\n");
@@ -627,7 +607,7 @@ async fn run_chat_turn_on(
     let read_roots = mycode_config::skill_read_roots(user_home.as_deref());
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
-    let mut system_prompt = session_system_prompt(
+    let system_prompt = session_system_prompt(
         home,
         &cwd,
         &registry,
@@ -636,10 +616,9 @@ async fn run_chat_turn_on(
         &directive,
         user_home.as_deref(),
     );
-    push_os_sandbox_prompt(&mut system_prompt, &settings.tools);
     let overhead_tokens = crate::compaction::estimate_prefix_tokens(
         std::slice::from_ref(&system_prompt),
-        &registry.model_specs(),
+        &registry.specs(),
     );
     // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
     // This pre-turn pass publishes its transcript card immediately. The
@@ -812,7 +791,6 @@ async fn run_chat_turn_on(
                         call_id: spelling,
                         name,
                         target,
-                        parent: None,
                     });
                 }
                 mycode_core::events::AgentEvent::ToolProgress { call_id, message } => {
@@ -822,31 +800,6 @@ async fn run_chat_turn_on(
                         name: String::new(),
                         message,
                     });
-                }
-                mycode_core::events::AgentEvent::PtcNested {
-                    parent,
-                    call_id,
-                    kind,
-                } => {
-                    if !handle_ptc_nested(
-                        &writer,
-                        &pump_events,
-                        &pump_session_id,
-                        parent.as_str(),
-                        call_id.as_str(),
-                        kind,
-                    )
-                    .await
-                    {
-                        emit_chat_failed(
-                            &pump_events,
-                            &writer,
-                            &pump_session_id,
-                            "could not record an inner tool call",
-                        )
-                        .await;
-                        return;
-                    }
                 }
                 mycode_core::events::AgentEvent::ToolCompleted {
                     call_id,
@@ -934,7 +887,6 @@ async fn run_chat_turn_on(
                                     text: text.into(),
                                     call_id: None,
                                     thinking: String::new(),
-                                    parent_call_id: None,
                                 };
                                 let _ = pump_events.send(BridgeEvent::SteerCommitted {
                                     session_id: pump_session_id.clone(),
@@ -1180,9 +1132,7 @@ async fn run_chat_turn_on(
         .with_cwd(cwd)
         .with_extra_roots(extra_roots)
         .with_read_roots(read_roots)
-        .with_steer(Some(steer))
-        .with_ptc_session(session_id.clone())
-        .with_os_sandbox(settings.tools.effective_os_sandbox());
+        .with_steer(Some(steer));
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
     // Drain the pump before returning. An agent error already became
@@ -1194,71 +1144,6 @@ async fn run_chat_turn_on(
     outcome.map_err(|error| format!("turn failed: {error}"))?;
     pump_ended.map_err(|_| "the turn pump stopped".to_owned())?;
     Ok(())
-}
-
-/// Reports a turn failure with the ledger head after whatever already committed.
-/// Records one inner `run_code` call for the transcript without putting it
-/// in model history. Live cards use the provider ids; the ledger stores the
-/// parent ledger id so a restored session nests the same way.
-async fn handle_ptc_nested(
-    writer: &crate::ledger::HeadWriter,
-    events: &crate::BridgeEventTx,
-    session_id: &str,
-    parent: &str,
-    call_id: &str,
-    kind: mycode_core::PtcNestedKind,
-) -> bool {
-    let parent_ledger = writer
-        .ledger_id(parent)
-        .await
-        .unwrap_or_else(|| parent.to_owned());
-    match kind {
-        mycode_core::PtcNestedKind::Started { name, target } => {
-            if writer
-                .open_nested_call(call_id, &name, &target, &parent_ledger)
-                .await
-                .is_err()
-            {
-                return false;
-            }
-            let _ = events.send(BridgeEvent::ToolStarted {
-                session_id: session_id.to_owned(),
-                call_id: call_id.to_owned(),
-                name,
-                target,
-                parent: Some(parent.to_owned()),
-            });
-            true
-        }
-        mycode_core::PtcNestedKind::Progress { message } => {
-            let _ = events.send(BridgeEvent::ToolProgress {
-                session_id: session_id.to_owned(),
-                call_id: call_id.to_owned(),
-                name: String::new(),
-                message,
-            });
-            true
-        }
-        mycode_core::PtcNestedKind::Completed { mut result } => {
-            result.ptc_parent = Some(parent_ledger);
-            let Ok(payload) = serde_json::to_vec(&result) else {
-                return false;
-            };
-            match writer.close_call(call_id, &payload).await {
-                Ok(event_id) => {
-                    let mut entry = project_tool_result_message(&event_id, &result);
-                    entry.call_id = Some(call_id.to_owned());
-                    entry.parent_call_id = Some(parent.to_owned());
-                    let _ = events.send(BridgeEvent::ToolCompleted {
-                        session_id: session_id.to_owned(),
-                        entry,
-                    });
-                    true
-                }
-                Err(_) => false,
-            }
-        }
-    }
 }
 
 async fn emit_chat_failed(
@@ -1514,19 +1399,17 @@ mod tests {
     }
 
     fn tool_sse() -> String {
-        let code = "a = await tools.read(path=\"a.txt\")\nb = await tools.read(path=\"b.txt\")\nreturn a + \"\\n\" + b\n";
         let chunk = serde_json::json!({
             "choices": [{
                 "delta": {
                     "tool_calls": [
                         {
                             "index": 0,
-                            "id": "call_run",
+                            "id": "call_read",
                             "function": {
-                                "name": "run_code",
+                                "name": "read",
                                 "arguments": serde_json::json!({
-                                    "description": "Read both fixtures",
-                                    "code": code
+                                    "path": "a.txt"
                                 }).to_string()
                             }
                         }
@@ -1569,7 +1452,7 @@ mod tests {
             models: vec!["test-model".to_owned()],
             enabled: true,
             // ~22k token auto threshold. The seeded prompt stays under it;
-            // the `run_code` result (capped near 8k chars) pushes the next hook over it.
+            // the `read` result (the whole 20k-char fixture) pushes the next hook over it.
             context_limit: Some(26_000),
             max_output: None,
         });
@@ -1587,11 +1470,6 @@ mod tests {
             format!("alpha-body\n{}", "a".repeat(20_000)),
         )
         .expect("a");
-        std::fs::write(
-            cwd.join("b.txt"),
-            format!("beta-body\n{}", "b".repeat(20_000)),
-        )
-        .expect("b");
 
         let catalog = mycode_providers::catalog::current(&home);
         let state = CoreState::new(home, catalog, Vec::new());
@@ -1717,22 +1595,14 @@ mod tests {
             .collect();
         assert_eq!(
             tool_calls.len(),
-            3,
-            "the run_code card and both nested reads should be on the ledger"
+            1,
+            "the read card should be on the ledger: {tool_calls:?}"
         );
         assert!(
-            tool_calls.iter().any(|(_, entry)| {
-                entry.parent_call_id.is_none() && entry.text.contains("Read both fixtures")
-            }),
-            "run_code card missing: {tool_calls:?}"
-        );
-        assert_eq!(
             tool_calls
                 .iter()
-                .filter(|(_, entry)| entry.parent_call_id.is_some())
-                .count(),
-            2,
-            "nested reads should remember their parent"
+                .any(|(_, entry)| entry.text.contains("a.txt")),
+            "read card missing: {tool_calls:?}"
         );
         for (index, call) in tool_calls {
             let call_id = call.call_id.as_deref().expect("call id");
@@ -1764,11 +1634,7 @@ mod tests {
             entries
                 .iter()
                 .any(|entry| entry.text.contains("alpha-body")),
-            "first read result missing"
-        );
-        assert!(
-            entries.iter().any(|entry| entry.text.contains("beta-body")),
-            "second read result missing"
+            "read result missing"
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1811,40 +1677,6 @@ mod tests {
         assert!(
             !prompt.contains("translated"),
             "prompt must not describe bash-to-PowerShell translation:\n{prompt}"
-        );
-        assert!(
-            !prompt.contains("os_sandbox: on"),
-            "the helper note is appended from settings, not baked into the environment block:\n{prompt}"
-        );
-    }
-
-    #[test]
-    fn os_sandbox_prompt_follows_the_product_path() {
-        let mut prompt = String::new();
-        super::push_os_sandbox_prompt(&mut prompt, &mycode_config::ToolsSettings::default());
-        if mycode_config::ToolsSettings::os_sandbox_platform_supported() {
-            assert!(prompt.contains("os_sandbox: on"), "{prompt}");
-            assert!(!prompt.contains("not supported yet"), "{prompt}");
-        } else {
-            assert!(prompt.contains("not supported yet"), "{prompt}");
-            assert!(!prompt.contains("os_sandbox: on"), "{prompt}");
-        }
-        let opted_out = mycode_config::ToolsSettings {
-            os_sandbox: false,
-            ..mycode_config::ToolsSettings::default()
-        };
-        let mut quiet = String::new();
-        super::push_os_sandbox_prompt(&mut quiet, &opted_out);
-        if mycode_config::ToolsSettings::os_sandbox_platform_supported() {
-            assert!(quiet.is_empty(), "{quiet}");
-        } else {
-            assert!(quiet.contains("not supported yet"), "{quiet}");
-            assert!(!quiet.contains("os_sandbox: on"), "{quiet}");
-        }
-        assert!(!opted_out.effective_os_sandbox());
-        assert_eq!(
-            mycode_config::ToolsSettings::default().effective_os_sandbox(),
-            mycode_config::ToolsSettings::os_sandbox_platform_supported()
         );
     }
 

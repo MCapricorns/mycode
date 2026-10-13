@@ -6,7 +6,7 @@
 //!
 //! Search hits are rendered as a short title, URL, and snippet. Fetches that
 //! pass `goal` return matching excerpts instead of the page. Identical
-//! queries and URLs are cached for a few minutes so a `run_code` program
+//! queries and URLs are cached for a few minutes so a turn
 //! can search, then fetch, without paying the raw page twice.
 
 use std::collections::HashSet;

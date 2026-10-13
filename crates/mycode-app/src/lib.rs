@@ -42,8 +42,6 @@ pub mod protocol;
 pub use compaction::{
     display_summary_text, is_display_only_summary as is_compaction_summary, summary_body,
 };
-#[cfg(test)]
-mod ptc_eval;
 mod search;
 mod settings_io;
 mod state;
@@ -366,10 +364,8 @@ pub enum BridgeEvent {
         name: String,
         /// Path, query, or command. Empty when the call has no target.
         target: String,
-        /// Provider id of the enclosing `run_code` call when this card is nested.
-        parent: Option<String>,
     },
-    /// Incremental tool progress (including nested subagent steps).
+    /// Incremental tool progress (including subagent steps).
     ToolProgress {
         /// Session identity spelling.
         session_id: String,

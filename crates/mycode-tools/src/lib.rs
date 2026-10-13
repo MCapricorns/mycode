@@ -32,21 +32,14 @@ pub mod tool;
 
 pub use builtin::fs_io::{FileAccess, PreparedFile, prepare_file_async};
 pub use builtin::fs_search::{PreparedSearch, SearchAccess, prepare_search_async_with_access};
-pub use builtin::python::{
-    PythonInterpreter, PythonStatus, python_install_steps, python_status,
-    python_unavailable_message,
-};
 pub use builtin::shell::{
     DetectedShell, ShellKind, active_shell, detect_default_shell, render_environment_block,
     resolved_shell, script_shell_line,
 };
-pub use builtin::{
-    ShellTool, os_sandbox_prompt_note, os_sandbox_status_note, os_sandbox_unsupported_prompt_note,
-    register_builtins, release_ptc_session,
-};
+pub use builtin::{ShellTool, register_builtins};
 pub use ctx::ToolCtx;
 pub use invoke::prepare_tool_ctx;
-pub use registry::{ToolCatalog, ToolRegistry};
+pub use registry::ToolRegistry;
 pub use roots::anchor_tool_path;
 pub use stream::{ToolProgress, ToolStream, ToolStreamItem, ToolStreamReceiver};
 pub use tool::{Tool, ToolDyn, ToolError, ToolResult};

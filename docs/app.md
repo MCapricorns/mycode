@@ -31,7 +31,7 @@
 | `settings_io` | 设置 CAS 和单把密钥的写入。读设置时补上探测到的 shell 和默认 User-Agent 并写回 |
 | `search` | 作曲栏 `@` 提到的项目文件：不区分大小写的子串，跳过 `.git`、`node_modules`、`target` 等目录，最多看 8192 项、返回 64 条 |
 | `export` | 产品数据的导出与导入包：设置、界面状态和会话日志，不带密钥。导入后为 JSONL 补建索引 |
-| `updates` | 检查、下载、校验、准备重启安装。错误收成一行。macOS / Linux 用 `update.sh`；Windows 复制当前程序，带 `--mycode-apply-update` 等参数替换安装文件。Linux x86_64 安装包是 `mycode-desktop-*-x86_64-unknown-linux-gnu.zip`。已发布平台缺这个包时报错，不当成已是最新。启动检查失败会送到界面提示 |
+| `updates` | 检查、下载、校验、准备重启安装。错误收成一行。macOS 用 `update.sh`；Windows 复制当前程序，带 `--mycode-apply-update` 等参数替换安装文件。没有 Linux 安装包，Linux 上没有对应平台的资源。换好并校验新二进制后，旧版本的备份文件会被删掉，不在安装目录里堆积。启动检查失败会送到界面提示 |
 
 ## 回合装配
 
@@ -59,7 +59,7 @@
 
 父提示要求：只有工作能独立并行、边界清楚，并且确实能降低成本或提高完成质量时才派 `agent`。单文件小改、已经有上下文、或同一个 brief 再套一层，都自己做。同一时刻尽量只跑一个 `artisan`，除非几份 brief 明显独立且父级能分别整合。问法含糊时先澄清或派 `scout`，不派 `artisan` 去漫游。
 
-角色来自内置、`<home>/agents/` 和项目的 `.mycode/agents/`（同名时项目覆盖用户覆盖内置）。同一条回复里的多个 `agent` 并行。并发上限默认是 4，每个回合一个信号量；设置里的 `subagents.maxConcurrent` 为 `0` 时使用这个默认值，不是零个子代理。子代理有墙钟超时：`subagents.timeoutSecs` 为 `0` 时默认 20 分钟（1200 秒），上限 2 小时，排队等名额不计入；到点、取消父回合，或单独 `CancelSubagent` 都会停掉它。子代理用角色声明的工具白名单；角色没写时继承父级的 `read`、`write`、`edit`、`shell`、`grep`、`find`、`web_search`、`fetch_content`、`run_code`。子代理也是 PTC-only：模型侧只有 `run_code`，其余工具在程序里调用。scout 的目录是只读工具，它的 Python 进程以 `-I` 启动并额外带 audit hook；同一会话复用这个进程，不和主代理的解释器混用，用户全局在两次调用之间清掉。`-I` 和这道 hook 是尽力而为，不是安全边界。`tools.osSandbox` 默认开启。在 Linux / macOS 上生效时不复用进程，bubblewrap 或 seatbelt 再包一层写范围限制，同样不是安全边界，助手失败时不退回无沙箱执行。Windows 暂不支持这层，设置页标明「暂不支持」，产品路径不套沙箱。见 [tools.md](tools.md)。白名单里的 `shell`、`bash`、`powershell`、`cmd` 都注册成当前这一个进程工具（跟父会话同一个解释器，名字是 `powershell`、`bash` 或 `cmd`），不会在 Windows 上另给一个 bash 工具，也不会翻译命令。子代理提示词带同一份 `<environment>` / `<shell>`。scout 仍然是只读，不注册这个工具。连上的 MCP 也会注册给它：名字是 `server__tool`，在 `run_code` 里调用。scout 只拿到 `readOnlyHint` 为 true 的 MCP 工具。技能目录同样附在子代理提示词上，用 `tools.read` 加载。子代理不能 `ask_user`，也不能再调 `agent`，没有压缩钩子。角色可以在设置里指定自己的 provider / model 和思考档位，否则沿用父回合。路由到其它提供商时走与父回合相同的 `resolve_request_auth`（OAuth 刷新、Copilot bearer 交换，共用 bearer 缓存），不会把密钥库里的整段 blob 当 bearer 发出。`worktree` 隔离只给能写的角色：在 `<home>/agent-worktrees/` 下建分离的 git worktree，结束时把 diff（最多 256 KiB）附在答案后面再删掉。旧会话里的 `task` 调用不会按新名字重放。
+角色来自内置、`<home>/agents/` 和项目的 `.mycode/agents/`（同名时项目覆盖用户覆盖内置）。同一条回复里的多个 `agent` 并行。并发上限默认是 4，每个回合一个信号量；设置里的 `subagents.maxConcurrent` 为 `0` 时使用这个默认值，不是零个子代理。子代理有墙钟超时：`subagents.timeoutSecs` 为 `0` 时默认 20 分钟（1200 秒），上限 2 小时，排队等名额不计入；到点、取消父回合，或单独 `CancelSubagent` 都会停掉它。子代理用角色声明的工具白名单；角色没写时继承父级的 `read`、`write`、`edit`、`shell`、`grep`、`find`、`web_search`、`fetch_content`。子代理和父级一样直接调用工具。scout 的目录是只读工具，注册时不会再给改动工具。进程在当前用户权限下运行，没有 OS 级沙箱。见 [tools.md](tools.md)。白名单里的 `shell`、`bash`、`powershell`、`cmd` 都注册成当前这一个进程工具（跟父会话同一个解释器，名字是 `powershell`、`bash` 或 `cmd`），不会在 Windows 上另给一个 bash 工具，也不会翻译命令。子代理提示词带同一份 `<environment>` / `<shell>`。scout 仍然是只读，不注册这个工具。连上的 MCP 也会注册给它，按原始工具名调用。scout 只拿到 `readOnlyHint` 为 true 的 MCP 工具。技能目录同样附在子代理提示词上，用 `read` 加载。子代理不能 `ask_user`，也不能再调 `agent`，没有压缩钩子。角色可以在设置里指定自己的 provider / model 和思考档位，否则沿用父回合。路由到其它提供商时走与父回合相同的 `resolve_request_auth`（OAuth 刷新、Copilot bearer 交换，共用 bearer 缓存），不会把密钥库里的整段 blob 当 bearer 发出。`worktree` 隔离只给能写的角色：在 `<home>/agent-worktrees/` 下建分离的 git worktree，结束时把 diff（最多 256 KiB）附在答案后面再删掉。旧会话里的 `task` 调用不会按新名字重放。
 
 ## MCP
 

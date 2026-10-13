@@ -15,13 +15,8 @@
 //!   `args`. Batch files and shebang arguments such as `-c` are rejected.
 //!
 //! Both modes pin the launched image, snapshot cwd/env/PATH once per call,
-//! allowlist the child environment, and use contained spawn. Execution is
-//! unsandboxed current-user file and network authority unless the OS helper
-//! is on. `tools.osSandbox` defaults on for Linux bubblewrap and macOS
-//! seatbelt. Windows has no helper; the product path leaves this off and
-//! says the sandbox is not supported yet. The helper is best-effort write
-//! confinement, not a sandbox boundary, and a missing or forced helper fails
-//! the call. Environment filtering is
+//! allowlist the child environment, and use contained spawn. Execution runs
+//! with current-user file and network authority. Environment filtering is
 //! not a sandbox. Valid calls run directly with no Core permission prompt.
 //! `write` and `edit` stay available. `read`, `grep`, and `find` stay
 //! in-process. File edits from either path are not undone.
@@ -326,11 +321,7 @@ impl Tool for ShellTool {
             invocation,
             lease,
         } = prepared;
-        let sandbox = crate::builtin::sandbox::OsSandboxPolicy::for_tool(
-            ctx,
-            crate::builtin::sandbox::SandboxWrite::Workspace,
-        );
-        let outcome = run_prepared(invocation, sandbox, lease, &ctx.cancel, &mut deadline).await?;
+        let outcome = run_prepared(invocation, lease, &ctx.cancel, &mut deadline).await?;
         let duration_ms = started.elapsed().as_millis() as u64;
         match outcome {
             RunOutcome::Done {
@@ -351,7 +342,6 @@ impl Tool for ShellTool {
                 ),
                 &identity,
                 metadata,
-                ctx.os_sandbox,
             )),
             RunOutcome::CollectFailed { error, teardown } => {
                 Err(collection_error(&error, teardown.err()))
@@ -375,7 +365,6 @@ impl Tool for ShellTool {
                 ),
                 &identity,
                 metadata,
-                ctx.os_sandbox,
             )),
             RunOutcome::Cancelled { teardown } => Err(command_cancelled_error(teardown.err())),
         }
@@ -601,13 +590,9 @@ fn with_identity(
     mut result: ToolResult,
     identity: &PreparedIdentity,
     metadata: ExecutionMetadata,
-    os_sandbox: bool,
 ) -> ToolResult {
     let details = result.details.as_mut().expect("details were populated");
     apply_execution_details(details, identity, metadata);
-    if os_sandbox {
-        crate::builtin::sandbox::annotate(&mut result);
-    }
     result
 }
 
@@ -1106,20 +1091,7 @@ mod mode_tests {
         assert!(!pwsh_spec.description.contains("translated"));
         assert!(bash_spec.description.contains("bash -c"));
         assert!(bash_spec.description.contains("quoted heredoc"));
-        assert!(
-            bash_spec
-                .description
-                .contains("`tools.osSandbox` defaults on")
-        );
-        assert!(bash_spec.description.contains("not a security boundary"));
-        assert!(bash_spec.description.contains("not supported yet"));
-        assert!(
-            bash_spec
-                .description
-                .contains("unsandboxed current-user execution")
-        );
-        assert!(bash_spec.description.contains("fails the call"));
-        assert!(!bash_spec.description.contains("opt-in"));
+        assert!(!bash_spec.description.contains("osSandbox"));
         assert!(!bash_spec.description.contains("Get-ChildItem"));
         let registry = ToolRegistry::new();
         registry.register(std::sync::Arc::new(powershell));

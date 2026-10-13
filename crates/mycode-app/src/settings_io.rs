@@ -80,13 +80,14 @@ pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String>
         "settings",
     )?;
     let discarded_shell = discard_stored_shell(&mut settings);
+    let discarded_sandbox = discard_stored_os_sandbox(&mut settings);
     let filled_agent = settings.user_agent.trim().is_empty();
     if filled_agent {
         settings.user_agent = mycode_config::default_user_agent();
     }
-    // Drop a legacy shell override, and fill an empty user-agent, so the
-    // next load does not repeat the same rewrite.
-    if (discarded_shell || filled_agent)
+    // Drop a legacy shell override and a legacy OS-sandbox flag, and fill an
+    // empty user-agent, so the next load does not repeat the same rewrite.
+    if (discarded_shell || discarded_sandbox || filled_agent)
         && let Ok(next) = replace_app_settings(home, revision, &settings)
     {
         revision = next;
@@ -120,6 +121,16 @@ pub(crate) fn save_settings(
 
 pub(crate) fn render_config_error(error: &mycode_config::ConfigError) -> String {
     format!("settings error: {}", error.summary())
+}
+
+/// The OS-sandbox feature is gone; a stored flag from an older build is
+/// cleared without a log line because nothing replaces it.
+fn discard_stored_os_sandbox(settings: &mut AppSettings) -> bool {
+    if !settings.tools.os_sandbox {
+        return false;
+    }
+    settings.tools.os_sandbox = false;
+    true
 }
 
 fn discard_stored_shell(settings: &mut AppSettings) -> bool {

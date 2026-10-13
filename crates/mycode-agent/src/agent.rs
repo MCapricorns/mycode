@@ -709,7 +709,7 @@ mod tests {
     impl mycode_tools::ToolDyn for HangAgent {
         fn spec(&self) -> mycode_core::ToolSpec {
             mycode_core::ToolSpec {
-                name: "run_code".to_owned(),
+                name: "hang".to_owned(),
                 description: "nested test agent".to_owned(),
                 params_schema: serde_json::json!({"type": "object"}),
             }
@@ -786,7 +786,7 @@ mod tests {
                     message: mycode_core::AssistantMessage {
                         blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
                             "call-agent",
-                            "run_code",
+                            "hang",
                             serde_json::json!({}),
                         ))],
                         usage: None,
@@ -880,7 +880,7 @@ mod tests {
                             message: mycode_core::AssistantMessage {
                                 blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
                                     "call-note",
-                                    "run_code",
+                                    "hang",
                                     serde_json::json!({}),
                                 ))],
                                 usage: None,
@@ -913,7 +913,7 @@ mod tests {
     impl mycode_tools::ToolDyn for NoteTool {
         fn spec(&self) -> mycode_core::ToolSpec {
             mycode_core::ToolSpec {
-                name: "run_code".to_owned(),
+                name: "hang".to_owned(),
                 description: "records a note".to_owned(),
                 params_schema: serde_json::json!({"type": "object"}),
             }
@@ -974,115 +974,5 @@ mod tests {
             "steer missing from the next request: {}",
             seen[1]
         );
-    }
-
-    struct FlagTool {
-        ran: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl mycode_tools::ToolDyn for FlagTool {
-        fn spec(&self) -> mycode_core::ToolSpec {
-            mycode_core::ToolSpec {
-                name: "read".to_owned(),
-                description: "read".to_owned(),
-                params_schema: serde_json::json!({"type": "object"}),
-            }
-        }
-
-        fn execute_dyn<'a>(
-            &'a self,
-            _args: serde_json::Value,
-            _ctx: &'a mycode_tools::ToolCtx,
-            _out: &'a mut mycode_tools::ToolStream,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async move {
-                self.ran.store(true, std::sync::atomic::Ordering::SeqCst);
-                Ok(mycode_tools::ToolResult::text("SECRET_READ"))
-            })
-        }
-    }
-
-    struct TwoStep {
-        step: std::sync::atomic::AtomicUsize,
-    }
-
-    impl Provider for TwoStep {
-        fn stream<'a>(
-            &'a self,
-            _request: &'a Request,
-            cancel: CancellationToken,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
-        > {
-            Box::pin(async move {
-                let step = self.step.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let (sender, stream) = EventStream::channel(cancel);
-                if step == 0 {
-                    sender
-                        .send(StreamEvent::Done {
-                            message: mycode_core::AssistantMessage {
-                                blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
-                                    "call-read",
-                                    "read",
-                                    serde_json::json!({"path": "a.rs"}),
-                                ))],
-                                usage: None,
-                                stop_reason: StopReason::ToolUse,
-                            },
-                        })
-                        .await;
-                } else {
-                    sender
-                        .send(StreamEvent::Done {
-                            message: mycode_core::AssistantMessage {
-                                blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
-                                    "done",
-                                ))],
-                                usage: None,
-                                stop_reason: StopReason::Stop,
-                            },
-                        })
-                        .await;
-                }
-                Ok(stream)
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn a_direct_read_is_rejected_before_the_tool_runs() {
-        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let tools = ToolRegistry::new();
-        tools.register(std::sync::Arc::new(FlagTool {
-            ran: std::sync::Arc::clone(&ran),
-        }));
-        let provider = TwoStep {
-            step: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let hooks = HookRunner::new();
-        let env = TurnEnv::new(&provider, &tools, &hooks);
-        let mut agent = Agent::new(AgentConfig::new());
-        let outcome = agent
-            .prompt(Message::User(UserMessage::text("read it")), &env)
-            .await
-            .expect("turn");
-        assert!(matches!(
-            outcome,
-            mycode_core::events::TurnOutcome::Completed
-        ));
-        assert!(
-            !ran.load(std::sync::atomic::Ordering::SeqCst),
-            "the direct read ran"
-        );
-        let history = history_text(&agent);
-        assert!(history.contains("via `run_code`"), "{history}");
-        assert!(!history.contains("SECRET_READ"), "{history}");
     }
 }

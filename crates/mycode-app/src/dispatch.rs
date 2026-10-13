@@ -320,7 +320,6 @@ fn cancel_turn(state: &CoreState, session_id: &str) {
 /// Session deletion uses this. A new chat turn uses [`cancel_turn`] only.
 fn cancel_session_work(state: &CoreState, session_id: &str) {
     cancel_turn(state, session_id);
-    mycode_tools::release_ptc_session(session_id);
     if let Ok(mut subagents) = state.subagent_cancels.lock() {
         let prefix = format!("{session_id}:");
         subagents.retain(|key, token| {

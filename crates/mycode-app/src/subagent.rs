@@ -22,9 +22,8 @@ use tokio_util::sync::CancellationToken;
 /// Subagent system brief: one-shot work, no user channel.
 const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MYCode subagent. Finish the brief with the \
 tools you have. You cannot ask the user; reversible choices in the brief are authorized. \
-Report assumptions that matter, then stop. \
-`run_code` is the only tool you can call directly; every other tool is `tools.*` inside \
-the program. Return only what the brief asks for. You cannot delegate further.";
+Report assumptions that matter, then stop. Return only what the brief asks for. You cannot \
+delegate further.";
 
 /// Parent-side tools a child can inherit when the role lists none.
 ///
@@ -39,7 +38,6 @@ const PARENT_TOOL_NAMES: &[&str] = &[
     "find",
     "web_search",
     "fetch_content",
-    "run_code",
 ];
 
 /// Host for the `agent` tool: runs one nested agent on a resolved role.
@@ -355,14 +353,14 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
     let timeout_secs = settings.effective_timeout_secs();
     let dispatch = [
         "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
-        "You decide whether to delegate. A narrow lookup is one `run_code` that calls `tools.grep` or `tools.find`. A rename, or edits across several files, is one `run_code` that calls `tools.edit`, not one edit per file. Prefer `tools.agent` with agent \"scout\" for web research, vendor docs, and a repository-wide map: several scout calls may overlap inside `asyncio.gather`, and each returns a short map. Do not spend this chat on a long chain of `web_search` and `fetch_content` for that kind of task. A `fetch_content` result that reports HTTP 4xx or extract_failed is final for that URL. A narrow question does not need `scout`. Delegating broad research to scout is your judgment.",
+        "You decide whether to delegate. Prefer `agent` with agent \"scout\" for web research, vendor docs, and a repository-wide map: independent scout calls run together in one response, and each returns a short map. Do not spend this chat on a long chain of `web_search` and `fetch_content` for that kind of task. A `fetch_content` result that reports HTTP 4xx or extract_failed is final for that URL. A narrow question does not need `scout`. Delegating broad research to scout is your judgment.",
         "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
         "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
         "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
     ];
     let limit = format!(
         "Send one self-contained brief. The child has no parent conversation and returns once. \
-         Independent `tools.agent` calls overlap, including inside `asyncio.gather`. \
+         Independent `agent` calls in one response run together. \
          Write-capable roles use a worktree, so concurrent artisans do not share the session checkout. \
          The host runs at most {cap} subagents at once. An artisan started past that cap waits, and the user is warned. \
          Each child stops after {timeout_secs} seconds of wall-clock time; time spent waiting for a slot does not count."
@@ -576,18 +574,6 @@ impl BridgeAgentHost {
                         let _ =
                             progress_sink.progress(agent_progress(&role_name, "step", &message));
                     }
-                    mycode_core::events::AgentEvent::PtcNested { kind, .. } => match kind {
-                        mycode_core::PtcNestedKind::Started { name, target } => {
-                            let label = mycode_core::tool_label(&name, &target);
-                            let _ =
-                                progress_sink.progress(agent_progress(&role_name, "tool", &label));
-                        }
-                        mycode_core::PtcNestedKind::Progress { message } => {
-                            let _ = progress_sink
-                                .progress(agent_progress(&role_name, "step", &message));
-                        }
-                        mycode_core::PtcNestedKind::Completed { .. } => {}
-                    },
                     _ => {}
                 }
             }
@@ -602,8 +588,7 @@ impl BridgeAgentHost {
         };
         extra_roots.sort();
         let read_roots = mycode_config::skill_read_roots(crate::turn::os_user_home().as_deref());
-        let os_sandbox = self.settings.tools.effective_os_sandbox();
-        let mut system = subagent_system_prompt(
+        let system = subagent_system_prompt(
             role,
             &registry,
             &run_dir,
@@ -612,7 +597,6 @@ impl BridgeAgentHost {
             std::env::consts::ARCH,
             &shell,
         );
-        crate::turn::push_os_sandbox_prompt(&mut system, &self.settings.tools);
         let mut config = AgentConfig::new()
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));
@@ -630,16 +614,13 @@ impl BridgeAgentHost {
             forget_subagent_cancel(&self.cancels, call_id, &cancel_key);
             return Err(fail(subagent_timeout_message(&role_name, budget.as_secs())));
         }
-        let ptc_session = self.session_id.clone();
         let run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
                 .with_cancel(run_cancel)
                 .with_events(event_tx)
                 .with_cwd(run_dir)
                 .with_extra_roots(extra_roots)
-                .with_read_roots(read_roots)
-                .with_ptc_session(ptc_session)
-                .with_os_sandbox(os_sandbox);
+                .with_read_roots(read_roots);
             let outcome = agent.prompt(prompt, &env).await;
             forwarder.abort();
             if let Err(error) = outcome {
@@ -837,10 +818,9 @@ fn subagent_system_prompt(
         }
         if let Some(shell_tool) = registered_shell_name(registry) {
             system.push_str(&format!(
-                "Relative paths stay in this run's cwd. For the other folders, inside \
-`run_code` pass an absolute path to `tools.read`, `tools.write`, `tools.edit`, \
-`tools.find`, and `tools.grep`, or an absolute path inside `tools.shell` \
-(`mode` `script`, a `{shell_tool}` script). `tools.shell` starts in this run's cwd.",
+                "Relative paths stay in this run's cwd. For the other folders, pass an \
+absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
+path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in this run's cwd.",
             ));
         }
     }
@@ -861,8 +841,9 @@ fn subagent_system_prompt(
     append_child_skills(&mut system, run_dir, extra_roots);
     if registry.get("search_tool").is_some() {
         system.push_str(
-            "\n\nMCP tools are connected. Inside `run_code`, call `await tools.search_tool(...)` with the tool name, then \
-`await tools.use_tool(...)` with arguments that match the returned inputSchema. Direct tools are `await tools.server__tool(...)`. Never guess parameters. A read-only role only receives MCP tools whose server set readOnlyHint.",
+            "\n\nMCP tools are connected. For any MCP tool other than the direct ones, call \
+`search_tool` with the tool name, then `use_tool` with arguments that match the returned \
+inputSchema. Never guess parameters. A read-only role only receives MCP tools whose server set readOnlyHint.",
         );
     }
     system.push_str("\n\n");
@@ -907,7 +888,6 @@ fn child_registry_with(
             }
             "grep" => registry.register(Arc::new(mycode_tools::builtin::GrepTool)),
             "find" => registry.register(Arc::new(mycode_tools::builtin::FindTool)),
-            "run_code" => registry.register(Arc::new(mycode_tools::builtin::RunCodeTool)),
             "web_search" => registry.register(Arc::new(mycode_tools::builtin::WebSearchTool::new(
                 web_host.clone(),
             ))),
@@ -1094,9 +1074,7 @@ mod tests {
         assert!(prompt.contains("Windows PowerShell 5.1"), "{prompt}");
         assert!(prompt.contains("Do not use `&&`"), "{prompt}");
         assert!(prompt.contains("here-string"), "{prompt}");
-        assert!(prompt.contains("async def shell("), "{prompt}");
         assert!(prompt.contains("`powershell`"), "{prompt}");
-        assert!(!prompt.contains("async def bash("), "{prompt}");
         assert!(!prompt.contains("\n- bash:"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");
         assert!(
@@ -1245,18 +1223,8 @@ mod tests {
         assert!(!prompt.contains("\n- powershell:"), "{prompt}");
         assert!(!prompt.contains("\n- bash:"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");
-        assert!(
-            allowed.iter().any(|name| name == "run_code"),
-            "scout keeps run_code, got {allowed:?}"
-        );
-        assert!(registry.get("run_code").is_some(), "{:?}", registry.names());
+        assert!(!prompt.contains("\n- shell:"), "{prompt}");
         assert!(registry.get("edit").is_none());
-        assert!(
-            prompt.contains("only tool you can call directly"),
-            "{prompt}"
-        );
-        assert!(!prompt.contains("async def shell("), "{prompt}");
-        assert!(!prompt.contains("async def edit("), "{prompt}");
         assert!(prompt.contains("`goal`"), "{prompt}");
         assert!(
             !prompt.contains("Do not do that research inline"),
@@ -1265,15 +1233,15 @@ mod tests {
     }
 
     #[test]
-    fn scout_prompt_lists_workspace_skills_for_tools_read() {
+    fn scout_prompt_lists_workspace_skills() {
         let root = std::env::temp_dir().join(format!(
             "mycode-scout-skill-{}-{}",
             std::process::id(),
             crate::unix_now().as_nanos()
         ));
-        let skill = root.join(".agents").join("skills").join("aaa-ptc");
+        let skill = root.join(".agents").join("skills").join("aaa-scout");
         std::fs::create_dir_all(&skill).unwrap();
-        std::fs::write(skill.join("SKILL.md"), "# Aaa Ptc\nMap the crate.\n").unwrap();
+        std::fs::write(skill.join("SKILL.md"), "# Aaa Scout\nMap the crate.\n").unwrap();
         let home = HomeLayout::from_root(&root).unwrap();
         let scout = builtin_roles().role("scout").expect("scout").clone();
         let allowed = scout.resolve_tools(
@@ -1293,20 +1261,15 @@ mod tests {
         );
         let prompt =
             super::subagent_system_prompt(&scout, &registry, &root, &[], "linux", "x86_64", &shell);
-        assert!(prompt.contains("/aaa-ptc"), "{prompt}");
-        assert!(prompt.contains("await tools.read"), "{prompt}");
-        assert!(prompt.contains("async def read("), "{prompt}");
-        assert!(
-            !prompt.contains("`read` that SKILL.md"),
-            "skill guidance must not name a direct read call:\n{prompt}"
-        );
+        assert!(prompt.contains("/aaa-scout"), "{prompt}");
+        assert!(prompt.contains("read the matching SKILL.md"), "{prompt}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn artisan_gets_the_same_grouping_block_as_the_parent_tools() {
+    fn artisan_gets_the_same_tool_guidance_as_the_parent() {
         let home =
-            HomeLayout::from_root(std::env::temp_dir().join("mycode-child-artisan-ptc")).unwrap();
+            HomeLayout::from_root(std::env::temp_dir().join("mycode-child-artisan")).unwrap();
         let artisan = builtin_roles().role("artisan").expect("artisan").clone();
         let allowed = artisan.resolve_tools(
             &super::PARENT_TOOL_NAMES
@@ -1314,7 +1277,7 @@ mod tests {
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>(),
         );
-        assert!(allowed.iter().any(|name| name == "run_code"), "{allowed:?}");
+        assert!(allowed.iter().any(|name| name == "edit"), "{allowed:?}");
         let shell = mycode_tools::DetectedShell {
             kind: mycode_tools::ShellKind::Bash,
             program: std::path::PathBuf::from("/bin/bash"),
@@ -1333,17 +1296,8 @@ mod tests {
             "x86_64",
             &shell,
         );
-        let child_block = mycode_agent::grouped_execution_block(&prompt).expect("child");
-        assert!(
-            child_block.contains("only tool you can call directly"),
-            "{child_block}"
-        );
-        assert!(child_block.contains("async def shell("), "{child_block}");
-        assert!(child_block.contains("async def edit("), "{child_block}");
-        assert!(
-            prompt.contains("only tool you can call directly"),
-            "{prompt}"
-        );
+        assert!(prompt.contains("<tool_calling>"), "{prompt}");
+        assert!(prompt.contains("`write`, `edit`, and `bash`"), "{prompt}");
         assert!(prompt.contains("cannot delegate further"), "{prompt}");
         assert!(
             !prompt.contains("Do not do that research inline"),
@@ -1353,14 +1307,8 @@ mod tests {
             &builtin_roles(),
             &mycode_config::SubagentSettings::default(),
         );
-        assert!(
-            mycode_agent::prompt_guides(&directive, mycode_agent::TaskWeight::Broad),
-            "{directive}"
-        );
-        assert!(
-            mycode_agent::prompt_guides(&directive, mycode_agent::TaskWeight::GroupInline),
-            "{directive}"
-        );
+        assert!(directive.contains("your judgment"), "{directive}");
+        assert!(directive.contains("scout"), "{directive}");
         assert!(
             !directive.contains("Do not do that research inline"),
             "{directive}"

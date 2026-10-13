@@ -90,18 +90,6 @@ pub struct TurnEnv<'a> {
     /// Steers to fold into this turn at the next loop boundary.
     /// `None` for a turn that does not accept them (a nested agent).
     pub steer: Option<Arc<SteerInbox>>,
-    /// Session key for the warm `run_code` interpreter. `None` cold-starts
-    /// Python on every call. Scout and the main agent still use separate
-    /// processes: isolation is part of the pool key, not this string.
-    /// OS sandboxing ignores this key and cold-starts every call when the
-    /// effective flag is on.
-    pub ptc_session: Option<String>,
-    /// Effective OS helper for `shell` and `run_code`.
-    ///
-    /// The settings default is on. The host sets this from the effective
-    /// value, which is off on Windows so shell and `run_code` still run.
-    /// `true` still fail-closes when the helper is missing.
-    pub os_sandbox: bool,
 }
 
 impl<'a> TurnEnv<'a> {
@@ -122,15 +110,7 @@ impl<'a> TurnEnv<'a> {
             extra_roots: Vec::new(),
             read_roots: Vec::new(),
             steer: None,
-            ptc_session: None,
-            os_sandbox: false,
         }
-    }
-
-    /// Enable or disable the best-effort OS helper for `shell` and `run_code`.
-    pub fn with_os_sandbox(mut self, enabled: bool) -> Self {
-        self.os_sandbox = enabled;
-        self
     }
 
     /// Use this cancellation token (builder style).
@@ -166,19 +146,6 @@ impl<'a> TurnEnv<'a> {
     /// Accept steers into this turn. Drained at loop boundaries only.
     pub fn with_steer(mut self, steer: Option<Arc<SteerInbox>>) -> Self {
         self.steer = steer;
-        self
-    }
-
-    /// Reuse one warm Python interpreter for `run_code` in this session.
-    ///
-    /// An empty key leaves calls on the cold-start path.
-    pub fn with_ptc_session(mut self, session: impl Into<String>) -> Self {
-        let session = session.into();
-        self.ptc_session = if session.is_empty() {
-            None
-        } else {
-            Some(session)
-        };
         self
     }
 }

@@ -89,7 +89,13 @@ pub const VALID_FONT_SIZES: [&str; 4] = ["s", "m", "l", "xl"];
 ///
 /// Empty and `"system"` are not in this list: both mean the operating-system
 /// UI font. A stored id is one of these names, not a free-typed family.
-pub const VALID_FONT_FAMILIES: [&str; 4] = ["Inter", "Segoe UI", "PingFang", "Noto Sans"];
+pub const VALID_FONT_FAMILIES: [&str; 5] = [
+    "Inter",
+    "Segoe UI",
+    "PingFang",
+    "Microsoft YaHei",
+    "Noto Sans",
+];
 
 /// Stored id for the operating-system UI font.
 pub const SYSTEM_FONT_FAMILY: &str = "system";
