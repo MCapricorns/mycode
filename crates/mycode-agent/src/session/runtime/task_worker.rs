@@ -92,7 +92,7 @@ pub(crate) trait PackTaskActor: Send + 'static {
     fn is_fatal(error: Self::Error) -> bool;
     fn invoke(
         &mut self,
-        request: &Self::Request,
+        request: Self::Request,
     ) -> impl Future<Output = Result<Self::Operation, Self::Error>> + Send;
     fn pull(
         &mut self,
@@ -358,7 +358,7 @@ async fn invoke_operation<A: PackTaskActor>(
     if *next_operation == u64::MAX {
         return Err(TaskActorError::Unavailable);
     }
-    let invocation = timeout_at(deadline, actor.invoke(&request));
+    let invocation = timeout_at(deadline, actor.invoke(request));
     tokio::pin!(invocation);
     let mut operation = tokio::select! {
         biased;

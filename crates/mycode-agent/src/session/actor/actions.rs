@@ -287,7 +287,7 @@ impl SessionCore {
         drop(commit);
         let charge = committed.map_err(map_store)?;
         let new_branch = prepared.new_branch.clone();
-        self.record_branch(session, &prepared, charge);
+        self.record_branch(session, prepared, charge);
         Ok(SessionPull::Complete(SessionResult::Branched(
             BranchedResult {
                 branch_id: new_branch,
@@ -566,34 +566,39 @@ impl SessionCore {
         })
     }
 
-    fn record_branch(&mut self, session: &SessionId, prepared: &PreparedBranch, charge: u64) {
+    fn record_branch(&mut self, session: &SessionId, prepared: PreparedBranch, charge: u64) {
         let Some(ledger) = self.sessions.get_mut(session) else {
             return;
         };
+        let PreparedBranch {
+            new_branch,
+            prefix_end,
+            events,
+            ..
+        } = prepared;
         let mut open_calls = std::collections::HashSet::new();
-        for row in &prepared.events {
+        for row in &events {
             match row.kind {
                 EventKind::ToolCall => {
                     open_calls.insert(row.call_id.clone().expect("tool call carries an id"));
                 }
                 EventKind::ToolResult => {
-                    open_calls.remove(&row.call_id.clone().expect("tool result carries an id"));
+                    open_calls.remove(row.call_id.as_ref().expect("tool result carries an id"));
                 }
                 EventKind::Message | EventKind::Usage | EventKind::Task => {}
             }
         }
-        let head = prepared
-            .events
+        let head = events
             .last()
             .map(|event| HeadStamp::Event(event.event_id.clone()))
             .unwrap_or(HeadStamp::Empty);
         ledger.branches.insert(
-            prepared.new_branch.clone(),
+            new_branch,
             BranchLedger {
                 head,
-                committed_bytes: prepared.prefix_end,
+                committed_bytes: prefix_end,
                 open_calls,
-                events: prepared.events.clone(),
+                events,
             },
         );
         ledger.total_bytes = ledger.total_bytes.saturating_add(charge);

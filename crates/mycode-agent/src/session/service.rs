@@ -5,7 +5,6 @@
 //! fence, and every facade call drives its operation to exactly one
 //! terminal pull under a bounded deadline.
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -58,7 +57,7 @@ impl SessionService {
     /// runtime, and its storage work uses `spawn_blocking`.
     #[must_use]
     pub fn new(home: &HomeLayout) -> Self {
-        let fence = Arc::new(GenerationFence::new(Arc::new(AtomicU64::new(0))));
+        let fence = Arc::new(GenerationFence::new());
         fence.mark_current();
         let actor = SessionActor::new(home.clone(), Arc::clone(&fence));
         let client = TaskActorClient::start(actor);

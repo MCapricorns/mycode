@@ -69,12 +69,15 @@ pub(crate) async fn stream_assistant(
     } else {
         config.system_prompt.clone()
     };
-    // Move history into the request so compaction can rewrite it in place.
-    // Writing it back clones `Arc`s, not tool output. The provider borrows
-    // the request.
+    // The request carries Arc-shared history; the compaction hook rewrites
+    // the request's message list and the result is written back below.
+    // Cloning the Arc vector (rather than moving the history out) keeps the
+    // in-memory history intact if the hook panics or this future is dropped
+    // at that await, so a failed rewrite cannot wipe the conversation.
+    // Writing the result back clones `Arc`s, not tool output.
     let request = Request {
         system_prompt,
-        messages: std::mem::take(&mut state.messages),
+        messages: state.messages.clone(),
         tools: env.tools.specs(),
         reasoning: config.reasoning,
         max_output_tokens: config.max_output_tokens,

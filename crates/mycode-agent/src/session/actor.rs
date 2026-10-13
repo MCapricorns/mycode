@@ -274,7 +274,7 @@ impl SessionCore {
 
     fn invoke_sync(
         &mut self,
-        request: &SessionRequest,
+        request: SessionRequest,
     ) -> Result<SessionOperation, SessionTaskError> {
         fn failed(
             admission: Option<TaskOperationAdmission>,
@@ -288,17 +288,12 @@ impl SessionCore {
                 (Some(session), Some(branch)) => Stage::Run(Action::Create { session, branch }),
                 _ => return failed(admission, SessionError::Unavailable),
             },
-            SessionRequest::Open { session } => self.stage_for(
-                session.clone(),
-                Action::Heads {
-                    session: session.clone(),
-                },
-            )?,
+            SessionRequest::Open { session } => {
+                self.stage_for(session.clone(), Action::Heads { session })?
+            }
             // Eviction never loads: a missing index row must still be
             // evictable, and an unknown session is already evicted.
-            SessionRequest::Evict { session } => Stage::Run(Action::Evict {
-                session: session.clone(),
-            }),
+            SessionRequest::Evict { session } => Stage::Run(Action::Evict { session }),
             SessionRequest::ReserveEvent {
                 session,
                 branch,
@@ -320,11 +315,11 @@ impl SessionCore {
                 self.stage_for(
                     session.clone(),
                     Action::ReserveEvent {
-                        session: session.clone(),
-                        branch: branch.clone(),
-                        kind: *kind,
-                        call_id: call_id.clone(),
-                        payload: payload.clone(),
+                        session,
+                        branch,
+                        kind,
+                        call_id,
+                        payload,
                     },
                 )?
             }
@@ -340,10 +335,10 @@ impl SessionCore {
                 self.stage_for(
                     session.clone(),
                     Action::Append {
-                        session: session.clone(),
-                        branch: branch.clone(),
-                        expected_head: expected_head.clone(),
-                        reservation: reservation.clone(),
+                        session,
+                        branch,
+                        expected_head,
+                        reservation,
                     },
                 )?
             }
@@ -354,17 +349,17 @@ impl SessionCore {
                 after,
                 limit,
             } => {
-                if let Err(error) = reject_bad_read_limit(*limit) {
+                if let Err(error) = reject_bad_read_limit(limit) {
                     return failed(admission, error);
                 }
                 self.stage_for(
                     session.clone(),
                     Action::Read {
-                        session: session.clone(),
-                        branch: branch.clone(),
-                        snapshot_head: snapshot_head.clone(),
-                        after: after.clone(),
-                        limit: *limit,
+                        session,
+                        branch,
+                        snapshot_head,
+                        after,
+                        limit,
                     },
                 )?
             }
@@ -376,10 +371,10 @@ impl SessionCore {
             } => self.stage_for(
                 session.clone(),
                 Action::ReserveBranch {
-                    session: session.clone(),
-                    kind: *kind,
-                    source_branch: source_branch.clone(),
-                    target_event: target_event.clone(),
+                    session,
+                    kind,
+                    source_branch,
+                    target_event,
                 },
             )?,
             SessionRequest::Fork {
@@ -394,11 +389,11 @@ impl SessionCore {
                 self.stage_for(
                     session.clone(),
                     Action::BranchCommit {
-                        session: session.clone(),
+                        session,
                         kind: BranchMutationKind::Fork,
-                        source_branch: from_branch.clone(),
-                        target_event: at_event.clone(),
-                        reservation: reservation.clone(),
+                        source_branch: from_branch,
+                        target_event: at_event,
+                        reservation,
                     },
                 )?
             }
@@ -414,11 +409,11 @@ impl SessionCore {
                 self.stage_for(
                     session.clone(),
                     Action::BranchCommit {
-                        session: session.clone(),
+                        session,
                         kind: BranchMutationKind::Rewind,
-                        source_branch: branch.clone(),
-                        target_event: to_event.clone(),
-                        reservation: reservation.clone(),
+                        source_branch: branch,
+                        target_event: to_event,
+                        reservation,
                     },
                 )?
             }
@@ -429,9 +424,9 @@ impl SessionCore {
             } => self.stage_for(
                 session.clone(),
                 Action::LoadEvent {
-                    session: session.clone(),
-                    branch: branch.clone(),
-                    event: event.clone(),
+                    session,
+                    branch,
+                    event,
                 },
             )?,
             SessionRequest::ReadPayloads {
@@ -441,17 +436,17 @@ impl SessionCore {
                 after,
                 limit,
             } => {
-                if let Err(error) = reject_bad_read_limit(*limit) {
+                if let Err(error) = reject_bad_read_limit(limit) {
                     return failed(admission, error);
                 }
                 self.stage_for(
                     session.clone(),
                     Action::ReadPayloads {
-                        session: session.clone(),
-                        branch: branch.clone(),
-                        snapshot_head: snapshot_head.clone(),
-                        after: after.clone(),
-                        limit: *limit,
+                        session,
+                        branch,
+                        snapshot_head,
+                        after,
+                        limit,
                     },
                 )?
             }
@@ -462,17 +457,17 @@ impl SessionCore {
                 before,
                 limit,
             } => {
-                if let Err(error) = reject_bad_read_limit(*limit) {
+                if let Err(error) = reject_bad_read_limit(limit) {
                     return failed(admission, error);
                 }
                 self.stage_for(
                     session.clone(),
                     Action::ReadWindow {
-                        session: session.clone(),
-                        branch: branch.clone(),
-                        snapshot_head: snapshot_head.clone(),
-                        before: before.clone(),
-                        limit: *limit,
+                        session,
+                        branch,
+                        snapshot_head,
+                        before,
+                        limit,
                     },
                 )?
             }
@@ -623,10 +618,9 @@ impl PackTaskActor for SessionActor {
         false
     }
 
-    async fn invoke(&mut self, request: &Self::Request) -> Result<Self::Operation, Self::Error> {
-        let request = request.clone();
+    async fn invoke(&mut self, request: Self::Request) -> Result<Self::Operation, Self::Error> {
         let core = Arc::clone(&self.core);
-        blocking_session(move || core.lock().expect("session actor").invoke_sync(&request)).await?
+        blocking_session(move || core.lock().expect("session actor").invoke_sync(request)).await?
     }
 
     async fn pull(&mut self, operation: &mut Self::Operation) -> Result<Self::Pull, Self::Error> {

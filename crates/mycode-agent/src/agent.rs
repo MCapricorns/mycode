@@ -267,8 +267,13 @@ async fn agent_loop(
             has_tool_calls = drain_steers(env, state);
         } else if assistant.stop_reason == StopReason::Length {
             // Truncated arguments are never executed (pi parity);
-            // the model re-issues the calls.
-            for call in &calls {
+            // the model re-issues the calls. Calls without an id or name
+            // cannot be paired on the wire, so they are dropped, matching
+            // the error branch above.
+            for call in calls
+                .iter()
+                .filter(|call| !call.id.is_empty() && !call.name.is_empty())
+            {
                 let message = turn::fail_truncated_call(env, call);
                 turn::push_message(env, state, Message::ToolResult(message));
             }
@@ -974,5 +979,126 @@ mod tests {
             "steer missing from the next request: {}",
             seen[1]
         );
+    }
+
+    struct LengthThenStop {
+        steps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Provider for LengthThenStop {
+        fn stream<'a>(
+            &'a self,
+            _request: &'a Request,
+            cancel: CancellationToken,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                let step = self.steps.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (sender, stream) = EventStream::channel(cancel);
+                if step == 0 {
+                    sender
+                        .send(StreamEvent::Done {
+                            message: mycode_core::AssistantMessage {
+                                blocks: vec![
+                                    ContentBlock::Text(mycode_core::TextBlock::new("cut short")),
+                                    ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                        "",
+                                        "read",
+                                        serde_json::json!({}),
+                                    )),
+                                    ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                        "call-named",
+                                        "read",
+                                        serde_json::json!({}),
+                                    )),
+                                ],
+                                usage: None,
+                                stop_reason: StopReason::Length,
+                            },
+                        })
+                        .await;
+                } else {
+                    sender
+                        .send(StreamEvent::Done {
+                            message: mycode_core::AssistantMessage {
+                                blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                                    "done",
+                                ))],
+                                usage: None,
+                                stop_reason: StopReason::Stop,
+                            },
+                        })
+                        .await;
+                }
+                Ok(stream)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn length_truncated_call_without_an_id_is_not_answered() {
+        let provider = LengthThenStop {
+            steps: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let tools = ToolRegistry::new();
+        let hooks = HookRunner::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks);
+        let mut agent = Agent::new(AgentConfig::new());
+        let outcome = agent
+            .prompt(Message::User(UserMessage::text("start")), &env)
+            .await
+            .expect("completed turn");
+        assert!(matches!(
+            outcome,
+            mycode_core::events::TurnOutcome::Completed
+        ));
+        let results: Vec<&mycode_core::ToolResultMessage> = agent
+            .state()
+            .messages()
+            .iter()
+            .filter_map(|message| match message.as_ref() {
+                Message::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 1, "only the named call is answered");
+        assert_eq!(results[0].tool_call_id, "call-named");
+        assert!(results[0].is_error);
+    }
+
+    #[tokio::test]
+    async fn dropping_prompt_inside_the_compaction_hook_keeps_history() {
+        // A rewrite that outlives the caller must not cost the conversation:
+        // the request shares Arc clones, so dropping this prompt future
+        // mid-hook leaves the in-memory history intact instead of empty.
+        let hook_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let signal = std::sync::Arc::clone(&hook_entered);
+        let hooks = HookRunner::new().with_before_request(move |_request: Request| {
+            let signal = std::sync::Arc::clone(&signal);
+            async move {
+                signal.notify_one();
+                std::future::pending::<Request>().await
+            }
+        });
+        let provider = Scripted { events: vec![] };
+        let tools = ToolRegistry::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks);
+        let mut agent = Agent::new(AgentConfig::new());
+        agent.seed_history(std::iter::once(std::sync::Arc::new(Message::User(
+            UserMessage::text("earlier"),
+        ))));
+        let entered = hook_entered.notified();
+        tokio::pin!(entered);
+        // Box the future so dropping it here truly ends the `&mut agent` borrow.
+        let mut prompt = Box::pin(agent.prompt(Message::User(UserMessage::text("hello")), &env));
+        tokio::select! {
+            () = entered.as_mut() => {}
+            result = prompt.as_mut() => panic!("prompt finished without the hook: {result:?}"),
+        }
+        drop(prompt);
+        let messages = agent.state().messages();
+        assert_eq!(messages.len(), 2, "history survived the dropped rewrite");
+        assert!(matches!(messages[1].as_ref(), Message::User(_)));
     }
 }
