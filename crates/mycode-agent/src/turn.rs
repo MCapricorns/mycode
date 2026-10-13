@@ -13,13 +13,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use mycode_core::events::{AgentEvent, MessageDelta, PtcNestedKind};
+use mycode_core::events::{AgentEvent, MessageDelta};
 use mycode_core::message::{AssistantMessage, ContentBlock, Message, ToolCall, ToolResultMessage};
 use mycode_core::{CallId, MycodeError};
 use mycode_core::{Request, StreamEvent};
-use mycode_tools::{
-    ToolCatalog, ToolError, ToolResult, ToolStream, ToolStreamItem, prepare_tool_ctx,
-};
+use mycode_tools::{ToolError, ToolResult, ToolStream, ToolStreamItem, prepare_tool_ctx};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::{AgentConfig, AgentState};
@@ -77,7 +75,7 @@ pub(crate) async fn stream_assistant(
     let request = Request {
         system_prompt,
         messages: std::mem::take(&mut state.messages),
-        tools: env.tools.model_specs(),
+        tools: env.tools.specs(),
         reasoning: config.reasoning,
         max_output_tokens: config.max_output_tokens,
         reasoning_token: config.reasoning_token.clone(),
@@ -347,18 +345,6 @@ fn canonical_tool_name(name: &str) -> &str {
     }
 }
 
-/// Error returned when the model names any tool other than `run_code`.
-pub(crate) fn direct_call_rejection(name: &str) -> String {
-    let via = if matches!(name, "powershell" | "bash" | "zsh" | "sh" | "cmd") {
-        "shell"
-    } else {
-        name
-    };
-    format!(
-        "only `run_code` is callable directly — call `{name}` via `run_code` (`await tools.{via}(...)`)"
-    )
-}
-
 /// Dispatch one registered, schema-valid tool call and return the
 /// resulting [`ToolResultMessage`].
 ///
@@ -388,17 +374,12 @@ pub(crate) async fn dispatch_tool_call(
     );
 
     let tool_name = canonical_tool_name(&call.name);
-    if tool_name != "run_code" {
-        return completed_error(env, &call_id, call, direct_call_rejection(tool_name));
-    }
     let Some(tool) = env.tools.get(tool_name) else {
         return completed_error(env, &call_id, call, format!("unknown tool: {}", call.name));
     };
 
     let args = call.arguments.clone();
-    // Same preflight a program uses for an inner call. `run_code` itself
-    // declares neither file nor search access; the catalog is what the
-    // program dispatches through.
+    // Preflight binds the search/file capability the tool declares, if any.
     let ctx = match prepare_tool_ctx(
         &env.cwd,
         &env.extra_roots,
@@ -410,15 +391,7 @@ pub(crate) async fn dispatch_tool_call(
     )
     .await
     {
-        Ok(ctx) => {
-            let mut ctx = ctx
-                .with_catalog(ToolCatalog::from_registry(env.tools))
-                .with_os_sandbox(env.os_sandbox);
-            if let Some(session) = env.ptc_session.as_deref() {
-                ctx = ctx.with_ptc_session(session);
-            }
-            ctx
-        }
+        Ok(ctx) => ctx,
         Err(message) => return completed_error(env, &call_id, call, message),
     };
     let (mut producer, mut consumer) = ToolStream::channel();
@@ -463,41 +436,6 @@ pub(crate) async fn dispatch_tool_call(
                             message: progress.message,
                         },
                     ),
-                    Some(ToolStreamItem::NestedStarted(start)) => emit(
-                        env,
-                        AgentEvent::PtcNested {
-                            parent: call_id.clone(),
-                            call_id: CallId::from(start.id),
-                            kind: PtcNestedKind::Started {
-                                name: start.name,
-                                target: start.target,
-                            },
-                        },
-                    ),
-                    Some(ToolStreamItem::NestedProgress { id, message }) => emit(
-                        env,
-                        AgentEvent::PtcNested {
-                            parent: call_id.clone(),
-                            call_id: CallId::from(id),
-                            kind: PtcNestedKind::Progress { message },
-                        },
-                    ),
-                    Some(ToolStreamItem::NestedCompleted { id, result }) => emit(
-                        env,
-                        AgentEvent::PtcNested {
-                            parent: call_id.clone(),
-                            call_id: CallId::from(id.clone()),
-                            kind: PtcNestedKind::Completed {
-                                result: ToolResultMessage {
-                                    tool_call_id: id,
-                                    content: result.content,
-                                    is_error: result.is_error,
-                                    details: result.details,
-                                    ptc_parent: Some(call.id.clone()),
-                                },
-                            },
-                        },
-                    ),
                     Some(ToolStreamItem::Terminal(result)) => streamed_terminal = Some(result),
                     None => break,
                 }
@@ -513,7 +451,6 @@ pub(crate) async fn dispatch_tool_call(
         content: result.content,
         is_error: result.is_error,
         details: result.details,
-        ptc_parent: None,
     };
     emit(
         env,
@@ -541,7 +478,6 @@ fn completed_error(
         content: vec![ContentBlock::Text(reason.into())],
         is_error: true,
         details: None,
-        ptc_parent: None,
     };
     emit(
         env,

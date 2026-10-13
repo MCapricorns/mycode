@@ -1,7 +1,7 @@
-//! Shared tool preflight for every tool execution, including a `run_code` inner call.
+//! Shared tool preflight for every tool execution.
 //!
-//! Both paths anchor the path, bind the file or search capability, and then
-//! execute the same tool. There is no separate permission prompt: a
+//! The path is anchored, the file or search capability is bound, and the
+//! same tool executes. There is no separate permission prompt: a
 //! schema-valid call runs, and a path outside the workspace fails here.
 
 use std::path::{Path, PathBuf};

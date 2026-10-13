@@ -15,7 +15,7 @@ BridgeCommand → CoreBridge
 再 reduce 一次，元素按新状态重画
 ```
 
-视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口。pull request 只在 Linux 上跑整个 workspace 的 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO），不编译发布版，也不上传安装包。推到 main 时，四个原生 runner 才编译并打包发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon、Linux x86_64；`[profile.release]` 是 fat LTO）。没有 fmt 任务。macOS 发布构建另外把二进制装进 `MYCode.app` 并产出 dmg 安装镜像（`scripts/make_dmg.sh`）。同一份 Linux 检查和四个发布构建都成功后，流水线才打标签并发布 GitHub Release。
+视图模型和 GPUI 分开，是为了产品行为不依赖一块 GPU。CI 不打开窗口。pull request 只在 Linux 上跑整个 workspace 的 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO），不编译发布版，也不上传安装包。推到 main 时，三个原生 runner 才编译并打包发布版桌面二进制（Windows x64、Windows ARM64、macOS Apple Silicon；`[profile.release]` 是 fat LTO；没有 Linux 包）。没有 fmt 任务。macOS 发布构建另外把二进制装进 `MYCode.app` 并产出 dmg 安装镜像（`scripts/make_dmg.sh`）。同一份 Linux 检查和三个发布构建都成功后，流水线才打标签并发布 GitHub Release。
 
 ## 模块
 
@@ -36,7 +36,7 @@ BridgeCommand → CoreBridge
 | `ui/model_picker` | 两步模型选择器，作曲栏、默认模型和每个子代理角色共用 |
 | `ui/chat` | 欢迎页、转录、作曲栏、`@` / `/` 与模型菜单、提问卡 |
 | `ui/context` | 详情面板：运行中的子代理、git 改动、模型与用量；全部改动抽屉和 diff 面板 |
-| `ui/settings` | 设置壳：顶栏返回工作台、五组导航（通用 / 外观、模型与服务商、子代理、工具 / MCP / 网页、数据与更新）。页面是 General、Models、Agents、Skills、MCP、Web、Data、About。操作系统沙箱在通用页 |
+| `ui/settings` | 设置壳：顶栏返回工作台、五组导航（通用 / 外观、模型与服务商、子代理、工具 / MCP / 网页、数据与更新）。页面是 General、Models、Agents、Skills、MCP、Web、Data、About |
 | `git_status` | 只读 `git status --porcelain=v1`（带 `--no-optional-locks`，不抢 `index.lock`）和 `git diff HEAD`。最多保留 80 个改动文件，改名行打开新路径的 diff |
 | `i18n` | `auto` 跟系统语言，否则用设置里的 `en` / `zh` |
 
@@ -50,7 +50,7 @@ BridgeCommand → CoreBridge
 - **标题栏。** 全平台由客户端绘制（CSD）。系统标题栏隐藏（macOS 的红绿灯挪到窗口外），最小化、最大化、关闭在右侧，空白处双击缩放。
 - **命令面板。** macOS 用 `Cmd-K`，Windows 和 Linux 用 `Ctrl-K`，在任何页面打开，再按一次关闭。输入框可搜索四类：会话（新建任务，以及能打开的会话）、当前已启用服务商里的模型（含星标和最近使用）、斜杠命令（`/new`、`/compact`、`/settings`、技能、已启用的 MCP）、设置页（通用、模型、子代理、技能、MCP、网页、数据、关于）。`↑` `↓` 移动高亮，Enter 执行，Esc 关闭。搜索不区分大小写，中英文关键词都能对上。选中会话或斜杠命令会回到工作台；选中设置页会打开对应分区。
 - **欢迎页。** 没有打开文件夹时只有「打开目录」。打开文件夹后才出现「新建任务」。最近项目可以删。
-- **设置。** 顶栏的「返回工作台」离开设置；目录、服务商详情、MCP 和网页的二级页用自己的返回，回到上一级而不是工作台。进入设置、回到工作台，以及切换分区或二级页时，内容做一次很短的淡入。系统打开减少动态效果时，这些淡入直接显示，不做透明度动画。模型先选服务商，再搜索。服务商详情里的端点可以改，校验和保存走设置文档；密钥框在已保存时显示锁，点锁是换一把新的，旧钥匙不会被填回输入框，也不会填进端点框。子代理设置里 Scout 和 Artisan 仍是两张主卡片，后面才是主目录 `agents` 或项目 `.mycode/agents` 里发现的其他角色。steward 和 sentinel 不是默认角色。并发默认仍是 4（`0` 表示这个默认值，不是零个，也不是四种角色）。墙钟超时默认 20 分钟（`subagents.timeoutSecs` 为 `0` 表示这个默认值，不是不限时；上限 2 小时）。解释器选择不在设置里。操作系统沙箱在通用页：Linux 和 macOS 是默认开启的开关；Windows 显示「暂不支持」，不把开关画成打开，shell 和 `run_code` 照常运行。MCP 的添加在二级页：目录、导入 JSON、自定义。窗口打开后直接是工作台，没有启动遮罩。
+- **设置。** 顶栏的「返回工作台」离开设置；目录、服务商详情、MCP 和网页的二级页用自己的返回，回到上一级而不是工作台。进入设置、回到工作台，以及切换分区或二级页时，内容做一次很短的淡入。系统打开减少动态效果时，这些淡入直接显示，不做透明度动画。模型先选服务商，再搜索。服务商详情里的端点可以改，校验和保存走设置文档；密钥框在已保存时显示锁，点锁是换一把新的，旧钥匙不会被填回输入框，也不会填进端点框。子代理设置里 Scout 和 Artisan 仍是两张主卡片，后面才是主目录 `agents` 或项目 `.mycode/agents` 里发现的其他角色。steward 和 sentinel 不是默认角色。并发默认仍是 4（`0` 表示这个默认值，不是零个，也不是四种角色）。墙钟超时默认 20 分钟（`subagents.timeoutSecs` 为 `0` 表示这个默认值，不是不限时；上限 2 小时）。解释器选择不在设置里。MCP 的添加在二级页：目录、导入 JSON、自定义。窗口打开后直接是工作台，没有启动遮罩。
 
 提示是右下角短暂气泡。更新在右上角：可更新、下载中、待安装。下载校验完成后弹出对话框，确认才重启安装。关于页手动检查或下载失败只弹这个气泡，状态行写「上次更新失败」，不再把整段网络错误铺成大红字。启动后的自动检查失败也弹同样的气泡；已是最新则不提示。启动时若设置、界面状态、密钥或模型目录缓存被重置，同样只提示一次，并说明原文件留在旁边。
 
@@ -84,9 +84,9 @@ BridgeCommand → CoreBridge
 
 思考菜单贴在思考芯片上方，底不透明，当前档是 Max。
 
-![设置的通用页：语言、深浅色、色板、字体，以及已打开的操作系统沙箱](images/settings-v0.11.11.png)
+![设置的通用页：语言、深浅色、色板、字体](images/settings-v0.11.11.png)
 
-设置的通用页：语言、深色或浅色、六块色板和对话预览、界面字体和字号。下面是工具卡片，操作系统沙箱开关是开的。
+设置的通用页：语言、深色或浅色、六块色板和对话预览、界面字体和字号。
 
 ## 不放在这里的东西
 

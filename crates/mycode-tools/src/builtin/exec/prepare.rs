@@ -177,37 +177,6 @@ impl PreparedInvocation {
         &self.env
     }
 
-    /// Rebuilds a snapshot so the pinned image is the OS-sandbox helper.
-    ///
-    /// The caller records the user program's identity before this. The digest
-    /// here covers the helper that the kernel actually execs.
-    pub(super) fn from_launcher(
-        pinned: PinnedImage,
-        argv0: String,
-        args: Vec<String>,
-        cwd: PathBuf,
-        env: Vec<(OsString, OsString)>,
-    ) -> Self {
-        let invocation_digest = invocation_digest(
-            &pinned.canonical_path,
-            pinned.identity,
-            &pinned.digest,
-            &argv0,
-            &args,
-            &cwd,
-            &env,
-        );
-        Self {
-            pinned,
-            argv0,
-            args,
-            cwd,
-            env,
-            invocation_digest,
-            wrapper: None,
-        }
-    }
-
     /// Splits the snapshot into its owned spawn inputs.
     pub(super) fn into_spawn_parts(
         self,

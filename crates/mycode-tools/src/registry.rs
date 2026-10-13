@@ -19,38 +19,6 @@ struct RegistryInner {
     specs: Option<Arc<[ToolSpec]>>,
 }
 
-/// Snapshot of a registry for nested `run_code` calls.
-///
-/// The snapshot is an `Arc` clone of the tool map taken at dispatch.
-/// Later registrations on the live registry are not visible, which keeps
-/// one program on the tool set the model was offered.
-#[derive(Clone)]
-pub struct ToolCatalog {
-    tools: Arc<BTreeMap<String, Arc<dyn ToolDyn>>>,
-}
-
-impl ToolCatalog {
-    /// Freezes the registry's current tools.
-    #[must_use]
-    pub fn from_registry(registry: &ToolRegistry) -> Self {
-        Self {
-            tools: Arc::new(registry.read().tools.clone()),
-        }
-    }
-
-    /// Looks up one tool by its model-facing name.
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<Arc<dyn ToolDyn>> {
-        self.tools.get(name).cloned()
-    }
-
-    /// Sorted tool names.
-    #[must_use]
-    pub fn names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
-    }
-}
-
 /// Thread-safe registry of tools, keyed by name.
 pub struct ToolRegistry {
     inner: RwLock<RegistryInner>,
@@ -78,23 +46,6 @@ impl ToolRegistry {
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn ToolDyn>> {
         self.read().tools.get(name).cloned()
-    }
-
-    /// Specs the model may call directly. PTC-only: that is `run_code` alone.
-    ///
-    /// The full registry stays available for programs. This list is what
-    /// goes on the provider request, and it stays byte-stable for a session
-    /// as long as `run_code` is registered.
-    pub fn model_specs(&self) -> Arc<[ToolSpec]> {
-        let specs = self.specs();
-        if specs.len() == 1 && specs.first().is_some_and(|spec| spec.name == "run_code") {
-            return specs;
-        }
-        specs
-            .iter()
-            .filter(|spec| spec.name == "run_code")
-            .cloned()
-            .collect()
     }
 
     /// Specs of all registered tools, sorted by tool name for stable

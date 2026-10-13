@@ -246,10 +246,9 @@ pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
     }
     let mut out = String::from(
         "<skills>\nSkills (on demand). Scan this list before you act. When a \
-task matches one, load it inside `run_code` with `await tools.read(path=\"...\")` \
-on that SKILL.md path and follow it before building or answering. Do not call \
-`read` directly. Do not wait for the user to name the skill. Do not paste skill \
-bodies into the prompt.",
+task matches one, read the matching SKILL.md by path with `read` and follow \
+it before building or answering. Do not wait for the user to name the skill. \
+Do not paste skill bodies into the prompt.",
     );
     for skill in files {
         out.push_str(&format!(
@@ -337,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_loads_skills_inside_run_code() {
+    fn catalog_points_skills_at_a_read_by_path() {
         let workspace = temp("catalog");
         skill(
             &workspace.0.join(".agents").join("skills"),
@@ -348,12 +347,8 @@ mod tests {
         let catalog = super::render_skill_catalog(&found).expect("catalog");
         assert!(catalog.contains("/review"), "{catalog}");
         assert!(
-            catalog.contains("await tools.read(path=\"...\")"),
+            catalog.contains("read the matching SKILL.md by path"),
             "{catalog}"
-        );
-        assert!(
-            !catalog.contains("`read` that SKILL.md"),
-            "direct read wording is gone:\n{catalog}"
         );
     }
 }

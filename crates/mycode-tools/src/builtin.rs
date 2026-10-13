@@ -13,10 +13,7 @@ pub(crate) mod fs_search;
 pub(crate) mod fs_walk;
 pub mod grep;
 pub(crate) mod process;
-pub mod ptc;
-pub mod python;
 pub mod read;
-pub(crate) mod sandbox;
 pub(crate) mod search_report;
 pub mod shell;
 pub mod web;
@@ -30,13 +27,7 @@ pub use ask::{
 pub use edit::EditTool;
 pub use find::FindTool;
 pub use grep::GrepTool;
-pub use ptc::{
-    RUN_CODE_EXAMPLE_CODE, RUN_CODE_EXAMPLE_DESCRIPTION, RunCodeTool, release_ptc_session,
-};
 pub use read::ReadTool;
-pub use sandbox::{
-    os_sandbox_prompt_note, os_sandbox_status_note, os_sandbox_unsupported_prompt_note,
-};
 pub use shell::ShellTool;
 pub use web::{FetchContentTool, WebHit, WebHost, WebPage, WebSearchTool};
 pub use write::WriteTool;
@@ -55,7 +46,6 @@ pub(crate) fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
         Arc::new(ShellTool::default()),
         Arc::new(GrepTool),
         Arc::new(FindTool),
-        Arc::new(RunCodeTool),
     ]
 }
 

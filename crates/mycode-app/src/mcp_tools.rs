@@ -53,14 +53,13 @@ impl DynamicMcpTool {
         broken: Arc<AtomicBool>,
         direct: bool,
         result_dir: Arc<std::path::PathBuf>,
-        sdk_name: String,
     ) -> Self {
         let validator = jsonschema::validator_for(&tool.input_schema).ok();
         let snippet = format!(
             "MCP tool on server '{server_id}'. Call it when the task matches; do not wait to be asked."
         );
         let spec = ToolSpec {
-            name: sdk_name,
+            name: tool.name.clone(),
             description: tool
                 .description
                 .clone()
@@ -180,100 +179,6 @@ pub(crate) fn bound_mcp_result(dir: &std::path::Path, text: &str) -> String {
     )
 }
 
-/// Python attribute name for one MCP tool: `server__tool`, with characters
-/// that are not identifiers replaced. Keywords get a trailing underscore.
-pub(crate) fn python_mcp_name(server_id: &str, tool_name: &str) -> String {
-    let mut name = String::new();
-    push_ident(&mut name, server_id);
-    name.push_str("__");
-    push_ident(&mut name, tool_name);
-    if name.starts_with(|ch: char| ch.is_ascii_digit()) || name.starts_with('_') {
-        name.insert_str(0, "mcp_");
-    }
-    if is_python_keyword(&name) {
-        name.push('_');
-    }
-    if name.is_empty() || name == "__" {
-        "mcp_tool".to_owned()
-    } else {
-        name
-    }
-}
-
-fn push_ident(out: &mut String, text: &str) {
-    let before = out.len();
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch);
-        } else {
-            out.push('_');
-        }
-    }
-    if out.len() == before {
-        out.push('x');
-    }
-}
-
-fn is_python_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "False"
-            | "None"
-            | "True"
-            | "and"
-            | "as"
-            | "assert"
-            | "async"
-            | "await"
-            | "break"
-            | "class"
-            | "continue"
-            | "def"
-            | "del"
-            | "elif"
-            | "else"
-            | "except"
-            | "finally"
-            | "for"
-            | "from"
-            | "global"
-            | "if"
-            | "import"
-            | "in"
-            | "is"
-            | "lambda"
-            | "nonlocal"
-            | "not"
-            | "or"
-            | "pass"
-            | "raise"
-            | "return"
-            | "try"
-            | "while"
-            | "with"
-            | "yield"
-    )
-}
-
-fn unique_python_name(
-    server_id: &str,
-    tool_name: &str,
-    used: &mut std::collections::HashSet<String>,
-) -> String {
-    let base = python_mcp_name(server_id, tool_name);
-    if used.insert(base.clone()) {
-        return base;
-    }
-    let mut n = 2u32;
-    loop {
-        let name = format!("{base}_{n}");
-        if used.insert(name.clone()) {
-            return name;
-        }
-        n = n.saturating_add(1);
-    }
-}
-
 /// A server is exposed directly when it is small and its schemas are small.
 pub(crate) fn mcp_server_is_direct(tools: &[crate::mcp_client::McpTool]) -> bool {
     const MAX_DIRECT_TOOLS: usize = 4;
@@ -324,7 +229,6 @@ pub(crate) async fn connect_mcp_tools(
     }
     let enabled: Vec<_> = servers.iter().filter(|server| server.enabled).collect();
     let mut tools = Vec::new();
-    let mut used_names = std::collections::HashSet::new();
     let mut connected = 0usize;
     let broken = Arc::new(AtomicBool::new(false));
     let result_dir = Arc::new(home.root().join("mcp-results"));
@@ -347,7 +251,6 @@ pub(crate) async fn connect_mcp_tools(
         let direct = mcp_server_is_direct(&listed);
         let client = Arc::new(tokio::sync::Mutex::new(client));
         for tool in listed {
-            let sdk_name = unique_python_name(&server.id, &tool.name, &mut used_names);
             tools.push(Arc::new(DynamicMcpTool::new(
                 server.id.clone(),
                 tool,
@@ -355,7 +258,6 @@ pub(crate) async fn connect_mcp_tools(
                 Arc::clone(&broken),
                 direct,
                 Arc::clone(&result_dir),
-                sdk_name,
             )));
         }
     }
@@ -486,15 +388,13 @@ impl McpCatalog {
         if !self.direct.is_empty() {
             note.push_str("Direct MCP tools: ");
             note.push_str(&self.direct.join(", "));
-            note.push_str(
-                ". Inside run_code call await tools.<name>(...). A name that is not an identifier uses await tools[\"name\"](...).\n",
-            );
+            note.push_str(". Call them directly by name.\n");
         }
         if !self.deferred.is_empty() {
             note.push_str(
-                "Other MCP tools are connected but not preloaded. Inside run_code, call await tools.search_tool(...) with name \
+                "Other MCP tools are connected but not preloaded. Call `search_tool` with name \
 \"list\" for names and descriptions, then with an exact name for the inputSchema, then \
-await tools.use_tool(...). Do not guess parameters.\n",
+`use_tool`. Do not guess parameters.\n",
             );
         }
         note
@@ -795,22 +695,6 @@ mod tests {
         assert!(!note.contains("remote"));
     }
 
-    #[test]
-    fn python_names_are_identifiers_and_keep_the_server() {
-        assert_eq!(super::python_mcp_name("docs", "lookup"), "docs__lookup");
-        assert_eq!(super::python_mcp_name("docs", "get-page"), "docs__get_page");
-        assert_eq!(super::python_mcp_name("1srv", "tool"), "mcp_1srv__tool");
-        let mut used = std::collections::HashSet::new();
-        assert_eq!(
-            super::unique_python_name("docs", "lookup", &mut used),
-            "docs__lookup"
-        );
-        assert_eq!(
-            super::unique_python_name("docs", "lookup", &mut used),
-            "docs__lookup_2"
-        );
-    }
-
     struct ScriptedMcp {
         calls: std::sync::Mutex<Vec<serde_json::Value>>,
     }
@@ -879,7 +763,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ptc_calls_a_mock_mcp_server_by_python_name() {
+    async fn direct_mcp_call_runs_the_server_tool() {
         let scripted = std::sync::Arc::new(ScriptedMcp {
             calls: std::sync::Mutex::new(Vec::new()),
         });
@@ -899,10 +783,8 @@ mod tests {
         let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let result_dir = std::sync::Arc::new(std::env::temp_dir());
         let client = std::sync::Arc::new(tokio::sync::Mutex::new(client));
-        let mut used = std::collections::HashSet::new();
         let mut tools = Vec::new();
         for tool in listed {
-            let sdk_name = super::unique_python_name("docs", &tool.name, &mut used);
             tools.push(std::sync::Arc::new(super::DynamicMcpTool::new(
                 "docs".to_owned(),
                 tool,
@@ -910,7 +792,6 @@ mod tests {
                 broken.clone(),
                 true,
                 result_dir.clone(),
-                sdk_name,
             )));
         }
         let scout: Vec<_> = tools
@@ -919,50 +800,38 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(scout.len(), 1);
-        assert_eq!(scout[0].spec().name, "docs__lookup");
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.spec().name == "docs__write_note")
-        );
+        assert_eq!(scout[0].spec().name, "lookup");
+        assert!(tools.iter().any(|tool| tool.spec().name == "write-note"));
 
         let registry = mycode_tools::ToolRegistry::new();
-        registry.register(std::sync::Arc::new(mycode_tools::builtin::RunCodeTool));
         registry.register(scout[0].clone());
         let prompt = mycode_agent::build_system_prompt(&registry);
         assert!(
-            prompt.contains("async def docs__lookup"),
-            "SDK must declare the MCP tool:\n{prompt}"
+            prompt.contains(
+                "
+- lookup:"
+            ),
+            "the tool list must name the MCP tool:
+{prompt}"
         );
         let root = std::env::temp_dir().join(format!(
-            "mycode-mcp-ptc-{}-{}",
+            "mycode-mcp-direct-{}-{}",
             std::process::id(),
             crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let ctx = mycode_tools::ToolCtx::new(&root)
-            .with_catalog(mycode_tools::ToolCatalog::from_registry(&registry));
-        let (mut stream, mut rx) = mycode_tools::ToolStream::channel();
-        let result = mycode_tools::Tool::execute(
-            &mycode_tools::builtin::RunCodeTool,
-            mycode_tools::builtin::ptc::RunCodeArgs {
-                description: "Call the doc tool".to_owned(),
-                code: "text = await tools.docs__lookup(query=\"ptc\")\nreturn text\n".to_owned(),
-            },
+        let ctx = mycode_tools::ToolCtx::new(&root);
+        let (mut stream, rx) = mycode_tools::ToolStream::channel();
+        let result = mycode_tools::ToolDyn::execute_dyn(
+            scout[0].as_ref(),
+            serde_json::json!({"query": "direct"}),
             &ctx,
             &mut stream,
         )
         .await
-        .expect("run_code");
+        .expect("call the MCP tool");
         drop(stream);
-        let mut nested = false;
-        while let Some(item) = rx.recv().await {
-            if let mycode_tools::ToolStreamItem::NestedStarted(start) = item
-                && start.name == "docs__lookup"
-            {
-                nested = true;
-            }
-        }
+        drop(rx);
         let text = result
             .content
             .iter()
@@ -973,11 +842,10 @@ mod tests {
             .collect::<String>();
         assert!(!result.is_error, "{text}");
         assert!(text.contains("pong"), "{text}");
-        assert!(nested, "MCP call should render as a nested card");
         let calls = scripted.calls.lock().expect("calls");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0]["name"], "lookup");
-        assert_eq!(calls[0]["arguments"]["query"], "ptc");
+        assert_eq!(calls[0]["arguments"]["query"], "direct");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
