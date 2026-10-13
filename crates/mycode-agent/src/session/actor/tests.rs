@@ -46,7 +46,7 @@ impl Drop for Scratch {
 }
 
 fn core(home: &HomeLayout) -> SessionCore {
-    let fence = Arc::new(GenerationFence::new(Arc::new(AtomicU64::new(0))));
+    let fence = Arc::new(GenerationFence::new());
     fence.mark_current();
     SessionCore::new(home.clone(), fence)
 }

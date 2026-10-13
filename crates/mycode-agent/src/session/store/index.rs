@@ -316,7 +316,13 @@ impl SessionStore {
             return Err(StoreError::Storage);
         }
 
-        let committed = self.commit_append(request, record_len, payload_len, encoded.external);
+        let committed = self.commit_append(
+            request,
+            record_len,
+            payload_len,
+            encoded.external,
+            event_charge,
+        );
         if committed.is_err()
             && let Some(path) = payload_path
         {
@@ -331,6 +337,7 @@ impl SessionStore {
         record_len: u64,
         payload_len: u64,
         external: bool,
+        event_charge: u64,
     ) -> Result<AppendedLocation, StoreError> {
         let offset = request.expected_committed;
         let new_committed = offset.checked_add(record_len).ok_or(StoreError::Limit)?;
@@ -340,7 +347,6 @@ impl SessionStore {
             .ok_or(StoreError::Limit)?;
         let title = jsonl::message_title(request.kind, request.payload).unwrap_or_default();
         let expected_head = encode_head(request.expected_head);
-        let event_charge = charge(record_len, external, payload_len).ok_or(StoreError::Limit)?;
         let tx = self.conn.transaction().map_err(|_| StoreError::Storage)?;
         let changed = tx
             .execute(

@@ -5,23 +5,16 @@
 //! state so retirement linearizes with every activity reservation before
 //! quiescent Store cleanup.
 //!
-//! The shared publication state is a monotonically increasing epoch: even
-//! values mark a stable published authority, odd values mark a publication
-//! transition in progress, and [`PUBLICATION_CLOSED`] marks the authority as
-//! finally closed. The owning publisher is the only writer. Closing the
-//! publication only rejects new admissions; every fence must additionally be
-//! retired (and drained via [`GenerationFence::wait_drained`]) before its
-//! Store ownership is reclaimed.
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+//! Closing the publication only rejects new admissions; every fence must
+//! additionally be retired (and drained via [`GenerationFence::wait_drained`])
+//! before its Store ownership is reclaimed.
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, MutexGuard};
 
 use tokio::sync::Notify;
 
-/// Marks a publication authority as finally closed.
-pub(crate) const PUBLICATION_CLOSED: u64 = u64::MAX;
-
 pub(crate) struct GenerationFence {
-    publication_state: Arc<AtomicU64>,
+    closed: AtomicBool,
     state: AtomicUsize,
     drained: Notify,
     commit: SyncMutex<()>,
@@ -37,9 +30,9 @@ const GENERATION_ACTIVITY_INCREMENT: usize = GENERATION_PHASE_MASK + 1;
 const MAX_GENERATION_ACTIVITIES: usize = usize::MAX >> 2;
 
 impl GenerationFence {
-    pub(crate) fn new(publication_state: Arc<AtomicU64>) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            publication_state,
+            closed: AtomicBool::new(false),
             state: AtomicUsize::new(GENERATION_PREPARING),
             drained: Notify::new(),
             commit: SyncMutex::new(()),
@@ -48,18 +41,16 @@ impl GenerationFence {
 
     /// Returns whether the publication authority is finally closed.
     pub(crate) fn publication_closed(&self) -> bool {
-        self.publication_state.load(Ordering::SeqCst) == PUBLICATION_CLOSED
+        self.closed.load(Ordering::SeqCst)
     }
 
     /// Closes the shared publication authority forever.
     pub(crate) fn close_publication(&self) {
-        self.publication_state
-            .store(PUBLICATION_CLOSED, Ordering::SeqCst);
+        self.closed.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn enter(self: &Arc<Self>) -> Option<GenerationActivity> {
-        let publication_epoch = self.publication_state.load(Ordering::SeqCst);
-        if publication_epoch == PUBLICATION_CLOSED || !publication_epoch.is_multiple_of(2) {
+        if self.publication_closed() {
             return None;
         }
         let mut state = self.state.load(Ordering::Acquire);
@@ -79,7 +70,7 @@ impl GenerationFence {
                 Err(observed) => state = observed,
             }
         }
-        if self.publication_state.load(Ordering::SeqCst) != publication_epoch {
+        if self.publication_closed() {
             self.release();
             return None;
         }
