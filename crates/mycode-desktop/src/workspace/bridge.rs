@@ -395,7 +395,21 @@ impl Workspace {
                 self.apply_action(DesktopAction::CopilotSignInFinished(Err(message)), cx);
             }
             BridgeReply::AskAnswered(Ok(())) => {}
-            BridgeReply::Sent(Ok((head, entry))) => {
+            BridgeReply::Sent {
+                session,
+                outcome: Ok((head, entry)),
+            } => {
+                // A send that raced a session switch must not touch the
+                // conversation now open; the committed entry lives in its
+                // own session's ledger and shows on reopen.
+                let applicable = self
+                    .vm
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.session_id == session);
+                if !applicable {
+                    return;
+                }
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
                 self.begin_chat_turn(cx);
             }
@@ -691,7 +705,10 @@ impl Workspace {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
             BridgeReply::Sessions(Err(message))
-            | BridgeReply::Sent(Err(message))
+            | BridgeReply::Sent {
+                outcome: Err(message),
+                ..
+            }
             | BridgeReply::Settings(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
             | BridgeReply::ChatStarted(Err(message))
