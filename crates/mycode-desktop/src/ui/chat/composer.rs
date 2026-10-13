@@ -87,7 +87,7 @@ pub(super) fn render_composer(
         let menu = workspace
             .vm()
             .reasoning_menu_open
-            .then(|| super::menus::render_thinking_menu(workspace, cx));
+            .then(|| super::menus::render_thinking_menu(workspace, window, cx));
         div()
             .relative()
             .child(composer_text_button(
@@ -328,7 +328,6 @@ fn composer_text_button(
         .px(skin::space(1))
         .h(skin::space(6))
         .text_xs()
-        .italic()
         .cursor_pointer()
         .text_color(ink)
         .hover(|this| this.text_color(theme.foreground))
@@ -632,12 +631,16 @@ fn context_meter(workspace: &Workspace) -> Option<crate::view_model::ContextMete
     let vm = workspace.vm();
     let used = vm.context_used;
     let cached = vm.context_cache;
-    if used == 0 && cached == 0 {
+    let window = super::super::context::model_context_window(vm);
+    if used == 0 && cached == 0 && window == 0 {
         return None;
     }
+    // With no usage yet the chip still shows `0 / window`, so the budget is
+    // visible from the first message instead of appearing after the first
+    // reply.
     let parts = crate::view_model::context_meter_parts(
         used,
-        super::super::context::model_context_window(vm),
+        window,
         cached,
         t("cached", "缓存"),
         t("cache hit", "缓存命中"),
@@ -650,18 +653,18 @@ fn model_button_label(vm: &WorkspaceState) -> String {
 }
 
 fn thinking_button_label(vm: &WorkspaceState) -> String {
+    // Rung labels stay English: they are short technical tokens and the
+    // localized variants were clipped by the chip's narrow width.
     match selected_reasoning_level(vm) {
-        // The chip names its rung: a bare "Thinking" read as some unnamed
-        // intensity. Default says the provider decides.
-        "default" => t("Thinking · Default", "思考 · 默认").to_owned(),
-        "off" => t("Thinking off", "思考关").to_owned(),
-        "on" => t("Thinking on", "思考开").to_owned(),
-        "minimal" => t("Minimal", "极简").to_owned(),
-        "low" => t("Low · brief", "低 · 简短").to_owned(),
-        "medium" => t("Medium · balanced", "中 · 均衡").to_owned(),
-        "high" => t("High · deep", "高 · 深入").to_owned(),
-        "xhigh" => t("Extra high", "超高").to_owned(),
-        "max" => t("Max", "最高").to_owned(),
+        "default" => "Thinking · Default".to_owned(),
+        "off" => "Thinking off".to_owned(),
+        "on" => "Thinking on".to_owned(),
+        "minimal" => "Minimal".to_owned(),
+        "low" => "Low · brief".to_owned(),
+        "medium" => "Medium · balanced".to_owned(),
+        "high" => "High · deep".to_owned(),
+        "xhigh" => "Extra high".to_owned(),
+        "max" => "Max".to_owned(),
         other => other.to_owned(),
     }
 }

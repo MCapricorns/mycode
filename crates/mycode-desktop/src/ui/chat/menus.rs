@@ -40,6 +40,7 @@ pub(super) fn render_model_menu(
         workspace,
         window,
         crate::ui::model_picker::ModelPickerTarget::Session,
+        menu_height_cap(window, 420.),
         cx,
     ))
     .into_any_element()
@@ -85,6 +86,20 @@ const COMPOSER_CARD_CLEARANCE: f32 = 88.;
 pub(super) const THINKING_MENU_CLEARANCE: f32 =
     COMPOSER_CARD_CLEARANCE + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + JUMP_LATEST_GAP;
 
+/// Height cap that keeps an upward-opening menu inside the window.
+///
+/// The layer's bottom edge sits [`THINKING_MENU_CLEARANCE`] above the chip,
+/// and the chip itself rests near the composer's bottom padding. In a short
+/// window that leaves less room than the panel cap, so the panel is cut to
+/// what fits (at least three rows) and scrolls inside instead of losing its
+/// top rows to the window edge.
+pub(super) fn menu_height_cap(window: &Window, cap: f32) -> gpui_kit::Pixels {
+    let below_menu = THINKING_MENU_CLEARANCE + 72.;
+    let headroom = 32.;
+    let available = f32::from(window.viewport_size().height) - below_menu - headroom;
+    px(available.clamp(110., cap))
+}
+
 /// The thinking menu opens above its chip.
 #[must_use]
 pub(super) fn thinking_menu_placement() -> MenuPlacement {
@@ -116,6 +131,7 @@ fn anchor_edge(
 /// Thinking effort as its own short list, opened from the composer button.
 pub(super) fn render_thinking_menu(
     workspace: &mut Workspace,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
@@ -135,7 +151,7 @@ pub(super) fn render_thinking_menu(
     .child(
         menu_panel("thinking-menu", theme)
             .w(px(220.))
-            .max_h(px(320.))
+            .max_h(menu_height_cap(window, 320.))
             .overflow_y_scroll()
             .flex_none()
             .p_1()
@@ -196,17 +212,20 @@ fn menu_row(
         })
 }
 
+/// Thinking-effort labels stay English in both UI languages: the rung names
+/// are short technical tokens and the localized variants were clipped by the
+/// chip's narrow width.
 pub(crate) fn reasoning_row_label(level: &str) -> String {
     match level {
-        "default" => t("Default \u{b7} provider", "默认 \u{b7} 跟随服务商").to_owned(),
-        "off" => t("Off", "关闭").to_owned(),
-        "on" => t("On", "开启").to_owned(),
-        "minimal" => t("Minimal", "极简").to_owned(),
-        "low" => t("Low \u{b7} brief", "低 \u{b7} 简短").to_owned(),
-        "medium" => t("Medium \u{b7} balanced", "中 \u{b7} 均衡").to_owned(),
-        "high" => t("High \u{b7} deep", "高 \u{b7} 深入").to_owned(),
-        "xhigh" => t("Extra high", "超高").to_owned(),
-        "max" => t("Max", "最高").to_owned(),
+        "default" => "Default · provider".to_owned(),
+        "off" => "Off".to_owned(),
+        "on" => "On".to_owned(),
+        "minimal" => "Minimal".to_owned(),
+        "low" => "Low · brief".to_owned(),
+        "medium" => "Medium · balanced".to_owned(),
+        "high" => "High · deep".to_owned(),
+        "xhigh" => "Extra high".to_owned(),
+        "max" => "Max".to_owned(),
         other => other.to_owned(),
     }
 }

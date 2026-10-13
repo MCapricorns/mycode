@@ -142,26 +142,6 @@ pub(super) fn render_chat(
         .flex_col()
         .bg(super::skin::ambient(theme))
         .when(details_reserve > 0., |this| this.pr(px(details_reserve)))
-        .when(
-            python_warning_banner(workspace.python_warning()).is_some(),
-            |this| {
-                let message = python_warning_banner(workspace.python_warning())
-                    .unwrap_or("")
-                    .to_owned();
-                this.child(
-                    div()
-                        .id("python-warning")
-                        .w_full()
-                        .px_4()
-                        .py_2()
-                        .text_xs()
-                        .whitespace_normal()
-                        .bg(theme.warning.opacity(0.18))
-                        .text_color(theme.warning_foreground)
-                        .child(message),
-                )
-            },
-        )
         .child(
             div()
                 .id("conversation-frame")
@@ -251,7 +231,6 @@ enum TranscriptBlock<'a> {
 struct ToolRow<'a> {
     call: &'a ConversationEntry,
     result: Option<&'a ConversationEntry>,
-    children: Vec<(&'a ConversationEntry, Option<&'a ConversationEntry>)>,
 }
 
 fn coalesce_tools<'a>(items: Vec<TranscriptItem<'a>>) -> Vec<TranscriptBlock<'a>> {
@@ -265,15 +244,7 @@ fn coalesce_tools<'a>(items: Vec<TranscriptItem<'a>>) -> Vec<TranscriptBlock<'a>
                 }
                 blocks.push(TranscriptBlock::User { entry, index });
             }
-            TranscriptItem::Tool {
-                call,
-                result,
-                children,
-            } => run.push(ToolRow {
-                call,
-                result,
-                children,
-            }),
+            TranscriptItem::Tool { call, result } => run.push(ToolRow { call, result }),
             TranscriptItem::Entry(entry) => {
                 if !run.is_empty() {
                     blocks.push(TranscriptBlock::Tools(std::mem::take(&mut run)));
@@ -335,7 +306,7 @@ fn render_one_tool(
     cx: &gpui_kit::Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let expanded = workspace.tool_row_open(&tool.call.event_id);
-    let mut column = div()
+    div()
         .w_full()
         .min_w_0()
         .flex()
@@ -346,70 +317,8 @@ fn render_one_tool(
             expanded,
             reduce_motion,
             cx,
-        ));
-    if !tool.children.is_empty() {
-        column = column.child(render_nested_tools(
-            &tool.call.event_id,
-            &tool.children,
-            workspace,
-            reduce_motion,
-            cx,
-        ));
-    }
-    column.into_any_element()
-}
-
-/// Nested `run_code` calls stay under the parent card. Two or more collapse
-/// into one summary line until the row is opened.
-fn render_nested_tools(
-    parent_id: &str,
-    children: &[(&ConversationEntry, Option<&ConversationEntry>)],
-    workspace: &Workspace,
-    reduce_motion: bool,
-    cx: &gpui_kit::Context<Workspace>,
-) -> gpui_kit::AnyElement {
-    let cards = children.iter().map(|(child, child_result)| {
-        let open = workspace.tool_row_open(&child.event_id);
-        tools::render_tool_block(child, *child_result, open, reduce_motion, cx)
-    });
-    let body = div()
-        .w_full()
-        .min_w_0()
-        .pl(skin_indent())
-        .flex()
-        .flex_col()
-        .children(cards);
-    if children.len() < 2 {
-        return body.into_any_element();
-    }
-    let labels: Vec<&str> = children
-        .iter()
-        .map(|(child, _)| child.text.as_ref())
-        .collect();
-    let open = workspace.tool_batch_open(parent_id);
-    div()
-        .w_full()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .child(tools::render_tool_batch(
-            parent_id,
-            tools::tool_batch_summary(&labels),
-            open,
-            cx,
         ))
-        .when(open, |this| {
-            this.child(super::motion::fade_in(
-                format!("tool-nest-{parent_id}"),
-                reduce_motion,
-                body,
-            ))
-        })
         .into_any_element()
-}
-
-fn skin_indent() -> gpui_kit::Pixels {
-    crate::ui::skin::space(4)
 }
 
 enum TranscriptItem<'a> {
@@ -420,7 +329,6 @@ enum TranscriptItem<'a> {
     Tool {
         call: &'a ConversationEntry,
         result: Option<&'a ConversationEntry>,
-        children: Vec<(&'a ConversationEntry, Option<&'a ConversationEntry>)>,
     },
     Entry(&'a ConversationEntry),
 }
@@ -428,11 +336,6 @@ enum TranscriptItem<'a> {
 /// Splits the raw entry list into display blocks: user messages become their
 /// own rows, each tool call merges with its matching result, and everything
 /// else (assistant text, orphan results, usage markers) passes through.
-/// Banner text for a missing Python install. Empty stored warnings stay hidden.
-pub(crate) fn python_warning_banner(warning: Option<&str>) -> Option<&str> {
-    warning.map(str::trim).filter(|text| !text.is_empty())
-}
-
 fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem<'_>> {
     let mut items = Vec::with_capacity(entries.len());
     let mut index = 0;
@@ -441,24 +344,14 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
         if entry.kind == EntryKind::UserMessage {
             items.push(TranscriptItem::User { entry, index });
         } else if entry.kind == EntryKind::ToolCall {
-            if entry.parent_call_id.as_deref().is_some_and(|parent| {
-                entries.iter().any(|other| {
-                    other.kind == EntryKind::ToolCall && other.call_id.as_deref() == Some(parent)
-                })
-            }) {
-                index += 1;
-                continue;
-            }
             let result = entry.call_id.as_deref().and_then(|call| {
                 entries[index + 1..].iter().find(|next| {
                     next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
                 })
             });
-            let children = child_tool_rows(entries, entry.call_id.as_deref());
             items.push(TranscriptItem::Tool {
                 call: entry,
                 result,
-                children,
             });
         } else if entry.kind == EntryKind::AssistantMessage
             && entry.text.trim().is_empty()
@@ -478,29 +371,6 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
         index += 1;
     }
     items
-}
-
-/// Inner calls of one `run_code` card, in ledger order.
-fn child_tool_rows<'a>(
-    entries: &'a [ConversationEntry],
-    parent: Option<&str>,
-) -> Vec<(&'a ConversationEntry, Option<&'a ConversationEntry>)> {
-    let Some(parent) = parent else {
-        return Vec::new();
-    };
-    let mut rows = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
-        if entry.kind != EntryKind::ToolCall || entry.parent_call_id.as_deref() != Some(parent) {
-            continue;
-        }
-        let result = entry.call_id.as_deref().and_then(|call| {
-            entries[index + 1..].iter().find(|next| {
-                next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
-            })
-        });
-        rows.push((entry, result));
-    }
-    rows
 }
 
 /// The jump-to-latest control, docked in-flow right above the composer. The
@@ -578,68 +448,27 @@ fn render_older_chip(loading: bool, cx: &Context<Workspace>) -> impl IntoElement
 
 #[cfg(test)]
 mod nesting_tests {
-    use super::{TranscriptItem, child_tool_rows, collect_transcript_items, python_warning_banner};
+    use super::collect_transcript_items;
     use crate::view_model::{ConversationEntry, EntryKind};
 
-    fn call(id: &str, text: &str, parent: Option<&str>) -> ConversationEntry {
+    fn call(id: &str, text: &str) -> ConversationEntry {
         ConversationEntry {
             event_id: format!("call-{id}"),
             kind: EntryKind::ToolCall,
             text: text.into(),
             call_id: Some(id.to_owned()),
             thinking: String::new(),
-            parent_call_id: parent.map(str::to_owned),
         }
     }
 
-    fn result(id: &str, text: &str, parent: Option<&str>) -> ConversationEntry {
+    fn result(id: &str, text: &str) -> ConversationEntry {
         ConversationEntry {
             event_id: format!("result-{id}"),
             kind: EntryKind::ToolResult,
             text: text.into(),
             call_id: Some(id.to_owned()),
             thinking: String::new(),
-            parent_call_id: parent.map(str::to_owned),
         }
-    }
-
-    #[test]
-    fn missing_python_banner_uses_the_stored_warning() {
-        let stored = "Python 3.10+ was not found on PATH. run_code needs the system Python.\nInstall Python 3.10 or newer with the system package manager.";
-        let banner = python_warning_banner(Some(stored)).expect("banner");
-        assert_eq!(banner, stored.trim());
-        assert!(banner.contains("Python 3.10+"));
-        assert!(banner.contains("Install Python"));
-        assert!(python_warning_banner(None).is_none());
-        assert!(python_warning_banner(Some(" \n ")).is_none());
-    }
-
-    #[test]
-    fn nested_cards_sit_under_the_run_code_row() {
-        let entries = vec![
-            call("outer", "run_code  List rust files", None),
-            call("inner", "read  src/lib.rs L1+20", Some("outer")),
-            result("inner", "fn main", Some("outer")),
-            result("outer", "done", None),
-        ];
-        let items = collect_transcript_items(&entries);
-        let TranscriptItem::Tool {
-            call: outer,
-            children,
-            ..
-        } = &items[0]
-        else {
-            panic!("expected one tool row");
-        };
-        assert_eq!(outer.call_id.as_deref(), Some("outer"));
-        assert_eq!(children.len(), 1);
-        assert_eq!(children[0].0.call_id.as_deref(), Some("inner"));
-        assert_eq!(
-            children[0].1.map(|entry| entry.text.as_ref()),
-            Some("fn main")
-        );
-        assert_eq!(items.len(), 1, "the inner card is not a sibling row");
-        assert_eq!(child_tool_rows(&entries, Some("outer")).len(), 1);
     }
 
     #[test]
@@ -650,7 +479,6 @@ mod nesting_tests {
             text: "hi".into(),
             call_id: None,
             thinking: String::new(),
-            parent_call_id: None,
         };
         let agent = crate::view_model::ConversationEntry {
             event_id: "agent".into(),
@@ -658,17 +486,16 @@ mod nesting_tests {
             text: "done".into(),
             call_id: None,
             thinking: String::new(),
-            parent_call_id: None,
         };
         let entries = vec![
             user,
-            call("a", "read  a.rs", None),
-            result("a", "alpha", None),
-            call("b", "edit  b.rs", None),
-            result("b", "+ x\n", None),
+            call("a", "read  a.rs"),
+            result("a", "alpha"),
+            call("b", "edit  b.rs"),
+            result("b", "+ x\n"),
             agent,
-            call("c", "read  c.rs", None),
-            result("c", "c", None),
+            call("c", "read  c.rs"),
+            result("c", "c"),
         ];
         let blocks = super::coalesce_tools(collect_transcript_items(&entries));
         assert!(matches!(

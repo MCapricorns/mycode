@@ -193,7 +193,6 @@ mod tests {
                 text: "hello".into(),
                 call_id: None,
                 thinking: String::new(),
-                parent_call_id: None,
             });
         assert!(!open_session_is_empty(&with_messages));
 

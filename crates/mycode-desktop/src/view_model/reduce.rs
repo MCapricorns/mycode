@@ -301,8 +301,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             call_id,
             name,
             target,
-            parent,
-        } => tool_started(state, call_id, name, target, parent),
+        } => tool_started(state, call_id, name, target),
         DesktopAction::ToolProgress {
             call_id,
             name,
@@ -546,15 +545,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.font_family = font_family.to_owned();
                 mark_settings_dirty(settings);
             }
-        }
-        DesktopAction::SettingsOsSandboxToggled(enabled) => {
-            edit_settings(state, |settings| {
-                if settings.tools.os_sandbox == enabled {
-                    return false;
-                }
-                settings.tools.os_sandbox = enabled;
-                true
-            });
         }
         DesktopAction::InspectorChanged { open, pinned } => {
             state.inspector_open = open;
@@ -1088,7 +1078,6 @@ mod tests {
             text: text.into(),
             call_id: None,
             thinking: String::new(),
-            parent_call_id: None,
         }
     }
 
@@ -1469,7 +1458,6 @@ mod tests {
             text: text.into(),
             call_id: None,
             thinking: String::new(),
-            parent_call_id: None,
         };
         // Both triggers emit this action with the written summary.
         reduce(&mut state, DesktopAction::SummaryShown(entry.clone()));
@@ -1490,7 +1478,6 @@ mod tests {
             text: "grep  src".into(),
             call_id: Some("c1".into()),
             thinking: String::new(),
-            parent_call_id: None,
         };
         let result = ConversationEntry {
             event_id: "res-1".to_owned(),
@@ -1498,7 +1485,6 @@ mod tests {
             text: "src/main.rs:1:fn main".into(),
             call_id: Some("c1".into()),
             thinking: String::new(),
-            parent_call_id: None,
         };
         let mut state = WorkspaceState {
             sending: true,
@@ -1524,7 +1510,6 @@ mod tests {
             text: mycode_app::display_summary_text("files: src/main.rs").into(),
             call_id: None,
             thinking: String::new(),
-            parent_call_id: None,
         };
         reduce(&mut state, DesktopAction::SummaryShown(summary.clone()));
         let held = state.active.as_ref().expect("open");
@@ -1547,7 +1532,6 @@ mod tests {
             text: "done".into(),
             call_id: None,
             thinking: "weigh the matches".to_owned(),
-            parent_call_id: None,
         };
         reduce(
             &mut state,
@@ -1751,7 +1735,6 @@ mod tests {
             text: "keep going".into(),
             call_id: None,
             thinking: String::new(),
-            parent_call_id: None,
         };
         reduce(
             &mut state,

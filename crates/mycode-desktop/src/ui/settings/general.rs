@@ -2,26 +2,17 @@
 //! and the OS sandbox.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt as _, Window, div, px,
 };
 
-use super::widgets::{choice_chips, dropdown_field, settings_card, settings_row};
+use super::widgets::{choice_chips, dropdown_field, settings_card};
 use crate::i18n::{effective_language_id, t};
 use crate::workspace::Workspace;
 
 /// Badge on Windows. The switch is not shown, so the setting does not look on.
-pub(crate) const OS_SANDBOX_UNSUPPORTED_EN: &str = "Not supported yet";
-/// Badge on Windows. Product copy: 「暂不支持」.
-pub(crate) const OS_SANDBOX_UNSUPPORTED_ZH: &str = "暂不支持";
-/// Explanation under the badge. Names the missing helpers and that shell still runs.
-pub(crate) const OS_SANDBOX_UNSUPPORTED_DETAIL_EN: &str = "Windows has no bubblewrap or seatbelt helper yet. Shell and run_code run without an OS sandbox.";
-/// Chinese explanation. Includes 「暂不支持」 so the page states it in the body, not only the badge.
-pub(crate) const OS_SANDBOX_UNSUPPORTED_DETAIL_ZH: &str = "Windows 暂不支持操作系统沙箱，没有 bubblewrap 或 seatbelt。shell 和 run_code 不套这层限制，照常运行。";
-
 /// Display label for one configured language id.
 fn language_label(id: &str) -> &'static str {
     match id {
@@ -147,13 +138,6 @@ pub(super) fn render_general_section(
                 .child(format!("{}: {effective_ua}", t("Effective", "生效值"))),
         )
         .into_any_element();
-    let os_sandbox = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.tools.os_sandbox)
-        .unwrap_or(true);
-    let os_sandbox_row = render_os_sandbox_row(os_sandbox, cx);
     let theme = cx.theme();
     div()
         .id("general-section")
@@ -180,61 +164,7 @@ pub(super) fn render_general_section(
                 ua_field,
             ],
         ))
-        .child(settings_card(
-            "os-sandbox",
-            t("Tools", "工具"),
-            Some(t(
-                "OS sandbox for shell and run_code.",
-                "shell 和 run_code 的操作系统沙箱。",
-            )),
-            theme,
-            vec![os_sandbox_row],
-        ))
         .into_any_element()
-}
-
-fn render_os_sandbox_row(enabled: bool, cx: &mut Context<Workspace>) -> AnyElement {
-    let supported = mycode_config::ToolsSettings::os_sandbox_platform_supported();
-    let description = if supported {
-        t(
-            "On by default. Linux uses bubblewrap and macOS uses seatbelt to limit writes. This is not a security boundary. A missing helper fails the call instead of running unsandboxed. Warm run_code reuse stays off while this is on.",
-            "默认开启。Linux 用 bubblewrap，macOS 用 seatbelt 限制写入。这不是安全边界。助手缺失时这次调用失败，不会退回无沙箱执行。开启时 run_code 不复用热进程。",
-        )
-    } else {
-        t(
-            OS_SANDBOX_UNSUPPORTED_DETAIL_EN,
-            OS_SANDBOX_UNSUPPORTED_DETAIL_ZH,
-        )
-    };
-    let control = if supported {
-        Switch::new("os-sandbox-toggle")
-            .checked(enabled)
-            .on_click(cx.listener(|workspace, checked: &bool, _, cx| {
-                workspace.on_toggle_os_sandbox(*checked, cx);
-            }))
-            .into_any_element()
-    } else {
-        div()
-            .id("os-sandbox-unsupported")
-            .px_2()
-            .h(px(24.))
-            .flex()
-            .items_center()
-            .flex_none()
-            .rounded(px(6.))
-            .border_1()
-            .border_color(cx.theme().border)
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .child(t(OS_SANDBOX_UNSUPPORTED_EN, OS_SANDBOX_UNSUPPORTED_ZH))
-            .into_any_element()
-    };
-    settings_row(
-        "os-sandbox",
-        t("OS sandbox", "操作系统沙箱"),
-        Some(description),
-        control,
-    )
 }
 
 /// Label above a wrapping row of fixed-width swatches.
@@ -1117,28 +1047,5 @@ mod appearance_layout {
             );
         })
         .unwrap();
-    }
-}
-
-#[cfg(test)]
-mod copy {
-    use super::{
-        OS_SANDBOX_UNSUPPORTED_DETAIL_EN, OS_SANDBOX_UNSUPPORTED_DETAIL_ZH,
-        OS_SANDBOX_UNSUPPORTED_EN, OS_SANDBOX_UNSUPPORTED_ZH,
-    };
-
-    #[test]
-    fn windows_os_sandbox_copy_says_not_supported_yet() {
-        assert_eq!(OS_SANDBOX_UNSUPPORTED_EN, "Not supported yet");
-        assert_eq!(OS_SANDBOX_UNSUPPORTED_ZH, "暂不支持");
-        assert!(OS_SANDBOX_UNSUPPORTED_DETAIL_ZH.contains("暂不支持"));
-        assert!(OS_SANDBOX_UNSUPPORTED_DETAIL_ZH.contains("照常运行"));
-        assert!(OS_SANDBOX_UNSUPPORTED_DETAIL_EN.contains("without an OS sandbox"));
-        assert!(
-            !OS_SANDBOX_UNSUPPORTED_DETAIL_EN
-                .to_ascii_lowercase()
-                .contains("enabled")
-        );
-        assert!(!OS_SANDBOX_UNSUPPORTED_DETAIL_ZH.contains("已开启"));
     }
 }

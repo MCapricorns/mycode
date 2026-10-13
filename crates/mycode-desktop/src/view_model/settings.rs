@@ -469,34 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn os_sandbox_toggle_round_trips_and_defaults_on() {
-        let document = mycode_config::AppSettings::default();
-        assert!(document.tools.os_sandbox);
-        let state = super::SettingsState::from_settings(&document, 1, Vec::new());
-        assert!(state.tools.os_sandbox);
-        let mut vm = super::super::WorkspaceState {
-            settings: Some(state),
-            ..super::super::WorkspaceState::default()
-        };
-        super::super::reduce(
-            &mut vm,
-            super::super::DesktopAction::SettingsOsSandboxToggled(true),
-        );
-        assert!(!vm.settings.as_ref().expect("settings").dirty);
-        super::super::reduce(
-            &mut vm,
-            super::super::DesktopAction::SettingsOsSandboxToggled(false),
-        );
-        let settings = vm.settings.as_ref().expect("settings");
-        assert!(settings.dirty);
-        assert!(!settings.tools.os_sandbox);
-        let stored = settings.to_settings();
-        assert!(!stored.tools.os_sandbox);
-        assert!(!stored.tools.effective_os_sandbox());
-        assert!(stored.validate().is_ok());
-    }
-
-    #[test]
     fn nav_groups_match_the_settings_shell() {
         let ids: Vec<_> = SettingsSection::GROUPS.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, ["Appearance", "Models", "Agents", "Tools", "Data"]);

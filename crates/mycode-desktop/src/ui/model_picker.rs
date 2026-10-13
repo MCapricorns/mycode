@@ -197,6 +197,7 @@ pub(crate) fn render_model_picker(
     workspace: &mut Workspace,
     window: &mut Window,
     target: ModelPickerTarget,
+    max_height: gpui_kit::Pixels,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let browse = workspace.vm().model_menu_browse.clone();
@@ -217,7 +218,7 @@ pub(crate) fn render_model_picker(
     menu_panel("model-picker", &theme)
         .w(px(340.))
         .max_w_full()
-        .max_h(px(420.))
+        .max_h(max_height)
         .overflow_y_scroll()
         .flex_none()
         .p_1()
