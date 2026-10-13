@@ -69,7 +69,7 @@ pub(crate) fn apply_anthropic_message_breakpoints(body: &mut Value) {
     if crate::family::anthropic_pins_stable_ends(model) {
         mark_stable_ends(body.get_mut("messages"), remaining, &[], true);
     } else {
-        mark_trailing_messages(body.get_mut("messages"), remaining.min(2), &[]);
+        mark_trailing_messages(body.get_mut("messages"), remaining.min(2));
     }
 }
 
@@ -344,7 +344,7 @@ fn content_is_markable(content: Option<&Value>) -> bool {
     }
 }
 
-fn mark_trailing_messages(messages: Option<&mut Value>, budget: usize, skip_roles: &[&str]) {
+fn mark_trailing_messages(messages: Option<&mut Value>, budget: usize) {
     let Some(Value::Array(messages)) = messages else {
         return;
     };
@@ -352,10 +352,6 @@ fn mark_trailing_messages(messages: Option<&mut Value>, budget: usize, skip_role
     for message in messages.iter_mut().rev() {
         if marked >= budget {
             break;
-        }
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
-        if skip_roles.contains(&role) {
-            continue;
         }
         if mark_content(message.get_mut("content")) {
             marked += 1;

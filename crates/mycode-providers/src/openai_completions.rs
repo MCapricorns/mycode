@@ -601,6 +601,13 @@ impl CompletionsReducer {
                 {
                     merge_detail(&mut self.reasoning_details[position], &item);
                 } else {
+                    // A retained detail item is stream state and counts
+                    // toward the accumulation ceiling like any other
+                    // fragment, so distinct-id frames cannot grow the
+                    // array without bound.
+                    if !charge_stream(&mut self.accumulated, item.to_string().len()) {
+                        return Err("stream exceeded the output limit");
+                    }
                     self.reasoning_details.push(item);
                 }
             }
@@ -1204,5 +1211,47 @@ mod tests {
         let message = take_done(reducer.feed("[DONE]"));
         assert_eq!(thinking_of(&message), "plan the edit");
         assert_eq!(text_of(&message), "answer");
+    }
+
+    #[test]
+    fn distinct_detail_items_are_charged_against_the_stream_cap() {
+        // Frames that keep appending new detail items (no shared prefix, so
+        // the cumulative-merge paths do not apply) must count their retained
+        // bytes toward the accumulation ceiling instead of growing the
+        // array without bound.
+        let mut reducer = CompletionsReducer::new();
+        let filler = "x".repeat(1_050_000);
+        let mut capped = false;
+        for index in 0..9_u32 {
+            let marker = char::from_u32('z' as u32 - index).expect("marker");
+            let frame = serde_json::json!({
+                "choices": [{
+                    "delta": {
+                        "reasoning_details": [{
+                            "type": "reasoning.text",
+                            "id": format!("reasoning-text-{index}"),
+                            "format": filler,
+                            "text": marker.to_string(),
+                        }]
+                    }
+                }]
+            });
+            let events = reducer.feed(&frame.to_string());
+            if events.iter().any(|event| {
+                matches!(
+                    event,
+                    mycode_core::StreamEvent::Error(error) if error
+                        .message()
+                        .is_some_and(|message| message.contains("stream exceeded the output limit"))
+                )
+            }) {
+                capped = true;
+                break;
+            }
+        }
+        assert!(
+            capped,
+            "distinct-id detail frames must hit the accumulation cap"
+        );
     }
 }

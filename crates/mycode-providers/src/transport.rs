@@ -152,10 +152,23 @@ impl SseTransport for ReqwestTransport {
                 false => response,
             };
             let status = response.status();
+            let idle = self.read_timeout;
             if !status.is_success() {
+                // A server that answers with an error status and then stalls
+                // must not pin the turn: the idle ceiling bounds the
+                // error-body read the same way it bounds body chunks.
                 let body = tokio::select! {
-                    text = response.text() => text.unwrap_or_default(),
-                    () = cancel.cancelled() => return Err(ProviderError::new(ProviderErrorKind::Cancelled)),
+                    biased;
+                    () = cancel.cancelled() => {
+                        return Err(ProviderError::new(ProviderErrorKind::Cancelled));
+                    }
+                    text = tokio::time::timeout(idle, response.text()) => match text {
+                        Ok(Ok(body)) => body,
+                        Ok(Err(_)) => String::new(),
+                        Err(_elapsed) => {
+                            return Err(ProviderError::new(ProviderErrorKind::Timeout));
+                        }
+                    },
                 };
                 return Err(ProviderError::with_message(
                     status_error_kind(status),
@@ -165,7 +178,6 @@ impl SseTransport for ReqwestTransport {
             let cancel_for_body = cancel;
             let (chunk_tx, chunk_rx) =
                 tokio::sync::mpsc::channel::<Result<Bytes, ProviderError>>(BYTE_STREAM_CAPACITY);
-            let idle = self.read_timeout;
             // Reads the body chunk by chunk on a dedicated task and forwards
             // each chunk through the bounded channel. Cancellation and a chunk
             // gap over the idle ceiling surface as one final `Err` item, then
@@ -272,6 +284,32 @@ mod tests {
         format!("http://{addr}/v1/chat/completions")
     }
 
+    /// Sends error-status headers with a promised body it never delivers.
+    fn spawn_stalled_error_server() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut buf = Vec::new();
+            let mut tmp = [0_u8; 1024];
+            while !buf.windows(4).any(|window| window == b"\r\n\r\n") {
+                match stream.read(&mut tmp) {
+                    Ok(0) | Err(_) => return,
+                    Ok(count) => buf.extend_from_slice(&tmp[..count]),
+                }
+            }
+            let header = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 256\r\n\r\n";
+            if stream.write_all(header.as_bytes()).is_err() {
+                return;
+            }
+            let _ = stream.flush();
+            // Never send the promised body; hold the socket open.
+            std::thread::sleep(Duration::from_secs(10));
+        });
+        format!("http://{addr}/v1/chat/completions")
+    }
+
     #[tokio::test]
     async fn a_slow_but_alive_stream_outlives_the_idle_limit() {
         let idle = Duration::from_millis(200);
@@ -311,5 +349,25 @@ mod tests {
         let text = String::from_utf8(collected).expect("utf8");
         let expected: String = (0..pieces).map(|index| format!("data:{index}\n")).collect();
         assert_eq!(text, expected);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_error_body_hits_the_idle_timeout() {
+        let url = spawn_stalled_error_server();
+        let transport =
+            ReqwestTransport::with_read_timeout(Duration::from_millis(200)).expect("transport");
+        let posted = transport.post(
+            TransportCall {
+                endpoint: url,
+                headers: Vec::new(),
+                body: b"{}".to_vec(),
+            },
+            CancellationToken::new(),
+        );
+        let error = tokio::time::timeout(Duration::from_secs(3), posted)
+            .await
+            .expect("post settled within the outer bound")
+            .expect_err("stalled error body must fail");
+        assert_eq!(error.kind(), mycode_core::ProviderErrorKind::Timeout);
     }
 }

@@ -33,7 +33,7 @@ pub(crate) trait FrameReducer: Send + 'static {
 pub(crate) async fn drive(
     transport: Arc<dyn crate::transport::SseTransport>,
     call: TransportCall,
-    reducer: Box<dyn FrameReducer + Send>,
+    mut reducer: Box<dyn FrameReducer + Send>,
     sender: EventStreamSender,
     cancel: tokio_util::sync::CancellationToken,
 ) {
@@ -82,7 +82,6 @@ pub(crate) async fn drive(
     };
 
     let mut parser = FrameParser::new();
-    let mut reducer = reducer;
     let mut body = body;
     loop {
         let chunk = tokio::select! {

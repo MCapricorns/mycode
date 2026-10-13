@@ -250,14 +250,14 @@ const CHAT_CACHE: &[CacheRow] = &[
 #[cfg(test)]
 #[must_use]
 pub(crate) fn chat_family_name(model: &str, endpoint: &str) -> &'static str {
-    chat_row(model, endpoint).name
+    chat_row(&model.to_ascii_lowercase(), &endpoint.to_ascii_lowercase()).name
 }
 
 /// Messages family name for the first matching thinking row.
 #[cfg(test)]
 #[must_use]
 pub(crate) fn anthropic_family_name(model: &str, endpoint: &str) -> &'static str {
-    anthropic_row(model, endpoint).name
+    anthropic_row(&model.to_ascii_lowercase(), &endpoint.to_ascii_lowercase()).name
 }
 
 /// Applies chat or Responses reasoning fields from [`CHAT_THINKING`].
@@ -357,12 +357,11 @@ pub(crate) fn glm_target(model: &str, endpoint: &str) -> bool {
     match_zai(&model.to_ascii_lowercase(), &endpoint.to_ascii_lowercase())
 }
 
-fn chat_row(model: &str, endpoint: &str) -> &'static ChatRow {
-    let model_id = model.to_ascii_lowercase();
-    let host = endpoint.to_ascii_lowercase();
+/// First matching chat thinking row. Inputs are already lowercased.
+fn chat_row(model_id: &str, host: &str) -> &'static ChatRow {
     CHAT_THINKING
         .iter()
-        .find(|row| (row.matches)(&model_id, &host))
+        .find(|row| (row.matches)(model_id, host))
         .unwrap_or_else(|| {
             CHAT_THINKING
                 .last()
@@ -370,12 +369,11 @@ fn chat_row(model: &str, endpoint: &str) -> &'static ChatRow {
         })
 }
 
-fn anthropic_row(model: &str, endpoint: &str) -> &'static AnthropicRow {
-    let model_id = model.to_ascii_lowercase();
-    let host = endpoint.to_ascii_lowercase();
+/// First matching Messages thinking row. Inputs are already lowercased.
+fn anthropic_row(model_id: &str, host: &str) -> &'static AnthropicRow {
     ANTHROPIC_THINKING
         .iter()
-        .find(|row| (row.matches)(&model_id, &host))
+        .find(|row| (row.matches)(model_id, host))
         .unwrap_or_else(|| {
             ANTHROPIC_THINKING
                 .last()
