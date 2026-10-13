@@ -200,13 +200,13 @@ where
     }
 }
 
-/// [`prepare_search_async_with_access`] resolves a grep/find target on a
-/// cancellable worker thread.
-/// [`prepare_search_async`] with an explicit content/metadata capability.
+/// Resolves a grep/find target on a cancellable worker thread with an
+/// explicit content/metadata capability.
 ///
 /// # Errors
 ///
-/// Same as [`prepare_search_async`].
+/// Returns [`ToolError`] when the target cannot be bound, the call is
+/// cancelled, or the preflight deadline expires.
 pub async fn prepare_search_async_with_access(
     cwd: std::path::PathBuf,
     path_arg: Option<String>,

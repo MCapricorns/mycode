@@ -428,18 +428,6 @@ impl Tool for GrepTool {
 
 fn run_search(
     matcher: RegexMatcher,
-    root: ResolvedRoot,
-    include: Option<GlobMatcher>,
-    exclude: Option<GlobMatcher>,
-    max_results: Option<usize>,
-    cancel: &CancellationToken,
-    limits: &Limits,
-) -> Result<ToolResult, ToolError> {
-    run_search_core(matcher, root, include, exclude, max_results, cancel, limits)
-}
-
-fn run_search_core(
-    matcher: RegexMatcher,
     mut root: ResolvedRoot,
     include: Option<GlobMatcher>,
     exclude: Option<GlobMatcher>,

@@ -260,8 +260,8 @@ pub use crate::builtin::blocking::prepare_search_async_with_access;
 
 /// Handle-backed grep/find target bound during dispatch preparation.
 ///
-/// A value exists only as a ready retained root: `prepare_search` never
-/// constructs a path key with an empty root. The dispatcher moves that root
+/// A value exists only as a ready retained root: `prepare_search_with_access`
+/// never constructs a path key with an empty root. The dispatcher moves that root
 /// into execution. A later path rewrite must re-prepare; execution never
 /// re-resolves a prepared root, including after the root is taken.
 pub struct PreparedSearch {
@@ -296,7 +296,8 @@ impl PreparedSearch {
     }
 }
 
-/// Resolves `cwd` and `path_arg` once for retained-capability execution.
+/// Resolves `cwd` and `path_arg` once for retained-capability execution with
+/// an explicit content/metadata capability.
 ///
 /// Any resolve, open, alias, ignore, missing, or sharing failure is a
 /// terminating [`ToolError`]. Success is always a ready retained root.
@@ -306,11 +307,6 @@ impl PreparedSearch {
 /// Returns [`ToolError::Execution`] or [`ToolError::InvalidArgs`] when the
 /// target cannot be bound, including missing paths, sharing violations,
 /// cancellation, and deadline expiry.
-/// [`prepare_search`] with an explicit content/metadata capability.
-///
-/// # Errors
-///
-/// Same as [`prepare_search`].
 pub(crate) fn prepare_search_with_access(
     cwd: &Path,
     path_arg: Option<&str>,

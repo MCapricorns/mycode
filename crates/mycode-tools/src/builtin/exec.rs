@@ -6,10 +6,8 @@
 //! and Mach-O images launch directly. A direct shebang wrapper (one
 //! interpreter, at most one argument, no `-c` or `env -S`) is exec'd as that
 //! interpreter with the script path and `args`. Batch files and anything else
-//! require an explicit interpreter, or shell-tool `mode` `script`. Execution is
-//! unsandboxed current-user execution unless the OS helper is on.
-//! That helper (bubblewrap or seatbelt) is best-effort write confinement, not
-//! a security boundary, and a missing helper fails the call. Environment
+//! require an explicit interpreter, or shell-tool `mode` `script`. Execution
+//! is unsandboxed current-user execution. Environment
 //! allowlisting is not isolation. There is no Core permission prompt: a
 //! registered, schema-valid shell-tool call is dispatched directly.
 //! Same-account hostile processes remain outside the security boundary.

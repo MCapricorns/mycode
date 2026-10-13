@@ -192,7 +192,7 @@ directly. A direct shebang wrapper runs its interpreter with the script path and
 args. Batch files and a shebang argument of `-c` are rejected. `write` and `edit` \
 remain available. `read`, `grep`, and \
 `find` stay in-process. Do not use this tool to talk to the user. Edits are not \
-undone. `tools.osSandbox` defaults on. On Linux and macOS a best-effort OS helper confines writes and is not a security boundary; a missing helper fails the call instead of running unsandboxed. OS sandbox is not supported yet on Windows, so execution there is unsandboxed current-user execution, and forcing the helper fails the call. Captured stdout/stderr is \
+undone. Captured stdout/stderr is \
 truncated beyond 50 KiB. A non-zero exit is an error result, not a tool failure. \
 Default timeout: 120 s. There is no permission prompt. Output is captured as UTF-8.";
 

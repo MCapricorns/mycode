@@ -163,16 +163,6 @@ fn run_find(
     cancel: &CancellationToken,
     limits: &Limits,
 ) -> Result<ToolResult, ToolError> {
-    run_find_core(glob, root, limit, cancel, limits)
-}
-
-fn run_find_core(
-    glob: GlobMatcher,
-    root: ResolvedRoot,
-    limit: Option<usize>,
-    cancel: &CancellationToken,
-    limits: &Limits,
-) -> Result<ToolResult, ToolError> {
     let effective_limit = limit.unwrap_or(DEFAULT_LIMIT).min(limits.stored_ceiling);
     let state = Arc::new(FindState::new(Arc::clone(&root.limiter)));
     let report_root = root.root.clone();
