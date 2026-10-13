@@ -333,7 +333,35 @@ pub(crate) fn normalize_tool_args(args: Value) -> Value {
     };
     alias_key(map, "timeout", "timeout_secs");
     alias_key(map, "cmd", "command");
+    unwrap_echoed_values(map);
     args
+}
+
+/// Unwraps `{key: {key: value}}` into `{key: value}`.
+///
+/// Models occasionally echo the parameter name inside the value — the
+/// observed case was shell `mode={"mode":"program"}`, which schema
+/// validation reports as an opaque `oneOf` failure. A value that is an
+/// object holding exactly the same single key with a non-object value is
+/// the echoed shape; anything else passes through untouched.
+fn unwrap_echoed_values(map: &mut serde_json::Map<String, Value>) {
+    for (key, value) in map.iter_mut() {
+        let echoed = value.as_object().is_some_and(|inner| {
+            inner.len() == 1
+                && inner.iter().next().is_some_and(|(inner_key, inner_value)| {
+                    inner_key.as_str() == key.as_str() && !inner_value.is_object()
+                })
+        });
+        if !echoed {
+            continue;
+        }
+        let unwrapped = value
+            .as_object_mut()
+            .and_then(|inner| inner.values_mut().next().map(std::mem::take));
+        if let Some(unwrapped) = unwrapped {
+            *value = unwrapped;
+        }
+    }
 }
 
 fn alias_key(map: &mut serde_json::Map<String, Value>, from: &str, to: &str) {
@@ -380,4 +408,28 @@ fn camel_to_snake(name: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::normalize_tool_args;
+
+    #[test]
+    fn an_echoed_parameter_object_is_unwrapped() {
+        let args = normalize_tool_args(json!({"mode": {"mode": "program"}}));
+        assert_eq!(args, json!({"mode": "program"}));
+    }
+
+    #[test]
+    fn non_echoed_objects_pass_through_untouched() {
+        // Different inner key, extra keys, and nested objects stay as-is.
+        let args = normalize_tool_args(json!({"mode": {"launch": "program"}}));
+        assert_eq!(args, json!({"mode": {"launch": "program"}}));
+        let args = normalize_tool_args(json!({"mode": {"mode": "program", "x": 1}}));
+        assert_eq!(args, json!({"mode": {"mode": "program", "x": 1}}));
+        let args = normalize_tool_args(json!({"questions": [{"question": "Go?"}]}));
+        assert_eq!(args, json!({"questions": [{"question": "Go?"}]}));
+    }
 }
