@@ -39,15 +39,14 @@ pub fn current_version() -> &'static str {
 
 /// Release asset suffix for one target, empty when that target is unpublished.
 ///
-/// Published archives are Windows x64, Windows ARM64, macOS Apple Silicon,
-/// and Linux x86_64. Intel macOS, Windows x86, and every other target
-/// resolve no asset and stay on their installed version.
+/// Published archives are Windows x64, Windows ARM64, and macOS Apple
+/// Silicon. Intel macOS, Windows x86, Linux, and every other target resolve
+/// no asset and stay on their installed version.
 fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
     match (os, arch) {
         ("windows", "x86_64") => "-x86_64-pc-windows-msvc.zip",
         ("windows", "aarch64") => "-aarch64-pc-windows-msvc.zip",
         ("macos", "aarch64") => "-aarch64-apple-darwin.zip",
-        ("linux", "x86_64") => "-x86_64-unknown-linux-gnu.zip",
         _ => "",
     }
 }
@@ -506,8 +505,10 @@ fn unix_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: bool) 
     // `shasum -a 256` is the hasher stock macOS ships. `sha256sum` is the
     // fallback for other Unix hosts. A failed backup stops the script; the
     // replace is not attempted without `.mycode-previous`. `cp -p` keeps the
-    // mode, so a rollback puts an executable binary back. Paths and the
-    // expected hash are single-quoted: `$`, backticks, and `"` stay literal.
+    // mode, so a rollback puts an executable binary back. Once the replaced
+    // binary verifies, the backup is deleted so old versions do not pile up
+    // next to the install. Paths and the expected hash are single-quoted:
+    // `$`, backticks, and `"` stay literal.
     let relaunch_line = if relaunch {
         "nohup \"$current\" >/dev/null 2>&1 &\n"
     } else {
@@ -534,6 +535,11 @@ hash_file() {
 }
 i=0
 copied=0
+actual=$(hash_file "$new")
+if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+  echo "updater: staged binary sha256 does not match" >&2
+  exit 1
+fi
 while [ "$i" -lt 30 ]; do
   if cp -p "$current" "$prev" 2>/dev/null; then
     copied=1
@@ -544,11 +550,6 @@ while [ "$i" -lt 30 ]; do
 done
 if [ "$copied" -ne 1 ]; then
   echo "updater: could not back up the current binary" >&2
-  exit 1
-fi
-actual=$(hash_file "$new")
-if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
-  echo "updater: staged binary sha256 does not match" >&2
   exit 1
 fi
 j=0
@@ -576,6 +577,7 @@ if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
 fi
 chmod +x "$current" 2>/dev/null || true
 __RELAUNCH__
+rm -f "$prev"
 rm -f "$0"
 "#;
     template
@@ -627,10 +629,6 @@ mod tests {
         assert_eq!(
             asset_suffix_for("macos", "aarch64"),
             "-aarch64-apple-darwin.zip"
-        );
-        assert_eq!(
-            asset_suffix_for("linux", "x86_64"),
-            "-x86_64-unknown-linux-gnu.zip"
         );
     }
 
@@ -753,7 +751,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn unix_script_good_hash_replaces_and_keeps_backup() {
+    fn unix_script_good_hash_replaces_and_removes_the_backup() {
         let dir = scratch("unix-good");
         let current = dir.join("app");
         let staged = dir.join("next");
@@ -779,11 +777,9 @@ mod tests {
         );
         assert_eq!(std::fs::read(&current).unwrap(), new);
         let backup = super::previous_path(&current);
-        assert_eq!(std::fs::read(&backup).unwrap(), old);
-        assert_eq!(
-            unix_mode(&backup),
-            0o755,
-            "backup must keep the executable mode"
+        assert!(
+            !backup.exists(),
+            "a verified replace must not leave the old-version backup behind"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -879,8 +875,10 @@ mod tests {
             output_text(&output)
         );
         assert_eq!(std::fs::read(&current).unwrap(), b"new-bytes");
-        assert_eq!(std::fs::read(&backup).unwrap(), b"old-bytes");
-        assert_eq!(unix_mode(&backup), 0o755);
+        assert!(
+            !backup.exists(),
+            "old-version backup must be removed after the verified swap"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -981,8 +979,6 @@ mod tests {
             "mycode-desktop-v0.9.18-aarch64-pc-windows-msvc.zip.sha256",
             "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip",
             "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip.sha256",
-            "mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip",
-            "mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip.sha256",
         ];
         names
             .into_iter()
@@ -996,53 +992,34 @@ mod tests {
     }
 
     #[test]
-    fn linux_x86_64_selects_the_published_zip_not_the_checksum() {
-        assert_eq!(
-            asset_suffix_for("linux", "x86_64"),
-            "-x86_64-unknown-linux-gnu.zip"
-        );
+    fn windows_x86_64_selects_the_published_zip_not_the_checksum() {
         let offer = super::resolve_asset_for(
-            "linux",
+            "windows",
             "x86_64",
             "v0.9.18",
             "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
             &release_assets(),
         )
         .unwrap()
-        .expect("linux x86_64 is a published update target");
+        .expect("windows x86_64 is a published update target");
         assert_eq!(offer.version, "0.9.18");
         assert!(
             offer
                 .asset_url
-                .ends_with("mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip")
+                .ends_with("mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip")
         );
         assert!(
             offer
                 .checksum_url
-                .ends_with("mycode-desktop-v0.9.18-x86_64-unknown-linux-gnu.zip.sha256")
+                .ends_with("mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip.sha256")
         );
         assert!(!offer.asset_url.ends_with(".sha256"));
     }
 
     #[test]
-    fn supported_platform_without_its_zip_is_not_up_to_date() {
-        let error = super::resolve_asset_for(
-            "linux",
-            "x86_64",
-            "v0.9.18",
-            "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
-            &[super::AssetJson {
-                name: "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
-                browser_download_url: "https://github.com/example/app.zip".to_owned(),
-            }],
-        )
-        .unwrap_err();
-        assert!(error.contains("x86_64-unknown-linux-gnu.zip"), "{error}");
-    }
-
-    #[test]
     fn unsupported_platforms_have_no_asset() {
         assert_eq!(asset_suffix_for("macos", "x86_64"), "");
+        assert_eq!(asset_suffix_for("linux", "x86_64"), "");
         assert_eq!(asset_suffix_for("linux", "aarch64"), "");
         assert_eq!(asset_suffix_for("windows", "x86"), "");
         assert_eq!(asset_suffix_for("freebsd", "x86_64"), "");

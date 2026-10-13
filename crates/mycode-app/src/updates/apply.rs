@@ -4,9 +4,11 @@
 //! The UI process spawns that helper with explicit arguments and exits. The
 //! helper waits for the UI pid, copies the staged file onto the install
 //! directory (so a download on another volume still lands), renames the old
-//! binary to `*.mycode-previous`, and starts the new binary with no updater
-//! arguments. A detached `cmd` script is not used: it could copy a backup and
-//! then fail to replace a locked image.
+//! binary to `*.mycode-previous` for an in-flight restore, and starts the new
+//! binary with no updater arguments. Once the replaced binary verifies, the
+//! backup is deleted: old versions must not pile up next to the install. A
+//! detached `cmd` script is not used: it could copy a backup and then fail to
+//! replace a locked image.
 //!
 //! macOS and Linux keep the shell script in the parent module.
 
@@ -263,6 +265,9 @@ fn replace_verified_executable(
             "replaced binary sha256 does not match; backup restore failed".to_owned()
         }));
     }
+    // The verified replace is final: the old-version backup is only for an
+    // in-flight restore, so it must not pile up next to the install.
+    let _ = std::fs::remove_file(&backup);
     Ok(())
 }
 
@@ -419,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn replace_keeps_a_backup_and_rejects_a_bad_hash() {
+    fn replace_cleans_the_backup_and_rejects_a_bad_hash() {
         let dir = scratch("swap");
         let nested = dir.join("Program Files");
         std::fs::create_dir_all(&nested).unwrap();
@@ -431,7 +436,10 @@ mod tests {
         replace_verified_executable(&source, &target, &hash).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new-bytes");
         let backup = super::super::previous_path(&target);
-        assert_eq!(std::fs::read(&backup).unwrap(), b"old-bytes");
+        assert!(
+            !backup.exists(),
+            "a verified replace must not leave the old-version backup behind"
+        );
         std::fs::write(&source, b"other").unwrap();
         let error = replace_verified_executable(&source, &target, &hash).unwrap_err();
         assert!(!error.retryable);
@@ -475,9 +483,9 @@ mod tests {
         let _ = child.wait();
         worker.join().unwrap().unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new-bytes");
-        assert_eq!(
-            std::fs::read(super::super::previous_path(&target)).unwrap(),
-            b"old-bytes"
+        assert!(
+            !super::super::previous_path(&target).exists(),
+            "old-version backup must be removed after the verified swap"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
