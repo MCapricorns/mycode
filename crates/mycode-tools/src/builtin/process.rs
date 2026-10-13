@@ -159,43 +159,6 @@ impl ProcessTree {
     }
 }
 
-/// Enrolls a child started in its own process group. Call this immediately
-/// after spawn, before the child runs user code.
-///
-/// Windows warm Python and MCP stdio enroll in their own `CreateProcessW`
-/// path and resume `PROCESS_INFORMATION.hThread` there. This function is the
-/// Unix process-group path.
-///
-/// # Errors
-///
-/// Returns an error when the platform cannot build a process tree or the
-/// child has already exited.
-#[cfg(not(windows))]
-pub(crate) fn enroll_spawned(child: &Child) -> std::io::Result<ProcessTree> {
-    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-    {
-        ProcessTree::enroll_unix(child)
-    }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        let pid = child
-            .id()
-            .ok_or_else(|| std::io::Error::other("child exited before enrollment"))?;
-        ProcessTree::enroll_leader_pid(pid)
-    }
-    #[cfg(not(any(
-        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64"),
-    )))]
-    {
-        let _ = child;
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "this target has no process-tree enrollment",
-        ))
-    }
-}
-
 #[cfg(unix)]
 fn ignore_missing_process_group(result: std::io::Result<()>) -> std::io::Result<()> {
     result.or_else(|err| {
