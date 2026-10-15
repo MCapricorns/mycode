@@ -1517,7 +1517,14 @@ mod tests {
             &shell,
         );
         assert!(prompt.contains("<tool_calling>"), "{prompt}");
-        assert!(prompt.contains("`write`, `edit`, and `bash`"), "{prompt}");
+        assert!(
+            prompt.contains("Change files with `write` and `edit`"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Use `bash` only for what the dedicated tools cannot do"),
+            "{prompt}"
+        );
         assert!(prompt.contains("cannot delegate further"), "{prompt}");
         assert!(
             !prompt.contains("Do not do that research inline"),
