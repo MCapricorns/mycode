@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+## [0.11.17] - 2026-10-15
+
+### Added
+
+- OpenDesign 网关（`https://amr-link.open-design.ai/v1`）：设置 → 模型的服务商卡片下新增单独的「OpenDesign」按钮，不混在 models.dev 目录列表里。页里先列针对该网关实测过的模型（思考档位、关闭语义和输出上限参照 pi-opendesign-bridge），粘贴密钥后「从网关加载模型」换成这把密钥实际可用的模型；新模型的思考档位、输出上限和图片输入按裸 id 从 models.dev 借（OpenRouter 优先），上下文取网关声明的值。已配置时再次添加是替换模型列表，不会多出 `opendesign-2`。该网关对所有模型只发 `reasoning_effort`，不发厂商的 `thinking` 对象。
+- `find` 新增 `max_depth`，目录条目以 `/` 结尾；`*` 加 `max_depth` 1 就是列一个目录。
+
+### Fixed
+
+- 只装了 Microsoft Store 版 PowerShell 7 的 Windows 上，shell 工具每次都报 `program pwsh.exe not found`：`WindowsApps\pwsh.exe` 是执行别名，不能当文件打开。现在顺着别名的重解析点找到包内真实的 `pwsh.exe` 再启动；包不可读时退回 Windows PowerShell 5.1。
+- 回合进行中按回车提交的追加引导，在模型下一步读到之前完全看不见；现在立刻显示在输入框上方的「追加引导」列表里。回合在最后一次请求之后才收到的引导以前会被静默丢弃，现在退回排队列表、作为下一条消息发送，正在输入的草稿不受影响。
+- 详情面板的「上一轮」和上下文条对不上：前者是这一轮所有请求（每个工具回合一次）的累计 token，后者是最近一次提示的大小。现在标成「上一轮合计 / 本轮合计」，并写出请求次数。
+- 思考强度芯片在「默认」时显示成 `Thinking · D…`：芯片改用短名（Max、High、Thinking off 等）。
+
+### Changed
+
+- 思考强度没选过或选的档位当前模型没有时，按该模型公布的最强档运行（芯片和实际请求一致）；只有模型一个档位都没公布时才是「默认」。
+- 提示词和 shell 工具说明改为专用工具优先：列目录、读文件、搜文本用 `find` / `read` / `grep`，shell 只做它们做不到的事（构建、测试、git、运行程序）。
+- 思考的展开 / 收起改为一个全局开关：点任意一条思考的标题行，全部展开或全部收起，默认展开，写进 `ui.json` 的 `thinkingCollapsed`。收起时显示最新一行的末尾，生成中随内容滚动，不再固定在开头。
+- 移除色板选择（六块色板差别太小）。旧 `settings.json` 里的 `appearance.palette` 照常读入、被忽略，下次保存时清除，不会因此重置。
+
 ## [0.11.16] - 2026-10-15
 
 ### Fixed
