@@ -41,8 +41,6 @@ pub struct SettingsState {
     pub mcp_servers: Vec<mycode_config::McpServerSettings>,
     /// Appearance theme: `dark` or `light`.
     pub theme: String,
-    /// Appearance palette. One of `mycode_config::VALID_PALETTES`; slate is the default.
-    pub palette: String,
     /// UI language: `auto`, `en`, or `zh`.
     pub language: String,
     /// Interface font size: `s`, `m`, `l`, or `xl`.
@@ -92,7 +90,6 @@ impl SettingsState {
             web_backends: merge_web_backends(&settings.web.backends),
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.effective_theme().to_owned(),
-            palette: settings.effective_palette().to_owned(),
             language: settings.appearance.language.clone(),
             font_size: settings.effective_font_size().to_owned(),
             font_family: settings.appearance.font_family.clone(),
@@ -121,7 +118,7 @@ impl SettingsState {
             mcp_servers: self.mcp_servers.clone(),
             appearance: mycode_config::AppearanceSettings {
                 theme: self.theme.clone(),
-                palette: self.palette.clone(),
+                legacy_palette: None,
                 language: self.language.clone(),
                 font_size: self.font_size.clone(),
                 font_family: self.font_family.clone(),

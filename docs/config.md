@@ -47,7 +47,7 @@
 
 `AppSettings` 是设置页的唯一文档。
 
-- **外观**：`appearance.theme` 接受 `dark` 或 `light`，其它值校验失败，整份文档按上面的规则备份并重置。`appearance.palette` 是 `slate`、`ocean`、`forest`、`dusk`、`ember`、`aurora`，默认 `slate`；旧色板 id 不迁移，同样触发重置。`appearance.language` 是 `auto` / `en` / `zh`。`appearance.fontSize` 是 `s` / `m` / `l` / `xl`，缺省为 `m`。`appearance.fontFamily` 缺省、空字符串或 `system` 表示操作系统界面字体；具名值为 `Inter`、`Segoe UI`、`PingFang`、`Noto Sans`
+- **外观**：`appearance.theme` 接受 `dark` 或 `light`，其它值校验失败，整份文档按上面的规则备份并重置。色板已移除：旧文件里的 `appearance.palette` 不论写的是什么都照常读入、被忽略，下次保存时清除，不会因此重置整份文档。`appearance.language` 是 `auto` / `en` / `zh`。`appearance.fontSize` 是 `s` / `m` / `l` / `xl`，缺省为 `m`。`appearance.fontFamily` 缺省、空字符串或 `system` 表示操作系统界面字体；具名值为 `Inter`、`Segoe UI`、`PingFang`、`Noto Sans`
 - **User-Agent**：`userAgent`，缺省是 pi agent 形状 `pi (<平台> <版本>; <架构>)`
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`）。密钥不在此列
 - **思考强度**：`reasoningEffort` 是保存的默认值，必须是 models.dev 档位（`off`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）。会话里选的模型和强度不写这里，见下文 `ui.json`

@@ -1,7 +1,7 @@
-//! Palettes in dark and light. Spec colors stay opaque; chrome applies its
-//! own alpha in `ui/skin` over the window blur. The page is a neutral graphite
-//! (dark) or warm-neutral (light) canvas with only a faint accent wash, so
-//! each palette selects an accent family rather than repainting the whole app.
+//! The Desk colors in dark and light. Spec colors stay opaque; chrome applies
+//! its own alpha in `ui/skin` over the window blur. The page is a neutral
+//! graphite (dark) or warm-neutral (light) canvas with an indigo accent and a
+//! faint accent wash.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
@@ -9,8 +9,7 @@
 use gpui_kit::Hsla;
 use gpui_kit::component::theme::{Theme, ThemeMode};
 
-/// Semantic surface, border, text, and status tokens for one appearance mode,
-/// combined with the active palette's accent family.
+/// Semantic surface, border, text, and status tokens for one appearance mode.
 #[derive(Clone, Copy, Debug)]
 pub struct SemanticTokens {
     pub bg: Hsla,
@@ -62,83 +61,6 @@ pub fn theme_mode(theme: &str) -> ThemeMode {
     }
 }
 
-/// Canonical palette id. Unknown values fall back to slate.
-#[must_use]
-pub fn normalize_palette(palette: &str) -> &'static str {
-    mycode_config::VALID_PALETTES
-        .into_iter()
-        .find(|id| *id == palette)
-        .unwrap_or("slate")
-}
-
-/// Short label for a palette id.
-#[must_use]
-pub fn palette_label(palette: &str) -> &'static str {
-    let t = crate::i18n::t;
-    match normalize_palette(palette) {
-        "ocean" => t("Ocean", "海洋"),
-        "forest" => t("Forest", "森林"),
-        "dusk" => t("Dusk", "暮色"),
-        "ember" => t("Ember", "余烬"),
-        "aurora" => t("Aurora", "极光"),
-        _ => t("Indigo", "靛蓝"),
-    }
-}
-
-/// Page base and accent for one settings swatch.
-///
-/// Both colors come from the same [`Spec`] [`apply_palette`] paints. The
-/// base is the page background; the accent is the corner chip and the
-/// selected ring.
-#[derive(Clone, Copy, Debug)]
-pub struct PaletteSwatch {
-    pub base: Hsla,
-    pub accent: Hsla,
-}
-
-/// Preview colors for one palette id. Unknown ids use the slate spec.
-///
-/// `light` selects the light page of that hue. The swatch and the chat
-/// preview both read this, so a hover and a saved pick show the same colors
-/// `apply_palette` will paint.
-#[must_use]
-pub fn palette_swatch_colors(palette: &str, light: bool) -> PaletteSwatch {
-    let spec = spec_for_mode(normalize_palette(palette), light);
-    PaletteSwatch {
-        base: hex(spec.bg),
-        accent: hex(spec.accent),
-    }
-}
-
-/// Colors for the settings chat preview of one palette.
-#[derive(Clone, Copy, Debug)]
-pub struct ChatPreview {
-    pub page: Hsla,
-    pub ink: Hsla,
-    pub muted: Hsla,
-    pub accent: Hsla,
-    pub bubble: Hsla,
-    pub green: Hsla,
-    pub red: Hsla,
-    pub line: Hsla,
-}
-
-/// Sample-chat colors for a palette in the current appearance.
-#[must_use]
-pub fn chat_preview(palette: &str, light: bool) -> ChatPreview {
-    let spec = spec_for_mode(normalize_palette(palette), light);
-    ChatPreview {
-        page: hex(spec.bg),
-        ink: hex(spec.ink),
-        muted: hex(spec.dim),
-        accent: hex(spec.accent),
-        bubble: hex(spec.tint),
-        green: hex(spec.green),
-        red: hex(spec.red),
-        line: hex(spec.line),
-    }
-}
-
 /// Canonical font-size id. Unknown values fall back to medium.
 #[must_use]
 pub fn normalize_font_size(id: &str) -> &'static str {
@@ -183,32 +105,6 @@ pub fn apply_font_size(theme: &mut Theme, id: &str) {
     let rem = interface_rem_px(id);
     theme.font_size = gpui_kit::px(rem);
     theme.mono_font_size = gpui_kit::px(interface_font_px(id));
-}
-
-/// Swatches on one full row of the settings palette.
-///
-/// Six palettes fit one row of the settings card.
-pub const PALETTE_COLUMNS: u16 = 6;
-
-/// Fixed width of one palette cell, in pixels.
-///
-/// The cell is a flex item, not a grid track. A percentage width or a grid
-/// row (including max-content tracks) still grew into the settings scrollport
-/// and left a void under the swatches.
-pub const PALETTE_CELL_PX: f32 = 52.;
-
-/// Gap between palette cells, in pixels. Fixed so a font-size change cannot
-/// wrap a cell that still fits the six-across row.
-pub const PALETTE_GAP_PX: f32 = 6.;
-
-/// Side length of the color square inside a palette cell, in pixels.
-pub const PALETTE_SWATCH_PX: f32 = 28.;
-
-/// Width of one full palette row: six fixed cells and the gaps between them.
-#[must_use]
-pub fn palette_row_max_px() -> f32 {
-    let columns = f32::from(PALETTE_COLUMNS.max(1));
-    columns * PALETTE_CELL_PX + (columns - 1.) * PALETTE_GAP_PX
 }
 
 /// GPUI's virtual family for the operating-system UI font.
@@ -394,8 +290,8 @@ const PRIMARY_FILL_MIX: f32 = 0.16;
 
 /// Accent-edge alpha on a primary control.
 ///
-/// Composited on a dark card, this clears a 3:1 boundary on every palette
-/// without painting a solid accent ring.
+/// Composited on a dark card, this clears a 3:1 boundary without painting a
+/// solid accent ring.
 const PRIMARY_EDGE_ALPHA: f32 = 0.66;
 
 /// Primary body. Light ink stays readable; the fill stays a tint.
@@ -441,17 +337,10 @@ struct Spec {
     violet: u32,
 }
 
-struct AccentFamily {
-    accent: u32,
-    accent_ink: u32,
-    tint: u32,
-    wash: u32,
-}
-
-/// Resolves semantic tokens for a palette id in dark or light mode.
+/// Resolves semantic tokens in dark or light mode.
 #[must_use]
-pub fn semantic_tokens(palette: &str, light: bool) -> SemanticTokens {
-    let spec = spec_for_mode(normalize_palette(palette), light);
+pub fn semantic_tokens(light: bool) -> SemanticTokens {
+    let spec = if light { light_spec() } else { dark_spec() };
     SemanticTokens {
         bg: hex(spec.bg),
         wash: hex(spec.wash),
@@ -474,101 +363,10 @@ pub fn semantic_tokens(palette: &str, light: bool) -> SemanticTokens {
     }
 }
 
-fn spec_for_mode(palette: &str, light: bool) -> Spec {
-    if light {
-        light_spec_for(palette)
-    } else {
-        spec_for(palette)
-    }
-}
-
-fn dark_accent_for(palette: &str) -> AccentFamily {
-    match palette {
-        "ocean" => AccentFamily {
-            accent: 0x4DA3FF,
-            accent_ink: 0x06101C,
-            tint: 0x16253A,
-            wash: 0x10151E,
-        },
-        "forest" => AccentFamily {
-            accent: 0x3DDC97,
-            accent_ink: 0x05140E,
-            tint: 0x142923,
-            wash: 0x0F1614,
-        },
-        "dusk" => AccentFamily {
-            accent: 0xC084FC,
-            accent_ink: 0x14091E,
-            tint: 0x261E36,
-            wash: 0x13111A,
-        },
-        "ember" => AccentFamily {
-            accent: 0xFF8A4C,
-            accent_ink: 0x1A0B05,
-            tint: 0x2E201B,
-            wash: 0x151211,
-        },
-        "aurora" => AccentFamily {
-            accent: 0x2EE6C7,
-            accent_ink: 0x041512,
-            tint: 0x122A29,
-            wash: 0x0E1616,
-        },
-        _ => AccentFamily {
-            accent: 0x7C8CFF,
-            accent_ink: 0x0B0E1A,
-            tint: 0x1B2036,
-            wash: 0x11131B,
-        },
-    }
-}
-
-fn light_accent_for(palette: &str) -> AccentFamily {
-    match palette {
-        "ocean" => AccentFamily {
-            accent: 0x0B6BCB,
-            accent_ink: 0xFFFFFF,
-            tint: 0xE1EFFC,
-            wash: 0xF5F8FC,
-        },
-        "forest" => AccentFamily {
-            accent: 0x0E7A4D,
-            accent_ink: 0xFFFFFF,
-            tint: 0xDFF3EA,
-            wash: 0xF5FAF7,
-        },
-        "dusk" => AccentFamily {
-            accent: 0x7A3EBF,
-            accent_ink: 0xFFFFFF,
-            tint: 0xEDE3FA,
-            wash: 0xF8F6FB,
-        },
-        "ember" => AccentFamily {
-            accent: 0xC2410C,
-            accent_ink: 0xFFFFFF,
-            tint: 0xFBE6DC,
-            wash: 0xFCF7F5,
-        },
-        "aurora" => AccentFamily {
-            accent: 0x0F766E,
-            accent_ink: 0xFFFFFF,
-            tint: 0xDCF3F0,
-            wash: 0xF4FAF9,
-        },
-        _ => AccentFamily {
-            accent: 0x4353D8,
-            accent_ink: 0xFFFFFF,
-            tint: 0xE5E8FC,
-            wash: 0xF6F7FB,
-        },
-    }
-}
-
-fn spec_for(palette: &str) -> Spec {
-    let family = dark_accent_for(palette);
+fn dark_spec() -> Spec {
     Spec {
         bg: 0x0E0F12,
-        wash: family.wash,
+        wash: 0x11131B,
         surface: 0x15171B,
         card: 0x1C1F24,
         hover: 0x24282E,
@@ -577,9 +375,9 @@ fn spec_for(palette: &str) -> Spec {
         faint: 0x6B6F78,
         line: 0x22252B,
         line_strong: 0x2E323B,
-        accent: family.accent,
-        accent_ink: family.accent_ink,
-        tint: family.tint,
+        accent: 0x7C8CFF,
+        accent_ink: 0x0B0E1A,
+        tint: 0x1B2036,
         green: 0x34D399,
         amber: 0xF5B544,
         red: 0xF87171,
@@ -588,11 +386,10 @@ fn spec_for(palette: &str) -> Spec {
     }
 }
 
-fn light_spec_for(palette: &str) -> Spec {
-    let family = light_accent_for(palette);
+fn light_spec() -> Spec {
     Spec {
         bg: 0xFAFAF9,
-        wash: family.wash,
+        wash: 0xF6F7FB,
         surface: 0xFFFFFF,
         card: 0xF4F4F3,
         hover: 0xEAEAE8,
@@ -601,9 +398,9 @@ fn light_spec_for(palette: &str) -> Spec {
         faint: 0x71717A,
         line: 0xE4E4E2,
         line_strong: 0xD4D4D0,
-        accent: family.accent,
-        accent_ink: family.accent_ink,
-        tint: family.tint,
+        accent: 0x4353D8,
+        accent_ink: 0xFFFFFF,
+        tint: 0xE5E8FC,
         green: 0x0F7A4D,
         amber: 0xB45309,
         red: 0xB91C1C,
@@ -612,21 +409,16 @@ fn light_spec_for(palette: &str) -> Spec {
     }
 }
 
-/// Applies the default slate palette. Used before settings have loaded.
+/// Paints the Desk colors in the theme's current light or dark mode.
 pub fn apply(theme: &mut Theme) {
-    apply_palette(theme, "slate");
-}
-
-/// Applies one named palette in the theme's current light or dark mode.
-pub fn apply_palette(theme: &mut Theme, palette: &str) {
-    let tokens = semantic_tokens(palette, !theme.mode.is_dark());
+    let tokens = semantic_tokens(!theme.mode.is_dark());
     paint(theme, &tokens);
     sync_controls(theme);
 }
 
 fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     let bg = tokens.bg;
-    // Keep the neutral canvas dominant; palette changes remain accent-only.
+    // Keep the neutral canvas dominant; the accent only tints it.
     let wash = soften(tokens.wash, bg, 0.25);
     let surface = tokens.surface_1;
     let card = tokens.surface_2;
@@ -660,7 +452,7 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     theme.accent_foreground = accent;
     theme.caret = accent;
     // Selected text. Opaque fills cover the glyphs; this stays translucent
-    // and bright enough to see on every palette.
+    // and bright enough to see in both modes.
     theme.selection = accent.opacity(0.35);
     theme.primary = accent;
     theme.primary_foreground = accent_ink;
@@ -733,7 +525,7 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
 }
 
 /// `Theme::change` resets button tokens to the stock theme. Copy the
-/// palette into both the legacy fields and `tokens`.
+/// Desk colors into both the legacy fields and `tokens`.
 fn sync_controls(theme: &mut Theme) {
     let primary = primary_fill(theme.accent, theme.primary);
     let primary_hover = deepen(primary);
@@ -778,7 +570,7 @@ pub(crate) fn diff_wash(ink: Hsla) -> Hsla {
 }
 
 /// Semantic signal colors. `amber` is a distinct warning hue; `violet` and
-/// `cyan` are distinct from the active palette accent.
+/// `cyan` are distinct from the accent.
 pub struct Desk {
     pub amber: Hsla,
     pub green: Hsla,
@@ -791,7 +583,7 @@ pub struct Desk {
 
 impl Desk {
     pub fn of(theme: &Theme) -> Self {
-        let faint = semantic_tokens("slate", !theme.mode.is_dark()).text_3;
+        let faint = semantic_tokens(!theme.mode.is_dark()).text_3;
         Self {
             amber: theme.warning,
             green: theme.green,
@@ -819,67 +611,29 @@ mod tests {
     }
 
     #[test]
-    fn palette_row_is_six_fixed_cells() {
-        assert_eq!(super::PALETTE_COLUMNS, 6);
-        assert_eq!(super::PALETTE_SWATCH_PX, 28.);
-        assert_eq!(super::PALETTE_CELL_PX, 52.);
-        assert_eq!(super::PALETTE_GAP_PX, 6.);
-        const _: () = assert!(super::PALETTE_CELL_PX > super::PALETTE_SWATCH_PX);
-        assert_eq!(mycode_config::VALID_PALETTES.len(), 6);
-        let columns = usize::from(super::PALETTE_COLUMNS);
-        assert_eq!(mycode_config::VALID_PALETTES.len() / columns, 1);
-        assert_eq!(mycode_config::VALID_PALETTES.len() % columns, 0);
-        let row = super::palette_row_max_px();
-        let six = super::PALETTE_CELL_PX * 6. + super::PALETTE_GAP_PX * 5.;
-        assert!((row - six).abs() < f32::EPSILON);
-    }
-
-    /// The swatch must preview the page, not a solid accent chip. The colors
-    /// are the same spec `apply_palette` writes onto the theme.
-    #[test]
-    fn palette_swatch_uses_the_same_spec_as_apply_palette() {
-        for id in mycode_config::VALID_PALETTES {
-            let spec = super::spec_for(id);
-            let preview = super::palette_swatch_colors(id, false);
-            assert_eq!(preview.base, super::hex(spec.bg));
-            assert_eq!(preview.accent, super::hex(spec.accent));
-            assert_ne!(spec.bg, spec.accent, "{id} base and accent must differ");
-            let light = super::light_spec_for(id);
-            let light_preview = super::palette_swatch_colors(id, true);
-            assert_eq!(light_preview.base, super::hex(light.bg));
-            assert_eq!(light_preview.accent, super::hex(light.accent));
-        }
-        let slate = super::palette_swatch_colors("nope", false);
-        let spec = super::spec_for("slate");
-        assert_eq!(slate.base, super::hex(spec.bg));
-        assert_eq!(slate.accent, super::hex(spec.accent));
-    }
-
-    #[test]
-    fn light_palettes_keep_ink_and_descriptions_readable() {
-        for id in mycode_config::VALID_PALETTES {
-            let spec = super::light_spec_for(id);
-            let bg = super::hex(spec.bg);
-            let ink = super::hex(spec.ink);
-            let dim = super::hex(spec.dim);
-            let card = super::hex(spec.card);
-            assert!(
-                contrast(ink, bg) >= 7.0,
-                "{id}: light ink on the page is {:.2}",
-                contrast(ink, bg)
-            );
-            assert!(
-                contrast(dim, bg) >= 4.5,
-                "{id}: light description text on the page is {:.2}",
-                contrast(dim, bg)
-            );
-            assert!(
-                contrast(dim, card) >= 4.5,
-                "{id}: light description text on a card is {:.2}",
-                contrast(dim, card)
-            );
-            assert_ne!(spec.bg, super::spec_for(id).bg);
-        }
+    fn light_mode_keeps_ink_and_descriptions_readable() {
+        let spec = super::light_spec();
+        let bg = super::hex(spec.bg);
+        let ink = super::hex(spec.ink);
+        let dim = super::hex(spec.dim);
+        let card = super::hex(spec.card);
+        assert!(
+            contrast(ink, bg) >= 7.0,
+            "light ink on the page is {:.2}",
+            contrast(ink, bg)
+        );
+        assert!(
+            contrast(dim, bg) >= 4.5,
+            "light description text on the page is {:.2}",
+            contrast(dim, bg)
+        );
+        assert!(
+            contrast(dim, card) >= 4.5,
+            "light description text on a card is {:.2}",
+            contrast(dim, card)
+        );
+        assert_ne!(spec.bg, super::dark_spec().bg);
+        assert_ne!(spec.bg, spec.accent, "page and accent must differ");
         assert_eq!(super::normalize_theme("light"), "light");
         assert_eq!(super::normalize_theme("nope"), "dark");
         assert_eq!(
@@ -934,105 +688,80 @@ mod tests {
     /// Primary controls stay a tint: readable ink, a body that lifts off the
     /// card, and an edge that still meets a 3:1 boundary.
     #[test]
-    fn primary_fill_stays_soft_and_readable_on_every_dark_palette() {
-        for id in mycode_config::VALID_PALETTES {
-            let spec = super::spec_for(id);
-            let tint = super::hex(spec.tint);
-            let accent = super::hex(spec.accent);
-            let ink = super::hex(spec.ink);
-            let card = super::hex(spec.card);
-            let fill = super::primary_fill(tint, accent);
-            let edge = super::primary_edge(accent);
-            let text = contrast(ink, fill);
-            let body = contrast(fill, card);
-            let boundary = contrast(over(edge, card), card);
-            assert!(
-                text >= 4.5,
-                "{id}: ink on the primary fill is {text:.2}, want >= 4.5"
-            );
-            assert!(
-                (1.1..=2.2).contains(&body),
-                "{id}: fill against the card is {body:.2}, want a soft 1.1..=2.2"
-            );
-            assert!(
-                boundary >= 3.0,
-                "{id}: primary edge against the card is {boundary:.2}, want >= 3"
-            );
-        }
+    fn primary_fill_stays_soft_and_readable_in_dark_mode() {
+        let spec = super::dark_spec();
+        let tint = super::hex(spec.tint);
+        let accent = super::hex(spec.accent);
+        let ink = super::hex(spec.ink);
+        let card = super::hex(spec.card);
+        let fill = super::primary_fill(tint, accent);
+        let edge = super::primary_edge(accent);
+        let text = contrast(ink, fill);
+        let body = contrast(fill, card);
+        let boundary = contrast(over(edge, card), card);
+        assert!(
+            text >= 4.5,
+            "ink on the primary fill is {text:.2}, want >= 4.5"
+        );
+        assert!(
+            (1.1..=2.2).contains(&body),
+            "fill against the card is {body:.2}, want a soft 1.1..=2.2"
+        );
+        assert!(
+            boundary >= 3.0,
+            "primary edge against the card is {boundary:.2}, want >= 3"
+        );
     }
 
     #[test]
     fn semantic_tokens_keep_neutral_canvas_and_distinct_accessible_status_colors() {
-        let dark_slate = super::semantic_tokens("slate", false);
-        let light_slate = super::semantic_tokens("slate", true);
-        assert_eq!(dark_slate.bg, super::hex(0x0E0F12));
-        assert_eq!(dark_slate.surface_1, super::hex(0x15171B));
-        assert_eq!(dark_slate.surface_2, super::hex(0x1C1F24));
-        assert_eq!(dark_slate.surface_3, super::hex(0x24282E));
-        assert_eq!(light_slate.bg, super::hex(0xFAFAF9));
-        assert_eq!(light_slate.surface_1, super::hex(0xFFFFFF));
-        assert_eq!(light_slate.surface_2, super::hex(0xF4F4F3));
+        let dark = super::semantic_tokens(false);
+        let light = super::semantic_tokens(true);
+        assert_eq!(dark.bg, super::hex(0x0E0F12));
+        assert_eq!(dark.surface_1, super::hex(0x15171B));
+        assert_eq!(dark.surface_2, super::hex(0x1C1F24));
+        assert_eq!(dark.surface_3, super::hex(0x24282E));
+        assert_eq!(light.bg, super::hex(0xFAFAF9));
+        assert_eq!(light.surface_1, super::hex(0xFFFFFF));
+        assert_eq!(light.surface_2, super::hex(0xF4F4F3));
 
-        for id in mycode_config::VALID_PALETTES {
-            let dark = super::semantic_tokens(id, false);
-            assert_eq!(dark.bg, dark_slate.bg, "{id} keeps neutral graphite bg");
-            assert_eq!(
-                dark.surface_1, dark_slate.surface_1,
-                "{id} keeps neutral surface-1"
-            );
-            assert_ne!(
-                dark.warning, dark.accent,
-                "{id} dark warning must not collapse onto accent"
-            );
-            assert_ne!(dark.success, dark.warning);
-            assert_ne!(dark.warning, dark.danger);
-            assert_ne!(dark.danger, dark.info);
+        assert_ne!(
+            dark.warning, dark.accent,
+            "dark warning must not collapse onto accent"
+        );
+        assert_ne!(dark.success, dark.warning);
+        assert_ne!(dark.warning, dark.danger);
+        assert_ne!(dark.danger, dark.info);
+        assert!(
+            contrast(dark.text_1, dark.bg) >= 12.0,
+            "dark text-1 contrast {:.2}",
+            contrast(dark.text_1, dark.bg)
+        );
+        assert!(
+            contrast(dark.text_2, dark.surface_1) >= 4.5,
+            "dark text-2 contrast {:.2}",
+            contrast(dark.text_2, dark.surface_1)
+        );
+        for (mode, tokens) in [("dark", dark), ("light", light)] {
             assert!(
-                contrast(dark.text_1, dark.bg) >= 12.0,
-                "{id} dark text-1 contrast {:.2}",
-                contrast(dark.text_1, dark.bg)
-            );
-            assert!(
-                contrast(dark.text_2, dark.surface_1) >= 4.5,
-                "{id} dark text-2 contrast {:.2}",
-                contrast(dark.text_2, dark.surface_1)
-            );
-            assert!(
-                contrast(dark.success, dark.surface_1) >= 4.5
-                    && contrast(dark.warning, dark.surface_1) >= 4.5
-                    && contrast(dark.danger, dark.surface_1) >= 4.5
-                    && contrast(dark.info, dark.surface_1) >= 4.5,
-                "{id} dark semantic status hues must clear 4.5:1 on surface-1"
+                contrast(tokens.success, tokens.surface_1) >= 4.5
+                    && contrast(tokens.warning, tokens.surface_1) >= 4.5
+                    && contrast(tokens.danger, tokens.surface_1) >= 4.5
+                    && contrast(tokens.info, tokens.surface_1) >= 4.5,
+                "{mode} semantic status hues must clear 4.5:1 on surface-1"
             );
             assert!(
                 contrast(
-                    dark.text_1,
-                    over(dark.warning.opacity(0.14), dark.surface_1)
+                    tokens.text_1,
+                    over(tokens.warning.opacity(0.14), tokens.surface_1)
                 ) >= 4.5,
-                "{id} dark warning banner text must stay readable"
-            );
-
-            let light = super::semantic_tokens(id, true);
-            assert_eq!(light.bg, light_slate.bg, "{id} keeps warm neutral bg");
-            assert_ne!(
-                light.warning, light.accent,
-                "{id} light warning must not collapse onto accent"
-            );
-            assert!(
-                contrast(light.success, light.surface_1) >= 4.5
-                    && contrast(light.warning, light.surface_1) >= 4.5
-                    && contrast(light.danger, light.surface_1) >= 4.5
-                    && contrast(light.info, light.surface_1) >= 4.5,
-                "{id} light semantic status hues must clear 4.5:1 on surface-1"
-            );
-            assert!(
-                contrast(
-                    light.text_1,
-                    over(light.warning.opacity(0.14), light.surface_1)
-                ) >= 4.5,
-                "{id} light warning banner text must stay readable"
+                "{mode} warning banner text must stay readable"
             );
         }
+        assert_ne!(
+            light.warning, light.accent,
+            "light warning must not collapse onto accent"
+        );
     }
 
     fn contrast(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> f32 {

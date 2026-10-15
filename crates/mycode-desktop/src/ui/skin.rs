@@ -15,7 +15,7 @@ use gpui_kit::{
 /// Sidebar, title bar, settings nav, inspector. Translucent over the blur.
 const RAIL_ALPHA: f32 = 0.62;
 /// Conversation and settings page. Still readable, with the window blur
-/// and the palette gradient showing through.
+/// and the accent wash showing through.
 const PAGE_ALPHA: f32 = 0.88;
 /// Menus, dialogs, and the composer. Frosted, not an opaque slab.
 const OVERLAY_ALPHA: f32 = 0.82;
@@ -32,7 +32,7 @@ const _: () = {
 };
 
 /// Reading-column wash. Stops stay translucent so a hint of the window
-/// material remains; the palette wash is already pulled toward the base.
+/// material remains; the accent wash is already pulled toward the base.
 pub(super) fn ambient(theme: &Theme) -> Background {
     linear_gradient(
         180.,
@@ -105,11 +105,6 @@ pub(super) fn radius_sm() -> gpui_kit::Pixels {
 /// 14px. Cards, menus, and panels.
 pub(super) fn radius_md() -> gpui_kit::Pixels {
     px(14.)
-}
-
-/// 20px. Composer, dialogs, and message bubbles.
-pub(super) fn radius_lg() -> gpui_kit::Pixels {
-    px(20.)
 }
 
 /// Card corner radius.

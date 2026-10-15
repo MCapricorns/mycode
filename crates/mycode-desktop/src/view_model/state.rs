@@ -269,8 +269,6 @@ pub enum DesktopAction {
     /// The user picked a UI language (`auto`, `en`, `zh`); applies live and
     /// persists with settings.
     SettingsLanguageSelected(String),
-    /// The user picked a color palette; persists with settings.
-    SettingsPaletteSelected(String),
     /// The user picked dark or light; persists with settings.
     SettingsThemeSelected(String),
     /// The user picked an interface font size (`s`, `m`, `l`, `xl`).

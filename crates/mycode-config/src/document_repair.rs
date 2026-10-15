@@ -276,7 +276,7 @@ mod tests {
         write_private(&home, "secrets.json", b"\xff\xfe broken");
 
         let (settings, settings_repair) = read_app_settings_with_repair(&home).unwrap();
-        assert_eq!(settings.appearance.palette, "slate");
+        assert_eq!(settings.appearance.font_size, "m");
         assert_eq!(settings.appearance.theme, "dark");
         let settings_repair = settings_repair.expect("settings repair");
         assert_eq!(settings_repair.path, "settings.json");
@@ -308,24 +308,25 @@ mod tests {
     }
 
     #[test]
-    fn invalid_palette_resets_settings_and_keeps_the_old_bytes() {
-        let (_guard, home) = home("palette");
+    fn invalid_appearance_resets_settings_and_keeps_the_old_bytes() {
+        let (_guard, home) = home("appearance");
         let bytes = br#"{
             "formatVersion": 1,
             "kind": "mycode-app-settings",
             "revision": 3,
-            "appearance": { "theme": "dark", "palette": "nope", "language": "zh" },
+            "appearance": { "theme": "nope", "language": "zh" },
             "providers": [{
                 "id": "openai",
                 "kind": "openai-completions",
                 "baseUrl": "https://api.openai.com/v1",
-                "models": ["gpt-4o"]
+                "models": ["gpt-4o"],
+                "enabled": true
             }]
         }"#;
         write_private(&home, "settings.json", bytes);
         let (settings, repair) = read_app_settings_with_repair(&home).unwrap();
         assert!(settings.providers.is_empty());
-        assert_eq!(settings.appearance.palette, "slate");
+        assert_eq!(settings.appearance.theme, "dark");
         let repair = repair.expect("validation repair");
         let backup = std::fs::read(home.root().join(&repair.backup)).unwrap();
         assert!(
@@ -339,11 +340,11 @@ mod tests {
     fn valid_settings_and_trailing_commas_are_not_quarantined() {
         let (_guard, home) = home("valid");
         let mut settings = crate::AppSettings::default();
-        settings.appearance.palette = "ocean".to_owned();
+        settings.appearance.font_size = "l".to_owned();
         replace_app_settings(&home, crate::AuthorityRevision::ABSENT, &settings).unwrap();
         let (loaded, repair) = read_app_settings_with_repair(&home).unwrap();
         assert!(repair.is_none());
-        assert_eq!(loaded.appearance.palette, "ocean");
+        assert_eq!(loaded.appearance.font_size, "l");
 
         write_private(
             &home,
@@ -388,7 +389,7 @@ mod tests {
         }
 
         let (settings, settings_repair) = read_app_settings_with_repair(&home).unwrap();
-        assert_eq!(settings.appearance.palette, "slate");
+        assert_eq!(settings.appearance.theme, "dark");
         let (_, secrets_repair) = read_provider_secrets_with_repair(&home).unwrap();
         let (_, ui_repair) = read_ui_state_with_repair(&home).unwrap();
         for repair in [settings_repair, secrets_repair, ui_repair] {
@@ -418,7 +419,7 @@ mod tests {
         // A home written by an older build still has its lock files.
         std::fs::write(home.root().join("settings.json.lock"), b"").unwrap();
         let mut settings = crate::AppSettings::default();
-        settings.appearance.palette = "ocean".to_owned();
+        settings.appearance.font_size = "l".to_owned();
         replace_app_settings(&home, crate::AuthorityRevision::ABSENT, &settings).unwrap();
         crate::replace_ui_state(&home, &crate::UiState::default()).unwrap();
         let names = names_in(&home);

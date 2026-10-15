@@ -68,14 +68,8 @@ pub struct LegacyUsageSettings {
     pub enabled: bool,
 }
 
-/// Painted appearance: dark or light. Each palette has both.
+/// Painted appearance: dark or light.
 pub const VALID_THEMES: [&str; 2] = ["dark", "light"];
-
-/// Palette ids the desktop can paint. Slate is the default.
-///
-/// Six palettes, each a different hue. Older ids are not migrated; a file
-/// that names one is reset to the defaults.
-pub const VALID_PALETTES: [&str; 6] = ["slate", "ocean", "forest", "dusk", "ember", "aurora"];
 
 /// UI language ids: follow the system, English, or Simplified Chinese.
 pub const VALID_LANGUAGES: [&str; 3] = ["auto", "en", "zh"];
@@ -99,10 +93,6 @@ pub const VALID_FONT_FAMILIES: [&str; 5] = [
 
 /// Stored id for the operating-system UI font.
 pub const SYSTEM_FONT_FAMILY: &str = "system";
-
-fn default_palette() -> String {
-    "slate".to_owned()
-}
 
 fn default_language() -> String {
     "auto".to_owned()
@@ -136,9 +126,11 @@ pub struct AppearanceSettings {
     /// `dark` or `light`. Any other stored value fails validation, and startup
     /// replaces the whole document with defaults.
     pub theme: String,
-    /// One of [`VALID_PALETTES`]. Slate is the default.
-    #[serde(default = "default_palette")]
-    pub palette: String,
+    /// Retired color palette. A document written before the palettes were
+    /// removed still names one; it loads, is ignored, and is dropped on the
+    /// next save, so an old file is not reset over it.
+    #[serde(default, rename = "palette", skip_serializing)]
+    pub legacy_palette: Option<String>,
     /// `auto`, `en`, or `zh`.
     #[serde(default = "default_language")]
     pub language: String,
@@ -155,7 +147,7 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "dark".to_owned(),
-            palette: default_palette(),
+            legacy_palette: None,
             language: default_language(),
             font_size: default_font_size(),
             font_family: default_font_family(),
@@ -237,15 +229,6 @@ impl AppSettings {
             .unwrap_or("dark")
     }
 
-    /// Returns the effective palette. Unknown values read as slate.
-    #[must_use]
-    pub fn effective_palette(&self) -> &'static str {
-        VALID_PALETTES
-            .into_iter()
-            .find(|id| *id == self.appearance.palette)
-            .unwrap_or("slate")
-    }
-
     /// Returns the effective interface font size. Unknown values read as `m`.
     #[must_use]
     pub fn effective_font_size(&self) -> &'static str {
@@ -291,12 +274,6 @@ impl AppSettings {
         self.validate_mcp()?;
         if !VALID_THEMES.contains(&self.appearance.theme.as_str()) {
             return Err(invalid("appearance.theme: must be dark or light"));
-        }
-        if !VALID_PALETTES.contains(&self.appearance.palette.as_str()) {
-            return Err(invalid(&format!(
-                "appearance.palette: must be one of {}",
-                VALID_PALETTES.join(", ")
-            )));
         }
         if !VALID_LANGUAGES.contains(&self.appearance.language.as_str()) {
             return Err(invalid("appearance.language: must be auto, en, or zh"));
@@ -607,9 +584,37 @@ mod tests {
         assert_eq!(parsed.settings.effective_font_size(), "m");
         assert_eq!(parsed.settings.appearance.font_family, "system");
         assert_eq!(parsed.settings.effective_font_family(), "system");
-        assert_eq!(parsed.settings.appearance.palette, "ocean");
         assert_eq!(parsed.settings.appearance.language, "zh");
         assert!(!parsed.migrated);
+    }
+
+    #[test]
+    fn a_retired_palette_still_loads_and_is_dropped_on_save() {
+        // Any id, including one no build ever offered: the field is ignored,
+        // so a document from before the palettes were removed is not reset.
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 6,
+            "appearance": { "theme": "light", "palette": "ember", "language": "zh" },
+            "providers": [{
+                "id": "openai",
+                "kind": "openai-completions",
+                "baseUrl": "https://api.openai.com/v1",
+                "models": ["gpt-4o"],
+                "enabled": true
+            }]
+        }"#;
+        let parsed = decode_settings(bytes).expect("retired palette still loads");
+        assert!(parsed.settings.validate().is_ok());
+        assert_eq!(parsed.settings.providers.len(), 1);
+        assert_eq!(parsed.settings.appearance.theme, "light");
+        let revision = AuthorityRevision::new(6).expect("revision");
+        let rewritten = encode_settings(revision, &parsed.settings).expect("encode");
+        assert!(
+            !String::from_utf8_lossy(&rewritten).contains("palette"),
+            "a save drops the retired field"
+        );
     }
 
     #[test]
@@ -685,7 +690,6 @@ mod tests {
         let home = crate::HomeLayout::from_root(&root).expect("layout");
 
         let mut settings = AppSettings::default();
-        settings.appearance.palette = "aurora".to_owned();
         settings.appearance.font_size = "l".to_owned();
         settings.appearance.font_family = "Noto Sans".to_owned();
         let revision =
@@ -693,7 +697,6 @@ mod tests {
                 .expect("publish");
 
         let loaded = super::read_app_settings(&home).expect("read");
-        assert_eq!(loaded.appearance.palette, "aurora");
         assert_eq!(loaded.appearance.font_size, "l");
         settings.appearance.theme = "light".to_owned();
         assert!(settings.validate().is_ok());
@@ -709,23 +712,20 @@ mod tests {
 
         assert_eq!(loaded.appearance.font_family, "Noto Sans");
         assert_eq!(loaded.effective_font_family(), "Noto Sans");
-        assert_eq!(loaded.effective_palette(), "aurora");
         assert_eq!(loaded.effective_font_size(), "l");
 
         let bytes = std::fs::read(home.root().join("settings.json")).expect("settings.json");
         let text = String::from_utf8(bytes).expect("utf-8");
-        assert!(text.contains("\"palette\": \"aurora\""), "{text}");
+        assert!(!text.contains("palette"), "{text}");
         assert!(text.contains("\"fontSize\": \"l\""), "{text}");
         assert!(text.contains("\"fontFamily\": \"Noto Sans\""), "{text}");
 
         settings.appearance.font_family = "system".to_owned();
-        settings.appearance.palette = "slate".to_owned();
         settings.appearance.font_size = "m".to_owned();
         super::replace_app_settings(&home, revision, &settings).expect("publish system");
         let restored = super::read_app_settings(&home).expect("read system");
         assert_eq!(restored.appearance.font_family, "system");
         assert_eq!(restored.effective_font_family(), "system");
-        assert_eq!(restored.appearance.palette, "slate");
         assert_eq!(restored.appearance.font_size, "m");
     }
 

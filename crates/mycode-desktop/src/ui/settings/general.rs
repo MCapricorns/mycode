@@ -1,11 +1,10 @@
-//! The General settings page: language, palette, typeface, size, and request
-//! identity.
+//! The General settings page: language, appearance, typeface, size, and
+//! request identity.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::theme::Theme;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt as _, Window, div, px,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled,
+    TestSupportExt as _, Window, div, px,
 };
 
 use super::widgets::{choice_chips, dropdown_field, settings_card};
@@ -37,12 +36,6 @@ pub(super) fn render_general_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let ua_input = workspace.settings_ua_input(window, cx);
-    let palette = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.palette.clone())
-        .unwrap_or_else(|| "slate".to_owned());
     let theme_id = workspace
         .vm()
         .settings
@@ -78,12 +71,7 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.effective_user_agent.clone())
         .unwrap_or_default();
-    let preview_id = workspace
-        .palette_preview()
-        .unwrap_or(palette.as_str())
-        .to_owned();
     let theme_row = appearance_theme_field(&theme_id, cx);
-    let palette_row = palette_field(&palette, &theme_id, &preview_id, cx);
     let font_family_row = font_family_field(&font_family, workspace.vm().font_family_menu_open, cx);
     let font_row = font_size_field(&font_size, cx);
     let language_row = dropdown_field(
@@ -149,70 +137,18 @@ pub(super) fn render_general_section(
             "appearance",
             t("Appearance", "外观"),
             Some(t(
-                "Palette, typeface, size, and language apply immediately and are saved to settings.",
-                "色板、字体、字号和语言立即生效并写入设置。",
+                "Appearance, typeface, size, and language apply immediately and are saved to settings.",
+                "外观、字体、字号和语言立即生效并写入设置。",
             )),
             theme,
             vec![
                 language_row,
                 theme_row,
-                palette_row,
                 font_family_row,
                 font_row,
                 ua_field,
             ],
         ))
-        .into_any_element()
-}
-
-/// Label above a wrapping row of fixed-width swatches.
-///
-/// Six palettes fill one row.
-/// Cells share one width, so the last row stays on the left. The row is a
-/// flex wrap, not a grid: grid row tracks still grew into the settings
-/// scrollport and hid the font controls in that gap.
-fn palette_field(
-    selected: &str,
-    theme_id: &str,
-    preview: &str,
-    cx: &mut Context<Workspace>,
-) -> AnyElement {
-    div()
-        .id("row-palette")
-        .w_full()
-        .min_w_0()
-        .h_auto()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(
-            div()
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(
-                    div()
-                        .text_sm()
-                        .whitespace_normal()
-                        .child(t("Palette", "色板")),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .whitespace_normal()
-                        .child(t(
-                            "Pick a hue. The preview follows the swatch under the pointer.",
-                            "选一个色调。预览跟着指针下的色块走。",
-                        )),
-                ),
-        )
-        .child(palette_choices(selected, cx))
-        .child(palette_chat_preview(preview, theme_id == "light"))
-        .test_support()
         .into_any_element()
 }
 
@@ -333,10 +269,7 @@ fn appearance_theme_field(selected: &str, cx: &mut Context<Workspace>) -> AnyEle
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .whitespace_normal()
-                        .child(t(
-                            "Dark or light. Every palette has both.",
-                            "深色或浅色。每个色板都有这两种。",
-                        )),
+                        .child(t("Dark or light.", "深色或浅色。")),
                 ),
         )
         .child(choice_chips(
@@ -347,212 +280,6 @@ fn appearance_theme_field(selected: &str, cx: &mut Context<Workspace>) -> AnyEle
             cx,
         ))
         .into_any_element()
-}
-
-fn palette_choices(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
-    let theme = cx.theme().clone();
-    let cells = mycode_config::VALID_PALETTES
-        .into_iter()
-        .map(|id| {
-            palette_cell(id, selected, &theme)
-                .on_hover(cx.listener(move |workspace, hovered: &bool, _, cx| {
-                    // A neighbor's hover-out can run after this cell's
-                    // hover-in. Only the cell that still owns the preview
-                    // may clear it, or a later swatch (Ember, Aurora) never
-                    // sticks.
-                    if *hovered {
-                        workspace.set_palette_preview(Some(id), cx);
-                    } else if workspace.palette_preview() == Some(id) {
-                        workspace.set_palette_preview(None, cx);
-                    }
-                }))
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_select_palette(id, cx);
-                }))
-                .test_support()
-                .into_any_element()
-        })
-        .collect::<Vec<_>>();
-    palette_swatches(cells)
-}
-
-fn palette_chat_preview(palette: &str, light: bool) -> AnyElement {
-    let colors = crate::ui::desk::chat_preview(palette, light);
-    div()
-        .id("palette-chat-preview")
-        .w_full()
-        .max_w(px(420.))
-        .h_auto()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(crate::ui::skin::space(2))
-        .p(crate::ui::skin::space(3))
-        .rounded(crate::ui::skin::radius_md())
-        .bg(colors.page)
-        .border_1()
-        .border_color(colors.line)
-        .child(preview_speaker(t("You", "你"), colors.accent, colors.ink))
-        .child(
-            div()
-                .rounded(crate::ui::skin::radius_lg())
-                .bg(colors.bubble)
-                .px(crate::ui::skin::space(3))
-                .py(crate::ui::skin::space(2))
-                .text_xs()
-                .text_color(colors.ink)
-                .child(t("Compare the two approaches.", "比较这两种做法。")),
-        )
-        .child(preview_speaker(
-            t("Agent", "代理"),
-            colors.accent,
-            colors.ink,
-        ))
-        .child(
-            div()
-                .text_xs()
-                .text_color(colors.ink)
-                .child(t("Here is a short answer.", "这是一段简短的回答。")),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(crate::ui::skin::space(2))
-                .child(
-                    div()
-                        .size(crate::ui::skin::space(2))
-                        .rounded_full()
-                        .bg(colors.green),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(colors.muted)
-                        .child("edit  notes.md"),
-                )
-                .child(div().text_xs().text_color(colors.green).child("+2"))
-                .child(div().text_xs().text_color(colors.red).child("-1")),
-        )
-        .test_support()
-        .into_any_element()
-}
-
-fn preview_speaker(name: &str, accent: gpui_kit::Hsla, ink: gpui_kit::Hsla) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(crate::ui::skin::space(2))
-        .child(
-            div()
-                .size(crate::ui::skin::space(4))
-                .rounded_full()
-                .bg(accent.opacity(0.2)),
-        )
-        .child(
-            div()
-                .text_xs()
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                .text_color(ink)
-                .child(name.to_owned()),
-        )
-}
-
-/// Fixed cells on a wrapping row. Six fill one row; a narrower card wraps
-/// the rest left.
-///
-/// No grid. GPUI row tracks, including max-content, still absorbed the
-/// settings scrollport and pushed the font controls off the first screen.
-/// `min_w_0` lets the row shrink to the card instead of keeping a one-line
-/// minimum of every swatch, which overflowed the settings pane.
-fn palette_swatches(children: Vec<AnyElement>) -> AnyElement {
-    div()
-        .id("palette-swatches")
-        .w_full()
-        .min_w_0()
-        .max_w(px(crate::ui::desk::palette_row_max_px()))
-        .h_auto()
-        .flex_none()
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .items_start()
-        .content_start()
-        .justify_start()
-        .gap(px(crate::ui::desk::PALETTE_GAP_PX))
-        .children(children)
-        .test_support()
-        .into_any_element()
-}
-
-/// One palette cell: a fixed 52px column with a 28px swatch and a one-line label.
-///
-/// The swatch paints the same spec as `apply_palette`: page background as
-/// the base, accent as the inner corner, and the accent again as the
-/// selected ring. Width and the color fill are absolute pixels. A
-/// percentage size is resolved against the settings scrollport and
-/// stretches the row.
-fn palette_cell(
-    id: &'static str,
-    selected: &str,
-    theme: &Theme,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let cell_px = px(crate::ui::desk::PALETTE_CELL_PX);
-    let swatch_px = px(crate::ui::desk::PALETTE_SWATCH_PX);
-    let on = selected == id;
-    let colors = crate::ui::desk::palette_swatch_colors(id, !theme.is_dark());
-    let ring = if on { colors.accent } else { theme.border };
-    let hover_ring = colors.accent;
-    div()
-        .id(format!("palette-{id}"))
-        .w(cell_px)
-        .h_auto()
-        .self_start()
-        .flex_none()
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_1()
-        .cursor_pointer()
-        .child(
-            div()
-                .id(format!("swatch-{id}"))
-                .size(swatch_px)
-                .flex_none()
-                .flex_shrink_0()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(ring)
-                .hover(move |this| this.border_color(hover_ring))
-                .bg(colors.base)
-                .overflow_hidden()
-                .p(px(3.))
-                .flex()
-                .items_end()
-                .justify_end()
-                .child(
-                    div()
-                        .id(format!("swatch-accent-{id}"))
-                        .size(px(12.))
-                        .flex_none()
-                        .rounded(px(3.))
-                        .bg(colors.accent)
-                        .test_support(),
-                )
-                .test_support(),
-        )
-        .child(
-            div()
-                .w(cell_px)
-                .text_center()
-                .text_xs()
-                .truncate()
-                .text_color(theme.foreground)
-                .child(crate::ui::desk::palette_label(id)),
-        )
 }
 
 #[cfg(test)]
@@ -597,7 +324,6 @@ mod appearance_layout {
     };
 
     use super::super::widgets::settings_card;
-    use super::{palette_cell, palette_swatches};
 
     /// Settings scrollport at a normal desktop size. The shell matches
     /// `#settings-content`: a fixed-height flex column whose page does not grow.
@@ -606,16 +332,6 @@ mod appearance_layout {
     impl Render for AppearanceProbe {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
-            let swatches = palette_swatches(
-                mycode_config::VALID_PALETTES
-                    .into_iter()
-                    .map(|id| {
-                        palette_cell(id, "slate", &theme)
-                            .test_support()
-                            .into_any_element()
-                    })
-                    .collect(),
-            );
             let font = probe_dropdown(
                 "font-family",
                 "Interface font",
@@ -686,26 +402,9 @@ mod appearance_layout {
                                         .child(settings_card(
                                             "appearance",
                                             "Appearance",
-                                            Some("Palette, typeface, size, and language."),
+                                            Some("Appearance, typeface, size, and language."),
                                             &theme,
-                                            vec![
-                                                language,
-                                                div()
-                                                    .id("row-palette")
-                                                    .w_full()
-                                                    .h_auto()
-                                                    .flex_none()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap_2()
-                                                    .child("Palette")
-                                                    .child(swatches)
-                                                    .test_support()
-                                                    .into_any_element(),
-                                                font,
-                                                size_row,
-                                                agent,
-                                            ],
+                                            vec![language, font, size_row, agent],
                                         )),
                                 )
                                 .test_support(),
@@ -886,18 +585,12 @@ mod appearance_layout {
     }
 
     #[gpui_kit::test]
-    fn appearance_card_shows_language_then_palette_on_the_first_screen(cx: &mut TestAppContext) {
+    fn appearance_card_packs_language_font_size_and_user_agent(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(|cx| cx.set_reduce_motion(true));
         let handle = cx.open_window(size(px(1280.), px(480.)), |_, _| AppearanceProbe);
         cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
-            let swatches = window.find("palette-swatches").bounds();
-            let swatch = window.find("swatch-slate").bounds();
-            let accent = window.find("swatch-accent-slate").bounds();
-            let slate = window.find("palette-slate").bounds();
-            let ocean = window.find("palette-ocean").bounds();
-            let aurora = window.find("palette-aurora").bounds();
             let font = window.find("dropdown-font-family").bounds();
             let font_row = window.find("dropdown-row-font-family").bounds();
             let font_button = window.find("dropdown-button-font-family").bounds();
@@ -913,42 +606,8 @@ mod appearance_layout {
             assert!(
                 language.origin.y >= content.origin.y
                     && language.bottom() <= content.bottom()
-                    && language.origin.y < swatches.origin.y,
-                "language should be on the first screen, above the palette: language {language:?} swatches {swatches:?} content {content:?}"
-            );
-            assert!(
-                (swatch.size.width - px(28.)).abs() <= px(2.)
-                    && (swatch.size.height - px(28.)).abs() <= px(2.),
-                "swatch should stay a 28px square, got {swatch:?}"
-            );
-            assert!(
-                accent.size.width < swatch.size.width
-                    && accent.size.height < swatch.size.height
-                    && accent.origin.x > swatch.origin.x
-                    && accent.origin.y > swatch.origin.y
-                    && accent.right() <= swatch.right() + px(1.)
-                    && accent.bottom() <= swatch.bottom() + px(1.),
-                "accent should be an inner corner, not the whole swatch: accent {accent:?} swatch {swatch:?}"
-            );
-            assert!(
-                (slate.size.width - px(crate::ui::desk::PALETTE_CELL_PX)).abs() <= px(2.),
-                "palette cell should stay {0}px wide, got {slate:?}",
-                crate::ui::desk::PALETTE_CELL_PX
-            );
-            assert!(
-                swatches.size.height < px(280.),
-                "palette row should be content height, got {swatches:?}"
-            );
-            assert!(
-                (ocean.origin.y - slate.origin.y).abs() <= px(2.)
-                    && (aurora.origin.y - slate.origin.y).abs() <= px(2.)
-                    && aurora.origin.x > ocean.origin.x
-                    && aurora.right()
-                        <= slate.origin.x + px(crate::ui::desk::palette_row_max_px()) + px(2.)
-                    && swatches.right() <= card.right() + px(1.)
-                    && swatches.size.width
-                        <= px(crate::ui::desk::palette_row_max_px()) + px(2.),
-                "six palettes stay on one row inside the card: slate {slate:?} ocean {ocean:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
+                    && language.origin.y < font.origin.y,
+                "language should be on the first screen, above the font: language {language:?} font {font:?} content {content:?}"
             );
             assert!(
                 font.size.height < px(120.)
@@ -966,22 +625,13 @@ mod appearance_layout {
                     && chip_xl.right() <= card.right() + px(1.),
                 "font helper should wrap beside a dropdown that stays inside the card: hint {font_hint:?} button {font_button:?} card {card:?} chip {chip_xl:?}"
             );
-            assert!(
-                card.size.height > content.size.height && card.size.height < px(920.),
-                "appearance card should scroll inside the pane instead of growing a blank band, card {card:?} content {content:?}"
-            );
 
-            let palette_gap = swatches.origin.y - language.bottom();
-            let font_gap = font.origin.y - swatches.bottom();
+            let font_gap = font.origin.y - language.bottom();
             let size_gap = size_row.origin.y - font.bottom();
             let agent_gap = agent.origin.y - size_row.bottom();
             assert!(
-                palette_gap >= px(0.) && palette_gap < px(160.),
-                "gap between language and palette is {palette_gap:?}, language {language:?} swatches {swatches:?}"
-            );
-            assert!(
                 font_gap >= px(0.) && font_gap < px(80.),
-                "gap between palette and interface font is {font_gap:?}, swatches {swatches:?} font {font:?}"
+                "gap between language and interface font is {font_gap:?}"
             );
             assert!(
                 size_gap >= px(0.) && size_gap < px(80.),
@@ -995,13 +645,9 @@ mod appearance_layout {
                 chip.size.height > px(16.) && chip.size.height < px(48.),
                 "S chip should paint at content height, got {chip:?}"
             );
-            assert!(
-                agent.bottom() < px(920.),
-                "palette through user-agent should stay one short page, ua {agent:?}"
-            );
 
-            // Scrolling the settings pane must not panic, and the same
-            // sections have to stay content-sized after the offset changes.
+            // Scrolling the settings pane must not panic, and the rows have
+            // to stay content-sized after the offset changes.
             window.scroll(
                 "settings-content",
                 ScrollDelta::Pixels(point(px(0.), px(-240.))),
@@ -1009,23 +655,17 @@ mod appearance_layout {
             );
             let font_after = window.find("dropdown-font-family").bounds();
             let size_after = window.find("row-font-size").bounds();
-            let language_after = window.find("dropdown-language").bounds();
-            let swatches_after = window.find("palette-swatches").bounds();
             let agent_after = window.find("row-user-agent").bounds();
-            let scrolled_palette = swatches_after.origin.y - language_after.bottom();
             let scrolled_gap = size_after.origin.y - font_after.bottom();
             let scrolled_agent = agent_after.origin.y - size_after.bottom();
             assert!(
-                language_after.origin.y < swatches_after.origin.y
-                    && font_after.size.height < px(120.)
+                font_after.size.height < px(120.)
                     && size_after.size.height < px(120.)
-                    && scrolled_palette >= px(0.)
-                    && scrolled_palette < px(160.)
                     && scrolled_gap >= px(0.)
                     && scrolled_gap < px(80.)
                     && scrolled_agent >= px(0.)
                     && scrolled_agent < px(80.),
-                "scroll should keep language, palette, font, size, and user-agent packed: language {language_after:?} swatches {swatches_after:?} font {font_after:?} size {size_after:?} ua {agent_after:?}"
+                "scroll should keep font, size, and user-agent packed: font {font_after:?} size {size_after:?} ua {agent_after:?}"
             );
         })
         .unwrap();
@@ -1044,19 +684,9 @@ mod appearance_layout {
             let language = window.find("dropdown-language").bounds();
             let content = window.find("settings-content").bounds();
             let chip = window.find("font-size-xl").bounds();
-            let swatches = window.find("palette-swatches").bounds();
-            let slate = window.find("palette-slate").bounds();
-            let aurora = window.find("palette-aurora").bounds();
             assert!(
                 language.bottom() <= content.bottom(),
                 "language should stay on the first screen, language {language:?} content {content:?}"
-            );
-            assert!(
-                (aurora.origin.y - slate.origin.y).abs() <= px(2.)
-                    && swatches.right() <= card.right() + px(1.)
-                    && swatches.size.width
-                        <= px(crate::ui::desk::palette_row_max_px()) + px(2.),
-                "palette stays on one row inside the card: slate {slate:?} aurora {aurora:?} swatches {swatches:?} card {card:?}"
             );
             assert!(
                 button.right() <= card.right() + px(1.) && hint.right() <= button.left() + px(4.),
