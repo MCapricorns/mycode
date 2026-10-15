@@ -250,6 +250,14 @@ async fn store_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), Str
     blocking(move || write_cache(&home, &cache)).await
 }
 
+/// Whether a parsed cloud document carries any provider besides the presets
+/// this build injects (`openai-codex`, OpenDesign).
+fn has_cloud_providers(document: &CatalogDocument) -> bool {
+    document.providers.iter().any(|provider| {
+        provider.id != "openai-codex" && provider.id != super::opendesign::PROVIDER_ID
+    })
+}
+
 /// Runs one refresh against the cloud catalog.
 ///
 /// `force` bypasses the freshness window. Network failures and parse
@@ -335,6 +343,12 @@ pub async fn refresh(
     let parse_home = home.clone();
     let document = match blocking(move || {
         let mut document = parse_models_dev(&bytes);
+        // Judge the cloud copy before this build's own rows join it: an
+        // unparsable body (a captive portal's HTML page, say) must not
+        // replace the cache with nothing but the injected presets.
+        if !has_cloud_providers(&document) {
+            return Err("catalog document had no usable providers".to_owned());
+        }
         super::opendesign::attach_stored(&parse_home, &mut document);
         Ok(document)
     })
@@ -343,9 +357,6 @@ pub async fn refresh(
         Ok(document) => document,
         Err(message) => return RefreshOutcome::Unavailable(message),
     };
-    if document.providers.is_empty() {
-        return RefreshOutcome::Unavailable("catalog document had no usable providers".to_owned());
-    }
     let etag = headers
         .get("etag")
         .and_then(|value| value.to_str().ok())
@@ -363,8 +374,21 @@ pub async fn refresh(
 
 #[cfg(test)]
 mod tests {
-    use super::{CACHE_FORMAT_VERSION, CACHE_KIND, CacheParse, parse_cache};
+    use super::{CACHE_FORMAT_VERSION, CACHE_KIND, CacheParse, has_cloud_providers, parse_cache};
     use serde_json::json;
+
+    #[test]
+    fn a_cloud_body_without_providers_is_not_a_catalog() {
+        let html = super::parse_models_dev(b"<html>captive portal</html>");
+        assert!(!has_cloud_providers(&html));
+        let empty = super::parse_models_dev(b"{}");
+        assert!(
+            !has_cloud_providers(&empty),
+            "the injected presets alone are not a catalog"
+        );
+        let snapshot = super::bundled();
+        assert!(has_cloud_providers(snapshot));
+    }
 
     #[test]
     fn parse_cache_normalizes_and_rejects_empty_or_invalid_provider_sets() {
