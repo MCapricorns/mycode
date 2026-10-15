@@ -422,6 +422,7 @@ mod tests {
             session_id: id.to_owned(),
             root_branch_id: "br".to_owned(),
             title: title.to_owned(),
+            updated_at_ms: None,
             event_count: 1,
             active: false,
             corrupt,

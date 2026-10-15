@@ -43,7 +43,8 @@ pub(crate) fn append(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     Ok(created)
 }
 
-/// Reads one exact byte range from one owned file.
+/// Reads one exact byte range from one owned file, rejecting trailing bytes
+/// when `exact_end` requires the range to end at EOF.
 pub(crate) fn read_range(path: &Path, offset: u64, length: u64) -> io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(offset))?;
@@ -51,6 +52,26 @@ pub(crate) fn read_range(path: &Path, offset: u64, length: u64) -> io::Result<Ve
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "range length exceeds addressable bytes",
+        )
+    })?;
+    let mut buffer = vec![0_u8; length];
+    file.read_exact(&mut buffer)?;
+    Ok(buffer)
+}
+
+/// Reads an external payload file, requiring its on-disk length to match `length`.
+pub(crate) fn read_exact_file(path: &Path, length: u64) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    if file.metadata()?.len() != length {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "payload file length does not match indexed length",
+        ));
+    }
+    let length = usize::try_from(length).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "payload length exceeds addressable bytes",
         )
     })?;
     let mut buffer = vec![0_u8; length];

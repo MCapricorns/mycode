@@ -42,12 +42,47 @@ pub fn anchor_tool_path(primary: &Path, extras: &[PathBuf], raw: &str) -> (PathB
         let spelled = if relative.as_os_str().is_empty() {
             String::new()
         } else {
-            relative.to_string_lossy().replace('\\', "/")
+            crate::builtin::fs_search::to_posix(&relative)
         };
         best = Some((depth, extra.clone(), spelled));
     }
     match best {
         Some((_, root, relative)) => (root, relative),
         None => (primary.to_path_buf(), raw.to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::anchor_tool_path;
+
+    #[test]
+    fn anchor_tool_path_selects_deepest_extra_root_and_normalizes_separators() {
+        // Use a native absolute root: `/workspace` alone is drive-relative
+        // on Windows and cannot exercise the absolute-path anchor contract.
+        let base = std::env::temp_dir().join("mycode-anchor-root");
+        let primary = base.join("main");
+        let extra = base.join("extra");
+        let nested = extra.join("nested");
+        let extras = vec![extra, nested.clone()];
+        let raw = nested
+            .join(Path::new("dir/../file.rs"))
+            .display()
+            .to_string();
+        let (root, rel) = anchor_tool_path(&primary, &extras, &raw);
+        assert_eq!(root, nested);
+        assert_eq!(rel, "file.rs");
+
+        let (root_exact, rel_exact) =
+            anchor_tool_path(&primary, &extras, &nested.display().to_string());
+        assert_eq!(root_exact, nested);
+        assert_eq!(rel_exact, "");
+
+        let unmatched = base.join("outside/file.rs").display().to_string();
+        let (unmatched_root, unmatched_rel) = anchor_tool_path(&primary, &extras, &unmatched);
+        assert_eq!(unmatched_root, primary);
+        assert_eq!(unmatched_rel, unmatched);
     }
 }

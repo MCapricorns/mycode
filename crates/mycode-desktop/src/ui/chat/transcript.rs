@@ -6,7 +6,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, TestSupportExt as _, Window, div, px,
+    StatefulInteractiveElement, Styled, TestSupportExt as _, Window, div, px, relative,
 };
 
 use super::markdown;
@@ -16,6 +16,12 @@ use crate::ui::{desk::Desk, ellipsis};
 use crate::view_model::{ConversationEntry, EntryKind, StreamingReply};
 use crate::workspace::Workspace;
 
+#[derive(Clone, Copy)]
+pub(super) struct AssistantDisplay {
+    pub reasoning: bool,
+    pub speaker: bool,
+}
+
 /// The in-flight assistant turn: a live status line, then thinking and text.
 ///
 /// Subagent progress lives on this one status line, the running list above
@@ -24,21 +30,25 @@ use crate::workspace::Workspace;
 pub(super) fn render_streaming_entry(
     streaming: &StreamingReply,
     workspace: &Workspace,
+    cache: Option<&markdown::MarkdownCache>,
     theme: &Theme,
-    show_reasoning: bool,
+    display: AssistantDisplay,
     window: &Window,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
+    let AssistantDisplay {
+        reasoning: show_reasoning,
+        speaker: show_speaker,
+    } = display;
     let desk = Desk::of(theme);
     let status = if streaming.status.is_empty() {
         t("Working", "工作中").to_owned()
     } else {
         streaming.status.clone()
     };
+    let has_text = !streaming.text.trim().is_empty();
     desk_shell(
         "streaming",
-        t("live", "实时").to_owned(),
-        theme,
         div()
             .w_full()
             .min_w_0()
@@ -53,6 +63,15 @@ pub(super) fn render_streaming_entry(
                 desk.amber,
                 theme,
             )))
+            .when(show_speaker && has_text, |this| {
+                this.child(markdown::prose_measure(speaker_row(
+                    "streaming-agent-status",
+                    t("Agent", "代理"),
+                    IconName::Bot,
+                    desk.green,
+                    theme,
+                )))
+            })
             .when(show_reasoning && !streaming.thinking.is_empty(), |this| {
                 let id: SharedString = "streaming-thinking".into();
                 let open = workspace.thinking_open(&id);
@@ -68,49 +87,41 @@ pub(super) fn render_streaming_entry(
                     }),
                 )))
             })
-            .when(!streaming.text.trim().is_empty(), |this| {
-                this.child(markdown::prose_measure(speaker_row(
-                    "streaming-agent-status",
-                    t("Agent", "代理"),
-                    IconName::Bot,
-                    desk.green,
-                    theme,
-                )))
-                .child(agent_text(
+            .when(has_text, |this| {
+                this.child(agent_text(
                     "streaming-agent-md".into(),
                     streaming.text.clone().into(),
+                    cache,
                     theme,
                     true,
                     window,
                 ))
             })
-            .when(
-                streaming.thinking.trim().is_empty() && streaming.text.trim().is_empty(),
-                |this| {
-                    this.child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .truncate()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(status),
-                    )
-                },
-            ),
+            .when(streaming.thinking.trim().is_empty() && !has_text, |this| {
+                this.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .truncate()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(status),
+                )
+            }),
     )
 }
 
-/// Desk transcript entries: a mono stamp gutter plus a ledger row per
-/// entry. Assistant text is bare. User rows and tool blocks arrive
-/// pre-routed by the caller's transcript collection and render through
-/// their own builders.
+/// Desk transcript entries: a clean timeline block per entry. Assistant text
+/// shows one speaker header per turn. User rows and tool blocks arrive
+/// pre-routed by the caller's transcript collection and render through their
+/// own builders.
 pub(super) fn render_entry(
     entry: &ConversationEntry,
     workspace: &Workspace,
+    cache: Option<&markdown::MarkdownCache>,
     theme: &Theme,
-    show_reasoning: bool,
+    display: AssistantDisplay,
     window: &Window,
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
@@ -121,11 +132,11 @@ pub(super) fn render_entry(
             let toggle_id = id;
             desk_block(
                 entry,
-                theme,
                 assistant_block(
                     entry,
                     open,
-                    show_reasoning,
+                    display,
+                    cache,
                     theme,
                     window,
                     cx.listener(move |workspace, _, _, cx| {
@@ -140,7 +151,6 @@ pub(super) fn render_entry(
             let failed = entry.text.starts_with("failed:");
             desk_block(
                 entry,
-                theme,
                 div()
                     .w_full()
                     .min_w_0()
@@ -164,16 +174,10 @@ pub(super) fn render_entry(
     }
 }
 
-/// Timeline block shell: a stamp gutter beside the entry content.
-fn desk_block(
-    entry: &ConversationEntry,
-    theme: &Theme,
-    content: impl IntoElement,
-) -> impl IntoElement {
+/// Timeline block shell around one committed entry.
+fn desk_block(entry: &ConversationEntry, content: impl IntoElement) -> impl IntoElement {
     desk_shell(
         &entry.event_id,
-        short_stamp(&entry.event_id),
-        theme,
         div()
             .id(format!("entry-{}", entry.event_id))
             .w_full()
@@ -187,16 +191,7 @@ fn desk_block(
     )
 }
 
-fn desk_shell(
-    id: &str,
-    stamp: String,
-    theme: &Theme,
-    content: impl IntoElement,
-) -> impl IntoElement {
-    // The event id stays out of the layout, so user and agent prose share the
-    // tool cards' left edge. It used to sit on the leading edge and painted
-    // over the "You" label (a tail such as 256206). It now rests on the
-    // trailing edge, hidden until the row is hovered.
+fn desk_shell(_id: &str, content: impl IntoElement) -> impl IntoElement {
     div()
         .group("ledger-row")
         .relative()
@@ -204,21 +199,6 @@ fn desk_shell(
         .min_w_0()
         .h_auto()
         .flex_none()
-        .child(
-            div()
-                .id(SharedString::from(format!("ledger-stamp-{id}")))
-                .absolute()
-                .right(px(4.))
-                .top(px(2.))
-                .text_xs()
-                .font_family(theme.mono_font_family.clone())
-                .text_color(Desk::of(theme).faint)
-                .whitespace_nowrap()
-                .invisible()
-                .group_hover("ledger-row", |style| style.visible())
-                .child(stamp)
-                .test_support(),
-        )
         .child(content)
 }
 
@@ -240,13 +220,13 @@ fn speaker_row(
         .min_w_0()
         .child(
             div()
-                .size(skin::space(6))
+                .size(skin::space(5))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .bg(color.opacity(0.16))
+                .bg(color.opacity(0.14))
                 .text_color(color)
                 .child(Icon::new(icon).xsmall()),
         )
@@ -257,7 +237,7 @@ fn speaker_row(
                 .overflow_hidden()
                 .truncate()
                 .text_xs()
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .text_color(theme.foreground)
                 .child(name.to_owned())
                 .test_support(),
@@ -300,13 +280,20 @@ fn status_line(
 fn assistant_block(
     entry: &ConversationEntry,
     open: bool,
-    show_reasoning: bool,
+    display: AssistantDisplay,
+    cache: Option<&markdown::MarkdownCache>,
     theme: &Theme,
     window: &Window,
     on_toggle: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
 ) -> impl IntoElement {
+    let AssistantDisplay {
+        reasoning: show_reasoning,
+        speaker: show_speaker,
+    } = display;
     let desk = Desk::of(theme);
     let thinking_id: SharedString = format!("thinking-{}", entry.event_id).into();
+    let has_text = !entry.text.trim().is_empty();
+    let has_thinking = show_reasoning && !entry.thinking.is_empty();
     div()
         .flex()
         .flex_col()
@@ -315,7 +302,16 @@ fn assistant_block(
         .min_w_0()
         .h_auto()
         .flex_none()
-        .when(show_reasoning && !entry.thinking.is_empty(), |this| {
+        .when(show_speaker && (has_text || has_thinking), |this| {
+            this.child(markdown::prose_measure(speaker_row(
+                format!("agent-status-{}", entry.event_id),
+                t("Agent", "代理"),
+                IconName::Bot,
+                desk.green,
+                theme,
+            )))
+        })
+        .when(has_thinking, |this| {
             this.child(markdown::prose_measure(thinking_box(
                 thinking_id,
                 &entry.thinking,
@@ -325,17 +321,11 @@ fn assistant_block(
                 on_toggle,
             )))
         })
-        .when(!entry.text.trim().is_empty(), |this| {
-            this.child(markdown::prose_measure(speaker_row(
-                format!("agent-status-{}", entry.event_id),
-                t("Agent", "代理"),
-                IconName::Bot,
-                desk.green,
-                theme,
-            )))
-            .child(agent_text(
+        .when(has_text, |this| {
+            this.child(agent_text(
                 format!("agent-md-{}", entry.event_id).into(),
-                SharedString::from(entry.text.trim()),
+                SharedString::from(entry.text.clone()),
+                cache,
                 theme,
                 false,
                 window,
@@ -385,9 +375,9 @@ fn thinking_summary(text: &str) -> String {
     ellipsis(line, 42)
 }
 
-/// Thinking trace. Distinct from the answer: a single header row toggles the
-/// body. Collapsed, the header stays and the reply (a sibling) does not fold
-/// with it.
+/// Thinking trace. Distinct from the answer: a single quiet header row toggles
+/// the body. Collapsed, the header stays and the reply (a sibling) does not
+/// fold with it.
 ///
 /// The box is content-sized. `overflow_hidden` here lets the scroller treat
 /// the row as a zero-minimum flex item and clip it down to a bar.
@@ -421,9 +411,10 @@ fn thinking_box(
                 .min_w_0()
                 .h_auto()
                 .flex_none()
-                .min_h(px(22.))
+                .min_h(px(24.))
+                .px(skin::space(1))
                 .cursor_pointer()
-                .rounded(skin::radius_xs())
+                .rounded(px(6.))
                 .hover(|row| row.bg(theme.secondary_hover.opacity(0.35)))
                 .on_click(on_toggle)
                 .child(thinking_line(&toggle_id, headline, streaming, theme))
@@ -437,9 +428,11 @@ fn thinking_box(
                     .min_w_0()
                     .h_auto()
                     .flex_none()
+                    .pl(skin::space(3))
+                    .border_l_1()
+                    .border_color(theme.border.opacity(0.55))
                     .whitespace_normal()
                     .text_xs()
-                    .italic()
                     .text_color(theme.muted_foreground)
                     .child(text.to_owned())
                     .test_support(),
@@ -459,7 +452,6 @@ fn thinking_line(
         .h_auto()
         .flex_none()
         .text_xs()
-        .italic()
         .whitespace_nowrap()
         .text_color(theme.muted_foreground)
         .test_support();
@@ -484,6 +476,7 @@ fn thinking_line(
 fn agent_text(
     id: SharedString,
     text: SharedString,
+    cache: Option<&markdown::MarkdownCache>,
     theme: &Theme,
     stream_fade: bool,
     window: &Window,
@@ -495,24 +488,11 @@ fn agent_text(
         .child(markdown::render_markdown(
             id,
             text,
+            cache,
             theme,
             stream_fade,
             window,
         ))
-}
-
-/// Gutter stamp: the last 8 characters of the entry id. The id is a ledger
-/// identity, not a clock time.
-fn short_stamp(event_id: &str) -> String {
-    let tail: String = event_id
-        .chars()
-        .rev()
-        .take(8)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    tail
 }
 
 /// Compaction summary card. The text is the checkpoint summary, shown after
@@ -526,15 +506,16 @@ pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> 
         .flex()
         .flex_col()
         .gap(skin::space(1))
-        .rounded(skin::radius_md())
+        .rounded(px(14.))
         .border_1()
-        .border_color(theme.border)
+        .border_color(theme.border.opacity(0.65))
         .bg(theme.muted.opacity(0.65))
         .px_3()
         .py_2()
         .child(
             div()
                 .text_xs()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .text_color(theme.primary)
                 .child(t("SUMMARY", "摘要")),
         )
@@ -547,11 +528,14 @@ pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> 
         )
 }
 
-/// One user bubble with hover actions: edit-and-resend (rewinds to before
-/// this message and prefills the composer) and recall (drops this message
-/// and everything after). Neither action restores or deletes workspace
-/// files. The first message has no prior event to rewind to, so its
-/// actions hide.
+/// Maximum fraction of the prose column a right-aligned user bubble occupies.
+pub(super) const USER_BUBBLE_MAX_SHARE: f32 = 0.72;
+
+/// One right-aligned user bubble (capped at 72% width, no speaker header) with
+/// hover actions: edit-and-resend (rewinds to before this message and prefills
+/// the composer) and recall (drops this message and everything after). Neither
+/// action restores or deletes workspace files. Messages without a prior ledger
+/// event hide these actions.
 pub(super) fn render_user_entry(
     entry: &ConversationEntry,
     can_rewind: bool,
@@ -559,36 +543,29 @@ pub(super) fn render_user_entry(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
-    let desk = Desk::of(theme);
-    // Left-aligned ledger row. Hover edit/recall actions sit inline to the
-    // right of the text.
     let mut column = div()
         .w_full()
         .min_w_0()
         .flex()
         .flex_col()
+        .items_end()
         .gap(skin::space(1))
-        .child(speaker_row(
-            format!("you-status-{}", entry.event_id),
-            t("You", "你"),
-            IconName::UserRound,
-            desk.cyan,
-            theme,
-        ))
         .child(
             div()
-                .w_full()
+                .id(format!("user-bubble-{}", entry.event_id))
+                .max_w(relative(USER_BUBBLE_MAX_SHARE))
                 .min_w_0()
-                .rounded(skin::radius_lg())
-                .bg(theme.accent.opacity(0.16))
+                .rounded(px(14.))
+                .bg(theme.secondary)
                 .border_1()
-                .border_color(theme.border.opacity(0.65))
+                .border_color(theme.border.opacity(0.55))
                 .px(skin::space(3))
                 .py(skin::space(2))
                 .text_sm()
                 .whitespace_normal()
                 .text_color(theme.foreground)
-                .child(SharedString::from(&entry.text)),
+                .child(SharedString::from(entry.text.clone()))
+                .test_support(),
         );
     if can_rewind {
         column = column.child(
@@ -596,6 +573,7 @@ pub(super) fn render_user_entry(
                 .id(format!("entry-actions-{index}"))
                 .flex()
                 .flex_row()
+                .justify_end()
                 .gap_1()
                 .opacity(0.0)
                 .group_hover("user-entry", |this| this.opacity(1.0))
@@ -638,18 +616,15 @@ pub(super) fn render_user_entry(
                         }))
                         .child(Icon::new(IconName::RefreshCcw).xsmall())
                         .child(t("recall", "撤回")),
-                ),
+                )
+                .test_support(),
         );
     }
     div()
         .id(format!("entry-{}", entry.event_id))
         .group("user-entry")
-        .child(desk_shell(
-            &entry.event_id,
-            short_stamp(&entry.event_id),
-            theme,
-            markdown::prose_measure(column),
-        ))
+        .child(desk_shell(&entry.event_id, markdown::prose_measure(column)))
+        .test_support()
         .into_any_element()
 }
 
@@ -719,11 +694,14 @@ mod layout {
                     let toggle_key = key.clone();
                     desk_block(
                         entry,
-                        &theme,
                         assistant_block(
                             entry,
                             expanded,
-                            true,
+                            super::AssistantDisplay {
+                                reasoning: true,
+                                speaker: true,
+                            },
+                            None,
                             &theme,
                             window,
                             cx.listener(move |probe, _, _, cx| {
@@ -970,43 +948,144 @@ mod layout {
     }
 
     #[gpui_kit::test]
-    fn ledger_stamp_does_not_cover_the_you_label(cx: &mut TestAppContext) {
-        struct StampProbe;
-        impl Render for StampProbe {
+    fn user_bubbles_align_right_stay_within_72_percent_and_omit_ledger_stamps(
+        cx: &mut TestAppContext,
+    ) {
+        struct UserProbe(ConversationEntry);
+        impl Render for UserProbe {
             fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 let theme = cx.theme().clone();
-                div().size_full().p(px(16.)).child(super::desk_shell(
-                    "probe",
-                    "256206".into(),
-                    &theme,
-                    // The speaker name hugs its text, the same way the real
-                    // "You" label does. A full-width row would overlap the
-                    // trailing stamp even when the word itself does not.
+                let column = div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .child(
+                        div()
+                            .id(format!("user-bubble-{}", self.0.event_id))
+                            .max_w(gpui_kit::relative(super::USER_BUBBLE_MAX_SHARE))
+                            .min_w_0()
+                            .rounded(px(14.))
+                            .bg(theme.secondary)
+                            .px(px(12.))
+                            .py(px(8.))
+                            .text_sm()
+                            .whitespace_normal()
+                            .child(gpui_kit::SharedString::from(self.0.text.clone()))
+                            .test_support(),
+                    );
+                div().size_full().child(
                     div()
-                        .w_full()
-                        .flex()
-                        .flex_row()
-                        .child(div().id("you-label").child("You").test_support()),
-                ))
+                        .id("conversation")
+                        .w(px(800.))
+                        .h(px(300.))
+                        .child(
+                            super::transcript_stack()
+                                .child(
+                                    div()
+                                        .id(format!("entry-{}", self.0.event_id))
+                                        .child(super::desk_shell(
+                                            &self.0.event_id,
+                                            super::markdown::prose_measure(column),
+                                        ))
+                                        .test_support(),
+                                )
+                                .test_support(),
+                        )
+                        .test_support(),
+                )
             }
         }
+        let entry = ConversationEntry {
+            event_id: "u1".into(),
+            kind: EntryKind::UserMessage,
+            text: "A long user prompt that wraps across multiple lines inside the right-aligned bubble without stretching across the full transcript width."
+                .repeat(3)
+                .into(),
+            call_id: None,
+            thinking: String::new(),
+        };
         cx.update(gpui_kit::init);
-        let handle = cx.open_window(size(px(800.), px(240.)), |_, _| StampProbe);
+        let handle = cx.open_window(size(px(900.), px(400.)), move |_, _| UserProbe(entry));
         cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
-            let label = window.find("you-label").bounds();
-            let stamp = window.find("ledger-stamp-probe");
-            let stamp_bounds = stamp.bounds();
             assert!(
-                !stamp.visible(),
-                "the event id must stay hidden until the row is hovered"
+                window.try_find("ledger-stamp-u1").is_none(),
+                "ledger stamps must not be mounted in the transcript"
             );
             assert!(
-                stamp_bounds.origin.x >= label.right() - px(1.)
-                    || stamp_bounds.right() <= label.origin.x + px(1.),
-                "ledger stamp {stamp_bounds:?} overlaps the You label {label:?}"
+                window.try_find("you-status-u1").is_none(),
+                "user rows must not paint a You speaker header"
+            );
+            let row = window.find("entry-u1").bounds();
+            let bubble = window.find("user-bubble-u1").bounds();
+            let max_allowed = f32::from(row.size.width) * super::USER_BUBBLE_MAX_SHARE + 2.;
+            assert!(
+                f32::from(bubble.size.width) <= max_allowed,
+                "user bubble width {:?} must not exceed 72% of row {:?}",
+                bubble.size.width,
+                row.size.width
+            );
+            assert!(
+                (row.right() - bubble.right()).abs() <= px(2.),
+                "user bubble must align to the right edge of its row: bubble {bubble:?} row {row:?}"
             );
         })
         .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn assistant_speaker_header_renders_only_when_requested_for_the_turn(cx: &mut TestAppContext) {
+        struct TurnProbe(Vec<(ConversationEntry, bool)>);
+        impl Render for TurnProbe {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let theme = cx.theme().clone();
+                let rows = self.0.iter().map(|(entry, show_speaker)| {
+                    desk_block(
+                        entry,
+                        assistant_block(
+                            entry,
+                            false,
+                            super::AssistantDisplay {
+                                reasoning: true,
+                                speaker: *show_speaker,
+                            },
+                            None,
+                            &theme,
+                            window,
+                            |_, _, _| {},
+                        ),
+                    )
+                });
+                div().size_full().child(
+                    div()
+                        .id("conversation")
+                        .w(px(760.))
+                        .h(px(400.))
+                        .child(transcript_stack().children(rows).test_support())
+                        .test_support(),
+                )
+            }
+        }
+        let first = assistant("step-1", "First assistant step in this turn.");
+        let second = assistant("step-2", "Second assistant step in the same turn.");
+        cx.update(gpui_kit::init);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let handle = cx.open_window(size(px(900.), px(500.)), move |_, _| {
+            TurnProbe(vec![(first, true), (second, false)])
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("agent-status-step-1").is_some(),
+            "first assistant step in a turn must render the Agent speaker header"
+        );
+        assert!(
+            window.try_find("agent-status-step-2").is_none(),
+            "subsequent assistant steps in the same turn must not repeat the Agent speaker header"
+        );
+    })
+    .unwrap();
     }
 }

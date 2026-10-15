@@ -8,7 +8,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    Window, div, px, relative,
 };
 
 use crate::i18n::t;
@@ -47,6 +47,7 @@ const INSPECTOR_OVERLAY_WIDTH: f32 = 320.;
 const CHANGES_DRAWER_WIDTH: f32 = 480.;
 const DIFF_PANEL_WIDTH: f32 = 560.;
 const PANEL_GAP: f32 = 12.;
+const PANEL_MIN_WIDTH: f32 = 280.;
 
 /// Right insets for the changes drawer and the diff panel.
 ///
@@ -66,6 +67,80 @@ pub(crate) fn panel_rights(inspector_span: f32, drawer_open: bool) -> (f32, f32)
         PANEL_GAP
     };
     (drawer_right, diff_right)
+}
+
+/// Responsive right inset and width for the changes drawer and diff panel so
+/// neither panel slides past the left edge of narrower windows.
+#[must_use]
+pub(crate) fn responsive_panel_bounds(
+    viewport_width: f32,
+    inspector_span: f32,
+    drawer_open: bool,
+) -> ((f32, f32), (f32, f32)) {
+    let min_left = PANEL_GAP;
+    let max_span = (viewport_width - min_left * 2.).max(PANEL_MIN_WIDTH);
+    let base_right = panel_rights(inspector_span, drawer_open).0;
+
+    let drawer_avail = viewport_width - base_right - min_left;
+    let (drawer_right, drawer_width) = if drawer_avail >= PANEL_MIN_WIDTH {
+        (base_right, CHANGES_DRAWER_WIDTH.min(drawer_avail))
+    } else {
+        let width = CHANGES_DRAWER_WIDTH.min(max_span);
+        let right = (viewport_width - width - min_left).max(PANEL_GAP);
+        (right, width)
+    };
+
+    let preferred_diff_right = if drawer_open {
+        drawer_right + drawer_width + PANEL_GAP
+    } else {
+        base_right
+    };
+    let diff_avail = viewport_width - preferred_diff_right - min_left;
+    let (diff_right, diff_width) = if diff_avail >= DIFF_PANEL_WIDTH {
+        (preferred_diff_right, DIFF_PANEL_WIDTH)
+    } else if diff_avail >= 360. {
+        (preferred_diff_right, diff_avail)
+    } else {
+        // When side-by-side stacking would push the diff panel off-screen or
+        // crush it too narrow, anchor it inside the viewport over the drawer.
+        let fallback_avail = viewport_width - base_right - min_left;
+        if fallback_avail >= 360. {
+            (base_right, DIFF_PANEL_WIDTH.min(fallback_avail))
+        } else {
+            let width = DIFF_PANEL_WIDTH.min(max_span);
+            let right = (viewport_width - width - min_left).max(PANEL_GAP);
+            (right, width)
+        }
+    };
+
+    ((drawer_right, drawer_width), (diff_right, diff_width))
+}
+
+/// Proportional fill fraction in `0.0..=1.0` for the context usage bar.
+#[must_use]
+pub(crate) fn context_bar_fraction(value: u64, total: u64) -> f32 {
+    if total == 0 || value == 0 {
+        0.0
+    } else {
+        (value as f32 / total as f32).clamp(0.0, 1.0)
+    }
+}
+
+/// Semantic color for a git porcelain status code (`A`, `M`, `D`, `??`, etc.).
+#[must_use]
+pub(crate) fn git_status_color(status: &str, theme: &Theme) -> gpui_kit::Hsla {
+    let trimmed = status.trim();
+    if trimmed == "??" {
+        super::desk::Desk::of(theme).faint
+    } else if trimmed.contains('D') {
+        theme.danger
+    } else if trimmed.contains('A') {
+        theme.success
+    } else if trimmed.contains('M') || trimmed.contains('R') || trimmed.contains('C') {
+        theme.warning
+    } else {
+        theme.primary
+    }
 }
 
 pub(super) fn render_context_panel(
@@ -92,7 +167,7 @@ pub(super) fn render_context_panel(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .rounded(px(12.))
+                .rounded(super::skin::radius_card())
                 .border_1()
                 .border_color(super::skin::glass_border(theme))
                 .bg(super::skin::glass_sidebar(theme))
@@ -141,10 +216,11 @@ pub(super) fn render_inspector_drawer(
                 .w(px(INSPECTOR_OVERLAY_WIDTH))
                 .flex()
                 .flex_col()
-                .rounded(px(12.))
+                .rounded(super::skin::radius_card())
                 .border_1()
-                .border_color(super::skin::glass_border(theme))
+                .border_color(super::skin::border_strong(theme))
                 .bg(super::skin::glass_sidebar(theme))
+                .shadow(super::skin::elevation_shadow(theme))
                 .overflow_hidden()
                 .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation();
@@ -233,6 +309,14 @@ fn inspector_body(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> imp
         .child(render_model_usage(workspace, cx))
 }
 
+fn section_heading(text: &str, theme: &Theme) -> impl IntoElement {
+    div()
+        .text_xs()
+        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+        .text_color(theme.muted_foreground)
+        .child(text.to_uppercase())
+}
+
 fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
@@ -254,7 +338,7 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                 .flex_row()
                 .items_center()
                 .justify_between()
-                .child(div().text_sm().child(t("Subagents", "子代理")))
+                .child(section_heading(t("Subagents", "子代理"), theme))
                 .child(
                     div()
                         .text_xs()
@@ -364,7 +448,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                 .flex_row()
                 .items_center()
                 .justify_between()
-                .child(div().text_sm().child(t("Changes", "改动")))
+                .child(section_heading(t("Changes", "改动"), theme))
                 .when(!git.files.is_empty(), |this| {
                     this.child(
                         div()
@@ -406,6 +490,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
         .children(shown.into_iter().enumerate().map(|(index, file)| {
             let path = file.path.clone();
             let open = selected == Some(file.path.as_str());
+            let badge_color = git_status_color(&file.status, theme);
             div()
                 .id(format!("git-file-{index}"))
                 .flex()
@@ -414,7 +499,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                 .gap_2()
                 .px_2()
                 .h(px(28.))
-                .rounded(px(6.))
+                .rounded(super::skin::radius_xs())
                 .cursor_pointer()
                 .when(open, |row| row.bg(theme.accent))
                 .hover(|row| row.bg(theme.secondary_hover))
@@ -426,7 +511,8 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                     div()
                         .w(px(18.))
                         .text_xs()
-                        .text_color(theme.primary)
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .text_color(badge_color)
                         .child(file.status.clone()),
                 )
                 .child(
@@ -472,6 +558,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
 /// short preview; this is where a large working tree stays browsable.
 pub(super) fn render_changes_drawer(
     workspace: &mut Workspace,
+    window: &Window,
     inspector_span: f32,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
@@ -481,7 +568,9 @@ pub(super) fn render_changes_drawer(
     let diff = workspace.git_diff().to_owned();
     let files = git.files.clone();
     let stopped_early = git.stopped_early;
-    let (drawer_right, _) = panel_rights(inspector_span, true);
+    let viewport_width = f32::from(window.viewport_size().width);
+    let ((drawer_right, drawer_width), _) =
+        responsive_panel_bounds(viewport_width, inspector_span, true);
     div()
         .id("changes-drawer-layer")
         .absolute()
@@ -508,16 +597,17 @@ pub(super) fn render_changes_drawer(
                 .id("changes-drawer")
                 .occlude()
                 .absolute()
-                .top(px(44.))
+                .top(px(super::title_bar::BAR_HEIGHT + 8.))
                 .right(px(drawer_right))
                 .bottom(px(12.))
-                .w(px(CHANGES_DRAWER_WIDTH))
+                .w(px(drawer_width))
                 .flex()
                 .flex_col()
-                .rounded(px(12.))
+                .rounded(super::skin::radius_card())
                 .border_1()
-                .border_color(super::skin::glass_border(theme))
+                .border_color(super::skin::border_strong(theme))
                 .bg(super::skin::popover(theme))
+                .shadow(super::skin::elevation_shadow(theme))
                 .overflow_hidden()
                 .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation();
@@ -574,6 +664,7 @@ pub(super) fn render_changes_drawer(
                         .children(files.into_iter().enumerate().map(|(index, file)| {
                             let path = file.path.clone();
                             let open = selected == Some(file.path.as_str());
+                            let badge_color = git_status_color(&file.status, theme);
                             div()
                                 .id(format!("changes-drawer-file-{index}"))
                                 .flex()
@@ -582,7 +673,7 @@ pub(super) fn render_changes_drawer(
                                 .gap_2()
                                 .px_2()
                                 .h(px(26.))
-                                .rounded(px(6.))
+                                .rounded(super::skin::radius_xs())
                                 .text_xs()
                                 .cursor_pointer()
                                 .when(open, |row| row.bg(theme.accent))
@@ -595,7 +686,8 @@ pub(super) fn render_changes_drawer(
                                     div()
                                         .w(px(20.))
                                         .flex_shrink_0()
-                                        .text_color(theme.primary)
+                                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                        .text_color(badge_color)
                                         .child(file.status.clone()),
                                 )
                                 .child(
@@ -647,6 +739,7 @@ pub(super) fn render_changes_drawer(
 /// drawer both open this, so the patch is not clipped inside the inspector.
 pub(super) fn render_diff_panel(
     workspace: &mut Workspace,
+    window: &Window,
     inspector_span: f32,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
@@ -657,21 +750,27 @@ pub(super) fn render_diff_panel(
         .to_owned();
     let diff = workspace.git_diff().to_owned();
     let lines = diff_lines(&diff);
-    let (_, diff_right) = panel_rights(inspector_span, workspace.vm().changes_panel_open);
+    let viewport_width = f32::from(window.viewport_size().width);
+    let (_, (diff_right, diff_width)) = responsive_panel_bounds(
+        viewport_width,
+        inspector_span,
+        workspace.vm().changes_panel_open,
+    );
     div()
         .id("diff-panel-layer")
         .occlude()
         .absolute()
-        .top(px(44.))
+        .top(px(super::title_bar::BAR_HEIGHT + 8.))
         .right(px(diff_right))
         .bottom(px(12.))
-        .w(px(DIFF_PANEL_WIDTH))
+        .w(px(diff_width))
         .flex()
         .flex_col()
-        .rounded(px(12.))
+        .rounded(super::skin::radius_card())
         .border_1()
-        .border_color(super::skin::glass_border(theme))
+        .border_color(super::skin::border_strong(theme))
         .bg(super::skin::popover(theme))
+        .shadow(super::skin::elevation_shadow(theme))
         .overflow_hidden()
         .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
             cx.stop_propagation();
@@ -867,7 +966,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         .flex()
         .flex_col()
         .gap_3()
-        .child(div().text_sm().child(t("Model", "模型")))
+        .child(section_heading(t("Model", "模型"), theme))
         .child(
             div().text_sm().whitespace_normal().child(
                 model
@@ -1039,11 +1138,7 @@ fn bar_row(
     parts: &crate::view_model::ContextMeterParts,
     theme: &Theme,
 ) -> impl IntoElement {
-    let fill = if total == 0 {
-        0.0
-    } else {
-        (value as f32 / total as f32).clamp(0.04, 1.0)
-    };
+    let fill = context_bar_fraction(value, total);
     div()
         .id(format!("bar-{label}"))
         .flex()
@@ -1101,13 +1196,8 @@ fn bar_row(
                 .w_full()
                 .rounded_full()
                 .bg(theme.border)
-                .child(
-                    div()
-                        .h_full()
-                        .w(px((200.0 * fill).round()))
-                        .rounded_full()
-                        .bg(color),
-                ),
+                .overflow_hidden()
+                .child(div().h_full().w(relative(fill)).rounded_full().bg(color)),
         )
 }
 
@@ -1163,16 +1253,17 @@ pub(super) fn render_subagent_window(
     div()
         .id("subagent-window-layer")
         .absolute()
-        .top(px(44.))
+        .top(px(super::title_bar::BAR_HEIGHT + 8.))
         .right(px(16.))
         .w(px(320.))
         .h(px(280.))
         .flex()
         .flex_col()
-        .rounded(px(12.))
+        .rounded(super::skin::radius_card())
         .border_1()
-        .border_color(super::skin::glass_border(theme))
+        .border_color(super::skin::border_strong(theme))
         .bg(super::skin::popover(theme))
+        .shadow(super::skin::elevation_shadow(theme))
         .overflow_hidden()
         .child(
             div()
@@ -1308,5 +1399,42 @@ mod tests {
             beside_drawer,
             super::INSPECTOR_DOCKED_WIDTH + 12. + 480. + 12.
         );
+    }
+
+    #[test]
+    fn context_bar_fraction_is_zero_when_empty_and_proportional_to_window() {
+        assert_eq!(super::context_bar_fraction(0, 0), 0.0);
+        assert_eq!(super::context_bar_fraction(0, 200_000), 0.0);
+        assert!((super::context_bar_fraction(50_000, 200_000) - 0.25).abs() < f32::EPSILON);
+        assert!((super::context_bar_fraction(200_000, 200_000) - 1.0).abs() < f32::EPSILON);
+        assert!((super::context_bar_fraction(250_000, 200_000) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn responsive_panel_bounds_keep_drawer_and_diff_on_screen_across_window_widths() {
+        for width in [960., 1100., 1280., 1360., 1520.] {
+            for span in [
+                0.,
+                super::INSPECTOR_DOCKED_WIDTH,
+                super::INSPECTOR_OVERLAY_SPAN,
+            ] {
+                for drawer_open in [false, true] {
+                    let ((drawer_right, drawer_w), (diff_right, diff_w)) =
+                        super::responsive_panel_bounds(width, span, drawer_open);
+                    let drawer_left = width - drawer_right - drawer_w;
+                    let diff_left = width - diff_right - diff_w;
+                    assert!(
+                        drawer_left >= 12. - f32::EPSILON,
+                        "drawer left {drawer_left} off-screen at width {width}, span {span}"
+                    );
+                    assert!(
+                        diff_left >= 12. - f32::EPSILON,
+                        "diff left {diff_left} off-screen at width {width}, span {span}, drawer {drawer_open}"
+                    );
+                    assert!(drawer_w >= 280.);
+                    assert!(diff_w >= 280.);
+                }
+            }
+        }
     }
 }

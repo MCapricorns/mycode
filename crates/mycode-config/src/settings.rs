@@ -52,7 +52,7 @@ pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 /// Settings kind tag.
 const SETTINGS_KIND: &str = "mycode-app-settings";
 /// Maximum string field length in bytes.
-pub(super) const MAX_FIELD_BYTES: usize = 8 * 1024;
+pub(crate) const MAX_FIELD_BYTES: usize = 8 * 1024;
 /// Base URL maximum length.
 pub(super) const MAX_URL_BYTES: usize = 2 * 1024;
 
@@ -490,7 +490,7 @@ fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
     })
 }
 
-fn bounded_text(value: &str, max: usize) -> Result<(), ConfigError> {
+pub(crate) fn bounded_text(value: &str, max: usize) -> Result<(), ConfigError> {
     if value.len() <= max && !value.contains(['\0', '\r', '\n']) {
         Ok(())
     } else {
@@ -502,13 +502,13 @@ fn is_portable_id(value: &str) -> bool {
     crate::home::is_valid_portable_id(value)
 }
 
-fn is_https_url(value: &str) -> bool {
+pub(crate) fn is_https_url(value: &str) -> bool {
+    if bounded_text(value, MAX_URL_BYTES).is_err() {
+        return false;
+    }
     let Some(rest) = value.strip_prefix("https://") else {
         return false;
     };
-    if value.len() > MAX_URL_BYTES {
-        return false;
-    }
     let host = rest.split('/').next().unwrap_or_default();
     !host.is_empty()
         && !host

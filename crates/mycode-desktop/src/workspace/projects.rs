@@ -2,10 +2,10 @@
 //! pipeline, message recall, session switching, and the project bindings
 //! that drive the sidebar grouping.
 use gpui_kit::AppContext as _;
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{Context, Window};
 
-use mycode_app::{BranchId, BridgeCommand, SessionId};
+use mycode_app::{BridgeCommand, SessionId};
 
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
@@ -20,10 +20,10 @@ impl Workspace {
                 return;
             }
         };
-        if self.mention_query.as_deref() == Some(fragment.as_str()) {
+        if self.mention_query.as_ref() == Some(&(kind, fragment.clone())) {
             return;
         }
-        self.mention_query = Some(fragment.clone());
+        self.mention_query = Some((kind, fragment.clone()));
         if kind == crate::view_model::MentionKind::Command {
             // Reload skills so `/` lists them even before Settings was opened.
             // The reducer rebuilds the menu, including enabled MCP servers.
@@ -96,11 +96,9 @@ impl Workspace {
         self.apply_action(DesktopAction::SkillsLoaded(skills), cx);
     }
 
-    /// Enter accepts the highlighted `/` row instead of sending it as chat.
-    ///
-    /// Returns whether the key was consumed. A slash menu with no rows still
-    /// sends, so an unknown token can be a normal message.
-    pub(super) fn accept_open_slash(
+    /// Enter accepts the highlighted file or command instead of sending an
+    /// incomplete token. An empty menu still allows an ordinary message.
+    pub(super) fn accept_open_mention(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -108,15 +106,10 @@ impl Workspace {
         let Some(mention) = self.vm.mention.clone() else {
             return false;
         };
-        if mention.kind != crate::view_model::MentionKind::Command || mention.items.is_empty() {
+        if mention.items.is_empty() {
             return false;
         }
-        let index = crate::view_model::preferred_slash_index(&mention.fragment, &mention.items);
-        let Some(item) = mention.items.get(index) else {
-            return false;
-        };
-        let insert = item.insert.clone();
-        self.on_accept_mention(insert, window, cx);
+        self.on_accept_mention(self.mention_highlight(), window, cx);
         true
     }
 
@@ -124,24 +117,35 @@ impl Workspace {
     /// command (commands), then closes the menu.
     pub(crate) fn on_accept_mention(
         &mut self,
-        insert: String,
-        _window: &mut Window,
+        index: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(mention) = self.vm.mention.take() else {
             return;
         };
         self.mention_query = None;
-        match mention.kind {
-            crate::view_model::MentionKind::File => {
+        let Some(item) = mention.items.get(index) else {
+            return;
+        };
+        match item.group {
+            crate::view_model::MentionGroup::File => {
                 let mut text = self.vm.composer_draft.clone();
                 if let Some(position) = text.rfind('@') {
-                    text.replace_range(position.., &format!("@{insert} "));
+                    text.replace_range(position.., &format!("@{} ", item.insert));
                 }
-                self.pending_composer_prefill = Some(text);
-                cx.notify();
+                self.apply_action(DesktopAction::ComposerChanged(text.clone()), cx);
+                self.composer
+                    .update(cx, |state, cx| state.set_value(text, window, cx));
             }
-            crate::view_model::MentionKind::Command => self.run_slash_command(&insert, cx),
+            crate::view_model::MentionGroup::Skill => {
+                if let Some(slug) = item.insert.strip_prefix('/') {
+                    self.insert_skill_draft(slug, cx);
+                    let draft = self.pending_composer_prefill.clone().unwrap_or_default();
+                    self.apply_action(DesktopAction::ComposerChanged(draft), cx);
+                }
+            }
+            _ => self.run_slash_command(&item.insert, cx),
         }
     }
 
@@ -225,82 +229,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Rewinds the chat to just before the user message at `index` and
-    /// prefills the composer with its text (edit-and-resend). Workspace files
-    /// stay as they are. The first message has no prior event to rewind to
-    /// and is ignored.
-    pub(crate) fn on_edit_message(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.recall_at(index, true, cx);
-    }
-
-    /// Rewinds the chat to just before the user message at `index` (recall).
-    /// Workspace files stay as they are.
-    pub(crate) fn on_recall_message(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.recall_at(index, false, cx);
-    }
-
-    fn recall_at(&mut self, index: usize, edit: bool, cx: &mut Context<Self>) {
-        if self.vm.sending {
-            return;
-        }
-        let Some(conversation) = self.vm.active.clone() else {
-            return;
-        };
-        if index == 0 || index >= conversation.entries.len() {
-            return;
-        }
-        if conversation.entries[index].kind != crate::view_model::EntryKind::UserMessage {
-            return;
-        }
-        let Some(session) = SessionId::parse(&conversation.session_id) else {
-            return;
-        };
-        let Some(branch) = BranchId::parse(&conversation.branch_id) else {
-            return;
-        };
-        let expected_head = crate::workspace::parse_head(&conversation.head);
-        let to_event = conversation.entries[index - 1].event_id.clone();
-        let edit = if edit {
-            Some(conversation.entries[index].text.to_string())
-        } else {
-            None
-        };
-        self.dispatch(
-            BridgeCommand::RecallMessage {
-                session,
-                branch,
-                expected_head,
-                to_event,
-                edit,
-            },
-            cx,
-        );
-    }
-
-    /// Deletes one session's durable data and drops it if active.
-    pub(crate) fn on_delete_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        if self
-            .vm
-            .active
-            .as_ref()
-            .is_some_and(|conversation| conversation.session_id == session_id)
-        {
-            self.apply_action(DesktopAction::SessionDeleted, cx);
-        }
-        // Drop the remembered bindings optimistically: the core forgets them
-        // too, and a later UI-state save must not resurrect stale ids.
-        self.apply_action(
-            DesktopAction::SessionBindingsForgotten(session_id.to_owned()),
-            cx,
-        );
-        self.dispatch(
-            BridgeCommand::DeleteSession {
-                session_id: session_id.to_owned(),
-            },
-            cx,
-        );
-    }
-
     /// Opens or closes the sidebar workspace switcher.
     pub(crate) fn on_toggle_workspace_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::WorkspaceMenuToggled(open), cx);
@@ -349,7 +277,14 @@ impl Workspace {
         else {
             return;
         };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(current));
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
+        cx.subscribe_in(&input, window, |workspace, _, event, _, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                workspace.on_confirm_workspace_rename(cx);
+            }
+        })
+        .detach();
+        input.update(cx, |state, cx| state.focus(window, cx));
         self.workspace_rename_input = Some(input);
         self.apply_action(DesktopAction::WorkspaceRenameToggled(true), cx);
     }
@@ -557,11 +492,75 @@ impl Workspace {
 
     /// Opens the in-app folder browser and binds the chosen directory.
     pub(crate) fn on_open_project_dialog(&mut self, cx: &mut Context<Self>) {
+        self.picker_chat_session = None;
         self.project_picker = Some(crate::ui::project_picker::ProjectPicker::open());
         cx.notify();
     }
 
+    /// Unlike Add folder, this explicit action changes this chat's directory.
+    pub(crate) fn on_open_chat_folder_picker(&mut self, cx: &mut Context<Self>) {
+        if self.vm.sending {
+            self.push_toast(
+                "Finish or stop the current turn before changing its folder.",
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        }
+        self.picker_chat_session = self
+            .vm
+            .active
+            .as_ref()
+            .map(|active| active.session_id.clone());
+        self.project_picker = Some(crate::ui::project_picker::browse(
+            self.vm.project_dir.as_ref().map(std::path::PathBuf::from),
+        ));
+        cx.notify();
+    }
+
+    /// Adds explicit file references; it never silently switches the workspace.
+    pub(crate) fn on_attach_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let session = self
+            .vm
+            .active
+            .as_ref()
+            .map(|active| active.session_id.clone());
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach file references".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let _ = this.update(cx, |workspace, cx| {
+                if workspace
+                    .vm
+                    .active
+                    .as_ref()
+                    .map(|active| &active.session_id)
+                    != session.as_ref()
+                {
+                    return;
+                }
+                let mut draft = workspace.vm.composer_draft.clone();
+                for path in paths {
+                    if !draft.is_empty() && !draft.ends_with(char::is_whitespace) {
+                        draft.push(' ');
+                    }
+                    draft.push_str(&format!("@{} ", path.display()));
+                }
+                workspace.pending_composer_prefill = Some(draft.clone());
+                workspace.apply_action(DesktopAction::ComposerChanged(draft), cx);
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn on_picker_cancel(&mut self, cx: &mut Context<Self>) {
+        self.picker_chat_session = None;
         self.project_picker = None;
         cx.notify();
     }
@@ -629,7 +628,25 @@ impl Workspace {
             return;
         }
         self.project_picker = None;
-        self.on_add_workspace_root(&path.to_string_lossy(), cx);
+        if let Some(session) = self.picker_chat_session.take() {
+            if !self.vm.sending
+                && self
+                    .vm
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.session_id == session)
+            {
+                self.on_focus_workspace_folder(&path.to_string_lossy(), cx);
+            } else {
+                self.push_toast(
+                    "The active conversation changed; its folder was not changed.",
+                    crate::workspace::ToastKind::Info,
+                    cx,
+                );
+            }
+        } else {
+            self.on_add_workspace_root(&path.to_string_lossy(), cx);
+        }
     }
 
     /// Opens one of the remembered recent projects.

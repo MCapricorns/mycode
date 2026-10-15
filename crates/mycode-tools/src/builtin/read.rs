@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::builtin::fs_io::{FileAccess, read_file_async};
+use crate::builtin::fs_io::{FileAccess, anchor_file_path, read_file_async};
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
 use crate::tool::{Tool, ToolError, ToolResult};
@@ -66,10 +66,17 @@ impl Tool for ReadTool {
         ctx: &ToolCtx,
         _out: &mut ToolStream,
     ) -> Result<ToolResult, ToolError> {
+        let (root, path) = anchor_file_path(
+            &ctx.cwd,
+            &ctx.extra_roots,
+            &ctx.read_roots,
+            true,
+            &args.path,
+        );
         let outcome = read_file_async(
             ctx.prepared_file.clone(),
-            ctx.cwd.clone(),
-            args.path,
+            root,
+            path,
             args.offset,
             args.limit,
             ctx.cancel.clone(),
@@ -87,9 +94,14 @@ impl Tool for ReadTool {
 
 #[cfg(test)]
 mod tests {
-    use super::ReadArgs;
-    use crate::tool::{ToolError, validate_args};
+    use std::path::PathBuf;
+
     use serde_json::json;
+
+    use super::{ReadArgs, ReadTool};
+    use crate::ctx::ToolCtx;
+    use crate::stream::ToolStream;
+    use crate::tool::{Tool, ToolError, validate_args};
 
     #[test]
     fn offset_below_one_is_rejected_by_the_schema() {
@@ -98,5 +110,58 @@ mod tests {
         assert!(matches!(error, ToolError::InvalidArgs(_)), "{error}");
         validate_args::<ReadArgs>(&json!({"path": "a.txt", "offset": 1})).expect("offset 1");
         validate_args::<ReadArgs>(&json!({"path": "a.txt"})).expect("omitted offset");
+    }
+
+    #[tokio::test]
+    async fn read_without_preflight_anchors_extra_and_read_roots() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-read-roots-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let cwd = base.join("ws");
+        let extra = base.join("extra");
+        let skill = base.join("skills");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&extra).expect("extra");
+        std::fs::create_dir_all(&skill).expect("skill");
+        let extra_file = extra.join("a.txt");
+        let skill_file = skill.join("SKILL.md");
+        std::fs::write(&extra_file, "from extra\n").expect("write extra");
+        std::fs::write(&skill_file, "from skill\n").expect("write skill");
+
+        let ctx = ToolCtx::new(&cwd)
+            .with_extra_roots(vec![PathBuf::from(&extra)])
+            .with_read_roots(vec![PathBuf::from(&skill)]);
+        let (mut stream, _rx) = ToolStream::channel();
+        let extra_res = ReadTool
+            .execute(
+                ReadArgs {
+                    path: extra_file.display().to_string(),
+                    offset: None,
+                    limit: None,
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("read under extra_roots");
+        assert!(!extra_res.is_error);
+
+        let skill_res = ReadTool
+            .execute(
+                ReadArgs {
+                    path: skill_file.display().to_string(),
+                    offset: None,
+                    limit: None,
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("read under read_roots");
+        assert!(!skill_res.is_error);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

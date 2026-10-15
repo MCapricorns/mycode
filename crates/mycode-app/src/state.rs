@@ -35,7 +35,7 @@ pub(crate) struct CoreState {
     /// Live turn cancellation tokens by session id; Escape targets these.
     pub(crate) turn_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
     /// One token per running subagent, keyed by `session_id:call_id`.
-    pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
     /// Steer inbox for the live turn of each session. Removed when the turn ends.
     pub(crate) steer_inboxes: Arc<Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
     /// Live MCP clients, reused until settings change or a connection dies.
@@ -140,9 +140,11 @@ pub(crate) async fn refresh_catalog(
     events: &crate::BridgeEventTx,
     force: bool,
 ) -> BridgeReply {
-    let settings = match read_app_settings(&state.home) {
-        Ok(settings) => settings,
-        Err(error) => return BridgeReply::Catalog(Err(render_config_error(&error))),
+    let read_home = state.home.clone();
+    let settings = match tokio::task::spawn_blocking(move || read_app_settings(&read_home)).await {
+        Ok(Ok(settings)) => settings,
+        Ok(Err(error)) => return BridgeReply::Catalog(Err(render_config_error(&error))),
+        Err(error) => return BridgeReply::Catalog(Err(format!("catalog task failed: {error}"))),
     };
     let outcome = mycode_providers::catalog::refresh(
         &state.home,
@@ -319,7 +321,7 @@ mod tests {
                     "name": "Marker",
                     "kind": "openai-completions",
                     "baseUrl": "https://example.invalid/v1",
-                    "models": []
+                    "models": [{ "id": "marker-model", "name": "Marker Model" }]
                 }]
             }
         });

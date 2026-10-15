@@ -6,21 +6,150 @@ use std::path::{Component, Path, PathBuf};
 
 use super::*;
 
-/// Last on-disk path component of a Windows handle opened by alias.
+/// Unique on-disk path component of a Windows handle opened by alias.
 ///
-/// `GetFinalPathNameByHandleW` returns the NTFS long name with stored case,
-/// so a user-typed `visible` or `VISIBL~1` becomes `Visible` for ignore
-/// matching. The last component is taken from the UTF-16 handle path, not
-/// `Path::file_name`, which can strip trailing dots and spaces. Unix keeps
-/// the opened byte spelling.
+/// Scans `parent` with `NtQueryDirectoryFile` and matches each entry's handle
+/// identity against `handle.identity`. Zero or several matches fail closed so
+/// a case-sensitive NTFS directory with colliding case siblings cannot trust
+/// `GetFinalPathNameByHandleW` or keep an ambiguous spelling.
 #[cfg(windows)]
-pub(crate) fn on_disk_component_name(handle: &StableHandle) -> io::Result<OsString> {
-    last_wide_component(handle.final_path.as_os_str()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "opened object has no on-disk file name",
-        )
-    })
+pub(crate) fn windows_on_disk_component_name(
+    parent: &File,
+    handle: &StableHandle,
+    limiter: &WalkLimiter,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> io::Result<OsString> {
+    use std::mem::offset_of;
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr::{null, null_mut};
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FileFullDirectoryInformation, NtQueryDirectoryFile,
+    };
+    use windows_sys::Win32::Foundation::{
+        RtlNtStatusToDosError, STATUS_NO_MORE_FILES, STATUS_SUCCESS,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FULL_DIR_INFO,
+    };
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+
+    let want = handle.identity;
+    let mut words = vec![0u64; 8192];
+    let mut restart = true;
+    let mut found: Option<OsString> = None;
+    let mut scanned = 0usize;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "search stopped"));
+        }
+        if !limiter.try_reserve_entry() {
+            return Err(io::Error::other("walk entry limit reached"));
+        }
+        let byte_len = u32::try_from(words.len().saturating_mul(8)).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "directory listing buffer is too large",
+            )
+        })?;
+        let mut io_status = IO_STATUS_BLOCK::default();
+        // SAFETY: `parent` is a live synchronous directory handle; `words` is
+        // aligned writable storage; `ReturnSingleEntry` is true.
+        let status = unsafe {
+            NtQueryDirectoryFile(
+                parent.as_raw_handle(),
+                null_mut(),
+                None,
+                null(),
+                &mut io_status,
+                words.as_mut_ptr().cast(),
+                byte_len,
+                FileFullDirectoryInformation,
+                true,
+                null(),
+                restart,
+            )
+        };
+        if status == STATUS_NO_MORE_FILES {
+            limiter.release_entry();
+            break;
+        }
+        if status != STATUS_SUCCESS {
+            limiter.release_entry();
+            // `NtQueryDirectoryFile` returns NTSTATUS and does not define
+            // `GetLastError`; convert the returned value directly.
+            let code = unsafe { RtlNtStatusToDosError(status) };
+            let code = i32::try_from(code).unwrap_or(i32::MAX);
+            return Err(io::Error::from_raw_os_error(code));
+        }
+        restart = false;
+        let used = io_status.Information;
+        let header_size = offset_of!(FILE_FULL_DIR_INFO, FileName);
+        if used < header_size || used > words.len().saturating_mul(8) {
+            limiter.release_entry();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "directory query returned an invalid byte count",
+            ));
+        }
+        // SAFETY: `used` covers the header inside `words`.
+        let info = unsafe { &*words.as_ptr().cast::<FILE_FULL_DIR_INFO>() };
+        let name_bytes = info.FileNameLength as usize;
+        if !name_bytes.is_multiple_of(2) || header_size.saturating_add(name_bytes) > used {
+            limiter.release_entry();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "directory query returned an invalid name length",
+            ));
+        }
+        let units = name_bytes / 2;
+        // SAFETY: `FileName` has `units` UTF-16 code units inside `used`.
+        let name_slice = unsafe { std::slice::from_raw_parts(info.FileName.as_ptr(), units) };
+        let name = OsString::from_wide(name_slice);
+        if name == "." || name == ".." {
+            limiter.release_entry();
+            continue;
+        }
+        scanned += 1;
+        if scanned > MAX_DIR_WIDTH {
+            limiter.release_entry();
+            return Err(io::Error::other(
+                "directory is too wide to prove unique on-disk component spelling",
+            ));
+        }
+        if info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            continue;
+        }
+        let opened = match open_named_windows(
+            parent,
+            &name,
+            None,
+            NameMatch::Exact,
+            SearchAccess::Metadata,
+        ) {
+            Ok(opened) => opened,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => continue,
+        };
+        if opened.identity == want {
+            if found.is_some() {
+                limiter.release_entry();
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "multiple directory entries share the opened identity",
+                ));
+            }
+            found = Some(name);
+        }
+    }
+    if let Some(found) = found {
+        Ok(found)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "opened object has no unique on-disk file name",
+        ))
+    }
 }
 
 /// Last `\`/`/`-separated UTF-16 component, preserving stored spelling.

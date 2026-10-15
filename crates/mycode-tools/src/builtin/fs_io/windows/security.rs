@@ -110,9 +110,7 @@ pub(super) fn private_temp_descriptor() -> io::Result<PrivateSd> {
         }
     }
     let sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(sid_text.0, sid_len) });
-    // Protected DACL: current user and SYSTEM only. `P` blocks parent
-    // inheritance so a shared directory cannot reopen the payload.
-    let sddl = format!("D:P(A;;FA;;;{sid})(A;;FA;;;SY)");
+    let sddl = private_temp_sddl(&sid);
     let mut wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
     // SAFETY: `wide` is a live NUL-terminated SDDL string; on success `sd`
@@ -129,4 +127,28 @@ pub(super) fn private_temp_descriptor() -> io::Result<PrivateSd> {
         return Err(io::Error::last_os_error());
     }
     Ok(PrivateSd(sd))
+}
+
+/// Protected DACL granting full access only to `sid` and `SYSTEM`, omitting
+/// a duplicate `SY` ACE when `sid` is already `S-1-5-18`.
+fn private_temp_sddl(sid: &str) -> String {
+    if sid == "S-1-5-18" {
+        format!("D:P(A;;FA;;;{sid})")
+    } else {
+        format!("D:P(A;;FA;;;{sid})(A;;FA;;;SY)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::private_temp_sddl;
+
+    #[test]
+    fn system_sid_does_not_emit_duplicate_sy_ace() {
+        assert_eq!(private_temp_sddl("S-1-5-18"), "D:P(A;;FA;;;S-1-5-18)");
+        assert_eq!(
+            private_temp_sddl("S-1-5-21-1-2-3-1000"),
+            "D:P(A;;FA;;;S-1-5-21-1-2-3-1000)(A;;FA;;;SY)"
+        );
+    }
 }

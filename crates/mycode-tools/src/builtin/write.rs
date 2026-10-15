@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::builtin::fs_io::{FileAccess, write_file_with_lease};
+use crate::builtin::fs_io::{FileAccess, anchor_file_path, write_file_with_lease};
 use crate::builtin::process::acquire_execution_lease;
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
@@ -85,10 +85,17 @@ impl Tool for WriteTool {
             }
             lease = acquire_execution_lease() => lease,
         };
+        let (root, path) = anchor_file_path(
+            &ctx.cwd,
+            &ctx.extra_roots,
+            &ctx.read_roots,
+            false,
+            &args.path,
+        );
         let outcome = write_file_with_lease(
             ctx.prepared_file.clone(),
-            ctx.cwd.clone(),
-            args.path,
+            root,
+            path,
             args.content,
             args.expected_revision,
             args.overwrite,
@@ -110,5 +117,72 @@ impl Tool for WriteTool {
             "revision": outcome.revision.as_str(),
             "detached_hardlink": outcome.detached_hardlink,
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{WriteArgs, WriteTool};
+    use crate::ctx::ToolCtx;
+    use crate::stream::ToolStream;
+    use crate::tool::Tool;
+
+    #[tokio::test]
+    async fn write_without_preflight_anchors_extra_roots_and_refuses_read_roots() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-write-roots-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let cwd = base.join("ws");
+        let extra = base.join("extra");
+        let read_only = base.join("skills");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&extra).expect("extra");
+        std::fs::create_dir_all(&read_only).expect("skills");
+        let extra_file = extra.join("out.txt");
+        let skill_file = read_only.join("SKILL.md");
+
+        let ctx = ToolCtx::new(&cwd)
+            .with_extra_roots(vec![PathBuf::from(&extra)])
+            .with_read_roots(vec![PathBuf::from(&read_only)]);
+        let (mut stream, _rx) = ToolStream::channel();
+        let res = WriteTool
+            .execute(
+                WriteArgs {
+                    path: extra_file.display().to_string(),
+                    content: "written\n".to_owned(),
+                    expected_revision: None,
+                    overwrite: false,
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("write under extra_roots");
+        assert!(!res.is_error);
+        assert_eq!(
+            std::fs::read_to_string(&extra_file).expect("read back"),
+            "written\n"
+        );
+
+        let err = WriteTool
+            .execute(
+                WriteArgs {
+                    path: skill_file.display().to_string(),
+                    content: "nope\n".to_owned(),
+                    expected_revision: None,
+                    overwrite: false,
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect_err("write under read_roots must fail closed");
+        assert!(err.to_string().contains("escapes the session cwd"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

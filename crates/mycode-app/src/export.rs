@@ -174,6 +174,10 @@ pub fn import_from_file(
         .settings
         .validate()
         .map_err(|error| format!("settings: {error}"))?;
+    bundle
+        .ui_state
+        .validate()
+        .map_err(|error| format!("ui state: {error}"))?;
     let current_settings = read_app_settings(home).map_err(|error| format!("settings: {error}"))?;
     // Stdio commands run on the next turn. A bundle that introduces or
     // rewrites one must be confirmed, and so must one that drops the local
@@ -212,16 +216,19 @@ pub fn import_from_file(
 /// Reads the current revision of one authority document for the import's CAS
 /// write. An absent document is [`AuthorityRevision::ABSENT`].
 fn stored_authority_revision(
-    path: &std::path::Path,
+    home: &HomeLayout,
+    path: &str,
+    max_bytes: usize,
     format_version: u32,
     label: &str,
 ) -> Result<AuthorityRevision, String> {
-    if !path.exists() {
+    let Some(body) = mycode_config::read_owned_file(home, path, max_bytes)
+        .map_err(|error| format!("{label}: {}", error.summary()))?
+    else {
         return Ok(AuthorityRevision::ABSENT);
-    }
-    let body = std::fs::read(path).map_err(|_| format!("{label}: unreadable"))?;
+    };
     // Shared header decoder; distinct messages keep the import's wording.
-    match crate::settings_io::revision_header(&body, format_version) {
+    match crate::settings_io::revision_header(body.as_slice(), format_version) {
         Ok(revision) => Ok(revision),
         Err(crate::settings_io::RevisionHeaderError::Unreadable) => {
             Err(format!("{label}: unreadable"))
@@ -238,7 +245,9 @@ fn stored_authority_revision(
 /// Reads the current settings revision for the import's CAS write.
 fn read_current_revision(home: &HomeLayout) -> Result<AuthorityRevision, String> {
     stored_authority_revision(
-        &home.root().join(mycode_config::SETTINGS_PATH),
+        home,
+        mycode_config::SETTINGS_PATH,
+        mycode_config::MAX_AUTHORITY_DOCUMENT_BYTES,
         mycode_config::SETTINGS_FORMAT_VERSION,
         "settings",
     )
@@ -247,7 +256,9 @@ fn read_current_revision(home: &HomeLayout) -> Result<AuthorityRevision, String>
 /// Reads the current secrets revision for the import's CAS write.
 fn read_current_secrets_revision(home: &HomeLayout) -> Result<AuthorityRevision, String> {
     stored_authority_revision(
-        &home.root().join(mycode_config::SECRETS_PATH),
+        home,
+        mycode_config::SECRETS_PATH,
+        mycode_config::MAX_SECRETS_BYTES,
         mycode_config::SECRETS_FORMAT_VERSION,
         "secrets",
     )
@@ -539,6 +550,43 @@ mod tests {
         std::fs::write(&bundle_path, serde_json::to_vec(&future).unwrap()).unwrap();
         let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
         assert!(refused.contains("not a MYCode export bundle"), "{refused}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn invalid_ui_state_rejects_the_whole_import_before_mutating_settings_or_secrets() {
+        let (root, home) = scratch("bad-ui");
+        let mut bad_ui = mycode_config::UiState::default();
+        bad_ui
+            .recent_projects
+            .push("relative/not-absolute".to_owned());
+        let bundle_path = root.join("bundle.json");
+        let bundle = super::ExportBundle {
+            format_version: super::EXPORT_FORMAT_VERSION,
+            kind: super::EXPORT_KIND.to_owned(),
+            exported_at_unix: 0,
+            settings: AppSettings {
+                user_agent: "should-not-land".to_owned(),
+                ..AppSettings::default()
+            },
+            ui_state: bad_ui,
+            secrets: BTreeMap::from([("zai".to_owned(), "should-not-land-key".to_owned())]),
+            _sessions: Vec::new(),
+            _todos: Vec::new(),
+        };
+        std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
+        assert!(refused.starts_with("ui state:"), "{refused}");
+        assert_ne!(
+            mycode_config::read_app_settings(&home).unwrap().user_agent,
+            "should-not-land"
+        );
+        assert!(
+            mycode_config::read_provider_secrets(&home)
+                .unwrap()
+                .provider_ids()
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

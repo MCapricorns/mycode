@@ -23,14 +23,17 @@ use crate::i18n::t;
 use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
 
-/// Sidebar width. Narrow enough that the session list stays primary.
-pub(super) const WIDTH_PX: f32 = 220.;
+mod time;
+use self::time::{DateGroup, classify_session_group, format_session_relative_time};
+
+/// Sidebar width. Compact rail with room for session titles and folder paths.
+pub(super) const WIDTH_PX: f32 = 248.;
 const WIDTH: gpui_kit::Pixels = px(WIDTH_PX);
 /// Workspace switcher row. The window-level menu sits just under this.
 const WORKSPACE_HEAD_H: f32 = 40.;
 /// Matches [`super::skin::glass_button`].
-const NEW_TASK_H: f32 = 32.;
-const SEARCH_H: f32 = 30.;
+const NEW_TASK_H: f32 = 34.;
+const SEARCH_H: f32 = 32.;
 const ACTION_PAD_Y: f32 = 8.;
 const ACTION_GAP: f32 = 6.;
 /// Folders label row. Add folder lives here, not in the session list.
@@ -128,8 +131,6 @@ pub(super) fn render_sidebar(
         .flex_col()
         .flex_shrink_0()
         .bg(skin::glass_sidebar(theme))
-        .border_r_1()
-        .border_color(skin::glass_border(theme))
         .child(workspace_head(&active_name, cx))
         .child(action_strip(has_folder, filter_input, cx))
         .child(folders_section(cx, &roots, cwd.as_deref()))
@@ -233,6 +234,7 @@ fn action_strip(
 fn section_label(text: &str, theme: &Theme) -> impl IntoElement {
     div()
         .text_xs()
+        .font_weight(gpui_kit::FontWeight::MEDIUM)
         .text_color(theme.muted_foreground)
         .child(text.to_owned())
 }
@@ -333,6 +335,8 @@ fn sessions_section(
     faint: gpui_kit::Hsla,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
+    let now = chrono::Local::now();
+    let grouped_rows = build_grouped_session_rows(sessions, bindings, cwd, now, cx);
     div()
         .id("sidebar-sessions")
         .flex_1()
@@ -392,13 +396,57 @@ fn sessions_section(
                             .child(t("No sessions yet", "还没有会话")),
                     )
                 })
-                .children(sessions.iter().copied().map(|summary| {
-                    let project = bindings.iter().find_map(|(id, path)| {
-                        (id == &summary.session_id).then_some(path.as_str())
-                    });
-                    session_row(summary, project, cwd, cx)
-                })),
+                .children(grouped_rows),
         )
+}
+
+fn build_grouped_session_rows(
+    sessions: &[&SessionSummary],
+    bindings: &[(String, String)],
+    cwd: Option<&str>,
+    now: chrono::DateTime<chrono::Local>,
+    cx: &Context<Workspace>,
+) -> Vec<gpui_kit::AnyElement> {
+    let theme = cx.theme();
+    let mut elements = Vec::new();
+    let mut first_group = true;
+    for group in DateGroup::ALL {
+        let mut group_sessions = sessions
+            .iter()
+            .copied()
+            .filter(|summary| {
+                classify_session_group(summary.updated_at_ms, summary.corrupt, now) == group
+            })
+            .peekable();
+        if group_sessions.peek().is_none() {
+            continue;
+        }
+        elements.push(date_group_header(group, first_group, theme).into_any_element());
+        first_group = false;
+        for summary in group_sessions {
+            let project = bindings
+                .iter()
+                .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
+            let relative =
+                format_session_relative_time(summary.updated_at_ms, summary.corrupt, now);
+            elements.push(session_row(summary, project, cwd, relative, cx).into_any_element());
+        }
+    }
+    elements
+}
+
+fn date_group_header(group: DateGroup, first: bool, theme: &Theme) -> impl IntoElement {
+    let desk = super::desk::Desk::of(theme);
+    div()
+        .id(format!("session-group-{}", group.id_slug()))
+        .px_2()
+        .when(first, |this| this.pt_1())
+        .when(!first, |this| this.pt_2p5())
+        .pb(px(2.))
+        .text_xs()
+        .font_weight(gpui_kit::FontWeight::MEDIUM)
+        .text_color(desk.faint)
+        .child(group.label())
 }
 
 fn root_row(
@@ -414,6 +462,7 @@ fn root_row(
     let label: SharedString = project_label(root).into();
     div()
         .id(format!("workspace-root-{}", element_id(root)))
+        .relative()
         .group("workspace-root")
         .flex()
         .flex_row()
@@ -422,7 +471,7 @@ fn root_row(
         .px_2()
         .py(px(6.))
         .rounded(skin::radius_control())
-        .when(is_cwd, |this| this.bg(skin::frost_accent(theme)))
+        .when(is_cwd, |this| this.bg(theme.secondary_hover))
         .cursor_pointer()
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click({
@@ -430,6 +479,18 @@ fn root_row(
             cx.listener(move |workspace, _, _, cx| {
                 workspace.on_focus_workspace_folder(&path, cx);
             })
+        })
+        .when(is_cwd, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(6.))
+                    .bottom(px(6.))
+                    .w(px(2.))
+                    .rounded_full()
+                    .bg(theme.primary),
+            )
         })
         .child(div().mt(px(3.)).flex_shrink_0().child(
             Icon::new(IconName::Folder).xsmall().text_color(if is_cwd {
@@ -499,6 +560,7 @@ fn session_row(
     summary: &SessionSummary,
     project: Option<&str>,
     cwd: Option<&str>,
+    relative_time: Option<String>,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
@@ -513,6 +575,7 @@ fn session_row(
         .then(|| project.map(project_label))
         .flatten()
         .map(Into::into);
+    let time_label: Option<SharedString> = relative_time.map(Into::into);
     let session_id = summary.session_id.clone();
     let open_listener = {
         let session_id = session_id.clone();
@@ -532,6 +595,7 @@ fn session_row(
     });
     div()
         .id(format!("session-row-{}", summary.session_id))
+        .relative()
         .flex()
         .flex_row()
         .items_center()
@@ -540,7 +604,7 @@ fn session_row(
         .px_2()
         .py(px(6.))
         .rounded(skin::radius_control())
-        .when(is_open, |this| this.bg(skin::frost_accent(theme)))
+        .when(is_open, |this| this.bg(theme.secondary_hover))
         .cursor_pointer()
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .text_color(if is_open {
@@ -550,6 +614,18 @@ fn session_row(
         })
         .when(summary.corrupt, |this| this.on_click(corrupt_listener))
         .when(!summary.corrupt, |this| this.on_click(open_listener))
+        .when(is_open, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(6.))
+                    .bottom(px(6.))
+                    .w(px(2.))
+                    .rounded_full()
+                    .bg(theme.primary),
+            )
+        })
         .child(
             div()
                 .flex_shrink_0()
@@ -580,13 +656,13 @@ fn session_row(
                     )
                 }),
         )
-        .when(summary.event_count > 0, |this| {
+        .when_some(time_label, |this, label| {
             this.child(
                 div()
-                    .text_xs()
                     .flex_shrink_0()
+                    .text_xs()
                     .text_color(desk.faint)
-                    .child(summary.event_count.to_string()),
+                    .child(label),
             )
         })
         .child(super::hover_delete_button(
@@ -595,8 +671,8 @@ fn session_row(
             "session-row",
             {
                 let session_id = session_id.clone();
-                cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_delete_session(&session_id, cx);
+                cx.listener(move |workspace, _, window, cx| {
+                    workspace.on_delete_session(&session_id, window, cx);
                 })
             },
             cx,

@@ -25,15 +25,30 @@ use crate::i18n::t;
 use crate::view_model::{MainView, UpdateState};
 use crate::workspace::Workspace;
 
-pub(super) const BAR_HEIGHT: f32 = 34.;
-/// Caption hit target. The bar is taller than this; each button is at least
-/// this wide and fills the bar vertically.
-const CONTROL_HIT: f32 = 28.;
+pub(super) const BAR_HEIGHT: f32 = 40.;
+/// Caption hit target on Windows and Linux.
+const CONTROL_HIT: f32 = 46.;
 /// Space between minimize, zoom, and close.
-const CONTROL_GAP: f32 = 2.;
+const CONTROL_GAP: f32 = 1.;
 /// Inset from the window edge so Linux CSD's resize band does not cover close.
 const CAPTION_EDGE: f32 = 4.;
 const TITLE_INSET: f32 = 12.;
+/// Leading space reserved on macOS for native traffic-light window controls.
+const MACOS_TRAFFIC_LIGHT_INSET: f32 = 76.;
+
+#[must_use]
+const fn title_leading_inset(is_macos: bool) -> f32 {
+    if is_macos {
+        MACOS_TRAFFIC_LIGHT_INSET
+    } else {
+        TITLE_INSET
+    }
+}
+
+#[must_use]
+const fn paints_custom_caption_buttons(is_macos: bool, is_wasm: bool) -> bool {
+    !is_macos && !is_wasm
+}
 
 struct CaptionButton {
     id: &'static str,
@@ -132,7 +147,7 @@ fn drag_region(
         .h_full()
         .min_w_0()
         .flex_1()
-        .pl(px(TITLE_INSET))
+        .pl(px(title_leading_inset(cfg!(target_os = "macos"))))
         .window_control_area(WindowControlArea::Drag)
         .when(cfg!(not(target_os = "windows")), |this| {
             this.on_double_click(|_, window, _| {
@@ -309,7 +324,7 @@ fn inspector_toggle_button(
 }
 
 fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl IntoElement {
-    if cfg!(target_family = "wasm") {
+    if !paints_custom_caption_buttons(cfg!(target_os = "macos"), cfg!(target_family = "wasm")) {
         return div().id("window-controls");
     }
     // A compositor that refuses client decorations still paints its own
@@ -404,10 +419,16 @@ mod tests {
 
     #[test]
     fn caption_buttons_are_minimize_zoom_close_on_the_right() {
-        const _: () = assert!(CONTROL_HIT >= 28.);
+        const _: () = assert!(BAR_HEIGHT == 40.);
+        const _: () = assert!(CONTROL_HIT >= 40.);
         const _: () = assert!(CONTROL_GAP > 0. && CONTROL_GAP <= 4.);
         const _: () = assert!(CAPTION_EDGE >= 4.);
-        const _: () = assert!(BAR_HEIGHT >= CONTROL_HIT);
+        assert_eq!(title_leading_inset(false), TITLE_INSET);
+        assert_eq!(title_leading_inset(true), MACOS_TRAFFIC_LIGHT_INSET);
+        assert!(title_leading_inset(true) > title_leading_inset(false));
+        assert!(paints_custom_caption_buttons(false, false));
+        assert!(!paints_custom_caption_buttons(true, false));
+        assert!(!paints_custom_caption_buttons(false, true));
         let normal: Vec<_> = caption_buttons(false)
             .into_iter()
             .map(|button| button.id)

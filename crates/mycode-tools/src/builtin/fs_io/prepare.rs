@@ -11,9 +11,35 @@ use crate::builtin::fs_search::{
     SEARCH_TIME_LIMIT, map_target_kind_error, normalize_session_cwd, posix_relative_key,
     resolve_relative_argument, validate_component_name,
 };
+use crate::roots::anchor_tool_path;
 use crate::tool::ToolError;
 
 use super::*;
+
+/// Anchors `raw` against `extra_roots` (for read-write file tools) or
+/// `extra_roots` + `read_roots` (for read-only file tools), matching
+/// [`crate::invoke::prepare_tool_ctx`].
+pub(crate) fn anchor_file_path(
+    cwd: &Path,
+    extra_roots: &[PathBuf],
+    read_roots: &[PathBuf],
+    reads_only: bool,
+    raw: &str,
+) -> (PathBuf, String) {
+    let anchors: Vec<PathBuf> = if reads_only {
+        extra_roots.iter().chain(read_roots).cloned().collect()
+    } else {
+        extra_roots.to_vec()
+    };
+    let (root, relative) = anchor_tool_path(cwd, &anchors, raw);
+    if root == cwd {
+        (cwd.to_path_buf(), raw.to_owned())
+    } else if relative.is_empty() {
+        (root, ".".to_owned())
+    } else {
+        (root, relative)
+    }
+}
 
 pub(super) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
     if cancel.is_cancelled() {
@@ -66,7 +92,20 @@ pub fn prepare_file(
     let absolute = normalize_session_cwd(cwd)?;
     let allowed = sys::open_allowed_root(&absolute)
         .map_err(|error| ToolError::Execution(format!("session cwd is not accessible: {error}")))?;
-    let relative = resolve_relative_argument(&absolute, None, path)
+    // Windows: the session-given cwd spelling can differ from the
+    // handle-proven final path through an 8.3 alias (`RUNNER~1` vs
+    // `runneradmin`); both spell the tree the retained handle anchors.
+    #[cfg(windows)]
+    let (allowed_root, alias_root) = {
+        let final_root =
+            crate::builtin::fs_search::final_path_by_handle(&allowed).map_err(|error| {
+                ToolError::Execution(format!("session cwd is not accessible: {error}"))
+            })?;
+        (final_root, Some(absolute.as_path()))
+    };
+    #[cfg(not(windows))]
+    let (allowed_root, alias_root): (PathBuf, Option<&Path>) = (absolute, None);
+    let relative = resolve_relative_argument(&allowed_root, alias_root, path)
         .map_err(|()| ToolError::InvalidArgs(format!("path escapes the session cwd: {path}")))?;
     let components: Vec<OsString> = relative
         .components()
@@ -233,4 +272,82 @@ pub(super) fn bind_prepared(
             "prepared file capability is missing or was already consumed".to_owned(),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::{prepare_file, walk_prepare};
+    use crate::builtin::fs_io::FileAccess;
+    use crate::tool::ToolError;
+
+    #[test]
+    fn empty_walk_components_are_rejected_without_reading_disk() {
+        let _ = walk_prepare;
+        let error = prepare_file(
+            Path::new("."),
+            ".",
+            &CancellationToken::new(),
+            FileAccess::ExistingContent,
+        )
+        .expect_err("cwd itself is not a file");
+        assert!(
+            matches!(error, ToolError::InvalidArgs(msg) if msg.contains("inside the session cwd"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_8dot3_session_cwd_accepts_long_name_absolute_path() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use std::path::PathBuf;
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let base = std::env::temp_dir().join(format!(
+            "mycode-prepare-8dot3-longname-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let target = base.join("note.txt");
+        std::fs::write(&target, "hello\n").expect("write target");
+
+        let wide: Vec<u16> = base
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut short_buf = vec![0u16; 1024];
+        // SAFETY: `wide` is NUL-terminated and `short_buf` is writable storage.
+        let len = unsafe {
+            GetShortPathNameW(
+                wide.as_ptr(),
+                short_buf.as_mut_ptr(),
+                u32::try_from(short_buf.len()).expect("buffer fits u32"),
+            )
+        };
+        if len == 0 {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        let short_cwd = PathBuf::from(OsString::from_wide(&short_buf[..len as usize]));
+        if short_cwd == base {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        let prepared = prepare_file(
+            &short_cwd,
+            &target.display().to_string(),
+            &CancellationToken::new(),
+            FileAccess::ExistingContent,
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let prepared = prepared.expect("long-name path under 8.3 cwd must prepare");
+        assert_eq!(prepared.key(), "note.txt");
+    }
 }

@@ -38,12 +38,14 @@ pub async fn prepare_tool_ctx(
         .with_call_id(call_id)
         .with_extra_roots(extra_roots.to_vec())
         .with_read_roots(read_roots.to_vec());
+    let args = crate::tool::normalize_tool_args(args.clone());
     if let Some(access) = tool.search_access() {
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
         let (root, path) = anchored_search(cwd, extra_roots, path.as_deref());
-        let prepared = crate::prepare_search_async_with_access(root, path, cancel, access)
+        let prepared = crate::prepare_search_async_with_access(root.clone(), path, cancel, access)
             .await
             .map_err(|error| error.to_string())?;
+        ctx.cwd = root;
         ctx = ctx.with_prepared_search(std::sync::Arc::new(prepared));
     } else if let Some(access) = tool.file_access() {
         let path = args
@@ -56,9 +58,10 @@ pub async fn prepare_tool_ctx(
             extra_roots.to_vec()
         };
         let (root, path) = anchored_file(cwd, &anchors, path);
-        let prepared = crate::prepare_file_async(root, path, cancel, access)
+        let prepared = crate::prepare_file_async(root.clone(), path, cancel, access)
             .await
             .map_err(|error| error.to_string())?;
+        ctx.cwd = root;
         ctx = ctx.with_prepared_file(std::sync::Arc::new(prepared));
     }
     Ok(ctx)
@@ -197,5 +200,55 @@ mod tests {
             ctx.is_err(),
             "edit shares the read root spelling but must stay workspace-bound"
         );
+    }
+
+    #[tokio::test]
+    async fn extra_root_updates_ctx_cwd_so_edit_and_search_execute_against_anchor() {
+        let workspace = temp("ws-extra");
+        let extra = temp("extra-root");
+        let target = extra.0.join("sub").join("note.txt");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, "alpha\n").unwrap();
+        let extras = vec![extra.0.clone()];
+        let args = json!({
+            "path": target.display().to_string(),
+            "old_string": "alpha",
+            "new_string": "beta"
+        });
+        let ctx = prepare_tool_ctx(
+            &workspace.0,
+            &extras,
+            &[],
+            CancellationToken::new(),
+            "call",
+            &EditTool,
+            &args,
+        )
+        .await
+        .expect("prepare edit in extra root");
+        assert_eq!(ctx.cwd, extra.0);
+        let mut stream = crate::stream::ToolStream::closed();
+        let result = crate::tool::ToolDyn::execute_dyn(&EditTool, args, &ctx, &mut stream)
+            .await
+            .expect("edit in extra root must succeed");
+        assert!(!result.is_error);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "beta\n");
+
+        let find_args = json!({
+            "pattern": "*.txt",
+            "path": extra.0.display().to_string()
+        });
+        let find_ctx = prepare_tool_ctx(
+            &workspace.0,
+            &extras,
+            &[],
+            CancellationToken::new(),
+            "call",
+            &crate::builtin::FindTool,
+            &find_args,
+        )
+        .await
+        .expect("prepare find in extra root");
+        assert_eq!(find_ctx.cwd, extra.0);
     }
 }

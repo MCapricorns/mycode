@@ -1,13 +1,37 @@
 //! Palettes in dark and light. Spec colors stay opaque; chrome applies its
-//! own alpha in `ui/skin` over the window blur. The page is a near-solid base
-//! with only a hint of the palette wash, so the conversation is not sitting
-//! on a loud gradient.
+//! own alpha in `ui/skin` over the window blur. The page is a neutral graphite
+//! (dark) or warm-neutral (light) canvas with only a faint accent wash, so
+//! each palette selects an accent family rather than repainting the whole app.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
 
 use gpui_kit::Hsla;
 use gpui_kit::component::theme::{Theme, ThemeMode};
+
+/// Semantic surface, border, text, and status tokens for one appearance mode,
+/// combined with the active palette's accent family.
+#[derive(Clone, Copy, Debug)]
+pub struct SemanticTokens {
+    pub bg: Hsla,
+    pub wash: Hsla,
+    pub surface_1: Hsla,
+    pub surface_2: Hsla,
+    pub surface_3: Hsla,
+    pub border_subtle: Hsla,
+    pub border_strong: Hsla,
+    pub text_1: Hsla,
+    pub text_2: Hsla,
+    pub text_3: Hsla,
+    pub accent: Hsla,
+    pub accent_soft: Hsla,
+    pub accent_ink: Hsla,
+    pub success: Hsla,
+    pub warning: Hsla,
+    pub danger: Hsla,
+    pub info: Hsla,
+    pub violet: Hsla,
+}
 
 fn hex(value: u32) -> Hsla {
     gpui_kit::rgb(value).into()
@@ -57,7 +81,7 @@ pub fn palette_label(palette: &str) -> &'static str {
         "dusk" => t("Dusk", "暮色"),
         "ember" => t("Ember", "余烬"),
         "aurora" => t("Aurora", "极光"),
-        _ => t("Slate", "石板灰"),
+        _ => t("Indigo", "靛蓝"),
     }
 }
 
@@ -130,9 +154,9 @@ pub fn normalize_font_size(id: &str) -> &'static str {
 pub fn interface_font_px(id: &str) -> f32 {
     match normalize_font_size(id) {
         "s" => 12.,
-        "l" => 14.,
-        "xl" => 16.,
-        _ => 13.,
+        "l" => 16.,
+        "xl" => 18.,
+        _ => 14.,
     }
 }
 
@@ -404,13 +428,50 @@ struct Spec {
     hover: u32,
     ink: u32,
     dim: u32,
+    faint: u32,
     line: u32,
+    line_strong: u32,
     accent: u32,
     accent_ink: u32,
     tint: u32,
     green: u32,
+    amber: u32,
     red: u32,
     info: u32,
+    violet: u32,
+}
+
+struct AccentFamily {
+    accent: u32,
+    accent_ink: u32,
+    tint: u32,
+    wash: u32,
+}
+
+/// Resolves semantic tokens for a palette id in dark or light mode.
+#[must_use]
+pub fn semantic_tokens(palette: &str, light: bool) -> SemanticTokens {
+    let spec = spec_for_mode(normalize_palette(palette), light);
+    SemanticTokens {
+        bg: hex(spec.bg),
+        wash: hex(spec.wash),
+        surface_1: hex(spec.surface),
+        surface_2: hex(spec.card),
+        surface_3: hex(spec.hover),
+        border_subtle: hex(spec.line),
+        border_strong: hex(spec.line_strong),
+        text_1: hex(spec.ink),
+        text_2: hex(spec.dim),
+        text_3: hex(spec.faint),
+        accent: hex(spec.accent),
+        accent_soft: hex(spec.tint),
+        accent_ink: hex(spec.accent_ink),
+        success: hex(spec.green),
+        warning: hex(spec.amber),
+        danger: hex(spec.red),
+        info: hex(spec.info),
+        violet: hex(spec.violet),
+    }
 }
 
 fn spec_for_mode(palette: &str, light: bool) -> Spec {
@@ -421,205 +482,133 @@ fn spec_for_mode(palette: &str, light: bool) -> Spec {
     }
 }
 
-fn spec_for(palette: &str) -> Spec {
+fn dark_accent_for(palette: &str) -> AccentFamily {
     match palette {
-        "ocean" => Spec {
-            bg: 0x071428,
-            wash: 0x0A3A6E,
-            surface: 0x0C1E38,
-            card: 0x12304C,
-            hover: 0x1A4468,
-            ink: 0xE7F2FF,
-            dim: 0x8EB4D8,
-            line: 0x1E4E78,
+        "ocean" => AccentFamily {
             accent: 0x4DA3FF,
-            accent_ink: 0x041018,
-            tint: 0x12385C,
-            green: 0x8FBF9F,
-            red: 0xE08B7A,
-            info: 0x8FB4C4,
+            accent_ink: 0x06101C,
+            tint: 0x16253A,
+            wash: 0x10151E,
         },
-        "forest" => Spec {
-            bg: 0x0A1C12,
-            wash: 0x146B32,
-            surface: 0x102818,
-            card: 0x163822,
-            hover: 0x1E4C2E,
-            ink: 0xE7F8EC,
-            dim: 0x8FCB9E,
-            line: 0x1E5A34,
-            accent: 0x3DDC7A,
-            accent_ink: 0x04140A,
-            tint: 0x145C30,
-            green: 0x8FBF9F,
-            red: 0xE08B7A,
-            info: 0x8FB4C4,
+        "forest" => AccentFamily {
+            accent: 0x3DDC97,
+            accent_ink: 0x05140E,
+            tint: 0x142923,
+            wash: 0x0F1614,
         },
-        "dusk" => Spec {
-            bg: 0x140A22,
-            wash: 0x4A1878,
-            surface: 0x1E1030,
-            card: 0x2A1844,
-            hover: 0x3C2460,
-            ink: 0xF4E9FF,
-            dim: 0xC4A6E4,
-            line: 0x4C2878,
+        "dusk" => AccentFamily {
             accent: 0xC084FC,
-            accent_ink: 0x140820,
-            tint: 0x3A1868,
-            green: 0x8FBF9F,
-            red: 0xE08B7A,
-            info: 0x8FB4C4,
+            accent_ink: 0x14091E,
+            tint: 0x261E36,
+            wash: 0x13111A,
         },
-        "ember" => Spec {
-            bg: 0x241008,
-            wash: 0x8A3410,
-            surface: 0x321608,
-            card: 0x4A220C,
-            hover: 0x6A3010,
-            ink: 0xFFF1E6,
-            dim: 0xE8B898,
-            line: 0x7A3A14,
-            accent: 0xFF8A3D,
-            accent_ink: 0x1C0A04,
-            tint: 0x6A2C0C,
-            green: 0x8FBF9F,
-            red: 0xE08B7A,
-            info: 0xC4A888,
+        "ember" => AccentFamily {
+            accent: 0xFF8A4C,
+            accent_ink: 0x1A0B05,
+            tint: 0x2E201B,
+            wash: 0x151211,
         },
-        "aurora" => Spec {
-            bg: 0x041816,
-            wash: 0x0E6A62,
-            surface: 0x082420,
-            card: 0x0E3834,
-            hover: 0x14564E,
-            ink: 0xE6FFFB,
-            dim: 0x8EDDD4,
-            line: 0x146E64,
+        "aurora" => AccentFamily {
             accent: 0x2EE6C7,
-            accent_ink: 0x021412,
-            tint: 0x0E5850,
-            green: 0x8FBF9F,
-            red: 0xE08B7A,
-            info: 0x8EC8B4,
+            accent_ink: 0x041512,
+            tint: 0x122A29,
+            wash: 0x0E1616,
         },
-        _ => Spec {
-            bg: 0x12151C,
-            wash: 0x24304A,
-            surface: 0x1A1E28,
-            card: 0x242A38,
-            hover: 0x323848,
-            ink: 0xEEF1F8,
-            dim: 0xA8B0C4,
-            line: 0x3A445C,
-            accent: 0x8AABFF,
-            accent_ink: 0x10141C,
-            tint: 0x2A3558,
-            green: 0x8FBF9F,
-            red: 0xE08B7A,
-            info: 0x8FB4C4,
+        _ => AccentFamily {
+            accent: 0x7C8CFF,
+            accent_ink: 0x0B0E1A,
+            tint: 0x1B2036,
+            wash: 0x11131B,
         },
     }
 }
 
-fn light_spec_for(palette: &str) -> Spec {
+fn light_accent_for(palette: &str) -> AccentFamily {
     match palette {
-        "ocean" => Spec {
-            bg: 0xF3F8FD,
-            wash: 0xD7E9FA,
-            surface: 0xFFFFFF,
-            card: 0xE5F0FA,
-            hover: 0xD4E6F6,
-            ink: 0x102033,
-            dim: 0x3A5168,
-            line: 0xC5D8EA,
+        "ocean" => AccentFamily {
             accent: 0x0B6BCB,
             accent_ink: 0xFFFFFF,
-            tint: 0xD6E9FA,
-            green: 0x0F7A45,
-            red: 0xB42318,
-            info: 0x1A5F86,
+            tint: 0xE1EFFC,
+            wash: 0xF5F8FC,
         },
-        "forest" => Spec {
-            bg: 0xF4FAF6,
-            wash: 0xD7F0E2,
-            surface: 0xFFFFFF,
-            card: 0xE5F4EB,
-            hover: 0xD3EBDD,
-            ink: 0x122418,
-            dim: 0x3A5646,
-            line: 0xC5E0D0,
-            accent: 0x0E7A3D,
+        "forest" => AccentFamily {
+            accent: 0x0E7A4D,
             accent_ink: 0xFFFFFF,
-            tint: 0xD5F0E1,
-            green: 0x0F7A45,
-            red: 0xB42318,
-            info: 0x1A5F4A,
+            tint: 0xDFF3EA,
+            wash: 0xF5FAF7,
         },
-        "dusk" => Spec {
-            bg: 0xF8F5FC,
-            wash: 0xEADFF6,
-            surface: 0xFFFFFF,
-            card: 0xF0E8F8,
-            hover: 0xE4D8F2,
-            ink: 0x241432,
-            dim: 0x534060,
-            line: 0xDCCFEA,
+        "dusk" => AccentFamily {
             accent: 0x7A3EBF,
             accent_ink: 0xFFFFFF,
-            tint: 0xE9DCF6,
-            green: 0x0F7A45,
-            red: 0xB42318,
-            info: 0x5A3A78,
+            tint: 0xEDE3FA,
+            wash: 0xF8F6FB,
         },
-        "ember" => Spec {
-            bg: 0xFDF7F3,
-            wash: 0xF8E4D6,
-            surface: 0xFFFFFF,
-            card: 0xF8EBE3,
-            hover: 0xF3DDD0,
-            ink: 0x2C160C,
-            dim: 0x5C4032,
-            line: 0xEAD4C4,
+        "ember" => AccentFamily {
             accent: 0xC2410C,
             accent_ink: 0xFFFFFF,
-            tint: 0xF8E2D4,
-            green: 0x0F7A45,
-            red: 0xB42318,
-            info: 0x8A4B24,
+            tint: 0xFBE6DC,
+            wash: 0xFCF7F5,
         },
-        "aurora" => Spec {
-            bg: 0xF2FBFA,
-            wash: 0xD4F4F0,
-            surface: 0xFFFFFF,
-            card: 0xE3F6F3,
-            hover: 0xD2EEEA,
-            ink: 0x0C2422,
-            dim: 0x355652,
-            line: 0xC2E4DF,
+        "aurora" => AccentFamily {
             accent: 0x0F766E,
             accent_ink: 0xFFFFFF,
-            tint: 0xD2F3EF,
-            green: 0x0F7A45,
-            red: 0xB42318,
-            info: 0x1A5F58,
+            tint: 0xDCF3F0,
+            wash: 0xF4FAF9,
         },
-        _ => Spec {
-            bg: 0xF6F7FB,
-            wash: 0xE4E8F4,
-            surface: 0xFFFFFF,
-            card: 0xECEFF6,
-            hover: 0xE0E5F0,
-            ink: 0x1A2030,
-            dim: 0x3E475C,
-            line: 0xD0D6E4,
-            accent: 0x2F4FBF,
+        _ => AccentFamily {
+            accent: 0x4353D8,
             accent_ink: 0xFFFFFF,
-            tint: 0xE2E8F8,
-            green: 0x0F7A45,
-            red: 0xB42318,
-            info: 0x1F4E72,
+            tint: 0xE5E8FC,
+            wash: 0xF6F7FB,
         },
+    }
+}
+
+fn spec_for(palette: &str) -> Spec {
+    let family = dark_accent_for(palette);
+    Spec {
+        bg: 0x0E0F12,
+        wash: family.wash,
+        surface: 0x15171B,
+        card: 0x1C1F24,
+        hover: 0x24282E,
+        ink: 0xECEDEE,
+        dim: 0xA1A4AB,
+        faint: 0x6B6F78,
+        line: 0x22252B,
+        line_strong: 0x2E323B,
+        accent: family.accent,
+        accent_ink: family.accent_ink,
+        tint: family.tint,
+        green: 0x34D399,
+        amber: 0xF5B544,
+        red: 0xF87171,
+        info: 0x60A5FA,
+        violet: 0xA78BFA,
+    }
+}
+
+fn light_spec_for(palette: &str) -> Spec {
+    let family = light_accent_for(palette);
+    Spec {
+        bg: 0xFAFAF9,
+        wash: family.wash,
+        surface: 0xFFFFFF,
+        card: 0xF4F4F3,
+        hover: 0xEAEAE8,
+        ink: 0x18181B,
+        dim: 0x52525B,
+        faint: 0x71717A,
+        line: 0xE4E4E2,
+        line_strong: 0xD4D4D0,
+        accent: family.accent,
+        accent_ink: family.accent_ink,
+        tint: family.tint,
+        green: 0x0F7A4D,
+        amber: 0xB45309,
+        red: 0xB91C1C,
+        info: 0x1D4ED8,
+        violet: 0x6D28D9,
     }
 }
 
@@ -630,32 +619,33 @@ pub fn apply(theme: &mut Theme) {
 
 /// Applies one named palette in the theme's current light or dark mode.
 pub fn apply_palette(theme: &mut Theme, palette: &str) {
-    let spec = spec_for_mode(normalize_palette(palette), !theme.mode.is_dark());
-    paint(theme, &spec);
+    let tokens = semantic_tokens(palette, !theme.mode.is_dark());
+    paint(theme, &tokens);
     sync_controls(theme);
 }
 
-fn paint(theme: &mut Theme, spec: &Spec) {
-    let bg = hex(spec.bg);
-    // Keep enough of the palette wash that the six themes do not collapse
-    // into the same gray. Chrome then paints this through a translucent fill.
-    let wash = soften(hex(spec.wash), bg, 0.28);
-    let surface = hex(spec.surface);
-    let card = hex(spec.card);
-    let hover = hex(spec.hover);
-    let ink = hex(spec.ink);
-    let dim = hex(spec.dim);
-    let line = soften(hex(spec.line), bg, 0.32);
-    let accent = hex(spec.accent);
-    let accent_ink = hex(spec.accent_ink);
-    let tint = hex(spec.tint);
-    let green = hex(spec.green);
-    let red = hex(spec.red);
-    let info = hex(spec.info);
+fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
+    let bg = tokens.bg;
+    // Keep the neutral canvas dominant; palette changes remain accent-only.
+    let wash = soften(tokens.wash, bg, 0.25);
+    let surface = tokens.surface_1;
+    let card = tokens.surface_2;
+    let hover = tokens.surface_3;
+    let ink = tokens.text_1;
+    let dim = tokens.text_2;
+    let line = tokens.border_subtle;
+    let accent = tokens.accent;
+    let accent_ink = tokens.accent_ink;
+    let tint = tokens.accent_soft;
+    let green = tokens.success;
+    let amber = tokens.warning;
+    let red = tokens.danger;
+    let info = tokens.info;
+    let violet = tokens.violet;
 
     theme.radius = super::skin::radius_sm();
     theme.radius_lg = super::skin::radius_md();
-    theme.shadow = false;
+    theme.shadow = true;
 
     theme.background = bg;
     theme.foreground = ink;
@@ -671,7 +661,7 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.caret = accent;
     // Selected text. Opaque fills cover the glyphs; this stays translucent
     // and bright enough to see on every palette.
-    theme.selection = hex_a(spec.accent, 0.55);
+    theme.selection = accent.opacity(0.35);
     theme.primary = accent;
     theme.primary_foreground = accent_ink;
     theme.primary_hover = accent;
@@ -680,14 +670,18 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.link_hover = accent;
     theme.link_active = accent;
     theme.info = info;
-    theme.info_foreground = accent_ink;
+    theme.info_foreground = ink;
     theme.success = green;
-    theme.success_foreground = accent_ink;
-    theme.warning = accent;
-    theme.warning_foreground = accent_ink;
+    theme.success_foreground = ink;
+    theme.warning = amber;
+    theme.warning_foreground = ink;
     theme.danger = red;
-    theme.danger_foreground = accent_ink;
-    theme.input = line;
+    theme.danger_foreground = if theme.mode.is_dark() {
+        bg
+    } else {
+        hex(0xFFFFFF)
+    };
+    theme.input = tokens.border_strong;
     theme.ring = accent;
 
     theme.sidebar = surface;
@@ -719,7 +713,7 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.table_head = card;
     theme.table_head_foreground = ink;
     theme.scrollbar = bg;
-    theme.scrollbar_thumb = line;
+    theme.scrollbar_thumb = tokens.border_strong;
     theme.scrollbar_thumb_hover = dim;
     theme.window_border = line;
     theme.overlay = hex_a(0x000000, 0.45);
@@ -730,10 +724,10 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.red_light = red;
     theme.blue = info;
     theme.blue_light = info;
-    theme.yellow = accent;
-    theme.yellow_light = accent;
-    theme.magenta = accent;
-    theme.magenta_light = accent;
+    theme.yellow = amber;
+    theme.yellow_light = amber;
+    theme.magenta = violet;
+    theme.magenta_light = violet;
     theme.cyan = info;
     theme.cyan_light = info;
 }
@@ -783,13 +777,12 @@ pub(crate) fn diff_wash(ink: Hsla) -> Hsla {
     ink.opacity(0.14)
 }
 
-/// Semantic signal colors. `amber` follows the active palette accent so a
-/// selected row is not always honey.
+/// Semantic signal colors. `amber` is a distinct warning hue; `violet` and
+/// `cyan` are distinct from the active palette accent.
 pub struct Desk {
     pub amber: Hsla,
     pub green: Hsla,
     pub red: Hsla,
-    pub cyan: Hsla,
     pub violet: Hsla,
     pub faint: Hsla,
     pub screen: Hsla,
@@ -798,13 +791,13 @@ pub struct Desk {
 
 impl Desk {
     pub fn of(theme: &Theme) -> Self {
+        let faint = semantic_tokens("slate", !theme.mode.is_dark()).text_3;
         Self {
-            amber: theme.primary,
+            amber: theme.warning,
             green: theme.green,
             red: theme.red,
-            cyan: theme.cyan,
             violet: theme.magenta,
-            faint: theme.muted_foreground,
+            faint,
             screen: theme.background,
             screen_dim: theme.muted_foreground,
         }
@@ -816,11 +809,11 @@ mod tests {
     #[test]
     fn font_sizes_land_on_the_body_scale() {
         assert_eq!(super::interface_font_px("s"), 12.);
-        assert_eq!(super::interface_font_px("m"), 13.);
-        assert_eq!(super::interface_font_px("l"), 14.);
-        assert_eq!(super::interface_font_px("xl"), 16.);
-        assert_eq!(super::interface_font_px("nope"), 13.);
-        assert!((super::interface_rem_px("l") - 16.).abs() < f32::EPSILON);
+        assert_eq!(super::interface_font_px("m"), 14.);
+        assert_eq!(super::interface_font_px("l"), 16.);
+        assert_eq!(super::interface_font_px("xl"), 18.);
+        assert_eq!(super::interface_font_px("nope"), 14.);
+        assert!((super::interface_rem_px("m") - 16.).abs() < f32::EPSILON);
         assert_eq!(super::normalize_font_size("xl"), "xl");
         assert_eq!(super::font_size_label("s"), "S");
     }
@@ -958,12 +951,86 @@ mod tests {
                 "{id}: ink on the primary fill is {text:.2}, want >= 4.5"
             );
             assert!(
-                (1.25..=2.2).contains(&body),
-                "{id}: fill against the card is {body:.2}, want a soft 1.25..=2.2"
+                (1.1..=2.2).contains(&body),
+                "{id}: fill against the card is {body:.2}, want a soft 1.1..=2.2"
             );
             assert!(
                 boundary >= 3.0,
                 "{id}: primary edge against the card is {boundary:.2}, want >= 3"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_tokens_keep_neutral_canvas_and_distinct_accessible_status_colors() {
+        let dark_slate = super::semantic_tokens("slate", false);
+        let light_slate = super::semantic_tokens("slate", true);
+        assert_eq!(dark_slate.bg, super::hex(0x0E0F12));
+        assert_eq!(dark_slate.surface_1, super::hex(0x15171B));
+        assert_eq!(dark_slate.surface_2, super::hex(0x1C1F24));
+        assert_eq!(dark_slate.surface_3, super::hex(0x24282E));
+        assert_eq!(light_slate.bg, super::hex(0xFAFAF9));
+        assert_eq!(light_slate.surface_1, super::hex(0xFFFFFF));
+        assert_eq!(light_slate.surface_2, super::hex(0xF4F4F3));
+
+        for id in mycode_config::VALID_PALETTES {
+            let dark = super::semantic_tokens(id, false);
+            assert_eq!(dark.bg, dark_slate.bg, "{id} keeps neutral graphite bg");
+            assert_eq!(
+                dark.surface_1, dark_slate.surface_1,
+                "{id} keeps neutral surface-1"
+            );
+            assert_ne!(
+                dark.warning, dark.accent,
+                "{id} dark warning must not collapse onto accent"
+            );
+            assert_ne!(dark.success, dark.warning);
+            assert_ne!(dark.warning, dark.danger);
+            assert_ne!(dark.danger, dark.info);
+            assert!(
+                contrast(dark.text_1, dark.bg) >= 12.0,
+                "{id} dark text-1 contrast {:.2}",
+                contrast(dark.text_1, dark.bg)
+            );
+            assert!(
+                contrast(dark.text_2, dark.surface_1) >= 4.5,
+                "{id} dark text-2 contrast {:.2}",
+                contrast(dark.text_2, dark.surface_1)
+            );
+            assert!(
+                contrast(dark.success, dark.surface_1) >= 4.5
+                    && contrast(dark.warning, dark.surface_1) >= 4.5
+                    && contrast(dark.danger, dark.surface_1) >= 4.5
+                    && contrast(dark.info, dark.surface_1) >= 4.5,
+                "{id} dark semantic status hues must clear 4.5:1 on surface-1"
+            );
+            assert!(
+                contrast(
+                    dark.text_1,
+                    over(dark.warning.opacity(0.14), dark.surface_1)
+                ) >= 4.5,
+                "{id} dark warning banner text must stay readable"
+            );
+
+            let light = super::semantic_tokens(id, true);
+            assert_eq!(light.bg, light_slate.bg, "{id} keeps warm neutral bg");
+            assert_ne!(
+                light.warning, light.accent,
+                "{id} light warning must not collapse onto accent"
+            );
+            assert!(
+                contrast(light.success, light.surface_1) >= 4.5
+                    && contrast(light.warning, light.surface_1) >= 4.5
+                    && contrast(light.danger, light.surface_1) >= 4.5
+                    && contrast(light.info, light.surface_1) >= 4.5,
+                "{id} light semantic status hues must clear 4.5:1 on surface-1"
+            );
+            assert!(
+                contrast(
+                    light.text_1,
+                    over(light.warning.opacity(0.14), light.surface_1)
+                ) >= 4.5,
+                "{id} light warning banner text must stay readable"
             );
         }
     }

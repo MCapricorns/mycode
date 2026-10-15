@@ -241,15 +241,37 @@ fn key_block(
         })
         .when_some(key_input, |this, input| {
             let id = id_owned.clone();
+            let cancel_id = id_owned.clone();
+            let can_save =
+                crate::workspace::normalized_key_input(&input.read(cx).value()).is_some();
             this.child(div().h(px(32.)).text_sm().child(Input::new(&input)))
                 .child(
-                    Button::new(format!("provider-key-save-{id}"))
-                        .label(t("Save key", "保存密钥"))
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(move |workspace, _, window, cx| {
-                            workspace.on_save_provider_key(&id, window, cx);
-                        })),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new(format!("provider-key-save-{id}"))
+                                .label(t("Save key", "保存密钥"))
+                                .small()
+                                .primary()
+                                .disabled(!can_save)
+                                .on_click(cx.listener(move |workspace, _, window, cx| {
+                                    workspace.on_save_provider_key(&id, window, cx);
+                                })),
+                        )
+                        .when(keyed && replacing, |this| {
+                            this.child(
+                                Button::new(format!("provider-key-cancel-{cancel_id}"))
+                                    .label(t("Cancel", "取消"))
+                                    .small()
+                                    .ghost()
+                                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                                        workspace.on_cancel_replace_provider_key(&cancel_id, cx);
+                                    })),
+                            )
+                        }),
                 )
         })
         .into_any_element()

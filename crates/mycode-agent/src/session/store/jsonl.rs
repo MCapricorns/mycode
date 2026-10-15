@@ -58,7 +58,7 @@ struct LineFile<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LineOwned {
     id: String,
     kind: String,
@@ -99,7 +99,8 @@ pub(crate) fn charge(record_len: u64, external: bool, payload_len: u64) -> Optio
     }
 }
 
-/// Sidebar title for a user message payload. Assistant JSON is skipped.
+/// Sidebar title for a user message payload. Assistant JSON and display-only
+/// compaction summaries are skipped.
 pub(crate) fn message_title(kind: EventKind, payload: &[u8]) -> Option<String> {
     if kind != EventKind::Message {
         return None;
@@ -108,6 +109,12 @@ pub(crate) fn message_title(kind: EventKind, payload: &[u8]) -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(payload);
+    if text
+        .trim_start()
+        .starts_with("<compaction_summary display=\"true\">")
+    {
+        return None;
+    }
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let title: String = collapsed.chars().take(60).collect();
     if title.is_empty() { None } else { Some(title) }
@@ -202,7 +209,11 @@ pub(crate) fn decode_line(bytes: &[u8]) -> Result<DecodedLine, ()> {
     if line.payload_file.as_deref() != Some(expected.as_str()) {
         return Err(());
     }
-    if line.bytes == 0 || usize::try_from(line.bytes).is_err() {
+    if !super::super::digest::is_canonical_digest(&line.digest)
+        || line.bytes < EXTERNAL_PAYLOAD_THRESHOLD as u64
+        || line.bytes > kind.payload_bound() as u64
+        || usize::try_from(line.bytes).is_err()
+    {
         return Err(());
     }
     Ok(DecodedLine {

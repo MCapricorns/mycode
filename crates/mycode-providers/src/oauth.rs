@@ -135,6 +135,25 @@ fn field<'a>(payload: &'a Value, name: &str) -> Option<&'a str> {
     payload.get(name).and_then(Value::as_str).and_then(bounded)
 }
 
+/// Reads a JSON response body up to [`MAX_FIELD_BYTES`] * 4 so a hostile or
+/// misconfigured endpoint cannot buffer an unbounded payload before parsing.
+async fn bounded_json(response: reqwest::Response, label: &str) -> Result<Value, String> {
+    const MAX_OAUTH_JSON_BYTES: usize = MAX_FIELD_BYTES * 4;
+    let mut response = response;
+    let mut buf = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("{label} response was not JSON: {error}"))?
+    {
+        if buf.len().saturating_add(chunk.len()) > MAX_OAUTH_JSON_BYTES {
+            return Err(format!("{label} response was not JSON: payload oversized"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&buf).map_err(|error| format!("{label} response was not JSON: {error}"))
+}
+
 /// Starts the device authorization flow.
 ///
 /// # Errors
@@ -159,10 +178,7 @@ pub async fn start_device_flow(call: &PinnedCall) -> Result<DeviceCodeStart, Str
             response.status()
         ));
     }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("device-code response was not JSON: {error}"))?;
+    let payload = bounded_json(response, "device-code").await?;
     parse_device_start(&payload).ok_or_else(|| "device-code response was missing fields".to_owned())
 }
 
@@ -212,10 +228,7 @@ pub async fn poll_device_token(
             response.status()
         ));
     }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("device-token response was not JSON: {error}"))?;
+    let payload = bounded_json(response, "device-token").await?;
     Ok(classify_device_poll(&payload))
 }
 
@@ -265,10 +278,7 @@ pub async fn copilot_bearer(call: &PinnedCall, github_token: &str) -> Result<Cop
     } {
         return Err(reason);
     }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("copilot token response was not JSON: {error}"))?;
+    let payload = bounded_json(response, "copilot token").await?;
     parse_copilot_token(&payload)
         .ok_or_else(|| "copilot token response was missing fields".to_owned())
 }
@@ -419,10 +429,7 @@ pub async fn start_codex_device_flow(call: &PinnedCall) -> Result<CodexDeviceSta
             response.status()
         ));
     }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("Codex device-code response was not JSON: {error}"))?;
+    let payload = bounded_json(response, "Codex device-code").await?;
     let interval = payload
         .get("interval")
         .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
@@ -484,10 +491,7 @@ pub async fn poll_codex_device_token(
     if !response.status().is_success() {
         return Err(format!("Codex device-token endpoint returned {status}"));
     }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("Codex device-token response was not JSON: {error}"))?;
+    let payload = bounded_json(response, "Codex device-token").await?;
     if let (Some(code), Some(verifier)) = (
         field(&payload, "authorization_code"),
         field(&payload, "code_verifier"),
@@ -541,10 +545,7 @@ pub async fn exchange_codex_code(
             response.status()
         ));
     }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("Codex token response was not JSON: {error}"))?;
+    let payload = bounded_json(response, "Codex token").await?;
     secret_from_token_payload(&payload, None, true)
 }
 
@@ -570,10 +571,7 @@ pub async fn refresh_codex_token(call: &PinnedCall, refresh: &str) -> Result<OAu
     if !response.status().is_success() {
         return Err(format!("token refresh returned {}", response.status()));
     }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("token refresh was not JSON: {error}"))?;
+    let payload = bounded_json(response, "token refresh").await?;
     secret_from_token_payload(&payload, Some(refresh), true)
 }
 

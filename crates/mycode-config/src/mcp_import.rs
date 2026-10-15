@@ -127,7 +127,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let args = spec
+    let args: Vec<String> = spec
         .get("args")
         .and_then(Value::as_array)
         .map(|items| {
@@ -138,7 +138,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
                 .collect()
         })
         .unwrap_or_default();
-    let env = spec
+    let env: BTreeMap<String, String> = spec
         .get("env")
         .and_then(Value::as_object)
         .map(|items| {
@@ -157,8 +157,8 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
     ) || (endpoint.is_some() && command.is_none());
     if is_http {
         let endpoint = endpoint.ok_or_else(|| format!("server '{id}' is HTTP but has no url"))?;
-        if !endpoint.starts_with("https://") {
-            return Err(format!("server '{id}' url must be https://"));
+        if !crate::settings::is_https_url(&endpoint) {
+            return Err(format!("server '{id}' url must be a valid https:// URL"));
         }
         return Ok(ImportedMcpServer {
             server: McpServerSettings {
@@ -175,6 +175,30 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
         });
     }
     let command = command.ok_or_else(|| format!("server '{id}' is stdio but has no command"))?;
+    if crate::settings::bounded_text(&command, crate::settings::MAX_FIELD_BYTES).is_err()
+        || !crate::settings::is_mcp_executable(&command)
+    {
+        return Err(format!(
+            "server '{id}' command must be an executable path, not a shell string"
+        ));
+    }
+    if args.len() > 64
+        || args.iter().any(|arg| {
+            crate::settings::bounded_text(arg, crate::settings::MAX_FIELD_BYTES).is_err()
+        })
+    {
+        return Err(format!("server '{id}' has invalid or too many args"));
+    }
+    if env.len() > crate::settings::MAX_MCP_ENV_VARS
+        || env.iter().any(|(key, value)| {
+            key.is_empty()
+                || key.contains('=')
+                || key.chars().any(|ch| ch.is_control() || ch == '\0')
+                || crate::settings::bounded_text(value, crate::settings::MAX_FIELD_BYTES).is_err()
+        })
+    {
+        return Err(format!("server '{id}' has invalid or too many env vars"));
+    }
     Ok(ImportedMcpServer {
         server: McpServerSettings {
             id,
@@ -236,4 +260,32 @@ fn sanitize_mcp_id(raw: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join("-");
     crate::home::is_valid_portable_id(&collapsed).then_some(collapsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_mcp_import;
+
+    #[test]
+    fn import_rejects_shell_commands_and_malformed_https_urls() {
+        assert!(
+            parse_mcp_import(r#"{"mcpServers":{"bad":{"command":"npx -y @scope/pkg"}}}"#).is_err(),
+            "shell command string must be rejected at import time"
+        );
+        assert!(
+            parse_mcp_import(r#"{"mcpServers":{"bad":{"url":"https://"}}}"#).is_err(),
+            "empty https host must be rejected at import time"
+        );
+        assert!(
+            parse_mcp_import(r#"{"mcpServers":{"bad":{"url":"https://host/path\ninjected"}}}"#)
+                .is_err(),
+            "URL with newline must be rejected at import time"
+        );
+        let imported = parse_mcp_import(
+            r#"{"mcpServers":{"good":{"command":"npx","args":["-y","@scope/pkg"]}}}"#,
+        )
+        .expect("valid stdio import");
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].server.id, "good");
+    }
 }

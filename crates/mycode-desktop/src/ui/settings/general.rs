@@ -9,7 +9,7 @@ use gpui_kit::{
 };
 
 use super::widgets::{choice_chips, dropdown_field, settings_card};
-use crate::i18n::{effective_language_id, t};
+use crate::i18n::t;
 use crate::workspace::Workspace;
 
 /// Display label for one configured language id.
@@ -67,8 +67,7 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.font_family.clone())
         .unwrap_or_else(|| mycode_config::SYSTEM_FONT_FAMILY.to_owned());
-    let language = effective_language_id(&configured_language).to_owned();
-    let language_label_now = language_label(&language).to_owned();
+    let language_label_now = language_label(&configured_language).to_owned();
     let language_options = ["auto", "en", "zh"]
         .iter()
         .map(|id| language_label(id).to_owned())
@@ -566,6 +565,24 @@ mod tests {
         }
         assert_eq!(super::font_family_id_for_label("System"), Some("system"));
         assert_eq!(super::font_family_id_for_label("unknown"), None);
+    }
+
+    #[test]
+    fn language_dropdown_keeps_follow_system_visible_when_configured_auto() {
+        assert_eq!(
+            super::language_label("auto"),
+            crate::i18n::t("Follow system", "跟随系统")
+        );
+        assert_eq!(super::language_label("en"), "English");
+        assert_eq!(super::language_label("zh"), "中文");
+        assert_eq!(
+            super::language_id_for_label(super::language_label("auto")),
+            Some("auto")
+        );
+        assert_eq!(super::language_id_for_label("Follow system"), Some("auto"));
+        assert_eq!(super::language_id_for_label("跟随系统"), Some("auto"));
+        assert_eq!(super::language_id_for_label("English"), Some("en"));
+        assert_eq!(super::language_id_for_label("中文"), Some("zh"));
     }
 }
 

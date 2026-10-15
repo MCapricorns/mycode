@@ -3,7 +3,7 @@
 /// Compact token-count spelling: 12.3k / 1.2M.
 #[must_use]
 pub(crate) fn compact_count(count: u64) -> String {
-    if count >= 1_000_000 {
+    if count >= 999_950 {
         format!("{:.1}M", count as f64 / 1_000_000.0)
     } else if count >= 1_000 {
         format!("{:.1}k", count as f64 / 1_000.0)
@@ -246,6 +246,15 @@ mod tests {
         cache_hit_recovered, cache_percent, context_meter_label, context_meter_parts,
         format_context_meter, turn_cache_hit,
     };
+
+    #[test]
+    fn compact_count_rolls_over_to_millions_before_four_digit_thousands() {
+        assert_eq!(super::compact_count(999), "999");
+        assert_eq!(super::compact_count(1_000), "1.0k");
+        assert_eq!(super::compact_count(999_949), "999.9k");
+        assert_eq!(super::compact_count(999_950), "1.0M");
+        assert_eq!(super::compact_count(1_000_000), "1.0M");
+    }
 
     #[test]
     fn context_meter_shows_cache_reads_and_hides_an_empty_session() {

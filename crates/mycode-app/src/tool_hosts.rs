@@ -280,7 +280,11 @@ impl mycode_tools::builtin::WebHost for BridgeWebHost {
     > {
         Box::pin(async move {
             let fail = |message: String| mycode_tools::ToolError::Execution(message);
-            let client = web_client(&self.home).map_err(fail)?;
+            let read_home = self.home.clone();
+            let client = tokio::task::spawn_blocking(move || web_client(&read_home))
+                .await
+                .map_err(|error| fail(format!("web setup task: {error}")))?
+                .map_err(fail)?;
             let results = client
                 .search(query, max_results, cancel.clone())
                 .await
@@ -310,7 +314,11 @@ impl mycode_tools::builtin::WebHost for BridgeWebHost {
     > {
         Box::pin(async move {
             let fail = |message: String| mycode_tools::ToolError::Execution(message);
-            let client = web_client(&self.home).map_err(fail)?;
+            let read_home = self.home.clone();
+            let client = tokio::task::spawn_blocking(move || web_client(&read_home))
+                .await
+                .map_err(|error| fail(format!("web setup task: {error}")))?
+                .map_err(fail)?;
             let pages = client
                 .contents(urls, cancel.clone())
                 .await

@@ -20,7 +20,10 @@ pub(crate) fn render_ask_panel(
     let rows = workspace.vm().pending_ask.clone().unwrap_or_default();
     let picks = workspace.vm().ask_answers.clone();
     let single = rows.len() == 1;
-    let ask_input = workspace.ask_input(window, cx);
+    let inputs = (0..rows.len())
+        .map(|index| workspace.ask_input(index, window, cx))
+        .collect::<Vec<_>>();
+    let max_height = px((f32::from(window.viewport_size().height) * 0.45).clamp(160., 420.));
     let theme = cx.theme();
     let desk = Desk::of(theme);
     div()
@@ -34,6 +37,8 @@ pub(crate) fn render_ask_panel(
             div()
                 .id("ask-card")
                 .w_full()
+                .max_h(max_height)
+                .overflow_y_scroll()
                 .flex()
                 .flex_col()
                 .gap_3()
@@ -98,11 +103,12 @@ pub(crate) fn render_ask_panel(
                                                 theme,
                                             )
                                             .on_click(
-                                                cx.listener(move |workspace, _, _, cx| {
+                                                cx.listener(move |workspace, _, window, cx| {
                                                     workspace.on_pick_ask_choice(
                                                         index,
                                                         answer.clone(),
                                                         single && !multiple,
+                                                        window,
                                                         cx,
                                                     );
                                                 }),
@@ -120,6 +126,15 @@ pub(crate) fn render_ask_panel(
                         .when(optional, |this| {
                             this.child(div().text_xs().opacity(0.5).child(t("Optional", "可选")))
                         })
+                        .child(
+                            div()
+                                .id(format!("ask-free-input-{index}"))
+                                .w_full()
+                                .min_w_0()
+                                .h(px(32.))
+                                .text_sm()
+                                .child(Input::new(&inputs[index])),
+                        )
                 }))
                 .child(
                     div()
@@ -130,15 +145,7 @@ pub(crate) fn render_ask_panel(
                         .items_center()
                         .gap_2()
                         .w_full()
-                        .child(
-                            div()
-                                .id("ask-free-input")
-                                .flex_1()
-                                .min_w_0()
-                                .h(px(32.))
-                                .text_sm()
-                                .child(Input::new(&ask_input)),
-                        )
+                        .justify_end()
                         .child(
                             skin::glass_button("ask-decline", false, theme)
                                 .flex_shrink_0()

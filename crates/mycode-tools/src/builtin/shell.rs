@@ -435,6 +435,9 @@ fn script_launch_args(shell: &DetectedShell, command: &str) -> Result<Vec<String
 
 fn powershell_script_for(command: &str) -> String {
     let mut script = String::with_capacity(command.len() + POWERSHELL_UTF8_PRELUDE.len() + 4);
+    // Strip a leading UTF-8 BOM so a leading `using` statement remains the
+    // first token PowerShell sees after `-EncodedCommand` decoding.
+    let command = command.strip_prefix('\u{feff}').unwrap_or(command);
     if command.is_empty() {
         // PowerShell 7 rejects an empty -EncodedCommand payload as not Base64.
         script.push_str("#\n");
@@ -443,78 +446,233 @@ fn powershell_script_for(command: &str) -> String {
     }
     let prologue = powershell_prologue_units(command);
     script.push_str(&command[..prologue]);
-    if !script.is_empty() && !script.ends_with('\n') {
+    if !script.is_empty() && !script.ends_with('\n') && !script.ends_with(';') {
         script.push('\n');
     }
     script.push_str(POWERSHELL_UTF8_PRELUDE);
-    script.push('\n');
-    script.push_str(&command[prologue..]);
+    let rest = &command[prologue..];
+    if rest.trim_start().starts_with(';') {
+        script.push(' ');
+    } else {
+        script.push('\n');
+    }
+    script.push_str(rest);
     script
 }
 
-/// Byte offset of the end of the leading statement-ordering prologue — blank
-/// lines, comments, `using` statements, and one `param (...)` block — which
-/// PowerShell requires (`using`) or expects (`param`) before all other
-/// statements. The UTF-8 prelude is inserted right after it, so those forms
-/// keep their required position.
+/// Byte offset of the end of the leading statement-ordering prologue —
+/// whitespace, line/block comments, `using` statements, script attributes,
+/// and one `param (...)` block — which PowerShell requires (`using`) or
+/// expects (`param` and its attributes) before all other statements. The
+/// UTF-8 prelude is inserted right after it, so those forms keep their
+/// required position.
 fn powershell_prologue_units(command: &str) -> usize {
-    let mut offset = 0_usize;
-    let mut paren_depth: i64 = 0;
-    let mut in_param_block = false;
-    let mut quote: Option<char> = None;
-    for line in command.split_inclusive('\n') {
-        if in_param_block {
-            scan_param_line(line, &mut paren_depth, &mut quote);
-            offset += line.len();
-            if paren_depth <= 0 {
-                in_param_block = false;
-            }
+    let mut index = 0_usize;
+    let mut saw_attribute = false;
+    while index < command.len() {
+        let next = skip_ps_trivia(command, index);
+        if next > index {
+            index = next;
             continue;
         }
-        let trimmed = line.trim_start();
-        // PowerShell keywords are case-insensitive: `Param($x)` and
-        // `Using namespace …` are legal spellings the prelude must sit
-        // behind, or the inserted statement makes them fail to parse.
-        let lower = trimmed.to_ascii_lowercase();
-        let is_prologue_line = trimmed.is_empty()
-            || lower.starts_with('#')
-            || lower.starts_with("using ")
-            || lower.starts_with("using\t");
-        if is_prologue_line {
-            offset += line.len();
+        if !saw_attribute && let Some(after_using) = scan_ps_using(command, index) {
+            index = after_using;
             continue;
         }
-        if lower.starts_with("param(") || lower.starts_with("param (") {
-            in_param_block = true;
-            paren_depth = 0;
-            quote = None;
-            scan_param_line(line, &mut paren_depth, &mut quote);
-            offset += line.len();
-            if paren_depth <= 0 {
-                in_param_block = false;
+        if let Some(after_param) = scan_ps_param_block(command, index) {
+            index = after_param;
+            break;
+        }
+        if let Some(after_attr) = scan_ps_attribute(command, index) {
+            let after_trivia = skip_ps_trivia(command, after_attr);
+            if scan_ps_attribute(command, after_trivia).is_some()
+                || scan_ps_param_block(command, after_trivia).is_some()
+            {
+                saw_attribute = true;
+                index = after_attr;
+                continue;
             }
+        }
+        break;
+    }
+    if index > 0 && index < command.len() {
+        index = consume_trailing_line_break(command, index);
+    }
+    index
+}
+
+fn consume_trailing_line_break(text: &str, mut index: usize) -> usize {
+    let bytes = text.as_bytes();
+    while index < bytes.len() && matches!(bytes[index], b' ' | b'\t') {
+        index += 1;
+    }
+    if index < bytes.len() && bytes[index] == b'#' && !text[index..].starts_with("<#") {
+        while index < bytes.len() && !matches!(bytes[index], b'\r' | b'\n') {
+            index += 1;
+        }
+    }
+    if index < bytes.len() && bytes[index] == b'\r' {
+        index += 1;
+    }
+    if index < bytes.len() && bytes[index] == b'\n' {
+        index += 1;
+    }
+    index
+}
+
+fn skip_ps_trivia(text: &str, mut index: usize) -> usize {
+    while index < text.len() {
+        let rest = &text[index..];
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        if ch.is_whitespace() || ch == '\u{feff}' {
+            index += ch.len_utf8();
+            continue;
+        }
+        if let Some(comment) = rest.strip_prefix("<#") {
+            index = match comment.find("#>") {
+                Some(end) => index + 2 + end + 2,
+                None => text.len(),
+            };
+            continue;
+        }
+        if ch == '#' {
+            index = match rest.find('\n') {
+                Some(nl) => index + nl + 1,
+                None => text.len(),
+            };
             continue;
         }
         break;
     }
-    offset
+    index
 }
 
-/// Tracks paren depth across one line of a `param (...)` block, ignoring
-/// parentheses inside single- or double-quoted strings.
-fn scan_param_line(line: &str, paren_depth: &mut i64, quote: &mut Option<char>) {
-    for character in line.chars() {
-        match *quote {
-            Some(open) if character == open => *quote = None,
-            Some(_) => {}
-            None => match character {
-                '\'' | '"' => *quote = Some(character),
-                '(' => *paren_depth += 1,
-                ')' => *paren_depth -= 1,
-                _ => {}
-            },
+fn scan_ps_using(text: &str, start: usize) -> Option<usize> {
+    let rest = &text[start..];
+    if !rest
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("using"))
+    {
+        return None;
+    }
+    let after_kw = rest[5..].chars().next()?;
+    if !after_kw.is_whitespace() || matches!(after_kw, '\r' | '\n') {
+        return None;
+    }
+    let mut index = start + 5;
+    while index < text.len() {
+        let slice = &text[index..];
+        if let Some(comment) = slice.strip_prefix("<#") {
+            index = match comment.find("#>") {
+                Some(end) => index + 2 + end + 2,
+                None => text.len(),
+            };
+            continue;
+        }
+        let ch = slice.chars().next()?;
+        match ch {
+            '\r' | '\n' => return Some(consume_trailing_line_break(text, index)),
+            ';' => return Some(index + 1),
+            '#' => return Some(consume_trailing_line_break(text, index)),
+            '\'' | '"' => index = skip_ps_quoted_string(text, index),
+            '{' => index = scan_ps_balanced(text, index, '{', '}')?,
+            '(' => index = scan_ps_balanced(text, index, '(', ')')?,
+            _ => index += ch.len_utf8(),
         }
     }
+    Some(text.len())
+}
+
+fn scan_ps_attribute(text: &str, start: usize) -> Option<usize> {
+    if text.as_bytes().get(start) != Some(&b'[') {
+        return None;
+    }
+    scan_ps_balanced(text, start, '[', ']')
+}
+
+fn scan_ps_param_block(text: &str, start: usize) -> Option<usize> {
+    let rest = &text[start..];
+    if !rest
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("param"))
+    {
+        return None;
+    }
+    let after_kw = start + 5;
+    if let Some(ch) = text[after_kw..].chars().next()
+        && (ch.is_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        return None;
+    }
+    let open = skip_ps_trivia(text, after_kw);
+    if text.as_bytes().get(open) != Some(&b'(') {
+        return None;
+    }
+    scan_ps_balanced(text, open, '(', ')')
+}
+
+fn scan_ps_balanced(text: &str, start: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut index = start;
+    while index < text.len() {
+        let slice = &text[index..];
+        if let Some(comment) = slice.strip_prefix("<#") {
+            index += comment.find("#>")? + 4;
+            continue;
+        }
+        let ch = slice.chars().next()?;
+        if ch == '#' {
+            index += slice.find('\n')? + 1;
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            index = skip_ps_quoted_string(text, index);
+            continue;
+        }
+        if ch == open {
+            depth += 1;
+            index += ch.len_utf8();
+            continue;
+        }
+        if ch == close {
+            depth = depth.saturating_sub(1);
+            index += ch.len_utf8();
+            if depth == 0 {
+                return Some(index);
+            }
+            continue;
+        }
+        index += ch.len_utf8();
+    }
+    None
+}
+
+fn skip_ps_quoted_string(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let quote = bytes[start];
+    let mut index = start + 1;
+    while index < text.len() {
+        let ch = text[index..].chars().next().expect("char boundary");
+        if quote == b'"' && ch == '`' {
+            index += 1;
+            if let Some(escaped) = text[index..].chars().next() {
+                index += escaped.len_utf8();
+            }
+            continue;
+        }
+        if ch == char::from(quote) {
+            index += 1;
+            if bytes.get(index) == Some(&quote) {
+                index += 1;
+                continue;
+            }
+            return index;
+        }
+        index += ch.len_utf8();
+    }
+    text.len()
 }
 
 fn powershell_args(encoded_command: String) -> Vec<String> {
@@ -1253,6 +1411,73 @@ mod mode_tests {
         let details = plain.details.as_ref().expect("details");
         assert!(details.get("translated_command").is_none());
         assert!(!result_text(&plain).contains("translated"));
+    }
+
+    #[test]
+    fn powershell_prologue_accepts_non_ascii_statements_without_slicing_inside_a_scalar() {
+        for body in [
+            "\"\u{4e2d}\u{1f4a1}\"",
+            "\u{76ee}\u{5f55} -Name x",
+            "\u{1f680}abc",
+        ] {
+            let script = super::powershell_script_for(body);
+            assert!(script.contains(body));
+            assert!(
+                script.find(super::POWERSHELL_UTF8_PRELUDE).unwrap() < script.find(body).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn powershell_prologue_preserves_attributes_block_comments_using_and_param() {
+        let command = "\u{feff}#Requires -Version 5.0\r\n\
+<#\r\n\
+header (comment)\r\n\
+#>\r\n\
+using namespace System.IO; using namespace System.Text\r\n\
+[CmdletBinding()]\r\n\
+[OutputType([string])]\r\n\
+param\r\n\
+(\r\n\
+    [string]$x = '('')', # (comment paren\r\n\
+    [string]$y = \"`\")\" <# (block paren #>\r\n\
+)\r\n\
+Write-Output \"$x $y\"";
+        let script = super::powershell_script_for(command);
+        let prelude_pos = script
+            .find(super::POWERSHELL_UTF8_PRELUDE)
+            .expect("prelude inserted");
+        let param_end = script.find("Write-Output").expect("body present");
+        assert!(!script.starts_with('\u{feff}'), "{script:?}");
+        assert!(
+            prelude_pos < param_end,
+            "prelude must precede the script body: {script}"
+        );
+        let before = &script[..prelude_pos];
+        assert!(before.contains("using namespace System.Text"), "{before}");
+        assert!(before.contains("[CmdletBinding()]"), "{before}");
+        assert!(before.contains("[OutputType([string])]"), "{before}");
+        assert!(before.contains("[string]$y = \"`\")\""), "{before}");
+
+        // A leading type expression `[math]::Abs(-1)` is not a param attribute
+        // and must stay after the UTF-8 prelude.
+        let type_expr = super::powershell_script_for("[math]::Abs(-1)\nWrite-Output 'ok'");
+        let expr_prelude = type_expr.find(super::POWERSHELL_UTF8_PRELUDE).unwrap();
+        let expr_body = type_expr.find("[math]::Abs(-1)").unwrap();
+        assert!(expr_prelude < expr_body, "{type_expr}");
+
+        // Semicolon-chained `using` on the same line as the body splits right
+        // after the `using` statement.
+        let inline_using = super::powershell_script_for(
+            "using namespace System.IO; Write-Output ([Path]::GetFileName('a/b.txt'))",
+        );
+        let inline_prelude = inline_using.find(super::POWERSHELL_UTF8_PRELUDE).unwrap();
+        let inline_using_pos = inline_using.find("using namespace System.IO;").unwrap();
+        let inline_body_pos = inline_using.find("Write-Output").unwrap();
+        assert!(
+            inline_using_pos < inline_prelude && inline_prelude < inline_body_pos,
+            "{inline_using}"
+        );
     }
 }
 

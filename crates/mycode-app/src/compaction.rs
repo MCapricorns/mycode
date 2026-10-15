@@ -140,10 +140,18 @@ pub(crate) async fn compact_history(
 ) -> Compacted {
     let auto_threshold = compaction_threshold(scope.context_window);
     let threshold = if force { 0 } else { auto_threshold };
-    let prior = mycode_config::read_compaction(scope.home, scope.session_id)
-        .ok()
-        .flatten()
-        .filter(|checkpoint| checkpoint.branch_id == scope.branch_id);
+    let read_home = scope.home.clone();
+    let read_session = scope.session_id.to_owned();
+    let read_branch = scope.branch_id.to_owned();
+    let prior = tokio::task::spawn_blocking(move || {
+        mycode_config::read_compaction(&read_home, &read_session)
+            .ok()
+            .flatten()
+            .filter(|checkpoint| checkpoint.branch_id == read_branch)
+    })
+    .await
+    .ok()
+    .flatten();
     // `/compact` writes a checkpoint the next request must use even while the
     // raw ledger is still under the auto threshold. Apply that checkpoint
     // before the threshold check, then judge the threshold on the stitched
@@ -255,7 +263,7 @@ pub(crate) async fn compact_history(
         () = scope.cancel.cancelled() => Ok(Err("compaction cancelled".to_owned())),
         summarized = tokio::time::timeout(
             SUMMARY_TIMEOUT,
-            summarize_transcript(scope.wire, scope.model, &transcript),
+            summarize_transcript(scope.wire, scope.model, &transcript, scope.cancel),
         ) => summarized,
     };
     let summary = match summarized {
@@ -286,6 +294,13 @@ pub(crate) async fn compact_history(
             summary: None,
         };
     }
+    if scope.cancel.is_cancelled() {
+        return Compacted {
+            messages: history,
+            status: CompactStatus::Failed("compaction cancelled".to_owned()),
+            summary: None,
+        };
+    }
     let shown = summary.clone();
     let checkpoint = mycode_config::CompactionCheckpoint {
         format_version: mycode_config::COMPACTION_FORMAT_VERSION,
@@ -298,12 +313,29 @@ pub(crate) async fn compact_history(
         model: scope.model.to_owned(),
         created_at_unix: crate::unix_now().as_secs(),
     };
-    if let Err(error) = mycode_config::write_compaction(scope.home, scope.session_id, &checkpoint) {
-        return Compacted {
-            messages: history,
-            status: CompactStatus::Failed(format!("checkpoint write failed: {error:?}")),
-            summary: None,
-        };
+    let write_home = scope.home.clone();
+    let write_session = scope.session_id.to_owned();
+    let written = tokio::task::spawn_blocking(move || {
+        mycode_config::write_compaction(&write_home, &write_session, &checkpoint)
+    })
+    .await
+    .map_err(|error| format!("checkpoint write task failed: {error}"));
+    match written {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            return Compacted {
+                messages: history,
+                status: CompactStatus::Failed(format!("checkpoint write failed: {error:?}")),
+                summary: None,
+            };
+        }
+        Err(message) => {
+            return Compacted {
+                messages: history,
+                status: CompactStatus::Failed(message),
+                summary: None,
+            };
+        }
     }
     Compacted {
         messages: compacted,
@@ -617,15 +649,16 @@ async fn summarize_transcript(
     wire: &WireProvider,
     model: &str,
     transcript: &str,
+    cancel: &CancellationToken,
 ) -> Result<String, String> {
     let first = summary_max_output(model);
-    match request_summary(wire, transcript, first).await? {
+    match request_summary(wire, transcript, first, cancel).await? {
         SummaryAttempt::Complete(summary) => Ok(summary),
         SummaryAttempt::Truncated => finish_summary_retry(
-            request_summary(wire, transcript, SUMMARY_OUTPUT_RETRY_TOKENS).await?,
+            request_summary(wire, transcript, SUMMARY_OUTPUT_RETRY_TOKENS, cancel).await?,
         ),
         SummaryAttempt::TooShort => {
-            finish_summary_retry(request_summary(wire, transcript, first).await?)
+            finish_summary_retry(request_summary(wire, transcript, first, cancel).await?)
         }
     }
 }
@@ -682,11 +715,11 @@ async fn request_summary(
     wire: &WireProvider,
     transcript: &str,
     max_output_tokens: u64,
+    cancel: &CancellationToken,
 ) -> Result<SummaryAttempt, String> {
     let request = summary_request(transcript, max_output_tokens);
-    let cancel = CancellationToken::new();
     let mut stream = wire
-        .stream(&request, cancel)
+        .stream(&request, cancel.child_token())
         .await
         .map_err(|error| format!("summary request failed: {error:?}"))?;
     let mut summary = String::new();

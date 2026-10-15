@@ -46,6 +46,9 @@ pub struct SessionSnapshot {
     pub session_id: SessionId,
     /// Sidebar title stored in the index. Empty until the first user message.
     pub title: String,
+    /// Last durable mutation time in Unix epoch milliseconds (`None` when
+    /// unknown or invalid).
+    pub updated_at_ms: Option<u64>,
     /// Sum of committed events across branches.
     pub event_count: u64,
     /// Every branch, ordered by branch-ID bytes.
@@ -106,10 +109,11 @@ fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, Strin
     let Some(session_id) = SessionId::parse(&row.id) else {
         return Err(id);
     };
-    if row.branches.is_empty() {
+    if row.branches.is_empty() || row.branches.len() > dto::MAX_BRANCHES {
         return Err(id);
     }
     let mut branches = Vec::with_capacity(row.branches.len());
+    let mut sum_events = 0_u64;
     for branch in row.branches {
         let Some(branch_id) = BranchId::parse(&branch.branch_id) else {
             return Err(id);
@@ -117,15 +121,26 @@ fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, Strin
         let Some(head) = store::decode_head(&branch.head) else {
             return Err(id);
         };
+        if matches!(head, HeadStamp::Empty) != (branch.event_count == 0) {
+            return Err(id);
+        }
+        let Some(next_sum) = sum_events.checked_add(branch.event_count) else {
+            return Err(id);
+        };
+        sum_events = next_sum;
         branches.push(BranchSnapshot {
             branch_id,
             head,
             event_count: branch.event_count,
         });
     }
+    if sum_events != row.event_count {
+        return Err(id);
+    }
     Ok(SessionSnapshot {
         session_id,
         title: row.title,
+        updated_at_ms: row.updated_at_ms,
         event_count: row.event_count,
         branches,
     })

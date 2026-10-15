@@ -2,11 +2,15 @@
 //! code and tables use the full column. Tables scroll sideways, stripe their rows,
 //! and keep the header pinned above a scrolling body. Bold and inline code inside
 //! a cell render as text styles; the markers themselves are not shown.
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
+
 use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
+    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, Pixels, SharedString,
     StatefulInteractiveElement, Styled, TestSupportExt as _, Window, WindowTextSystem, div, px,
     rems,
 };
@@ -16,15 +20,125 @@ use crate::ui::skin;
 #[cfg(all(test, feature = "test-support"))]
 mod layout_tests;
 
+/// Maximum number of resident entries cached in the renderer's bounded
+/// markdown/table cache. Matches the resident conversation window ceiling
+/// plus streaming headroom so old entries are evicted in FIFO order.
+const MAX_CACHED_MARKDOWN_ENTRIES: usize = 1536;
+
+/// Bounded per-entry cache for parsed markdown blocks and measured table column
+/// widths. Owned by the renderer so no global or unbounded cache is retained.
+#[derive(Clone, Default)]
+pub(crate) struct MarkdownCache {
+    inner: Rc<RefCell<MarkdownCacheStore>>,
+}
+
+#[derive(Default)]
+struct MarkdownCacheStore {
+    order: VecDeque<SharedString>,
+    entries: HashMap<SharedString, CachedMarkdownEntry>,
+}
+
+struct CachedMarkdownEntry {
+    source: SharedString,
+    blocks: Vec<MarkdownBlock>,
+    tables: Vec<Option<CachedTableLayout>>,
+}
+
+#[derive(Clone)]
+struct CachedTableLayout {
+    font_family: SharedString,
+    mono_font_family: SharedString,
+    font_size_bits: u32,
+    widths: Vec<f32>,
+}
+
+impl MarkdownCache {
+    /// Returns the parsed blocks for `id` and `source`, reusing the cached
+    /// split (and its `SharedString` allocations) when `source` has not changed.
+    fn blocks_for(&self, id: &SharedString, source: &SharedString) -> Vec<MarkdownBlock> {
+        let mut store = self.inner.borrow_mut();
+        if let Some(entry) = store.entries.get(id)
+            && entry.source == *source
+        {
+            return entry.blocks.clone();
+        }
+        let blocks = split_markdown(source.as_ref());
+        let tables = vec![None; blocks.len()];
+        if !store.entries.contains_key(id) {
+            if store.order.len() >= MAX_CACHED_MARKDOWN_ENTRIES
+                && let Some(oldest) = store.order.pop_front()
+            {
+                store.entries.remove(&oldest);
+            }
+            store.order.push_back(id.clone());
+        }
+        store.entries.insert(
+            id.clone(),
+            CachedMarkdownEntry {
+                source: source.clone(),
+                blocks: blocks.clone(),
+                tables,
+            },
+        );
+        blocks
+    }
+
+    /// Returns cached table column widths when the entry text, font families,
+    /// and font size match, or shapes and stores them.
+    fn table_widths_for(
+        &self,
+        id: &SharedString,
+        block_index: usize,
+        table: &ParsedTableBlock,
+        theme: &Theme,
+        text_system: &WindowTextSystem,
+    ) -> Vec<f32> {
+        let font_size_bits = f32::from(theme.font_size).to_bits();
+        if let Some(entry) = self.inner.borrow().entries.get(id)
+            && let Some(Some(cached)) = entry.tables.get(block_index)
+            && cached.font_size_bits == font_size_bits
+            && cached.font_family == theme.font_family
+            && cached.mono_font_family == theme.mono_font_family
+        {
+            return cached.widths.clone();
+        }
+        let widths = column_widths_from_spans(&table.spans, theme, text_system);
+        if let Some(entry) = self.inner.borrow_mut().entries.get_mut(id)
+            && let Some(slot) = entry.tables.get_mut(block_index)
+        {
+            *slot = Some(CachedTableLayout {
+                font_family: theme.font_family.clone(),
+                mono_font_family: theme.mono_font_family.clone(),
+                font_size_bits,
+                widths: widths.clone(),
+            });
+        }
+        widths
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.inner.borrow().entries.len()
+    }
+}
+
+/// One parsed table block with both raw cell text and pre-parsed inline spans.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ParsedTableBlock {
+    pub(super) rows: Vec<Vec<String>>,
+    spans: Vec<Vec<Vec<InlineSpan>>>,
+}
+
 /// One block after the prose / code / table split.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum MarkdownBlock {
     /// Paragraphs, headings, lists, and anything that is not a fence or table.
-    Prose(String),
+    Prose(SharedString),
     /// A fenced block, including its opening and closing markers.
-    Code(String),
-    /// Header row first, then body rows. Cells are trimmed.
-    Table(Vec<Vec<String>>),
+    Code(SharedString),
+    /// Header row first, then body rows. Cells are trimmed and pre-split into
+    /// inline spans.
+    Table(Rc<ParsedTableBlock>),
 }
 
 /// Splits markdown so prose can be measured separately from wide blocks.
@@ -52,13 +166,21 @@ pub(super) fn split_markdown(source: &str) -> Vec<MarkdownBlock> {
                 }
                 index += 1;
             }
-            blocks.push(MarkdownBlock::Code(fence.join("\n")));
+            blocks.push(MarkdownBlock::Code(fence.join("\n").into()));
             continue;
         }
         if let Some(table) = table_at(&lines, index) {
             flush_prose(&mut prose, &mut blocks);
             index += table.span;
-            blocks.push(MarkdownBlock::Table(table.rows));
+            let spans = table
+                .rows
+                .iter()
+                .map(|row| row.iter().map(|cell| inline_spans(cell)).collect())
+                .collect();
+            blocks.push(MarkdownBlock::Table(Rc::new(ParsedTableBlock {
+                rows: table.rows,
+                spans,
+            })));
             continue;
         }
         prose.push(line);
@@ -74,7 +196,7 @@ fn flush_prose(prose: &mut Vec<&str>, blocks: &mut Vec<MarkdownBlock>) {
             .iter()
             .rposition(|line| !line.trim().is_empty())
             .unwrap();
-        blocks.push(MarkdownBlock::Prose(prose[start..=end].join("\n")));
+        blocks.push(MarkdownBlock::Prose(prose[start..=end].join("\n").into()));
     }
     prose.clear();
 }
@@ -195,11 +317,26 @@ fn split_row(line: &str) -> Vec<String> {
 pub(super) fn render_markdown(
     id: SharedString,
     text: SharedString,
+    cache: Option<&MarkdownCache>,
     theme: &Theme,
     stream_fade: bool,
     window: &Window,
 ) -> impl IntoElement {
-    let blocks = split_markdown(text.as_ref());
+    let blocks = match cache {
+        Some(cache) => cache.blocks_for(&id, &text),
+        None => split_markdown(text.as_ref()),
+    };
+    render_blocks(id, blocks, cache, theme, stream_fade, window)
+}
+
+fn render_blocks(
+    id: SharedString,
+    blocks: Vec<MarkdownBlock>,
+    cache: Option<&MarkdownCache>,
+    theme: &Theme,
+    stream_fade: bool,
+    window: &Window,
+) -> impl IntoElement {
     let last = blocks.len().saturating_sub(1);
     div()
         .id(SharedString::from(format!("reply-shell-{id}")))
@@ -223,8 +360,15 @@ pub(super) fn render_markdown(
                     .min_w_0()
                     .child(text_view(format!("{id}-c{index}"), body, fade))
                     .into_any_element(),
-                MarkdownBlock::Table(rows) => {
-                    render_table(format!("{id}-t{index}"), &rows, theme, window).into_any_element()
+                MarkdownBlock::Table(table) => {
+                    let widths = match cache {
+                        Some(cache) => {
+                            cache.table_widths_for(&id, index, &table, theme, window.text_system())
+                        }
+                        None => column_widths_from_spans(&table.spans, theme, window.text_system()),
+                    };
+                    render_table(format!("{id}-t{index}"), &table, &widths, theme)
+                        .into_any_element()
                 }
             }
         }))
@@ -242,54 +386,56 @@ pub(super) fn prose_measure(child: impl IntoElement) -> impl IntoElement {
         .child(child)
 }
 
-fn text_view(id: String, text: String, stream_fade: bool) -> impl IntoElement {
-    TextView::markdown(SharedString::from(id), SharedString::from(text))
-        .style(prose_style())
+fn text_view(id: String, text: SharedString, stream_fade: bool) -> impl IntoElement {
+    TextView::markdown(SharedString::from(id), text)
+        .style(prose_style().clone())
         .selectable(true)
         .stream_fade(stream_fade)
 }
 
-fn prose_style() -> TextViewStyle {
-    let mut table = gpui_kit::StyleRefinement::default();
-    table.overflow.x = Some(gpui_kit::Overflow::Scroll);
-    let mut cell = gpui_kit::StyleRefinement::default();
-    cell.text.white_space = Some(gpui_kit::WhiteSpace::Nowrap);
-    // Headings stay close to body size. The kit default is 2rem / 1.5rem,
-    // which reads as a title page inside a chat turn.
-    TextViewStyle::default()
-        .paragraph_gap(rems(0.45))
-        .heading_font_size(|level, base| {
-            let scale = match level {
-                1 => 1.28,
-                2 => 1.16,
-                3 => 1.08,
-                _ => 1.0,
-            };
-            px(base.as_f32() * scale)
-        })
-        .table(table)
-        .table_cell(cell)
+fn prose_style() -> &'static TextViewStyle {
+    static STYLE: std::sync::LazyLock<TextViewStyle> = std::sync::LazyLock::new(|| {
+        let mut table = gpui_kit::StyleRefinement::default();
+        table.overflow.x = Some(gpui_kit::Overflow::Scroll);
+        let mut cell = gpui_kit::StyleRefinement::default();
+        cell.text.white_space = Some(gpui_kit::WhiteSpace::Nowrap);
+        // Headings stay close to body size and rely on semibold weight rather
+        // than huge size jumps, matching chat-scale typography.
+        TextViewStyle::default()
+            .paragraph_gap(rems(0.45))
+            .heading_font_size(|level, base| {
+                let scale = match level {
+                    1 => 1.18,
+                    2 => 1.10,
+                    3 => 1.04,
+                    _ => 1.0,
+                };
+                px(base.as_f32() * scale)
+            })
+            .table(table)
+            .table_cell(cell)
+    });
+    &STYLE
 }
 
 fn render_table(
     id: String,
-    rows: &[Vec<String>],
+    table: &ParsedTableBlock,
+    widths: &[f32],
     theme: &Theme,
-    window: &Window,
 ) -> impl IntoElement {
-    let Some(header) = rows.first() else {
+    let Some(header_spans) = table.spans.first() else {
         return div().into_any_element();
     };
-    let widths = column_widths(rows, theme, window.text_system());
     let min_width: f32 = widths.iter().sum();
-    let body = &rows[1..];
+    let body_spans = &table.spans[1..];
     let body_id = format!("{id}-body");
     div()
         .id(SharedString::from(id))
         .w_full()
         .min_w_0()
         .overflow_x_scroll()
-        .rounded(skin::radius_sm())
+        .rounded(px(10.))
         .border_1()
         .border_color(theme.border)
         .child(
@@ -297,7 +443,7 @@ fn render_table(
                 .min_w(px(min_width))
                 .flex()
                 .flex_col()
-                .child(table_row(header, &widths, true, false, theme))
+                .child(table_row(header_spans, widths, true, false, theme))
                 .child(
                     div()
                         .id(SharedString::from(body_id))
@@ -305,15 +451,32 @@ fn render_table(
                         .overflow_y_scroll()
                         .flex()
                         .flex_col()
-                        .children(body.iter().enumerate().map(|(index, row)| {
-                            table_row(row, &widths, false, index % 2 == 1, theme)
+                        .children(body_spans.iter().enumerate().map(|(index, row_spans)| {
+                            table_row(row_spans, widths, false, index % 2 == 1, theme)
                         })),
                 ),
         )
         .into_any_element()
 }
 
-fn column_widths(rows: &[Vec<String>], theme: &Theme, text_system: &WindowTextSystem) -> Vec<f32> {
+#[cfg(all(test, feature = "test-support"))]
+pub(super) fn column_widths(
+    rows: &[Vec<String>],
+    theme: &Theme,
+    text_system: &WindowTextSystem,
+) -> Vec<f32> {
+    let parsed_rows: Vec<Vec<Vec<InlineSpan>>> = rows
+        .iter()
+        .map(|row| row.iter().map(|cell| inline_spans(cell)).collect())
+        .collect();
+    column_widths_from_spans(&parsed_rows, theme, text_system)
+}
+
+fn column_widths_from_spans(
+    rows: &[Vec<Vec<InlineSpan>>],
+    theme: &Theme,
+    text_system: &WindowTextSystem,
+) -> Vec<f32> {
     let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
     let mut widths = vec![88.0_f32; columns];
     for (index, row) in rows.iter().enumerate() {
@@ -322,8 +485,8 @@ fn column_widths(rows: &[Vec<String>], theme: &Theme, text_system: &WindowTextSy
         } else {
             FontWeight::NORMAL
         };
-        for (column, cell) in row.iter().enumerate() {
-            let width = inline_width(&inline_spans(cell), weight, theme, text_system);
+        for (column, spans) in row.iter().enumerate() {
+            let width = inline_width(spans, weight, theme, text_system);
             widths[column] = widths[column].max((f32::from(width) + 28.).ceil());
         }
     }
@@ -338,7 +501,7 @@ fn inline_width(
     weight: FontWeight,
     theme: &Theme,
     text_system: &WindowTextSystem,
-) -> gpui_kit::Pixels {
+) -> Pixels {
     spans
         .iter()
         .map(|span| {
@@ -353,7 +516,7 @@ fn inline_width(
             font.weight = weight;
             text_system
                 .shape_line(
-                    SharedString::from(text.clone()),
+                    text.clone(),
                     theme.font_size * 0.875,
                     &[gpui_kit::TextRun {
                         len: text.len(),
@@ -371,11 +534,11 @@ fn inline_width(
 /// One inline run inside a table cell.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InlineSpan {
-    Text(String),
+    Text(SharedString),
     /// `**...**`. Nested bold is left literal; inline code inside is parsed.
     Bold(Vec<InlineSpan>),
     /// `` `...` ``. The backticks are not part of the text.
-    Code(String),
+    Code(SharedString),
 }
 
 /// Splits a cell into bold, inline code, and plain text.
@@ -410,7 +573,7 @@ fn parse_inline(source: &str, allow_bold: bool) -> Vec<InlineSpan> {
         {
             push_text(&mut spans, source, text_start, index);
             spans.push(InlineSpan::Code(
-                source[index + 1..index + 1 + rel].to_owned(),
+                source[index + 1..index + 1 + rel].to_owned().into(),
             ));
             index += 1 + rel + 1;
             text_start = index;
@@ -429,40 +592,41 @@ fn parse_inline(source: &str, allow_bold: bool) -> Vec<InlineSpan> {
 
 fn push_text(spans: &mut Vec<InlineSpan>, source: &str, start: usize, end: usize) {
     if start < end {
-        spans.push(InlineSpan::Text(source[start..end].to_owned()));
+        spans.push(InlineSpan::Text(source[start..end].to_owned().into()));
     }
 }
 
-fn render_inline(source: &str, theme: &Theme) -> impl IntoElement {
-    div().flex().flex_row().items_center().min_w_0().children(
-        inline_spans(source)
-            .into_iter()
-            .map(|span| render_span(span, theme)),
-    )
+fn render_inline(spans: &[InlineSpan], theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .min_w_0()
+        .children(spans.iter().map(|span| render_span(span, theme)))
 }
 
-fn render_span(span: InlineSpan, theme: &Theme) -> AnyElement {
+fn render_span(span: &InlineSpan, theme: &Theme) -> AnyElement {
     match span {
-        InlineSpan::Text(text) => div().child(text).into_any_element(),
+        InlineSpan::Text(text) => div().child(text.clone()).into_any_element(),
         InlineSpan::Code(text) => div()
             .font_family(theme.mono_font_family.clone())
             .px(px(3.))
             .rounded(px(3.))
             .bg(theme.secondary)
-            .child(text)
+            .child(text.clone())
             .into_any_element(),
         InlineSpan::Bold(parts) => div()
             .font_weight(FontWeight::BOLD)
             .flex()
             .flex_row()
             .items_center()
-            .children(parts.into_iter().map(|part| render_span(part, theme)))
+            .children(parts.iter().map(|part| render_span(part, theme)))
             .into_any_element(),
     }
 }
 
 fn table_row(
-    cells: &[String],
+    row_spans: &[Vec<InlineSpan>],
     widths: &[f32],
     header: bool,
     zebra: bool,
@@ -483,7 +647,8 @@ fn table_row(
         .when(!header && zebra, |this| this.bg(theme.table_even))
         .when(!header && !zebra, |this| this.bg(theme.table))
         .children(widths.iter().enumerate().map(|(index, width)| {
-            let text = cells.get(index).cloned().unwrap_or_default();
+            let empty = Vec::new();
+            let spans = row_spans.get(index).unwrap_or(&empty);
             let last = index + 1 == widths.len();
             div()
                 .w(px(*width))
@@ -493,7 +658,7 @@ fn table_row(
                 .text_sm()
                 .whitespace_nowrap()
                 .when(!last, |this| this.border_r_1().border_color(theme.border))
-                .child(render_inline(&text, theme))
+                .child(render_inline(spans, theme))
         }))
 }
 
@@ -512,10 +677,10 @@ mod tests {
             matches!(blocks.get(1), Some(MarkdownBlock::Code(text)) if text.contains("fn main"))
         );
         match blocks.get(2) {
-            Some(MarkdownBlock::Table(rows)) => {
-                assert_eq!(rows.len(), 3);
-                assert_eq!(rows[0], vec!["a".to_owned(), "b".to_owned()]);
-                assert_eq!(rows[2], vec!["3".to_owned(), "4".to_owned()]);
+            Some(MarkdownBlock::Table(table)) => {
+                assert_eq!(table.rows.len(), 3);
+                assert_eq!(table.rows[0], vec!["a".to_owned(), "b".to_owned()]);
+                assert_eq!(table.rows[2], vec!["3".to_owned(), "4".to_owned()]);
             }
             other => panic!("expected a table, got {other:?}"),
         }
@@ -555,11 +720,11 @@ mod tests {
         let source = "| expression | meaning |\n| --- | --- |\n| `a\\|b` | left\\|right |\n| ending\\| | slash\\\\|";
         let blocks = split_markdown(source);
         assert_eq!(blocks.len(), 1);
-        let MarkdownBlock::Table(rows) = &blocks[0] else {
+        let MarkdownBlock::Table(table) = &blocks[0] else {
             panic!("expected a table");
         };
-        assert_eq!(rows[1], ["`a|b`", "left|right"]);
-        assert_eq!(rows[2], ["ending|", "slash\\\\"]);
+        assert_eq!(table.rows[1], ["`a|b`", "left|right"]);
+        assert_eq!(table.rows[2], ["ending|", "slash\\\\"]);
     }
 
     #[test]
@@ -575,11 +740,11 @@ mod tests {
             [MarkdownBlock::Prose(invalid.into())]
         );
         let blocks = split_markdown("| one | two |\n| --- | :---: |\n| a | b | ignored |\n| c |");
-        let MarkdownBlock::Table(rows) = &blocks[0] else {
+        let MarkdownBlock::Table(table) = &blocks[0] else {
             panic!("expected a table");
         };
-        assert_eq!(rows[1], ["a", "b"]);
-        assert_eq!(rows[2], ["c", ""]);
+        assert_eq!(table.rows[1], ["a", "b"]);
+        assert_eq!(table.rows[2], ["c", ""]);
     }
 
     #[test]
@@ -631,5 +796,45 @@ mod tests {
                 InlineSpan::Code("mio".into()),
             ]
         );
+    }
+
+    #[test]
+    fn bounded_markdown_cache_reuses_allocations_and_evicts_oldest() {
+        use super::{MAX_CACHED_MARKDOWN_ENTRIES, MarkdownBlock, MarkdownCache};
+        use gpui_kit::SharedString;
+
+        let cache = MarkdownCache::default();
+        let id = SharedString::from("entry-1");
+        let text = SharedString::from(
+            "A long paragraph exceeding inline SmolStr storage to verify pointer reuse across frames.",
+        );
+        let first = cache.blocks_for(&id, &text);
+        let second = cache.blocks_for(&id, &text);
+        let (Some(MarkdownBlock::Prose(p1)), Some(MarkdownBlock::Prose(p2))) =
+            (first.first(), second.first())
+        else {
+            panic!("expected cached prose blocks");
+        };
+        assert_eq!(
+            p1.as_ptr(),
+            p2.as_ptr(),
+            "unchanged entry must reuse the same SharedString allocation"
+        );
+
+        let updated = SharedString::from(
+            "Updated paragraph exceeding inline SmolStr storage to verify cache invalidation on edit.",
+        );
+        let third = cache.blocks_for(&id, &updated);
+        let Some(MarkdownBlock::Prose(p3)) = third.first() else {
+            panic!("expected updated prose block");
+        };
+        assert_eq!(p3.as_str(), updated.as_str());
+
+        for index in 0..(MAX_CACHED_MARKDOWN_ENTRIES + 32) {
+            let key = SharedString::from(format!("id-{index}"));
+            let body = SharedString::from(format!("row {index}"));
+            let _ = cache.blocks_for(&key, &body);
+        }
+        assert_eq!(cache.len(), MAX_CACHED_MARKDOWN_ENTRIES);
     }
 }

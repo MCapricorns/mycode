@@ -111,9 +111,11 @@ pub(super) fn settings_row(
 ) -> AnyElement {
     div()
         .id(format!("row-{id}"))
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_row()
-        .items_start()
+        .items_center()
         .justify_between()
         .gap_4()
         .child(
@@ -128,7 +130,7 @@ pub(super) fn settings_row(
                     this.child(
                         div()
                             .text_xs()
-                            .opacity(0.88)
+                            .opacity(0.75)
                             .whitespace_normal()
                             .child(description.to_owned()),
                     )
@@ -173,7 +175,7 @@ pub(super) fn choice_chips(
                 .self_start()
                 .flex()
                 .items_center()
-                .rounded(px(8.))
+                .rounded(crate::ui::skin::radius_control())
                 .border_1()
                 .border_color(if selected {
                     theme.primary
@@ -213,7 +215,7 @@ pub(super) fn row_header(title: &str, subtitle: String) -> gpui_kit::Div {
         .child(
             div()
                 .text_xs()
-                .opacity(0.88)
+                .opacity(0.75)
                 .whitespace_normal()
                 .child(subtitle),
         )
@@ -225,8 +227,8 @@ pub(super) fn labeled_field(label: &str, input: Entity<InputState>) -> impl Into
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_xs().opacity(0.88).child(label.to_owned()))
-        .child(div().h(px(28.)).child(Input::new(&input)))
+        .child(div().text_xs().opacity(0.75).child(label.to_owned()))
+        .child(div().h(px(30.)).child(Input::new(&input)))
 }
 
 /// A dropdown row: label on the left, a button showing the current value on

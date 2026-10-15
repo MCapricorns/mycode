@@ -192,7 +192,7 @@ pub fn replace_provider_secrets(
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeserializedSecrets {
     format_version: u32,
     kind: String,
@@ -235,6 +235,21 @@ fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unknown_secrets_field_is_rejected() {
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-provider-secrets",
+            "revision": 1,
+            "providerKeys": {},
+            "providers": { "openai": "sk-test" }
+        }"#;
+        let error = super::decode_secrets(bytes)
+            .err()
+            .expect("unknown field in secrets.json must fail validation");
+        assert_eq!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
+    }
+
     #[test]
     fn trailing_comma_repair_surfaces_a_rewrite_failure() {
         let parent = std::env::temp_dir().join(format!(

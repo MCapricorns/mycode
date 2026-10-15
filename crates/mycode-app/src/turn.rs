@@ -16,7 +16,7 @@ use mycode_tools::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
-use crate::ledger::{HeadWriter, head_spelling, ledger_history, render_error};
+use crate::ledger::{HEAD_MOVED_ON, HeadWriter, head_spelling, ledger_history, render_error};
 use crate::oauth::resolve_request_auth;
 use crate::projection::{project_assistant_message, project_tool_result_message};
 use crate::protocol::CHAT_CANCELLED;
@@ -82,7 +82,7 @@ pub(crate) struct TurnControl {
     cancel: CancellationToken,
     steer: Arc<mycode_agent::SteerInbox>,
     _cancel_guard: CancelGuard,
-    _steer_guard: SteerGuard,
+    _steer_guard: Option<SteerGuard>,
 }
 
 impl TurnControl {
@@ -101,7 +101,19 @@ impl TurnControl {
             cancel,
             steer,
             _cancel_guard: cancel_guard,
-            _steer_guard: steer_guard,
+            _steer_guard: Some(steer_guard),
+        }
+    }
+
+    /// Publishes only the cancel token for `/compact` (no steer inbox).
+    pub(crate) fn register_cancel_only(state: &CoreState, session_id: &str) -> Self {
+        let cancel = CancellationToken::new();
+        let cancel_guard = CancelGuard::register(state.turn_cancels.clone(), session_id, &cancel);
+        Self {
+            cancel,
+            steer: Arc::new(mycode_agent::SteerInbox::new()),
+            _cancel_guard: cancel_guard,
+            _steer_guard: None,
         }
     }
 
@@ -128,9 +140,13 @@ impl TurnControl {
     }
 }
 
-/// Runs `/compact`: summarize the ledger now and store a checkpoint the next
-/// turn will send instead of the full history.
-pub(crate) async fn manual_compact(
+/// Summarizes the open session on `expected_head` and stores a checkpoint
+/// the next turn will send instead of the full history.
+///
+/// The cancel token is published before the returned future is first polled,
+/// so a subsequent `ChatTurn`, `CancelChat`, or `DeleteSession` can cancel an
+/// in-flight manual compaction immediately.
+pub(crate) fn manual_compact(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
     session: SessionId,
@@ -138,35 +154,47 @@ pub(crate) async fn manual_compact(
     expected_head: HeadStamp,
     provider_id: String,
     model: String,
-) {
+) -> impl std::future::Future<Output = ()> + Send + 'static {
     let session_id = session.as_str().to_owned();
-    let outcome = compact_session_now(
-        &state,
-        &session,
-        &branch,
-        &expected_head,
-        &provider_id,
-        &model,
-    )
-    .await;
-    let (ok, message) = match outcome {
-        Ok((message, Some(summary))) => {
-            match show_compaction_summary(&state, &events, &session, &branch, &session_id, &summary)
+    let control = TurnControl::register_cancel_only(&state, &session_id);
+    async move {
+        let outcome = compact_session_now(
+            &state,
+            &session,
+            &branch,
+            &expected_head,
+            &provider_id,
+            &model,
+            &control.cancel,
+        )
+        .await;
+        let (ok, message) = match outcome {
+            Ok((message, Some(summary))) => {
+                match show_compaction_summary(
+                    &state,
+                    &events,
+                    &session,
+                    &branch,
+                    &expected_head,
+                    &session_id,
+                    &summary,
+                )
                 .await
-            {
-                Ok(()) => (true, message),
-                Err(error) => (false, error),
+                {
+                    Ok(()) => (true, message),
+                    Err(error) => (false, error),
+                }
             }
-        }
-        Ok((message, None)) if message == "empty" || message == "covered" => (true, message),
-        Ok((_, None)) => (false, "compaction finished without a summary".to_owned()),
-        Err(message) => (false, message),
-    };
-    let _ = events.send(BridgeEvent::CompactFinished {
-        session_id,
-        message,
-        ok,
-    });
+            Ok((message, None)) if message == "empty" || message == "covered" => (true, message),
+            Ok((_, None)) => (false, "compaction finished without a summary".to_owned()),
+            Err(message) => (false, message),
+        };
+        let _ = events.send(BridgeEvent::CompactFinished {
+            session_id,
+            message,
+            ok,
+        });
+    }
 }
 
 /// Writes the summary into the ledger as a transcript row and tells the UI.
@@ -176,6 +204,7 @@ async fn show_compaction_summary(
     events: &crate::BridgeEventTx,
     session: &SessionId,
     branch: &BranchId,
+    expected_head: &HeadStamp,
     session_id: &str,
     summary: &str,
 ) -> Result<(), String> {
@@ -190,6 +219,9 @@ async fn show_compaction_summary(
         .find(|head| &head.branch_id == branch)
         .map(|head| head.head.clone())
         .ok_or_else(|| "could not open the session".to_owned())?;
+    if &head != expected_head {
+        return Err(HEAD_MOVED_ON.to_owned());
+    }
     let writer = HeadWriter::new(state.service.clone(), session.clone(), branch.clone(), head);
     publish_visible_summary(&writer, events, session_id, summary, true).await
 }
@@ -276,25 +308,32 @@ async fn compact_session_now(
     state: &CoreState,
     session: &SessionId,
     branch: &BranchId,
-    _expected_head: &HeadStamp,
+    expected_head: &HeadStamp,
     provider_id: &str,
     model: &str,
+    cancel: &CancellationToken,
 ) -> Result<(String, Option<String>), String> {
     let opened = state
         .service
         .open(session)
         .await
         .map_err(|_| "could not open the session".to_owned())?;
-    let expected_head = opened
+    let current_head = opened
         .heads
         .iter()
         .find(|head| &head.branch_id == branch)
         .map(|head| head.head.clone())
         .ok_or_else(|| "could not open the session".to_owned())?;
+    if &current_head != expected_head {
+        return Err(HEAD_MOVED_ON.to_owned());
+    }
     let home = &state.home;
     let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
     let (bearer, extra_headers) =
         resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
+    if cancel.is_cancelled() {
+        return Err("compaction cancelled".to_owned());
+    }
     let mut resolved =
         ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
@@ -302,15 +341,14 @@ async fn compact_session_now(
     let transport: Arc<dyn SseTransport> =
         Arc::new(ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?);
     let wire = WireProvider::new(resolved, transport);
-    let history = ledger_history(&state.service, session, branch, &expected_head)
+    let history = ledger_history(&state.service, session, branch, expected_head)
         .await
         .map_err(render_error)?;
     if history.len() < 2 {
         return Ok(("empty".to_owned(), None));
     }
-    let head_stamp_text = head_spelling(&expected_head);
+    let head_stamp_text = head_spelling(expected_head);
     let context_window = model_context_window(state, &provider, model);
-    let never_cancelled = CancellationToken::new();
     let scope = crate::compaction::CompactScope {
         home,
         wire: &wire,
@@ -320,7 +358,7 @@ async fn compact_session_now(
         head: &head_stamp_text,
         context_window,
         overhead_tokens: 0,
-        cancel: &never_cancelled,
+        cancel,
     };
     let compacted = crate::compaction::compact_history(&scope, history, true).await;
     match compacted.status {
@@ -343,34 +381,32 @@ async fn turn_credentials(
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         }
-        let settings = match read_app_settings(home) {
-            Ok(settings) => settings,
-            Err(error) => {
-                last_error = crate::settings_io::render_config_error(&error);
-                continue;
-            }
-        };
-        let Some(index) = settings
-            .providers
-            .iter()
-            .position(|provider| provider.id == provider_id && provider.enabled)
-        else {
-            last_error = "provider not found or disabled in settings".to_owned();
-            continue;
-        };
-        let secrets = match read_provider_secrets(home) {
-            Ok(secrets) => secrets,
-            Err(error) => {
-                last_error = crate::settings_io::render_config_error(&error);
-                continue;
-            }
-        };
-        let Some(key) = secrets.key(provider_id) else {
-            last_error = "provider API key is not set".to_owned();
-            continue;
-        };
-        let provider = settings.providers[index].clone();
-        return Ok((settings, provider, key.to_owned()));
+        let step_home = home.clone();
+        let step_id = provider_id.to_owned();
+        let loaded = tokio::task::spawn_blocking(move || {
+            let settings = read_app_settings(&step_home)
+                .map_err(|error| crate::settings_io::render_config_error(&error))?;
+            let Some(index) = settings
+                .providers
+                .iter()
+                .position(|provider| provider.id == step_id && provider.enabled)
+            else {
+                return Err("provider not found or disabled in settings".to_owned());
+            };
+            let secrets = read_provider_secrets(&step_home)
+                .map_err(|error| crate::settings_io::render_config_error(&error))?;
+            let Some(key) = secrets.key(&step_id).map(str::to_owned) else {
+                return Err("provider API key is not set".to_owned());
+            };
+            let provider = settings.providers[index].clone();
+            Ok((settings, provider, key))
+        })
+        .await
+        .map_err(|error| format!("credentials task failed: {error}"))?;
+        match loaded {
+            Ok(ready) => return Ok(ready),
+            Err(error) => last_error = error,
+        }
     }
     Err(last_error)
 }
@@ -564,7 +600,7 @@ async fn run_chat_turn_on(
     session_id: &str,
     session: SessionId,
     branch: BranchId,
-    expected_head: HeadStamp,
+    _expected_head: HeadStamp,
     model: &str,
     reasoning: Option<&str>,
     cwd: PathBuf,
@@ -587,19 +623,18 @@ async fn run_chat_turn_on(
     // entries flatten tool traffic into text, which breaks the
     // tool_use/tool_result pairing providers validate.
     // Follow the durable tip when the desktop snapshot is behind. A stale
-    // expected head otherwise surfaces as "the session moved on".
-    let expected_head = match control
+    // expected head otherwise surfaces as "the session moved on". A missing
+    // session or branch fails here instead of waiting until the first write.
+    let opened = control
         .unless_cancelled(state.service.open(&session))
         .await?
-    {
-        Ok(opened) => opened
-            .heads
-            .iter()
-            .find(|head| head.branch_id == branch)
-            .map(|head| head.head.clone())
-            .unwrap_or(expected_head),
-        Err(_) => expected_head,
-    };
+        .map_err(render_error)?;
+    let expected_head = opened
+        .heads
+        .iter()
+        .find(|head| head.branch_id == branch)
+        .map(|head| head.head.clone())
+        .ok_or_else(|| render_error(mycode_agent::session::SessionError::NotFound))?;
     let history = control
         .unless_cancelled(ledger_history(
             &state.service,
@@ -609,6 +644,12 @@ async fn run_chat_turn_on(
         ))
         .await?
         .map_err(render_error)?;
+    // The prompt is the latest user message. A trailing assistant or tool
+    // result (an interrupted turn, or a write that landed after the user
+    // message) used to fail the turn and leave the session unable to send.
+    // Those suffix messages stay in the ledger and are omitted from this
+    // request so the session can continue. Checked before MCP connects.
+    let (history, prompt) = split_latest_user(history)?;
     let usage_model = model.to_owned();
     let head_stamp_text = head_spelling(&expected_head);
     let writer = HeadWriter::new(
@@ -629,7 +670,20 @@ async fn run_chat_turn_on(
             Some(&cwd),
         ))
         .await?;
-    let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
+    // Keep role discovery and workspace extra-root reads off the single
+    // core runtime thread.
+    let (role_catalog, extra_roots) = {
+        let home = home.clone();
+        let cwd = cwd.clone();
+        tokio::task::spawn_blocking(move || {
+            (
+                mycode_config::discover_roles(&home, Some(&cwd)),
+                workspace_extra_roots(&home, &cwd),
+            )
+        })
+        .await
+        .map_err(|error| format!("workspace setup task: {error}"))?
+    };
     let registry = Arc::new({
         let registry = ToolRegistry::new();
         mycode_tools::register_builtins(&registry);
@@ -669,30 +723,34 @@ async fn run_chat_turn_on(
     });
     let mcp_catalog = crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning);
 
-    // The prompt is the latest user message. A trailing assistant or tool
-    // result (an interrupted turn, or a write that landed after the user
-    // message) used to fail the turn and leave the session unable to send.
-    // Those suffix messages stay in the ledger and are omitted from this
-    // request so the session can continue.
-    let (history, prompt) = split_latest_user(history)?;
     // Owned for the compaction hook and the cancel registration.
     let session_id = session_id.to_owned();
 
     let context_window = model_context_window(state, &provider, model);
     let user_home = os_user_home();
-    let extra_roots = workspace_extra_roots(home, &cwd);
     let read_roots = mycode_config::skill_read_roots(user_home.as_deref());
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
-    let system_prompt = session_system_prompt(
-        home,
-        &cwd,
-        &registry,
-        mcp_note.as_deref(),
-        &extra_roots,
-        &directive,
-        user_home.as_deref(),
-    );
+    let system_prompt = {
+        let home = home.clone();
+        let cwd = cwd.clone();
+        let registry = Arc::clone(&registry);
+        let extra_roots = extra_roots.clone();
+        let user_home = user_home.clone();
+        tokio::task::spawn_blocking(move || {
+            session_system_prompt(
+                &home,
+                &cwd,
+                &registry,
+                mcp_note.as_deref(),
+                &extra_roots,
+                &directive,
+                user_home.as_deref(),
+            )
+        })
+        .await
+        .map_err(|error| format!("system prompt task: {error}"))?
+    };
     let overhead_tokens = crate::compaction::estimate_prefix_tokens(
         std::slice::from_ref(&system_prompt),
         &registry.specs(),
@@ -1271,9 +1329,11 @@ impl CancelGuard {
         // same session replaces the entry; the guard keeps its own token to
         // avoid removing the successor's live token on drop.
         let token = Arc::new(token.clone());
-        if let Ok(mut map) = cancels.lock() {
-            map.insert(session_id.to_owned(), token.clone());
-        }
+        let mut map = cancels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        map.insert(session_id.to_owned(), token.clone());
+        drop(map);
         Self {
             cancels,
             session_id: session_id.to_owned(),
@@ -1284,13 +1344,14 @@ impl CancelGuard {
 
 impl Drop for CancelGuard {
     fn drop(&mut self) {
-        // Remove the entry only while it still maps to this turn's token;
-        // a contended lock leaks one stale entry, which the next turn for
-        // the same session replaces.
-        if let Ok(mut map) = self.cancels.try_lock()
-            && map
-                .get(&self.session_id)
-                .is_some_and(|live| Arc::ptr_eq(live, &self.token))
+        // Remove the entry only while it still maps to this turn's token.
+        let mut map = self
+            .cancels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if map
+            .get(&self.session_id)
+            .is_some_and(|live| Arc::ptr_eq(live, &self.token))
         {
             map.remove(&self.session_id);
         }
@@ -1310,9 +1371,11 @@ impl SteerGuard {
         session_id: &str,
         inbox: Arc<mycode_agent::SteerInbox>,
     ) -> Self {
-        if let Ok(mut map) = inboxes.lock() {
-            map.insert(session_id.to_owned(), Arc::clone(&inbox));
-        }
+        let mut map = inboxes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        map.insert(session_id.to_owned(), Arc::clone(&inbox));
+        drop(map);
         Self {
             inboxes,
             session_id: session_id.to_owned(),
@@ -1323,10 +1386,13 @@ impl SteerGuard {
 
 impl Drop for SteerGuard {
     fn drop(&mut self) {
-        if let Ok(mut map) = self.inboxes.try_lock()
-            && map
-                .get(&self.session_id)
-                .is_some_and(|live| Arc::ptr_eq(live, &self.inbox))
+        let mut map = self
+            .inboxes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if map
+            .get(&self.session_id)
+            .is_some_and(|live| Arc::ptr_eq(live, &self.inbox))
         {
             map.remove(&self.session_id);
         }
@@ -2507,5 +2573,129 @@ mod tests {
             "the finished turn must unpublish its token"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn manual_compact_rejects_a_moved_branch_head() {
+        use super::manual_compact;
+
+        let (root, home) = scratch();
+        let catalog = mycode_providers::catalog::current(&home);
+        let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+        let created = state.service.create().await.expect("session");
+        let (head, _) = crate::ledger::send_message(
+            &state.service,
+            &created.session_id,
+            &created.branch_id,
+            &HeadStamp::Empty,
+            "first message",
+        )
+        .await
+        .expect("send");
+        assert!(!head.is_empty());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        // The UI still reports Empty while the ledger moved on to `head`.
+        manual_compact(
+            state.clone(),
+            tx,
+            created.session_id.clone(),
+            created.branch_id.clone(),
+            HeadStamp::Empty,
+            "local".to_owned(),
+            "test-model".to_owned(),
+        )
+        .await;
+        let event = rx.recv().await.expect("compact event");
+        match event {
+            crate::BridgeEvent::CompactFinished { message, ok, .. } => {
+                assert!(!ok);
+                assert_eq!(message, crate::ledger::HEAD_MOVED_ON);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn chat_turn_fails_fast_when_the_branch_is_missing() {
+        let fixture = turn_fixture().await;
+        let transport = Arc::new(HistoryTransport {
+            bodies: Mutex::new(Vec::new()),
+            hang_partial: false,
+            partial_ready: Arc::new(tokio::sync::Notify::new()),
+        });
+        let wrong_branch = mycode_agent::session::BranchId::generate().expect("branch id");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let control = super::TurnControl::register(&fixture.state, fixture.session.as_str());
+        let outcome = super::run_chat_turn_on(
+            &fixture.state,
+            &tx,
+            fixture.session.as_str(),
+            fixture.session.clone(),
+            wrong_branch,
+            HeadStamp::Empty,
+            "test-model",
+            None,
+            fixture.cwd.clone(),
+            fixture.resolved.clone(),
+            fixture.settings.clone(),
+            fixture.provider.clone(),
+            transport.clone(),
+            &control,
+        )
+        .await;
+        assert_eq!(outcome, Err("not found".to_owned()));
+        assert!(transport.bodies.lock().expect("bodies").is_empty());
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn cancel_and_steer_guards_unpublish_under_lock_contention() {
+        let fixture = turn_fixture().await;
+        let session_id = fixture.session.as_str().to_owned();
+        let control = super::TurnControl::register(&fixture.state, &session_id);
+        let cancels = Arc::clone(&fixture.state.turn_cancels);
+        let inboxes = Arc::clone(&fixture.state.steer_inboxes);
+        let cancel_hold = cancels.lock().expect("lock cancels");
+        let inbox_hold = inboxes.lock().expect("lock inboxes");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let dropper = std::thread::spawn(move || {
+            started_tx.send(()).expect("announce drop");
+            drop(control);
+            done_tx.send(()).expect("announce cleanup");
+        });
+        started_rx.recv().expect("dropper started");
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "cleanup must wait for the held locks rather than abandoning registrations"
+        );
+        drop(cancel_hold);
+        drop(inbox_hold);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("cleanup completes after unlock");
+        dropper.join().expect("dropper thread");
+        assert!(
+            !fixture
+                .state
+                .turn_cancels
+                .lock()
+                .expect("cancels")
+                .contains_key(&session_id),
+            "contended drop leaked the turn cancel token"
+        );
+        assert!(
+            !fixture
+                .state
+                .steer_inboxes
+                .lock()
+                .expect("inboxes")
+                .contains_key(&session_id),
+            "contended drop leaked the steer inbox"
+        );
+        let _ = std::fs::remove_dir_all(&fixture.root);
     }
 }

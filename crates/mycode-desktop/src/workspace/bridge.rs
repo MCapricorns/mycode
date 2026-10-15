@@ -9,6 +9,94 @@ use crate::view_model::{
 };
 use crate::workspace::Workspace;
 
+#[cfg(test)]
+mod tests;
+
+/// Replies without embedded identity still belong to the request's session.
+/// A late cancel, recall, or search must never mutate a newly opened chat.
+#[derive(Debug)]
+pub(super) enum ReplyScope {
+    Global,
+    Open(String),
+    Session {
+        session: String,
+        branch: Option<String>,
+    },
+    Mention {
+        session: String,
+        query: String,
+    },
+}
+
+impl ReplyScope {
+    pub(super) fn for_command(command: &BridgeCommand) -> Self {
+        match command {
+            BridgeCommand::OpenSession(session) => Self::Open(session.to_string()),
+            BridgeCommand::ChatTurn {
+                session, branch, ..
+            }
+            | BridgeCommand::SendMessage {
+                session, branch, ..
+            }
+            | BridgeCommand::RecallMessage {
+                session, branch, ..
+            }
+            | BridgeCommand::LoadOlder {
+                session, branch, ..
+            } => Self::Session {
+                session: session.to_string(),
+                branch: Some(branch.to_string()),
+            },
+            BridgeCommand::CancelChat { session_id }
+            | BridgeCommand::CancelSubagent { session_id, .. }
+            | BridgeCommand::ListResources { session_id }
+            | BridgeCommand::AskAnswer { session_id, .. }
+            | BridgeCommand::AskDismiss { session_id } => Self::Session {
+                session: session_id.clone(),
+                branch: None,
+            },
+            BridgeCommand::SearchProjectFiles { session_id, query } => Self::Mention {
+                session: session_id.clone(),
+                query: query.clone(),
+            },
+            _ => Self::Global,
+        }
+    }
+
+    pub(super) fn applies(
+        &self,
+        vm: &crate::view_model::WorkspaceState,
+        pending_open: Option<&str>,
+    ) -> bool {
+        match self {
+            Self::Global => true,
+            Self::Open(session) => pending_open == Some(session.as_str()),
+            Self::Session { session, branch } => vm.active.as_ref().is_some_and(|active| {
+                &active.session_id == session
+                    && branch
+                        .as_ref()
+                        .is_none_or(|branch| branch == &active.branch_id)
+            }),
+            Self::Mention { session, query } => {
+                vm.active
+                    .as_ref()
+                    .is_some_and(|active| &active.session_id == session)
+                    && vm.mention.as_ref().is_some_and(|mention| {
+                        mention.kind == crate::view_model::MentionKind::File
+                            && &mention.fragment == query
+                    })
+            }
+        }
+    }
+}
+
+fn failed_start(message: String) -> DesktopAction {
+    DesktopAction::ChatFailed {
+        message,
+        head: String::new(),
+    }
+}
+
 impl Workspace {
     pub(super) fn apply_event(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
         let active_session = self.vm.active.as_ref().map(|c| c.session_id.clone());
@@ -345,7 +433,7 @@ impl Workspace {
                     active.session_id == page.session_id
                         && active.older_before.as_deref() == Some(page.requested_before.as_str())
                 });
-                let pinned = applicable && self.conversation_pinned();
+                let pinned = applicable && self.conversation_follows_tail();
                 if applicable && !pinned {
                     self.capture_scroll_hold();
                 }
@@ -486,7 +574,7 @@ impl Workspace {
                 cx.notify();
             }
             BridgeReply::SessionDeleted(Ok(())) => {
-                self.apply_action(DesktopAction::SessionDeleted, cx);
+                // The confirmed delete handler updates only its target session.
                 self.dispatch(BridgeCommand::ListSessions, cx);
             }
             BridgeReply::SettingsSaved(Ok(revision)) => {
@@ -630,6 +718,13 @@ impl Workspace {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
             BridgeReply::UpdateChecked(Ok(None)) => {
+                if matches!(
+                    self.vm.update,
+                    UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+                ) {
+                    let _ = self.take_manual_update_check();
+                    return;
+                }
                 self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::UpToDate), cx);
                 if self.take_manual_update_check() {
                     self.push_toast(
@@ -666,6 +761,13 @@ impl Workspace {
                 self.on_download_update(cx);
             }
             BridgeReply::UpdateChecked(Err(message)) => {
+                if matches!(
+                    self.vm.update,
+                    UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+                ) {
+                    let _ = self.take_manual_update_check();
+                    return;
+                }
                 let brief = mycode_app::brief_error(&message);
                 self.apply_action(
                     DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
@@ -727,14 +829,25 @@ impl Workspace {
                 }
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
-            BridgeReply::Sessions(Err(message))
-            | BridgeReply::Sent {
+            BridgeReply::Sent {
+                session,
                 outcome: Err(message),
-                ..
+            } => {
+                if self
+                    .vm
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.session_id == session)
+                {
+                    self.apply_action(failed_start(message), cx);
+                }
             }
+            BridgeReply::ChatStarted(Err(message)) => {
+                self.apply_action(failed_start(message), cx);
+            }
+            BridgeReply::Sessions(Err(message))
             | BridgeReply::Settings(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
-            | BridgeReply::ChatStarted(Err(message))
             | BridgeReply::Recalled(Err(message))
             | BridgeReply::Resources(Err(message))
             | BridgeReply::AskAnswered(Err(message)) => {
@@ -822,7 +935,7 @@ impl Workspace {
 
     fn begin_chat_turn(&mut self, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.clone() else {
-            self.apply_action(DesktopAction::Failed("no open session".to_owned()), cx);
+            self.apply_action(failed_start("no open session".to_owned()), cx);
             return;
         };
         let (Some(session), Some(branch)) = (
@@ -830,17 +943,14 @@ impl Workspace {
             BranchId::parse(&conversation.branch_id),
         ) else {
             self.apply_action(
-                DesktopAction::Failed("the open session could not be read".to_owned()),
+                failed_start("the open session could not be read".to_owned()),
                 cx,
             );
             return;
         };
         let expected_head = crate::workspace::parse_head(&conversation.head);
         let Some(settings) = self.vm.settings.as_ref() else {
-            self.apply_action(
-                DesktopAction::Failed("settings are still loading".to_owned()),
-                cx,
-            );
+            self.apply_action(failed_start("settings are still loading".to_owned()), cx);
             return;
         };
         let selected_provider = self.vm.selected_provider.clone();
@@ -852,7 +962,7 @@ impl Workspace {
             .or_else(|| settings.providers.iter().find(|provider| provider.enabled));
         let Some(provider) = provider else {
             self.apply_action(
-                DesktopAction::Failed(
+                failed_start(
                     "no enabled provider — add one with its API key in Settings".to_owned(),
                 ),
                 cx,
@@ -864,7 +974,7 @@ impl Workspace {
             .or_else(|| provider.models.first().cloned());
         let Some(model) = model else {
             self.apply_action(
-                DesktopAction::Failed("the provider has no models configured".to_owned()),
+                failed_start("the provider has no models configured".to_owned()),
                 cx,
             );
             return;

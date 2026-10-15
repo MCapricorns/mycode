@@ -254,6 +254,14 @@ fn commit_interrupted(
 
 /// Fills thinking or text the reducer omitted when the draft already has it.
 fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> AssistantMessage {
+    // Never commit an unpairable tool call: filtering only at dispatch would
+    // still resend it from history on the next user turn or after a steer.
+    let before = message.blocks.len();
+    message.blocks.retain(|block| match block {
+        ContentBlock::ToolCall(call) => !call.id.is_empty() && !call.name.is_empty(),
+        _ => true,
+    });
+    let discarded_call = message.blocks.len() != before;
     let has_thinking = message
         .blocks
         .iter()
@@ -268,6 +276,13 @@ fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> Ass
         message
             .blocks
             .push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+    }
+    if discarded_call {
+        message
+            .blocks
+            .push(ContentBlock::Text(mycode_core::TextBlock::new(
+                "The provider returned an incomplete tool call; it was not executed.",
+            )));
     }
     message
 }

@@ -317,8 +317,11 @@ fn bearer_value_end(message: &str, start: usize) -> Option<usize> {
             find_closing_quote(message, credential_start, quote)
                 .map_or(message.len(), |end| end + 1),
         ),
-        Some(_) => Some(credential_token_end(message, credential_start)),
-        None => Some(credential_start),
+        Some(_) => {
+            let end = credential_token_end(message, credential_start);
+            (end > credential_start).then_some(end)
+        }
+        None => None,
     }
 }
 
@@ -330,12 +333,16 @@ fn standalone_bearer_value(message: &str, start: usize) -> Option<Range<usize>> 
 }
 
 fn prefixed_api_key(message: &str, start: usize) -> Option<Range<usize>> {
+    if start > 0 && is_word_byte(message.as_bytes()[start - 1]) {
+        return None;
+    }
     let end = start.checked_add(3)?;
     let prefix = message.get(start..end)?;
     if !prefix.eq_ignore_ascii_case("sk-") && !prefix.eq_ignore_ascii_case("sk_") {
         return None;
     }
-    Some(start..credential_token_end(message, start))
+    let token_end = credential_token_end(message, start);
+    (token_end > end).then_some(start..token_end)
 }
 
 fn credential_token_end(message: &str, start: usize) -> usize {
@@ -486,6 +493,12 @@ mod tests {
             "{\"api_key\":\"[REDACTED]\"}"
         );
         assert_eq!(sanitized("x-api-key: keyvalue"), "x-api-key: [REDACTED]");
+        // Ordinary prose words containing `sk-` / `sk_` or `bearer` without a
+        // token are not credentials and must not be clobbered.
+        assert_eq!(
+            sanitized("task-123 and mask_value failed; missing bearer\n"),
+            "task-123 and mask_value failed; missing bearer\n"
+        );
     }
 
     #[test]

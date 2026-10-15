@@ -12,16 +12,14 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::skin::{self, menu_panel};
-use crate::view_model::{
-    MentionGroup, MentionKind, preferred_slash_index, selected_reasoning_level,
-};
+use crate::view_model::{MentionGroup, MentionKind, selected_reasoning_level};
 use crate::workspace::Workspace;
 
 #[cfg(all(test, feature = "test-support"))]
 mod layout_tests;
 
 /// Fixed row height that keeps the menu rows visually uniform.
-const MENU_ROW_HEIGHT: gpui_kit::Pixels = px(30.);
+const MENU_ROW_HEIGHT: gpui_kit::Pixels = px(34.);
 
 /// The model picker, anchored above the model chip. Same provider step
 /// and search list the settings page uses.
@@ -137,6 +135,8 @@ pub(super) fn render_thinking_menu(
     let theme = cx.theme();
     let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
     let selected = selected_reasoning_level(workspace.vm()).to_owned();
+    let preferred = workspace.reasoning_highlight(&levels);
+    let scroll = workspace.reasoning_scroll().clone();
     let weak = cx.weak_entity();
     composer_menu_layer(
         "thinking-menu-layer",
@@ -145,18 +145,20 @@ pub(super) fn render_thinking_menu(
             .w(px(220.))
             .max_h(menu_height_cap(window, 320.))
             .overflow_y_scroll()
+            .track_scroll(&scroll)
             .flex_none()
             .p_1()
             .flex()
             .flex_col()
             .gap_1()
-            .children(levels.iter().map(|level| {
+            .children(levels.iter().enumerate().map(|(index, level)| {
                 let picked = level.clone();
                 let weak = weak.clone();
                 let on = level == &selected;
                 menu_row(
                     format!("thinking-row-{level}"),
                     reasoning_row_label(level),
+                    index == preferred,
                     on,
                     move |_, _, cx| {
                         let picked = picked.clone();
@@ -174,6 +176,7 @@ pub(super) fn render_thinking_menu(
 fn menu_row(
     id: String,
     label: String,
+    highlighted: bool,
     selected: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     theme: &Theme,
@@ -190,7 +193,13 @@ fn menu_row(
         .rounded(skin::radius_control())
         .text_sm()
         .cursor_pointer()
-        .when(selected, |this| this.bg(skin::frost_accent(theme)))
+        .border_1()
+        .border_color(if highlighted {
+            theme.primary.opacity(0.4)
+        } else {
+            theme.transparent
+        })
+        .when(highlighted, |this| this.bg(skin::frost_accent(theme)))
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)
         .child(div().min_w_0().truncate().child(label))
@@ -238,11 +247,8 @@ pub(super) fn render_mention_layer(
         MentionKind::File => Some(t("FILES", "文件")),
         MentionKind::Command => None,
     };
-    let preferred = if mention.kind == MentionKind::Command {
-        preferred_slash_index(&mention.fragment, &mention.items)
-    } else {
-        0
-    };
+    let preferred = workspace.mention_highlight();
+    let scroll = workspace.mention_scroll().clone();
     let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
     let mut previous: Option<MentionGroup> = None;
     for (index, item) in mention.items.iter().enumerate() {
@@ -250,16 +256,16 @@ pub(super) fn render_mention_layer(
             previous = Some(item.group);
             rows.push(slash_heading(item.group, theme));
         }
-        let insert = item.insert.clone();
         let label = mention_label(item);
-        let row_id = format!("mention-{insert}");
+        let row_id = mention_row_id(index, item);
         rows.push(
             menu_row(
                 row_id,
                 label,
                 index == preferred,
+                false,
                 cx.listener(move |workspace, _, window, cx| {
-                    workspace.on_accept_mention(insert.clone(), window, cx);
+                    workspace.on_accept_mention(index, window, cx);
                 }),
                 theme,
             )
@@ -279,6 +285,7 @@ pub(super) fn render_mention_layer(
                     .w_full()
                     .max_h(px(300.))
                     .overflow_y_scroll()
+                    .track_scroll(&scroll)
                     .p_2()
                     .flex()
                     .flex_col()
@@ -298,6 +305,10 @@ pub(super) fn render_mention_layer(
             ),
         )
         .into_any_element()
+}
+
+fn mention_row_id(index: usize, item: &crate::view_model::MentionItem) -> String {
+    format!("mention-{index}-{:?}-{}", item.group, item.insert)
 }
 
 fn slash_heading(group: MentionGroup, theme: &Theme) -> gpui_kit::AnyElement {
@@ -354,6 +365,23 @@ mod tests {
         JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MenuAnchor, THINKING_MENU_CLEARANCE,
         model_menu_anchor, thinking_menu_anchor,
     };
+
+    #[test]
+    fn builtin_and_skill_rows_with_the_same_slug_have_distinct_ids() {
+        let command = crate::view_model::MentionItem {
+            insert: "/new".to_owned(),
+            label: "new".to_owned(),
+            group: crate::view_model::MentionGroup::Command,
+        };
+        let skill = crate::view_model::MentionItem {
+            group: crate::view_model::MentionGroup::Skill,
+            ..command.clone()
+        };
+        assert_ne!(
+            super::mention_row_id(0, &command),
+            super::mention_row_id(1, &skill)
+        );
+    }
 
     #[test]
     fn thinking_menu_clears_the_jump_button() {

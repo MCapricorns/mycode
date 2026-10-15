@@ -70,19 +70,6 @@ fn is_unusable_file(error: &ConfigError) -> bool {
     }
 }
 
-/// `{relative}.broken-<nanos>`, checked to be one safe sibling file name.
-fn backup_name(relative: &str) -> Result<String, ConfigError> {
-    if relative.is_empty() || relative.contains(['/', '\\']) {
-        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
-    }
-    let stamp = crate::unix_now().as_nanos();
-    let backup = format!("{relative}.broken-{stamp}");
-    if backup.len() > 200 || backup.ends_with(['.', ' ']) {
-        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
-    }
-    Ok(backup)
-}
-
 /// Copies `bytes` to `{relative}.broken-<nanos>` and leaves the original file
 /// in place.
 ///
@@ -95,14 +82,51 @@ pub fn quarantine_owned_bytes(
     relative: &'static str,
     bytes: &[u8],
 ) -> Result<DocumentRepair, ConfigError> {
-    let backup = backup_name(relative)?;
     let payload = bytes.to_vec();
     let limit = payload.len().max(1);
-    locked_update_owned_file(home, &backup, limit, |_| Ok(payload))?;
+    let backup = publish_unique_backup(relative, crate::unix_now().as_nanos(), |backup| {
+        let payload = payload.clone();
+        locked_update_owned_file(home, backup, limit, |current| {
+            if current.is_some() {
+                return Err(ConfigError::new(ConfigErrorKind::Io)
+                    .with_io_kind(io::ErrorKind::AlreadyExists));
+            }
+            Ok(payload)
+        })
+    })?;
     Ok(DocumentRepair {
         path: relative,
         backup,
     })
+}
+
+fn publish_unique_backup(
+    relative: &str,
+    stamp: u128,
+    mut publish: impl FnMut(&str) -> Result<(), ConfigError>,
+) -> Result<String, ConfigError> {
+    for attempt in 0..16u128 {
+        let backup = backup_name_with_stamp(relative, stamp.saturating_add(attempt))?;
+        match publish(&backup) {
+            Ok(()) => return Ok(backup),
+            Err(error)
+                if error.io_kind() == Some(io::ErrorKind::AlreadyExists)
+                    || error.kind() == ConfigErrorKind::Oversized => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::AlreadyExists))
+}
+
+fn backup_name_with_stamp(relative: &str, stamp: u128) -> Result<String, ConfigError> {
+    if relative.is_empty() || relative.contains(['/', '\\']) {
+        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
+    }
+    let backup = format!("{relative}.broken-{stamp}");
+    if backup.len() > 200 || backup.ends_with(['.', ' ']) {
+        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
+    }
+    Ok(backup)
 }
 
 pub(crate) fn load_or_reset<T>(
@@ -157,10 +181,24 @@ fn reset_unreadable<T>(
     fallback: impl FnOnce() -> T,
     publish: impl FnOnce() -> Result<(), ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
-    let backup = backup_name(relative)?;
-    if !matches!(quarantine_owned_file(home, relative, &backup), Ok(true)) {
-        return Err(error);
+    let mut moved_backup = None;
+    let stamp = crate::unix_now().as_nanos();
+    for attempt in 0..16u128 {
+        let candidate = backup_name_with_stamp(relative, stamp.saturating_add(attempt))?;
+        match quarantine_owned_file(home, relative, &candidate) {
+            Ok(true) => {
+                moved_backup = Some(candidate);
+                break;
+            }
+            Ok(false) => return Err(error),
+            Err(quarantine_err)
+                if quarantine_err.io_kind() == Some(io::ErrorKind::AlreadyExists) => {}
+            Err(_) => return Err(error),
+        }
     }
+    let Some(backup) = moved_backup else {
+        return Err(error);
+    };
     publish()?;
     Ok(Loaded {
         value: fallback(),
@@ -421,5 +459,49 @@ mod tests {
         let (_guard, home) = home("path");
         let error = quarantine_owned_bytes(&home, "sessions/note.json", b"{}").unwrap_err();
         assert_eq!(error.kind(), crate::ConfigErrorKind::PathEscape);
+    }
+
+    #[test]
+    fn backup_collision_retries_without_overwriting_the_existing_entry() {
+        let (_guard, home) = home("fixed-collision");
+        std::fs::create_dir_all(home.root()).unwrap();
+        let source = home.root().join("settings.json");
+        let backup = home.root().join("settings.json.broken-1");
+        std::fs::write(&source, b"new damage").unwrap();
+        std::fs::write(&backup, b"previous damage").unwrap();
+        let error = super::quarantine_owned_file(&home, "settings.json", "settings.json.broken-1")
+            .unwrap_err();
+        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        assert_eq!(std::fs::read(&source).unwrap(), b"new damage");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"previous damage");
+        let mut names = Vec::new();
+        let next = super::publish_unique_backup("settings.json", 1, |name| {
+            names.push(name.to_owned());
+            if names.len() == 1 {
+                Err(crate::ConfigError::new(crate::ConfigErrorKind::Io)
+                    .with_io_kind(std::io::ErrorKind::AlreadyExists))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(next, "settings.json.broken-2");
+        assert_eq!(names, ["settings.json.broken-1", "settings.json.broken-2"]);
+    }
+
+    #[test]
+    fn repeated_quarantines_do_not_overwrite_earlier_backups() {
+        let (_guard, home) = home("collide");
+        let first = quarantine_owned_bytes(&home, "settings.json", b"first-damage").unwrap();
+        let second = quarantine_owned_bytes(&home, "settings.json", b"second-damage").unwrap();
+        assert_ne!(first.backup, second.backup);
+        assert_eq!(
+            std::fs::read(home.root().join(&first.backup)).unwrap(),
+            b"first-damage"
+        );
+        assert_eq!(
+            std::fs::read(home.root().join(&second.backup)).unwrap(),
+            b"second-damage"
+        );
     }
 }

@@ -162,10 +162,9 @@ impl SseTransport for ReqwestTransport {
                     () = cancel.cancelled() => {
                         return Err(ProviderError::new(ProviderErrorKind::Cancelled));
                     }
-                    text = tokio::time::timeout(idle, response.text()) => match text {
-                        Ok(Ok(body)) => body,
-                        Ok(Err(_)) => String::new(),
-                        Err(_elapsed) => {
+                    text = read_error_body(response, idle) => match text {
+                        Ok(body) => body,
+                        Err(()) => {
                             return Err(ProviderError::new(ProviderErrorKind::Timeout));
                         }
                     },
@@ -221,6 +220,29 @@ impl SseTransport for ReqwestTransport {
     }
 }
 
+/// Maximum bytes read from an error response body.
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// Reads at most [`MAX_ERROR_BODY_BYTES`] from a non-2xx response with `idle`
+/// bounding each chunk wait.
+async fn read_error_body(mut response: reqwest::Response, idle: Duration) -> Result<String, ()> {
+    let mut buf = Vec::new();
+    loop {
+        match tokio::time::timeout(idle, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => {
+                let remaining = MAX_ERROR_BODY_BYTES.saturating_sub(buf.len());
+                buf.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                if buf.len() >= MAX_ERROR_BODY_BYTES {
+                    break;
+                }
+            }
+            Ok(Ok(None)) => break,
+            Ok(Err(_)) => break,
+            Err(_elapsed) => return Err(()),
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
 fn map_reqwest_error(error: reqwest::Error) -> ProviderError {
     if error.is_timeout() {
         ProviderError::new(ProviderErrorKind::Timeout)
@@ -306,6 +328,37 @@ mod tests {
         format!("http://{addr}/v1/chat/completions")
     }
 
+    fn spawn_oversized_error_server(chunks: usize, chunk_bytes: usize) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            if !read_request_head(&mut stream) {
+                return;
+            }
+            let total = chunks * chunk_bytes;
+            let header = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {total}\r\n\r\n"
+            );
+            if stream.write_all(header.as_bytes()).is_err() {
+                return;
+            }
+            let _ = stream.flush();
+            let piece = vec![b'x'; chunk_bytes];
+            for _ in 0..chunks {
+                if stream.write_all(&piece).is_err() {
+                    return;
+                }
+                let _ = stream.flush();
+            }
+            // Hold open after the cap is crossed to prove the client stops
+            // reading at MAX_ERROR_BODY_BYTES instead of waiting for EOF.
+            std::thread::sleep(Duration::from_secs(10));
+        });
+        format!("http://{addr}/v1/chat/completions")
+    }
+
     /// Sends error-status headers with a promised body it never delivers.
     fn spawn_stalled_error_server() -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -386,5 +439,25 @@ mod tests {
             .expect("post settled within the outer bound")
             .expect_err("stalled error body must fail");
         assert_eq!(error.kind(), mycode_core::ProviderErrorKind::Timeout);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_error_body_stops_reading_at_the_cap() {
+        let url = spawn_oversized_error_server(12, 8192);
+        let transport =
+            ReqwestTransport::with_read_timeout(Duration::from_secs(2)).expect("transport");
+        let posted = transport.post(
+            TransportCall {
+                endpoint: url,
+                headers: Vec::new(),
+                body: b"{}".to_vec(),
+            },
+            CancellationToken::new(),
+        );
+        let error = tokio::time::timeout(Duration::from_secs(2), posted)
+            .await
+            .expect("error body settled at the cap without waiting for the 10s hold")
+            .expect_err("400 must fail");
+        assert_eq!(error.kind(), mycode_core::ProviderErrorKind::Rejected);
     }
 }

@@ -413,7 +413,7 @@ fn reading_an_evicted_session_reloads_from_the_store() {
     });
 }
 
-/// A live reservation holds payload bytes that exist nowhere durably yet, so
+/// A livereservation's payload bytes exist nowhere durably yet, so
 /// eviction pressure from other sessions must never drop it.
 #[test]
 fn a_reserved_event_survives_other_sessions_churning() {
@@ -449,4 +449,158 @@ fn a_reserved_event_survives_other_sessions_churning() {
         );
         service.shutdown().await;
     });
+}
+
+#[test]
+fn missing_or_lengthened_external_payload_and_bad_index_rows_report_corrupt() {
+    let scratch = Scratch::new();
+    runtime().block_on(async {
+        let service = SessionService::new(&scratch.home);
+        let created = service.create().await.expect("create");
+        let payload = vec![b'x'; 64 * 1024];
+        let reservation = service
+            .reserve_event(
+                &created.session_id,
+                &created.branch_id,
+                EventKind::Usage,
+                None,
+                &payload,
+            )
+            .await
+            .expect("reserve");
+        let head = service
+            .append(
+                &created.session_id,
+                &created.branch_id,
+                &HeadStamp::Empty,
+                &reservation,
+            )
+            .await
+            .expect("append")
+            .head;
+        let HeadStamp::Event(event_id) = &head else {
+            panic!("head");
+        };
+        let payload_path = scratch
+            .home
+            .root()
+            .join("sessions")
+            .join(created.session_id.as_str())
+            .join("payloads")
+            .join(format!("{}.bin", event_id.as_str()));
+
+        // Trailing bytes on an external payload file must fail closed as Corrupt.
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&payload_path)
+                .expect("open payload");
+            file.write_all(b"extra").expect("append extra");
+        }
+        assert_eq!(
+            service
+                .load_event(&created.session_id, &created.branch_id, event_id)
+                .await,
+            Err(SessionError::Corrupt)
+        );
+
+        // A missing external payload file must also fail closed as Corrupt.
+        std::fs::remove_file(&payload_path).expect("remove payload");
+        assert_eq!(
+            service
+                .load_event(&created.session_id, &created.branch_id, event_id)
+                .await,
+            Err(SessionError::Corrupt)
+        );
+
+        // A missing JSONL log when reading or branching a committed event must report Corrupt.
+        let log_path = jsonl_path(
+            &scratch.home,
+            created.session_id.as_str(),
+            created.branch_id.as_str(),
+        );
+        std::fs::remove_file(&log_path).expect("remove log");
+        assert_eq!(
+            service
+                .load_event(&created.session_id, &created.branch_id, event_id)
+                .await,
+            Err(SessionError::Corrupt)
+        );
+        let branch_res = service
+            .reserve_branch(
+                &created.session_id,
+                BranchMutationKind::Fork,
+                &created.branch_id,
+                event_id,
+            )
+            .await
+            .expect("reserve branch");
+        assert_eq!(
+            service
+                .fork(
+                    &created.session_id,
+                    &created.branch_id,
+                    event_id,
+                    &branch_res,
+                )
+                .await,
+            Err(SessionError::Corrupt)
+        );
+
+        // Compaction summary payloads must not become the session title.
+        let summary_session = service.create().await.expect("create summary session");
+        let summary_head = append_text(
+            &service,
+            &summary_session.session_id,
+            &summary_session.branch_id,
+            &HeadStamp::Empty,
+            "<compaction_summary display=\"true\">\nsummary text\n</compaction_summary>",
+        )
+        .await;
+        append_text(
+            &service,
+            &summary_session.session_id,
+            &summary_session.branch_id,
+            &summary_head,
+            "real user prompt",
+        )
+        .await;
+        let listing = inspect_sessions(&scratch.home).expect("list");
+        let summary_listed = listing
+            .sessions
+            .iter()
+            .find(|row| row.session_id == summary_session.session_id)
+            .expect("summary session listed");
+        assert_eq!(summary_listed.title, "real user prompt");
+        service.shutdown().await;
+    });
+
+    // Corrupt SQLite index invariants (negative event_count or mismatched head/count)
+    // must surface in `listing.corrupt` instead of aborting the whole listing.
+    let db_path = scratch.home.root().join("sessions.db");
+    let conn = rusqlite::Connection::open(&db_path).expect("open db");
+    let bad_session = crate::session::SessionId::generate().expect("bad session id");
+    let bad_branch = crate::session::BranchId::generate().expect("bad branch id");
+    conn.execute(
+        "INSERT INTO sessions (id, title, updated_at, root_branch, event_count, corrupt)
+         VALUES (?1, 'bad', 1, ?2, -1, 0)",
+        rusqlite::params![bad_session.as_str(), bad_branch.as_str()],
+    )
+    .expect("insert bad session");
+    conn.execute(
+        "INSERT INTO branches (
+            session_id, branch_id, head, event_count, committed_bytes,
+            parent_kind, source_branch_id, at_event_id, to_event_id
+         ) VALUES (?1, ?2, 'empty', 0, 0, 'root', NULL, NULL, NULL)",
+        rusqlite::params![bad_session.as_str(), bad_branch.as_str()],
+    )
+    .expect("insert bad branch");
+    drop(conn);
+
+    let listing = inspect_sessions(&scratch.home).expect("list with corrupt row");
+    assert!(
+        listing.corrupt.contains(&bad_session.as_str().to_owned()),
+        "corrupt row should be isolated in listing.corrupt: {listing:?}"
+    );
 }

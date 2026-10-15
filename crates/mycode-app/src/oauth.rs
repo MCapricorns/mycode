@@ -182,8 +182,17 @@ async fn finish_oauth_sign_in(
     secret: &OAuthSecret,
     models: &[String],
 ) -> Result<(), String> {
-    save_provider_key(&state.home, provider_id, &secret.encode())?;
-    upsert_catalog_provider(state, provider_id, models)
+    let home = state.home.clone();
+    let provider_id = provider_id.to_owned();
+    let encoded = secret.encode();
+    let models = models.to_vec();
+    let catalog = state.catalog.clone();
+    tokio::task::spawn_blocking(move || {
+        save_provider_key(&home, &provider_id, &encoded)?;
+        upsert_catalog_provider(&home, &catalog, &provider_id, &models)
+    })
+    .await
+    .map_err(|error| format!("sign-in persistence failed: {error}"))?
 }
 
 /// Verifies the grant works, stores the OAuth token, and configures the
@@ -196,21 +205,26 @@ async fn finish_copilot_sign_in(
     let call = oauth_call();
     let bearer = copilot_bearer(&call, github_token).await?;
     *state.copilot.lock().await = Some((bearer.token, bearer.expires_at_unix));
-    save_provider_key(&state.home, COPILOT_PROVIDER_ID, github_token)?;
-    upsert_copilot_provider(state, models)
-}
-
-fn upsert_copilot_provider(state: &CoreState, models: &[String]) -> Result<(), String> {
-    upsert_catalog_provider(state, COPILOT_PROVIDER_ID, models)
+    let home = state.home.clone();
+    let github_token = github_token.to_owned();
+    let models = models.to_vec();
+    let catalog = state.catalog.clone();
+    tokio::task::spawn_blocking(move || {
+        save_provider_key(&home, COPILOT_PROVIDER_ID, &github_token)?;
+        upsert_catalog_provider(&home, &catalog, COPILOT_PROVIDER_ID, &models)
+    })
+    .await
+    .map_err(|error| format!("sign-in persistence failed: {error}"))?
 }
 
 /// Adds or refreshes a catalog provider entry with the chosen models.
 fn upsert_catalog_provider(
-    state: &CoreState,
+    home: &HomeLayout,
+    catalog: &std::sync::RwLock<crate::CatalogInfo>,
     provider_id: &str,
     models: &[String],
 ) -> Result<(), String> {
-    let catalog = state.catalog.read().ok().and_then(|guard| {
+    let catalog = catalog.read().ok().and_then(|guard| {
         guard.document.provider(provider_id).map(|preset| {
             (
                 preset.kind.clone(),
@@ -242,7 +256,7 @@ fn upsert_catalog_provider(
     if bound.is_empty() {
         return Err(format!("no {provider_id} models were selected"));
     }
-    let loaded = load_settings(&state.home)?;
+    let loaded = load_settings(home)?;
     let mut settings = loaded.settings;
     let revision = loaded.revision;
     match settings
@@ -266,8 +280,7 @@ fn upsert_catalog_provider(
             max_output: None,
         }),
     }
-    replace_app_settings(&state.home, revision, &settings)
-        .map_err(|error| render_config_error(&error))?;
+    replace_app_settings(home, revision, &settings).map_err(|error| render_config_error(&error))?;
     Ok(())
 }
 
@@ -344,16 +357,28 @@ async fn refresh_oauth_secret(
         return Err(OAUTH_EXPIRED.to_owned());
     }
     let _refreshing = OAUTH_REFRESH.lock().await;
-    let stored = mycode_config::read_provider_secrets(home)
-        .ok()
-        .and_then(|secrets| secrets.key(&provider.id).and_then(parse_oauth_secret));
+    let check_home = home.clone();
+    let provider_id = provider.id.clone();
+    let stored = tokio::task::spawn_blocking(move || {
+        mycode_config::read_provider_secrets(&check_home)
+            .ok()
+            .and_then(|secrets| secrets.key(&provider_id).and_then(parse_oauth_secret))
+    })
+    .await
+    .ok()
+    .flatten();
     if let Some(stored) = stored
         && !stored.expired(now)
     {
         return Ok(stored);
     }
     let secret = refresh_codex_token(&oauth_call(), &expired.refresh).await?;
-    let _ = save_provider_key(home, &provider.id, &secret.encode());
+    let save_home = home.clone();
+    let provider_id = provider.id.clone();
+    let encoded = secret.encode();
+    let _ =
+        tokio::task::spawn_blocking(move || save_provider_key(&save_home, &provider_id, &encoded))
+            .await;
     Ok(secret)
 }
 

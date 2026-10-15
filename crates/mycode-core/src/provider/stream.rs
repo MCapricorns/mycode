@@ -195,3 +195,104 @@ impl Drop for EventStream {
         self.rx.close();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AssistantMessage, ContentBlock, StopReason, TextBlock};
+
+    #[tokio::test]
+    async fn oversized_event_becomes_a_single_protocol_terminal() {
+        let cancel = CancellationToken::new();
+        let (sender, mut stream) = EventStream::channel(cancel);
+        assert!(
+            sender
+                .send(StreamEvent::TextDelta("before".to_owned()))
+                .await
+        );
+        assert!(
+            sender
+                .send(StreamEvent::TextDelta("x".repeat(MAX_EVENT_ENCODED_BYTES)))
+                .await
+        );
+        // Any send after the synthesized protocol terminal is rejected.
+        assert!(
+            !sender
+                .send(StreamEvent::Done {
+                    message: AssistantMessage {
+                        blocks: vec![ContentBlock::Text(TextBlock::new("after"))],
+                        usage: None,
+                        stop_reason: StopReason::Stop,
+                    },
+                })
+                .await
+        );
+        assert_eq!(
+            stream.next().await,
+            Some(StreamEvent::TextDelta("before".to_owned()))
+        );
+        match stream.next().await {
+            Some(StreamEvent::Error(error)) => {
+                assert_eq!(error.kind(), ProviderErrorKind::Protocol);
+            }
+            other => panic!("expected protocol error, got {other:?}"),
+        }
+        assert_eq!(stream.next().await, None);
+    }
+
+    #[tokio::test]
+    async fn dropping_sender_without_terminal_synthesizes_protocol_error() {
+        let cancel = CancellationToken::new();
+        let (sender, mut stream) = EventStream::channel(cancel);
+        assert!(
+            sender
+                .send(StreamEvent::TextDelta("partial".to_owned()))
+                .await
+        );
+        drop(sender);
+        assert_eq!(
+            stream.next().await,
+            Some(StreamEvent::TextDelta("partial".to_owned()))
+        );
+        match stream.next().await {
+            Some(StreamEvent::Error(error)) => {
+                assert_eq!(error.kind(), ProviderErrorKind::Protocol);
+            }
+            other => panic!("expected protocol error, got {other:?}"),
+        }
+        assert_eq!(stream.next().await, None);
+    }
+
+    #[tokio::test]
+    async fn queued_events_drain_before_cancellation_and_drop_cancels_producer() {
+        let cancel = CancellationToken::new();
+        let (sender, mut stream) = EventStream::channel(cancel.clone());
+        assert!(
+            sender
+                .send(StreamEvent::TextDelta("queued".to_owned()))
+                .await
+        );
+        cancel.cancel();
+        assert_eq!(
+            stream.next().await,
+            Some(StreamEvent::TextDelta("queued".to_owned()))
+        );
+        match stream.next().await {
+            Some(StreamEvent::Error(error)) => {
+                assert!(error.is_cancelled());
+            }
+            other => panic!("expected cancelled error, got {other:?}"),
+        }
+        assert_eq!(stream.next().await, None);
+
+        let drop_cancel = CancellationToken::new();
+        let (drop_sender, drop_stream) = EventStream::channel(drop_cancel.clone());
+        drop(drop_stream);
+        assert!(drop_cancel.is_cancelled());
+        assert!(
+            !drop_sender
+                .send(StreamEvent::TextDelta("after drop".to_owned()))
+                .await
+        );
+    }
+}

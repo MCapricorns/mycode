@@ -18,12 +18,16 @@ use crate::view_model::{DesktopAction, MainView, WorkspaceState, reduce};
 use mycode_app::{BridgeCommand, BridgeEventRx, BridgeReply, CoreBridge};
 
 mod bridge;
+mod conversation;
 mod git;
+mod menus;
 mod palette;
 mod projects;
 mod settings_editor;
 mod stream_frame;
 mod updates_data;
+
+pub(crate) use settings_editor::normalized_key_input;
 
 /// Preferred first-window size. The origin is computed from the primary
 /// display so the window opens in the middle of the usable area.
@@ -49,10 +53,8 @@ fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
     desired.min(room)
 }
 
-/// AppKit can move the traffic lights but cannot remove them. Park the
-/// cluster outside the window so the custom right-side buttons are the only
-/// ones on screen.
-const PARKED_TRAFFIC_LIGHTS: gpui_kit::Point<Pixels> = gpui_kit::point(px(-240.), px(0.));
+/// Position the native macOS controls inside the custom 40px title bar.
+const TRAFFIC_LIGHTS: gpui_kit::Point<Pixels> = gpui_kit::point(px(16.), px(14.));
 
 /// Window options for the app-drawn chrome.
 ///
@@ -62,7 +64,7 @@ const PARKED_TRAFFIC_LIGHTS: gpui_kit::Point<Pixels> = gpui_kit::point(px(-240.)
 /// - Windows: `appears_transparent` extends the client area over the caption.
 ///   Min, max, and close still go through `WindowControlArea`.
 /// - macOS: `appears_transparent` and `app_owns_titlebar_drag` drop the system
-///   title bar and its drag/double-click. Traffic lights are parked off-window.
+///   title bar and its drag/double-click. Native traffic lights stay visible.
 fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
     let mut options = gpui_kit::component::TitleBar::window_options();
     options.window_bounds = Some(WindowBounds::Windowed(bounds));
@@ -74,7 +76,7 @@ fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
         .get_or_insert_with(gpui_kit::component::TitleBar::title_bar_options);
     titlebar.title = Some("MYCode".into());
     titlebar.appears_transparent = true;
-    titlebar.traffic_light_position = Some(PARKED_TRAFFIC_LIGHTS);
+    titlebar.traffic_light_position = Some(TRAFFIC_LIGHTS);
     options
 }
 
@@ -100,8 +102,8 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         // backdrop filter; macOS, Windows, and KDE Wayland implement this
         // appearance, and other sessions simply composite the translucent fills.
         window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Blurred);
-        // `init` installs the stock light theme. The product paints dark only,
-        // then pushes that theme into Base.
+        // Start in dark mode until the saved appearance arrives, then sync
+        // the resolved palette into Base.
         Theme::change(ThemeMode::Dark, Some(window), cx);
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);
@@ -111,7 +113,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     .expect("open the MYCode window");
 }
 
-/// One bottom-right notice. It leaves the screen on its own timer.
+/// Notice severity. Errors remain visible until explicitly dismissed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToastKind {
     Info,
@@ -195,7 +197,11 @@ pub struct Workspace {
     agent_roles_stale: bool,
     /// The next model-step render should clear and focus the search box.
     picker_focus_pending: bool,
-    ask_input: Option<Entity<InputState>>,
+    ask_inputs: Vec<Entity<InputState>>,
+    /// Keyboard selection and scroll handles for the composer pickers.
+    menu_navigation: menus::MenuNavigation,
+    /// Invalidates asynchronous recall lookups when their conversation changes.
+    recall_generation: u64,
     pending_project: Option<String>,
     /// Session created to carry [`crate::view_model::WorkspaceState::pending_welcome_send`].
     welcome_send_session: Option<String>,
@@ -219,7 +225,7 @@ pub struct Workspace {
     /// A User-Agent (or similar) debounce is waiting to write `settings.json`.
     settings_text_save_pending: bool,
     /// Last `@` fragment already searched, to dedupe bridge dispatches.
-    mention_query: Option<String>,
+    mention_query: Option<(crate::view_model::MentionKind, String)>,
     /// Bumped on each composer edit so a stale mention timer does not search.
     mention_generation: u64,
     pending_catalog_refresh: bool,
@@ -233,6 +239,8 @@ pub struct Workspace {
     next_toast_id: u64,
     /// In-app folder browser. `None` while the picker is closed.
     pub(crate) project_picker: Option<crate::ui::project_picker::ProjectPicker>,
+    /// Only the explicit chat-folder chip may rebind an existing conversation.
+    picker_chat_session: Option<String>,
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
     conversation_scroll: gpui_kit::ScrollHandle,
@@ -340,7 +348,9 @@ impl Workspace {
             agent_roles_project: None,
             agent_roles_stale: false,
             picker_focus_pending: false,
-            ask_input: None,
+            ask_inputs: Vec::new(),
+            menu_navigation: menus::MenuNavigation::default(),
+            recall_generation: 0,
             pending_project: None,
             welcome_send_session: None,
             focused_project: None,
@@ -360,6 +370,7 @@ impl Workspace {
             toasts: Vec::new(),
             next_toast_id: 0,
             project_picker: None,
+            picker_chat_session: None,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
             scroll_hold: None,
             appearance_scroll: None,
@@ -520,7 +531,7 @@ impl Workspace {
                 if draft != self.vm.composer_draft {
                     self.apply_action(DesktopAction::ComposerChanged(draft), cx);
                 }
-                if self.accept_open_slash(window, cx) {
+                if self.accept_open_mention(window, cx) {
                     return;
                 }
                 self.on_send(window, cx);
@@ -550,6 +561,20 @@ impl Workspace {
                 | DesktopAction::SessionDeleted
                 | DesktopAction::ConversationParked
         );
+        self.reset_menu_navigation(&action);
+        if drop_hold {
+            self.recall_generation = self.recall_generation.wrapping_add(1);
+        }
+        if drop_hold
+            || matches!(
+                action,
+                DesktopAction::AskRequested(_)
+                    | DesktopAction::ChatDone { .. }
+                    | DesktopAction::ChatFailed { .. }
+            )
+        {
+            self.ask_inputs.clear();
+        }
         let previous_error = self.vm.error.clone();
         let previous_project = self.vm.project_dir.clone();
         // Decide from the scroll position before this update. New text has
@@ -648,10 +673,15 @@ impl Workspace {
     }
 
     fn dispatch(&self, command: BridgeCommand, cx: &mut Context<Self>) {
+        let scope = bridge::ReplyScope::for_command(&command);
         let request = self.bridge.request(command);
         cx.spawn(async move |this, cx| {
             let reply = request.await;
-            let _ = this.update(cx, |workspace, cx| workspace.apply_reply(reply, cx));
+            let _ = this.update(cx, |workspace, cx| {
+                if scope.applies(&workspace.vm, workspace.pending_open.as_deref()) {
+                    workspace.apply_reply(reply, cx);
+                }
+            });
         })
         .detach();
     }
@@ -851,7 +881,7 @@ impl Workspace {
         self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx);
     }
 
-    /// Stops the in-flight turn and sends one queued follow-up immediately.
+    /// Opens or closes the detail card for one running subagent.
     pub(crate) fn on_open_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
         let next = if call_id.is_empty() || self.vm.subagent_window.as_deref() == Some(call_id) {
             None
@@ -866,6 +896,7 @@ impl Workspace {
         self.apply_action(DesktopAction::ChangesPanelToggled(open), cx);
     }
 
+    /// Stops the in-flight turn and sends one queued follow-up immediately.
     pub(crate) fn on_interrupt_queued(&mut self, index: usize, cx: &mut Context<Self>) {
         cx.stop_propagation();
         self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
@@ -876,8 +907,6 @@ impl Workspace {
         self.pump_queued_send(cx);
     }
 
-    /// Aborts the in-flight turn; the bridge answers with a `cancelled`
-    /// failure event that resets the sending state.
     /// Stops one running subagent. The parent turn and the other children stay.
     pub(crate) fn on_cancel_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
         let Some(session_id) = self
@@ -901,6 +930,7 @@ impl Workspace {
         );
     }
 
+    /// Aborts the in-flight turn; its terminal event resets the sending state.
     pub(crate) fn on_cancel_chat(&mut self, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.as_ref() else {
             return;
@@ -1003,11 +1033,12 @@ impl Workspace {
             None
         };
         let ids: Vec<String> = filtered.iter().map(|choice| choice.id.clone()).collect();
-        let index = crate::ui::model_picker::preferred_index(
+        let preferred = crate::ui::model_picker::preferred_index(
             &ids,
             &self.vm.picker_query,
             selected.as_deref(),
         );
+        let index = self.model_highlight(ids.len(), preferred);
         let Some(model) = ids.get(index).cloned() else {
             return;
         };
@@ -1406,17 +1437,10 @@ impl Workspace {
     }
 
     fn near_history_top(&self) -> bool {
-        let max = self.conversation_scroll.max_offset().y;
-        if max >= px(-1.) {
-            return false;
-        }
-        self.conversation_scroll.offset().y > px(-64.)
-    }
-
-    fn conversation_pinned(&self) -> bool {
-        let offset = self.conversation_scroll.offset().y;
-        let max = self.conversation_scroll.max_offset().y;
-        offset - max < px(24.)
+        near_history_top(
+            self.conversation_scroll.offset().y,
+            self.conversation_scroll.max_offset().y,
+        )
     }
 
     fn capture_appearance_scroll(&mut self) {
@@ -1442,7 +1466,7 @@ impl Workspace {
     fn request_older(&mut self, cx: &mut Context<Self>) {
         // `scroll_hold` is the frame where a previous page is still being
         // anchored. Starting another read here would measure the wrong height.
-        if self.vm.history_loading || self.scroll_hold.is_some() {
+        if self.vm.sending || self.vm.history_loading || self.scroll_hold.is_some() {
             return;
         }
         let Some(active) = self.vm.active.clone() else {
@@ -1526,7 +1550,7 @@ impl Workspace {
         .detach();
     }
 
-    /// Shows a notice for three seconds. A full stack drops the oldest.
+    /// Keeps errors until dismissal; other notices expire after a readable delay.
     pub(crate) fn push_toast(
         &mut self,
         text: impl Into<String>,
@@ -1539,26 +1563,34 @@ impl Workspace {
         }
         let id = self.next_toast_id;
         self.next_toast_id = self.next_toast_id.wrapping_add(1);
+        if self
+            .toasts
+            .iter()
+            .any(|toast| toast.kind == kind && toast.text == text)
+        {
+            return;
+        }
         self.toasts.push(Toast { id, text, kind });
         // A click handler repaints on its own. A toast pushed from the event
         // pump (compaction finishing, a while after "Compacting…") does not,
         // so the row was removed by its timer before the window ever drew it.
         cx.notify();
-        const MAX_TOASTS: usize = 4;
-        if self.toasts.len() > MAX_TOASTS {
-            let drop_count = self.toasts.len() - MAX_TOASTS;
-            self.toasts.drain(0..drop_count);
-        }
+        let Some(lifetime) = toast_lifetime(kind) else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs(3))
-                .await;
+            cx.background_executor().timer(lifetime).await;
             let _ = this.update(cx, |workspace, cx| {
                 workspace.toasts.retain(|toast| toast.id != id);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    pub(crate) fn on_dismiss_toast(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.toasts.retain(|toast| toast.id != id);
+        cx.notify();
     }
 
     pub(crate) fn take_manual_update_check(&mut self) -> bool {
@@ -1593,7 +1625,7 @@ fn parse_head(spelling: &str) -> HeadStamp {
 
 /// Parses one optional token-count field: empty keeps `None`, a plain number
 /// overrides; anything else is an error.
-fn parse_token_field(raw: &str) -> Result<Option<u64>, ()> {
+pub(crate) fn parse_token_field(raw: &str) -> Result<Option<u64>, ()> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -1624,6 +1656,18 @@ pub(crate) fn parse_env_line(
         ));
     }
     Ok(env)
+}
+
+fn toast_lifetime(kind: ToastKind) -> Option<Duration> {
+    match kind {
+        ToastKind::Error => None,
+        ToastKind::Warning => Some(Duration::from_secs(10)),
+        ToastKind::Info => Some(Duration::from_secs(5)),
+    }
+}
+
+fn near_history_top(offset_y: Pixels, max_offset_y: Pixels) -> bool {
+    max_offset_y > px(1.) && offset_y > px(-64.)
 }
 
 /// Slack around the bottom edge. A reader a few pixels short of the tail
@@ -1674,9 +1718,31 @@ mod tests {
         let titlebar = options.titlebar.expect("custom title bar");
         assert!(titlebar.appears_transparent);
         assert_eq!(titlebar.title.as_ref().map(AsRef::as_ref), Some("MYCode"));
-        assert_eq!(titlebar.traffic_light_position, Some(PARKED_TRAFFIC_LIGHTS));
-        assert!(f32::from(PARKED_TRAFFIC_LIGHTS.x) < 0.);
-        assert!(f32::from(PARKED_TRAFFIC_LIGHTS.y) >= 0.);
+        assert_eq!(titlebar.traffic_light_position, Some(TRAFFIC_LIGHTS));
+        assert!(f32::from(TRAFFIC_LIGHTS.x) >= 0.);
+        assert!(f32::from(TRAFFIC_LIGHTS.y) >= 0.);
+    }
+
+    #[test]
+    fn history_autoload_uses_the_positive_scroll_extent() {
+        assert!(!near_history_top(px(0.), px(0.)));
+        assert!(near_history_top(px(0.), px(800.)));
+        assert!(near_history_top(px(-32.), px(800.)));
+        assert!(!near_history_top(px(-100.), px(800.)));
+        assert!(!near_history_top(px(-800.), px(800.)));
+    }
+
+    #[test]
+    fn errors_have_no_expiry_and_other_notices_have_reading_time() {
+        assert_eq!(toast_lifetime(ToastKind::Error), None);
+        assert_eq!(
+            toast_lifetime(ToastKind::Info),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            toast_lifetime(ToastKind::Warning),
+            Some(Duration::from_secs(10))
+        );
     }
 
     #[test]

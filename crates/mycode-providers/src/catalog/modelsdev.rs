@@ -10,7 +10,8 @@ use serde::Deserialize;
 
 use super::{
     AUTH_DEVICE_CODE, CatalogDocument, CatalogModel, CatalogProvider, KIND_ANTHROPIC_MESSAGES,
-    KIND_OPENAI_COMPLETIONS, KIND_OPENAI_RESPONSES, clean_text, normalize, valid_provider_id,
+    KIND_OPENAI_COMPLETIONS, KIND_OPENAI_RESPONSES, clean_text, normalize, valid_model_id,
+    valid_provider_id,
 };
 
 /// Cloud source of the provider catalog.
@@ -215,7 +216,7 @@ pub(crate) const MAX_EFFORTS: usize = 16;
 
 /// Keeps one published effort token. Unknown spellings stay; nothing is
 /// invented to fill a ladder, and tokens that are not identifiers are dropped.
-fn push_effort(efforts: &mut Vec<String>, value: &str, cap: usize) {
+pub(crate) fn push_effort(efforts: &mut Vec<String>, value: &str, cap: usize) {
     let Some(token) = clean_text(value) else {
         return;
     };
@@ -234,12 +235,4 @@ fn effort_token_ok(token: &str) -> bool {
         && token.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '-' || character == '_'
         })
-}
-
-/// Model ids keep the provider's own spelling: any nonempty printable id
-/// without whitespace or control characters is accepted.
-fn valid_model_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= super::MAX_STRING_BYTES
-        && id.chars().all(|c| !c.is_whitespace() && !c.is_control())
 }

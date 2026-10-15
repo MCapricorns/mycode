@@ -40,6 +40,7 @@ pub(super) fn render_chat(
     // in the ledger; only the REASONING row is hidden while that pick is set.
     let show_reasoning = crate::view_model::selected_reasoning_level(workspace.vm()) != "off";
     let (show_welcome, has_older, entry_elements, streaming_element) = {
+        let md_cache = scroll_hold::use_markdown_cache(window);
         let active = workspace.vm().active.as_ref();
         let entries: &[ConversationEntry] = active
             .map(|conversation| conversation.entries.as_slice())
@@ -48,15 +49,19 @@ pub(super) fn render_chat(
         let show_welcome = entries.is_empty() && streaming.is_none() && !sending;
         let has_older = active.is_some_and(|conversation| conversation.older_before.is_some());
         let blocks = collect_transcript_blocks(entries);
+        let show_speakers = compute_block_speakers(&blocks, show_reasoning);
         let reduce_motion = cx.reduce_motion();
         let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(blocks.len());
-        for item in blocks {
+        let mut turn_has_assistant_header = false;
+        for (item, show_speaker) in blocks.into_iter().zip(show_speakers) {
             match item {
                 TranscriptBlock::User { entry, index } => {
+                    turn_has_assistant_header = false;
                     let child = if mycode_app::is_compaction_summary(&entry.text) {
                         transcript::render_summary_entry(entry, cx.theme()).into_any_element()
                     } else {
-                        transcript::render_user_entry(entry, index > 0, index, cx)
+                        let can_rewind = workspace.can_rewind_message(index);
+                        transcript::render_user_entry(entry, can_rewind, index, cx)
                     };
                     elements.push(appear(entry.event_id.as_str(), reduce_motion, child));
                 }
@@ -68,19 +73,26 @@ pub(super) fn render_chat(
                     elements.push(appear(
                         id,
                         reduce_motion,
-                        render_tool_run(&tools, workspace, reduce_motion, cx),
+                        render_tool_run(&tools, workspace, sending, reduce_motion, cx),
                     ));
                 }
                 TranscriptBlock::Entry(entry) => {
                     let id = entry.event_id.clone();
+                    if show_speaker {
+                        turn_has_assistant_header = true;
+                    }
                     elements.push(appear(
                         &id,
                         reduce_motion,
                         transcript::render_entry(
                             entry,
                             workspace,
+                            Some(&md_cache),
                             cx.theme(),
-                            show_reasoning,
+                            transcript::AssistantDisplay {
+                                reasoning: show_reasoning,
+                                speaker: show_speaker,
+                            },
                             window,
                             cx,
                         ),
@@ -88,13 +100,18 @@ pub(super) fn render_chat(
                 }
             }
         }
+        let streaming_show_speaker = !turn_has_assistant_header;
         let streaming_element = streaming
             .map(|streaming| {
                 transcript::render_streaming_entry(
                     streaming,
                     workspace,
+                    Some(&md_cache),
                     cx.theme(),
-                    show_reasoning,
+                    transcript::AssistantDisplay {
+                        reasoning: show_reasoning,
+                        speaker: streaming_show_speaker,
+                    },
                     window,
                     cx,
                 )
@@ -109,8 +126,12 @@ pub(super) fn render_chat(
                             ..crate::view_model::StreamingReply::default()
                         },
                         workspace,
+                        Some(&md_cache),
                         cx.theme(),
-                        show_reasoning,
+                        transcript::AssistantDisplay {
+                            reasoning: show_reasoning,
+                            speaker: streaming_show_speaker,
+                        },
                         window,
                         cx,
                     )
@@ -242,22 +263,60 @@ struct ToolRow<'a> {
     result: Option<&'a ConversationEntry>,
 }
 
+/// Computes which transcript blocks should render an assistant speaker header
+/// so only the first visible assistant block in each turn gets one.
+fn compute_block_speakers(blocks: &[TranscriptBlock<'_>], show_reasoning: bool) -> Vec<bool> {
+    let mut turn_has_header = false;
+    blocks
+        .iter()
+        .map(|block| match block {
+            TranscriptBlock::User { .. } => {
+                turn_has_header = false;
+                false
+            }
+            TranscriptBlock::Tools(_) => false,
+            TranscriptBlock::Entry(entry) => {
+                let renders_assistant = entry.kind == EntryKind::AssistantMessage
+                    && (!entry.text.trim().is_empty()
+                        || (show_reasoning && !entry.thinking.is_empty()));
+                if renders_assistant && !turn_has_header {
+                    turn_has_header = true;
+                    true
+                } else {
+                    false
+                }
+            }
+        })
+        .collect()
+}
+
 fn render_tool_run(
     tools: &[ToolRow<'_>],
     workspace: &Workspace,
+    turn_running: bool,
     reduce_motion: bool,
     cx: &gpui_kit::Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     if tools.is_empty() {
         return div().into_any_element();
     }
+    let theme = cx.theme();
+    let rail = theme.border.opacity(0.65);
     if tools.len() >= 2 {
         let id = tools[0].call.event_id.clone();
         let labels: Vec<&str> = tools.iter().map(|tool| tool.call.text.as_ref()).collect();
         let open = workspace.tool_batch_open(&id);
+        let has_failed = tools.iter().any(|tool| {
+            tool.result
+                .is_some_and(|entry| entry.text.starts_with("failed:"))
+        });
+        let has_unfinished = tools.iter().any(|tool| tool.result.is_none());
         let mut column = div()
             .w_full()
             .min_w_0()
+            .pl(super::skin::space(2))
+            .border_l_1()
+            .border_color(rail)
             .flex()
             .flex_col()
             .gap(px(2.))
@@ -265,12 +324,15 @@ fn render_tool_run(
                 &id,
                 tools::tool_batch_summary(&labels),
                 open,
+                has_failed,
+                has_unfinished,
+                turn_running,
                 cx,
             ));
         if open {
             let cards = tools
                 .iter()
-                .map(|tool| render_one_tool(tool, workspace, reduce_motion, cx));
+                .map(|tool| render_one_tool(tool, workspace, turn_running, reduce_motion, cx));
             column = column.child(super::motion::fade_in(
                 format!("tool-run-{id}"),
                 reduce_motion,
@@ -279,12 +341,28 @@ fn render_tool_run(
         }
         return column.into_any_element();
     }
-    render_one_tool(&tools[0], workspace, reduce_motion, cx)
+    div()
+        .w_full()
+        .min_w_0()
+        .pl(super::skin::space(2))
+        .border_l_1()
+        .border_color(rail)
+        .flex()
+        .flex_col()
+        .child(render_one_tool(
+            &tools[0],
+            workspace,
+            turn_running,
+            reduce_motion,
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn render_one_tool(
     tool: &ToolRow<'_>,
     workspace: &Workspace,
+    turn_running: bool,
     reduce_motion: bool,
     cx: &gpui_kit::Context<Workspace>,
 ) -> gpui_kit::AnyElement {
@@ -297,6 +375,7 @@ fn render_one_tool(
         .child(tools::render_tool_block(
             tool.call,
             tool.result,
+            turn_running,
             expanded,
             reduce_motion,
             cx,
@@ -562,5 +641,46 @@ mod nesting_tests {
             panic!("a reply should start a new tool run");
         };
         assert_eq!(second.len(), 1);
+    }
+
+    #[test]
+    fn only_the_first_assistant_step_per_turn_receives_a_speaker_header() {
+        let user = |id: &str| ConversationEntry {
+            event_id: id.into(),
+            kind: EntryKind::UserMessage,
+            text: "prompt".into(),
+            call_id: None,
+            thinking: String::new(),
+        };
+        let assistant = |id: &str, text: &str, thinking: &str| ConversationEntry {
+            event_id: id.into(),
+            kind: EntryKind::AssistantMessage,
+            text: text.into(),
+            call_id: None,
+            thinking: thinking.into(),
+        };
+        let entries = vec![
+            user("u1"),
+            assistant("a1", "first step", ""),
+            call("c1", "read  a.rs"),
+            result("c1", "ok"),
+            assistant("a2", "second step", "some trace"),
+            user("u2"),
+            assistant("a3", "", "thinking only"),
+            assistant("a4", "final answer", ""),
+        ];
+        let blocks = collect_transcript_blocks(&entries);
+        let speakers = super::compute_block_speakers(&blocks, true);
+        // Blocks: u1 (false), a1 (true), tools (false), a2 (false), u2 (false), a3 (true), a4 (false)
+        assert_eq!(
+            speakers,
+            vec![false, true, false, false, false, true, false]
+        );
+        // When reasoning is hidden ("off"), a3 has no visible content so a4 gets the header.
+        let speakers_no_reasoning = super::compute_block_speakers(&blocks, false);
+        assert_eq!(
+            speakers_no_reasoning,
+            vec![false, true, false, false, false, false, true]
+        );
     }
 }

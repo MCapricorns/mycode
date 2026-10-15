@@ -5,23 +5,53 @@
 
 use crate::i18n::t;
 
-use std::path::Path;
+#[cfg(test)]
+mod git_integration_tests;
+
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// `git` with no console window. The desktop process has no console, so a
 /// plain spawn of `git.exe` allocates a black window on Windows.
 fn git_command() -> Command {
+    let mut command = Command::new("git");
+    // Every panel operation is read-only and treats filenames as literals.
+    command.args(["--no-optional-locks", "--no-pager", "--literal-pathspecs"]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut command = Command::new("git");
         command.creation_flags(CREATE_NO_WINDOW);
-        command
     }
-    #[cfg(not(windows))]
+    command
+}
+
+enum RepoRoot {
+    Root(PathBuf),
+    NotARepository,
+    GitUnavailable,
+}
+
+fn repository_root(folder: &Path) -> RepoRoot {
+    let Ok(output) = git_command()
+        .arg("-C")
+        .arg(folder)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+    else {
+        return RepoRoot::GitUnavailable;
+    };
+    if !output.status.success() {
+        return RepoRoot::NotARepository;
+    }
+    match std::str::from_utf8(&output.stdout)
+        .ok()
+        .map(|root| root.trim_end_matches(['\n', '\r']))
+        .filter(|root| !root.is_empty())
     {
-        Command::new("git")
+        Some(root) => RepoRoot::Root(PathBuf::from(root)),
+        None => RepoRoot::NotARepository,
     }
 }
 
@@ -61,11 +91,25 @@ impl GitSnapshot {
 /// own git commands and subagent worktree updates. The file list keeps 80
 /// dirty paths and sets [`GitSnapshot::stopped_early`] when another remains.
 pub(crate) fn read_status(root: &Path) -> GitSnapshot {
+    let root = match repository_root(root) {
+        RepoRoot::Root(root) => root,
+        RepoRoot::NotARepository => {
+            return GitSnapshot::empty(t("Not a git repository", "不是 git 仓库"));
+        }
+        RepoRoot::GitUnavailable => {
+            return GitSnapshot::empty(t("git is not installed", "未安装 git"));
+        }
+    };
     let output = git_command()
-        .arg("--no-optional-locks")
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain=v1", "-b", "--untracked-files=all"])
+        .args([
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "-b",
+            "--untracked-files=all",
+        ])
         .output();
     let output = match output {
         Ok(output) => output,
@@ -79,37 +123,34 @@ pub(crate) fn read_status(root: &Path) -> GitSnapshot {
 
 const STATUS_CAP: usize = 80;
 
-/// Parses `git status --porcelain=v1 -b` text.
-///
-/// Rename and copy rows (`R` or `C` in the two-character status) use
-/// `old -> new`. The new path is [`GitFile::path`] so diffs open the
-/// destination. Exactly [`STATUS_CAP`] files with no further file row is
-/// complete; another file row sets [`GitSnapshot::stopped_early`].
+/// Parses NUL-delimited porcelain. Paths are never quoted or whitespace-trimmed;
+/// rename/copy records carry the destination first and then the old name.
 fn parse_porcelain(text: &str) -> GitSnapshot {
     let mut branch = String::new();
     let mut files = Vec::new();
     let mut stopped_early = false;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("## ") {
+    let mut records = text.split('\0');
+    while let Some(record) = records.next() {
+        if let Some(rest) = record.strip_prefix("## ") {
             branch = rest.split("...").next().unwrap_or(rest).trim().to_owned();
             continue;
         }
-        if line.len() < 4 {
+        let (Some(status_xy), Some(path)) = (record.get(..2), record.get(3..)) else {
+            continue;
+        };
+        if path.is_empty() || record.as_bytes().get(2) != Some(&b' ') {
             continue;
         }
+        let previous = status_xy
+            .contains(['R', 'C'])
+            .then(|| records.next().unwrap_or_default().to_owned());
         if files.len() == STATUS_CAP {
             stopped_early = true;
             break;
         }
-        let status_xy = &line[..2];
-        let status = status_xy.trim().to_owned();
-        let (path, previous) = split_rename(status_xy, line[3..].trim());
-        if path.is_empty() {
-            continue;
-        }
         files.push(GitFile {
-            path,
-            status,
+            path: path.to_owned(),
+            status: status_xy.trim().to_owned(),
             previous,
         });
     }
@@ -121,102 +162,32 @@ fn parse_porcelain(text: &str) -> GitSnapshot {
     }
 }
 
-fn split_rename(status_xy: &str, payload: &str) -> (String, Option<String>) {
-    let renamed = status_xy.chars().any(|ch| ch == 'R' || ch == 'C');
-    if renamed && let Some((old, new)) = split_arrow(payload) {
-        let path = unquote_path(new);
-        if !path.is_empty() {
-            return (path, Some(unquote_path(old)));
-        }
-    }
-    (unquote_path(payload), None)
-}
-
-fn split_arrow(payload: &str) -> Option<(&str, &str)> {
-    let bytes = payload.as_bytes();
-    let mut quoted = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'"' && (index == 0 || bytes[index - 1] != b'\\') {
-            quoted = !quoted;
-            index += 1;
-            continue;
-        }
-        if !quoted && bytes[index..].starts_with(b" -> ") {
-            return Some((payload[..index].trim(), payload[index + 4..].trim()));
-        }
-        index += 1;
-    }
-    None
-}
-
-fn unquote_path(raw: &str) -> String {
-    let raw = raw.trim();
-    let Some(inner) = raw
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-    else {
-        return raw.to_owned();
-    };
-    let mut bytes = Vec::new();
-    let source = inner.as_bytes();
-    let mut index = 0;
-    while index < source.len() {
-        if source[index] == b'\\' && index + 1 < source.len() {
-            match source[index + 1] {
-                b'n' => {
-                    bytes.push(b'\n');
-                    index += 2;
-                }
-                b't' => {
-                    bytes.push(b'\t');
-                    index += 2;
-                }
-                b'\\' | b'"' => {
-                    bytes.push(source[index + 1]);
-                    index += 2;
-                }
-                b'0'..=b'7' => {
-                    let mut value = 0u16;
-                    let mut consumed = 0;
-                    while consumed < 3 && index + 1 + consumed < source.len() {
-                        let digit = source[index + 1 + consumed];
-                        if !digit.is_ascii_digit() || digit > b'7' {
-                            break;
-                        }
-                        value = value * 8 + u16::from(digit - b'0');
-                        consumed += 1;
-                    }
-                    if consumed == 0 {
-                        bytes.push(b'\\');
-                        index += 1;
-                    } else {
-                        bytes.push(value as u8);
-                        index += 1 + consumed;
-                    }
-                }
-                _ => {
-                    bytes.push(source[index + 1]);
-                    index += 2;
-                }
-            }
-        } else {
-            bytes.push(source[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
 /// Unified diff for one path.
 ///
 /// `git diff HEAD` includes staged edits. An untracked file has no HEAD
 /// object, so the whole file is shown as added lines.
 pub(crate) fn read_diff(root: &Path, path: &str) -> String {
+    let root = match repository_root(root) {
+        RepoRoot::Root(root) => root,
+        RepoRoot::NotARepository => {
+            return t("Not a git repository", "不是 git 仓库").to_owned();
+        }
+        RepoRoot::GitUnavailable => {
+            return t("git is not installed", "未安装 git").to_owned();
+        }
+    };
     let output = git_command()
         .arg("-C")
-        .arg(root)
-        .args(["diff", "HEAD", "--", path])
+        .arg(&root)
+        .args([
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "HEAD",
+            "--",
+            path,
+        ])
         .output();
     let Ok(output) = output else {
         return t("git is not installed", "未安装 git").to_owned();
@@ -225,8 +196,11 @@ pub(crate) fn read_diff(root: &Path, path: &str) -> String {
     if !text.is_empty() {
         return cap_diff(&text);
     }
-    if untracked(root, path) {
-        return added_file_diff(root, path);
+    if is_new_file(&root, path, !output.status.success()) {
+        return added_file_diff(&root, path);
+    }
+    if !output.status.success() {
+        return cap_diff(&String::from_utf8_lossy(&output.stderr));
     }
     t("No diff against HEAD.", "与 HEAD 无差异。").to_owned()
 }
@@ -248,27 +222,54 @@ fn cap_diff(text: &str) -> String {
     format!("{}…", &text[..end])
 }
 
-fn untracked(root: &Path, path: &str) -> bool {
+fn is_new_file(root: &Path, path: &str, allow_staged: bool) -> bool {
     let Ok(output) = git_command()
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain=v1", "--", path])
+        .args([
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            path,
+        ])
         .output()
     else {
         return false;
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .any(|line| line.starts_with("?? ") && line[3..].trim() == path)
+    output.status.success()
+        && parse_porcelain(&String::from_utf8_lossy(&output.stdout))
+            .files
+            .iter()
+            .any(|file| {
+                file.path == path
+                    && (file.status == "??" || (allow_staged && file.status.contains('A')))
+            })
 }
 
 /// The whole file as a new-file unified diff. Binary files stay a one-line note.
 fn added_file_diff(root: &Path, path: &str) -> String {
-    if path.is_empty() || path.contains('\0') || Path::new(path).is_absolute() {
+    if path.is_empty()
+        || path.contains('\0')
+        || Path::new(path)
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
         return t("No diff against HEAD.", "与 HEAD 无差异。").to_owned();
     }
     let full = root.join(path);
-    let Ok(bytes) = std::fs::read(&full) else {
+    if std::fs::symlink_metadata(&full).is_ok_and(|metadata| metadata.is_symlink()) {
+        return std::fs::read_link(&full)
+            .map(|target| cap_diff(&added_lines(path, &target.to_string_lossy())))
+            .unwrap_or_else(|_| t("No diff against HEAD.", "与 HEAD 无差异。").to_owned());
+    }
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(&full).and_then(|file| {
+        file.take((DIFF_CAP_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+    });
+    if read.is_err() {
         return t("No diff against HEAD.", "与 HEAD 无差异。").to_owned();
     };
     if bytes.contains(&0) {
@@ -362,18 +363,18 @@ mod diff_tests {
 
     #[test]
     fn porcelain_rename_splits_old_and_new_paths() {
-        let snapshot = super::parse_porcelain("## main\nR  old.txt -> new.txt\n");
+        let snapshot = super::parse_porcelain("## main\0R  new.txt\0old.txt\0");
         assert_eq!(snapshot.files.len(), 1);
         assert_eq!(snapshot.files[0].path, "new.txt");
         assert_eq!(snapshot.files[0].previous.as_deref(), Some("old.txt"));
         assert_eq!(snapshot.files[0].status, "R");
         assert!(!snapshot.stopped_early);
 
-        let quoted = super::parse_porcelain("C  \"old file.txt\" -> \"new file.txt\"\n");
+        let quoted = super::parse_porcelain("C  new file.txt\0old file.txt\0");
         assert_eq!(quoted.files[0].path, "new file.txt");
         assert_eq!(quoted.files[0].previous.as_deref(), Some("old file.txt"));
 
-        let plain = super::parse_porcelain(" M keep -> name.txt\n");
+        let plain = super::parse_porcelain(" M keep -> name.txt\0");
         assert_eq!(plain.files[0].path, "keep -> name.txt");
         assert!(plain.files[0].previous.is_none());
     }
@@ -392,15 +393,15 @@ mod diff_tests {
 
     #[test]
     fn porcelain_marks_the_list_incomplete_only_past_the_cap() {
-        let mut eighty = String::from("## main\n");
+        let mut eighty = String::from("## main\0");
         for index in 0..80 {
-            eighty.push_str(&format!(" M file{index}.txt\n"));
+            eighty.push_str(&format!(" M file{index}.txt\0"));
         }
         let complete = super::parse_porcelain(&eighty);
         assert_eq!(complete.files.len(), 80);
         assert!(!complete.stopped_early);
 
-        eighty.push_str(" M extra.txt\n");
+        eighty.push_str(" M extra.txt\0");
         let truncated = super::parse_porcelain(&eighty);
         assert_eq!(truncated.files.len(), 80);
         assert!(truncated.stopped_early);

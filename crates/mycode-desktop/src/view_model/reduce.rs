@@ -62,6 +62,21 @@ fn push_entry_once(conversation: &mut ActiveConversation, entry: mycode_app::Con
 
 /// Applies one action to the state.
 pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
+    // A paged-back window stays readable through ordinary UI actions. Only
+    // new tail activity (or opening a new snapshot) applies the live ceiling.
+    let trim_window = matches!(
+        action,
+        DesktopAction::TurnArmed
+            | DesktopAction::MessageSent { .. }
+            | DesktopAction::SteerCommitted { .. }
+            | DesktopAction::AssistantStepCommitted(_)
+            | DesktopAction::ToolStarted { .. }
+            | DesktopAction::ToolResultAppended(_)
+            | DesktopAction::ChatDone { .. }
+            | DesktopAction::ChatFailed { .. }
+            | DesktopAction::SummaryShown(_)
+            | DesktopAction::ConversationOpened(_)
+    );
     let touches_providers = matches!(
         action,
         DesktopAction::SettingsLoaded(_)
@@ -118,11 +133,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::SessionDeleted => {
             state.active = None;
             state.sending = false;
+            state.pending_summary = None;
             state.queued.clear();
             state.live_jobs.clear();
             state.subagent_window = None;
             state.changes_panel_open = false;
             state.pending_ask = None;
+            state.ask_answers.clear();
             state.error = None;
             state.history_loading = false;
             state.pending_welcome_send = None;
@@ -140,6 +157,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.subagent_window = None;
             state.changes_panel_open = false;
             state.pending_ask = None;
+            state.ask_answers.clear();
             state.history_loading = false;
             state.composer_draft.clear();
             state.mention = None;
@@ -172,6 +190,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.subagent_window = None;
                 state.changes_panel_open = false;
                 state.pending_ask = None;
+                state.ask_answers.clear();
                 state.pending_summary = None;
                 state.sending = false;
                 state.history_loading = false;
@@ -422,6 +441,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.streaming = None;
             }
             state.live_jobs.clear();
+            state.subagent_window = None;
+            state.pending_ask = None;
+            state.ask_answers.clear();
             // The finished turn keeps its meter: the last live snapshot held
             // the turn's sums, so it becomes the completed-turn stats.
             state.last_turn = state.live_turn.take();
@@ -445,6 +467,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.error = Some(message);
             }
             state.live_jobs.clear();
+            state.subagent_window = None;
+            state.pending_ask = None;
+            state.ask_answers.clear();
             state.live_turn = None;
             state.sending = false;
         }
@@ -465,7 +490,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::Failed(message) => {
             state.error = Some(message);
-            state.sending = false;
         }
         DesktopAction::SettingsLoaded(settings) => {
             match state.settings.as_mut() {
@@ -976,7 +1000,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.update = UpdateState::Ready { version };
         }
     }
-    trim_resident_entries(state);
+    if trim_window {
+        trim_resident_entries(state);
+    }
     if touches_providers {
         ensure_model_selection(state);
     }
@@ -986,8 +1012,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
 /// Ceiling on entries held for one open conversation. The transcript pages
 /// from disk in both directions; past this the oldest rows drop out of the
 /// window and page back in on demand, so a long-running window stays
-/// bounded. Trimming runs in the same action as a prepend, so the scroll
-/// anchor compensates the net height change.
+/// bounded. Older-page prepends are not trimmed so the newly loaded page is
+/// never discarded on arrival.
 const MAX_RESIDENT_ENTRIES: usize = 1500;
 
 fn trim_resident_entries(state: &mut WorkspaceState) {
@@ -996,6 +1022,12 @@ fn trim_resident_entries(state: &mut WorkspaceState) {
     {
         let excess = active.entries.len() - MAX_RESIDENT_ENTRIES;
         active.entries.drain(..excess);
+        if let Some(first_ledger_id) = active.entries.iter().find_map(|entry| {
+            mycode_app::SessionEventId::parse(&entry.event_id)
+                .map(|event_id| event_id.as_str().to_owned())
+        }) {
+            active.older_before = Some(first_ledger_id);
+        }
     }
 }
 
@@ -1136,13 +1168,27 @@ mod tests {
         );
     }
 
+    fn ledger_id(index: usize) -> String {
+        format!("evt1-{index:032x}")
+    }
+
     #[test]
     fn the_open_conversation_is_capped_at_the_resident_entry_ceiling() {
-        let entries: Vec<ConversationEntry> = (0..super::MAX_RESIDENT_ENTRIES + 400)
-            .map(|index| user(&format!("evt-{index}"), "row"))
+        let mut entries: Vec<ConversationEntry> = (0..super::MAX_RESIDENT_ENTRIES + 400)
+            .map(|index| user(&ledger_id(index), "row"))
             .collect();
-        let mut state = open(entries, Some("cursor"));
-        reduce(&mut state, DesktopAction::HistoryLoadStarted);
+        // A live tool placeholder (`call-*`) is not a ledger event id; if it
+        // lands at the front of the kept window, `older_before` must skip it
+        // and anchor on the first real ledger entry.
+        entries[400] = ConversationEntry {
+            event_id: "call-live-1".to_owned(),
+            kind: EntryKind::ToolCall,
+            text: "read  src/lib.rs".into(),
+            call_id: Some("live-1".to_owned()),
+            thinking: String::new(),
+        };
+        let mut state = open(entries, None);
+        reduce(&mut state, DesktopAction::TurnArmed);
         let active = state.active.expect("conversation stays open");
         assert_eq!(
             active.entries.len(),
@@ -1151,10 +1197,84 @@ mod tests {
         );
         assert_eq!(
             active.entries.last().expect("kept tail").event_id,
-            format!("evt-{}", super::MAX_RESIDENT_ENTRIES + 399),
+            ledger_id(super::MAX_RESIDENT_ENTRIES + 399),
             "trimming drops the oldest rows, never the tail"
         );
-        assert_eq!(active.older_before.as_deref(), Some("cursor"));
+        assert_eq!(
+            active.older_before.as_deref(),
+            Some(ledger_id(401).as_str()),
+            "older_before advances to the first remaining ledger event id so trimmed rows can page back in"
+        );
+    }
+
+    #[test]
+    fn older_loaded_is_not_trimmed_past_the_resident_ceiling() {
+        let tail: Vec<ConversationEntry> = (10..super::MAX_RESIDENT_ENTRIES + 10)
+            .map(|index| user(&ledger_id(index), "row"))
+            .collect();
+        let older_page: Vec<ConversationEntry> = (0..10)
+            .map(|index| user(&ledger_id(index), "older"))
+            .collect();
+        let requested = ledger_id(10);
+        let mut state = open(tail, Some(&requested));
+        reduce(
+            &mut state,
+            DesktopAction::OlderLoaded {
+                session_id: "ses".to_owned(),
+                entries: older_page,
+                older_before: None,
+                requested_before: requested,
+            },
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ComposerChanged("draft".to_owned()),
+        );
+        reduce(&mut state, DesktopAction::HistoryLoadStarted);
+        let active = state.active.expect("open");
+        assert_eq!(active.entries.len(), super::MAX_RESIDENT_ENTRIES + 10);
+        assert_eq!(
+            active.entries.first().expect("first").event_id,
+            ledger_id(0)
+        );
+        assert!(active.older_before.is_none());
+    }
+
+    #[test]
+    fn non_turn_failure_preserves_sending_and_streaming_during_a_turn() {
+        use crate::view_model::StreamingReply;
+
+        let mut state = WorkspaceState {
+            sending: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt-1".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: Some(StreamingReply {
+                    text: "partial".to_owned(),
+                    thinking: String::new(),
+                    status: "Replying".to_owned(),
+                }),
+                context_used: 0,
+                context_cache: 0,
+            }),
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            DesktopAction::Failed("branch head moved on".to_owned()),
+        );
+        assert!(state.sending, "non-turn failure must not clear sending");
+        assert_eq!(state.error.as_deref(), Some("branch head moved on"));
+        assert!(
+            state
+                .active
+                .as_ref()
+                .and_then(|active| active.streaming.as_ref())
+                .is_some()
+        );
     }
 
     #[test]
@@ -1321,6 +1441,7 @@ mod tests {
                 session_id: "new".to_owned(),
                 root_branch_id: "branch".to_owned(),
                 title: String::new(),
+                updated_at_ms: None,
                 event_count: 0,
                 active: false,
                 corrupt: false,
@@ -1459,6 +1580,7 @@ mod tests {
                 session_id: "new".to_owned(),
                 root_branch_id: "branch".to_owned(),
                 title: String::new(),
+                updated_at_ms: None,
                 event_count: 0,
                 active: false,
                 corrupt: false,
@@ -1614,6 +1736,7 @@ mod tests {
                 session_id: "new".to_owned(),
                 root_branch_id: "branch".to_owned(),
                 title: String::new(),
+                updated_at_ms: None,
                 event_count: 0,
                 active: false,
                 corrupt: false,
@@ -1803,5 +1926,80 @@ mod tests {
         assert_eq!(conversation.head, "evt-steer");
         assert_eq!(conversation.entries.len(), 1);
         assert_eq!(conversation.entries[0].text.as_ref(), "keep going");
+    }
+
+    #[test]
+    fn ending_a_turn_clears_pending_ask_and_subagent_detail_window() {
+        let prompt = mycode_app::AskPrompt {
+            question: "Pick one?".to_owned(),
+            choices: Vec::new(),
+            optional: false,
+            multiple: false,
+        };
+        let mut state = open(Vec::new(), None);
+        state.sending = true;
+        reduce(
+            &mut state,
+            DesktopAction::AskRequested(vec![prompt.clone()]),
+        );
+        reduce(
+            &mut state,
+            DesktopAction::AskChoicePicked {
+                index: 0,
+                answer: "a".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            DesktopAction::SubagentWindowChanged(Some("call-1".to_owned())),
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ChatFailed {
+                message: mycode_app::CHAT_CANCELLED.to_owned(),
+                head: String::new(),
+            },
+        );
+        assert!(state.pending_ask.is_none());
+        assert!(state.ask_answers.is_empty());
+        assert!(state.subagent_window.is_none());
+
+        state.sending = true;
+        reduce(&mut state, DesktopAction::AskRequested(vec![prompt]));
+        reduce(
+            &mut state,
+            DesktopAction::SubagentWindowChanged(Some("call-2".to_owned())),
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ChatDone {
+                head: "evt-done".to_owned(),
+                entry: user("evt-done", "done"),
+            },
+        );
+        assert!(state.pending_ask.is_none());
+        assert!(state.ask_answers.is_empty());
+        assert!(state.subagent_window.is_none());
+    }
+
+    #[test]
+    fn workspace_rename_strips_control_characters_for_durable_ui_state() {
+        let ws = mycode_config::WorkspaceDef::generate("Default", Vec::new());
+        let mut state = WorkspaceState {
+            active_workspace: Some(ws.id.clone()),
+            workspaces: vec![ws],
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            DesktopAction::WorkspaceRenamed("  Line 1\nLine 2\t ".to_owned()),
+        );
+        assert_eq!(state.workspaces[0].name, "Line 1 Line 2");
+        let ui_state = mycode_config::UiState {
+            workspaces: state.workspaces.clone(),
+            active_workspace: state.active_workspace.clone(),
+            ..mycode_config::UiState::default()
+        };
+        assert!(ui_state.validate().is_ok());
     }
 }

@@ -39,7 +39,7 @@ pub struct SettingsState {
     pub web_backends: Vec<mycode_config::WebBackendSettings>,
     /// MCP servers.
     pub mcp_servers: Vec<mycode_config::McpServerSettings>,
-    /// Appearance theme. Always `dark`; light mode is not painted.
+    /// Appearance theme: `dark` or `light`.
     pub theme: String,
     /// Appearance palette. One of `mycode_config::VALID_PALETTES`; slate is the default.
     pub palette: String,

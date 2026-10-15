@@ -65,6 +65,8 @@ getrandom = "0.4.3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 zip = { version = "9.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1.0.28", features = ["serde"] }
+# Session grouping follows the user's local calendar, including DST boundaries.
+chrono = "0.4.45"
 
 # Disk-conscious dev profile: line tables keep backtraces useful while
 # cutting debuginfo from multi-GiB full DWARF to a fraction.

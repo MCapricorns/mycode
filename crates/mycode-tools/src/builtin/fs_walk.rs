@@ -562,7 +562,8 @@ impl DirListing {
                 // `NtQueryDirectoryFile` returns NTSTATUS and does not define
                 // `GetLastError`; convert the returned value directly.
                 let code = unsafe { RtlNtStatusToDosError(status) };
-                return Err(io::Error::from_raw_os_error(code as i32));
+                let code = i32::try_from(code).unwrap_or(i32::MAX);
+                return Err(io::Error::from_raw_os_error(code));
             }
             self.restart = false;
             let used = io_status.Information;

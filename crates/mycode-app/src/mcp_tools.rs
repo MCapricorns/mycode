@@ -144,7 +144,17 @@ impl ToolDyn for DynamicMcpTool {
             // A server that flags `isError` ran the tool and reported failure as
             // data. The model needs to read it to correct its arguments, so it
             // becomes an error *result* rather than a dispatcher failure.
-            let text = bound_mcp_result(&self.result_dir, &output.text);
+            let text = if output.text.len() <= MAX_MCP_TOOL_RESULT_BYTES {
+                output.text
+            } else {
+                let result_dir = Arc::clone(&self.result_dir);
+                let output_text = output.text;
+                tokio::task::spawn_blocking(move || bound_mcp_result(&result_dir, &output_text))
+                    .await
+                    .map_err(|error| {
+                        ToolError::Execution(format!("MCP result task failed: {error}"))
+                    })?
+            };
             Ok(if output.is_error {
                 ToolResult::error(text)
             } else {
@@ -245,10 +255,19 @@ pub(crate) async fn connect_mcp_tools(
     pool: &tokio::sync::Mutex<Option<McpPool>>,
     project: Option<&std::path::Path>,
 ) -> (Vec<Arc<DynamicMcpTool>>, Option<String>) {
-    let Ok(secrets) = mycode_config::read_provider_secrets(home) else {
+    let read_home = home.clone();
+    let read_settings = settings.clone();
+    let read_project = project.map(std::path::Path::to_path_buf);
+    let Ok((Ok(secrets), (servers, project_warning))) = tokio::task::spawn_blocking(move || {
+        (
+            mycode_config::read_provider_secrets(&read_home),
+            merged_mcp_servers(&read_settings, read_project.as_deref()),
+        )
+    })
+    .await
+    else {
         return (Vec::new(), None);
     };
-    let (servers, project_warning) = merged_mcp_servers(settings, project);
     let fingerprint = mcp_fingerprint(&servers, &secrets);
     {
         let guard = pool.lock().await;
@@ -653,8 +672,12 @@ pub(crate) async fn mcp_list_tools(
     home: &mycode_config::HomeLayout,
     server: &mycode_config::McpServerSettings,
 ) -> Result<Vec<String>, String> {
-    let secrets = mycode_config::read_provider_secrets(home)
-        .map_err(|error| crate::settings_io::render_config_error(&error))?;
+    let read_home = home.clone();
+    let secrets =
+        tokio::task::spawn_blocking(move || mycode_config::read_provider_secrets(&read_home))
+            .await
+            .map_err(|error| format!("secrets task failed: {error}"))?
+            .map_err(|error| crate::settings_io::render_config_error(&error))?;
     let api_key = secrets
         .key(&format!("mcp-{}", server.id))
         .map(str::to_owned);

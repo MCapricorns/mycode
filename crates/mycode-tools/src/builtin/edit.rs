@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::builtin::fs_io::{
-    FileAccess, MAX_WRITE_BYTES, read_file_snapshot_async, write_file_with_lease,
+    FileAccess, MAX_WRITE_BYTES, anchor_file_path, read_file_snapshot_async, write_file_with_lease,
 };
 use crate::builtin::process::acquire_execution_lease;
 use crate::ctx::ToolCtx;
@@ -226,10 +226,17 @@ impl Tool for EditTool {
         .map_err(|error| {
             ToolError::Execution(format!("edit preparation worker failed: {error}"))
         })??;
+        let (root, path) = anchor_file_path(
+            &ctx.cwd,
+            &ctx.extra_roots,
+            &ctx.read_roots,
+            false,
+            &args.path,
+        );
         let snapshot = read_file_snapshot_async(
             ctx.prepared_file.clone(),
-            ctx.cwd.clone(),
-            args.path.clone(),
+            root.clone(),
+            path.clone(),
             ctx.cancel.clone(),
         )
         .await?;
@@ -282,8 +289,8 @@ impl Tool for EditTool {
         };
         let outcome = write_file_with_lease(
             None,
-            ctx.cwd.clone(),
-            args.path,
+            root,
+            path,
             applied.text.clone(),
             Some(snapshot.revision.as_str().to_owned()),
             false,
@@ -307,8 +314,9 @@ use engine::*;
 
 #[cfg(test)]
 mod schema_tests {
-    use super::EditTool;
-    use crate::tool::ToolDyn;
+    use super::{EditArgs, EditTool};
+    use crate::stream::ToolStream;
+    use crate::tool::{Tool, ToolDyn};
 
     #[test]
     fn edit_schema_inlines_refs_and_drops_defs() {
@@ -319,5 +327,60 @@ mod schema_tests {
         assert!(!text.contains("\"definitions\""), "{text}");
         assert!(text.contains("operations"), "{text}");
         assert!(text.contains("unique"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn edit_publishes_changes_to_files_in_extra_roots() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-edit-extra-root-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let cwd = base.join("ws");
+        let extra = base.join("extra");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&extra).expect("extra");
+        let file = extra.join("target.txt");
+        std::fs::write(&file, "before\n").expect("seed file");
+        let raw_path = file.display().to_string();
+
+        let args_json = serde_json::json!({
+            "path": raw_path,
+            "old_string": "before",
+            "new_string": "after"
+        });
+        let ctx = crate::prepare_tool_ctx(
+            &cwd,
+            std::slice::from_ref(&extra),
+            &[],
+            tokio_util::sync::CancellationToken::new(),
+            "call-1",
+            &EditTool,
+            &args_json,
+        )
+        .await
+        .expect("preflight succeeds");
+
+        let (mut stream, _rx) = ToolStream::channel();
+        let result = EditTool
+            .execute(
+                EditArgs {
+                    path: raw_path,
+                    expected_revision: None,
+                    old_string: Some("before".to_owned()),
+                    new_string: Some("after".to_owned()),
+                    operations: None,
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("edit in extra_roots must publish");
+        assert!(!result.is_error);
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read back"),
+            "after\n"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

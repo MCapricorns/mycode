@@ -23,7 +23,7 @@ use crate::protocol::{
 const VISIBLE_EVENTS: u16 = 40;
 
 /// Rendered wording for a lost expected-head compare-and-swap.
-const HEAD_MOVED_ON: &str = "the session moved on; reopen it";
+pub(crate) const HEAD_MOVED_ON: &str = "the session moved on; reopen it";
 
 /// Leftover file-snapshot directory from older versions. New turns do not
 /// write it. Session delete still removes `<home>/checkpoints/<session-id>`
@@ -57,6 +57,7 @@ pub(crate) async fn inspect_summaries(
             session_id: name.clone(),
             root_branch_id: String::new(),
             title: String::new(),
+            updated_at_ms: None,
             event_count: 0,
             active: false,
             corrupt: true,
@@ -72,6 +73,7 @@ pub(crate) async fn inspect_summaries(
         };
         summaries.push(SessionSummary {
             root_branch_id: root.branch_id.as_str().to_owned(),
+            updated_at_ms: snapshot.updated_at_ms,
             event_count: snapshot.event_count,
             session_id: snapshot.session_id.as_str().to_owned(),
             title: snapshot.title,
@@ -451,15 +453,15 @@ impl HeadWriter {
         target: &str,
     ) -> Result<(), SessionError> {
         let identity = SessionCallId::generate().ok_or(SessionError::Corrupt)?;
+        let payload = serde_json::json!({ "name": name, "target": target });
+        let bytes = serde_json::to_vec(&payload).map_err(|_| SessionError::Corrupt)?;
+        self.write_event(EventKind::ToolCall, Some(identity.clone()), &bytes)
+            .await?;
         self.calls
             .lock()
             .await
-            .insert(provider_call_id.to_owned(), identity.clone());
-        let payload = serde_json::json!({ "name": name, "target": target });
-        let bytes = serde_json::to_vec(&payload).map_err(|_| SessionError::Corrupt)?;
-        self.write_event(EventKind::ToolCall, Some(identity), &bytes)
-            .await
-            .map(|_| ())
+            .insert(provider_call_id.to_owned(), identity);
+        Ok(())
     }
 
     /// Commits one ToolResult under the identity opened at ToolStarted.

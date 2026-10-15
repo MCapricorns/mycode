@@ -170,11 +170,17 @@ fn parse_cache(bytes: &[u8]) -> CacheParse {
     if document.format_version != CACHE_FORMAT_VERSION {
         return CacheParse::Damaged;
     }
-    if document.etag.as_ref().is_some_and(|etag| etag.len() > 256) {
+    if document.etag.as_deref().is_some_and(|etag| {
+        etag.is_empty() || etag.len() > 256 || etag.chars().any(char::is_control)
+    }) {
+        return CacheParse::Damaged;
+    }
+    let normalized = super::normalize(document.document.providers);
+    if normalized.providers.is_empty() {
         return CacheParse::Damaged;
     }
     CacheParse::Ready(CachedCatalog {
-        document: document.document,
+        document: super::attach_subscription_presets(normalized),
         fetched_at: document.fetched_at,
         etag: document.etag,
     })
@@ -304,11 +310,26 @@ pub async fn refresh(
         ));
     }
     let headers = response.headers().clone();
-    let bytes = match response.bytes().await {
-        Ok(bytes) if bytes.len() <= MAX_CLOUD_BYTES => bytes,
-        Ok(_) => return RefreshOutcome::Unavailable("catalog document oversized".to_owned()),
-        Err(error) => return RefreshOutcome::Unavailable(format!("catalog read failed: {error}")),
-    };
+    let mut bytes = Vec::new();
+    let mut response = response;
+    loop {
+        let chunk = match tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
+            .await
+        {
+            Ok(Ok(Some(chunk))) => chunk,
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
+                return RefreshOutcome::Unavailable(format!("catalog read failed: {error}"));
+            }
+            Err(_) => {
+                return RefreshOutcome::Unavailable("catalog read failed: timed out".to_owned());
+            }
+        };
+        if bytes.len().saturating_add(chunk.len()) > MAX_CLOUD_BYTES {
+            return RefreshOutcome::Unavailable("catalog document oversized".to_owned());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     let document = match blocking(move || Ok(parse_models_dev(&bytes))).await {
         Ok(document) => document,
         Err(message) => return RefreshOutcome::Unavailable(message),
@@ -329,4 +350,74 @@ pub async fn refresh(
         return RefreshOutcome::Unavailable(message);
     }
     RefreshOutcome::Updated(refreshed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CACHE_FORMAT_VERSION, CACHE_KIND, CacheParse, parse_cache};
+    use serde_json::json;
+
+    #[test]
+    fn parse_cache_normalizes_and_rejects_empty_or_invalid_provider_sets() {
+        let empty = json!({
+            "formatVersion": CACHE_FORMAT_VERSION,
+            "kind": CACHE_KIND,
+            "fetchedAt": 123,
+            "etag": "\"v1\"",
+            "document": { "providers": [] }
+        });
+        assert!(matches!(
+            parse_cache(empty.to_string().as_bytes()),
+            CacheParse::Damaged
+        ));
+
+        let invalid_only = json!({
+            "formatVersion": CACHE_FORMAT_VERSION,
+            "kind": CACHE_KIND,
+            "fetchedAt": 123,
+            "etag": "\"v1\"",
+            "document": {
+                "providers": [{
+                    "id": "BAD ID",
+                    "name": "Bad",
+                    "kind": "openai-completions",
+                    "baseUrl": "https://example.com/v1",
+                    "models": [{ "id": "m1", "name": "m1" }]
+                }]
+            }
+        });
+        assert!(matches!(
+            parse_cache(invalid_only.to_string().as_bytes()),
+            CacheParse::Damaged
+        ));
+
+        let valid = json!({
+            "formatVersion": CACHE_FORMAT_VERSION,
+            "kind": CACHE_KIND,
+            "fetchedAt": 123,
+            "etag": "\"v1\"",
+            "document": {
+                "providers": [{
+                    "id": "acme",
+                    "name": "Acme",
+                    "kind": "openai-completions",
+                    "baseUrl": "https://api.acme.example/v1",
+                    "models": [
+                        { "id": "b-model", "name": "B", "reasoningEfforts": ["DEFAULT", "High", "bad token!"] },
+                        { "id": "a-model", "name": "" },
+                        { "id": "bad id", "name": " dropped" }
+                    ]
+                }]
+            }
+        });
+        let CacheParse::Ready(cached) = parse_cache(valid.to_string().as_bytes()) else {
+            panic!("expected valid cache");
+        };
+        let acme = cached.document.provider("acme").expect("acme");
+        let ids: Vec<_> = acme.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["a-model", "b-model"]);
+        assert_eq!(acme.models[0].name, "a-model");
+        assert_eq!(acme.models[1].reasoning_efforts, ["high"]);
+        assert!(cached.document.provider("openai-codex").is_some());
+    }
 }

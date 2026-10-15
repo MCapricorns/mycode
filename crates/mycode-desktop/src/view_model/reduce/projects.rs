@@ -84,12 +84,38 @@ pub(super) fn session_project_bound(
     }
 }
 
+/// Sanitizes a workspace display name to fit `ui.json` validation.
+///
+/// Control characters are replaced with spaces before trimming so a pasted
+/// multiline name cannot brick later `ui.json` saves.
+pub(super) fn sanitize_workspace_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    cleaned
+        .trim()
+        .chars()
+        .take(mycode_config::MAX_WORKSPACE_NAME_CHARS)
+        .collect()
+}
+
 /// The `WorkspaceCreated` transition: a new workspace joined the list and
 /// becomes the one the sidebar shows.
 pub(super) fn workspace_created(
     state: &mut WorkspaceState,
-    workspace: mycode_config::WorkspaceDef,
+    mut workspace: mycode_config::WorkspaceDef,
 ) {
+    workspace.name = sanitize_workspace_name(&workspace.name);
+    if workspace.name.is_empty() {
+        return;
+    }
     let id = workspace.id.clone();
     // Only the identity is unique: display names may repeat, and replacing
     // an existing workspace on a name collision would drop its folders.
@@ -110,11 +136,7 @@ pub(super) fn workspace_switched(state: &mut WorkspaceState, id: String) {
 
 /// The `WorkspaceRenamed` transition: the active workspace got a new name.
 pub(super) fn workspace_renamed(state: &mut WorkspaceState, name: String) {
-    let name: String = name
-        .trim()
-        .chars()
-        .take(mycode_config::MAX_WORKSPACE_NAME_CHARS)
-        .collect();
+    let name = sanitize_workspace_name(&name);
     if name.is_empty() {
         return;
     }

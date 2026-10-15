@@ -109,6 +109,8 @@ fn convert_message(message: &Message, input: &mut Vec<Value>) {
 #[derive(Default)]
 struct FunctionCallAccumulator {
     id: String,
+    item_id: String,
+    output_index: Option<u64>,
     name: String,
     arguments: String,
 }
@@ -190,6 +192,44 @@ impl ResponsesReducer {
 }
 
 impl ResponsesReducer {
+    /// Resolves the target function call for an event by `call_id`, `item_id`,
+    /// or `output_index`, falling back to the last call.
+    fn call_index_for(&self, event: &Value, item: Option<&Value>) -> Option<usize> {
+        let call_id = item
+            .and_then(|item| item["call_id"].as_str())
+            .or_else(|| event["call_id"].as_str())
+            .filter(|id| !id.is_empty());
+        if let Some(call_id) = call_id
+            && let Some(pos) = self
+                .function_calls
+                .iter()
+                .rposition(|call| call.id == call_id)
+        {
+            return Some(pos);
+        }
+        let item_id = item
+            .and_then(|item| item["id"].as_str())
+            .or_else(|| event["item_id"].as_str())
+            .filter(|id| !id.is_empty());
+        if let Some(item_id) = item_id
+            && let Some(pos) = self
+                .function_calls
+                .iter()
+                .rposition(|call| call.item_id == item_id)
+        {
+            return Some(pos);
+        }
+        if let Some(output_index) = event["output_index"].as_u64()
+            && let Some(pos) = self
+                .function_calls
+                .iter()
+                .rposition(|call| call.output_index == Some(output_index))
+        {
+            return Some(pos);
+        }
+        self.function_calls.len().checked_sub(1)
+    }
+
     /// Sets the full argument string on a call whose deltas never arrived.
     /// A call that already streamed arguments keeps them.
     fn fill_arguments(&mut self, index: Option<usize>, full: &str) -> Vec<StreamEvent> {
@@ -268,8 +308,11 @@ impl FrameReducer for ResponsesReducer {
                         )];
                     }
                     let id = item["call_id"].as_str().unwrap_or_default();
+                    let item_id = item["id"].as_str().unwrap_or_default();
+                    let output_index = event["output_index"].as_u64();
                     let name = item["name"].as_str().unwrap_or_default();
-                    if !charge_stream(&mut self.accumulated, id.len() + name.len()) {
+                    if !charge_stream(&mut self.accumulated, id.len() + item_id.len() + name.len())
+                    {
                         self.terminal_sent = true;
                         return vec![crate::driver::protocol_error(
                             "stream exceeded the output limit",
@@ -277,6 +320,8 @@ impl FrameReducer for ResponsesReducer {
                     }
                     self.function_calls.push(FunctionCallAccumulator {
                         id: id.to_owned(),
+                        item_id: item_id.to_owned(),
+                        output_index,
                         name: name.to_owned(),
                         arguments: String::new(),
                     });
@@ -290,7 +335,8 @@ impl FrameReducer for ResponsesReducer {
                         "stream exceeded the output limit",
                     )];
                 }
-                if let Some(call) = self.function_calls.last_mut() {
+                let index = self.call_index_for(&event, None);
+                if let Some(call) = index.and_then(|index| self.function_calls.get_mut(index)) {
                     call.arguments.push_str(part);
                     if !part.is_empty() && !call.id.is_empty() {
                         return vec![StreamEvent::ToolCallDelta {
@@ -304,18 +350,25 @@ impl FrameReducer for ResponsesReducer {
             // string when the item closes; without this the call ran with `{}`.
             "response.function_call_arguments.done" => {
                 let full = event["arguments"].as_str().unwrap_or_default();
-                let index = self.function_calls.len().checked_sub(1);
+                let index = self.call_index_for(&event, None);
                 return self.fill_arguments(index, full);
             }
             "response.output_item.done" => {
                 let item = &event["item"];
                 if item["type"].as_str() == Some("function_call") {
-                    let call_id = item["call_id"].as_str().unwrap_or_default();
-                    let index = self
-                        .function_calls
-                        .iter()
-                        .rposition(|call| !call_id.is_empty() && call.id == call_id)
-                        .or_else(|| self.function_calls.len().checked_sub(1));
+                    let index = self.call_index_for(&event, Some(item));
+                    if let Some(call) = index.and_then(|index| self.function_calls.get_mut(index)) {
+                        if call.id.is_empty()
+                            && let Some(id) = item["call_id"].as_str().filter(|id| !id.is_empty())
+                        {
+                            call.id = id.to_owned();
+                        }
+                        if call.name.is_empty()
+                            && let Some(name) = item["name"].as_str().filter(|n| !n.is_empty())
+                        {
+                            call.name = name.to_owned();
+                        }
+                    }
                     return self
                         .fill_arguments(index, item["arguments"].as_str().unwrap_or_default());
                 }
@@ -405,6 +458,46 @@ mod tests {
         assert_eq!(calls[0]["path"], "a.rs");
         assert_eq!(calls[1]["pattern"], "x");
         assert_eq!(message.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn parallel_function_calls_route_arguments_by_item_id_and_output_index() {
+        let mut reducer = ResponsesReducer::new();
+        reducer.feed(
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"response.output_item.added","output_index":1,"item":{"id":"fc_2","type":"function_call","call_id":"call_2","name":"grep"}}"#,
+        );
+        // Deltas and done events for fc_1 arrive after fc_2 was added.
+        reducer.feed(
+            r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"path\":"}"#,
+        );
+        reducer.feed(
+            r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"a.rs\"}"}"#,
+        );
+        reducer.feed(
+            r#"{"type":"response.function_call_arguments.done","item_id":"fc_2","output_index":1,"arguments":"{\"pattern\":\"x\"}"}"#,
+        );
+        let events = reducer.feed(r#"{"type":"response.completed","response":{"usage":{}}}"#);
+        let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+            panic!("done");
+        };
+        let calls: Vec<_> = message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolCall(call) => {
+                    Some((call.id.as_str(), call.name.as_str(), &call.arguments))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "call_1");
+        assert_eq!(calls[0].2["path"], "a.rs");
+        assert_eq!(calls[1].0, "call_2");
+        assert_eq!(calls[1].2["pattern"], "x");
     }
 
     #[test]
