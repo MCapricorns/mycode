@@ -32,7 +32,7 @@ prompt(用户消息)
 
 `HookRunner` 只有一个请求前钩子 `with_before_request`：改写 `Request`，应用层在这里做自动压缩。没有工具前观察者，回合也不会在改文件之前做快照。
 
-`build_system_prompt` 列出注册表里的工具名和一句说明，再加 `<tool_calling>`：约定里的文件编辑走进程工具的 `mode` `script`——bash 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。这段随注册表变化，同一次会话里注册表不变就字节稳定。有网页工具时再加 `<web>`。发给模型的工具模式就是注册表里的全部工具。宽研究、厂商文档和全库地图优先交给 `agent` 的 scout，窄查找留在原地；提示词不禁止就地完成。进程工具只有当前解释器那一个（注册名是 `powershell`、`bash`、`zsh`、`sh` 或 `cmd`）。`mode` `program` 不解析 shell 命令字符串：可加载映像直接启动，直接 shebang 包装改由它的解释器执行。应用层另加 `<environment>` 和 `<shell>`，写明 OS、cwd 和这个解释器的语法（PowerShell 5.1 不用 `&&`）。输出里的 CLIXML 和 ANSI 颜色会先收成可读文本，细节在 [tools.md](tools.md)。编辑或撤回一条对话不会恢复或删除工作区文件。`AgentConfig` 没给 system prompt 时才用它；应用层把它拼在自己的提示末尾。
+`build_system_prompt` 列出注册表里的工具名和一句说明，再加 `<tool_calling>`：专用工具优先——`find` 列目录和找文件（`*` 加 `max_depth` 1 列一个目录），`grep` 搜内容，`read` 读文件，`write` / `edit` 改文件；进程工具只做这些工具做不到的事（构建、测试、git、包管理、运行程序），不用来列目录、读文件或搜文本。`write` / `edit` 表达不了的批量或生成式改写才走进程工具的 `mode` `script`——bash 用 Python 的引号 heredoc 或短脚本，PowerShell 用 here-string 管道给 `python`。这段随注册表变化，同一次会话里注册表不变就字节稳定。有网页工具时再加 `<web>`。发给模型的工具模式就是注册表里的全部工具。宽研究、厂商文档和全库地图优先交给 `agent` 的 scout，窄查找留在原地；提示词不禁止就地完成。进程工具只有当前解释器那一个（注册名是 `powershell`、`bash`、`zsh`、`sh` 或 `cmd`）。`mode` `program` 不解析 shell 命令字符串：可加载映像直接启动，直接 shebang 包装改由它的解释器执行。应用层另加 `<environment>` 和 `<shell>`，写明 OS、cwd 和这个解释器的语法（PowerShell 5.1 不用 `&&`）。输出里的 CLIXML 和 ANSI 颜色会先收成可读文本，细节在 [tools.md](tools.md)。编辑或撤回一条对话不会恢复或删除工作区文件。`AgentConfig` 没给 system prompt 时才用它；应用层把它拼在自己的提示末尾。
 
 ## 会话账本
 

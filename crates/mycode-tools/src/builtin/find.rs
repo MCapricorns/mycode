@@ -27,9 +27,9 @@ use crate::tool::{Tool, ToolError, ToolResult};
 
 use super::blocking::run_blocking_until;
 use super::fs_search::{
-    IO_ERROR_SAMPLES, IoErrors, Limits, PathOrderKey, ResolvedRoot, SearchAccess, WalkLimiter,
-    bind_search_root_with_access, is_hidden_skip, rel_posix, stop_reason_error, to_posix,
-    walk_retained_tree,
+    FsEntryKind, IO_ERROR_SAMPLES, IoErrors, Limits, PathOrderKey, ResolvedRoot, SearchAccess,
+    WalkLimiter, bind_search_root_with_access, is_hidden_skip, rel_posix, stop_reason_error,
+    to_posix, walk_retained_tree,
 };
 
 use super::search_report::{ReportSpec, compile_glob_labeled, reject_pattern_bytes, render_report};
@@ -50,6 +50,9 @@ pub struct FindArgs {
     pub path: Option<String>,
     /// Maximum number of paths to report.
     pub limit: Option<usize>,
+    /// Deepest level reported and walked, counted from the search root
+    /// (`1` is its direct children). Omitted searches every level.
+    pub max_depth: Option<usize>,
 }
 
 struct FindState {
@@ -102,15 +105,20 @@ impl Tool for FindTool {
 
     fn description(&self) -> &str {
         "Find files and directories by glob pattern under a directory (default: \
-         the session cwd). Respects .gitignore; hidden and gitignored paths are \
-         skipped. Reports up to `limit` (default 1000) matching paths relative \
-         to the search root, sorted, using `/` separators, with a notice when \
-         more matches exist. Cancellation or the wall-clock limit returns an \
-         execution error rather than a partial report."
+         the session cwd). `*` also matches across `/`. To list one directory, \
+         pass it as `path` with pattern `*` and `max_depth` 1. Respects \
+         .gitignore; hidden and gitignored paths are skipped. Reports up to \
+         `limit` (default 1000) matching paths relative to the search root, \
+         sorted, using `/` separators; directories end with `/`. A notice \
+         follows when more matches exist. Cancellation or the wall-clock limit \
+         returns an execution error rather than a partial report."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
-        Some("find: find files by glob pattern (pattern, optional path/limit).")
+        Some(
+            "find: list or locate files and directories by glob (pattern, optional \
+             path/limit/max_depth); pattern `*` with max_depth 1 lists one directory.",
+        )
     }
 
     fn search_access(&self) -> Option<SearchAccess> {
@@ -124,6 +132,12 @@ impl Tool for FindTool {
         _out: &mut ToolStream,
     ) -> Result<ToolResult, ToolError> {
         reject_pattern_bytes(&args.pattern, "pattern")?;
+        if args.max_depth == Some(0) {
+            return Err(ToolError::InvalidArgs(
+                "max_depth must be at least 1".to_owned(),
+            ));
+        }
+        let max_depth = args.max_depth;
         let cwd = ctx.cwd.clone();
         let path = args.path;
         let pattern = args.pattern;
@@ -150,7 +164,7 @@ impl Tool for FindTool {
                 &limits,
                 SearchAccess::Metadata,
             )?;
-            run_find(glob, root, limit, &worker_cancel, &limits)
+            run_find(glob, root, limit, max_depth, &worker_cancel, &limits)
         })
         .await
     }
@@ -160,6 +174,7 @@ fn run_find(
     glob: GlobMatcher,
     root: ResolvedRoot,
     limit: Option<usize>,
+    max_depth: Option<usize>,
     cancel: &CancellationToken,
     limits: &Limits,
 ) -> Result<ToolResult, ToolError> {
@@ -214,9 +229,17 @@ fn run_find(
                 if matches!(state.limiter.check(cancel), ignore::WalkState::Quit) {
                     return ignore::WalkState::Quit;
                 }
+                // An entry at the depth cap is still reported; a directory
+                // there is not descended into.
+                let next = if max_depth.is_some_and(|max| relative_path.components().count() >= max)
+                {
+                    ignore::WalkState::Skip
+                } else {
+                    ignore::WalkState::Continue
+                };
                 let relative = to_posix(relative_path);
                 if !glob.is_match(&relative) {
-                    return ignore::WalkState::Continue;
+                    return next;
                 }
 
                 // Deterministic race hook: enumeration has completed, but the
@@ -225,8 +248,13 @@ fn run_find(
                     if !is_hidden_skip(&error) {
                         state.io_errors.record(&relative, &error);
                     }
-                    return ignore::WalkState::Continue;
+                    return next;
                 }
+                let rendered = if expected == FsEntryKind::Directory {
+                    format!("{relative}/")
+                } else {
+                    relative
+                };
                 // Report only after metadata confirmation. The enumerated
                 // name is never sufficient by itself.
                 state.total.fetch_add(1, Ordering::Relaxed);
@@ -235,10 +263,10 @@ fn run_find(
                     &mut heap,
                     &state.limiter,
                     effective_limit,
-                    PathOrderKey::from_rendered_and_raw(relative, relative_path.as_os_str()),
+                    PathOrderKey::from_rendered_and_raw(rendered, relative_path.as_os_str()),
                 );
                 drop(heap);
-                ignore::WalkState::Continue
+                next
             },
         ) {
             return Ok(ToolResult::error(format!(
@@ -301,4 +329,73 @@ fn find_report(
 fn compile_find_glob(pattern: &str) -> Result<GlobMatcher, ToolError> {
     reject_pattern_bytes(pattern, "pattern")?;
     compile_glob_labeled(pattern, "pattern")
+}
+
+#[cfg(test)]
+mod tests {
+    use mycode_core::message::ContentBlock;
+
+    use super::{FindArgs, FindTool};
+    use crate::ctx::ToolCtx;
+    use crate::stream::ToolStream;
+    use crate::tool::{Tool, ToolError};
+
+    async fn find(root: &std::path::Path, max_depth: Option<usize>) -> Result<String, ToolError> {
+        let ctx = ToolCtx::new(root);
+        let mut out = ToolStream::closed();
+        let result = FindTool
+            .execute(
+                FindArgs {
+                    pattern: "*".to_owned(),
+                    path: None,
+                    limit: None,
+                    max_depth,
+                },
+                &ctx,
+                &mut out,
+            )
+            .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        Ok(result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    #[tokio::test]
+    async fn max_depth_lists_one_directory_and_marks_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-find-depth-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(root.join("sub").join("deep")).expect("tree");
+        std::fs::write(root.join("a.txt"), "a").expect("a");
+        std::fs::write(root.join("sub").join("b.txt"), "b").expect("b");
+        std::fs::write(root.join("sub").join("deep").join("c.txt"), "c").expect("c");
+
+        let listing = find(&root, Some(1)).await.expect("depth 1");
+        let lines: Vec<&str> = listing.lines().collect();
+        assert!(lines.contains(&"a.txt"), "{listing}");
+        assert!(lines.contains(&"sub/"), "{listing}");
+        assert!(!listing.contains("b.txt"), "{listing}");
+        assert!(!listing.contains("deep"), "{listing}");
+
+        let everything = find(&root, None).await.expect("every level");
+        let lines: Vec<&str> = everything.lines().collect();
+        assert!(lines.contains(&"sub/deep/"), "{everything}");
+        assert!(lines.contains(&"sub/deep/c.txt"), "{everything}");
+
+        let error = find(&root, Some(0)).await.expect_err("zero depth");
+        assert!(error.to_string().contains("max_depth"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
