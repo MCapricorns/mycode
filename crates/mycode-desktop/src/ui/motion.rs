@@ -122,6 +122,15 @@ fn macos_prefers_reduced_motion() -> Option<bool> {
         #[link_name = "objc_msgSend"]
         fn msg_send_id(receiver: *mut c_void, selector: *mut c_void) -> *mut c_void;
 
+        // objc_msgSend is a single symbol whose effective signature is chosen
+        // per selector; restating it per return type is the standard objc FFI
+        // pattern (the objc2 framework crates allow the same lint). Both
+        // declarations return in x0, and the u8 read holds for either BOOL
+        // ABI (signed char or _Bool).
+        #[expect(
+            clashing_extern_declarations,
+            reason = "objc_msgSend's return type is chosen per selector; the redeclaration is intentional"
+        )]
         #[link_name = "objc_msgSend"]
         fn msg_send_bool(receiver: *mut c_void, selector: *mut c_void) -> u8;
     }
