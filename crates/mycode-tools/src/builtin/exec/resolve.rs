@@ -743,8 +743,10 @@ fn parse_app_exec_link(buffer: &[u8]) -> Option<String> {
     let data_len = usize::from(u16::from_le_bytes([*buffer.get(4)?, *buffer.get(5)?]));
     let strings = buffer.get(12..8 + data_len)?;
     let units: Vec<u16> = strings
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     let target = units.split(|unit| *unit == 0).nth(2)?;
     let target = String::from_utf16(target).ok()?;
