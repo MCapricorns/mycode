@@ -151,6 +151,14 @@ impl Workspace {
                 }
                 return;
             }
+            BridgeEvent::SteersReturned { session_id, texts } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                self.apply_action(DesktopAction::SteersReturned(texts), cx);
+                self.pump_queued_send(cx);
+                return;
+            }
             BridgeEvent::SteerCommitted {
                 session_id,
                 head,

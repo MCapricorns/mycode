@@ -411,6 +411,14 @@ pub enum BridgeEvent {
         /// leave `conversation.head` unchanged.
         head: String,
     },
+    /// Steers that reached the turn after its last model request. They were
+    /// never sent; the UI queues them as follow-ups.
+    SteersReturned {
+        /// Session identity spelling.
+        session_id: String,
+        /// Steer texts in arrival order.
+        texts: Vec<String>,
+    },
     /// A steer was written into the ledger while the turn kept running.
     SteerCommitted {
         /// Session identity spelling.
