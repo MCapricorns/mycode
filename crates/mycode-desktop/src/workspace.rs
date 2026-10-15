@@ -1314,10 +1314,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Whether a thinking block is showing its body.
-    ///
-    /// Streaming thinking starts open. Every other id starts closed so old
-    /// traces stay out of the way until the user opens them.
     /// Whether thinking traces show their full text. One switch covers
     /// every trace, live and recorded.
     pub(crate) fn thinking_open(&self) -> bool {
