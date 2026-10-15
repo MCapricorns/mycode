@@ -71,6 +71,8 @@ pub(crate) struct WorkspaceState {
     pub pending_welcome_send: Option<String>,
     /// Follow-ups waiting for the in-flight turn to finish.
     pub queued: Vec<String>,
+    /// Steers sent to the running turn that its ledger has not shown yet.
+    pub pending_steers: Vec<String>,
     /// A send is in flight.
     pub sending: bool,
     /// Compaction card held until the in-flight reply is committed.
@@ -408,6 +410,12 @@ pub enum DesktopAction {
     },
     /// The user queued a follow-up while a turn is in flight.
     MessageQueued(String),
+    /// A steer went to the running turn; it shows until it commits.
+    SteerSent(String),
+    /// Steers the turn did not take: a refused `Steer`, or texts the core
+    /// returned after the turn's last request. They join the queue without
+    /// touching the draft the user may be typing.
+    SteersReturned(Vec<String>),
     /// The user dismissed one queued follow-up.
     QueuedMessageRemoved(usize),
     /// The next queued follow-up was taken to send.

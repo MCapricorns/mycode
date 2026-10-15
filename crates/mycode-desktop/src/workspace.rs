@@ -830,7 +830,8 @@ impl Workspace {
         self.apply_action(DesktopAction::ComposerChanged(String::new()), cx);
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
-        cx.notify();
+        // Shown above the composer until the ledger commits it.
+        self.apply_action(DesktopAction::SteerSent(draft.clone()), cx);
         let request = self.bridge.request(BridgeCommand::Steer {
             session_id,
             text: draft.clone(),
@@ -839,7 +840,7 @@ impl Workspace {
             let reply = request.await;
             if matches!(reply, BridgeReply::Steered(Err(_))) {
                 let _ = this.update(cx, |workspace, cx| {
-                    workspace.apply_action(DesktopAction::MessageQueued(draft), cx);
+                    workspace.apply_action(DesktopAction::SteersReturned(vec![draft]), cx);
                     // The turn may have finished between the click and the
                     // reply. Pump so the text does not sit in the queue.
                     workspace.pump_queued_send(cx);

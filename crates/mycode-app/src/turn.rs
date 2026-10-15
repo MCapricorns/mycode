@@ -42,10 +42,10 @@ pub(crate) fn chat_turn(
     reasoning: Option<String>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     let session_id = session.as_str().to_owned();
-    let control = TurnControl::register(&state, &session_id);
+    let mut control = TurnControl::register(&state, &session_id);
     async move {
         let cwd = state.project_dir(&session_id);
-        if let Err(message) = run_chat_turn(
+        let outcome = run_chat_turn(
             &state,
             &events,
             &session_id,
@@ -58,8 +58,8 @@ pub(crate) fn chat_turn(
             cwd,
             &control,
         )
-        .await
-        {
+        .await;
+        if let Err(message) = outcome {
             // A cancel that lands during setup surfaces as setup failing;
             // report it as the quiet cancel the desktop expects.
             let message = if control.cancel.is_cancelled() {
@@ -68,10 +68,16 @@ pub(crate) fn chat_turn(
                 message
             };
             let _ = events.send(BridgeEvent::ChatFailed {
-                session_id,
+                session_id: session_id.clone(),
                 message,
                 head: String::new(),
             });
+        }
+        // A steer accepted after the agent's last drain was never sent.
+        // Hand it back instead of dropping it with the inbox.
+        let texts = control.retire_steers();
+        if !texts.is_empty() {
+            let _ = events.send(BridgeEvent::SteersReturned { session_id, texts });
         }
     }
 }
@@ -82,7 +88,7 @@ pub(crate) struct TurnControl {
     cancel: CancellationToken,
     steer: Arc<mycode_agent::SteerInbox>,
     _cancel_guard: CancelGuard,
-    _steer_guard: Option<SteerGuard>,
+    steer_guard: Option<SteerGuard>,
 }
 
 impl TurnControl {
@@ -101,8 +107,17 @@ impl TurnControl {
             cancel,
             steer,
             _cancel_guard: cancel_guard,
-            _steer_guard: Some(steer_guard),
+            steer_guard: Some(steer_guard),
         }
+    }
+
+    /// Unpublishes the steer inbox, then takes whatever is still in it.
+    ///
+    /// `Steer` pushes while holding the inbox map lock, and the guard's drop
+    /// removes the entry under that lock, so no steer lands after the drain.
+    fn retire_steers(&mut self) -> Vec<String> {
+        drop(self.steer_guard.take());
+        self.steer.drain()
     }
 
     /// Publishes only the cancel token for `/compact` (no steer inbox).
@@ -113,7 +128,7 @@ impl TurnControl {
             cancel,
             steer: Arc::new(mycode_agent::SteerInbox::new()),
             _cancel_guard: cancel_guard,
-            _steer_guard: None,
+            steer_guard: None,
         }
     }
 
@@ -2722,6 +2737,34 @@ mod tests {
                 .contains_key(&session_id),
             "contended drop leaked the steer inbox"
         );
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn a_steer_after_the_last_request_is_returned_not_dropped() {
+        let fixture = turn_fixture().await;
+        let session_id = fixture.session.as_str().to_owned();
+        let mut control = super::TurnControl::register(&fixture.state, &session_id);
+        // What `Steer` does: push under the map lock while the turn is live.
+        fixture
+            .state
+            .steer_inboxes
+            .lock()
+            .expect("inboxes")
+            .get(&session_id)
+            .expect("published inbox")
+            .push("one more thing");
+        assert_eq!(control.retire_steers(), vec!["one more thing".to_owned()]);
+        assert!(
+            !fixture
+                .state
+                .steer_inboxes
+                .lock()
+                .expect("inboxes")
+                .contains_key(&session_id),
+            "a retired turn must not accept steers it can no longer send"
+        );
+        assert!(control.retire_steers().is_empty());
         let _ = std::fs::remove_dir_all(&fixture.root);
     }
 }

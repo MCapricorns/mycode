@@ -187,6 +187,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if switched {
                 // Queue, tasks, and asks belong to the previous session.
                 state.queued.clear();
+                state.pending_steers.clear();
                 state.live_jobs.clear();
                 state.subagent_window = None;
                 state.changes_panel_open = false;
@@ -272,6 +273,18 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
             state.composer_draft.clear();
             state.mention = None;
+        }
+        DesktopAction::SteerSent(text) => state.pending_steers.push(text),
+        DesktopAction::SteersReturned(texts) => {
+            for text in texts {
+                if let Some(position) = state.pending_steers.iter().position(|sent| *sent == text) {
+                    state.pending_steers.remove(position);
+                }
+                let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
+                if !bounded.trim().is_empty() && state.queued.len() < super::MAX_QUEUED_MESSAGES {
+                    state.queued.push(bounded);
+                }
+            }
         }
         DesktopAction::QueuedMessageRemoved(index) => {
             if index < state.queued.len() {
@@ -430,6 +443,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ChatDone { head, entry } => {
+            // Steers that did not commit come back as `SteersReturned`.
+            state.pending_steers.clear();
             let summary = state.pending_summary.take();
             if let Some(conversation) = state.active.as_mut() {
                 conversation.head = head;
@@ -453,6 +468,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sending = false;
         }
         DesktopAction::ChatFailed { message, head } => {
+            state.pending_steers.clear();
             let summary = state.pending_summary.take();
             if let Some(conversation) = state.active.as_mut() {
                 if !head.is_empty() {
@@ -487,6 +503,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             {
                 if !head.is_empty() {
                     conversation.head = head;
+                }
+                if let Some(position) = state
+                    .pending_steers
+                    .iter()
+                    .position(|sent| *sent == entry.text.as_ref())
+                {
+                    state.pending_steers.remove(position);
                 }
                 push_entry_once(conversation, entry);
             }
@@ -1524,6 +1547,44 @@ mod tests {
         reduce(&mut state, DesktopAction::SessionDeleted);
         assert_eq!(state.context_used, 0);
         assert_eq!(state.context_cache, 0);
+    }
+
+    #[test]
+    fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
+        let mut state = open(Vec::new(), None);
+        state.composer_draft = "typing the next one".to_owned();
+        reduce(&mut state, DesktopAction::SteerSent("first".to_owned()));
+        reduce(&mut state, DesktopAction::SteerSent("second".to_owned()));
+        assert_eq!(state.pending_steers, ["first", "second"]);
+        let session_id = state.active.as_ref().expect("active").session_id.clone();
+        reduce(
+            &mut state,
+            DesktopAction::SteerCommitted {
+                session_id,
+                head: String::new(),
+                entry: user("use-steer", "first"),
+            },
+        );
+        assert_eq!(state.pending_steers, ["second"]);
+        reduce(
+            &mut state,
+            DesktopAction::SteersReturned(vec!["second".to_owned()]),
+        );
+        assert!(state.pending_steers.is_empty());
+        assert_eq!(state.queued, ["second"]);
+        assert_eq!(
+            state.composer_draft, "typing the next one",
+            "a returned steer must not wipe the draft"
+        );
+        reduce(&mut state, DesktopAction::SteerSent("late".to_owned()));
+        reduce(
+            &mut state,
+            DesktopAction::ChatFailed {
+                message: mycode_app::CHAT_CANCELLED.to_owned(),
+                head: String::new(),
+            },
+        );
+        assert!(state.pending_steers.is_empty());
     }
 
     #[test]

@@ -73,6 +73,9 @@ pub(super) fn render_composer(
     } else {
         None
     };
+    let steering = workspace.vm().pending_steers.clone();
+    let steer_panel =
+        (!steering.is_empty()).then(|| render_pending_steers(steering, cx).into_any_element());
     let running = workspace.vm().live_jobs.clone();
     let running_panel = if running.is_empty() {
         None
@@ -168,6 +171,7 @@ pub(super) fn render_composer(
                 .flex()
                 .flex_col()
                 .when_some(running_panel, |this, running| this.child(running))
+                .when_some(steer_panel, |this, steering| this.child(steering))
                 .when_some(queue_panel, |this, queue| this.child(queue))
                 .child(
                     div()
@@ -540,6 +544,58 @@ fn render_running_subagents(
 }
 
 /// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
+/// Steers already sent to the running turn. The model reads them at its next
+/// step; until the ledger commits one, this is the only place it shows.
+fn render_pending_steers(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    let desk = Desk::of(theme);
+    div()
+        .id("composer-steers")
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .pb_1()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(crate::ui::lamp(theme.cyan))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .text_color(desk.faint)
+                        .child(format!("{}  {}", t("STEERING", "追加引导"), items.len())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t(
+                            "Sent; the model reads it at its next step",
+                            "已发送，模型在下一步读取",
+                        )),
+                ),
+        )
+        .children(items.into_iter().enumerate().map(|(index, text)| {
+            let preview: SharedString = ellipsis(&text, 72).into();
+            div()
+                .id(SharedString::from(format!("steer-{index}")))
+                .min_w_0()
+                .h(px(22.))
+                .flex()
+                .items_center()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(div().min_w_0().flex_1().truncate().child(preview))
+        }))
+}
+
 fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let desk = Desk::of(theme);
