@@ -103,7 +103,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         // appearance, and other sessions simply composite the translucent fills.
         window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Blurred);
         // Start in dark mode until the saved appearance arrives, then sync
-        // the resolved palette into Base.
+        // the Desk colors into Base.
         Theme::change(ThemeMode::Dark, Some(window), cx);
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);
@@ -274,9 +274,6 @@ pub struct Workspace {
     /// Consecutive tool runs the transcript has expanded. Keyed by the run's
     /// first call event id.
     expanded_tool_batches: HashSet<String>,
-    /// Palette id under the pointer on the settings swatches. `None` shows
-    /// the saved palette in the chat preview.
-    palette_preview: Option<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Last UI font-family id applied to the theme. Empty until the first frame.
@@ -380,7 +377,6 @@ impl Workspace {
             git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
-            palette_preview: None,
             applied_font_size: String::new(),
             applied_font_family: String::new(),
             applied_language: u8::MAX,
@@ -1074,33 +1070,7 @@ impl Workspace {
         self.apply_action(DesktopAction::ReasoningMenuToggled(open), cx);
     }
 
-    /// Applies and persists a palette. Light or dark follows the saved appearance.
-    pub(crate) fn on_select_palette(&mut self, palette: &str, cx: &mut Context<Self>) {
-        let palette = crate::ui::desk::normalize_palette(palette);
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.palette == palette)
-        {
-            return;
-        }
-        let theme_id = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| settings.theme.clone())
-            .unwrap_or_else(|| "dark".to_owned());
-        self.paint_appearance(&theme_id, palette, cx);
-        self.apply_action(
-            DesktopAction::SettingsPaletteSelected(palette.to_owned()),
-            cx,
-        );
-        self.on_save_settings(cx);
-    }
-
-    /// Applies and persists dark or light. The current palette is painted again
-    /// in that mode.
+    /// Applies and persists dark or light.
     pub(crate) fn on_select_theme(&mut self, theme_id: &str, cx: &mut Context<Self>) {
         let theme_id = crate::ui::desk::normalize_theme(theme_id);
         if self
@@ -1111,14 +1081,8 @@ impl Workspace {
         {
             return;
         }
-        let palette = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| settings.palette.clone())
-            .unwrap_or_else(|| "slate".to_owned());
         self.capture_appearance_scroll();
-        self.paint_appearance(theme_id, &palette, cx);
+        self.paint_appearance(theme_id, cx);
         self.apply_action(
             DesktopAction::SettingsThemeSelected(theme_id.to_owned()),
             cx,
@@ -1126,20 +1090,15 @@ impl Workspace {
         self.on_save_settings(cx);
     }
 
-    fn paint_appearance(&mut self, theme_id: &str, palette: &str, cx: &mut Context<Self>) {
+    pub(super) fn paint_appearance(&mut self, theme_id: &str, cx: &mut Context<Self>) {
         let mode = crate::ui::desk::theme_mode(theme_id);
         if cx.theme().mode != mode {
             Theme::change(mode, None, cx);
         }
-        crate::ui::desk::apply_palette(Theme::global_mut(cx), palette);
+        crate::ui::desk::apply(Theme::global_mut(cx));
         self.applied_font_size.clear();
         self.applied_font_family.clear();
         Theme::sync_base(cx);
-    }
-
-    /// Palette under the pointer, if the settings swatches are hovered.
-    pub(crate) fn palette_preview(&self) -> Option<&str> {
-        self.palette_preview.as_deref()
     }
 
     /// Applies and persists the interface font size. The next frame paints it.
@@ -1297,20 +1256,6 @@ impl Workspace {
         if !self.expanded_tool_batches.remove(id) {
             self.expanded_tool_batches.insert(id.to_owned());
         }
-        cx.notify();
-    }
-
-    /// Sets the palette the settings preview paints. `None` follows the saved pick.
-    pub(crate) fn set_palette_preview(
-        &mut self,
-        palette: Option<&'static str>,
-        cx: &mut Context<Self>,
-    ) {
-        let next = palette.map(str::to_owned);
-        if self.palette_preview == next {
-            return;
-        }
-        self.palette_preview = next;
         cx.notify();
     }
 

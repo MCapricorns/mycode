@@ -702,10 +702,10 @@ mod tests {
         assert!(!root.join("settings.json").exists());
 
         let mut settings = AppSettings::default();
-        settings.appearance.palette = "ocean".to_owned();
+        settings.appearance.font_size = "l".to_owned();
         replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("publish");
 
         let loaded = read_app_settings(&home).expect("reread");
-        assert_eq!(loaded.appearance.palette, "ocean");
+        assert_eq!(loaded.appearance.font_size, "l");
     }
 }

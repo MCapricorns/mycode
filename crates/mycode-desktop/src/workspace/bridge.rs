@@ -509,7 +509,7 @@ impl Workspace {
                 let mut state =
                     SettingsState::from_settings(&loaded.settings, revision, loaded.provider_keys);
                 state.mcp_with_keys = loaded.mcp_keys;
-                // A dirty or in-flight editor keeps its palette and
+                // A dirty or in-flight editor keeps its appearance and
                 // user-agent field. Applying the disk copy here would undo
                 // unsaved appearance edits before the reducer can refuse the
                 // document swap.
@@ -519,7 +519,7 @@ impl Workspace {
                     .as_ref()
                     .is_some_and(|settings| settings.dirty || settings.saving);
                 if !preserve_editor {
-                    self.paint_appearance(&state.theme, &state.palette, cx);
+                    self.paint_appearance(&state.theme, cx);
                     self.ua_sync_pending = true;
                 }
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);

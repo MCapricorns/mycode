@@ -560,13 +560,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 mark_settings_dirty(settings);
             }
         }
-        DesktopAction::SettingsPaletteSelected(palette) => {
-            let palette = crate::ui::desk::normalize_palette(&palette).to_owned();
-            if let Some(settings) = state.settings.as_mut() {
-                settings.palette = palette;
-                mark_settings_dirty(settings);
-            }
-        }
         DesktopAction::SettingsThemeSelected(theme) => {
             let theme = crate::ui::desk::normalize_theme(&theme).to_owned();
             if let Some(settings) = state.settings.as_mut() {
