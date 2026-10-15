@@ -134,7 +134,7 @@ pub(super) fn render_thinking_menu(
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
     let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
-    let selected = selected_reasoning_level(workspace.vm()).to_owned();
+    let selected = selected_reasoning_level(workspace.vm());
     let preferred = workspace.reasoning_highlight(&levels);
     let scroll = workspace.reasoning_scroll().clone();
     let weak = cx.weak_entity();

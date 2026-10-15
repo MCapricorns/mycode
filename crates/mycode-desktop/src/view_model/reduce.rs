@@ -19,6 +19,7 @@ use super::{
 
 pub(crate) use self::models::{
     reasoning_levels_for, selected_model_supports_reasoning, selected_reasoning_levels,
+    strongest_reasoning_level,
 };
 
 pub(crate) use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};

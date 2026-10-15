@@ -310,6 +310,27 @@ fn effort_rank(token: &str) -> Option<usize> {
     }
 }
 
+/// The strongest rung one model advertises: its highest effort, else the
+/// toggle's On. `None` when it offers only Default or nothing.
+#[must_use]
+pub(crate) fn strongest_reasoning_level(levels: &[String]) -> Option<&str> {
+    levels
+        .iter()
+        .filter_map(|level| {
+            effort_rank(level)
+                .filter(|rank| *rank > 0)
+                .map(|rank| (rank, level))
+        })
+        .max_by_key(|(rank, _)| *rank)
+        .map(|(_, level)| level.as_str())
+        .or_else(|| {
+            levels
+                .iter()
+                .find(|level| level.as_str() == "on")
+                .map(String::as_str)
+        })
+}
+
 /// Resolves a remembered effort against the rungs one model advertises.
 ///
 /// The strongest advertised rung at or below the preference wins, so a
@@ -479,9 +500,9 @@ mod tests {
 
     #[test]
     fn switching_to_a_model_without_the_stored_rung_keeps_the_pick() {
-        // The stored pick stays; only the projection falls back to Default.
-        // Wiping it here is what made the effort "not save" across model
-        // switches: returning to a supporting model showed Default.
+        // The stored pick stays; only the projection falls back to the
+        // strongest advertised rung. Wiping it here is what made the effort
+        // "not save" across model switches.
         let document = mycode_config::AppSettings {
             reasoning_effort: Some("low".to_owned()),
             ..mycode_config::AppSettings::default()
@@ -497,8 +518,8 @@ mod tests {
         };
         assert_eq!(
             crate::view_model::selected_reasoning_level(&state),
-            "default",
-            "a rung the model does not advertise projects as default"
+            "low",
+            "a rung the model does not advertise projects as its strongest rung"
         );
         let settings = state.settings.as_ref().expect("settings");
         assert_eq!(settings.reasoning.as_deref(), Some("high"));
@@ -546,13 +567,10 @@ mod tests {
         let listed = super::selected_reasoning_levels(&state);
         assert_eq!(
             listed,
-            vec![
-                "default".to_owned(),
-                "low".to_owned(),
-                "high".to_owned(),
-                "max".to_owned()
-            ]
+            vec!["low".to_owned(), "high".to_owned(), "max".to_owned()]
         );
+        // Nothing picked yet: the strongest published rung, not Default.
+        assert_eq!(crate::view_model::selected_reasoning_level(&state), "max");
 
         state.selected_provider = Some("my-gateway".to_owned());
         state.selected_model = Some("glm-not-in-catalog".to_owned());
@@ -577,8 +595,9 @@ mod tests {
         let borrowed = super::selected_reasoning_levels(&state);
         assert_eq!(
             borrowed,
-            vec!["default".to_owned(), "off".to_owned(), "on".to_owned()]
+            vec!["off".to_owned(), "on".to_owned()]
         );
+        assert_eq!(crate::view_model::selected_reasoning_level(&state), "on");
         let row = state
             .catalog
             .as_ref()

@@ -30,7 +30,9 @@ pub(crate) use self::command_palette::{
     PaletteCatalog, PaletteCommand, PaletteGroup, PaletteGroupId, PaletteItem, palette_catalog,
     palette_item,
 };
-pub(crate) use self::models::{rank_model_ids, selected_reasoning_level};
+pub(crate) use self::models::{
+    effective_reasoning_level, rank_model_ids, selected_reasoning_level,
+};
 pub(crate) use self::projects::{
     active_workspace, has_open_folder, newest_session_in_project, open_session_is_empty,
     project_of_session, same_project_path, task_surface_visible, workspace_of_session,
