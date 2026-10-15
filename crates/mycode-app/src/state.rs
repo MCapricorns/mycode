@@ -182,7 +182,6 @@ pub(crate) async fn refresh_catalog(
 /// That row's base URL is used when one is configured.
 pub(crate) async fn refresh_opendesign_models(
     state: &CoreState,
-    events: &crate::BridgeEventTx,
     api_key: String,
 ) -> Result<(CatalogInfo, usize), String> {
     use mycode_providers::catalog::opendesign;
@@ -220,27 +219,28 @@ pub(crate) async fn refresh_opendesign_models(
     .await
     .map_err(|error| format!("OpenDesign task failed: {error}"))??;
     let models = opendesign::fetch_live_models(&base_url, &key, &user_agent).await?;
-    let write_home = state.home.clone();
-    let stored = models.clone();
-    tokio::task::spawn_blocking(move || opendesign::write_store(&write_home, &stored))
-        .await
-        .map_err(|error| format!("OpenDesign task failed: {error}"))??;
-    let info = {
-        let mut guard = state
-            .catalog
+    let count = models.len();
+    let home = state.home.clone();
+    let catalog = Arc::clone(&state.catalog);
+    // The store write and the multi-megabyte document copy stay off the
+    // single-threaded core runtime. The swap happens under the write lock, so
+    // a catalog refresh that lands meanwhile is not overwritten by a copy
+    // taken before it.
+    let info = tokio::task::spawn_blocking(move || {
+        opendesign::write_store(&home, &models)?;
+        let mut guard = catalog
             .write()
             .map_err(|_| "catalog state is unavailable".to_owned())?;
         let mut document = guard.document.as_ref().clone();
         opendesign::attach(&mut document, Some(&models));
         guard.document = Arc::new(document);
-        guard.clone()
-    };
+        Ok::<_, String>(guard.clone())
+    })
+    .await
+    .map_err(|error| format!("OpenDesign task failed: {error}"))??;
     mycode_providers::catalog::install_active(Arc::clone(&info.document));
-    let _ = events.send(BridgeEvent::CatalogUpdated {
-        providers: info.document.providers.len(),
-        fetched_at: info.fetched_at,
-    });
-    Ok((info, models.len()))
+    // The reply carries the new catalog; no CatalogUpdated round trip.
+    Ok((info, count))
 }
 
 /// One background catalog refresh shortly after startup.
