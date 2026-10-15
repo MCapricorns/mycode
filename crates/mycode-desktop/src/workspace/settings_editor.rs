@@ -459,7 +459,44 @@ impl Workspace {
 
     pub(crate) fn on_close_preset(&mut self, cx: &mut Context<Self>) {
         self.preset_key_input = None;
-        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+        if self.vm.models_subview == crate::view_model::ModelsSubview::OpenDesign {
+            // The OpenDesign page is the form itself; closing it leaves the page.
+            self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
+        } else {
+            self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+        }
+    }
+
+    /// Lists the models the pasted (or stored) OpenDesign key can use.
+    pub(crate) fn on_load_opendesign_models(&mut self, cx: &mut Context<Self>) {
+        if self.vm.opendesign_loading {
+            return;
+        }
+        // Blank uses the stored key; a Bearer-only paste is refused like on Save.
+        let raw = self
+            .preset_key_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        let api_key = if raw.trim().is_empty() {
+            String::new()
+        } else {
+            match normalized_key_input(&raw) {
+                Some(key) => key,
+                None => {
+                    self.apply_action(
+                        DesktopAction::Failed(
+                            crate::i18n::t("paste a valid API key", "请粘贴有效的 API 密钥")
+                                .to_owned(),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+            }
+        };
+        self.apply_action(DesktopAction::OpenDesignLoading(true), cx);
+        self.dispatch(BridgeCommand::RefreshOpenDesignModels { api_key }, cx);
     }
 
     /// Starts an OAuth device-flow sign-in with the checked model list.
@@ -513,14 +550,25 @@ impl Workspace {
             models.push(first.id.clone());
         }
         let model = models[0].clone();
-        // Unique id: the catalog spelling, suffixed when already configured.
-        let mut id = preset.id.clone();
-        let mut suffix = 2;
-        while self
+        // OpenDesign is one gateway: adding it again updates the configured
+        // row (its endpoint and overrides stay). Other presets get a unique
+        // id, the catalog spelling suffixed when already configured.
+        let opendesign = preset.id == mycode_providers::catalog::opendesign::PROVIDER_ID;
+        let existing = self
             .vm
             .settings
             .as_ref()
-            .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))
+            .and_then(|settings| settings.providers.iter().find(|p| p.id == preset.id))
+            .filter(|_| opendesign)
+            .cloned();
+        let mut id = preset.id.clone();
+        let mut suffix = 2;
+        while existing.is_none()
+            && self
+                .vm
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))
         {
             id = format!("{}-{suffix}", preset.id);
             suffix += 1;
@@ -531,8 +579,13 @@ impl Workspace {
             .and_then(|input| normalized_key_input(&input.read(cx).value()));
         // Drop the input entity so the pasted key never lingers on screen.
         self.preset_key_input = None;
-        self.apply_action(
-            DesktopAction::SettingsProviderAdded(mycode_config::ProviderSettings {
+        let row = match existing {
+            Some(existing) => mycode_config::ProviderSettings {
+                models,
+                enabled: true,
+                ..existing
+            },
+            None => mycode_config::ProviderSettings {
                 id: id.clone(),
                 kind: preset.kind.clone(),
                 base_url: preset.base_url.clone(),
@@ -540,9 +593,9 @@ impl Workspace {
                 enabled: true,
                 context_limit: None,
                 max_output: None,
-            }),
-            cx,
-        );
+            },
+        };
+        self.apply_action(DesktopAction::SettingsProviderAdded(row), cx);
         if let Some(api_key) = api_key {
             self.dispatch(
                 BridgeCommand::SaveProviderKey {
@@ -552,7 +605,11 @@ impl Workspace {
                 cx,
             );
         }
-        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+        if opendesign {
+            self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
+        } else {
+            self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+        }
         self.apply_action(DesktopAction::ProviderSelected(id.clone()), cx);
         self.apply_action(DesktopAction::ModelSelected(model), cx);
         self.on_save_settings(cx);

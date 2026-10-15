@@ -6,7 +6,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement, IntoElement, ParentElement,
@@ -34,6 +34,9 @@ pub(super) fn render_models_section(
         }
         crate::view_model::ModelsSubview::Catalog => {
             render_models_catalog_page(workspace, window, cx)
+        }
+        crate::view_model::ModelsSubview::OpenDesign => {
+            render_opendesign_page(workspace, window, cx)
         }
         crate::view_model::ModelsSubview::Custom => {
             render_custom_provider_page(workspace, window, cx)
@@ -222,6 +225,19 @@ fn render_models_list_page(
                                 })),
                         )
                         .child(
+                            Button::new("add-opendesign")
+                                .icon(IconName::Globe)
+                                .label(t("OpenDesign\u{2026}", "OpenDesign\u{2026}"))
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_models_subview(
+                                        crate::view_model::ModelsSubview::OpenDesign,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
                             Button::new("add-custom-endpoint")
                                 .icon(IconName::Terminal)
                                 .label(t("Add custom endpoint\u{2026}", "添加自定义端点\u{2026}"))
@@ -263,6 +279,10 @@ fn render_models_catalog_page(
     let preset_search_text = workspace.vm().preset_search.to_lowercase();
     let mut preset_rows: Vec<(String, String, String, usize)> = Vec::new();
     for provider in &catalog.providers {
+        // OpenDesign has its own button and page; it is not a models.dev row.
+        if provider.id == mycode_providers::catalog::opendesign::PROVIDER_ID {
+            continue;
+        }
         if !preset_search_text.is_empty()
             && !provider.name.to_lowercase().contains(&preset_search_text)
             && !provider.id.to_lowercase().contains(&preset_search_text)
@@ -395,6 +415,115 @@ fn render_models_catalog_page(
         .when(workspace.vm().active_preset.is_some(), |this| {
             this.child(preset_form_element)
         })
+        .into_any_element()
+}
+
+/// The OpenDesign page: the live `/models` loader above the add form.
+///
+/// The form starts on the curated list. Loading replaces it with the models
+/// the key can use; a blank key field uses the key already stored for the
+/// configured OpenDesign provider.
+fn render_opendesign_page(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    use mycode_providers::catalog::opendesign;
+
+    let form = render_preset_form(workspace, opendesign::PROVIDER_ID, window, cx);
+    let loading = workspace.vm().opendesign_loading;
+    let configured = workspace.vm().settings.as_ref().is_some_and(|settings| {
+        settings
+            .providers
+            .iter()
+            .any(|provider| provider.id == opendesign::PROVIDER_ID)
+    });
+    let key_stored = workspace.vm().settings.as_ref().is_some_and(|settings| {
+        settings
+            .providers_with_keys
+            .iter()
+            .any(|id| id == opendesign::PROVIDER_ID)
+    });
+    let header = super::subview_header(
+        t("Providers", "服务商"),
+        "OpenDesign",
+        Some(t(
+            "Gateway at amr-link.open-design.ai, separate from the models.dev catalog.",
+            "amr-link.open-design.ai 网关，独立于 models.dev 目录。",
+        )),
+        |workspace, cx| {
+            workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
+        },
+        cx,
+    );
+    let hint = if key_stored {
+        t(
+            "A key is stored. Load with the field blank to use it, or paste a new one.",
+            "已保存密钥。输入框留空即用已保存的密钥加载，也可以粘贴新的。",
+        )
+    } else {
+        t(
+            "Paste your key in the form below, then load the models it can use.",
+            "先在下方表单粘贴密钥，再加载它可用的模型。",
+        )
+    };
+    let theme = cx.theme();
+    div()
+        .id("opendesign-page")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(header)
+        .child(
+            settings_card(
+                "opendesign-live",
+                t("Live models", "实时模型"),
+                Some(t(
+                    "Until you load, the list shows the models measured against the gateway. \
+                     Known models keep their measured limits and thinking levels.",
+                    "加载前列出的是针对该网关实测过的模型。已知模型保留实测的上限和思考档位。",
+                )),
+                theme,
+                vec![
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("opendesign-load")
+                                .icon(IconName::RefreshCw)
+                                .label(if loading {
+                                    t("Loading\u{2026}", "加载中\u{2026}")
+                                } else {
+                                    t("Load models from gateway", "从网关加载模型")
+                                })
+                                .small()
+                                .primary()
+                                .disabled(loading)
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_load_opendesign_models(cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(hint),
+                        )
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        )
+        .when(configured, |this| {
+            this.child(div().text_xs().text_color(theme.muted_foreground).child(t(
+                "OpenDesign is configured. Adding again replaces its model list.",
+                "OpenDesign 已配置。再次添加会替换它的模型列表。",
+            )))
+        })
+        .child(form)
         .into_any_element()
 }
 

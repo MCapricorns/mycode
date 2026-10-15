@@ -30,11 +30,11 @@
 | `transport` | `SseTransport` 与 reqwest 实现 |
 | `http_pin` | 解析、检查并钉住地址的 HTTP 请求 |
 | `oauth` | Copilot、Codex 的设备码登录、轮询、刷新。令牌解析后仍交给调用方存进 `secrets.json` |
-| `catalog` | 编进二进制的 models.dev 快照、家目录缓存、条件刷新，以及设置页用的预设 |
+| `catalog` | 编进二进制的 models.dev 快照、家目录缓存、条件刷新，以及设置页用的预设。`catalog/opendesign` 是 OpenDesign 网关的实测表和实时模型列表 |
 
 ## 思考强度
 
-请求带 `ReasoningLevel` 时按 `family.rs` 的表写字段，对齐 opencode `transform.ts`。Chat Completions 先看主机（OpenRouter、DashScope），再看模型族：
+请求带 `ReasoningLevel` 时按 `family.rs` 的表写字段，对齐 opencode `transform.ts`。Chat Completions 先看主机（OpenRouter、DashScope、OpenDesign），再看模型族：
 
 | 族 | Chat Completions / Responses | Anthropic Messages |
 | --- | --- | --- |
@@ -44,6 +44,7 @@
 | DeepSeek | `deepseek-v4` / `deepseek-flash`：`thinking` + `reasoning_effort` `low` / `high` / `max`；旧 id 只有开关 | 走 Claude 规则 |
 | Qwen | `enable_thinking` + `reasoning_effort` | 走 Claude 规则 |
 | OpenRouter | `reasoning.effort` | — |
+| OpenDesign（`open-design.ai`） | 只发 `reasoning_effort`，关闭为 `none` | — |
 | DashScope | `enable_thinking` + `reasoning_effort` | — |
 | Claude | — | Opus / Sonnet 4.6 和 4.7 起的版本用 `adaptive` + `output_config.effort`（4.7 起 `display: summarized`）；其它用 `budget_tokens`，必要时抬高 `max_tokens` |
 | 其它 | `reasoning_effort`（Responses 为 `reasoning.effort`） | 同上 |
@@ -76,6 +77,17 @@ K3 识别：路径段为 `k3`、`k3-*`、`kimi-k3`、`kimi-k3-*`；`k30`、`mk3`
 运行时家目录的 `catalog-cache.json` 盖在快照上。后台刷新直接解析 models.dev，缓存 6 小时内不发请求，之后用 `If-None-Match` 条件请求；失败时继续用已有缓存或内置快照。云端文档最大 32 MiB。缓存是旧格式版本时直接换成内置快照；解析失败时，原字节备份为 `catalog-cache.json.broken-*`，再写入内置快照，下次启动不会反复提示。读不出来则不动原文件，内存里用内置快照。设置页的预设、上下文窗口、输出上限、思考档位、工具调用和价格都从这份目录来，界面因此能在不发版的情况下看到新模型。
 
 解析时跳过带 `status` 的模型、Bedrock / Vertex / Azure / Google SDK 的服务商；每个提供商最多 512 个模型，字符串字段最多 8 KiB。思考档位只取 models.dev 公布的 `reasoning_options`（开关、effort 列表），effort 为空时取 `variants` 的键，不补猜测的档位；effort 最多 16 个，未知标识符保留，丢掉 `default` 和非标识符。设备登录服务商（`github-copilot` / `openai-codex` 的 device-code）用固定端点，不用云端文档里的控制台 URL。`scripts/generate_catalog.py` 与 Rust `modelsdev` 解析器对齐（设备登录、variants、effort 上限、未知 token）。自定义端点按服务商 id、再按 base URL、最后按模型 id 在全目录里找行。
+
+## OpenDesign
+
+`catalog/opendesign` 接 OpenDesign 网关（`https://amr-link.open-design.ai/v1`，Chat Completions），数据做法参照 `@lokeraar/pi-opendesign-bridge`。网关的 `/models` 只给 id、输入模态和 `metadata.context_limit` / `context_budget`，没有思考档位，也没有真实的输出上限，所以分两层：
+
+- **实测表**：针对该网关测过的 id。网关拒绝的档位不列（GLM-5.3 只有 low / high / max，GPT-6 没有 minimal，K2.7 Code 没有 max）；`reasoning_effort: "none"` 既被接受、又真的关掉思考的模型（DeepSeek、GPT-6 Luna、MiMo）才有「关」；输出上限取网关 budget 和厂商上限里较小的那个。
+- **实时**：设置页「从网关加载模型」用密钥请求 `GET {base}/models`（不跟随重定向，不让密钥跟到别的主机）。成员以网关为准：新 id 出现，下线的 id 消失。实测表里的 id 保留实测值；其它 id 的思考档位、输出上限和图片输入按裸 id（去掉 `vendor/` 前缀）从 models.dev 目录借，OpenRouter 优先，上下文窗口取网关自己声明的值，价格不借（那是别的转售商的价）。谁都不知道的 id 只有「默认」，输出上限 16384。嵌入、语音、图片生成、审核、重排序的 id 不列。
+
+任何上限都给提示留 2048 token：上限等于窗口时网关会拒绝。实时列表存在家目录的 `opendesign-models.json`，每次加载目录都重新和实测表合并，新版本修正的实测值照样生效。bridge 对新 id 逐档探测（每个约 15 次付费请求）这里不做。
+
+OpenDesign 行挂在目录文档里（id `opendesign`），上下文、输出和思考档位走和其它服务商一样的查找；设置页的 models.dev 列表不显示它，由单独的按钮打开。Chat Completions 的思考表里它是一个主机行，排在 GLM / Kimi / DeepSeek 这些模型行之前：该网关对所有模型都只发 `reasoning_effort`（关闭发 `none`），不发厂商的 `thinking` 对象。
 
 ## 登录
 

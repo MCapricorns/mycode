@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod modelsdev;
+pub mod opendesign;
 pub mod store;
 
 pub use store::{
@@ -318,11 +319,16 @@ pub fn parse_snapshot(bytes: &[u8]) -> CatalogDocument {
         .unwrap_or_default()
 }
 
+/// Adds the presets models.dev does not carry: the Codex subscription and
+/// the curated OpenDesign row. The OpenDesign row always replaces whatever a
+/// cached document holds, so a newer build's curated values take effect;
+/// the store layer then merges a stored live listing over it.
 pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> CatalogDocument {
     if document.provider("openai-codex").is_none() {
         document.providers.push(openai_codex_preset());
         document.providers.sort_by(|a, b| a.id.cmp(&b.id));
     }
+    opendesign::attach(&mut document, None);
     document
 }
 

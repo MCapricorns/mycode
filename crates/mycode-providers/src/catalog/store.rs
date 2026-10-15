@@ -199,10 +199,12 @@ pub fn current(home: &HomeLayout) -> CachedCatalog {
 pub fn current_with_repair(
     home: &HomeLayout,
 ) -> (CachedCatalog, Option<mycode_config::DocumentRepair>) {
-    match load_cache_with_repair(home) {
+    let (mut cache, repair) = match load_cache_with_repair(home) {
         (Some(cache), repair) => (cache, repair),
         (None, repair) => (bundled_cache(), repair),
-    }
+    };
+    super::opendesign::attach_stored(home, &mut cache.document);
+    (cache, repair)
 }
 
 fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
@@ -330,7 +332,14 @@ pub async fn refresh(
         }
         bytes.extend_from_slice(&chunk);
     }
-    let document = match blocking(move || Ok(parse_models_dev(&bytes))).await {
+    let parse_home = home.clone();
+    let document = match blocking(move || {
+        let mut document = parse_models_dev(&bytes);
+        super::opendesign::attach_stored(&parse_home, &mut document);
+        Ok(document)
+    })
+    .await
+    {
         Ok(document) => document,
         Err(message) => return RefreshOutcome::Unavailable(message),
     };

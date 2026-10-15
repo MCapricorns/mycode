@@ -74,7 +74,9 @@ pub(crate) fn settings_back_target(
         SettingsSection::Models => match models {
             ModelsSubview::List if provider_open => SettingsBack::CloseProviderDetail,
             ModelsSubview::Catalog if preset_open => SettingsBack::ClosePreset,
-            ModelsSubview::Catalog | ModelsSubview::Custom => SettingsBack::ModelsList,
+            ModelsSubview::Catalog | ModelsSubview::OpenDesign | ModelsSubview::Custom => {
+                SettingsBack::ModelsList
+            }
             ModelsSubview::List => SettingsBack::Desk,
         },
         SettingsSection::Web if web != WebSubview::List => SettingsBack::WebList,
@@ -630,6 +632,19 @@ mod tests {
                 ModelsSubview::Custom,
                 false,
                 false,
+                WebSubview::List,
+                McpSubview::List,
+            ),
+            SettingsBack::ModelsList
+        );
+        // The OpenDesign page is its own add form: Escape leaves the page,
+        // it does not just close the form.
+        assert_eq!(
+            settings_back_target(
+                SettingsSection::Models,
+                ModelsSubview::OpenDesign,
+                false,
+                true,
                 WebSubview::List,
                 McpSubview::List,
             ),
