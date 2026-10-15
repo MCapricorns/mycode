@@ -8,7 +8,8 @@
 //! candidates. A `WindowsApps\pwsh.exe` execution alias is recognized by path
 //! shape, not by file size, and is used only when no regular `pwsh` exists.
 //! The alias cannot be opened as a file; the launch pin follows its reparse
-//! point to the packaged image (`exec::resolve`).
+//! point to the packaged image (`exec::resolve`), and discovery accepts the
+//! alias only when that image can be opened.
 //!
 //! Linux and macOS follow Codex's user-shell rule, limited to POSIX shells.
 //! `$SHELL` wins when it is an absolute `bash`, `zsh`, or `sh`. Otherwise
@@ -522,7 +523,7 @@ fn image_of(path: &Path) -> ShellImage {
         return ShellImage::Missing;
     }
     if is_windowsapps_execution_alias(path) {
-        return if alias_file_present(path) {
+        return if alias_target_readable(path) {
             ShellImage::PwshStoreAlias
         } else {
             ShellImage::Missing
@@ -541,10 +542,13 @@ fn image_is_regular_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }
 
-/// The alias path exists and is not a directory. Size is irrelevant.
+/// The alias names a packaged image this process can open. Launching pins
+/// that image, so an alias whose package is locked away counts as missing and
+/// discovery moves on to Windows PowerShell 5.1.
 #[cfg(windows)]
-fn alias_file_present(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_dir())
+fn alias_target_readable(path: &Path) -> bool {
+    crate::builtin::exec::windows_app_exec_link_target(path)
+        .is_some_and(|target| std::fs::File::open(target).is_ok())
 }
 
 /// `%SystemRoot%\System32\cmd.exe` when that file exists.

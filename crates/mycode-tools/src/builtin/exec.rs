@@ -44,6 +44,9 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+pub(crate) use resolve::windows_app_exec_link_target;
+
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use tokio::time::Sleep;
