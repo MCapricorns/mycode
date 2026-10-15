@@ -357,6 +357,10 @@ pub enum BridgeEvent {
         output: u64,
         /// Prompt tokens served from the provider cache, when reported.
         cache: Option<u64>,
+        /// Model requests (response cycles) the sums cover. A turn that
+        /// calls tools sends one request per round, so `input` grows far
+        /// past the window while `context` stays one prompt.
+        requests: u32,
         /// Elapsed milliseconds since the turn started.
         elapsed_ms: u64,
     },

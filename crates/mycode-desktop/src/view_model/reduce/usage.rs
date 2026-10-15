@@ -106,6 +106,7 @@ mod tests {
             context_cache,
             output: 10,
             cache,
+            requests: 1,
             elapsed_ms: 5,
         }
     }

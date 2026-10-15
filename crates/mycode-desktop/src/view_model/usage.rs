@@ -235,6 +235,8 @@ pub(crate) struct TurnStats {
     pub output: u64,
     /// Prompt tokens served from the provider cache, when reported.
     pub cache: Option<u64>,
+    /// Model requests the sums cover: one per tool round.
+    pub requests: u32,
     /// Wall-clock duration in milliseconds.
     pub elapsed_ms: u64,
 }
@@ -301,6 +303,7 @@ mod tests {
             input: 3_000,
             output: 40,
             cache: Some(900),
+            requests: 1,
             elapsed_ms: 1,
         };
         assert_eq!(turn_cache_hit(&openai), Some(30));
@@ -311,6 +314,7 @@ mod tests {
             input: 150,
             output: 40,
             cache: Some(1_300),
+            requests: 1,
             elapsed_ms: 1,
         };
         assert_eq!(turn_cache_hit(&anthropic), Some(89));

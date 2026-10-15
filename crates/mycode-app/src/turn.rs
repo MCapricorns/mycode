@@ -1078,6 +1078,7 @@ async fn run_chat_turn_on(
                             context_cache: turn_usage.latest_cache,
                             output: turn_usage.output,
                             cache: turn_usage.cache,
+                            requests: turn_usage.requests,
                             elapsed_ms: turn_started.elapsed().as_millis() as u64,
                         });
                     }
@@ -1415,10 +1416,13 @@ struct TurnUsage {
     /// Cache-read tokens on the latest prompt. The context meter shows this
     /// beside the window, separate from [`Self::cache`], which is the sum.
     latest_cache: u64,
+    /// Response cycles folded in.
+    requests: u32,
 }
 
 impl TurnUsage {
     fn fold(&mut self, usage: &mycode_core::Usage) {
+        self.requests = self.requests.saturating_add(1);
         self.input = self.input.saturating_add(usage.input_tokens);
         let prompt = if usage.prompt_tokens > 0 {
             usage.prompt_tokens
@@ -1486,6 +1490,28 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn turn_usage_sums_every_request_but_meters_the_latest_prompt() {
+        let mut usage = super::TurnUsage::default();
+        for prompt in [40_000, 52_000, 61_000] {
+            usage.fold(&mycode_core::Usage {
+                input_tokens: prompt,
+                output_tokens: 500,
+                cache_read_tokens: Some(prompt - 1_000),
+                cache_write_tokens: None,
+                prompt_tokens: prompt,
+            });
+        }
+        assert_eq!(usage.requests, 3);
+        assert_eq!(usage.input, 153_000, "billing sums every tool round");
+        assert_eq!(
+            usage.latest_input, 61_000,
+            "the context meter is one prompt"
+        );
+        assert_eq!(usage.latest_cache, 60_000);
+        assert_eq!(usage.output, 1_500);
+    }
 
     use mycode_agent::session::{EventKind, HeadStamp, SessionId};
     use mycode_config::{

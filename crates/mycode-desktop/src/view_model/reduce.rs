@@ -344,6 +344,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             context_cache,
             output,
             cache,
+            requests,
             elapsed_ms,
         } => {
             state.live_turn = Some(TurnStats {
@@ -351,6 +352,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 input,
                 output,
                 cache,
+                requests,
                 elapsed_ms,
             });
             if context > 0 {
@@ -1427,6 +1429,7 @@ mod tests {
             input: 25_000,
             output: 100,
             cache: Some(24_300),
+            requests: 1,
             elapsed_ms: 10,
         };
         let mut state = WorkspaceState {
@@ -1535,6 +1538,7 @@ mod tests {
                 context_cache: 11_800,
                 output: 20,
                 cache: Some(11_800),
+                requests: 1,
                 elapsed_ms: 40,
             },
         );

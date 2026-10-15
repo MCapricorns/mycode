@@ -359,6 +359,7 @@ pub enum DesktopAction {
         context_cache: u64,
         output: u64,
         cache: Option<u64>,
+        requests: u32,
         elapsed_ms: u64,
     },
     /// The agent asked the user structured questions.
