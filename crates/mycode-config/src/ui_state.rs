@@ -250,6 +250,10 @@ pub struct UiState {
     /// in the composer; per-session pins keep overriding it.
     #[serde(default)]
     pub selected_reasoning: Option<String>,
+    /// Whether thinking traces show as one collapsed row. One switch for
+    /// every trace in every session; traces are expanded by default.
+    #[serde(default)]
+    pub thinking_collapsed: bool,
 }
 
 impl Default for UiState {
@@ -269,6 +273,7 @@ impl Default for UiState {
             starred_models: Vec::new(),
             session_models: Vec::new(),
             selected_reasoning: None,
+            thinking_collapsed: false,
         }
     }
 }

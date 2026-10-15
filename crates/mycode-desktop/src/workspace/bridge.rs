@@ -740,6 +740,7 @@ impl Workspace {
                         active_workspace: ui_state.active_workspace,
                         recent_models: ui_state.recent_models,
                         starred_models: ui_state.starred_models,
+                        thinking_collapsed: ui_state.thinking_collapsed,
                     },
                     cx,
                 );

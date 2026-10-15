@@ -277,11 +277,6 @@ pub struct Workspace {
     /// Palette id under the pointer on the settings swatches. `None` shows
     /// the saved palette in the chat preview.
     palette_preview: Option<String>,
-    /// Thinking blocks flipped away from their default.
-    ///
-    /// Streaming thinking (`streaming-thinking`) starts expanded. Committed
-    /// thinking starts collapsed. An id in this set is showing the other way.
-    thinking_overrides: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Last UI font-family id applied to the theme. Empty until the first frame.
@@ -386,7 +381,6 @@ impl Workspace {
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
             palette_preview: None,
-            thinking_overrides: HashSet::new(),
             applied_font_size: String::new(),
             applied_font_family: String::new(),
             applied_language: u8::MAX,
@@ -1324,21 +1318,16 @@ impl Workspace {
     ///
     /// Streaming thinking starts open. Every other id starts closed so old
     /// traces stay out of the way until the user opens them.
-    pub(crate) fn thinking_open(&self, id: &str) -> bool {
-        let default_open = id == "streaming-thinking";
-        if self.thinking_overrides.contains(id) {
-            !default_open
-        } else {
-            default_open
-        }
+    /// Whether thinking traces show their full text. One switch covers
+    /// every trace, live and recorded.
+    pub(crate) fn thinking_open(&self) -> bool {
+        !self.vm.thinking_collapsed
     }
 
-    /// Flips one thinking block between its header and the full trace.
-    pub(crate) fn on_toggle_thinking(&mut self, id: &str, cx: &mut Context<Self>) {
-        if !self.thinking_overrides.remove(id) {
-            self.thinking_overrides.insert(id.to_owned());
-        }
-        cx.notify();
+    /// Expands or collapses every thinking trace and remembers the choice.
+    pub(crate) fn on_toggle_thinking(&mut self, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ThinkingCollapsedToggled, cx);
+        self.persist_ui_state(cx);
     }
 
     /// Applies and persists the UI language. The whole window re-renders on

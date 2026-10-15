@@ -74,16 +74,14 @@ pub(super) fn render_streaming_entry(
             })
             .when(show_reasoning && !streaming.thinking.is_empty(), |this| {
                 let id: SharedString = "streaming-thinking".into();
-                let open = workspace.thinking_open(&id);
-                let toggle_id = id.to_string();
                 this.child(markdown::prose_measure(thinking_box(
                     id,
                     &streaming.thinking,
-                    open,
+                    workspace.thinking_open(),
                     true,
                     theme,
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_toggle_thinking(&toggle_id, cx);
+                    cx.listener(|workspace, _, _, cx| {
+                        workspace.on_toggle_thinking(cx);
                     }),
                 )))
             })
@@ -126,26 +124,21 @@ pub(super) fn render_entry(
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     match entry.kind {
-        EntryKind::AssistantMessage => {
-            let id = format!("thinking-{}", entry.event_id);
-            let open = workspace.thinking_open(&id);
-            let toggle_id = id;
-            desk_block(
+        EntryKind::AssistantMessage => desk_block(
+            entry,
+            assistant_block(
                 entry,
-                assistant_block(
-                    entry,
-                    open,
-                    display,
-                    cache,
-                    theme,
-                    window,
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_toggle_thinking(&toggle_id, cx);
-                    }),
-                ),
-            )
-            .into_any_element()
-        }
+                workspace.thinking_open(),
+                display,
+                cache,
+                theme,
+                window,
+                cx.listener(|workspace, _, _, cx| {
+                    workspace.on_toggle_thinking(cx);
+                }),
+            ),
+        )
+        .into_any_element(),
         EntryKind::ToolResult => {
             let desk = Desk::of(theme);
             let failed = entry.text.starts_with("failed:");
@@ -355,24 +348,35 @@ pub(super) fn transcript_stack() -> gpui_kit::Stateful<gpui_kit::Div> {
         .px_4()
 }
 
-/// One collapsed header, `思考 · <summary> ▸`, or the same row with the trace open.
+/// The header row: collapsed, `思考 · <latest line> ▸`; open, the label alone
+/// because the trace below already shows every line.
 fn thinking_headline(label: &str, open: bool, text: &str) -> String {
-    let marker = if open { "▾" } else { "▸" };
-    let summary = thinking_summary(text);
-    if summary.is_empty() {
-        format!("{label} {marker}")
+    if open {
+        return format!("{label} ▾");
+    }
+    let latest = thinking_latest(text);
+    if latest.is_empty() {
+        format!("{label} ▸")
     } else {
-        format!("{label} · {summary} {marker}")
+        format!("{label} · {latest} ▸")
     }
 }
 
-fn thinking_summary(text: &str) -> String {
+/// The newest non-empty line, cut from the front so a line still streaming
+/// shows its newest words instead of a fixed opening.
+fn thinking_latest(text: &str) -> String {
+    const MAX: usize = 42;
     let line = text
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty())
+        .rfind(|line| !line.is_empty())
         .unwrap_or("");
-    ellipsis(line, 42)
+    let count = line.chars().count();
+    if count <= MAX {
+        return line.to_owned();
+    }
+    let tail: String = line.chars().skip(count - (MAX - 1)).collect();
+    format!("\u{2026}{tail}")
 }
 
 /// Thinking trace. Distinct from the answer: a single quiet header row toggles
@@ -631,17 +635,24 @@ pub(super) fn render_user_entry(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn collapsed_thinking_headline_is_one_summary_row() {
-        let trace = "reasoning step 0 weighs the next edit\nsecond line";
+    fn collapsed_thinking_headline_follows_the_newest_line() {
+        let trace = "reasoning step 0 weighs the next edit\nsecond line\n\n";
         assert_eq!(
             super::thinking_headline("思考", false, trace),
-            "思考 · reasoning step 0 weighs the next edit ▸"
+            "思考 · second line ▸"
         );
         assert_eq!(
             super::thinking_headline("Thinking", true, trace),
-            "Thinking · reasoning step 0 weighs the next edit ▾"
+            "Thinking ▾"
         );
         assert_eq!(super::thinking_headline("思考", false, "   "), "思考 ▸");
+        let long = "a streaming line that keeps growing with the newest words at the end";
+        let headline = super::thinking_headline("思考", false, long);
+        assert!(
+            headline.ends_with("newest words at the end ▸"),
+            "{headline}"
+        );
+        assert!(headline.contains('\u{2026}'), "{headline}");
     }
 }
 
