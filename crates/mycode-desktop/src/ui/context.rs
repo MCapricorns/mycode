@@ -984,7 +984,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         })
         .child(stat_line(
             t("Thinking", "思考"),
-            &super::chat::reasoning_row_label(thinking),
+            &super::chat::reasoning_row_label(&thinking),
             theme.foreground,
             theme,
         ))

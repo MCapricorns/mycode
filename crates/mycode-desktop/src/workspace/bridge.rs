@@ -994,12 +994,14 @@ impl Workspace {
                     .and_then(|settings| settings.reasoning.clone())
             });
         // The stored effort survives model switches, so it may name a rung
-        // the resolved model does not advertise. Send only advertised rungs;
-        // anything else falls back to the provider default, matching the
-        // thinking chip's projection.
+        // the resolved model does not advertise. An unset or unadvertised
+        // pick runs at the strongest advertised rung, matching the thinking
+        // chip's projection; a model with no rungs keeps the provider default.
         let advertised =
             crate::view_model::reasoning_levels_for(self.vm(), Some(&provider.id), Some(&model));
-        let reasoning = reasoning.filter(|token| advertised.iter().any(|level| level == token));
+        let effective =
+            crate::view_model::effective_reasoning_level(&advertised, reasoning.as_deref());
+        let reasoning = (effective != "default").then_some(effective);
         // The bridge rebuilds the turn history from the ledger's typed
         // events, so tool_use/tool_result pairing survives replay.
         self.dispatch(

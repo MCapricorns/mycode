@@ -734,26 +734,43 @@ fn model_button_label(vm: &WorkspaceState) -> String {
     crate::ui::model_picker::selected_model_label(vm)
 }
 
+/// Chip label for the effective thinking level.
+///
+/// Labels stay English and short: the chip is at most 116 px wide, and
+/// longer spellings such as "Thinking · Default" were cut to "Thinking · D…".
+/// The menu rows keep the longer descriptions.
 fn thinking_button_label(vm: &WorkspaceState) -> String {
-    // Rung labels stay English: they are short technical tokens and the
-    // localized variants were clipped by the chip's narrow width.
-    match selected_reasoning_level(vm) {
-        "default" => "Thinking · Default".to_owned(),
-        "off" => "Thinking off".to_owned(),
-        "on" => "Thinking on".to_owned(),
-        "minimal" => "Minimal".to_owned(),
-        "low" => "Low · brief".to_owned(),
-        "medium" => "Medium · balanced".to_owned(),
-        "high" => "High · deep".to_owned(),
-        "xhigh" => "Extra high".to_owned(),
-        "max" => "Max".to_owned(),
-        other => other.to_owned(),
+    thinking_chip_label(&selected_reasoning_level(vm)).to_owned()
+}
+
+fn thinking_chip_label(level: &str) -> &str {
+    match level {
+        "default" => "Thinking",
+        "off" => "Thinking off",
+        "on" => "Thinking on",
+        "minimal" => "Minimal",
+        "low" => "Low",
+        "medium" => "Medium",
+        "high" => "High",
+        "xhigh" => "Extra high",
+        "max" => "Max",
+        other => other,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{COMPOSER_PLACEHOLDER, STEER_PLACEHOLDER, cache_ring_svg};
+    use super::{COMPOSER_PLACEHOLDER, STEER_PLACEHOLDER, cache_ring_svg, thinking_chip_label};
+
+    #[test]
+    fn thinking_chip_labels_fit_the_chip() {
+        for level in [
+            "default", "off", "on", "minimal", "low", "medium", "high", "xhigh", "max",
+        ] {
+            let label = thinking_chip_label(level);
+            assert!(label.chars().count() <= 12, "{level}: {label}");
+        }
+    }
 
     #[test]
     fn composer_placeholder_asks_the_agent_without_a_product_name() {

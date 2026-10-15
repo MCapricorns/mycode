@@ -62,7 +62,7 @@ fn render_models_list_page(
     });
     let model_label = crate::ui::model_picker::selected_model_label(workspace.vm());
     let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
-    let current_level = crate::view_model::selected_reasoning_level(workspace.vm()).to_owned();
+    let current_level = crate::view_model::selected_reasoning_level(workspace.vm());
     let thinking: Vec<(String, String)> = levels
         .iter()
         .map(|level| (level.clone(), crate::ui::chat::reasoning_row_label(level)))

@@ -76,7 +76,7 @@ impl Workspace {
         let selected = crate::view_model::selected_reasoning_level(&self.vm);
         let preferred = levels
             .iter()
-            .position(|level| level == selected)
+            .position(|level| *level == selected)
             .unwrap_or(0);
         highlight(self.menu_navigation.reasoning, levels.len(), preferred)
     }

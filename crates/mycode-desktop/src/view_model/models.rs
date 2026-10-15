@@ -5,20 +5,31 @@ use super::reduce;
 use super::state::WorkspaceState;
 
 /// The effective thinking level: the stored pick while the catalog still
-/// advertises it, otherwise `default`. One projection shared by the composer
-/// chip and the reasoning menu so the two can never disagree.
+/// advertises it, otherwise the strongest advertised rung, otherwise
+/// `default` (a model that publishes no rungs). One projection shared by the
+/// composer chip, the reasoning menu, and the turn request so they can never
+/// disagree.
 #[must_use]
-pub(crate) fn selected_reasoning_level(state: &WorkspaceState) -> &str {
-    state
-        .settings
-        .as_ref()
-        .and_then(|settings| settings.reasoning.as_deref())
-        .filter(|level| {
-            reduce::selected_reasoning_levels(state)
-                .iter()
-                .any(|item| item == level)
-        })
+pub(crate) fn selected_reasoning_level(state: &WorkspaceState) -> String {
+    let levels = reduce::selected_reasoning_levels(state);
+    effective_reasoning_level(
+        &levels,
+        state
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.reasoning.as_deref()),
+    )
+}
+
+/// The stored pick when `levels` advertises it, else the strongest rung,
+/// else `default`.
+#[must_use]
+pub(crate) fn effective_reasoning_level(levels: &[String], stored: Option<&str>) -> String {
+    stored
+        .filter(|stored| levels.iter().any(|level| level == stored))
+        .or_else(|| reduce::strongest_reasoning_level(levels))
         .unwrap_or("default")
+        .to_owned()
 }
 
 /// Higher scores are stronger general-purpose models such as o3 and gpt-5.

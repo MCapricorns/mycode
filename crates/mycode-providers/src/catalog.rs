@@ -76,14 +76,14 @@ impl CatalogModel {
     ///
     /// Only levels models.dev published are offered. A toggle adds Off and On.
     /// An effort list is kept as published (`none` is shown as Off). A model
-    /// that merely sets `reasoning: true` does not grow a guessed ladder;
-    /// the composer offers Default and leaves the provider's own setting.
+    /// that merely sets `reasoning: true` does not grow a guessed ladder: it
+    /// offers Default alone, which leaves the provider's own setting.
     #[must_use]
     pub fn reasoning_levels(&self) -> Vec<String> {
         if !self.reasoning && self.reasoning_efforts.is_empty() && !self.reasoning_toggle {
             return Vec::new();
         }
-        let mut levels = vec!["default".to_owned()];
+        let mut levels = Vec::new();
         if self.reasoning_toggle {
             levels.push("off".to_owned());
             levels.push("on".to_owned());
@@ -97,6 +97,9 @@ impl CatalogModel {
             if !levels.iter().any(|level| level == key) {
                 levels.push(key.to_owned());
             }
+        }
+        if levels.is_empty() {
+            levels.push("default".to_owned());
         }
         levels
     }
@@ -368,12 +371,7 @@ mod tests {
         let levels = model.reasoning_levels();
         assert_eq!(
             levels,
-            vec![
-                "default".to_owned(),
-                "low".to_owned(),
-                "high".to_owned(),
-                "max".to_owned()
-            ]
+            vec!["low".to_owned(), "high".to_owned(), "max".to_owned()]
         );
     }
 
@@ -387,8 +385,14 @@ mod tests {
         };
         assert_eq!(
             model.reasoning_levels(),
-            vec!["default".to_owned(), "off".to_owned(), "on".to_owned()]
+            vec!["off".to_owned(), "on".to_owned()]
         );
+        let bare = CatalogModel {
+            id: "bare".to_owned(),
+            reasoning: true,
+            ..CatalogModel::default()
+        };
+        assert_eq!(bare.reasoning_levels(), vec!["default".to_owned()]);
     }
 
     #[test]
@@ -406,7 +410,6 @@ mod tests {
             "glm-4.7 toggle should offer Off, got {levels:?}"
         );
         assert!(levels.iter().any(|level| level == "on"), "{levels:?}");
-        assert!(levels.iter().any(|level| level == "default"), "{levels:?}");
         assert!(
             document
                 .model_for_endpoint("302ai", None, "not-a-real-model")
