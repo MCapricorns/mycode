@@ -209,11 +209,9 @@ pub(crate) fn run_core(
                 }
                 BridgeCommand::RefreshOpenDesignModels { api_key } => {
                     let task_state = state.clone();
-                    let task_events = events.clone();
                     let reply = with_reply.reply;
                     tokio::spawn(async move {
-                        let outcome =
-                            refresh_opendesign_models(&task_state, &task_events, api_key).await;
+                        let outcome = refresh_opendesign_models(&task_state, api_key).await;
                         let _ = reply.send(BridgeReply::OpenDesignModels(outcome));
                     });
                 }

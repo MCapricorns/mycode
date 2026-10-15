@@ -89,9 +89,7 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
 pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<String>) {
     state.active_preset = preset.clone();
     state.preset_model_query.clear();
-    // Opening a provider pre-checks its model list, strongest first,
-    // so a long catalog does not bury o3 / gpt-5 under the cap.
-    state.preset_models = preset
+    let listed: Vec<String> = preset
         .as_ref()
         .and_then(|id| {
             state
@@ -106,6 +104,33 @@ pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<S
                 .collect()
         })
         .unwrap_or_default();
+    // OpenDesign is added in place, so its form starts from the models
+    // already configured; checking everything would replace that list on
+    // the next Add. Every other preset adds a new row and pre-checks the
+    // whole list, strongest first, so a long catalog does not bury o3 /
+    // gpt-5 under the cap.
+    let configured: Vec<String> = preset
+        .as_deref()
+        .filter(|id| *id == mycode_providers::catalog::opendesign::PROVIDER_ID)
+        .and_then(|id| {
+            state
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.providers.iter().find(|p| p.id == id))
+        })
+        .map(|provider| {
+            listed
+                .iter()
+                .filter(|model| provider.models.contains(model))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    state.preset_models = if configured.is_empty() {
+        listed
+    } else {
+        configured
+    };
 }
 
 /// Keeps the model picker on a provider/model that actually exists.
@@ -352,6 +377,58 @@ fn resolve_remembered_effort(levels: &[String], preferred: &str) -> Option<Strin
 mod tests {
     use super::selected_reasoning_levels;
     use crate::view_model::{SettingsState, WorkspaceState};
+
+    #[test]
+    fn the_opendesign_page_opens_its_form_on_the_configured_models() {
+        use mycode_providers::catalog::opendesign;
+
+        let mut document = mycode_providers::catalog::CatalogDocument::default();
+        opendesign::attach(&mut document, None);
+        let settings = mycode_config::AppSettings {
+            providers: vec![mycode_config::ProviderSettings {
+                id: opendesign::PROVIDER_ID.to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: opendesign::BASE_URL.to_owned(),
+                models: vec!["glm-5.3-flash".to_owned(), "retired-model".to_owned()],
+                enabled: true,
+                context_limit: None,
+                max_output: None,
+            }],
+            ..mycode_config::AppSettings::default()
+        };
+        let mut state = WorkspaceState {
+            catalog: Some(std::sync::Arc::new(document)),
+            settings: Some(SettingsState::from_settings(&settings, 1, Vec::new())),
+            ..WorkspaceState::default()
+        };
+        crate::view_model::reduce(
+            &mut state,
+            crate::view_model::DesktopAction::ShowModelsSubview(
+                crate::view_model::ModelsSubview::OpenDesign,
+            ),
+        );
+        assert_eq!(
+            state.active_preset.as_deref(),
+            Some(opendesign::PROVIDER_ID)
+        );
+        assert_eq!(
+            state.preset_models,
+            ["glm-5.3-flash"],
+            "configured models stay checked; ids the list lacks are not invented"
+        );
+
+        // Nothing configured yet: the whole list starts checked.
+        state.settings = Some(SettingsState::from_settings(
+            &mycode_config::AppSettings::default(),
+            1,
+            Vec::new(),
+        ));
+        super::active_preset_changed(&mut state, Some(opendesign::PROVIDER_ID.to_owned()));
+        assert_eq!(
+            state.preset_models.len(),
+            opendesign::curated_models().len()
+        );
+    }
 
     /// A catalog provider with one reasoning model advertising only `low`.
     fn low_rung_catalog() -> std::sync::Arc<mycode_providers::catalog::CatalogDocument> {
