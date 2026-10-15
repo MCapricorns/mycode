@@ -89,6 +89,9 @@ pub(crate) struct ListedSession {
     pub(crate) id: String,
     /// Sidebar title, possibly empty.
     pub(crate) title: String,
+    /// Last durable mutation time in Unix epoch milliseconds (`None` when
+    /// invalid or corrupt).
+    pub(crate) updated_at_ms: Option<u64>,
     /// Sum of committed events across branches.
     pub(crate) event_count: u64,
     /// The row was stored but failed validation.
@@ -433,9 +436,26 @@ impl SessionStore {
         let new_log = paths
             .absolute(&paths.branch_jsonl(request.new_branch))
             .map_err(|_| StoreError::Unavailable)?;
+        match fs::file_len(&source_log) {
+            Ok(length) if length < request.expected_committed || length < request.prefix_end => {
+                return Err(StoreError::Corrupt);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if request.expected_committed > 0 || request.prefix_end > 0 {
+                    return Err(StoreError::Corrupt);
+                }
+            }
+            Err(_) => return Err(StoreError::Storage),
+        }
         if request.prefix_end > 0 {
-            fs::copy_prefix(&source_log, &new_log, request.prefix_end)
-                .map_err(|_| StoreError::Storage)?;
+            fs::copy_prefix(&source_log, &new_log, request.prefix_end).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                    StoreError::Corrupt
+                } else {
+                    StoreError::Storage
+                }
+            })?;
         }
         let committed = (|| {
             let (parent_kind, at_event, to_event) = match request.kind {
@@ -593,7 +613,7 @@ impl SessionStore {
             plans.push((branch_id, head, u64_from(count)?, u64_from(bytes)?));
         }
         drop(statement);
-        if plans.is_empty() {
+        if plans.is_empty() || plans.len() > super::super::dto::MAX_BRANCHES {
             return Err(StoreError::Corrupt);
         }
         let mut branches = Vec::with_capacity(plans.len());
@@ -631,8 +651,16 @@ impl SessionStore {
         let log_path = paths
             .absolute(&paths.branch_jsonl(branch))
             .map_err(|_| StoreError::Unavailable)?;
-        let bytes = fs::read_range(&log_path, event.offset, event.record_len)
-            .map_err(|_| StoreError::Storage)?;
+        let bytes = fs::read_range(&log_path, event.offset, event.record_len).map_err(|error| {
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::NotFound
+            ) {
+                StoreError::Corrupt
+            } else {
+                StoreError::Storage
+            }
+        })?;
         let decoded = jsonl::decode_line(&bytes).map_err(|()| StoreError::Corrupt)?;
         if decoded.event_id != event.event_id.as_str()
             || decoded.record_len != event.record_len
@@ -648,8 +676,11 @@ impl SessionStore {
             let payload_path = paths
                 .absolute(&paths.payload_file(&event.event_id))
                 .map_err(|_| StoreError::Unavailable)?;
-            let payload = fs::read_range(&payload_path, 0, event.bytes).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            let payload = fs::read_exact_file(&payload_path, event.bytes).map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::NotFound
+                ) {
                     StoreError::Corrupt
                 } else {
                     StoreError::Storage
@@ -708,18 +739,26 @@ impl SessionStore {
                 Some(call) => Some(SessionCallId::parse(&call).ok_or(StoreError::Corrupt)?),
                 None => None,
             };
+            let bytes = u64_from(bytes)?;
+            let offset = u64_from(offset)?;
+            let record_len = u64_from(record_len)?;
             let tool = matches!(kind, EventKind::ToolCall | EventKind::ToolResult);
-            if tool != call_id.is_some() {
+            if tool != call_id.is_some()
+                || !super::super::digest::is_canonical_digest(&digest)
+                || bytes == 0
+                || bytes > kind.payload_bound() as u64
+                || record_len == 0
+            {
                 return Err(StoreError::Corrupt);
             }
             events.push(StoredEvent {
                 event_id,
                 digest,
-                bytes: u64_from(bytes)?,
+                bytes,
                 kind,
                 call_id,
-                offset: u64_from(offset)?,
-                record_len: u64_from(record_len)?,
+                offset,
+                record_len,
                 external: external != 0,
             });
         }
@@ -784,7 +823,7 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
     }
     let mut sessions = conn
         .prepare(
-            "SELECT id, title, event_count, corrupt
+            "SELECT id, title, updated_at, event_count, corrupt
              FROM sessions
              ORDER BY updated_at DESC, id ASC",
         )
@@ -796,17 +835,24 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
                 row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
             ))
         })
         .map_err(|_| StoreError::Storage)?;
     let mut listed = Vec::new();
     for row in session_rows {
-        let (id, title, event_count, corrupt) = row.map_err(|_| StoreError::Storage)?;
+        let (id, title, updated_at, event_count, corrupt) = row.map_err(|_| StoreError::Storage)?;
+        let updated_at_ms = u64::try_from(updated_at).ok().filter(|&ms| ms > 0);
+        let (event_count, corrupt) = match u64::try_from(event_count) {
+            Ok(count) => (count, corrupt != 0),
+            Err(_) => (0, true),
+        };
         listed.push(ListedSession {
             id,
             title,
-            event_count: u64_from(event_count)?,
-            corrupt: corrupt != 0,
+            updated_at_ms,
+            event_count,
+            corrupt,
             branches: Vec::new(),
         });
     }
@@ -829,18 +875,26 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
         })
         .map_err(|_| StoreError::Storage)?;
     let mut by_session: BTreeMap<String, Vec<ListedBranch>> = BTreeMap::new();
+    let mut corrupt_branches: std::collections::HashSet<String> = std::collections::HashSet::new();
     for row in branch_rows {
         let (session_id, branch_id, head, event_count) = row.map_err(|_| StoreError::Storage)?;
+        let Ok(event_count) = u64::try_from(event_count) else {
+            corrupt_branches.insert(session_id);
+            continue;
+        };
         by_session
             .entry(session_id)
             .or_default()
             .push(ListedBranch {
                 branch_id,
                 head,
-                event_count: u64_from(event_count)?,
+                event_count,
             });
     }
     for session in &mut listed {
+        if corrupt_branches.contains(&session.id) {
+            session.corrupt = true;
+        }
         if let Some(branches) = by_session.remove(&session.id) {
             session.branches = branches;
         }

@@ -28,7 +28,10 @@ use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::composer_placeholder;
 pub(crate) use command_palette::ToggleCommandPalette;
-pub(crate) use settings::{BackendForm, McpForm, ProviderForm, build_mcp_server};
+pub(crate) use settings::{
+    BackendForm, McpForm, ProviderForm, build_custom_backend, build_custom_provider,
+    build_mcp_server,
+};
 
 /// How much of the desk chrome fits the current window width.
 ///
@@ -120,7 +123,9 @@ pub fn render_root(
             }),
         )
         .capture_key_down(cx.listener(|workspace, event: &KeyDownEvent, window, cx| {
-            if command_palette::is_command_palette_shortcut(&event.keystroke) {
+            if workspace.on_menu_key_down(event, window, cx) {
+                cx.stop_propagation();
+            } else if command_palette::is_command_palette_shortcut(&event.keystroke) {
                 cx.stop_propagation();
                 workspace.toggle_command_palette(window, cx);
             } else if event.keystroke.key == "escape"
@@ -180,12 +185,18 @@ pub fn render_root(
         .when(workspace.vm().changes_panel_open, |this| {
             this.child(context::render_changes_drawer(
                 workspace,
+                window,
                 inspector_span,
                 cx,
             ))
         })
         .when(workspace.git_diff_panel_open(), |this| {
-            this.child(context::render_diff_panel(workspace, inspector_span, cx))
+            this.child(context::render_diff_panel(
+                workspace,
+                window,
+                inspector_span,
+                cx,
+            ))
         })
         .when(workspace.vm().update_dialog_open, |this| {
             this.child(update_dialog::render_update_dialog(workspace, cx))
@@ -196,7 +207,7 @@ pub fn render_root(
         .when(workspace.vm().command_palette_open, |this| {
             this.child(command_palette::render(workspace, window, cx))
         })
-        .child(render_toasts(workspace, cx))
+        .child(render_toasts(workspace, window, cx))
 }
 
 /// Chat or settings, faded in when that pane is entered.
@@ -230,40 +241,95 @@ fn main_pane(
     )
 }
 
-fn render_toasts(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
+fn render_toasts(
+    workspace: &Workspace,
+    window: &Window,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
     let theme = cx.theme();
     let toasts = workspace.toasts();
     div()
         .id("toasts")
+        .max_h((window.viewport_size().height - px(100.)).max(px(120.)))
+        .overflow_y_scroll()
         .absolute()
         .bottom(px(20.))
-        .right(px(20.))
-        .w(px(320.))
+        .left_0()
+        .right_0()
+        .px_4()
         .flex()
         .flex_col()
-        .items_end()
+        .items_center()
         .gap_2()
         .children(toasts.iter().map(|toast| {
-            let (fill, ink) = match toast.kind {
-                ToastKind::Error => (theme.danger.opacity(0.92), theme.danger_foreground),
-                ToastKind::Warning => (theme.warning.opacity(0.92), theme.warning_foreground),
-                ToastKind::Info => (skin::toast_fill(theme), theme.foreground),
+            let toast_id = toast.id;
+            let (strip, icon) = match toast.kind {
+                ToastKind::Error => (theme.danger, IconName::CircleAlert),
+                ToastKind::Warning => (theme.warning, IconName::TriangleAlert),
+                ToastKind::Info => (theme.info, IconName::Info),
             };
             div()
-                .id(format!("toast-{}", toast.id))
-                .w_full()
-                .px_3()
-                .py_2()
+                .id(format!("toast-{toast_id}"))
+                .flex_shrink_0()
+                .occlude()
+                .w(px(460.))
+                .max_w_full()
                 .rounded(skin::radius_card())
                 .border_1()
-                .border_color(skin::glass_border(theme))
-                .bg(fill)
-                .text_color(ink)
-                .text_xs()
-                // A long unbroken token (URL, path) must not paint past the
-                // fixed-width card.
+                .border_color(skin::border_strong(theme))
+                .bg(skin::toast_fill(theme))
+                .shadow(skin::elevation_shadow(theme))
+                .text_color(theme.foreground)
                 .overflow_hidden()
-                .child(ellipsis(&toast.text, 400))
+                .flex()
+                .flex_row()
+                .items_stretch()
+                .child(div().w(px(4.)).flex_shrink_0().bg(strip))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .px_3()
+                        .py_2p5()
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap_2p5()
+                        .child(
+                            div()
+                                .mt(px(2.))
+                                .flex_shrink_0()
+                                .child(Icon::new(icon).with_size(px(15.)).text_color(strip)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .whitespace_normal()
+                                .child(toast.text.clone()),
+                        )
+                        .child(
+                            div()
+                                .id(format!("toast-close-{toast_id}"))
+                                .size(px(22.))
+                                .rounded(skin::radius_xs())
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_color(theme.muted_foreground)
+                                .hover(|this| {
+                                    this.bg(theme.secondary_hover).text_color(theme.foreground)
+                                })
+                                .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    cx.stop_propagation();
+                                    workspace.on_dismiss_toast(toast_id, cx);
+                                }))
+                                .child(Icon::new(IconName::X).xsmall()),
+                        ),
+                )
         }))
 }
 

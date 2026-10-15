@@ -6,9 +6,21 @@ use gpui_kit::{AppContext as _, Context, Entity, Window};
 
 use mycode_app::BridgeCommand;
 
-use crate::ui::{BackendForm, McpForm, ProviderForm, build_mcp_server};
+use crate::ui::{
+    BackendForm, McpForm, ProviderForm, build_custom_backend, build_custom_provider,
+    build_mcp_server,
+};
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
+
+/// Trims an API key candidate for UI button enablement and save dispatch.
+///
+/// Saving an empty or whitespace-only key field is a no-op so the replace-key
+/// flow cannot delete a stored credential.
+pub(crate) fn normalized_key_input(raw: &str) -> Option<String> {
+    let key = mycode_config::normalize_api_key(raw);
+    (!key.is_empty() && !key.eq_ignore_ascii_case("bearer")).then_some(key)
+}
 
 impl Workspace {
     pub(crate) fn settings_ua_input(
@@ -62,57 +74,61 @@ impl Workspace {
             .clone()
     }
 
-    pub(crate) fn on_add_provider(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.provider_form.clone() else {
             return;
         };
-        let id = form.read(cx).id.read(cx).value().trim().to_string();
-        let kind = form.read(cx).kind.clone();
-        let base_url = form.read(cx).base_url.read(cx).value().trim().to_string();
-        let model = form.read(cx).model.read(cx).value().trim().to_string();
-        let api_key = form.read(cx).api_key.read(cx).value().trim().to_string();
-        let context_limit = super::parse_token_field(&form.read(cx).context_limit.read(cx).value());
-        let max_output = super::parse_token_field(&form.read(cx).max_output.read(cx).value());
-        if id.is_empty() || base_url.is_empty() || model.is_empty() {
-            self.apply_action(
-                DesktopAction::Failed("fill id, base URL, and model".to_owned()),
-                cx,
-            );
-            return;
-        }
-        let (context_limit, max_output) = match (context_limit, max_output) {
-            (Ok(a), Ok(b)) => (a, b),
-            _ => {
-                self.apply_action(
-                    DesktopAction::Failed(
-                        "context window and max output must be plain numbers".to_owned(),
-                    ),
-                    cx,
-                );
+        let (id, kind, base_url, model, api_key, context_limit, max_output) = {
+            let read = form.read(cx);
+            (
+                read.id.read(cx).value().to_string(),
+                read.kind.clone(),
+                read.base_url.read(cx).value().to_string(),
+                read.model.read(cx).value().to_string(),
+                read.api_key.read(cx).value().to_string(),
+                read.context_limit.read(cx).value().to_string(),
+                read.max_output.read(cx).value().to_string(),
+            )
+        };
+        let existing: Vec<String> = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| {
+                settings
+                    .providers
+                    .iter()
+                    .map(|provider| provider.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let provider = match build_custom_provider(
+            &existing,
+            &id,
+            &kind,
+            &base_url,
+            &model,
+            &context_limit,
+            &max_output,
+        ) {
+            Ok(provider) => provider,
+            Err(message) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
                 return;
             }
         };
-        self.apply_action(
-            DesktopAction::SettingsProviderAdded(mycode_config::ProviderSettings {
-                id: id.clone(),
-                kind,
-                base_url,
-                models: vec![model],
-                enabled: true,
-                context_limit,
-                max_output,
-            }),
-            cx,
-        );
-        if !api_key.is_empty() {
+        let provider_id = provider.id.clone();
+        self.apply_action(DesktopAction::SettingsProviderAdded(provider), cx);
+        if let Some(api_key) = normalized_key_input(&api_key) {
             self.dispatch(
                 BridgeCommand::SaveProviderKey {
-                    provider_id: id,
+                    provider_id,
                     api_key,
                 },
                 cx,
             );
         }
+        form.update(cx, |form, cx| form.clear(window, cx));
         self.apply_action(
             DesktopAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
             cx,
@@ -224,7 +240,15 @@ impl Workspace {
         self.provider_key_inputs
             .entry(id.to_owned())
             .or_insert_with(|| {
-                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+                let input =
+                    cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"));
+                cx.subscribe_in(&input, window, |_, _, event, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                })
+                .detach();
+                input
             })
             .clone()
     }
@@ -256,7 +280,9 @@ impl Workspace {
         let Some(input) = self.provider_key_inputs.get(id).cloned() else {
             return;
         };
-        let api_key = mycode_config::normalize_api_key(&input.read(cx).value());
+        let Some(api_key) = normalized_key_input(&input.read(cx).value()) else {
+            return;
+        };
         input.update(cx, |state, cx| state.set_value("", window, cx));
         self.provider_key_replace.remove(id);
         self.dispatch(
@@ -266,6 +292,12 @@ impl Workspace {
             },
             cx,
         );
+    }
+
+    pub(crate) fn on_cancel_replace_provider_key(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.provider_key_replace.remove(id);
+        self.provider_key_inputs.remove(id);
+        cx.notify();
     }
 
     /// Endpoint field for one provider. The stored base URL is the only
@@ -496,8 +528,7 @@ impl Workspace {
         let api_key = self
             .preset_key_input
             .clone()
-            .map(|input| input.read(cx).value().trim().to_owned())
-            .unwrap_or_default();
+            .and_then(|input| normalized_key_input(&input.read(cx).value()));
         // Drop the input entity so the pasted key never lingers on screen.
         self.preset_key_input = None;
         self.apply_action(
@@ -512,7 +543,7 @@ impl Workspace {
             }),
             cx,
         );
-        if !api_key.is_empty() {
+        if let Some(api_key) = api_key {
             self.dispatch(
                 BridgeCommand::SaveProviderKey {
                     provider_id: id.clone(),
@@ -540,29 +571,39 @@ impl Workspace {
             .clone()
     }
 
-    pub(crate) fn on_add_backend(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_add_backend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.backend_form.clone() else {
             return;
         };
-        let id = form.read(cx).id.read(cx).value().trim().to_string();
-        let kind = form.read(cx).kind.read(cx).value().trim().to_string();
-        let endpoint = form.read(cx).endpoint.read(cx).value().trim().to_string();
-        if id.is_empty() || kind.is_empty() || endpoint.is_empty() {
-            self.apply_action(
-                DesktopAction::Failed("fill id, kind, and endpoint".to_owned()),
-                cx,
-            );
-            return;
-        }
-        self.apply_action(
-            DesktopAction::SettingsBackendAdded(mycode_config::WebBackendSettings {
-                id,
-                kind,
-                endpoint,
-                enabled: false,
-            }),
-            cx,
-        );
+        let (id, kind, endpoint) = {
+            let read = form.read(cx);
+            (
+                read.id.read(cx).value().to_string(),
+                read.kind.read(cx).value().to_string(),
+                read.endpoint.read(cx).value().to_string(),
+            )
+        };
+        let existing: Vec<String> = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| {
+                settings
+                    .web_backends
+                    .iter()
+                    .map(|backend| backend.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let backend = match build_custom_backend(&existing, &id, &kind, &endpoint) {
+            Ok(backend) => backend,
+            Err(message) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+                return;
+            }
+        };
+        self.apply_action(DesktopAction::SettingsBackendAdded(backend), cx);
+        form.update(cx, |form, cx| form.clear(window, cx));
         self.on_show_web_subview(crate::view_model::WebSubview::List, cx);
     }
 
@@ -579,9 +620,16 @@ impl Workspace {
         self.web_key_inputs
             .entry(id.to_owned())
             .or_insert_with(|| {
-                cx.new(|cx| {
+                let input = cx.new(|cx| {
                     InputState::new(window, cx).placeholder("paste API key (Bearer is added)")
+                });
+                cx.subscribe_in(&input, window, |_, _, event, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
                 })
+                .detach();
+                input
             })
             .clone()
     }
@@ -595,7 +643,9 @@ impl Workspace {
         let Some(input) = self.web_key_inputs.get(id).cloned() else {
             return;
         };
-        let api_key = mycode_config::normalize_api_key(&input.read(cx).value());
+        let Some(api_key) = normalized_key_input(&input.read(cx).value()) else {
+            return;
+        };
         input.update(cx, |state, cx| state.set_value("", window, cx));
         self.web_key_replace.remove(id);
         self.dispatch(
@@ -605,6 +655,12 @@ impl Workspace {
             },
             cx,
         );
+    }
+
+    pub(crate) fn on_cancel_replace_web_key(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.web_key_replace.remove(id);
+        self.web_key_inputs.remove(id);
+        cx.notify();
     }
 
     pub(crate) fn web_key_replacing(&self, id: &str) -> bool {
@@ -652,7 +708,7 @@ impl Workspace {
 
     /// Adds the server the custom form currently describes: the pure builder
     /// next to [`McpForm`] validates the fields, this method dispatches.
-    pub(crate) fn on_add_mcp(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_add_mcp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.mcp_form.clone() else {
             return;
         };
@@ -664,7 +720,7 @@ impl Workspace {
                 read.endpoint.read(cx).value().trim().to_string(),
                 read.command.read(cx).value().trim().to_string(),
                 read.env.read(cx).value().trim().to_string(),
-                read.api_key.read(cx).value().trim().to_string(),
+                read.api_key.read(cx).value().to_string(),
             )
         };
         if id.is_empty() {
@@ -691,7 +747,9 @@ impl Workspace {
             }
         };
         self.apply_action(DesktopAction::SettingsMcpAdded(server), cx);
-        if !api_key.is_empty() {
+        if transport == "http"
+            && let Some(api_key) = normalized_key_input(&api_key)
+        {
             self.dispatch(
                 BridgeCommand::SaveProviderKey {
                     provider_id: format!("mcp-{id}"),
@@ -700,6 +758,7 @@ impl Workspace {
                 cx,
             );
         }
+        form.update(cx, |form, cx| form.clear(window, cx));
         self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
     }
 
@@ -719,7 +778,7 @@ impl Workspace {
             .clone()
     }
 
-    pub(crate) fn on_import_mcp_json(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_import_mcp_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(input) = self.mcp_json_input.clone() else {
             return;
         };
@@ -755,7 +814,7 @@ impl Workspace {
             let api_key = row.api_key.clone();
             self.apply_action(DesktopAction::SettingsMcpAdded(row.server), cx);
             added += 1;
-            if let Some(api_key) = api_key.filter(|key| !key.is_empty()) {
+            if let Some(api_key) = api_key.and_then(|key| normalized_key_input(&key)) {
                 self.dispatch(
                     BridgeCommand::SaveProviderKey {
                         provider_id: format!("mcp-{server_id}"),
@@ -765,6 +824,7 @@ impl Workspace {
                 );
             }
         }
+        input.update(cx, |state, cx| state.set_value("", window, cx));
         if added > 0 {
             self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
         }
@@ -965,6 +1025,26 @@ impl Workspace {
                 settings: document,
             },
             cx,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_key_input;
+
+    #[test]
+    fn blank_key_inputs_are_refused_and_bearer_prefixes_are_stripped() {
+        assert_eq!(normalized_key_input(""), None);
+        assert_eq!(normalized_key_input("   \t\n  "), None);
+        assert_eq!(normalized_key_input("Bearer   "), None);
+        assert_eq!(
+            normalized_key_input("  sk-test-123  "),
+            Some("sk-test-123".to_owned())
+        );
+        assert_eq!(
+            normalized_key_input("Bearer sk-test-123"),
+            Some("sk-test-123".to_owned())
         );
     }
 }

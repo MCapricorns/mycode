@@ -98,7 +98,7 @@ pub(super) fn render_data_section(
         .into_any_element();
     let scope_row = div()
         .text_xs()
-        .opacity(0.55)
+        .text_color(theme.muted_foreground)
         .child(t(
             "Settings, UI state, and API keys \u{2014} conversations are never included.",
             "设置、界面状态与 API 密钥 — 绝不包含对话。",
@@ -106,7 +106,7 @@ pub(super) fn render_data_section(
         .into_any_element();
     let warning_row = div()
         .text_xs()
-        .opacity(0.55)
+        .text_color(theme.muted_foreground)
         .child(t(
             "The export file stores API keys as plaintext JSON; keep it somewhere safe.",
             "导出文件以明文 JSON 存储 API 密钥，请妥善保管。",

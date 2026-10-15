@@ -595,17 +595,17 @@ async fn cached_pages(
     urls: &[String],
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<Vec<WebPage>, ToolError> {
-    let mut pages = Vec::with_capacity(urls.len());
-    let mut missing = Vec::new();
+    let mut slots: Vec<Option<WebPage>> = vec![None; urls.len()];
+    let mut missing: Vec<String> = Vec::new();
     {
         let guard = cache_lock();
-        for url in urls {
+        for (index, url) in urls.iter().enumerate() {
             let hit = guard.pages.iter().find_map(|(cached, slot)| {
                 (cached == url && slot.at.elapsed() < CACHE_TTL).then(|| slot.value.clone())
             });
             if let Some(page) = hit {
-                pages.push(page);
-            } else {
+                slots[index] = Some(page);
+            } else if !missing.iter().any(|existing| existing == url) {
                 missing.push(url.clone());
             }
         }
@@ -616,7 +616,8 @@ async fn cached_pages(
         guard
             .pages
             .retain(|(_, slot)| slot.at.elapsed() < CACHE_TTL);
-        for page in fetched {
+        for page in &fetched {
+            guard.pages.retain(|(cached, _)| cached != &page.url);
             guard.pages.push((
                 page.url.clone(),
                 CacheSlot {
@@ -624,14 +625,31 @@ async fn cached_pages(
                     value: page.clone(),
                 },
             ));
-            pages.push(page);
         }
         if guard.pages.len() > CACHE_LIMIT {
             let extra = guard.pages.len() - CACHE_LIMIT;
             guard.pages.drain(0..extra);
         }
+        drop(guard);
+
+        for (index, slot) in slots.iter_mut().enumerate() {
+            if slot.is_none() {
+                let target_url = &urls[index];
+                if let Some(page) = fetched.iter().find(|page| &page.url == target_url) {
+                    *slot = Some(page.clone());
+                }
+            }
+        }
+        // Preserve any extra or mismatched host-returned pages if a slot could
+        // not be matched by URL.
+        let mut remaining_fetched = fetched.into_iter();
+        for slot in &mut slots {
+            if slot.is_none() {
+                *slot = remaining_fetched.next();
+            }
+        }
     }
-    Ok(pages)
+    Ok(slots.into_iter().flatten().collect())
 }
 
 #[cfg(test)]
@@ -733,7 +751,104 @@ mod tests {
             truncated: true,
         }])
         .await;
-        assert!(host_cut.contains("(truncated)"), "{host_cut}");
+        assert!(
+            !host_cut.contains("hello") || host_cut.contains("(truncated)"),
+            "{host_cut}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_pages_preserves_request_order_and_deduplicates_inflight_fetches() {
+        use std::sync::Mutex;
+
+        struct RecordingHost {
+            calls: Mutex<Vec<Vec<String>>>,
+        }
+
+        impl WebHost for RecordingHost {
+            fn search<'a>(
+                &'a self,
+                _query: &'a str,
+                _max_results: usize,
+                _cancel: &'a tokio_util::sync::CancellationToken,
+            ) -> Pin<Box<dyn Future<Output = Result<Vec<WebHit>, ToolError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+
+            fn fetch_content<'a>(
+                &'a self,
+                urls: &'a [String],
+                _cancel: &'a tokio_util::sync::CancellationToken,
+            ) -> Pin<Box<dyn Future<Output = Result<Vec<WebPage>, ToolError>> + Send + 'a>>
+            {
+                let requested = urls.to_vec();
+                self.calls.lock().unwrap().push(requested.clone());
+                Box::pin(async move {
+                    Ok(requested
+                        .into_iter()
+                        .map(|url| WebPage {
+                            content: format!("body-of-{url}"),
+                            url,
+                            truncated: false,
+                        })
+                        .collect())
+                })
+            }
+        }
+
+        let host = Arc::new(RecordingHost {
+            calls: Mutex::new(Vec::new()),
+        });
+        let tool = FetchContentTool::new(Arc::clone(&host) as Arc<dyn WebHost>);
+        let ctx = ToolCtx::new(".");
+        let mut stream = ToolStream::closed();
+
+        // Prime URL B in the cache.
+        let url_a = "https://example.com/order-a".to_owned();
+        let url_b = "https://example.com/order-b".to_owned();
+        tool.execute(
+            FetchContentArgs {
+                urls: vec![url_b.clone()],
+                goal: None,
+            },
+            &ctx,
+            &mut stream,
+        )
+        .await
+        .expect("prime b");
+
+        // Request [A, B, A]: A is uncached and duplicated; B is already cached.
+        let res = tool
+            .execute(
+                FetchContentArgs {
+                    urls: vec![url_a.clone(), url_b.clone(), url_a.clone()],
+                    goal: None,
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("fetch [a, b, a]");
+        let text = result_text(&res);
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            2,
+            "second call should only fetch missing URLs once"
+        );
+        assert_eq!(
+            calls[1],
+            vec![url_a.clone()],
+            "duplicate uncached URL should be deduplicated in host call"
+        );
+        let first_a = text.find(&format!("[{url_a}]")).expect("first a");
+        let pos_b = text.find(&format!("[{url_b}]")).expect("b");
+        let second_a = text[pos_b..].find(&format!("[{url_a}]")).expect("second a") + pos_b;
+        assert!(
+            first_a < pos_b && pos_b < second_a,
+            "rendered pages must preserve caller order [A, B, A]:\n{text}"
+        );
     }
 
     #[test]

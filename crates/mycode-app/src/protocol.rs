@@ -23,6 +23,9 @@ pub struct SessionSummary {
     pub root_branch_id: String,
     /// Display title: the session's first user message, trimmed.
     pub title: String,
+    /// Last durable mutation time in Unix epoch milliseconds (`None` when
+    /// unknown or corrupt).
+    pub updated_at_ms: Option<u64>,
     /// Total committed events across branches.
     pub event_count: u64,
     /// Whether this session is currently open. The core reports `false` for

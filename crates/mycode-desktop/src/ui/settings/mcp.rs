@@ -100,8 +100,16 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
             vec![
                 div()
                     .when(mcp_empty, |this| {
-                        this.child(div().text_xs().opacity(0.5).child(t("No MCP servers yet", "还没有 MCP 服务器")))
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(t("No MCP servers yet", "还没有 MCP 服务器")),
+                        )
                     })
+                    .flex()
+                    .flex_col()
+                    .gap_2()
                     .children(mcp_row_elements)
                     .into_any_element(),
                 div()
@@ -220,7 +228,7 @@ fn render_mcp_catalog_page(
                             .child(
                                 div()
                                     .text_xs()
-                                    .opacity(0.6)
+                                    .text_color(theme.muted_foreground)
                                     .child(t("Key for the server you add", "要添加的服务器的密钥")),
                             )
                             .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
@@ -276,8 +284,8 @@ fn render_mcp_json_page(
                     .label(t("Import pasted JSON", "导入粘贴的 JSON"))
                     .small()
                     .primary()
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_import_mcp_json(cx);
+                    .on_click(cx.listener(|workspace, _, window, cx| {
+                        workspace.on_import_mcp_json(window, cx);
                     }))
                     .into_any_element(),
             ],
@@ -347,7 +355,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
             div()
                 .px(px(6.))
                 .py(px(1.))
-                .rounded(px(3.))
+                .rounded(skin::radius_xs())
                 .border_1()
                 .border_color(theme.border)
                 .bg(skin::frost(theme))
@@ -380,9 +388,10 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
         .flex_col()
         .gap_2()
         .p_2()
-        .rounded_md()
+        .rounded(skin::radius_control())
         .border_1()
-        .border_color(theme.border)
+        .border_color(skin::glass_border(theme))
+        .bg(skin::frost(theme))
         .child(
             div()
                 .flex()
@@ -411,7 +420,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                         .child(
                             div()
                                 .text_xs()
-                                .opacity(0.6)
+                                .text_color(theme.muted_foreground)
                                 .whitespace_normal()
                                 .child(format!("{transport} \u{b7} {target}")),
                         )
@@ -485,6 +494,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
 }
 
 fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -> AnyElement {
+    let theme = cx.theme();
     div()
         .id(format!("mcp-catalog-{id}"))
         .flex()
@@ -492,12 +502,12 @@ fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -
         .items_center()
         .justify_between()
         .gap_2()
-        .child(
-            div()
-                .text_sm()
-                .opacity(0.8)
-                .child(format!("{id} \u{b7} {transport}")),
-        )
+        .p_2()
+        .rounded(skin::radius_control())
+        .border_1()
+        .border_color(skin::glass_border(theme))
+        .bg(skin::frost(theme))
+        .child(div().text_sm().child(format!("{id} \u{b7} {transport}")))
         .child(
             Button::new(format!("mcp-add-{id}"))
                 .label(t("Add", "添加"))
@@ -511,7 +521,8 @@ fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -
                             .find(|server| server.id == id)
                             .expect("catalog entry");
                         let input = workspace.mcp_key_input(window, cx);
-                        let key = input.read(cx).value().trim().to_owned();
+                        let key = crate::workspace::normalized_key_input(&input.read(cx).value())
+                            .unwrap_or_default();
                         input.update(cx, |state, cx| state.set_value("", window, cx));
                         workspace.on_add_builtin_mcp(server, &key, cx);
                     })
@@ -558,6 +569,20 @@ impl McpForm {
             api_key,
         })
     }
+
+    pub(crate) fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.id
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.transport = "http".to_owned();
+        self.endpoint
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.command
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.env
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.api_key
+            .update(cx, |state, cx| state.set_value("", window, cx));
+    }
 }
 
 /// Builds the server row the custom form currently describes, from its raw
@@ -570,12 +595,12 @@ pub(crate) fn build_mcp_server(
     command: &str,
     env_line: &str,
 ) -> Result<mycode_config::McpServerSettings, String> {
-    match transport {
+    let server = match transport {
         "http" => {
             if endpoint.is_empty() {
                 return Err(t("http servers need an endpoint", "HTTP 服务器需要端点").to_owned());
             }
-            Ok(mycode_config::McpServerSettings {
+            mycode_config::McpServerSettings {
                 id: id.to_owned(),
                 enabled: true,
                 transport: transport.to_owned(),
@@ -584,7 +609,7 @@ pub(crate) fn build_mcp_server(
                 env: Default::default(),
                 endpoint: Some(endpoint.to_owned()),
                 key_header: Some("bearer".to_owned()),
-            })
+            }
         }
         "stdio" => {
             // The form takes the whole line the server docs publish
@@ -595,7 +620,7 @@ pub(crate) fn build_mcp_server(
                 return Err(t("stdio servers need a command", "stdio 服务器需要命令").to_owned());
             };
             let env = crate::workspace::parse_env_line(env_line)?;
-            Ok(mycode_config::McpServerSettings {
+            mycode_config::McpServerSettings {
                 id: id.to_owned(),
                 enabled: true,
                 transport: transport.to_owned(),
@@ -604,14 +629,24 @@ pub(crate) fn build_mcp_server(
                 env,
                 endpoint: None,
                 key_header: None,
-            })
+            }
         }
-        _ => Err(t(
-            "transport must be http or stdio",
-            "传输方式必须是 http 或 stdio",
-        )
-        .to_owned()),
-    }
+        _ => {
+            return Err(t(
+                "transport must be http or stdio",
+                "传输方式必须是 http 或 stdio",
+            )
+            .to_owned());
+        }
+    };
+    let probe = mycode_config::AppSettings {
+        mcp_servers: vec![server.clone()],
+        ..mycode_config::AppSettings::default()
+    };
+    probe
+        .validate()
+        .map_err(|error| format!("invalid MCP server: {}", error.summary()))?;
+    Ok(server)
 }
 
 fn render_mcp_form(
@@ -638,28 +673,32 @@ fn render_mcp_form(
         |workspace, transport, cx| workspace.on_select_mcp_transport(transport, cx),
         cx,
     );
-    let theme: &Theme = cx.theme();
-    div()
-        .id("mcp-form")
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_3()
-        .rounded_md()
-        .bg(theme.secondary)
-        .child(
-            div()
-                .text_xs()
-                .opacity(0.7)
-                .child(t("Add a custom MCP server", "添加自定义 MCP 服务器")),
+    let (id_input, endpoint_input, api_key_input, command_input, env_input) = {
+        let read = form.read(cx);
+        (
+            read.id.clone(),
+            read.endpoint.clone(),
+            read.api_key.clone(),
+            read.command.clone(),
+            read.env.clone(),
         )
-        .child(
+    };
+    let theme: &Theme = cx.theme();
+    settings_card(
+        "mcp-form",
+        t("Add a custom MCP server", "添加自定义 MCP 服务器"),
+        Some(t(
+            "Use a unique id. HTTP servers require an https:// endpoint.",
+            "请使用唯一标识。HTTP 服务器需要 https:// 端点。",
+        )),
+        theme,
+        vec![
             div()
                 .flex()
                 .flex_col()
                 .gap_2()
                 .text_sm()
-                .child(labeled_field(t("id", "标识"), form.read(cx).id.clone()))
+                .child(labeled_field(t("id", "标识"), id_input))
                 .child(transport_field)
                 // Only the fields the chosen transport uses are shown; the
                 // old form listed every field and users typed the full
@@ -667,14 +706,14 @@ fn render_mcp_form(
                 .when(is_http, |this| {
                     this.child(labeled_field(
                         t("endpoint (https URL)", "端点(https URL)"),
-                        form.read(cx).endpoint.clone(),
+                        endpoint_input,
                     ))
                     .child(labeled_field(
                         t(
                             "api key (stored in the vault, sent as Bearer)",
                             "API 密钥(保存在凭据库,以 Bearer 发送)",
                         ),
-                        form.read(cx).api_key.clone(),
+                        api_key_input,
                     ))
                 })
                 .when(!is_http, |this| {
@@ -683,25 +722,75 @@ fn render_mcp_form(
                             "command line (program and arguments, quotes allowed)",
                             "命令行(程序与参数,允许引号)",
                         ),
-                        form.read(cx).command.clone(),
+                        command_input,
                     ))
                     .child(labeled_field(
                         t(
                             "environment (KEY=VALUE pairs, optional)",
                             "环境变量(KEY=VALUE,可选)",
                         ),
-                        form.read(cx).env.clone(),
+                        env_input,
                     ))
-                }),
+                })
+                .into_any_element(),
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(
+                    Button::new("mcp-add")
+                        .icon(IconName::Check)
+                        .label(t("Add server", "添加服务器"))
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|workspace, _, window, cx| {
+                            workspace.on_add_mcp(window, cx);
+                        })),
+                )
+                .into_any_element(),
+        ],
+    )
+    .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_mcp_server;
+
+    #[test]
+    fn custom_mcp_builder_validates_id_endpoint_and_stdio_command() {
+        let bad_id = build_mcp_server("Bad Id", "http", "https://mcp.example.com/mcp", "", "")
+            .expect_err("invalid portable id must be refused");
+        assert!(bad_id.contains("invalid MCP server"), "{bad_id}");
+
+        let bad_url = build_mcp_server("my-mcp", "http", "http://mcp.example.com/mcp", "", "")
+            .expect_err("non-https endpoint must be refused");
+        assert!(bad_url.contains("https://"), "{bad_url}");
+
+        let bad_cmd = build_mcp_server("my-mcp", "stdio", "", "npx|evil", "")
+            .expect_err("shell metacharacters in executable must be refused");
+        assert!(bad_cmd.contains("invalid MCP server"), "{bad_cmd}");
+
+        let stdio = build_mcp_server(
+            "fs-mcp",
+            "stdio",
+            "http://leftover.invalid",
+            "npx -y @modelcontextprotocol/server-filesystem C:\\projects",
+            "FOO=bar",
         )
-        .child(
-            Button::new("mcp-add")
-                .label(t("Add server", "添加服务器"))
-                .small()
-                .outline()
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.on_add_mcp(cx);
-                })),
-        )
-        .into_any_element()
+        .expect("valid stdio MCP server");
+        assert_eq!(stdio.id, "fs-mcp");
+        assert_eq!(stdio.transport, "stdio");
+        assert_eq!(stdio.command.as_deref(), Some("npx"));
+        assert_eq!(
+            stdio.args,
+            vec![
+                "-y".to_owned(),
+                "@modelcontextprotocol/server-filesystem".to_owned(),
+                "C:\\projects".to_owned(),
+            ]
+        );
+        assert_eq!(stdio.env.get("FOO").map(String::as_str), Some("bar"));
+        assert!(stdio.endpoint.is_none());
+    }
 }

@@ -51,16 +51,15 @@ impl Workspace {
     /// the full changes drawer is already open.
     pub(crate) fn on_select_git_file(&mut self, path: &str, cx: &mut Context<Self>) {
         self.git_diff_panel_open = true;
-        if self.git_diff_path.as_deref() == Some(path) {
-            cx.notify();
-            return;
-        }
+        let same_path = self.git_diff_path.as_deref() == Some(path);
         let Some(root) = self.vm.project_dir.clone() else {
             return;
         };
         let path = path.to_owned();
         self.git_diff_path = Some(path.clone());
-        self.git_diff = t("Loading diff…", "正在加载差异…").to_owned();
+        if !same_path {
+            self.git_diff = t("Loading diff…", "正在加载差异…").to_owned();
+        }
         self.git_diff_generation = self.git_diff_generation.wrapping_add(1);
         let generation = self.git_diff_generation;
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -153,9 +152,18 @@ impl Workspace {
         self.git_status_pending = false;
         let current =
             self.git_generation == generation && self.vm.project_dir.as_deref() == Some(root);
-        if current && self.git != snapshot {
-            self.git = snapshot;
-            cx.notify();
+        if current {
+            if self.git != snapshot {
+                self.git = snapshot;
+                cx.notify();
+            }
+            // Contents can change without changing porcelain status (`M`
+            // stays `M`), so refresh an open diff after every watched read.
+            if self.git_diff_panel_open
+                && let Some(path) = self.git_diff_path.clone()
+            {
+                self.on_select_git_file(&path, cx);
+            }
         }
         if pending && self.vm.project_dir.is_some() {
             self.spawn_git_status(cx);

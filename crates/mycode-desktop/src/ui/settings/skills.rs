@@ -4,12 +4,11 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
-use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div, px,
-};
+use gpui_kit::{AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div};
 
 use super::widgets::settings_card;
 use crate::i18n::t;
+use crate::ui::skin;
 use crate::workspace::Workspace;
 
 pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyElement {
@@ -19,7 +18,7 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
         vec![
             div()
                 .text_xs()
-                .opacity(0.5)
+                .text_color(theme.muted_foreground)
                 .whitespace_normal()
                 .child(t(
                     "No skills yet. Add SKILL.md under the project .agents/skills/ folder \
@@ -47,9 +46,10 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                     .justify_between()
                     .gap_3()
                     .p_3()
-                    .rounded(px(3.))
+                    .rounded(skin::radius_control())
                     .border_1()
-                    .border_color(theme.border)
+                    .border_color(skin::glass_border(theme))
+                    .bg(skin::frost(theme))
                     .child(
                         div()
                             .flex_1()
@@ -66,14 +66,15 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                             .child(
                                 div()
                                     .text_xs()
-                                    .opacity(0.7)
+                                    .text_color(theme.foreground)
+                                    .opacity(0.85)
                                     .whitespace_normal()
                                     .child(skill.title.clone()),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .opacity(0.45)
+                                    .text_color(theme.muted_foreground)
                                     .whitespace_normal()
                                     .child(format!("{scope} · {}", skill.path)),
                             ),

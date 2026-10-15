@@ -148,7 +148,13 @@ impl Tool for AgentTool {
                 "prompt exceeds {MAX_AGENT_PROMPT_CHARS} characters"
             )));
         }
-        let description = args.description.unwrap_or_else(|| brief_label(&prompt));
+        let description = args
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|desc| !desc.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| brief_label(&prompt));
         let request = SubagentRequest {
             agent,
             prompt,

@@ -130,6 +130,7 @@ pub(crate) fn run_core(
                     provider_id,
                     model,
                 } => {
+                    cancel_turn(&state, session.as_str());
                     let task = manual_compact(
                         state.clone(),
                         events.clone(),
@@ -150,46 +151,50 @@ pub(crate) fn run_core(
                     let reply = with_reply.reply;
                     let cancels = state.subagent_cancels.clone();
                     tokio::spawn(async move {
-                        let outcome = match cancels.lock() {
-                            Ok(mut map) => match map.remove(&key) {
-                                Some(token) => {
-                                    token.cancel();
-                                    Ok(())
-                                }
-                                None => Err("that subagent is not running".to_owned()),
-                            },
-                            Err(_) => Err("subagent registry locked".to_owned()),
+                        let mut map = cancels
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let outcome = match map.remove(&key) {
+                            Some(token) => {
+                                token.cancel();
+                                Ok(())
+                            }
+                            None => Err("that subagent is not running".to_owned()),
                         };
+                        drop(map);
                         let _ = reply.send(BridgeReply::SubagentCancelled(outcome));
                     });
                 }
                 BridgeCommand::Steer { session_id, text } => {
-                    let outcome = match state.steer_inboxes.lock() {
-                        Ok(inboxes) => match inboxes.get(&session_id) {
-                            Some(inbox) => {
-                                inbox.push(text);
-                                Ok(())
-                            }
-                            None => Err("no turn is running for this session".to_owned()),
-                        },
-                        Err(_) => Err("steer registry locked".to_owned()),
+                    let inboxes = state
+                        .steer_inboxes
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let outcome = match inboxes.get(&session_id) {
+                        Some(inbox) => {
+                            inbox.push(text);
+                            Ok(())
+                        }
+                        None => Err("no turn is running for this session".to_owned()),
                     };
+                    drop(inboxes);
                     let _ = with_reply.reply.send(BridgeReply::Steered(outcome));
                 }
                 BridgeCommand::CancelChat { session_id } => {
                     let reply = with_reply.reply;
                     let cancels = state.turn_cancels.clone();
                     tokio::spawn(async move {
-                        let outcome = match cancels.lock() {
-                            Ok(map) => match map.get(&session_id) {
-                                Some(token) => {
-                                    token.cancel();
-                                    Ok(())
-                                }
-                                None => Err("no turn is running for this session".to_owned()),
-                            },
-                            Err(_) => Err("cancel registry locked".to_owned()),
+                        let map = cancels
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let outcome = match map.get(&session_id) {
+                            Some(token) => {
+                                token.cancel();
+                                Ok(())
+                            }
+                            None => Err("no turn is running for this session".to_owned()),
                         };
+                        drop(map);
                         let _ = reply.send(BridgeReply::ChatCancelled(outcome));
                     });
                 }
@@ -330,9 +335,11 @@ async fn blocking<T: Send + 'static>(
 /// subagent map is left alone so a follow-up turn does not cancel work
 /// the user is steering.
 fn cancel_turn(state: &CoreState, session_id: &str) {
-    if let Ok(mut turns) = state.turn_cancels.lock()
-        && let Some(token) = turns.remove(session_id)
-    {
+    let mut turns = state
+        .turn_cancels
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(token) = turns.remove(session_id) {
         token.cancel();
     }
 }
@@ -344,17 +351,19 @@ fn cancel_turn(state: &CoreState, session_id: &str) {
 /// Session deletion uses this. A new chat turn uses [`cancel_turn`] only.
 fn cancel_session_work(state: &CoreState, session_id: &str) {
     cancel_turn(state, session_id);
-    if let Ok(mut subagents) = state.subagent_cancels.lock() {
-        let prefix = format!("{session_id}:");
-        subagents.retain(|key, token| {
-            if key.starts_with(&prefix) {
-                token.cancel();
-                false
-            } else {
-                true
-            }
-        });
-    }
+    let mut subagents = state
+        .subagent_cancels
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let prefix = format!("{session_id}:");
+    subagents.retain(|key, token| {
+        if key.starts_with(&prefix) {
+            token.cancel();
+            false
+        } else {
+            true
+        }
+    });
 }
 
 async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
@@ -369,6 +378,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                 session_id: created.session_id.as_str().to_owned(),
                 root_branch_id: created.branch_id.as_str().to_owned(),
                 title: String::new(),
+                updated_at_ms: u64::try_from(crate::unix_now().as_millis())
+                    .ok()
+                    .filter(|&ms| ms > 0),
                 event_count: 0,
                 active: true,
                 corrupt: false,
@@ -507,10 +519,12 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             // Drop the in-memory project binding only after the directory is
             // gone. Leaving it made tool cwd and file search keep using a
             // session the user had already deleted.
-            if deleted.is_ok()
-                && let Ok(mut projects) = state.projects.lock()
-            {
-                projects.remove(session_id.as_str());
+            if deleted.is_ok() {
+                state
+                    .projects
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(session_id.as_str());
             }
             BridgeReply::SessionDeleted(deleted)
         }

@@ -4303,6 +4303,7 @@ dependencies = [
 name = "mycode-desktop"
 version = "0.11.16"
 dependencies = [
+ "chrono",
  "gpui-kit",
  "mycode-app",
  "mycode-config",

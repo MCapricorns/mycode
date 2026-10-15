@@ -51,17 +51,37 @@ pub struct AskQuestion {
 /// Whether `choice` is one of the newline-joined selections in `answer`.
 #[must_use]
 pub fn ask_choice_selected(answer: &str, choice: &str) -> bool {
-    answer.split('\n').any(|item| item == choice)
+    let choice = choice.trim_end_matches('\r');
+    if choice.is_empty() {
+        return false;
+    }
+    answer
+        .split('\n')
+        .map(|item| item.trim_end_matches('\r'))
+        .any(|item| item == choice)
 }
 
 /// Toggles one choice. Single-select replaces the answer. Multi-select adds
 /// or removes that line and never collapses the others.
 #[must_use]
 pub fn toggle_ask_choice(answer: &str, choice: &str, multiple: bool) -> String {
+    let choice = choice.trim_end_matches('\r');
+    if choice.is_empty() {
+        return answer
+            .split('\n')
+            .map(|item| item.trim_end_matches('\r'))
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     if !multiple {
         return choice.to_owned();
     }
-    let mut items: Vec<&str> = answer.split('\n').filter(|item| !item.is_empty()).collect();
+    let mut items: Vec<&str> = answer
+        .split('\n')
+        .map(|item| item.trim_end_matches('\r'))
+        .filter(|item| !item.is_empty())
+        .collect();
     if let Some(index) = items.iter().position(|item| *item == choice) {
         items.remove(index);
     } else {
@@ -252,7 +272,16 @@ fn attach_siblings(
 ) {
     let choices = take_first(map, &["choices", "options", "choice"]);
     let optional = take_first(map, &["optional"]);
-    let multiple = take_first(map, &["multiple", "multi_select", "allow_multiple"]);
+    let multiple = take_first(
+        map,
+        &[
+            "multiple",
+            "multi_select",
+            "allow_multiple",
+            "multiSelect",
+            "allowMultiple",
+        ],
+    );
     if choices.is_none() && optional.is_none() && multiple.is_none() {
         return;
     }
@@ -290,6 +319,8 @@ fn lift_question_fields(
         "multiple",
         "multi_select",
         "allow_multiple",
+        "multiSelect",
+        "allowMultiple",
     ] {
         if let Some(value) = map.remove(key) {
             item.entry(key.to_owned()).or_insert(value);
@@ -331,8 +362,16 @@ fn normalize_question(value: serde_json::Value) -> Option<serde_json::Value> {
             out.insert("choices".to_owned(), choices);
         }
     }
-    if let Some(flag) = take_first(&mut map, &["multiple", "multi_select", "allow_multiple"])
-        && let Some(flag) = coerce_bool(&flag)
+    if let Some(flag) = take_first(
+        &mut map,
+        &[
+            "multiple",
+            "multi_select",
+            "allow_multiple",
+            "multiSelect",
+            "allowMultiple",
+        ],
+    ) && let Some(flag) = coerce_bool(&flag)
     {
         out.insert("multiple".to_owned(), serde_json::Value::Bool(flag));
     }
@@ -543,6 +582,15 @@ mod tests {
         }]);
         assert!(rendered.contains("red"), "{rendered}");
         assert!(rendered.contains("blue"), "{rendered}");
+        assert!(!ask_choice_selected("", ""));
+        assert!(ask_choice_selected("red\r\nblue", "red"));
+        assert_eq!(toggle_ask_choice("red\r\nblue", "red", true), "blue");
+        let parsed_string_camel = normalize_ask_args(json!({
+            "questions": "[{\"question\":\"Which?\",\"choices\":[\"red\",\"blue\"],\"multiSelect\":true}]"
+        }));
+        let q: AskArgs =
+            serde_json::from_value(parsed_string_camel).expect("stringified multiSelect");
+        assert!(q.questions[0].multiple);
     }
 
     fn accept_ask(args: serde_json::Value) -> Vec<AskQuestion> {

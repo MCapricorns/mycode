@@ -87,14 +87,14 @@ pub(super) fn render_about_section(
             )
         }
     };
-    let rows = vec![
+    let mut rows = vec![
         settings_row(
             "version",
             t("Current version", "当前版本"),
             None,
             div()
                 .text_sm()
-                .opacity(0.8)
+                .text_color(cx.theme().muted_foreground)
                 .child(format!("v{current}"))
                 .into_any_element(),
         ),
@@ -104,7 +104,7 @@ pub(super) fn render_about_section(
             None,
             div()
                 .text_sm()
-                .opacity(0.8)
+                .text_color(cx.theme().muted_foreground)
                 .child("MaMy")
                 .into_any_element(),
         ),
@@ -114,7 +114,7 @@ pub(super) fn render_about_section(
             Some(t("People who built MYCode.", "参与构建 MYCode 的人。")),
             div()
                 .text_sm()
-                .opacity(0.8)
+                .text_color(cx.theme().muted_foreground)
                 .child("MaMy, YangChengxxyy, iKunCai")
                 .into_any_element(),
         ),
@@ -145,7 +145,7 @@ pub(super) fn render_about_section(
                 .child(
                     div()
                         .text_xs()
-                        .opacity(0.7)
+                        .text_color(cx.theme().muted_foreground)
                         .whitespace_normal()
                         .child(status.0),
                 )
@@ -166,40 +166,44 @@ pub(super) fn render_about_section(
                 )
                 .into_any_element(),
         ),
-        status
-            .1
-            .map(|node| {
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .child(node)
-                    .into_any_element()
-            })
-            .unwrap_or_else(|| div().into_any_element()),
-        settings_row(
-            "catalog",
-            t("Provider catalog", "服务商目录"),
-            None,
+    ];
+    if let Some(node) = status.1 {
+        rows.push(
             div()
                 .flex()
                 .flex_row()
-                .items_center()
-                .gap_2()
-                .child(div().text_xs().opacity(0.6).child(catalog_line))
-                .child(
-                    Button::new("catalog-refresh")
-                        .icon(IconName::RefreshCw)
-                        .label(t("Refresh", "刷新"))
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_refresh_catalog(cx);
-                        })),
-                )
+                .justify_end()
+                .child(node)
                 .into_any_element(),
-        ),
-    ];
+        );
+    }
+    rows.push(settings_row(
+        "catalog",
+        t("Provider catalog", "服务商目录"),
+        None,
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(catalog_line),
+            )
+            .child(
+                Button::new("catalog-refresh")
+                    .icon(IconName::RefreshCw)
+                    .label(t("Refresh", "刷新"))
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_refresh_catalog(cx);
+                    })),
+            )
+            .into_any_element(),
+    ));
     let theme = cx.theme();
     settings_card(
         "about",

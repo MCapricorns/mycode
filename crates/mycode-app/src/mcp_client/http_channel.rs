@@ -246,11 +246,15 @@ fn is_reply(value: &Value, id: Option<u64>) -> bool {
     }
 }
 
+/// Completes one JSON-RPC request's reply value.
+///
+/// Unlike notifications, a request requires a response object carrying `id`
+/// or an `error` object; an empty body is a protocol violation.
 fn finish_reply(value: Option<Value>, id: u64) -> Result<Value, McpError> {
     let Some(value) = value else {
-        // No JSON-RPC object. `notify` treats that as success and drops this
-        // value. `request` also lands here on an empty body and returns Null.
-        return Ok(Value::Null);
+        return Err(McpError::protocol(
+            "server returned an empty response to a request",
+        ));
     };
     if let Some(error) = value.get("error").filter(|error| error.is_object()) {
         return Err(McpError::server(error));
@@ -331,5 +335,14 @@ mod tests {
             .expect("error");
         assert!(reply["error"].is_object());
         assert!(sse_reply(b"data: [DONE]\n\n", Some(2)).unwrap().is_none());
+    }
+
+    #[test]
+    fn finish_reply_rejects_missing_response_object() {
+        let err = super::finish_reply(None, 7).expect_err("empty request response must fail");
+        assert!(
+            matches!(err, super::McpError::Protocol(ref msg) if msg.contains("empty response")),
+            "{err:?}"
+        );
     }
 }

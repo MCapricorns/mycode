@@ -16,8 +16,8 @@ mod web;
 mod widgets;
 
 pub(crate) use mcp::{McpForm, build_mcp_server};
-pub(crate) use models::ProviderForm;
-pub(crate) use web::BackendForm;
+pub(crate) use models::{ProviderForm, build_custom_provider};
+pub(crate) use web::{BackendForm, build_custom_backend};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -414,14 +414,32 @@ fn render_settings_nav(
                 .text_xs()
                 .text_color(desk.faint)
                 .child(format!("v{}", mycode_app::current_version()))
-                .when(dirty || saving, |this| {
-                    this.child(
-                        div()
-                            .text_color(desk.faint)
-                            .child(t("writing\u{2026}", "写入中\u{2026}")),
-                    )
-                }),
+                .when_some(
+                    nav_footer_status(saving, dirty),
+                    |this, (label, is_amber)| {
+                        this.child(
+                            div()
+                                .text_color(if is_amber { desk.amber } else { desk.faint })
+                                .child(label),
+                        )
+                    },
+                ),
         )
+}
+
+/// Footer status text and whether it highlights an unsaved draft.
+///
+/// Only an active write shows "writing…"; a dirty draft that is not writing
+/// (debounce pending or a rejected save) shows "unsaved" instead of claiming
+/// a write is in progress forever.
+fn nav_footer_status(saving: bool, dirty: bool) -> Option<(&'static str, bool)> {
+    if saving {
+        Some((t("writing\u{2026}", "写入中\u{2026}"), false))
+    } else if dirty {
+        Some((t("unsaved", "未保存"), true))
+    } else {
+        None
+    }
 }
 
 fn section_matches(section: SettingsSection, query: &str, role_names: &[String]) -> bool {
@@ -494,7 +512,7 @@ fn nav_row(
                     .min_w(px(18.))
                     .px(px(5.))
                     .py(px(1.))
-                    .rounded(px(3.))
+                    .rounded(crate::ui::skin::radius_xs())
                     .border_1()
                     .border_color(theme.border)
                     .text_xs()
@@ -542,7 +560,34 @@ pub(super) fn subview_header(
                 .child(title.to_owned()),
         )
         .when_some(hint, |this, hint| {
-            this.child(div().text_xs().opacity(0.5).child(hint.to_owned()))
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(hint.to_owned()),
+            )
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nav_footer_status;
+
+    #[test]
+    fn footer_status_only_reports_writing_when_a_save_is_in_flight() {
+        assert_eq!(nav_footer_status(false, false), None);
+        assert_eq!(
+            nav_footer_status(true, false),
+            Some((crate::i18n::t("writing\u{2026}", "写入中\u{2026}"), false))
+        );
+        assert_eq!(
+            nav_footer_status(true, true),
+            Some((crate::i18n::t("writing\u{2026}", "写入中\u{2026}"), false))
+        );
+        assert_eq!(
+            nav_footer_status(false, true),
+            Some((crate::i18n::t("unsaved", "未保存"), true))
+        );
+    }
 }

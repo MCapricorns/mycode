@@ -381,12 +381,27 @@ impl UiState {
                 return Err(invalid());
             }
         }
+        if let Some(provider) = &self.selected_provider
+            && !valid_pin_part(provider)
+        {
+            return Err(invalid());
+        }
+        if let Some(model) = &self.selected_model
+            && !valid_pin_part(model)
+        {
+            return Err(invalid());
+        }
+        if let Some(reasoning) = &self.selected_reasoning
+            && !valid_effort_token(reasoning)
+        {
+            return Err(invalid());
+        }
         validate_pins(&self.recent_models, MAX_RECENT_MODELS)?;
         validate_pins(&self.starred_models, MAX_STARRED_MODELS)?;
         if self.session_models.len() > MAX_SESSION_MODELS {
             return Err(invalid());
         }
-        for pin in &self.session_models {
+        for (index, pin) in self.session_models.iter().enumerate() {
             if !valid_session_id(&pin.session_id)
                 || !valid_pin_part(&pin.provider)
                 || !valid_pin_part(&pin.model)
@@ -394,6 +409,9 @@ impl UiState {
                     .reasoning
                     .as_deref()
                     .is_some_and(|level| !valid_effort_token(level))
+                || self.session_models[..index]
+                    .iter()
+                    .any(|earlier| earlier.session_id == pin.session_id)
             {
                 return Err(invalid());
             }
@@ -620,6 +638,69 @@ mod tests {
                 .push(ModelPin::new("openai", format!("m{index}")));
         }
         assert!(state.validate().is_err());
+    }
+
+    #[test]
+    fn retired_project_trust_is_ignored_without_resetting_ui_preferences() {
+        let bytes = br#"{
+            "formatVersion": 1, "kind": "mycode-ui-state",
+            "trustedProjects": ["/legacy/project"], "autoUpdate": false,
+            "selectedProvider": "openai", "selectedModel": "gpt-4o"
+        }"#;
+        let (state, _) = decode_ui_state(bytes).expect("legacy preference remains readable");
+        assert!(!state.auto_update);
+        assert_eq!(state.selected_model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn advisory_extensions_are_compatible_but_selected_pins_are_validated() {
+        let unknown_top = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-ui-state",
+            "autoUpdates": false
+        }"#;
+        assert!(decode_ui_state(unknown_top).is_ok());
+
+        let unknown_nested = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-ui-state",
+            "recentModels": [{ "provider": "openai", "model": "gpt-4o", "extra": 1 }]
+        }"#;
+        assert!(decode_ui_state(unknown_nested).is_ok());
+
+        let mut state = super::UiState {
+            selected_provider: Some("bad\0provider".to_owned()),
+            ..super::UiState::default()
+        };
+        assert!(state.validate().is_err());
+
+        state.selected_provider = Some("openai".to_owned());
+        state.selected_model = Some(String::new());
+        assert!(state.validate().is_err());
+
+        state.selected_model = Some("gpt-4o".to_owned());
+        state.selected_reasoning = Some("not a valid token!".to_owned());
+        assert!(state.validate().is_err());
+
+        state.selected_reasoning = Some("high".to_owned());
+        assert!(state.validate().is_ok());
+
+        state.session_models.push(super::SessionModelPin {
+            session_id: "ses-1".to_owned(),
+            provider: "openai".to_owned(),
+            model: "gpt-4o".to_owned(),
+            reasoning: None,
+        });
+        state.session_models.push(super::SessionModelPin {
+            session_id: "ses-1".to_owned(),
+            provider: "anthropic".to_owned(),
+            model: "claude".to_owned(),
+            reasoning: None,
+        });
+        assert!(
+            state.validate().is_err(),
+            "duplicate session model pins must fail validation"
+        );
     }
 
     #[test]

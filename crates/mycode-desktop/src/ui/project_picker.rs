@@ -431,7 +431,7 @@ pub(crate) fn browse(path: Option<PathBuf>) -> ProjectPicker {
     }
 }
 
-fn starting_directory() -> PathBuf {
+pub(crate) fn starting_directory() -> PathBuf {
     for key in ["USERPROFILE", "HOME"] {
         if let Some(value) = std::env::var_os(key) {
             let path = PathBuf::from(value);
@@ -462,7 +462,9 @@ fn list_entries(path: &Path) -> Result<(Vec<PickerEntry>, bool), String> {
         let entry = PickerEntry {
             name,
             path: item.path(),
-            is_dir: file_type.is_dir(),
+            // This is a user-directed browser, not a confined tool walk.
+            // Directory shortcuts must remain navigable.
+            is_dir: file_type.is_dir() || (file_type.is_symlink() && item.path().is_dir()),
         };
         if entry.is_dir {
             folders.push(entry);
@@ -504,16 +506,23 @@ fn drive_selected(current: Option<&Path>, drive: &Path) -> bool {
     let Some(current) = current else {
         return false;
     };
-    let current = current
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    let drive = drive
-        .to_string_lossy()
-        .trim_end_matches(['\\', '/'])
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    !drive.is_empty() && current.starts_with(&drive)
+    #[cfg(windows)]
+    {
+        let current = current
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+        let drive = drive
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+        !drive.is_empty() && current.starts_with(&drive)
+    }
+    #[cfg(not(windows))]
+    {
+        current.starts_with(drive)
+    }
 }
 
 fn filesystem_roots() -> Vec<PathBuf> {

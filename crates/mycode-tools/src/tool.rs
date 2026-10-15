@@ -207,8 +207,8 @@ pub trait ToolDyn: Send + Sync {
     fn requires_file_preflight(&self) -> bool {
         self.file_access().is_some()
     }
-    /// Validate `args` against the tool's schema, deserialize, and
-    /// execute. Wrong-shaped arguments fail with
+    /// Validate `args` against the tool's schema (`Self::spec().params_schema`),
+    /// deserialize, and execute. Wrong-shaped arguments fail with
     /// [`ToolError::InvalidArgs`].
     fn execute_dyn<'a>(
         &'a self,
@@ -256,9 +256,11 @@ fn normalize_tool_schema(value: &mut Value) {
     }
 }
 
-/// Validate raw `args` against the schemars-generated schema of `A`.
-pub(crate) fn validate_args<A: JsonSchema>(args: &Value) -> Result<(), ToolError> {
-    let validator = jsonschema::validator_for(&args_schema::<A>())
+/// Validate raw `args` against an arbitrary JSON Schema value.
+pub(crate) fn validate_args_with_schema(schema: &Value, args: &Value) -> Result<(), ToolError> {
+    let mut normalized = schema.clone();
+    normalize_tool_schema(&mut normalized);
+    let validator = jsonschema::validator_for(&normalized)
         .map_err(|err| ToolError::Execution(format!("failed to compile argument schema: {err}")))?;
     let errors: Vec<String> = validator
         .iter_errors(args)
@@ -271,16 +273,24 @@ pub(crate) fn validate_args<A: JsonSchema>(args: &Value) -> Result<(), ToolError
     }
 }
 
+/// Validate raw `args` against the schemars-generated schema of `A`.
+#[cfg(test)]
+pub(crate) fn validate_args<A: JsonSchema>(args: &Value) -> Result<(), ToolError> {
+    validate_args_with_schema(&args_schema::<A>(), args)
+}
+
 /// Blanket type erasure: every [`Tool`] is a [`ToolDyn`]. Deserializes
-/// `Value → Args` after validating it against the schemars-generated
-/// schema, so wrong-shaped arguments are rejected with
+/// `Value → Args` after validating it against `self.params_schema()`,
+/// so wrong-shaped arguments are rejected with
 /// [`ToolError::InvalidArgs`] before the tool runs.
 impl<T: Tool> ToolDyn for T {
     fn spec(&self) -> ToolSpec {
+        let mut params_schema = self.params_schema();
+        normalize_tool_schema(&mut params_schema);
         ToolSpec {
             name: self.name().to_owned(),
             description: self.description().to_owned(),
-            params_schema: self.params_schema(),
+            params_schema,
         }
     }
 
@@ -316,7 +326,8 @@ impl<T: Tool> ToolDyn for T {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
         Box::pin(async move {
             let args = self.prepare_args(normalize_tool_args(args));
-            validate_args::<T::Args>(&args)?;
+            let schema = self.params_schema();
+            validate_args_with_schema(&schema, &args)?;
             let typed = serde_json::from_value(args)
                 .map_err(|err| ToolError::InvalidArgs(err.to_string()))?;
             self.execute(typed, ctx, out).await
@@ -431,5 +442,72 @@ mod tests {
         assert_eq!(args, json!({"mode": {"mode": "program", "x": 1}}));
         let args = normalize_tool_args(json!({"questions": [{"question": "Go?"}]}));
         assert_eq!(args, json!({"questions": [{"question": "Go?"}]}));
+    }
+
+    #[tokio::test]
+    async fn execute_dyn_validates_against_overridden_params_schema() {
+        use schemars::JsonSchema;
+        use serde::Deserialize;
+        use serde_json::Value;
+
+        use crate::ctx::ToolCtx;
+        use crate::stream::ToolStream;
+        use crate::tool::{Tool, ToolDyn, ToolError, ToolResult};
+
+        #[derive(Deserialize, JsonSchema)]
+        struct CustomArgs {
+            count: u32,
+        }
+
+        struct CustomSchemaTool;
+
+        impl Tool for CustomSchemaTool {
+            type Args = CustomArgs;
+            type Output = ();
+
+            fn name(&self) -> &str {
+                "custom"
+            }
+
+            fn description(&self) -> &str {
+                "custom schema tool"
+            }
+
+            fn params_schema(&self) -> Value {
+                json!({
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "required": ["count"],
+                    "properties": {
+                        "count": { "type": "integer", "minimum": 1, "maximum": 5 }
+                    }
+                })
+            }
+
+            async fn execute(
+                &self,
+                args: Self::Args,
+                _ctx: &ToolCtx,
+                _out: &mut ToolStream,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult::text(args.count.to_string()))
+            }
+        }
+
+        let tool = CustomSchemaTool;
+        let spec = ToolDyn::spec(&tool);
+        assert!(spec.params_schema.get("$schema").is_none());
+
+        let ctx = ToolCtx::new(".");
+        let mut out = ToolStream::closed();
+        let err = ToolDyn::execute_dyn(&tool, json!({"count": 10}), &ctx, &mut out)
+            .await
+            .expect_err("count above custom maximum must fail schema validation");
+        assert!(matches!(err, ToolError::InvalidArgs(_)), "{err}");
+
+        let ok = ToolDyn::execute_dyn(&tool, json!({"count": 3}), &ctx, &mut out)
+            .await
+            .expect("valid count");
+        assert!(!ok.is_error);
     }
 }

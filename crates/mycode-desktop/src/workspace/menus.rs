@@ -1,0 +1,276 @@
+//! Keyboard navigation for the composer pickers. Selection is transient UI
+//! state; changing a draft or filter resets it without changing the model.
+use gpui_kit::{
+    Context, Focusable as _, KeyDownEvent, ScrollHandle, UniformListScrollHandle, Window,
+};
+
+use crate::ui::model_picker::{ModelPickerTarget, ProviderChoice};
+use crate::view_model::{DesktopAction, MentionKind};
+
+use super::Workspace;
+
+#[derive(Default)]
+pub(super) struct MenuNavigation {
+    mention: Option<usize>,
+    reasoning: Option<usize>,
+    model: Option<usize>,
+    provider: Option<usize>,
+    mention_scroll: ScrollHandle,
+    reasoning_scroll: ScrollHandle,
+    model_scroll: UniformListScrollHandle,
+    provider_scroll: ScrollHandle,
+}
+
+fn highlight(selected: Option<usize>, len: usize, preferred: usize) -> usize {
+    selected.unwrap_or(preferred).min(len.saturating_sub(1))
+}
+
+fn moved(current: usize, len: usize, down: bool) -> usize {
+    if len == 0 {
+        0
+    } else if down {
+        (current + 1) % len
+    } else {
+        (current + len - 1) % len
+    }
+}
+
+impl Workspace {
+    pub(super) fn reset_menu_navigation(&mut self, action: &DesktopAction) {
+        match action {
+            DesktopAction::ComposerChanged(text) if text != &self.vm.composer_draft => {
+                self.menu_navigation.mention = None;
+            }
+            DesktopAction::MentionFiles(_) => self.menu_navigation.mention = None,
+            DesktopAction::ReasoningMenuToggled(_) => self.menu_navigation.reasoning = None,
+            DesktopAction::ModelMenuToggled(_) | DesktopAction::SubagentMenuToggled(_) => {
+                self.menu_navigation.model = None;
+                self.menu_navigation.provider = None;
+            }
+            DesktopAction::ModelMenuBrowse(_) => self.menu_navigation.model = None,
+            DesktopAction::PickerQueryChanged(query) if query != &self.vm.picker_query => {
+                self.menu_navigation.model = None;
+            }
+            DesktopAction::ConversationOpened(_)
+            | DesktopAction::SessionDeleted
+            | DesktopAction::ConversationParked => {
+                self.menu_navigation = MenuNavigation::default();
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn mention_highlight(&self) -> usize {
+        let Some(mention) = &self.vm.mention else {
+            return 0;
+        };
+        let preferred = if mention.kind == MentionKind::Command {
+            crate::view_model::preferred_slash_index(&mention.fragment, &mention.items)
+        } else {
+            0
+        };
+        highlight(self.menu_navigation.mention, mention.items.len(), preferred)
+    }
+
+    pub(crate) fn reasoning_highlight(&self, levels: &[String]) -> usize {
+        let selected = crate::view_model::selected_reasoning_level(&self.vm);
+        let preferred = levels
+            .iter()
+            .position(|level| level == selected)
+            .unwrap_or(0);
+        highlight(self.menu_navigation.reasoning, levels.len(), preferred)
+    }
+
+    pub(crate) fn model_highlight(&self, len: usize, preferred: usize) -> usize {
+        highlight(self.menu_navigation.model, len, preferred)
+    }
+
+    pub(crate) fn provider_highlight(&self, len: usize) -> usize {
+        highlight(self.menu_navigation.provider, len, 0)
+    }
+
+    pub(crate) fn mention_scroll(&self) -> &ScrollHandle {
+        &self.menu_navigation.mention_scroll
+    }
+
+    pub(crate) fn reasoning_scroll(&self) -> &ScrollHandle {
+        &self.menu_navigation.reasoning_scroll
+    }
+
+    pub(crate) fn model_scroll(&self) -> &UniformListScrollHandle {
+        &self.menu_navigation.model_scroll
+    }
+
+    pub(crate) fn provider_scroll(&self) -> &ScrollHandle {
+        &self.menu_navigation.provider_scroll
+    }
+
+    /// Captures only plain navigation keys for a visible picker. Other input
+    /// shortcuts and higher-priority dialogs retain their normal handlers.
+    pub(crate) fn on_menu_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
+        if !matches!(key, "up" | "down" | "enter")
+            || modifiers.control
+            || modifiers.platform
+            || modifiers.alt
+            || modifiers.shift
+            || modifiers.function
+            || self.vm.command_palette_open
+            || self.project_picker.is_some()
+            || self.vm.update_dialog_open
+            || self.vm.subagent_window.is_some()
+        {
+            return false;
+        }
+        if self.vm.reasoning_menu_open {
+            let levels = crate::view_model::selected_reasoning_levels(&self.vm);
+            if levels.is_empty() {
+                return false;
+            }
+            let current = self.reasoning_highlight(&levels);
+            if key == "enter" {
+                self.on_select_reasoning(&levels[current], cx);
+            } else {
+                let index = moved(current, levels.len(), key == "down");
+                self.menu_navigation.reasoning = Some(index);
+                self.menu_navigation.reasoning_scroll.scroll_to_item(index);
+                cx.notify();
+            }
+            return true;
+        }
+        let role = self
+            .vm
+            .subagent_menu
+            .as_ref()
+            .filter(|(_, field)| field == "model")
+            .map(|(role, _)| role.clone());
+        if self.vm.model_menu_open || role.is_some() {
+            let target = role
+                .map(ModelPickerTarget::Role)
+                .unwrap_or(ModelPickerTarget::Session);
+            if let Some(provider) = self.vm.model_menu_browse.clone() {
+                let choices = crate::ui::model_picker::provider_model_choices(&self.vm, &provider);
+                let filtered =
+                    crate::ui::model_picker::filter_model_choices(&choices, &self.vm.picker_query);
+                if filtered.is_empty() {
+                    return true;
+                }
+                if key == "enter" {
+                    self.accept_model_search(cx);
+                } else {
+                    let selected =
+                        crate::ui::model_picker::selected_in_provider(&self.vm, &target, &provider);
+                    let ids = filtered
+                        .iter()
+                        .map(|choice| choice.id.clone())
+                        .collect::<Vec<_>>();
+                    let preferred = crate::ui::model_picker::preferred_index(
+                        &ids,
+                        &self.vm.picker_query,
+                        selected.as_deref(),
+                    );
+                    let index = moved(
+                        self.model_highlight(ids.len(), preferred),
+                        ids.len(),
+                        key == "down",
+                    );
+                    self.menu_navigation.model = Some(index);
+                    self.menu_navigation
+                        .model_scroll
+                        .scroll_to_item(index, gpui_kit::ScrollStrategy::Nearest);
+                    cx.notify();
+                }
+            } else {
+                let choices = crate::ui::model_picker::provider_choices(&self.vm, &target);
+                if choices.is_empty() {
+                    return true;
+                }
+                let current = self.provider_highlight(choices.len());
+                if key == "enter" {
+                    match &choices[current] {
+                        ProviderChoice::Inherit => {
+                            if let ModelPickerTarget::Role(role) = target {
+                                self.on_set_subagent_route(
+                                    &role,
+                                    Some("inherit".to_owned()),
+                                    None,
+                                    cx,
+                                );
+                                self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+                            }
+                        }
+                        ProviderChoice::Pin(pin) => crate::ui::model_picker::select_model(
+                            self,
+                            &target,
+                            &pin.provider,
+                            &pin.model,
+                            cx,
+                        ),
+                        ProviderChoice::Provider(id) => self.on_browse_model_provider(Some(id), cx),
+                    }
+                } else {
+                    let index = moved(current, choices.len(), key == "down");
+                    self.menu_navigation.provider = Some(index);
+                    let child =
+                        crate::ui::model_picker::provider_scroll_index(&self.vm, &target, index);
+                    self.menu_navigation.provider_scroll.scroll_to_item(child);
+                    cx.notify();
+                }
+            }
+            return true;
+        }
+        if self
+            .vm
+            .mention
+            .as_ref()
+            .is_some_and(|mention| !mention.items.is_empty())
+            && self.composer.read(cx).focus_handle(cx).is_focused(window)
+        {
+            if key == "enter" {
+                return self.accept_open_mention(window, cx);
+            }
+            let mention = self.vm.mention.as_ref().expect("visible mention");
+            let index = moved(self.mention_highlight(), mention.items.len(), key == "down");
+            self.menu_navigation.mention = Some(index);
+            // Heading children are real scroll items, so include them when
+            // selecting a command in a later group.
+            let mut headers = usize::from(mention.kind == MentionKind::File);
+            let mut previous = None;
+            if mention.kind == MentionKind::Command {
+                for item in &mention.items[..=index] {
+                    if previous != Some(item.group) {
+                        headers += 1;
+                        previous = Some(item.group);
+                    }
+                }
+            }
+            self.menu_navigation
+                .mention_scroll
+                .scroll_to_item(index + headers);
+            cx.notify();
+            return true;
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{highlight, moved};
+
+    #[test]
+    fn navigation_wraps_and_clamps_after_filtering() {
+        assert_eq!(moved(0, 3, false), 2);
+        assert_eq!(moved(2, 3, true), 0);
+        assert_eq!(moved(0, 0, true), 0);
+        assert_eq!(highlight(None, 5, 3), 3);
+        assert_eq!(highlight(Some(4), 2, 0), 1);
+        assert_eq!(highlight(None, 0, 7), 0);
+    }
+}

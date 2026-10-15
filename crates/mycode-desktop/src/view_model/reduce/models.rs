@@ -321,7 +321,7 @@ fn resolve_remembered_effort(levels: &[String], preferred: &str) -> Option<Strin
             .iter()
             .filter_map(|level| effort_rank(level).map(|rank| (rank, level)))
             .filter(|(rank, _)| *rank <= preferred_rank)
-            .min_by_key(|(rank, _)| *rank)
+            .max_by_key(|(rank, _)| *rank)
             .map(|(_, level)| level.clone());
     }
     levels.iter().find(|level| level == &preferred).cloned()
@@ -404,6 +404,10 @@ mod tests {
 
     #[test]
     fn a_remembered_rung_clamps_to_the_strongest_advertised_fit() {
+        use std::sync::Arc;
+
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+
         let mut state = state_with_low_rung_model(Some("max"));
         super::assign_fresh_session_model(&mut state, "ses1-clamp");
         assert_eq!(
@@ -413,6 +417,49 @@ mod tests {
                 .and_then(|settings| settings.reasoning.as_deref()),
             Some("low"),
             "max on a low-only model lands on low, not default"
+        );
+
+        let document = mycode_config::AppSettings {
+            providers: vec![mycode_config::ProviderSettings {
+                id: "zai".to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: "https://zai.test".to_owned(),
+                models: vec!["glm".to_owned()],
+                enabled: true,
+                context_limit: None,
+                max_output: None,
+            }],
+            ..mycode_config::AppSettings::default()
+        };
+        let mut multi_rung = WorkspaceState {
+            settings: Some(SettingsState::from_settings(&document, 1, Vec::new())),
+            catalog: Some(Arc::new(CatalogDocument {
+                providers: vec![CatalogProvider {
+                    id: "zai".to_owned(),
+                    models: vec![CatalogModel {
+                        id: "glm".to_owned(),
+                        reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_owned(),
+                            "high".to_owned(),
+                            "max".to_owned(),
+                        ],
+                        ..CatalogModel::default()
+                    }],
+                    ..CatalogProvider::default()
+                }],
+            })),
+            default_reasoning: Some("xhigh".to_owned()),
+            ..WorkspaceState::default()
+        };
+        super::assign_fresh_session_model(&mut multi_rung, "ses1-multi");
+        assert_eq!(
+            multi_rung
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.reasoning.as_deref()),
+            Some("high"),
+            "xhigh on a [low, high, max] model clamps to high, not low"
         );
     }
 

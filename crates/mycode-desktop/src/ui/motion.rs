@@ -8,7 +8,7 @@ use gpui_kit::{
     Animation, AnimationExt, AnyElement, ElementId, IntoElement, Styled, ease_out_quint,
 };
 
-const ENTER_MS: u64 = 170;
+const ENTER_MS: u64 = 140;
 
 /// Whether a one-shot opacity fade should tween.
 #[must_use]
@@ -157,7 +157,7 @@ mod tests {
     fn reduced_motion_skips_opacity_tweens() {
         assert!(opacity_fade_plays(false));
         assert!(!opacity_fade_plays(true));
-        assert_eq!(ENTER_MS, 170);
+        assert_eq!(ENTER_MS, 140);
     }
 
     #[test]

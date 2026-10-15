@@ -160,6 +160,17 @@ impl std::fmt::Debug for ResolvedRoot {
     }
 }
 
+#[cfg(windows)]
+fn confirm_windows_within_root(allowed: &StableHandle, child: &StableHandle) -> io::Result<()> {
+    if !is_within(&allowed.final_path, &child.final_path) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "opened entry is outside the allowed root",
+        ));
+    }
+    Ok(())
+}
+
 impl ResolvedRoot {
     /// Returns whether the selected root is one file.
     pub fn is_file(&self) -> bool {
@@ -277,12 +288,7 @@ impl ResolvedRoot {
             ));
         }
         #[cfg(windows)]
-        if !is_within(&self.allowed.final_path, &opened.final_path) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "opened entry is outside the allowed root",
-            ));
-        }
+        confirm_windows_within_root(&self.allowed, &opened)?;
         if handle_is_hidden(&opened, name)? {
             return Err(hidden_entry_error());
         }
@@ -300,7 +306,8 @@ impl ResolvedRoot {
                 "walk parent is no longer a directory",
             ));
         }
-        let meta_identity = confirm_child_identity(parent, name, FsEntryKind::Directory)?;
+        let meta_identity =
+            confirm_child_identity(&self.allowed, parent, name, FsEntryKind::Directory)?;
         let opened = open_child_handle(
             parent,
             name,
@@ -318,12 +325,7 @@ impl ResolvedRoot {
             ));
         }
         #[cfg(windows)]
-        if !is_within(&self.allowed.final_path, &opened.final_path) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "opened entry is outside the allowed root",
-            ));
-        }
+        confirm_windows_within_root(&self.allowed, &opened)?;
         if handle_is_hidden(&opened, name)? {
             return Err(hidden_entry_error());
         }
@@ -361,18 +363,20 @@ impl ResolvedRoot {
                 "walk parent is no longer a directory",
             ));
         }
-        let _identity = confirm_child_identity(parent, name, expected)?;
+        let _identity = confirm_child_identity(&self.allowed, parent, name, expected)?;
         Ok(())
     }
 }
 
 fn confirm_child_identity(
+    allowed: &StableHandle,
     parent: &File,
     name: &OsStr,
     expected: FsEntryKind,
 ) -> io::Result<FileIdentity> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
+        let _ = allowed;
         let file = open_named_unix(parent, name, Some(expected), SearchAccess::Metadata)?;
         let opened = stable_from_file(file)?;
         if handle_is_hidden(&opened, name)? {
@@ -383,6 +387,7 @@ fn confirm_child_identity(
 
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
     {
+        let _ = allowed;
         confirm_named_unix_metadata(parent, name, Some(expected))?;
         let (identity, kind) = unix_named_identity(parent, name)?;
         if kind != expected {
@@ -413,6 +418,7 @@ fn confirm_child_identity(
                 "walked object type or identity changed before it was opened",
             ));
         }
+        confirm_windows_within_root(allowed, &opened)?;
         if handle_is_hidden(&opened, name)? {
             return Err(hidden_entry_error());
         }
@@ -421,7 +427,7 @@ fn confirm_child_identity(
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (parent, name, expected);
+        let _ = (allowed, parent, name, expected);
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "handle-relative child confirm is not implemented on this platform",
@@ -827,4 +833,44 @@ pub(crate) fn open_allowed_root(path: &Path) -> io::Result<StableHandle> {
 #[cfg(windows)]
 pub(crate) fn open_allowed_root(path: &Path) -> io::Result<StableHandle> {
     open_windows(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn confirm_child_rejects_handle_outside_allowed_root() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-root-confirm-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let allowed_dir = base.join("allowed");
+        let outside_dir = base.join("outside");
+        fs::create_dir_all(&allowed_dir).unwrap();
+        fs::create_dir_all(&outside_dir).unwrap();
+        fs::write(outside_dir.join("leak.txt"), "secret\n").unwrap();
+
+        let allowed = open_allowed_root(&allowed_dir).unwrap();
+        let outside = open_allowed_root(&outside_dir).unwrap();
+        #[cfg(windows)]
+        {
+            let err = confirm_child_identity(
+                &allowed,
+                &outside.file,
+                OsStr::new("leak.txt"),
+                FsEntryKind::File,
+            )
+            .expect_err("confirm_child_identity must reject entry outside allowed root");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (&allowed, &outside);
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
 }

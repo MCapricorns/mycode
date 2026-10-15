@@ -40,6 +40,55 @@ pub(crate) enum ModelPickerTarget {
     Role(String),
 }
 
+/// A keyboard-selectable row in the provider step, in visual order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderChoice {
+    Inherit,
+    Pin(mycode_config::ModelPin),
+    Provider(String),
+}
+
+pub(crate) fn provider_choices(
+    vm: &WorkspaceState,
+    target: &ModelPickerTarget,
+) -> Vec<ProviderChoice> {
+    let enabled = enabled_providers(vm);
+    let ids = enabled.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    let (starred, recent) = visible_pins(&vm.starred_models, &vm.recent_models, &ids);
+    let mut choices = Vec::new();
+    if matches!(target, ModelPickerTarget::Role(_)) {
+        choices.push(ProviderChoice::Inherit);
+    }
+    choices.extend(
+        starred
+            .into_iter()
+            .chain(recent)
+            .map(|pin| ProviderChoice::Pin(pin.clone())),
+    );
+    choices.extend(
+        enabled
+            .into_iter()
+            .map(|(id, _)| ProviderChoice::Provider(id)),
+    );
+    choices
+}
+
+/// Include the non-selectable group headings in a scroll-handle item index.
+pub(crate) fn provider_scroll_index(
+    vm: &WorkspaceState,
+    target: &ModelPickerTarget,
+    index: usize,
+) -> usize {
+    let enabled = enabled_providers(vm);
+    let ids = enabled.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    let (starred, recent) = visible_pins(&vm.starred_models, &vm.recent_models, &ids);
+    let inherited = usize::from(matches!(target, ModelPickerTarget::Role(_)));
+    index
+        + usize::from(!starred.is_empty() && index >= inherited)
+        + usize::from(!recent.is_empty() && index >= inherited + starred.len())
+        + usize::from(!enabled.is_empty() && index >= inherited + starred.len() + recent.len())
+}
+
 /// Fixed height of one virtualized model row.
 const MODEL_ROW_HEIGHT: f32 = 32.;
 /// How many model rows the panel shows before the list scrolls.
@@ -244,8 +293,11 @@ fn render_provider_step(
     let starred: Vec<_> = starred.into_iter().cloned().collect();
     let recent: Vec<_> = recent.into_iter().cloned().collect();
     let mut rows: Vec<AnyElement> = Vec::new();
+    let preferred = workspace.provider_highlight(provider_choices(workspace.vm(), target).len());
+    let mut index = 0;
     if let ModelPickerTarget::Role(role) = target {
-        rows.push(session_model_row(role, cx));
+        rows.push(session_model_row(role, index == preferred, cx));
+        index += 1;
     }
     if !starred.is_empty() {
         rows.push(section_label(
@@ -253,11 +305,10 @@ fn render_provider_step(
             t("Starred", "星标"),
             &theme,
         ));
-        rows.extend(
-            starred
-                .iter()
-                .map(|pin| pin_row(workspace, pin, target, cx)),
-        );
+        for pin in &starred {
+            rows.push(pin_row(workspace, pin, target, index == preferred, cx));
+            index += 1;
+        }
     }
     if !recent.is_empty() {
         rows.push(section_label(
@@ -265,7 +316,10 @@ fn render_provider_step(
             t("Recent", "最近"),
             &theme,
         ));
-        rows.extend(recent.iter().map(|pin| pin_row(workspace, pin, target, cx)));
+        for pin in &recent {
+            rows.push(pin_row(workspace, pin, target, index == preferred, cx));
+            index += 1;
+        }
     }
     if enabled.is_empty() {
         rows.push(
@@ -305,7 +359,18 @@ fn render_provider_step(
                     .rounded(skin::radius_control())
                     .cursor_pointer()
                     .hover(|this| this.bg(skin::frost_hover(&theme)))
-                    .when(selected, |this| this.bg(skin::frost_accent(&theme)))
+                    .when(index == preferred, |this| {
+                        this.bg(skin::frost_accent(&theme))
+                    })
+                    .border_1()
+                    .border_color(if index == preferred {
+                        theme.primary.opacity(0.4)
+                    } else {
+                        theme.transparent
+                    })
+                    .when(selected, |this| {
+                        this.font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    })
                     .on_click(cx.listener(move |workspace, _, _, cx| {
                         workspace.on_browse_model_provider(Some(&provider_id), cx);
                     }))
@@ -324,10 +389,12 @@ fn render_provider_step(
                     )
                     .into_any_element(),
             );
+            index += 1;
         }
     }
     div()
         .id("model-picker-provider-step")
+        .track_scroll(workspace.provider_scroll())
         .max_h(px(400.))
         .overflow_y_scroll()
         .flex()
@@ -351,7 +418,9 @@ fn render_model_step(
     let filtered = filter_model_choices(&choices, query);
     let selected = selected_in_provider(workspace.vm(), target, provider_id);
     let ids: Vec<String> = filtered.iter().map(|choice| choice.id.clone()).collect();
-    let preferred = preferred_index(&ids, query, selected.as_deref());
+    let preferred =
+        workspace.model_highlight(ids.len(), preferred_index(&ids, query, selected.as_deref()));
+    let scroll = workspace.model_scroll().clone();
     let starred = workspace.vm().starred_models.clone();
     let row_id_prefix = match target {
         ModelPickerTarget::Session => format!("model-{provider_id}"),
@@ -405,6 +474,7 @@ fn render_model_step(
                             .collect()
                     },
                 )
+                .track_scroll(&scroll)
                 .h_full(),
             )
             .into_any_element()
@@ -550,7 +620,7 @@ fn model_row(
         .into_any_element()
 }
 
-fn select_model(
+pub(crate) fn select_model(
     workspace: &mut Workspace,
     target: &ModelPickerTarget,
     provider: &str,
@@ -575,6 +645,7 @@ fn pin_row(
     workspace: &Workspace,
     pin: &mycode_config::ModelPin,
     target: &ModelPickerTarget,
+    highlighted: bool,
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -590,6 +661,13 @@ fn pin_row(
         .any(|item| item.provider == provider && item.model == model);
     div()
         .id(format!("model-pin-{provider}-{model}"))
+        .when(highlighted, |this| this.bg(skin::frost_accent(theme)))
+        .border_1()
+        .border_color(if highlighted {
+            theme.primary.opacity(0.4)
+        } else {
+            theme.transparent
+        })
         // Two lines (model name and provider). A 32px catalog row clips the
         // second line into the next "Recent" row.
         .min_h(px(44.))
@@ -663,11 +741,18 @@ fn pin_row(
         .into_any_element()
 }
 
-fn session_model_row(role: &str, cx: &Context<Workspace>) -> AnyElement {
+fn session_model_row(role: &str, highlighted: bool, cx: &Context<Workspace>) -> AnyElement {
     let theme = cx.theme();
     let role = role.to_owned();
     div()
         .id(format!("agent-model-{role}-inherit-inherit"))
+        .when(highlighted, |this| this.bg(skin::frost_accent(theme)))
+        .border_1()
+        .border_color(if highlighted {
+            theme.primary.opacity(0.4)
+        } else {
+            theme.transparent
+        })
         .h(px(36.))
         .px_2()
         .flex()
@@ -734,7 +819,7 @@ fn current_provider(vm: &WorkspaceState, target: &ModelPickerTarget) -> Option<S
     }
 }
 
-fn selected_in_provider(
+pub(crate) fn selected_in_provider(
     vm: &WorkspaceState,
     target: &ModelPickerTarget,
     provider_id: &str,

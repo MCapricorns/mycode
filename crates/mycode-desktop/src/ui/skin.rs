@@ -8,20 +8,20 @@
 //! shows through. The reading column stays closer to solid than the rails.
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{
-    Background, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, linear_color_stop,
-    linear_gradient, px,
+    Background, BoxShadow, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, hsla,
+    linear_color_stop, linear_gradient, px,
 };
 
 /// Sidebar, title bar, settings nav, inspector. Translucent over the blur.
-const RAIL_ALPHA: f32 = 0.58;
+const RAIL_ALPHA: f32 = 0.62;
 /// Conversation and settings page. Still readable, with the window blur
 /// and the palette gradient showing through.
-const PAGE_ALPHA: f32 = 0.82;
+const PAGE_ALPHA: f32 = 0.88;
 /// Menus, dialogs, and the composer. Frosted, not an opaque slab.
-const OVERLAY_ALPHA: f32 = 0.74;
+const OVERLAY_ALPHA: f32 = 0.82;
 /// Form cards on the reading page. A small lift plus translucency, so a
 /// card is not the same color as the page under it.
-const CARD_ALPHA: f32 = 0.68;
+const CARD_ALPHA: f32 = 0.76;
 
 const _: () = {
     assert!(RAIL_ALPHA < PAGE_ALPHA);
@@ -62,9 +62,9 @@ pub(super) fn frost_card(theme: &Theme) -> Hsla {
     lifted(theme.popover, 0.04, CARD_ALPHA)
 }
 
-/// Toast fill. Same glass as other overlays; the border carries the edge.
+/// Toast fill. Raised surface-2 so notifications read clearly over the page.
 pub(super) fn toast_fill(theme: &Theme) -> Hsla {
-    lifted(theme.popover, 0.03, OVERLAY_ALPHA)
+    lifted(theme.popover, 0.02, 0.94)
 }
 
 pub(super) fn frost_hover(theme: &Theme) -> Hsla {
@@ -92,24 +92,24 @@ pub(super) fn prose_max() -> gpui_kit::Pixels {
     px(PROSE_MAX_PX)
 }
 
-/// 4px. Dots, swatch corners, and the smallest chip.
+/// 6px. Dots, swatch corners, and compact chips.
 pub(super) fn radius_xs() -> gpui_kit::Pixels {
-    space(1)
+    px(6.)
 }
 
-/// 8px. Controls, rows, and compact chips.
+/// 10px. Controls, rows, and compact chips.
 pub(super) fn radius_sm() -> gpui_kit::Pixels {
-    space(2)
+    px(10.)
 }
 
-/// 12px. Cards and panels.
+/// 14px. Cards, menus, and panels.
 pub(super) fn radius_md() -> gpui_kit::Pixels {
-    space(3)
+    px(14.)
 }
 
-/// 16px. Composer and message bubbles.
+/// 20px. Composer, dialogs, and message bubbles.
 pub(super) fn radius_lg() -> gpui_kit::Pixels {
-    space(4)
+    px(20.)
 }
 
 /// Card corner radius.
@@ -120,6 +120,38 @@ pub(super) fn radius_card() -> gpui_kit::Pixels {
 /// Button and chip corner radius.
 pub(super) fn radius_control() -> gpui_kit::Pixels {
     radius_sm()
+}
+
+/// Subtle surface border (`rgba(255,255,255,0.07)` dark, `rgba(0,0,0,0.08)` light).
+pub(super) fn border_subtle(theme: &Theme) -> Hsla {
+    if theme.mode.is_dark() {
+        hsla(0., 0., 1., 0.07)
+    } else {
+        hsla(0., 0., 0., 0.08)
+    }
+}
+
+/// Stronger interactive or elevated border (`rgba(255,255,255,0.12)` dark, `rgba(0,0,0,0.14)` light).
+pub(super) fn border_strong(theme: &Theme) -> Hsla {
+    if theme.mode.is_dark() {
+        hsla(0., 0., 1., 0.12)
+    } else {
+        hsla(0., 0., 0., 0.14)
+    }
+}
+
+/// Soft elevation shadow for floating menus, composer, toasts, and dialogs.
+pub(super) fn elevation_shadow(theme: &Theme) -> Vec<BoxShadow> {
+    let alpha = if theme.mode.is_dark() { 0.35 } else { 0.08 };
+    let ink = hsla(0., 0., 0., alpha);
+    vec![
+        BoxShadow::new(px(0.), px(8.), ink)
+            .blur_radius(px(12.))
+            .spread_radius(px(-2.)),
+        BoxShadow::new(px(0.), px(2.), hsla(0., 0., 0., alpha * 0.6))
+            .blur_radius(px(4.))
+            .spread_radius(px(-1.)),
+    ]
 }
 
 /// Primary and secondary actions. Primary is a low-saturation tint with a
@@ -142,7 +174,7 @@ pub(super) fn glass_button(
     let border = if emphasized {
         super::desk::primary_edge(theme.primary)
     } else {
-        glass_border(theme)
+        border_strong(theme)
     };
     div()
         .id(id)
@@ -151,9 +183,9 @@ pub(super) fn glass_button(
         .items_center()
         .justify_center()
         .gap(space(2))
-        .h(space(8))
+        .h(px(32.))
         .px(space(3))
-        .rounded(radius_sm())
+        .rounded(radius_control())
         .border_1()
         .border_color(border)
         .bg(fill)
@@ -163,10 +195,10 @@ pub(super) fn glass_button(
         .hover(move |style| style.bg(hover).border_color(border))
 }
 
-/// Panel edge. Stronger than the palette hairline, which sits only a few
-/// steps off the page and disappears once a fill is translucent.
+/// Panel edge. Uses the subtle semantic border so surfaces layer by elevation
+/// rather than heavy lines.
 pub(super) fn glass_border(theme: &Theme) -> Hsla {
-    theme.muted_foreground.opacity(0.42)
+    border_subtle(theme)
 }
 
 /// Menu and overlay fill. Translucent so the page shows through lightly.
@@ -204,8 +236,9 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .id(id)
         .rounded(radius_card())
         .border_1()
-        .border_color(glass_border(theme))
+        .border_color(border_strong(theme))
         .bg(popover(theme))
+        .shadow(elevation_shadow(theme))
         .text_color(theme.popover_foreground)
 }
 

@@ -179,12 +179,19 @@ fn open_target_with_ignores(
             limiter,
             cancel,
         )?;
-        hidden |= component_is_hidden(&exact, &child)?;
+        #[cfg(windows)]
+        if !is_within(&allowed.final_path, &child.final_path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "opened target is outside the allowed root",
+            ));
+        }
+        hidden |= component_is_hidden(&exact, &child.file)?;
         walked.push(exact);
         ignores
-            .ingest(&child, &walked, limiter, cancel)
+            .ingest(&child.file, &walked, limiter, cancel)
             .map_err(wrap_ignore_error)?;
-        parent = child;
+        parent = child.file;
     }
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
@@ -278,9 +285,8 @@ fn open_alias_component(
     access: SearchAccess,
     limiter: &WalkLimiter,
     cancel: &CancellationToken,
-) -> io::Result<(File, OsString)> {
-    let (handle, exact) = open_alias_handle(parent, name, expected, access, limiter, cancel)?;
-    Ok((handle.file, exact))
+) -> io::Result<(StableHandle, OsString)> {
+    open_alias_handle(parent, name, expected, access, limiter, cancel)
 }
 
 fn open_alias_target(
@@ -318,10 +324,8 @@ fn open_alias_handle(
     }
     #[cfg(windows)]
     {
-        let _ = cancel;
-        let _ = limiter;
         let handle = open_named_windows(parent, name, expected, NameMatch::Alias, access)?;
-        let exact = on_disk_component_name(&handle)?;
+        let exact = windows_on_disk_component_name(parent, &handle, limiter, cancel)?;
         Ok((handle, exact))
     }
     #[cfg(not(any(unix, windows)))]

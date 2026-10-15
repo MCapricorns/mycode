@@ -415,32 +415,57 @@ impl MessagesReducer {
         Vec::new()
     }
 
+    /// Resolves the slot in `blocks` for `event`'s wire `index`, or returns
+    /// [`Self::current`] when the event omits `index`.
+    fn slot_for(&self, event: &Value) -> usize {
+        match event.get("index").and_then(Value::as_u64) {
+            Some(index) => self
+                .block_slots
+                .get(&index)
+                .copied()
+                .unwrap_or(self.current),
+            None => self.current,
+        }
+    }
+
     fn apply_delta(&mut self, event: &Value) -> Vec<StreamEvent> {
+        let target = self.slot_for(event);
         let delta = &event["delta"];
         match delta["type"].as_str().unwrap_or_default() {
-            "text_delta" => self.apply_text_delta(delta["text"].as_str().unwrap_or_default()),
+            "text_delta" => {
+                self.apply_text_delta(target, delta["text"].as_str().unwrap_or_default())
+            }
             "thinking_delta" => {
-                self.apply_thinking_delta(delta["thinking"].as_str().unwrap_or_default())
+                self.apply_thinking_delta(target, delta["thinking"].as_str().unwrap_or_default())
             }
             "signature_delta" => {
-                if let BlockAccumulator::Thinking { signature, .. } = self
-                    .blocks
-                    .get_mut(self.current)
-                    .unwrap_or(&mut BlockAccumulator::Empty)
-                    && let Some(value) = delta["signature"].as_str()
+                let Some(value) = delta["signature"].as_str() else {
+                    return Vec::new();
+                };
+                if !value.is_empty() && !charge_stream(&mut self.accumulated, value.len()) {
+                    self.terminal_sent = true;
+                    return vec![crate::driver::protocol_error(
+                        "stream exceeded the output limit",
+                    )];
+                }
+                if let Some(BlockAccumulator::Thinking { signature, .. }) =
+                    self.blocks.get_mut(target)
                 {
-                    *signature = Some(value.to_owned());
+                    match signature {
+                        Some(existing) => existing.push_str(value),
+                        None => *signature = Some(value.to_owned()),
+                    }
                 }
                 Vec::new()
             }
             "input_json_delta" => {
-                self.apply_input_json(delta["partial_json"].as_str().unwrap_or_default())
+                self.apply_input_json(target, delta["partial_json"].as_str().unwrap_or_default())
             }
             _ => Vec::new(),
         }
     }
 
-    fn apply_text_delta(&mut self, part: &str) -> Vec<StreamEvent> {
+    fn apply_text_delta(&mut self, mut target: usize, part: &str) -> Vec<StreamEvent> {
         if part.is_empty() {
             return Vec::new();
         }
@@ -458,16 +483,14 @@ impl MessagesReducer {
                     // content_block_start; create the block the way the
                     // thinking path does, so the assembled Done message
                     // keeps the text the deltas already showed.
-                    if !matches!(
-                        self.blocks.get(self.current),
-                        Some(BlockAccumulator::Text { .. })
-                    ) {
+                    if !matches!(self.blocks.get(target), Some(BlockAccumulator::Text { .. })) {
                         self.blocks.push(BlockAccumulator::Text {
                             text: String::new(),
                         });
-                        self.current = self.blocks.len() - 1;
+                        target = self.blocks.len() - 1;
+                        self.current = target;
                     }
-                    if let BlockAccumulator::Text { text: block } = &mut self.blocks[self.current] {
+                    if let BlockAccumulator::Text { text: block } = &mut self.blocks[target] {
                         block.push_str(&text);
                     }
                     events.push(StreamEvent::TextDelta(text));
@@ -490,7 +513,7 @@ impl MessagesReducer {
         events
     }
 
-    fn apply_thinking_delta(&mut self, part: &str) -> Vec<StreamEvent> {
+    fn apply_thinking_delta(&mut self, mut target: usize, part: &str) -> Vec<StreamEvent> {
         if part.is_empty() {
             return Vec::new();
         }
@@ -501,31 +524,31 @@ impl MessagesReducer {
             )];
         }
         if !matches!(
-            self.blocks.get(self.current),
+            self.blocks.get(target),
             Some(BlockAccumulator::Thinking { .. })
         ) {
             self.blocks.push(BlockAccumulator::Thinking {
                 text: String::new(),
                 signature: None,
             });
-            self.current = self.blocks.len() - 1;
+            target = self.blocks.len() - 1;
+            self.current = target;
         }
-        if let BlockAccumulator::Thinking { text, .. } = &mut self.blocks[self.current] {
+        if let BlockAccumulator::Thinking { text, .. } = &mut self.blocks[target] {
             text.push_str(part);
             return vec![StreamEvent::ThinkingDelta(part.to_owned())];
         }
         Vec::new()
     }
 
-    fn apply_input_json(&mut self, part: &str) -> Vec<StreamEvent> {
+    fn apply_input_json(&mut self, target: usize, part: &str) -> Vec<StreamEvent> {
         if !part.is_empty() && !charge_stream(&mut self.accumulated, part.len()) {
             self.terminal_sent = true;
             return vec![crate::driver::protocol_error(
                 "stream exceeded the output limit",
             )];
         }
-        let Some(BlockAccumulator::ToolUse { id, arguments, .. }) =
-            self.blocks.get_mut(self.current)
+        let Some(BlockAccumulator::ToolUse { id, arguments, .. }) = self.blocks.get_mut(target)
         else {
             return Vec::new();
         };
@@ -729,6 +752,60 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["find", "read"]);
+    }
+
+    #[test]
+    fn content_block_deltas_route_by_wire_index_and_join_signature_deltas() {
+        let mut reducer = MessagesReducer::new();
+        reducer.feed(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_a","name":"read","input":{}}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_b","name":"grep","input":{}}}"#,
+        );
+        // Deltas for block 1 and block 0 arriving after block 2 started must
+        // still reach their own blocks instead of landing on `self.current`.
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a.rs\"}"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":\"x\"}"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"part2"}}"#,
+        );
+        reducer.feed(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#);
+        let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+        assert_eq!(thinking_of(&message), "plan");
+        let signature = message.blocks.iter().find_map(|block| match block {
+            ContentBlock::Thinking(thinking) => thinking.signature.as_deref(),
+            _ => None,
+        });
+        assert_eq!(signature, Some("sig-part2"));
+        let calls: Vec<_> = message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolCall(call) => {
+                    Some((call.id.as_str(), call.name.as_str(), &call.arguments))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "toolu_a");
+        assert_eq!(calls[0].2["path"], "a.rs");
+        assert_eq!(calls[1].0, "toolu_b");
+        assert_eq!(calls[1].2["pattern"], "x");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! the Escape key's dismissal of floating menus.
 use std::time::Duration;
 
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
 use mycode_app::BridgeCommand;
@@ -213,19 +213,26 @@ impl Workspace {
 
     pub(crate) fn ask_input(
         &mut self,
+        index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
-        self.ask_input
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    InputState::new(window, cx).placeholder(crate::i18n::t(
-                        "Type a free-text answer for every question (separate with |)",
-                        "为每个问题输入自由文本（用 | 分隔）",
-                    ))
-                })
+        while self.ask_inputs.len() <= index {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(crate::i18n::t(
+                    "Type a free-text answer",
+                    "输入自由文本回答",
+                ))
+            });
+            cx.subscribe_in(&input, window, |workspace, _, event, _, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    workspace.on_submit_free_ask(cx);
+                }
             })
-            .clone()
+            .detach();
+            self.ask_inputs.push(input);
+        }
+        self.ask_inputs[index].clone()
     }
 
     pub(crate) fn on_pick_ask_choice(
@@ -233,8 +240,12 @@ impl Workspace {
         index: usize,
         answer: String,
         submit: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(input) = self.ask_inputs.get(index) {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
         let current = self.vm.ask_answers.get(index).cloned().unwrap_or_default();
         let multiple = self
             .vm
@@ -250,29 +261,29 @@ impl Workspace {
     }
 
     pub(crate) fn on_submit_free_ask(&mut self, cx: &mut Context<Self>) {
-        let Some(input) = self.ask_input.clone() else {
+        let Some(rows) = self.vm.pending_ask.as_ref() else {
             return;
         };
-        let Some(rows) = self.vm.pending_ask.clone() else {
-            return;
-        };
-        let raw = input.read(cx).value().to_string();
-        let parts: Vec<String> = raw.split('|').map(|part| part.trim().to_owned()).collect();
-        let mut answers = self.vm.ask_answers.clone();
-        answers.resize(rows.len(), String::new());
-        for (index, slot) in answers.iter_mut().enumerate() {
-            if slot.is_empty() {
-                *slot = parts.get(index).cloned().unwrap_or_default();
-            }
+        let free_text = self
+            .ask_inputs
+            .iter()
+            .map(|input| input.read(cx).value().to_string())
+            .collect::<Vec<_>>();
+        match collect_ask_answers(rows, &self.vm.ask_answers, &free_text) {
+            Ok(answers) => self.on_answer_ask(answers, cx),
+            Err(index) => self.push_toast(
+                format!("Answer question {} before submitting.", index + 1),
+                crate::workspace::ToastKind::Info,
+                cx,
+            ),
         }
-        self.on_answer_ask(answers, cx);
     }
 
     pub(crate) fn on_dismiss_ask(&mut self, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.clone() else {
             return;
         };
-        self.ask_input = None;
+        self.ask_inputs.clear();
         self.apply_action(DesktopAction::AskAnswered, cx);
         self.dispatch(
             BridgeCommand::AskDismiss {
@@ -286,10 +297,8 @@ impl Workspace {
         let Some(conversation) = self.vm.active.clone() else {
             return;
         };
-        // Drop the free-text field so the next ask panel starts empty; the
-        // entity is created lazily on first use and would otherwise carry
-        // this answer into an unrelated question.
-        self.ask_input = None;
+        // Each question owns its text; the next request starts with empty fields.
+        self.ask_inputs.clear();
         self.apply_action(DesktopAction::AskAnswered, cx);
         self.dispatch(
             BridgeCommand::AskAnswer {
@@ -324,10 +333,7 @@ impl Workspace {
             self.vm.inspector_open && !self.vm.inspector_pinned && self.vm.view == MainView::Chat,
         ) {
             match layer {
-                DismissLayer::Picker => {
-                    self.project_picker = None;
-                    cx.notify();
-                }
+                DismissLayer::Picker => self.on_picker_cancel(cx),
                 DismissLayer::Diff => {
                     self.git_diff_panel_open = false;
                     cx.notify();
@@ -402,7 +408,9 @@ impl Workspace {
     /// keys) to a file chosen in a save dialog. Conversations never travel,
     /// and the file carries the keys as plaintext JSON.
     pub(crate) fn on_export_data(&mut self, cx: &mut Context<Self>) {
-        let directory = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let home = crate::ui::project_picker::starting_directory();
+        let documents = home.join("Documents");
+        let directory = if documents.is_dir() { documents } else { home };
         let stamp = crate::unix_now().as_secs();
         let suggested = format!("mycode-export-{stamp}.json");
         let receiver = cx.prompt_for_new_path(&directory, Some(&suggested));
@@ -481,10 +489,72 @@ impl Workspace {
     }
 }
 
+/// One input per question preserves arbitrary text, including shell pipes,
+/// and does not let an answer to one question occupy another question's slot.
+fn collect_ask_answers(
+    rows: &[mycode_app::AskPrompt],
+    picks: &[String],
+    free_text: &[String],
+) -> Result<Vec<String>, usize> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let text = free_text
+                .get(index)
+                .map(|text| text.trim())
+                .unwrap_or_default();
+            let answer = if text.is_empty() {
+                picks.get(index).map(|text| text.trim()).unwrap_or_default()
+            } else {
+                text
+            };
+            if answer.is_empty() && !row.optional {
+                Err(index)
+            } else {
+                Ok(answer.to_owned())
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DismissLayer, SettingsBack, settings_back_target, top_dismiss_layer};
     use crate::view_model::{McpSubview, ModelsSubview, SettingsSection, WebSubview};
+
+    fn question(optional: bool) -> mycode_app::AskPrompt {
+        mycode_app::AskPrompt {
+            question: "Question?".to_owned(),
+            choices: vec![],
+            optional,
+            multiple: false,
+        }
+    }
+
+    #[test]
+    fn free_text_preserves_pipes_and_question_identity() {
+        let questions = [question(false), question(false)];
+        assert_eq!(
+            super::collect_ask_answers(
+                &questions,
+                &["yes".to_owned()],
+                &[String::new(), "a | b".to_owned()]
+            ),
+            Ok(vec!["yes".to_owned(), "a | b".to_owned()])
+        );
+        assert_eq!(
+            super::collect_ask_answers(&questions[..1], &[], &["a|b|c".to_owned()]),
+            Ok(vec!["a|b|c".to_owned()])
+        );
+        assert_eq!(
+            super::collect_ask_answers(&questions, &[], &["only first".to_owned()]),
+            Err(1)
+        );
+        assert_eq!(
+            super::collect_ask_answers(&[question(true)], &[], &[]),
+            Ok(vec![String::new()])
+        );
+    }
 
     #[test]
     fn escape_closes_one_layer_topmost_first() {

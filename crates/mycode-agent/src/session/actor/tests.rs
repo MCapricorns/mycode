@@ -351,3 +351,28 @@ fn append_cas_still_rejects_after_an_eviction_reload() {
         other => panic!("append at the durable head returned {other:?}"),
     }
 }
+
+#[test]
+fn recovery_rejects_corrupt_index_offsets_and_digests() {
+    let scratch = Scratch::new();
+    let mut core = core(&scratch.home);
+    let (session, branch) = create(&mut core);
+    append_message(&mut core, &session, &branch, &HeadStamp::Empty, b"m0");
+    let head = core.sessions[&session].branches[&branch].head.clone();
+    append_message(&mut core, &session, &branch, &head, b"m1");
+    unwrap_complete(core.action_evict(&session));
+
+    let db_path = scratch.home.root().join("sessions.db");
+    let conn = rusqlite::Connection::open(&db_path).expect("open db");
+    conn.execute(
+        "UPDATE events SET offset = 999 WHERE session_id = ?1 AND branch_id = ?2 AND seq = 1",
+        rusqlite::params![session.as_str(), branch.as_str()],
+    )
+    .expect("corrupt offset");
+    drop(conn);
+
+    assert!(matches!(
+        core.ensure_loaded(&session),
+        Err(super::PlanError::Corrupt)
+    ));
+}

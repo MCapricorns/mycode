@@ -205,8 +205,13 @@ pub(in crate::secure_fs) fn quarantine_file(
     if windows_open::child_attributes(&parent, name)?.is_none() {
         return Ok(false);
     }
+    if windows_open::child_attributes(&parent, backup)?.is_some() {
+        return Err(
+            ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::AlreadyExists)
+        );
+    }
     let entry = windows_open::open_for_rename(&parent, name)?;
-    rename_relative(&parent, &entry, backup)?;
+    rename_relative_with_flags(&parent, &entry, backup, 0)?;
     super::flush_directory(&parent)?;
     Ok(true)
 }
@@ -368,6 +373,15 @@ pub(super) fn rename_relative(
     file: &File,
     destination: &OsStr,
 ) -> Result<(), ConfigError> {
+    rename_relative_with_flags(parent, file, destination, 1)
+}
+
+fn rename_relative_with_flags(
+    parent: &File,
+    file: &File,
+    destination: &OsStr,
+    flags: u32,
+) -> Result<(), ConfigError> {
     let wide = windows_open::wide_component(destination)?;
     let name_bytes = wide.len().saturating_mul(2);
     let header = size_of::<FILE_RENAME_INFORMATION>();
@@ -377,7 +391,7 @@ pub(super) fn rename_relative(
     // SAFETY: `storage` is aligned and covers the fixed header plus UTF-16
     // component. RootDirectory anchors the replacement to `parent`.
     unsafe {
-        (*information).Anonymous.Flags = 1;
+        (*information).Anonymous.Flags = flags;
         (*information).RootDirectory = parent.as_raw_handle();
         (*information).FileNameLength =
             u32::try_from(name_bytes).map_err(|_| ConfigError::new(ConfigErrorKind::PathEscape))?;

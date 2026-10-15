@@ -49,7 +49,7 @@ pub(crate) struct BridgeAgentHost {
     slots: Arc<Semaphore>,
     session_id: String,
     /// Child cancel tokens keyed by `session_id:call_id`.
-    cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
     mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     /// Shared Copilot bearer cache. A role routed at Copilot refreshes
     /// through the same slot as the parent turn.
@@ -65,7 +65,7 @@ impl BridgeAgentHost {
         cwd: PathBuf,
         settings: &AppSettings,
         session_id: String,
-        cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+        cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
         copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
     ) -> Self {
@@ -198,35 +198,39 @@ impl Drop for LeaseGuard {
 /// Publishes one child's cancel token under `session_id:call_id` and
 /// unpublishes it however the run ends, including a dropped call.
 struct ChildCancelRegistration<'a> {
-    cancels: &'a std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+    cancels: &'a std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
     call_id: &'a str,
     key: String,
+    token: Arc<CancellationToken>,
 }
 
 impl<'a> ChildCancelRegistration<'a> {
     fn new(
-        cancels: &'a std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+        cancels: &'a std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
         session_id: &str,
         call_id: &'a str,
         token: &CancellationToken,
     ) -> Self {
         let key = BridgeAgentHost::cancel_key(session_id, call_id);
-        if !call_id.is_empty()
-            && let Ok(mut slots) = cancels.lock()
-        {
-            slots.insert(key.clone(), token.clone());
+        let token = Arc::new(token.clone());
+        if !call_id.is_empty() {
+            let mut slots = cancels
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slots.insert(key.clone(), Arc::clone(&token));
         }
         Self {
             cancels,
             call_id,
             key,
+            token,
         }
     }
 }
 
 impl Drop for ChildCancelRegistration<'_> {
     fn drop(&mut self) {
-        forget_subagent_cancel(self.cancels, self.call_id, &self.key);
+        forget_subagent_cancel(self.cancels, self.call_id, &self.key, &self.token);
     }
 }
 
@@ -472,11 +476,35 @@ pub(crate) fn resolve_isolation(role: &SubagentRole, requested: Option<&str>) ->
     let chosen = requested
         .and_then(RoleIsolation::parse)
         .unwrap_or(role.isolation);
-    if chosen == RoleIsolation::Worktree && !role.is_write_capable() {
+    if chosen == RoleIsolation::Worktree && !role_is_write_capable(role) {
         RoleIsolation::Shared
     } else {
         chosen
     }
+}
+
+/// Whether `role` can actually mutate the workspace or call non-read-only tools.
+///
+/// Checked against the resolved allowlist rather than raw frontmatter names,
+/// so a role whose frontmatter only lists `agent`, `ask_user`, or unknown
+/// names is still treated as read-only for worktree and MCP filtering.
+#[must_use]
+fn role_is_write_capable(role: &SubagentRole) -> bool {
+    if !role.is_write_capable() {
+        return false;
+    }
+    let allowed = role.resolve_tools(
+        &PARENT_TOOL_NAMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>(),
+    );
+    allowed.iter().any(|name| {
+        matches!(
+            name.as_str(),
+            "write" | "edit" | "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd"
+        )
+    })
 }
 
 impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
@@ -489,14 +517,23 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
     ) -> Pin<Box<dyn Future<Output = Result<String, mycode_tools::ToolError>> + Send + 'a>> {
         Box::pin(async move {
             let fail = |message: String| mycode_tools::ToolError::Execution(message);
-            let catalog = discover_roles(&self.home, Some(&self.cwd));
-            let role = catalog.role(&request.agent).cloned().ok_or_else(|| {
-                fail(format!(
-                    "unknown role '{}'; available: {}",
-                    request.agent,
-                    catalog.names().join(", ")
-                ))
-            })?;
+            let role = {
+                let home = self.home.clone();
+                let cwd = self.cwd.clone();
+                let agent = request.agent.clone();
+                tokio::task::spawn_blocking(move || {
+                    let catalog = discover_roles(&home, Some(&cwd));
+                    catalog.role(&agent).cloned().ok_or_else(|| {
+                        format!(
+                            "unknown role '{agent}'; available: {}",
+                            catalog.names().join(", ")
+                        )
+                    })
+                })
+                .await
+                .map_err(|error| fail(format!("role discovery task: {error}")))?
+                .map_err(fail)?
+            };
             if !self.settings.subagents.is_enabled(&role.name) {
                 return Err(fail(format!(
                     "role '{}' is disabled in settings",
@@ -627,7 +664,7 @@ impl BridgeAgentHost {
                 Some(&self.cwd),
             ) => connected,
         };
-        let mcp_tools = if role.is_write_capable() {
+        let mcp_tools = if role_is_write_capable(role) {
             mcp_tools
         } else {
             mcp_tools
@@ -669,29 +706,45 @@ impl BridgeAgentHost {
 
         let path = run_dir.display().to_string();
         let _ = progress.progress(agent_progress(&role.name, "path", &path));
-        let mut extra_roots = if worktree.is_some() {
-            Vec::new()
-        } else {
-            crate::turn::workspace_extra_roots(&self.home, &self.cwd)
+        let (extra_roots, system) = {
+            let has_worktree = worktree.is_some();
+            let home = self.home.clone();
+            let cwd = self.cwd.clone();
+            let role = role.clone();
+            let registry = Arc::clone(&registry);
+            let run_dir = run_dir.clone();
+            let shell = shell.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut extra_roots = if has_worktree {
+                    Vec::new()
+                } else {
+                    crate::turn::workspace_extra_roots(&home, &cwd)
+                };
+                extra_roots.sort();
+                let system = subagent_system_prompt(
+                    &role,
+                    &registry,
+                    &run_dir,
+                    &extra_roots,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                    &shell,
+                );
+                (extra_roots, system)
+            })
+            .await
+            .map_err(|error| fail(format!("subagent prompt task: {error}")))?
         };
-        extra_roots.sort();
         let read_roots = mycode_config::skill_read_roots(crate::turn::os_user_home().as_deref());
-        let system = subagent_system_prompt(
-            role,
-            &registry,
-            &run_dir,
-            &extra_roots,
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            &shell,
-        );
         let mut config = AgentConfig::new()
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));
-        if let Some(level) = thinking_for(role, &self.settings.subagents).effort()
-            && let Some(level) = mycode_core::ReasoningLevel::parse(level)
-        {
-            config = config.with_reasoning(level);
+        if let Some(token) = thinking_for(role, &self.settings.subagents).effort() {
+            if let Some(level) = mycode_core::ReasoningLevel::parse(token) {
+                config = config.with_reasoning(level);
+            } else {
+                config = config.with_reasoning_token(Some(token.to_owned()));
+            }
         }
         let mut agent = Agent::new(config);
         let prompt = Message::User(mycode_core::UserMessage::text(request.prompt.clone()));
@@ -701,7 +754,7 @@ impl BridgeAgentHost {
             forwarder.abort();
             return Err(fail(subagent_timeout_message(&role_name, budget.as_secs())));
         }
-        let run = tokio::spawn(async move {
+        let mut run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
                 .with_cancel(run_cancel)
                 .with_events(event_tx)
@@ -736,9 +789,15 @@ impl BridgeAgentHost {
             cancel: child_cancel.clone(),
             task: run.abort_handle(),
         };
-        match finish_subagent_task(run, cancel, child_cancel, remaining).await {
-            SubagentFinish::Cancelled => Err(cancelled()),
+        match finish_subagent_task(&mut run, cancel, child_cancel, remaining).await {
+            SubagentFinish::Cancelled => {
+                run.abort();
+                let _ = (&mut run).await;
+                Err(cancelled())
+            }
             SubagentFinish::TimedOut => {
+                run.abort();
+                let _ = (&mut run).await;
                 Err(fail(subagent_timeout_message(&role_name, budget.as_secs())))
             }
             SubagentFinish::Finished(result) => result,
@@ -763,8 +822,12 @@ impl BridgeAgentHost {
             .iter()
             .find(|provider| provider.id == provider_id && provider.enabled)
             .ok_or_else(|| format!("role '{role}' provider '{provider_id}' is missing"))?;
-        let secrets = mycode_config::read_provider_secrets(&self.home)
-            .map_err(|error| format!("role '{role}' secrets: {error}"))?;
+        let read_home = self.home.clone();
+        let secrets =
+            tokio::task::spawn_blocking(move || mycode_config::read_provider_secrets(&read_home))
+                .await
+                .map_err(|error| format!("role '{role}' secrets task: {error}"))?
+                .map_err(|error| format!("role '{role}' secrets: {error}"))?;
         let key = secrets
             .key(provider_id)
             .ok_or_else(|| format!("role '{role}' has no API key for '{provider_id}'"))?;
@@ -818,7 +881,7 @@ enum SubagentFinish {
 /// A timeout cancels the child token and aborts the task so the run cannot
 /// keep editing after the tool result has returned.
 async fn finish_subagent_task(
-    mut run: tokio::task::JoinHandle<Result<String, mycode_tools::ToolError>>,
+    run: &mut tokio::task::JoinHandle<Result<String, mycode_tools::ToolError>>,
     cancel: &CancellationToken,
     child_cancel: &CancellationToken,
     timeout: Duration,
@@ -830,28 +893,34 @@ async fn finish_subagent_task(
             SubagentFinish::Cancelled
         }
         _ = child_cancel.cancelled() => SubagentFinish::Cancelled,
-        joined = &mut run => SubagentFinish::Finished(joined.unwrap_or_else(|error| {
+        joined = run => SubagentFinish::Finished(joined.unwrap_or_else(|error| {
             Err(mycode_tools::ToolError::Execution(format!(
                 "subagent task failed: {error}"
             )))
         })),
         _ = tokio::time::sleep(timeout) => {
             child_cancel.cancel();
-            run.abort();
             SubagentFinish::TimedOut
         }
     }
 }
 
 fn forget_subagent_cancel(
-    cancels: &std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+    cancels: &std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
     call_id: &str,
     cancel_key: &str,
+    token: &Arc<CancellationToken>,
 ) {
-    if !call_id.is_empty()
-        && let Ok(mut slots) = cancels.lock()
-    {
-        slots.remove(cancel_key);
+    if !call_id.is_empty() {
+        let mut slots = cancels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slots
+            .get(cancel_key)
+            .is_some_and(|live| Arc::ptr_eq(live, token))
+        {
+            slots.remove(cancel_key);
+        }
     }
 }
 
@@ -1502,23 +1571,26 @@ mod tests {
     async fn wall_clock_timeout_aborts_a_run_that_does_not_finish() {
         let cancel = CancellationToken::new();
         let child = CancellationToken::new();
-        let run = tokio::spawn(async {
+        let mut run = tokio::spawn(async {
             std::future::pending::<()>().await;
             Ok::<String, mycode_tools::ToolError>("never".to_owned())
         });
         let outcome =
-            super::finish_subagent_task(run, &cancel, &child, Duration::from_millis(40)).await;
+            super::finish_subagent_task(&mut run, &cancel, &child, Duration::from_millis(40)).await;
         assert!(matches!(outcome, super::SubagentFinish::TimedOut));
         assert!(child.is_cancelled());
+        run.abort();
+        let _ = (&mut run).await;
     }
 
     #[tokio::test]
     async fn a_finished_run_beats_the_wall_clock() {
         let cancel = CancellationToken::new();
         let child = CancellationToken::new();
-        let run = tokio::spawn(async { Ok::<String, mycode_tools::ToolError>("done".to_owned()) });
+        let mut run =
+            tokio::spawn(async { Ok::<String, mycode_tools::ToolError>("done".to_owned()) });
         let outcome =
-            super::finish_subagent_task(run, &cancel, &child, Duration::from_secs(2)).await;
+            super::finish_subagent_task(&mut run, &cancel, &child, Duration::from_secs(2)).await;
         match outcome {
             super::SubagentFinish::Finished(Ok(text)) => assert_eq!(text, "done"),
             other => panic!("expected a finished run, got {other:?}"),
@@ -1531,14 +1603,16 @@ mod tests {
         let cancel = CancellationToken::new();
         let child = CancellationToken::new();
         cancel.cancel();
-        let run = tokio::spawn(async {
+        let mut run = tokio::spawn(async {
             std::future::pending::<()>().await;
             Ok::<String, mycode_tools::ToolError>("no".to_owned())
         });
         let outcome =
-            super::finish_subagent_task(run, &cancel, &child, Duration::from_secs(30)).await;
+            super::finish_subagent_task(&mut run, &cancel, &child, Duration::from_secs(30)).await;
         assert!(matches!(outcome, super::SubagentFinish::Cancelled));
         assert!(child.is_cancelled());
+        run.abort();
+        let _ = (&mut run).await;
     }
 
     #[tokio::test]
@@ -1642,5 +1716,51 @@ mod tests {
                 .any(|(name, value)| { name == "chatgpt-account-id" && value == "acct_123" })
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn child_cancel_registration_preserves_a_successor_token_with_the_same_call_id() {
+        let cancels = std::sync::Mutex::new(std::collections::HashMap::new());
+        let first_token = CancellationToken::new();
+        let second_token = CancellationToken::new();
+        let first = super::ChildCancelRegistration::new(&cancels, "ses", "call_0", &first_token);
+        let second = super::ChildCancelRegistration::new(&cancels, "ses", "call_0", &second_token);
+        drop(first);
+        let kept = cancels
+            .lock()
+            .unwrap()
+            .get("ses:call_0")
+            .cloned()
+            .expect("the successor registration must survive the older drop");
+        kept.cancel();
+        assert!(second_token.is_cancelled());
+        drop(second);
+        assert!(cancels.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn role_with_only_unknown_or_parent_tools_stays_read_only() {
+        use mycode_config::{RoleIsolation, RoleOrigin, RoleThinking, SubagentRole};
+
+        let role = SubagentRole {
+            name: "reviewer".to_owned(),
+            description: "Review only".to_owned(),
+            isolation: RoleIsolation::Worktree,
+            thinking: RoleThinking::Default,
+            tools: Some(vec![
+                "read".to_owned(),
+                "grep".to_owned(),
+                "agent".to_owned(),
+                "ask_user".to_owned(),
+                "nonexistent_tool".to_owned(),
+            ]),
+            prompt: "Review.".to_owned(),
+            origin: RoleOrigin::Project,
+        };
+        assert!(!super::role_is_write_capable(&role));
+        assert_eq!(
+            super::resolve_isolation(&role, Some("worktree")),
+            RoleIsolation::Shared
+        );
     }
 }

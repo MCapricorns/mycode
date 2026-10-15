@@ -225,6 +225,23 @@ impl ParentElement for ContentProbe {
     }
 }
 
+/// Retrieves the renderer-owned bounded markdown cache stored in the window's
+/// element state while the chat view is active.
+pub(super) fn use_markdown_cache(window: &mut Window) -> super::markdown::MarkdownCache {
+    window.with_global_id(
+        ElementId::from("chat-markdown-cache"),
+        |global_id, window| {
+            window.with_element_state(
+                global_id,
+                |cached: Option<super::markdown::MarkdownCache>, _| {
+                    let cache = cached.unwrap_or_default();
+                    (cache.clone(), cache)
+                },
+            )
+        },
+    )
+}
+
 /// Offset after a theme relayout.
 ///
 /// A pinned tail moves to the new bottom. Any other offset is kept, then

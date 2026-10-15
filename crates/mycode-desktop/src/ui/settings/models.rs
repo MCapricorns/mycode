@@ -265,7 +265,7 @@ fn render_models_catalog_page(
     for provider in &catalog.providers {
         if !preset_search_text.is_empty()
             && !provider.name.to_lowercase().contains(&preset_search_text)
-            && !provider.id.contains(&preset_search_text)
+            && !provider.id.to_lowercase().contains(&preset_search_text)
         {
             continue;
         }
@@ -284,37 +284,54 @@ fn render_models_catalog_page(
     let preset_list_weak = cx.weak_entity();
     let list_height = px((preset_rows.len().clamp(1, 9) as f32) * PRESET_ROW_HEIGHT.as_f32() + 2.);
     let list_rows = preset_rows.clone();
+    let presets_empty = preset_rows.is_empty();
     let preset_list = div()
         .id("preset-catalog-list")
         .w_full()
         .h(list_height)
         .overflow_hidden()
-        .rounded_md()
+        .rounded(skin::radius_control())
         .border_1()
-        .border_color(cx.theme().border)
-        .child(
-            gpui_kit::uniform_list(
-                "preset-catalog-rows",
-                preset_rows.len(),
-                move |range, _window, cx| {
-                    let theme = cx.theme().clone();
-                    range
-                        .map(|index| {
-                            let (id, name, kind, models) = &list_rows[index];
-                            preset_row(
-                                id.clone(),
-                                name.clone(),
-                                kind.clone(),
-                                *models,
-                                &preset_list_weak,
-                                &theme,
-                            )
-                        })
-                        .collect()
-                },
+        .border_color(skin::glass_border(cx.theme()))
+        .bg(skin::popover(cx.theme()))
+        .when(presets_empty, |this| {
+            let muted = cx.theme().muted_foreground;
+            this.child(
+                div()
+                    .px_2()
+                    .h(PRESET_ROW_HEIGHT)
+                    .flex()
+                    .items_center()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(t("No matching providers", "没有匹配的服务商")),
             )
-            .h_full(),
-        );
+        })
+        .when(!presets_empty, |this| {
+            this.child(
+                gpui_kit::uniform_list(
+                    "preset-catalog-rows",
+                    preset_rows.len(),
+                    move |range, _window, cx| {
+                        let theme = cx.theme().clone();
+                        range
+                            .map(|index| {
+                                let (id, name, kind, models) = &list_rows[index];
+                                preset_row(
+                                    id.clone(),
+                                    name.clone(),
+                                    kind.clone(),
+                                    *models,
+                                    &preset_list_weak,
+                                    &theme,
+                                )
+                            })
+                            .collect()
+                    },
+                )
+                .h_full(),
+            )
+        });
 
     let has_preset = workspace.vm().active_preset.is_some();
     let header = super::subview_header(
@@ -504,10 +521,10 @@ fn preset_row(
         // NOTE: no `overflow_hidden` on the row — inside a scroll container it
         // collapses the flex_1 name column to zero width on real windows
         // (headless layout tests do not reproduce this; verified on screen).
-        .hover(|this| this.bg(theme.secondary))
+        .hover(|this| this.bg(skin::frost_hover(theme)))
         .child(row_header(
             &name,
-            format!("{id} · {kind} · {models} models"),
+            format!("{id} · {kind} · {models} {}", t("model(s)", "个模型")),
         ))
         .child(
             Button::new(format!("preset-add-{id}"))
@@ -546,10 +563,10 @@ fn preset_model_row(
         .justify_between()
         .gap_2()
         .px_2()
-        .rounded_md()
+        .rounded(skin::radius_control())
         .text_sm()
         .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary))
+        .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(move |_, _, cx| {
             let _ = weak.update(cx, |workspace, cx| {
                 workspace.apply_action(DesktopAction::PresetModelToggled(model_id.clone()), cx);
@@ -613,10 +630,10 @@ fn render_preset_form(
         .flex_col()
         .gap_2()
         .p_3()
-        .rounded_md()
+        .rounded(skin::radius_card())
         .border_1()
-        .border_color(theme.primary)
-        .bg(theme.secondary)
+        .border_color(skin::glass_border(theme))
+        .bg(skin::frost_card(theme))
         .child(
             div()
                 .text_sm()
@@ -628,14 +645,19 @@ fn render_preset_form(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_xs().opacity(0.6).child(format!(
-                    "{} — {}",
-                    selection_label,
-                    t(
-                        "all are selected by default; uncheck what you do not need",
-                        "默认全选；不需要的取消勾选即可",
-                    )
-                )))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(format!(
+                            "{} — {}",
+                            selection_label,
+                            t(
+                                "all are selected by default; uncheck what you do not need",
+                                "默认全选；不需要的取消勾选即可",
+                            )
+                        )),
+                )
                 .child(div().h(px(32.)).text_sm().child(Input::new(&model_search)))
                 .child({
                     let weak = cx.weak_entity();
@@ -649,9 +671,9 @@ fn render_preset_form(
                         .w_full()
                         .h(list_height)
                         .overflow_hidden()
-                        .rounded_md()
+                        .rounded(skin::radius_control())
                         .border_1()
-                        .border_color(theme.border)
+                        .border_color(skin::glass_border(theme))
                         .bg(skin::popover(theme))
                         .when(empty, |this| {
                             this.child(
@@ -775,7 +797,7 @@ fn render_preset_form(
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().text_xs().opacity(0.6).child(t(
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(t(
                             "API key (stored in the secret vault)",
                             "API 密钥（保存在凭据库中）",
                         )))
@@ -852,6 +874,78 @@ impl ProviderForm {
             api_key,
         })
     }
+
+    pub(crate) fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.id
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.kind = "openai-completions".to_owned();
+        self.base_url
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.model
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.context_limit
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.max_output
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.api_key
+            .update(cx, |state, cx| state.set_value("", window, cx));
+    }
+}
+
+/// Validates and builds one custom provider from form inputs before
+/// dispatching, so duplicate ids or invalid URLs cannot overwrite an existing
+/// key or leave `settings` in an unsaveable state.
+pub(crate) fn build_custom_provider(
+    existing_ids: &[String],
+    id: &str,
+    kind: &str,
+    base_url: &str,
+    model: &str,
+    context_limit: &str,
+    max_output: &str,
+) -> Result<mycode_config::ProviderSettings, String> {
+    let id = id.trim();
+    let kind = kind.trim();
+    let base_url = base_url.trim();
+    let model = model.trim();
+    if id.is_empty() || base_url.is_empty() || model.is_empty() {
+        return Err("fill id, base URL, and model".to_owned());
+    }
+    if existing_ids.iter().any(|existing| existing == id) {
+        return Err(format!("a provider named '{id}' already exists"));
+    }
+    if existing_ids.len() >= mycode_config::MAX_PROVIDERS {
+        return Err(format!(
+            "at most {} providers may be configured",
+            mycode_config::MAX_PROVIDERS
+        ));
+    }
+    let (context_limit, max_output) = match (
+        crate::workspace::parse_token_field(context_limit),
+        crate::workspace::parse_token_field(max_output),
+    ) {
+        (Ok(a), Ok(b)) => (a, b),
+        _ => {
+            return Err("context window and max output must be plain numbers".to_owned());
+        }
+    };
+    let provider = mycode_config::ProviderSettings {
+        id: id.to_owned(),
+        kind: kind.to_owned(),
+        base_url: base_url.to_owned(),
+        models: vec![model.to_owned()],
+        enabled: true,
+        context_limit,
+        max_output,
+    };
+    let probe = mycode_config::AppSettings {
+        providers: vec![provider.clone()],
+        ..mycode_config::AppSettings::default()
+    };
+    probe
+        .validate()
+        .map_err(|error| format!("invalid provider: {}", error.summary()))?;
+    Ok(provider)
 }
 
 /// The custom-endpoint page: protocol dropdown, endpoint identity, and the
@@ -954,8 +1048,8 @@ fn render_custom_provider_page(
                         .text_sm()
                         .child(labeled_field(
                             t(
-                                "api key (stored in secrets.json)",
-                                "API 密钥(保存在 secrets.json)",
+                                "API key (stored in the secret vault)",
+                                "API 密钥（保存在凭据库中）",
                             ),
                             api_key_input,
                         ))
@@ -970,8 +1064,8 @@ fn render_custom_provider_page(
                                 .label(t("Add provider", "添加服务商"))
                                 .small()
                                 .primary()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_add_provider(cx);
+                                .on_click(cx.listener(|workspace, _, window, cx| {
+                                    workspace.on_add_provider(window, cx);
                                 })),
                         )
                         .into_any_element(),
@@ -980,4 +1074,78 @@ fn render_custom_provider_page(
             .into_any_element(),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_custom_provider;
+
+    #[test]
+    fn custom_provider_builder_rejects_duplicate_ids_and_invalid_urls() {
+        let existing = vec!["openai".to_owned()];
+        let duplicate = build_custom_provider(
+            &existing,
+            " openai ",
+            "openai-completions",
+            "https://api.openai.com/v1",
+            "gpt-5",
+            "",
+            "",
+        )
+        .expect_err("duplicate provider id must be refused");
+        assert!(duplicate.contains("already exists"), "{duplicate}");
+
+        let bad_id = build_custom_provider(
+            &existing,
+            "Bad ID",
+            "openai-completions",
+            "https://api.openai.com/v1",
+            "gpt-5",
+            "",
+            "",
+        )
+        .expect_err("uppercase/space id must be refused");
+        assert!(bad_id.contains("invalid provider"), "{bad_id}");
+
+        let bad_url = build_custom_provider(
+            &existing,
+            "custom-gw",
+            "openai-completions",
+            "http://api.example.com/v1",
+            "gpt-5",
+            "",
+            "",
+        )
+        .expect_err("non-https base URL must be refused");
+        assert!(bad_url.contains("https://"), "{bad_url}");
+
+        let bad_tokens = build_custom_provider(
+            &existing,
+            "custom-gw",
+            "openai-completions",
+            "https://api.example.com/v1",
+            "gpt-5",
+            "128k",
+            "",
+        )
+        .expect_err("non-numeric token override must be refused");
+        assert!(bad_tokens.contains("plain numbers"), "{bad_tokens}");
+
+        let valid = build_custom_provider(
+            &existing,
+            " custom-gw ",
+            "anthropic-messages",
+            " https://api.example.com/v1 ",
+            " claude-sonnet-4-5 ",
+            " 200000 ",
+            " 8192 ",
+        )
+        .expect("valid custom provider");
+        assert_eq!(valid.id, "custom-gw");
+        assert_eq!(valid.kind, "anthropic-messages");
+        assert_eq!(valid.base_url, "https://api.example.com/v1");
+        assert_eq!(valid.models, vec!["claude-sonnet-4-5".to_owned()]);
+        assert_eq!(valid.context_limit, Some(200_000));
+        assert_eq!(valid.max_output, Some(8_192));
+    }
 }

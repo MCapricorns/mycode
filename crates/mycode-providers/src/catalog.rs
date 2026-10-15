@@ -237,6 +237,14 @@ pub(crate) fn valid_provider_id(id: &str) -> bool {
         })
 }
 
+/// Model ids keep the provider's own spelling: any nonempty printable id
+/// without whitespace or control characters is accepted.
+pub(crate) fn valid_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_STRING_BYTES
+        && id.chars().all(|c| !c.is_whitespace() && !c.is_control())
+}
+
 /// Normalizes a parsed catalog: drops invalid entries, bounds model lists,
 /// and sorts providers and models by id.
 pub(crate) fn normalize(mut providers: Vec<CatalogProvider>) -> CatalogDocument {
@@ -251,17 +259,46 @@ pub(crate) fn normalize(mut providers: Vec<CatalogProvider>) -> CatalogDocument 
             && !provider.models.is_empty()
     });
     for provider in &mut providers {
+        if let Some(name) = clean_text(&provider.name) {
+            provider.name = name;
+        }
+        if let Some(base_url) = clean_text(&provider.base_url) {
+            provider.base_url = base_url;
+        }
+        provider.doc = provider
+            .doc
+            .as_deref()
+            .and_then(clean_text)
+            .filter(|doc| doc.starts_with("https://"));
+        provider.models.retain(|model| valid_model_id(&model.id));
         if provider.models.len() > MAX_MODELS_PER_PROVIDER {
             provider.models.truncate(MAX_MODELS_PER_PROVIDER);
         }
         for model in &mut provider.models {
-            if clean_text(&model.name).is_none() {
+            if let Some(clean) = clean_text(&model.name) {
+                model.name = clean;
+            } else {
                 model.name = model.id.clone();
             }
+            let raw_efforts = std::mem::take(&mut model.reasoning_efforts);
+            for effort in raw_efforts {
+                modelsdev::push_effort(
+                    &mut model.reasoning_efforts,
+                    &effort,
+                    modelsdev::MAX_EFFORTS,
+                );
+            }
+            model.cost_in = model
+                .cost_in
+                .filter(|cost| *cost >= 0.0 && cost.is_finite());
+            model.cost_out = model
+                .cost_out
+                .filter(|cost| *cost >= 0.0 && cost.is_finite());
         }
         provider.models.sort_by(|a, b| a.id.cmp(&b.id));
         provider.models.dedup_by(|a, b| a.id == b.id);
     }
+    providers.retain(|provider| !provider.models.is_empty());
     providers.sort_by(|a, b| a.id.cmp(&b.id));
     providers.dedup_by(|a, b| a.id == b.id);
     CatalogDocument { providers }

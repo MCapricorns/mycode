@@ -21,6 +21,7 @@ use crate::workspace::Workspace;
 pub(super) fn render_tool_block(
     call: &ConversationEntry,
     result: Option<&ConversationEntry>,
+    turn_running: bool,
     expanded: bool,
     reduce_motion: bool,
     cx: &Context<Workspace>,
@@ -28,9 +29,10 @@ pub(super) fn render_tool_block(
     let theme = cx.theme();
     let desk = Desk::of(theme);
     let failed = result.is_some_and(|entry| entry.text.starts_with("failed:"));
-    let waiting = result.is_none();
+    let unfinished = result.is_none();
     let tool = tool_name(call.text.as_ref());
-    let status = tool_status(tool, result);
+    let (verb, target) = tool_call_parts(call.text.as_ref(), result.is_some(), turn_running);
+    let status = tool_status(tool, result, turn_running);
     let event_id = call.event_id.clone();
     let mut row = div()
         .id(format!("tool-{}", call.event_id))
@@ -56,22 +58,43 @@ pub(super) fn render_tool_block(
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_toggle_tool_row(&event_id, cx);
                 }))
-                .child(status_dot(failed, waiting, theme))
+                .child(status_dot(failed, unfinished, turn_running, theme))
                 .child(
                     Icon::new(tool_icon(tool))
                         .xsmall()
+                        .flex_shrink_0()
                         .text_color(theme.muted_foreground),
                 )
                 .child(
                     div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(skin::space(2))
                         .min_w_0()
                         .flex_1()
                         .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.foreground)
-                        .child(call.text.to_string()),
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child(verb),
+                        )
+                        .when(!target.is_empty(), |label| {
+                            label.child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground)
+                                    .child(target),
+                            )
+                        }),
                 )
                 .when(!status.is_empty(), |row| {
                     row.child(tool_status_node(&status, failed, theme))
@@ -98,6 +121,9 @@ pub(super) fn render_tool_batch(
     id: &str,
     summary: String,
     open: bool,
+    has_failed: bool,
+    has_unfinished: bool,
+    turn_running: bool,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
@@ -119,38 +145,149 @@ pub(super) fn render_tool_batch(
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_toggle_tool_batch(&batch_id, cx);
         }))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(marker),
-        )
+        .child(status_dot(has_failed, has_unfinished, turn_running, theme))
         .child(
             div()
                 .min_w_0()
                 .flex_1()
                 .truncate()
                 .text_xs()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
                 .text_color(theme.foreground)
                 .child(summary),
         )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(marker),
+        )
 }
 
-fn status_dot(failed: bool, waiting: bool, theme: &Theme) -> impl IntoElement {
-    let color = if failed {
-        theme.red
-    } else if waiting {
-        theme.primary
-    } else {
-        theme.green
-    };
+fn status_dot(
+    failed: bool,
+    unfinished: bool,
+    turn_running: bool,
+    theme: &Theme,
+) -> impl IntoElement {
+    let color = tool_dot_color(failed, unfinished, turn_running, theme);
     div()
-        .size(skin::space(2))
+        .size(px(7.))
         .flex_shrink_0()
         .rounded_full()
         .bg(color)
         .border_1()
         .border_color(color.opacity(0.35))
+}
+
+pub(super) fn tool_dot_color(
+    failed: bool,
+    unfinished: bool,
+    turn_running: bool,
+    theme: &Theme,
+) -> gpui_kit::Hsla {
+    if failed {
+        theme.red
+    } else if unfinished {
+        if turn_running {
+            theme.primary
+        } else {
+            theme.muted_foreground
+        }
+    } else {
+        theme.green
+    }
+}
+
+/// Splits a raw tool call label (`edit  src/lib.rs`) into a verb-first UI
+/// label and a monospace target argument.
+pub(super) fn tool_call_parts(
+    label: &str,
+    completed: bool,
+    turn_running: bool,
+) -> (String, String) {
+    let trimmed = label.trim();
+    let tool = tool_name(trimmed);
+    let target = trimmed
+        .strip_prefix(tool)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_owned();
+    let active = !completed && turn_running;
+    let verb = match tool {
+        "read" => {
+            if active {
+                t("Reading", "正在读取")
+            } else {
+                t("Read", "读取")
+            }
+        }
+        "edit" => {
+            if active {
+                t("Editing", "正在编辑")
+            } else {
+                t("Edited", "已编辑")
+            }
+        }
+        "write" => {
+            if active {
+                t("Writing", "正在写入")
+            } else {
+                t("Wrote", "已写入")
+            }
+        }
+        "grep" | "search" => {
+            if active {
+                t("Searching", "正在搜索")
+            } else {
+                t("Searched", "已搜索")
+            }
+        }
+        "find" => {
+            if active {
+                t("Finding", "正在查找")
+            } else {
+                t("Found", "已查找")
+            }
+        }
+        "bash" | "zsh" | "sh" | "shell" | "pwsh" | "powershell" | "cmd" => {
+            if active {
+                t("Running", "正在运行")
+            } else {
+                t("Ran", "已运行")
+            }
+        }
+        "web_search" => {
+            if active {
+                t("Searching web", "正在搜索网页")
+            } else {
+                t("Searched web", "已搜索网页")
+            }
+        }
+        "fetch_content" => {
+            if active {
+                t("Fetching", "正在抓取")
+            } else {
+                t("Fetched", "已抓取")
+            }
+        }
+        "agent" => {
+            if active {
+                t("Running agent", "正在运行子代理")
+            } else {
+                t("Ran agent", "已运行子代理")
+            }
+        }
+        "ask" | "ask_user" => {
+            if active {
+                t("Asking", "正在提问")
+            } else {
+                t("Asked", "已提问")
+            }
+        }
+        other => other,
+    };
+    (verb.to_owned(), target)
 }
 
 fn tool_icon(tool: &str) -> IconName {
@@ -255,9 +392,17 @@ fn kind_phrase(kind: &str, count: usize) -> String {
     if is_chinese() { chinese } else { english }
 }
 
-pub(super) fn tool_status(tool: &str, result: Option<&ConversationEntry>) -> String {
+pub(super) fn tool_status(
+    tool: &str,
+    result: Option<&ConversationEntry>,
+    turn_running: bool,
+) -> String {
     let Some(result) = result else {
-        return t("in progress", "进行中").to_owned();
+        return if turn_running {
+            t("in progress", "进行中").to_owned()
+        } else {
+            t("interrupted", "已中断").to_owned()
+        };
     };
     let text = result.text.as_ref();
     if text.starts_with("failed:") {
@@ -886,7 +1031,10 @@ fn preview_caption(label: &str, theme: &Theme) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{diff_counts, diff_line_text, shows_diff_preview, tool_batch_summary, tool_status};
+    use super::{
+        diff_counts, diff_line_text, shows_diff_preview, tool_batch_summary, tool_call_parts,
+        tool_dot_color, tool_status,
+    };
     use crate::view_model::{ConversationEntry, EntryKind};
 
     fn result_entry(text: &str) -> ConversationEntry {
@@ -911,7 +1059,7 @@ mod tests {
     #[test]
     fn fetch_content_list_lines_are_not_a_diff() {
         let page = eleven_list_lines("[https://example.com/a]");
-        let status = tool_status("fetch_content", Some(&result_entry(&page)));
+        let status = tool_status("fetch_content", Some(&result_entry(&page)), false);
         assert_eq!(status, "[https://example.com/a]");
         assert_ne!(status, "+0 -11");
         assert!(!shows_diff_preview("fetch_content", &page));
@@ -920,7 +1068,7 @@ mod tests {
     #[test]
     fn web_search_snippets_are_not_a_diff() {
         let text = "[https://example.com] Docs\n- alpha\n- beta\n";
-        let status = tool_status("web_search", Some(&result_entry(text)));
+        let status = tool_status("web_search", Some(&result_entry(text)), false);
         assert_eq!(status, "[https://example.com] Docs");
         assert!(!shows_diff_preview("web_search", text));
     }
@@ -931,7 +1079,7 @@ mod tests {
         for n in 1..=21 {
             text.push_str(&format!("- line {n}\n"));
         }
-        let status = tool_status("agent", Some(&result_entry(&text)));
+        let status = tool_status("agent", Some(&result_entry(&text)), false);
         assert_eq!(status, "scout notes");
         assert_ne!(status, "+0 -21");
         assert!(!shows_diff_preview("agent", &text));
@@ -944,7 +1092,10 @@ mod tests {
         for n in 1..=11 {
             text.push_str(&format!("- line {n}\n"));
         }
-        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "+0 -11");
+        assert_eq!(
+            tool_status("edit", Some(&result_entry(&text)), false),
+            "+0 -11"
+        );
         assert_eq!(diff_counts("+0 -11"), Some(("0", "11")));
         assert!(shows_diff_preview("edit", &text));
     }
@@ -952,7 +1103,10 @@ mod tests {
     #[test]
     fn write_additions_summarize_as_a_diff() {
         let text = "wrote src/new.rs\n+ alpha\n+ beta\n";
-        assert_eq!(tool_status("write", Some(&result_entry(text))), "+2 -0");
+        assert_eq!(
+            tool_status("write", Some(&result_entry(text)), false),
+            "+2 -0"
+        );
         assert!(shows_diff_preview("write", text));
     }
 
@@ -960,23 +1114,32 @@ mod tests {
     fn raw_output_banners_are_not_the_summary() {
         let banner = "===== tokio =====\n|347270:347292…\n-------\n";
         assert_eq!(
-            tool_status("bash", Some(&result_entry(banner))),
+            tool_status("bash", Some(&result_entry(banner)), false),
             "3 lines output"
         );
         let with_text = "===== tokio =====\n-------\ncompiled 3 files\n";
         assert_eq!(
-            tool_status("bash", Some(&result_entry(with_text))),
+            tool_status("bash", Some(&result_entry(with_text)), false),
             "compiled 3 files"
         );
-        assert_eq!(tool_status("bash", Some(&result_entry("   \n"))), "done");
+        assert_eq!(
+            tool_status("bash", Some(&result_entry("   \n")), false),
+            "done"
+        );
     }
 
     #[test]
     fn numbers_and_brackets_are_the_summary() {
-        assert_eq!(tool_status("bash", Some(&result_entry("42\n"))), "42");
-        assert_eq!(tool_status("bash", Some(&result_entry("3.14\n"))), "3.14");
         assert_eq!(
-            tool_status("bash", Some(&result_entry("[1, 2, 3]\n"))),
+            tool_status("bash", Some(&result_entry("42\n")), false),
+            "42"
+        );
+        assert_eq!(
+            tool_status("bash", Some(&result_entry("3.14\n")), false),
+            "3.14"
+        );
+        assert_eq!(
+            tool_status("bash", Some(&result_entry("[1, 2, 3]\n")), false),
             "[1, 2, 3]"
         );
     }
@@ -985,18 +1148,19 @@ mod tests {
     fn ascii_art_dots_and_markdown_headings_are_trimmed() {
         let pelican = format!("{}Pelican", ".".repeat(60));
         assert_eq!(
-            tool_status("bash", Some(&result_entry(&pelican))),
+            tool_status("bash", Some(&result_entry(&pelican)), false),
             "Pelican"
         );
         assert_eq!(
             tool_status(
                 "bash",
-                Some(&result_entry("# Tokio Runtime — Fact Sheet\n"))
+                Some(&result_entry("# Tokio Runtime — Fact Sheet\n")),
+                false
             ),
             "Tokio Runtime — Fact Sheet"
         );
         assert_eq!(
-            tool_status("bash", Some(&result_entry("...\n"))),
+            tool_status("bash", Some(&result_entry("...\n")), false),
             "1 line output"
         );
     }
@@ -1012,33 +1176,43 @@ mod tests {
   WWWWWWWWWWWWWWWWWWWW
 ";
         assert_eq!(
-            tool_status("bash", Some(&result_entry(pelican))),
+            tool_status("bash", Some(&result_entry(pelican)), false),
             "6 lines output"
         );
         assert_eq!(
-            tool_status("bash", Some(&result_entry("WWWWWWWWWWWW\n"))),
+            tool_status("bash", Some(&result_entry("WWWWWWWWWWWW\n")), false),
             "1 line output"
         );
         assert_eq!(
-            tool_status("bash", Some(&result_entry("DD.OOOOOOOOOOOOOOOOOO\n"))),
+            tool_status(
+                "bash",
+                Some(&result_entry("DD.OOOOOOOOOOOOOOOOOO\n")),
+                false
+            ),
             "1 line output"
         );
         let captioned = format!("{pelican}The pelican faces right\n");
         assert_eq!(
-            tool_status("bash", Some(&result_entry(&captioned))),
+            tool_status("bash", Some(&result_entry(&captioned)), false),
             "The pelican faces right"
         );
 
         let blocks = "████████████\n██        ██\n████████████\n▀▄▀▄▀▄▀▄▀▄▀▄▀\n";
         assert_eq!(
-            tool_status("bash", Some(&result_entry(blocks))),
+            tool_status("bash", Some(&result_entry(blocks)), false),
             "4 lines output"
         );
 
-        assert_eq!(tool_status("bash", Some(&result_entry("42\n"))), "42");
-        assert_eq!(tool_status("bash", Some(&result_entry("3.14\n"))), "3.14");
         assert_eq!(
-            tool_status("bash", Some(&result_entry("[1, 2, 3]\n"))),
+            tool_status("bash", Some(&result_entry("42\n")), false),
+            "42"
+        );
+        assert_eq!(
+            tool_status("bash", Some(&result_entry("3.14\n")), false),
+            "3.14"
+        );
+        assert_eq!(
+            tool_status("bash", Some(&result_entry("[1, 2, 3]\n")), false),
             "[1, 2, 3]"
         );
         assert_eq!(
@@ -1046,12 +1220,13 @@ mod tests {
                 "bash",
                 Some(&result_entry(
                     "===== tokio =====\n-------\n# Tokio Runtime — Fact Sheet\n"
-                ))
+                )),
+                false
             ),
             "Tokio Runtime — Fact Sheet"
         );
         assert_eq!(
-            tool_status("bash", Some(&result_entry("compiled 3 files\n"))),
+            tool_status("bash", Some(&result_entry("compiled 3 files\n")), false),
             "compiled 3 files"
         );
     }
@@ -1061,7 +1236,10 @@ mod tests {
         let mut text = String::from("edited src/lib.rs\n");
         text.push_str("++ kept\n");
         text.push_str("-- gone\n");
-        assert_eq!(tool_status("edit", Some(&result_entry(&text))), "+1 -1");
+        assert_eq!(
+            tool_status("edit", Some(&result_entry(&text)), false),
+            "+1 -1"
+        );
         assert_eq!(diff_line_text("++ kept"), "+ kept");
         assert_eq!(diff_line_text("-- gone"), "- gone");
         assert_eq!(diff_line_text("+ kept"), "+ kept");
@@ -1098,5 +1276,34 @@ mod tests {
         assert_eq!(numbered[2].new, None);
         assert_eq!(numbered[3].old, Some(2));
         assert_eq!(numbered[3].new, Some(2));
+    }
+
+    #[test]
+    fn unfinished_tool_calls_report_in_progress_only_while_a_turn_runs() {
+        assert_eq!(tool_status("read", None, true), "in progress");
+        assert_eq!(tool_status("read", None, false), "interrupted");
+
+        let mut theme = gpui_kit::component::theme::Theme::default();
+        crate::ui::desk::apply(&mut theme);
+        assert_eq!(tool_dot_color(false, true, true, &theme), theme.primary);
+        assert_eq!(
+            tool_dot_color(false, true, false, &theme),
+            theme.muted_foreground
+        );
+        assert_eq!(tool_dot_color(true, false, false, &theme), theme.red);
+        assert_eq!(tool_dot_color(false, false, false, &theme), theme.green);
+
+        assert_eq!(
+            tool_call_parts("edit  src/lib.rs", true, false),
+            ("Edited".to_owned(), "src/lib.rs".to_owned())
+        );
+        assert_eq!(
+            tool_call_parts("edit  src/lib.rs", false, true),
+            ("Editing".to_owned(), "src/lib.rs".to_owned())
+        );
+        assert_eq!(
+            tool_call_parts("edit  src/lib.rs", false, false),
+            ("Edited".to_owned(), "src/lib.rs".to_owned())
+        );
     }
 }

@@ -270,28 +270,38 @@ async fn agent_loop(
             // the model re-issues the calls. Calls without an id or name
             // cannot be paired on the wire, so they are dropped, matching
             // the error branch above.
+            let mut answered = false;
             for call in calls
                 .iter()
                 .filter(|call| !call.id.is_empty() && !call.name.is_empty())
             {
                 let message = turn::fail_truncated_call(env, call);
                 turn::push_message(env, state, Message::ToolResult(message));
+                answered = true;
             }
-            has_tool_calls = true;
+            has_tool_calls = answered || drain_steers(env, state);
         } else {
             // `agent` calls overlap the rest of this response, so a child
             // and another tool requested together actually run together.
             // Non-agent tools run one after another in model order.
             // Results are written back in call order.
+            let valid_calls: Vec<ToolCall> = calls
+                .into_iter()
+                .filter(|call| !call.id.is_empty() && !call.name.is_empty())
+                .collect();
+            if valid_calls.is_empty() {
+                has_tool_calls = drain_steers(env, state);
+                continue;
+            }
             if token.is_cancelled() {
-                for call in &calls {
+                for call in &valid_calls {
                     let message = turn::fail_cancelled_call(env, call);
                     turn::push_message(env, state, Message::ToolResult(message));
                 }
                 aborted = true;
                 break;
             }
-            let results = dispatch_response_calls(env, token, &calls).await;
+            let results = dispatch_response_calls(env, token, &valid_calls).await;
             for message in results {
                 turn::push_message(env, state, Message::ToolResult(message));
             }
@@ -1065,6 +1075,104 @@ mod tests {
         assert_eq!(results.len(), 1, "only the named call is answered");
         assert_eq!(results[0].tool_call_id, "call-named");
         assert!(results[0].is_error);
+    }
+
+    #[tokio::test]
+    async fn tool_calls_missing_id_or_name_do_not_dispatch_or_resend_unanswered_assistant() {
+        let steps = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        struct UnnamedCallsProvider {
+            steps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl Provider for UnnamedCallsProvider {
+            fn stream<'a>(
+                &'a self,
+                _request: &'a Request,
+                cancel: CancellationToken,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<EventStream, ProviderError>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async move {
+                    let step = self.steps.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let (sender, stream) = EventStream::channel(cancel);
+                    if step == 0 {
+                        sender
+                            .send(StreamEvent::Done {
+                                message: mycode_core::AssistantMessage {
+                                    blocks: vec![
+                                        ContentBlock::Text(mycode_core::TextBlock::new(
+                                            "truncated call",
+                                        )),
+                                        ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                            "",
+                                            "read",
+                                            serde_json::json!({}),
+                                        )),
+                                        ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                            "call-unnamed",
+                                            "",
+                                            serde_json::json!({}),
+                                        )),
+                                    ],
+                                    usage: None,
+                                    stop_reason: StopReason::Length,
+                                },
+                            })
+                            .await;
+                    } else {
+                        sender
+                            .send(StreamEvent::Done {
+                                message: mycode_core::AssistantMessage {
+                                    blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                                        "unexpected second step",
+                                    ))],
+                                    usage: None,
+                                    stop_reason: StopReason::Stop,
+                                },
+                            })
+                            .await;
+                    }
+                    Ok(stream)
+                })
+            }
+        }
+        let provider = UnnamedCallsProvider {
+            steps: std::sync::Arc::clone(&steps),
+        };
+        let tools = ToolRegistry::new();
+        let hooks = HookRunner::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks);
+        let mut agent = Agent::new(AgentConfig::new());
+        let outcome = agent
+            .prompt(Message::User(UserMessage::text("start")), &env)
+            .await
+            .expect("completed turn");
+        assert!(matches!(
+            outcome,
+            mycode_core::events::TurnOutcome::Completed
+        ));
+        assert_eq!(
+            steps.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an assistant message with no pairable tool calls must not loop into a second request"
+        );
+        assert!(
+            agent
+                .state()
+                .messages()
+                .iter()
+                .all(|message| match message.as_ref() {
+                    Message::Assistant(assistant) => assistant
+                        .blocks
+                        .iter()
+                        .all(|block| !matches!(block, ContentBlock::ToolCall(_))),
+                    _ => true,
+                }),
+            "unpairable calls must not be persisted for the next user turn"
+        );
     }
 
     #[tokio::test]

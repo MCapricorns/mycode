@@ -32,8 +32,22 @@ impl SessionCore {
         for branch in loaded {
             let mut open_calls = HashSet::new();
             let mut seen_calls = HashSet::new();
+            let mut seen_events = HashSet::new();
+            let mut expected_offset = 0_u64;
             let mut events = Vec::with_capacity(branch.events.len());
             for event in branch.events {
+                if !seen_events.insert(event.event_id.clone())
+                    || !super::super::digest::is_canonical_digest(&event.digest)
+                    || event.bytes == 0
+                    || event.bytes > event.kind.payload_bound() as u64
+                    || event.record_len == 0
+                    || event.offset != expected_offset
+                {
+                    return Err(PlanError::Corrupt);
+                }
+                expected_offset = expected_offset
+                    .checked_add(event.record_len)
+                    .ok_or(PlanError::Corrupt)?;
                 match event.kind {
                     super::super::dto::EventKind::ToolCall => {
                         let call = event.call_id.clone().ok_or(PlanError::Corrupt)?;
@@ -66,6 +80,9 @@ impl SessionCore {
                     external: event.external,
                 });
             }
+            if expected_offset != branch.committed_bytes {
+                return Err(PlanError::Corrupt);
+            }
             if !matches!(
                 (&branch.head, events.last()),
                 (HeadStamp::Empty, None) | (HeadStamp::Event(_), Some(_))
@@ -81,6 +98,9 @@ impl SessionCore {
                     open_calls,
                 },
             );
+        }
+        if total > super::super::store::MAX_SESSION_TOTAL_BYTES {
+            return Err(PlanError::Corrupt);
         }
         self.sessions.insert(
             session.clone(),
