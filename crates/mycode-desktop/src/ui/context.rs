@@ -948,16 +948,19 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
     let cache_alert = vm.cache_alert;
     // Usage accounting is live-only: the running turn reports through the
     // live meter, and a finished turn keeps its sums as the last-turn row.
+    // These are totals over every request of the turn (one per tool round),
+    // so they exceed the context meter, which is the latest prompt alone;
+    // the labels and the request count say so.
     let turn_row = vm
         .live_turn
         .as_ref()
         .filter(|turn| model_of(turn))
-        .map(|turn| (t("Live", "实时"), turn))
+        .map(|turn| (t("This turn, total", "本轮合计"), turn))
         .or_else(|| {
             vm.last_turn
                 .as_ref()
                 .filter(|turn| model_of(turn))
-                .map(|turn| (t("Last turn", "上一轮"), turn))
+                .map(|turn| (t("Last turn, total", "上一轮合计"), turn))
         });
     let show_turn = turn_row.is_some();
 
@@ -1016,7 +1019,9 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             this.child(stat_line(
                 label,
                 &format!(
-                    "{} {} · {} {}",
+                    "{} {} · {} {} · {} {}",
+                    turn.requests,
+                    t("requests", "次请求"),
                     super::compact_count(turn.input),
                     t("in", "入"),
                     super::compact_count(turn.output),
@@ -1027,7 +1032,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             ))
             .when_some(hit, |row, percent| {
                 row.child(stat_line(
-                    t("Cache hit", "缓存命中"),
+                    t("Turn cache hit", "本轮缓存命中"),
                     &format!("{percent}%"),
                     theme.foreground,
                     theme,

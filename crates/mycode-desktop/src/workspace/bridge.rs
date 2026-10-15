@@ -173,6 +173,7 @@ impl Workspace {
                 context_cache,
                 output,
                 cache,
+                requests,
                 elapsed_ms,
             } => {
                 if !matches_active(&session_id) {
@@ -187,6 +188,7 @@ impl Workspace {
                         context_cache,
                         output,
                         cache,
+                        requests,
                         elapsed_ms,
                     },
                     cx,
