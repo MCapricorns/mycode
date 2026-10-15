@@ -859,6 +859,14 @@ def _expect_workflow_contract() -> None:
         "crates.io network retry is missing from the build",
     )
     _expect(
+        "generate_catalog.py" in release_build_job,
+        "release builds do not refresh the provider catalog snapshot",
+    )
+    _expect(
+        "models.dev/api.json" in release_build_job,
+        "release builds lost the models.dev catalog source",
+    )
+    _expect(
         "needs.check.result == 'success'" in _yaml_job(workflow, "release-publish"),
         "publish does not wait for the workspace check",
     )
