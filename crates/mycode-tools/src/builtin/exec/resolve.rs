@@ -127,8 +127,8 @@ pub(super) fn pin_program_with_path(
     pin_basename(program, path_var, cancel)
 }
 
-/// PATH search that skips unopenable hits (Windows Store execution aliases
-/// return ERROR_CANT_ACCESS_FILE / empty images) and continues to the next
+/// PATH search that skips missing or empty hits (an execution alias whose
+/// target cannot be read resolves as missing) and continues to the next
 /// directory instead of failing closed on the first name match.
 fn pin_basename(
     name: &str,
@@ -159,13 +159,7 @@ fn pin_basename(
 }
 
 fn is_skippable_path_hit(error: &ResolveError) -> bool {
-    if error.is_not_found() {
-        return true;
-    }
-    let text = error.to_string();
-    text.contains("program is empty")
-        || text.contains("os error 1920")
-        || text.contains("系统无法访问此文件")
+    error.is_not_found() || error.to_string().contains("program is empty")
 }
 
 /// Validates program and argument resource limits before request cloning.
@@ -614,21 +608,159 @@ fn canonical_from_handle(_file: &File) -> Result<PathBuf, ToolError> {
     ))
 }
 
+/// Opens `path` for pinning. A Store App Execution Alias (for example
+/// `WindowsApps\pwsh.exe`, the only `pwsh` a Microsoft Store install puts on
+/// PATH) cannot be opened as a file, so the alias is followed to the packaged
+/// image it names and that image is pinned and launched instead.
 #[cfg(windows)]
 fn windows_open_pin(path: &Path) -> Result<File, ResolveError> {
+    match windows_open_image(path) {
+        Err(error) if error.raw_os_error() == Some(ERROR_CANT_ACCESS_FILE) => {
+            match windows_app_exec_link_target(path) {
+                Some(target) => {
+                    windows_open_image(&target).map_err(|error| open_error(&target, &error))
+                }
+                None => Err(ResolveError::path_not_found(path)),
+            }
+        }
+        Err(error) => Err(open_error(path, &error)),
+        Ok(file) => Ok(file),
+    }
+}
+
+/// `ERROR_CANT_ACCESS_FILE`: what `CreateFileW` reports for an App Execution
+/// Alias, whose reparse tag the I/O manager does not follow.
+#[cfg(windows)]
+const ERROR_CANT_ACCESS_FILE: i32 = 1920;
+
+#[cfg(windows)]
+fn open_error(path: &Path, error: &std::io::Error) -> ResolveError {
+    if error.kind() == std::io::ErrorKind::NotFound
+        || error.raw_os_error() == Some(ERROR_CANT_ACCESS_FILE)
+    {
+        ResolveError::path_not_found(path)
+    } else {
+        ResolveError::Other(ToolError::InvalidArgs(format!(
+            "program could not be opened: {error}"
+        )))
+    }
+}
+
+/// NUL-terminated extended-length UTF-16 spelling of `path`.
+#[cfg(windows)]
+fn wide_path(path: &Path) -> std::io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt as _;
-    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
-    use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, OPEN_EXISTING};
 
     let extended = windows_extended_length_path(path);
     let mut wide: Vec<u16> = extended.as_os_str().encode_wide().collect();
     if wide.contains(&0) {
-        return Err(ResolveError::Other(ToolError::InvalidArgs(
-            "program path contains an interior NUL".into(),
-        )));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "program path contains an interior NUL",
+        ));
     }
     wide.push(0);
+    Ok(wide)
+}
+
+/// Target image named by an App Execution Alias reparse point, or `None` when
+/// `path` is not one.
+#[cfg(windows)]
+fn windows_app_exec_link_target(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        MAXIMUM_REPARSE_DATA_BUFFER_SIZE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    use windows_sys::Win32::System::Ioctl::FSCTL_GET_REPARSE_POINT;
+
+    let wide = wide_path(path).ok()?;
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path. FILE_FLAG_OPEN_REPARSE_POINT
+    // opens the alias itself rather than following it; only attributes are
+    // requested. A non-INVALID handle is uniquely owned.
+    let raw = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    // SAFETY: CreateFileW returned a fresh owned HANDLE.
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut buffer = vec![0_u8; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize];
+    let mut returned = 0_u32;
+    // SAFETY: `handle` is live; the output buffer is writable for its full
+    // length, which is passed as the output size; no input buffer is used.
+    let ok = unsafe {
+        DeviceIoControl(
+            handle.as_raw_handle(),
+            FSCTL_GET_REPARSE_POINT,
+            std::ptr::null(),
+            0,
+            buffer.as_mut_ptr().cast(),
+            MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
+            &raw mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    buffer.truncate(usize::try_from(returned).ok()?);
+    parse_app_exec_link(&buffer).map(PathBuf::from)
+}
+
+/// `IO_REPARSE_TAG_APPEXECLINK`.
+#[cfg(any(windows, test))]
+const IO_REPARSE_TAG_APPEXECLINK: u32 = 0x8000_001B;
+
+/// Target executable of one `IO_REPARSE_TAG_APPEXECLINK` reparse buffer.
+///
+/// Layout: tag (u32), data length (u16), reserved (u16), then version 3
+/// data: a u32 version followed by NUL-terminated UTF-16 strings — package
+/// family name, application user model id, target path, app type. Only an
+/// absolute drive path to an `.exe` is accepted as the target.
+#[cfg(any(windows, test))]
+fn parse_app_exec_link(buffer: &[u8]) -> Option<String> {
+    let read_u32 = |at: usize| {
+        buffer
+            .get(at..at + 4)
+            .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    };
+    if read_u32(0)? != IO_REPARSE_TAG_APPEXECLINK || read_u32(8)? != 3 {
+        return None;
+    }
+    let data_len = usize::from(u16::from_le_bytes([*buffer.get(4)?, *buffer.get(5)?]));
+    let strings = buffer.get(12..8 + data_len)?;
+    let units: Vec<u16> = strings
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let target = units.split(|unit| *unit == 0).nth(2)?;
+    let target = String::from_utf16(target).ok()?;
+    let bytes = target.as_bytes();
+    let drive_path =
+        bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\';
+    (drive_path && target.to_ascii_lowercase().ends_with(".exe")).then_some(target)
+}
+
+#[cfg(windows)]
+fn windows_open_image(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
+    use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, OPEN_EXISTING};
+
+    let wide = wide_path(path)?;
     // SAFETY: `wide` is a NUL-terminated UTF-16 path. CreateFileW follows
     // the final reparse alias onto the regular target. FILE_SHARE_READ (no
     // WRITE/DELETE) pins that object. A non-null, non-INVALID handle is
@@ -645,18 +777,7 @@ fn windows_open_pin(path: &Path) -> Result<File, ResolveError> {
         )
     };
     if raw == INVALID_HANDLE_VALUE {
-        let err = std::io::Error::last_os_error();
-        // ERROR_CANT_ACCESS_FILE (1920): Store execution aliases look like
-        // files on PATH but cannot be opened or hashed as a regular image.
-        return Err(
-            if err.kind() == std::io::ErrorKind::NotFound || err.raw_os_error() == Some(1920) {
-                ResolveError::path_not_found(path)
-            } else {
-                ResolveError::Other(ToolError::InvalidArgs(format!(
-                    "program could not be opened: {err}"
-                )))
-            },
-        );
+        return Err(std::io::Error::last_os_error());
     }
     // SAFETY: CreateFileW returned a fresh owned HANDLE.
     let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
@@ -749,5 +870,79 @@ fn windows_final_path(file: &File) -> Result<PathBuf, ToolError> {
             ));
         }
         return Ok(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IO_REPARSE_TAG_APPEXECLINK, parse_app_exec_link};
+
+    fn app_exec_link(version: u32, strings: &[&str]) -> Vec<u8> {
+        let mut data = version.to_le_bytes().to_vec();
+        for text in strings {
+            for unit in text.encode_utf16().chain(std::iter::once(0)) {
+                data.extend_from_slice(&unit.to_le_bytes());
+            }
+        }
+        let mut buffer = IO_REPARSE_TAG_APPEXECLINK.to_le_bytes().to_vec();
+        buffer.extend_from_slice(&u16::try_from(data.len()).expect("len").to_le_bytes());
+        buffer.extend_from_slice(&[0, 0]);
+        buffer.extend_from_slice(&data);
+        buffer
+    }
+
+    #[test]
+    fn app_exec_link_yields_the_packaged_image() {
+        let target = r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe\pwsh.exe";
+        let buffer = app_exec_link(
+            3,
+            &[
+                "Microsoft.PowerShell_8wekyb3d8bbwe",
+                "Microsoft.PowerShell_8wekyb3d8bbwe!App",
+                target,
+                "0",
+            ],
+        );
+        assert_eq!(parse_app_exec_link(&buffer).as_deref(), Some(target));
+    }
+
+    #[test]
+    fn app_exec_link_rejects_other_tags_versions_and_targets() {
+        let good = ["pkg", "pkg!App", r"C:\Apps\tool.exe", "0"];
+        let mut wrong_tag = app_exec_link(3, &good);
+        wrong_tag[0] = 0x0C;
+        assert_eq!(parse_app_exec_link(&wrong_tag), None);
+        assert_eq!(parse_app_exec_link(&app_exec_link(2, &good)), None);
+        assert_eq!(
+            parse_app_exec_link(&app_exec_link(3, &["pkg", "pkg!App", r"relative\tool.exe"])),
+            None
+        );
+        assert_eq!(
+            parse_app_exec_link(&app_exec_link(3, &["pkg", "pkg!App", r"C:\Apps\tool.dll"])),
+            None
+        );
+        assert_eq!(parse_app_exec_link(&app_exec_link(3, &["pkg"])), None);
+        assert_eq!(parse_app_exec_link(&[]), None);
+    }
+
+    /// A Microsoft Store PowerShell exposes only the execution alias. The pin
+    /// must follow it to the packaged image instead of reporting "not found".
+    #[cfg(windows)]
+    #[test]
+    fn store_pwsh_alias_pins_its_packaged_image() {
+        let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+            return;
+        };
+        let alias = std::path::Path::new(&local)
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("pwsh.exe");
+        if std::fs::symlink_metadata(&alias).is_err() {
+            return;
+        }
+        let pinned = super::pin_candidate(&alias, &tokio_util::sync::CancellationToken::new())
+            .expect("the Store alias resolves to a pinnable image");
+        let canonical = pinned.canonical_path.to_string_lossy().to_ascii_lowercase();
+        assert!(canonical.ends_with("pwsh.exe"), "{canonical}");
     }
 }

@@ -7,6 +7,8 @@
 //! PowerShell 5.1, then `cmd.exe`. Git Bash, MSYS2, Cygwin, and WSL are not
 //! candidates. A `WindowsApps\pwsh.exe` execution alias is recognized by path
 //! shape, not by file size, and is used only when no regular `pwsh` exists.
+//! The alias cannot be opened as a file; the launch pin follows its reparse
+//! point to the packaged image (`exec::resolve`).
 //!
 //! Linux and macOS follow Codex's user-shell rule, limited to POSIX shells.
 //! `$SHELL` wins when it is an absolute `bash`, `zsh`, or `sh`. Otherwise
@@ -201,8 +203,8 @@ pub(crate) fn is_wsl_bash_launcher(path: &Path) -> bool {
 /// under `WindowsApps`.
 ///
 /// Store execution aliases live at that exact path. Package binaries live in
-/// `WindowsApps\Microsoft.PowerShell_*\pwsh.exe` and are access-restricted, so
-/// discovery uses the alias path instead of launching them. File size is not
+/// versioned `WindowsApps\Microsoft.PowerShell_*\pwsh.exe` folders, so
+/// discovery records the stable alias path instead. File size is not
 /// part of the check: an alias can be larger than a few dozen bytes, and a
 /// tiny file outside `WindowsApps` is not an alias.
 #[cfg(any(windows, test))]
@@ -569,9 +571,9 @@ fn is_absolute_path_entry(entry: &Path) -> bool {
 
 /// `true` when `path` is `WindowsApps\Microsoft.PowerShell_*\pwsh.exe`.
 ///
-/// That file is the Store package, not the App Execution Alias. Launching it
-/// directly is access-restricted. Callers treat it as missing and use
-/// `WindowsApps\pwsh.exe` instead.
+/// Discovery never lists the package folder: its versioned name changes on
+/// every Store update. Callers treat it as missing and use the stable
+/// `WindowsApps\pwsh.exe` alias, which the launch pin resolves.
 #[cfg(any(windows, test))]
 #[must_use]
 pub(crate) fn is_windowsapps_package_pwsh(path: &Path) -> bool {

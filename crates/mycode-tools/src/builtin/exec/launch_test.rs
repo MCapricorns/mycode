@@ -55,6 +55,33 @@ async fn native_image_launches() {
     }
 }
 
+/// Script mode launches the platform shell discovery picked. On a Windows
+/// host whose only PowerShell 7 is the Microsoft Store build, that shell is
+/// the `WindowsApps\pwsh.exe` execution alias.
+#[tokio::test]
+async fn script_mode_runs_the_resolved_platform_shell() {
+    let tool = ShellTool::with_default_timeout(30);
+    let ctx = ToolCtx::new(std::env::temp_dir());
+    let mut out = ToolStream::closed();
+    let result = tool
+        .execute(
+            ShellArgs {
+                mode: ShellMode::Script,
+                command: Some("echo mycode-script-ok".to_owned()),
+                program: None,
+                args: Vec::new(),
+                timeout_secs: Some(30),
+            },
+            &ctx,
+            &mut out,
+        )
+        .await
+        .expect("script mode should launch the resolved shell");
+    let text = text_of(&result);
+    assert!(!result.is_error, "script mode failed: {text}");
+    assert!(text.contains("mycode-script-ok"), "{text}");
+}
+
 #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn launch_target() -> (String, Vec<String>, &'static str, Option<&'static str>) {
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
