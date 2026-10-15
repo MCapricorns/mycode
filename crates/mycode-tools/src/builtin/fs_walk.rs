@@ -154,11 +154,11 @@ pub(crate) fn walk_retained_tree(
         ) {
             continue;
         }
-        if matches!(
-            visit(&child_rel, &entry.name, kind, &parent_dir),
-            ignore::WalkState::Quit
-        ) {
-            return Ok(());
+        match visit(&child_rel, &entry.name, kind, &parent_dir) {
+            ignore::WalkState::Quit => return Ok(()),
+            // `Skip` keeps a visited directory out of the walk.
+            ignore::WalkState::Skip => continue,
+            ignore::WalkState::Continue => {}
         }
         if kind != FsEntryKind::Directory {
             continue;

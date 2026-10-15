@@ -23,15 +23,13 @@ fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
 fn edit_hint(shell_tool: &str) -> &'static str {
     match shell_tool {
         "powershell" => {
-            "For a shell edit, use `mode` `script` and pipe a literal here-string to `python` or `python3` (`@'...'@ | python -`)."
+            "For a change they cannot express (a bulk or generated rewrite), use `mode` `script` and pipe a literal here-string to `python` or `python3` (`@'...'@ | python -`)."
         }
         "bash" | "zsh" | "sh" => {
-            "For a shell edit, use `mode` `script` and run Python (`python3` or `python`) with a quoted heredoc or a short script."
+            "For a change they cannot express (a bulk or generated rewrite), use `mode` `script` and run Python (`python3` or `python`) with a quoted heredoc or a short script."
         }
-        "cmd" => {
-            "Prefer `write` and `edit` for file changes. `mode` `script` is cmd.exe, not bash or PowerShell."
-        }
-        _ => "For a shell edit, use `mode` `script`.",
+        "cmd" => "`mode` `script` is cmd.exe, not bash or PowerShell; do not edit files with it.",
+        _ => "For a change they cannot express, use `mode` `script`.",
     }
 }
 
@@ -40,8 +38,9 @@ fn tool_calling(shell_tool: &str) -> String {
     format!(
         "<tool_calling>\n\
 - Independent calls in one response run together. Do not wait between them.\n\
-- Read existing content before changing it. Prefer `read`, `grep`, and `find` to inspect files.\n\
-- `write`, `edit`, and `{shell_tool}` can all change files. {hint}\n\
+- Use the dedicated tools first: `find` lists and locates files and directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n\
+- Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
+- Read existing content before changing it. Change files with `write` and `edit`. {hint}\n\
 - Use `{shell_tool}` with `mode` `program` for one kernel image, or a direct shebang wrapper, and an explicit argument vector. That path does not parse a shell command string.\n\
 - Never use `{shell_tool}` to talk to the user.\n\
 - Editing or recalling a chat message does not restore or delete workspace files.\n\
@@ -156,12 +155,24 @@ mod tests {
         assert!(prompt.contains("`bash`"), "{prompt}");
         assert!(prompt.contains("quoted heredoc"), "{prompt}");
         assert!(
-            prompt.contains("`write`, `edit`, and `bash`"),
-            "write and edit stay alongside bash, got:\n{prompt}"
+            prompt.contains("Change files with `write` and `edit`"),
+            "write and edit are the file-change tools, got:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("Use `bash` only for what the dedicated tools cannot do"),
+            "the shell is the fallback, got:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("Never use it to list directories, read files, or search text"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("`max_depth` 1"),
+            "directory listing belongs to find, got:\n{prompt}"
         );
         assert!(
             prompt.contains("`mode` `script`"),
-            "file edits belong on script mode, got:\n{prompt}"
+            "bulk edits stay on script mode, got:\n{prompt}"
         );
         assert!(
             !prompt.contains("only for pipelines"),

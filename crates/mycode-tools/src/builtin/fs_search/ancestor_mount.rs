@@ -336,6 +336,7 @@ async fn run_find(project: &Path) -> String {
                 pattern: "*.txt".to_owned(),
                 path: None,
                 limit: None,
+                max_depth: None,
             },
             &ctx,
             &mut out,
