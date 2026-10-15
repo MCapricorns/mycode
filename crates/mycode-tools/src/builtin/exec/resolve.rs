@@ -666,7 +666,7 @@ fn wide_path(path: &Path) -> std::io::Result<Vec<u16>> {
 /// Target image named by an App Execution Alias reparse point, or `None` when
 /// `path` is not one.
 #[cfg(windows)]
-fn windows_app_exec_link_target(path: &Path) -> Option<PathBuf> {
+pub(crate) fn windows_app_exec_link_target(path: &Path) -> Option<PathBuf> {
     use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::Storage::FileSystem::{
