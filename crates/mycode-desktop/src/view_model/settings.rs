@@ -179,15 +179,18 @@ fn merge_web_backends(
     backends
 }
 
-/// The Models settings sub-page: provider list, catalog picker, or the
-/// custom-endpoint form.
+/// The Models settings sub-page: provider list, catalog picker, the
+/// OpenDesign gateway, or the custom-endpoint form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelsSubview {
-    /// Configured providers plus the two add buttons.
+    /// Configured providers plus the add buttons.
     #[default]
     List,
     /// The models.dev catalog picker (search + provider rows).
     Catalog,
+    /// The OpenDesign gateway: live model listing plus the add form. Kept
+    /// apart from the models.dev catalog.
+    OpenDesign,
     /// The custom endpoint form.
     Custom,
 }

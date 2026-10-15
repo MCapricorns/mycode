@@ -128,6 +128,14 @@ const CHAT_THINKING: &[ChatRow] = &[
         name: "dashscope",
         matches: host_dashscope,
     },
+    // The OpenDesign gateway takes plain `reasoning_effort` for every model
+    // it routes (verified per level against the gateway); the vendor
+    // `thinking` objects of the GLM, Kimi, and DeepSeek rows are not its API.
+    ChatRow {
+        family: ChatFamily::Generic,
+        name: "opendesign",
+        matches: host_opendesign,
+    },
     ChatRow {
         family: ChatFamily::Zai,
         name: "zai",
@@ -391,6 +399,10 @@ fn host_openrouter(_model: &str, host: &str) -> bool {
 
 fn host_dashscope(_model: &str, host: &str) -> bool {
     host.contains("dashscope") || host.contains("aliyuncs")
+}
+
+fn host_opendesign(_model: &str, host: &str) -> bool {
+    host.contains("open-design.ai")
 }
 
 fn match_zai(model: &str, host: &str) -> bool {
@@ -909,6 +921,7 @@ mod tests {
             [
                 "openrouter",
                 "dashscope",
+                "opendesign",
                 "zai",
                 "minimax",
                 "kimi",
@@ -955,6 +968,33 @@ mod tests {
             anthropic_family_name("claude-sonnet-4-6", "https://api.anthropic.com/v1/messages"),
             "claude-adaptive"
         );
+    }
+
+    #[test]
+    fn opendesign_sends_plain_reasoning_effort_for_vendor_models() {
+        let endpoint = "https://amr-link.open-design.ai/v1/chat/completions";
+        for model in ["glm-5.3-flash", "deepseek-v4-flash", "kimi-k2.7-code"] {
+            assert_eq!(chat_family_name(model, endpoint), "opendesign");
+            let mut body = json!({});
+            super::apply_chat_thinking(
+                &mut body,
+                model,
+                endpoint,
+                ReasoningLevel::Xhigh,
+                ThinkingWire::Completions,
+            );
+            assert_eq!(body["reasoning_effort"], "xhigh", "{model}");
+            assert!(body.get("thinking").is_none(), "{model}: {body}");
+        }
+        let mut off = json!({});
+        super::apply_chat_thinking(
+            &mut off,
+            "deepseek-v4-flash",
+            endpoint,
+            ReasoningLevel::Off,
+            ThinkingWire::Completions,
+        );
+        assert_eq!(off["reasoning_effort"], "none");
     }
 
     #[test]

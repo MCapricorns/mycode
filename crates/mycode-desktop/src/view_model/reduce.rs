@@ -610,7 +610,14 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsProviderAdded(provider) => {
             edit_settings(state, |settings| {
-                if settings.providers.len() < mycode_config::MAX_PROVIDERS {
+                if let Some(existing) = settings
+                    .providers
+                    .iter_mut()
+                    .find(|existing| existing.id == provider.id)
+                {
+                    *existing = provider;
+                    true
+                } else if settings.providers.len() < mycode_config::MAX_PROVIDERS {
                     settings.providers.push(provider);
                     true
                 } else {
@@ -947,12 +954,15 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::ShowModelsSubview(view) => {
             state.models_subview = view;
-            state.active_preset = None;
-            state.preset_model_query.clear();
             state.provider_kind_menu_open = false;
             state.mcp_transport_menu_open = false;
             state.provider_detail = None;
+            // The OpenDesign page is the add form for that one provider.
+            let preset = (view == crate::view_model::ModelsSubview::OpenDesign)
+                .then(|| mycode_providers::catalog::opendesign::PROVIDER_ID.to_owned());
+            active_preset_changed(state, preset);
         }
+        DesktopAction::OpenDesignLoading(loading) => state.opendesign_loading = loading,
         DesktopAction::ShowWebSubview(view) => state.web_subview = view,
         DesktopAction::ShowMcpSubview(view) => {
             state.mcp_subview = view;

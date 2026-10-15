@@ -263,6 +263,13 @@ pub enum BridgeCommand {
     GetCatalog,
     /// Re-download the cloud provider catalog.
     RefreshCatalog,
+    /// List the models one OpenDesign key can use and install them in the
+    /// catalog. An empty key uses the key stored for the configured
+    /// OpenDesign provider.
+    RefreshOpenDesignModels {
+        /// Pasted key; empty uses the stored one.
+        api_key: String,
+    },
     /// Load the durable UI state document.
     LoadUiState,
     /// Persist the durable UI state document.
@@ -544,6 +551,9 @@ pub enum BridgeReply {
     AskAnswered(Result<(), String>),
     /// Provider catalog snapshot with its freshness metadata.
     Catalog(Result<CatalogInfo, String>),
+    /// The catalog with the live OpenDesign listing installed, and how many
+    /// chat models the key can use.
+    OpenDesignModels(Result<(CatalogInfo, usize), String>),
     /// Durable UI state load result, plus documents reset earlier in startup.
     UiState(Result<(UiState, Vec<mycode_config::DocumentRepair>), String>),
     /// UI state persist result.

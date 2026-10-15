@@ -229,6 +229,7 @@ fn settings_page_key(workspace: &Workspace) -> String {
                 vm.provider_detail.as_deref().unwrap_or("all")
             ),
             crate::view_model::ModelsSubview::Catalog => "models-catalog".to_owned(),
+            crate::view_model::ModelsSubview::OpenDesign => "models-opendesign".to_owned(),
             crate::view_model::ModelsSubview::Custom => "models-custom".to_owned(),
         },
         SettingsSection::Web => match vm.web_subview {

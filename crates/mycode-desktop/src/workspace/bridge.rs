@@ -662,6 +662,37 @@ impl Workspace {
                     self.apply_action(DesktopAction::Failed(message), cx);
                 }
             }
+            BridgeReply::OpenDesignModels(Ok((info, count))) => {
+                self.apply_action(DesktopAction::OpenDesignLoading(false), cx);
+                self.apply_action(
+                    DesktopAction::CatalogLoaded {
+                        document: info.document,
+                        fetched_at: info.fetched_at,
+                    },
+                    cx,
+                );
+                // The open form re-checks the fresh list.
+                if self.vm.models_subview == crate::view_model::ModelsSubview::OpenDesign {
+                    self.apply_action(
+                        DesktopAction::ActivePresetChanged(Some(
+                            mycode_providers::catalog::opendesign::PROVIDER_ID.to_owned(),
+                        )),
+                        cx,
+                    );
+                }
+                self.push_toast(
+                    format!(
+                        "{count} {}",
+                        crate::i18n::t("OpenDesign models loaded", "个 OpenDesign 模型已加载")
+                    ),
+                    crate::workspace::ToastKind::Info,
+                    cx,
+                );
+            }
+            BridgeReply::OpenDesignModels(Err(message)) => {
+                self.apply_action(DesktopAction::OpenDesignLoading(false), cx);
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
             BridgeReply::UiState(Ok((mut ui_state, repairs))) => {
                 self.note_config_repairs(&repairs, cx);
                 // One-time upgrade: the legacy anonymous folder list becomes

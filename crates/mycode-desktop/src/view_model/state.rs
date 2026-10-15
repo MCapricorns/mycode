@@ -217,6 +217,8 @@ pub(crate) struct WorkspaceState {
     pub preset_models: Vec<String>,
     /// The Models settings sub-page.
     pub models_subview: ModelsSubview,
+    /// An OpenDesign `/models` listing is in flight.
+    pub opendesign_loading: bool,
     /// The Web search settings sub-page.
     pub web_subview: WebSubview,
     /// The MCP settings sub-page.
@@ -290,7 +292,8 @@ pub enum DesktopAction {
         /// New base URL, already accepted by settings validation.
         base_url: String,
     },
-    /// The settings editor added a provider row.
+    /// The settings editor added a provider row, or replaced the row that
+    /// has the same id.
     SettingsProviderAdded(mycode_config::ProviderSettings),
     /// The settings editor removed a provider row.
     SettingsProviderRemoved(usize),
@@ -585,6 +588,8 @@ pub enum DesktopAction {
     PresetModelToggled(String),
     /// The Models settings sub-page changed.
     ShowModelsSubview(ModelsSubview),
+    /// An OpenDesign model listing started (`true`) or finished.
+    OpenDesignLoading(bool),
     /// The Web search settings sub-page changed.
     ShowWebSubview(WebSubview),
     /// The MCP settings sub-page changed.
