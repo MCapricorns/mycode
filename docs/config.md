@@ -14,9 +14,14 @@
 | `sessions/<id>/compaction.json` | 压缩检查点 |
 | `catalog-cache.json` | models.dev 目录缓存，归 `mycode-providers` 读写 |
 
-文档是严格 JSON，带 `formatVersion` 和 `kind`。`settings.json` 和 `secrets.json` 还有 `revision`：写入用文件锁加上比较交换，编辑器带上读到的 revision，过期就失败，避免两个保存互相覆盖。`ui.json` 没有 revision，在锁下最后写入者生效。
+文档是严格 JSON，带 `formatVersion` 和 `kind`。`settings.json` 和 `secrets.json` 还有 `revision`：写入在咨询锁下做比较交换，编辑器带上读到的 revision，过期就失败，避免两个保存互相覆盖。`ui.json` 没有 revision，在锁下最后写入者生效。锁在操作系统里，不在磁盘上：Unix 对已打开的目录句柄 `flock`，Windows 用按目录路径命名的会话内互斥体，所以家目录里不会出现 `*.lock` 文件；旧版本留下的 `{文件名}.lock` 会在下次写入时删掉。
 
-读入时修掉旧写法留下的尾逗号并写回规范形式；缺字段补默认值。没有就地升级：`settings.json`、`secrets.json`、`ui.json` 如果解析失败、校验失败（未知字段、错误的 `formatVersion` / `kind`、非法取值等）、不是合法 UTF-8 或超过上限（8 MiB 以内），会把原字节复制到旁边的 `{文件名}.broken-<纳秒时间戳>`，再写入该文档的默认内容，启动继续，界面提示一次。密钥备份里仍是原来的字节，恢复过程不把它们写进日志。会话账本和 `sessions.db` 不走这套恢复。文件读不出来、权限不够，或备份写不进去时，原文件保持不动并返回错误。
+读入时修掉旧写法留下的尾逗号并写回规范形式；缺字段补默认值。没有就地升级：`settings.json`、`secrets.json`、`ui.json` 有问题时直接重置，启动继续，界面提示一次：
+
+- 内容坏了：解析失败、校验失败（未知字段、错误的 `formatVersion` / `kind`、非法取值等）、不是合法 UTF-8 或超过上限（8 MiB 以内）。原字节复制到旁边的 `{文件名}.broken-<纳秒时间戳>`，再写入该文档的默认内容。
+- 文件本身不能用：权限或所有者不对（例如从别的机器拷来、ACL 被清空、只读）、是链接或目录、读的时候报非瞬时 I/O 错误。文件原样改名为 `{文件名}.broken-<纳秒时间戳>`（不读内容；Windows 上只要 `DELETE` 权限，由父目录授予），再写入默认内容。
+
+密钥备份里仍是原来的内容，恢复过程不把它们写进日志。会话账本和 `sessions.db` 不走这套恢复。家目录本身不可信（所有者不对、是链接）时不会被“修好”，返回原错误；被别的程序短暂占用这类瞬时错误也不重置。
 
 密钥和设置分开。`settings.json` 可以进导出包；`secrets.json` 单独存，`Debug` 输出只列 id。读文件的缓冲区用 `zeroize`，避免密钥在临时缓冲里多停一轮。
 
@@ -25,10 +30,10 @@
 | 模块 | 干什么 |
 | --- | --- |
 | `home` | 解析根、`sessions/`、`scratch/`，以及会话内相对路径 |
-| `secure_fs` | 有界读取、持久锁、相对句柄的原子替换。Unix 与 Windows 各有一套不跟随链接的打开方式。本模块不含文档 schema |
+| `secure_fs` | 有界读取、不落盘的咨询锁、相对句柄的原子替换和改名隔离。Unix 与 Windows 各有一套不跟随链接的打开方式。本模块不含文档 schema |
 | `authority` | 文档 revision，供比较交换 |
 | `json_recover` | 尾逗号修复，这是唯一修的语法。修好后由调用方写回规范形式 |
-| `document_repair` | 把无法解析或无法校验的产品文档复制到 `.broken-*`，再发布默认内容 |
+| `document_repair` | 把内容损坏或文件本身不能用的产品文档挪到 `.broken-*`，再发布默认内容 |
 | `settings` | `settings.json`。损坏时备份后回到默认设置（无提供商、两个未启用的内置网页后端） |
 | `secrets` | `secrets.json`：每个 id 一把密钥，按 id 排序。空字符串表示清除。损坏时备份后变成空存储，钥匙只留在备份里 |
 | `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用和星标、每会话模型钉选、自动更新开关。只作界面恢复，不当作产品配置的真相 |

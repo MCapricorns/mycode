@@ -89,6 +89,13 @@ pub(super) fn protected_descriptor() -> Result<SecurityDescriptor, ConfigError> 
     descriptor_from_sddl(&protected_sddl(&current_sid))
 }
 
+/// A descriptor whose DACL grants nobody anything, as found on a
+/// `secrets.json` in the field. Tests use it to reproduce that file.
+#[cfg(test)]
+pub(super) fn empty_dacl_descriptor() -> Result<SecurityDescriptor, ConfigError> {
+    descriptor_from_sddl("D:")
+}
+
 fn protected_sddl(current_sid: &str) -> String {
     if current_sid == SYSTEM_SID {
         format!("O:{current_sid}D:P(A;;FA;;;{current_sid})")

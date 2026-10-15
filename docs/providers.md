@@ -29,7 +29,7 @@
 | `driver` | 用归约器把传输流驱动成 `EventStream`。`stream()` 在运行时里 `spawn` 这段驱动 |
 | `transport` | `SseTransport` 与 reqwest 实现 |
 | `http_pin` | 解析、检查并钉住地址的 HTTP 请求 |
-| `oauth` | Copilot、Codex、xAI 的设备码 / 订阅登录、轮询、刷新。令牌解析后仍交给调用方存进 `secrets.json` |
+| `oauth` | Copilot、Codex 的设备码登录、轮询、刷新。令牌解析后仍交给调用方存进 `secrets.json` |
 | `catalog` | 编进二进制的 models.dev 快照、家目录缓存、条件刷新，以及设置页用的预设 |
 
 ## 思考强度
@@ -75,11 +75,11 @@ K3 识别：路径段为 `k3`、`k3-*`、`kimi-k3`、`kimi-k3-*`；`k30`、`mk3`
 
 运行时家目录的 `catalog-cache.json` 盖在快照上。后台刷新直接解析 models.dev，缓存 6 小时内不发请求，之后用 `If-None-Match` 条件请求；失败时继续用已有缓存或内置快照。云端文档最大 32 MiB。缓存是旧格式版本时直接换成内置快照；解析失败时，原字节备份为 `catalog-cache.json.broken-*`，再写入内置快照，下次启动不会反复提示。读不出来则不动原文件，内存里用内置快照。设置页的预设、上下文窗口、输出上限、思考档位、工具调用和价格都从这份目录来，界面因此能在不发版的情况下看到新模型。
 
-解析时跳过带 `status` 的模型、Bedrock / Vertex / Azure / Google SDK 的服务商；每个提供商最多 512 个模型，字符串字段最多 8 KiB。思考档位只取 models.dev 公布的 `reasoning_options`（开关、effort 列表），effort 为空时取 `variants` 的键，不补猜测的档位；effort 最多 16 个，未知标识符保留，丢掉 `default` 和非标识符。设备登录服务商（`github-copilot` / `openai-codex` 的 device-code，`xai` 的 oauth）用固定端点，不用云端文档里的控制台 URL。`scripts/generate_catalog.py` 与 Rust `modelsdev` 解析器对齐（设备登录、variants、effort 上限、未知 token）。自定义端点按服务商 id、再按 base URL、最后按模型 id 在全目录里找行。
+解析时跳过带 `status` 的模型、Bedrock / Vertex / Azure / Google SDK 的服务商；每个提供商最多 512 个模型，字符串字段最多 8 KiB。思考档位只取 models.dev 公布的 `reasoning_options`（开关、effort 列表），effort 为空时取 `variants` 的键，不补猜测的档位；effort 最多 16 个，未知标识符保留，丢掉 `default` 和非标识符。设备登录服务商（`github-copilot` / `openai-codex` 的 device-code）用固定端点，不用云端文档里的控制台 URL。`scripts/generate_catalog.py` 与 Rust `modelsdev` 解析器对齐（设备登录、variants、effort 上限、未知 token）。自定义端点按服务商 id、再按 base URL、最后按模型 id 在全目录里找行。
 
 ## 登录
 
-`github-copilot`、`openai-codex` 是设备码登录，`xai` 是订阅 OAuth（也可以贴 API key）。目录会给 `xai` 标上 OAuth，缺少 `openai-codex` 时补一个内置预设（Responses，`https://chatgpt.com/backend-api/codex`）。OAuth 请求仍走钉住地址的客户端（`CheckRedirect`），调用方通过 `PinnedCall` 显式传入 User-Agent 和总超时（默认 30s），不跟随重定向；调用方的代理不生效。错误信息只带状态码和字段名，不带令牌。
+`github-copilot`、`openai-codex` 是设备码登录，其它服务商（包括 `xai`）贴 API key。旧版本缓存里 `xai` 的 `oauth` 标记按普通 API key 服务商处理。缺少 `openai-codex` 时目录补一个内置预设（Responses，`https://chatgpt.com/backend-api/codex`）。OAuth 请求仍走钉住地址的客户端（`CheckRedirect`），调用方通过 `PinnedCall` 显式传入 User-Agent 和总超时（默认 30s），不跟随重定向；调用方的代理不生效。错误信息只带状态码和字段名，不带令牌。
 
 ## 一次解析
 

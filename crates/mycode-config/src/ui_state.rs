@@ -642,31 +642,4 @@ mod tests {
             "c:\\work\\app"
         );
     }
-
-    #[cfg(unix)]
-    #[test]
-    fn trailing_comma_repair_surfaces_a_rewrite_failure() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let parent = std::env::temp_dir().join(format!(
-            "mycode-ui-comma-{}-{}",
-            std::process::id(),
-            crate::unix_now().as_nanos()
-        ));
-        std::fs::create_dir_all(&parent).expect("temp parent");
-        let root = parent.join("home");
-        std::fs::create_dir(&root).expect("home");
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
-        let home = crate::HomeLayout::from_root(&root).expect("layout");
-        let path = root.join("ui.json");
-        std::fs::write(&path, br#"{"formatVersion":1,"kind":"mycode-ui-state",}"#).expect("write");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("file mode");
-        std::fs::create_dir(root.join("ui.json.lock")).expect("lock dir");
-        let error = super::read_ui_state(&home).expect_err("rewrite must fail");
-        assert_ne!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
-        let kept = std::fs::read(&path).expect("original remains");
-        assert!(kept.windows(2).any(|window| window == b",}"), "{kept:?}");
-        let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
-        let _ = std::fs::remove_dir_all(&parent);
-    }
 }

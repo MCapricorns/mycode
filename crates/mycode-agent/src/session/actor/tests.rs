@@ -10,6 +10,7 @@ use super::super::dto::{EventKind, HeadStamp, SessionError, SessionResult};
 use super::super::generation::GenerationFence;
 use super::super::ids::{BranchId, SessionId};
 use super::super::ledger::MAX_EVENT_RESERVATIONS;
+use super::super::service::SessionService;
 use super::{MAX_RESIDENT_SESSIONS, OpFail, SessionCore, SessionPull};
 
 static SCRATCH_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -176,6 +177,87 @@ fn a_live_reservation_pins_its_session_against_eviction() {
         HeadStamp::Event(pinned.event_id.clone()),
         "the pinned reservation must survive the eviction pressure"
     );
+}
+
+#[tokio::test]
+async fn new_and_reloaded_session_remain_available_when_the_cache_is_pinned() {
+    let scratch = Scratch::new();
+    let service = SessionService::new(&scratch.home);
+    let mut pinned = Vec::new();
+    for _ in 0..MAX_RESIDENT_SESSIONS {
+        let created = service.create().await.expect("create pinned session");
+        let reservation = service
+            .reserve_event(
+                &created.session_id,
+                &created.branch_id,
+                EventKind::Message,
+                None,
+                b"pinned payload",
+            )
+            .await
+            .expect("reserve pinned payload");
+        pinned.push((created, reservation));
+    }
+
+    let created = service.create().await.expect("create beyond residency cap");
+    let reservation = service
+        .reserve_event(
+            &created.session_id,
+            &created.branch_id,
+            EventKind::Message,
+            None,
+            b"new session payload",
+        )
+        .await
+        .expect("the new session must not evict itself before reserving");
+    let appended = service
+        .append(
+            &created.session_id,
+            &created.branch_id,
+            &HeadStamp::Empty,
+            &reservation,
+        )
+        .await
+        .expect("append in new session");
+    service.forget(&created.session_id).await.expect("unload");
+    let opened = service
+        .open(&created.session_id)
+        .await
+        .expect("the reloaded session must not evict itself before opening");
+    assert_eq!(opened.heads.len(), 1);
+    assert_eq!(opened.heads[0].branch_id, created.branch_id);
+    assert_eq!(opened.heads[0].head, appended.head);
+    let loaded = service
+        .load_event(
+            &created.session_id,
+            &created.branch_id,
+            &reservation.event_id,
+        )
+        .await
+        .expect("load committed payload after reloading");
+    assert_eq!(loaded.payload, b"new session payload");
+
+    for (created, reservation) in pinned {
+        service
+            .append(
+                &created.session_id,
+                &created.branch_id,
+                &HeadStamp::Empty,
+                &reservation,
+            )
+            .await
+            .expect("every pinned reservation must still commit");
+        let loaded = service
+            .load_event(
+                &created.session_id,
+                &created.branch_id,
+                &reservation.event_id,
+            )
+            .await
+            .expect("load originally pinned payload");
+        assert_eq!(loaded.payload, b"pinned payload");
+    }
+    service.shutdown().await;
 }
 
 #[test]

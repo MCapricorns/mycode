@@ -172,7 +172,6 @@ pub(super) fn open_relative_file(
 }
 
 pub(super) const OPEN_EXISTING_DISPOSITION: u32 = FILE_OPEN;
-pub(super) const OPEN_OR_CREATE_FILE_DISPOSITION: u32 = FILE_OPEN_IF;
 pub(super) const CREATE_FILE_DISPOSITION: u32 = FILE_CREATE;
 
 pub(super) fn open_relative_directory(
@@ -344,6 +343,74 @@ fn nt_open_file(
         file,
         created: status_block.Information == FILE_CREATED as usize,
     })
+}
+
+/// Opens one existing child only so it can be renamed aside.
+///
+/// The access is `DELETE | FILE_READ_ATTRIBUTES` and nothing else: NTFS
+/// grants both through the parent's `FILE_DELETE_CHILD` and
+/// `FILE_LIST_DIRECTORY` even when the child's own DACL is empty. `SYNCHRONIZE`
+/// is left out for the same reason, so the handle is not synchronous; a rename
+/// needs no I/O on it. `FILE_OPEN_REPARSE_POINT` moves a link itself, never
+/// its target, and a directory squatting the name moves the same way.
+pub(super) fn open_for_rename(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
+    use windows_sys::Win32::Storage::FileSystem::DELETE;
+
+    open_unsynchronized(parent, name, DELETE | FILE_READ_ATTRIBUTES)
+}
+
+/// Opens one existing child with exactly `access`. `CreateFileW` always adds
+/// `SYNCHRONIZE`, which an empty DACL grants to nobody, the owner included.
+pub(super) fn open_unsynchronized(
+    parent: &File,
+    name: &OsStr,
+    access: u32,
+) -> Result<File, ConfigError> {
+    let mut wide = wide_component(name)?;
+    let byte_length = u16::try_from(wide.len().saturating_mul(2))
+        .map_err(|_| ConfigError::new(ConfigErrorKind::PathEscape))?;
+    wide.push(0);
+    let name_string = UNICODE_STRING {
+        Length: byte_length,
+        MaximumLength: byte_length.saturating_add(2),
+        Buffer: wide.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: u32::try_from(size_of::<OBJECT_ATTRIBUTES>()).expect("OBJECT_ATTRIBUTES fits u32"),
+        RootDirectory: parent.as_raw_handle(),
+        ObjectName: std::ptr::addr_of!(name_string),
+        Attributes: OBJ_CASE_INSENSITIVE,
+        SecurityDescriptor: null(),
+        SecurityQualityOfService: null(),
+    };
+    let mut status_block = IO_STATUS_BLOCK::default();
+    let mut handle: HANDLE = null_mut();
+    // SAFETY: The object attributes borrow a live parent handle and one
+    // validated UTF-16 component for this call. Success returns one owned
+    // handle.
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            access,
+            &attributes,
+            &mut status_block,
+            null(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_OPEN,
+            FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT,
+            null(),
+            0,
+        )
+    };
+    if !nt_success(status) {
+        return Err(map_ntstatus(status));
+    }
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Err(ConfigError::new(ConfigErrorKind::Io));
+    }
+    // SAFETY: NtCreateFile returned a fresh successful handle.
+    Ok(unsafe { File::from_raw_handle(handle) })
 }
 
 /// Reports the attributes of one child under its exact spelling.

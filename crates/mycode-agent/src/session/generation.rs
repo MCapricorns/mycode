@@ -121,6 +121,8 @@ impl GenerationFence {
     /// quiescence point before reclaiming the generation's Store ownership.
     pub(crate) async fn wait_drained(&self) {
         loop {
+            // Subscribe before checking the count so a drain broadcast is
+            // retained by this future even before its first poll.
             let notified = self.drained.notified();
             if generation_activity_count(self.state.load(Ordering::Acquire)) == 0 {
                 return;
@@ -138,7 +140,8 @@ impl GenerationFence {
             })
             .expect("a generation activity releases its reservation exactly once");
         if generation_activity_count(previous) == 1 {
-            self.drained.notify_one();
+            // Service clones can await the same quiescence transition.
+            self.drained.notify_waiters();
         }
     }
 }
@@ -193,5 +196,40 @@ pub(crate) enum GenerationCommitError {
 impl Drop for GenerationActivity {
     fn drop(&mut self) {
         self.fence.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Waker};
+
+    use super::GenerationFence;
+
+    #[test]
+    fn drain_wakes_every_waiter_only_after_the_last_activity() {
+        let fence = Arc::new(GenerationFence::new());
+        fence.mark_current();
+        let first_activity = fence.enter().expect("first admitted activity");
+        let last_activity = fence.enter().expect("last admitted activity");
+        fence.mark_retired();
+        assert!(fence.enter().is_none(), "retirement rejects new activity");
+
+        let mut first_waiter = std::pin::pin!(fence.wait_drained());
+        let mut second_waiter = std::pin::pin!(fence.wait_drained());
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(first_waiter.as_mut().poll(&mut context).is_pending());
+        assert!(second_waiter.as_mut().poll(&mut context).is_pending());
+
+        drop(first_activity);
+        assert!(first_waiter.as_mut().poll(&mut context).is_pending());
+        assert!(second_waiter.as_mut().poll(&mut context).is_pending());
+
+        drop(last_activity);
+        assert_eq!(first_waiter.as_mut().poll(&mut context), Poll::Ready(()));
+        assert_eq!(second_waiter.as_mut().poll(&mut context), Poll::Ready(()));
+        let mut late_waiter = std::pin::pin!(fence.wait_drained());
+        assert_eq!(late_waiter.as_mut().poll(&mut context), Poll::Ready(()));
     }
 }

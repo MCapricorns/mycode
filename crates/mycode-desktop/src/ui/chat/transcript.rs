@@ -6,7 +6,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, TestSupportExt as _, div, px,
+    StatefulInteractiveElement, Styled, TestSupportExt as _, Window, div, px,
 };
 
 use super::markdown;
@@ -26,6 +26,7 @@ pub(super) fn render_streaming_entry(
     workspace: &Workspace,
     theme: &Theme,
     show_reasoning: bool,
+    window: &Window,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let desk = Desk::of(theme);
@@ -80,6 +81,7 @@ pub(super) fn render_streaming_entry(
                     streaming.text.clone().into(),
                     theme,
                     true,
+                    window,
                 ))
             })
             .when(
@@ -109,6 +111,7 @@ pub(super) fn render_entry(
     workspace: &Workspace,
     theme: &Theme,
     show_reasoning: bool,
+    window: &Window,
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     match entry.kind {
@@ -124,6 +127,7 @@ pub(super) fn render_entry(
                     open,
                     show_reasoning,
                     theme,
+                    window,
                     cx.listener(move |workspace, _, _, cx| {
                         workspace.on_toggle_thinking(&toggle_id, cx);
                     }),
@@ -298,6 +302,7 @@ fn assistant_block(
     open: bool,
     show_reasoning: bool,
     theme: &Theme,
+    window: &Window,
     on_toggle: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
 ) -> impl IntoElement {
     let desk = Desk::of(theme);
@@ -333,6 +338,7 @@ fn assistant_block(
                 SharedString::from(entry.text.trim()),
                 theme,
                 false,
+                window,
             ))
         })
 }
@@ -480,12 +486,19 @@ fn agent_text(
     text: SharedString,
     theme: &Theme,
     stream_fade: bool,
+    window: &Window,
 ) -> impl IntoElement {
     div()
         .w_full()
         .min_w_0()
         .text_sm()
-        .child(markdown::render_markdown(id, text, theme, stream_fade))
+        .child(markdown::render_markdown(
+            id,
+            text,
+            theme,
+            stream_fade,
+            window,
+        ))
 }
 
 /// Gutter stamp: the last 8 characters of the entry id. The id is a ledger
@@ -694,7 +707,7 @@ mod layout {
     }
 
     impl Render for TranscriptProbe {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
             let open = self.open.borrow().clone();
             let rows: Vec<gpui_kit::AnyElement> = self
@@ -712,6 +725,7 @@ mod layout {
                             expanded,
                             true,
                             &theme,
+                            window,
                             cx.listener(move |probe, _, _, cx| {
                                 {
                                     let mut open = probe.open.borrow_mut();

@@ -77,24 +77,24 @@ pub struct HttpChannel {
 }
 
 impl HttpChannel {
-    /// Creates one channel over the endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError::Transport`] when the HTTP client cannot build.
-    pub fn new(endpoint: &str, options: HttpChannelOptions) -> Result<Self, McpError> {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| McpError::transport(format!("HTTP client unavailable: {error}")))?;
-        Ok(Self {
+    /// Creates one channel over the endpoint. Every request goes through the
+    /// pinned sender, which builds its own client per call.
+    #[must_use]
+    pub fn new(endpoint: &str, options: HttpChannelOptions) -> Self {
+        Self {
             endpoint: endpoint.to_owned(),
             options,
             session_id: RwLock::new(None),
-        })
+        }
     }
 
-    async fn post_envelope(&self, envelope: Value) -> Result<Option<Value>, McpError> {
+    /// Posts one envelope. `id` names the reply to pick out of an SSE body;
+    /// a notification passes `None`.
+    async fn post_envelope(
+        &self,
+        envelope: Value,
+        id: Option<u64>,
+    ) -> Result<Option<Value>, McpError> {
         let body =
             serde_json::to_vec(&envelope).map_err(|error| McpError::protocol(error.to_string()))?;
         if body.len() > MAX_MESSAGE_BYTES {
@@ -176,7 +176,7 @@ impl HttpChannel {
             .to_ascii_lowercase();
         let bytes = bounded_body(response, MAX_MESSAGE_BYTES).await?;
         if content_type.contains("text/event-stream") {
-            return sse_reply(&bytes);
+            return sse_reply(&bytes, id);
         }
         if bytes.is_empty() {
             return Ok(None);
@@ -187,25 +187,63 @@ impl HttpChannel {
     }
 }
 
-/// Extracts the first JSON-RPC response object from SSE frames.
-fn sse_reply(bytes: &[u8]) -> Result<Option<Value>, McpError> {
+/// Extracts the JSON-RPC response from an SSE body.
+///
+/// Events follow the SSE rules: consecutive `data:` lines join with `\n`
+/// and a blank line ends the event, so a reply split across lines parses.
+/// Server-initiated requests and notifications on the stream carry a
+/// `method` and are skipped; with `id` set, only that request's reply (or an
+/// id-less error) is returned.
+fn sse_reply(bytes: &[u8], id: Option<u64>) -> Result<Option<Value>, McpError> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| McpError::protocol("SSE body is not UTF-8"))?;
-    for line in text.lines() {
+    let mut data = String::new();
+    let mut has_data = false;
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.is_empty() {
+            if has_data
+                && let Some(value) = sse_event(&data)?
+                && is_reply(&value, id)
+            {
+                return Ok(Some(value));
+            }
+            data.clear();
+            has_data = false;
+            continue;
+        }
         let Some(payload) = line.strip_prefix("data:") else {
             continue;
         };
-        let payload = payload.trim_start();
-        if payload.is_empty() || payload == "[DONE]" {
-            continue;
+        if has_data {
+            data.push('\n');
         }
-        let value: Value = serde_json::from_str(payload)
-            .map_err(|error| McpError::protocol(format!("SSE frame is not JSON: {error}")))?;
-        if value["id"].is_u64() || value["error"].as_object().is_some() {
-            return Ok(Some(value));
-        }
+        data.push_str(payload.strip_prefix(' ').unwrap_or(payload));
+        has_data = true;
     }
     Ok(None)
+}
+
+/// Parses one SSE event's data; `[DONE]` and empty data carry nothing.
+fn sse_event(data: &str) -> Result<Option<Value>, McpError> {
+    let data = data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return Ok(None);
+    }
+    serde_json::from_str(data)
+        .map(Some)
+        .map_err(|error| McpError::protocol(format!("SSE frame is not JSON: {error}")))
+}
+
+/// Whether one stream message answers the request.
+fn is_reply(value: &Value, id: Option<u64>) -> bool {
+    if value.get("method").is_some() {
+        return false;
+    }
+    let has_error = value["error"].is_object();
+    match id {
+        Some(id) => value["id"].as_u64() == Some(id) || (has_error && value["id"].is_null()),
+        None => value["id"].is_u64() || has_error,
+    }
 }
 
 fn finish_reply(value: Option<Value>, id: u64) -> Result<Value, McpError> {
@@ -240,7 +278,7 @@ impl JsonRpcChannel for HttpChannel {
             "method": method,
             "params": params,
             });
-            let reply = self.post_envelope(envelope).await?;
+            let reply = self.post_envelope(envelope, Some(id)).await?;
             finish_reply(reply, id)
         })
     }
@@ -255,8 +293,43 @@ impl JsonRpcChannel for HttpChannel {
             "method": method,
             });
             // 202/empty responses are success; transport failures propagate.
-            self.post_envelope(envelope).await?;
+            self.post_envelope(envelope, None).await?;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sse_reply;
+
+    #[test]
+    fn sse_reply_joins_multi_line_data_and_skips_server_messages() {
+        let body = concat!(
+            ": keep-alive\n",
+            "event: message\n",
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\"}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":3,\n",
+            "data: \"result\":{\"ok\":true}}\n",
+            "\n",
+        );
+        let reply = sse_reply(body.as_bytes(), Some(3)).unwrap().expect("reply");
+        assert_eq!(reply["id"], 3);
+        assert_eq!(reply["result"]["ok"], true);
+    }
+
+    #[test]
+    fn sse_reply_ignores_other_ids_and_keeps_bare_errors() {
+        let other = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
+        assert!(sse_reply(other.as_bytes(), Some(2)).unwrap().is_none());
+        let error = "data: {\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600}}";
+        let reply = sse_reply(error.as_bytes(), Some(2))
+            .unwrap()
+            .expect("error");
+        assert!(reply["error"].is_object());
+        assert!(sse_reply(b"data: [DONE]\n\n", Some(2)).unwrap().is_none());
     }
 }

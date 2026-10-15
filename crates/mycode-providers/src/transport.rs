@@ -250,19 +250,40 @@ mod tests {
 
     use super::{ReqwestTransport, SseTransport, TransportCall};
 
+    /// Reads the request head. The reply starts right away: waiting for the
+    /// two-byte body can stall on Nagle against a delayed ACK (up to 200ms on
+    /// Windows), longer than the idle limits these tests use.
+    fn read_request_head(stream: &mut std::net::TcpStream) -> bool {
+        let mut buf = Vec::new();
+        let mut tmp = [0_u8; 1024];
+        while !buf.windows(4).any(|window| window == b"\r\n\r\n") {
+            match stream.read(&mut tmp) {
+                Ok(0) | Err(_) => return false,
+                Ok(count) => buf.extend_from_slice(&tmp[..count]),
+            }
+        }
+        true
+    }
+
+    /// Ends a reply without a reset. Closing with the request body still
+    /// unread in the receive buffer sends RST instead of FIN, and the client
+    /// then loses the tail of the response ("transport failed"). Half-close,
+    /// then drain until the client closes its side.
+    fn finish_response(mut stream: std::net::TcpStream) {
+        let _ = stream.shutdown(std::net::Shutdown::Write);
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let mut sink = [0_u8; 1024];
+        while matches!(stream.read(&mut sink), Ok(count) if count > 0) {}
+    }
+
     fn spawn_drip_server(pieces: usize, gap: Duration) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            let mut buf = Vec::new();
-            let mut tmp = [0_u8; 1024];
-            while !buf.windows(4).any(|window| window == b"\r\n\r\n") {
-                match stream.read(&mut tmp) {
-                    Ok(0) | Err(_) => return,
-                    Ok(count) => buf.extend_from_slice(&tmp[..count]),
-                }
+            if !read_request_head(&mut stream) {
+                return;
             }
             let body: String = (0..pieces).map(|index| format!("data:{index}\n")).collect();
             let header = format!(
@@ -280,6 +301,7 @@ mod tests {
                 }
                 let _ = stream.flush();
             }
+            finish_response(stream);
         });
         format!("http://{addr}/v1/chat/completions")
     }
@@ -291,13 +313,8 @@ mod tests {
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-            let mut buf = Vec::new();
-            let mut tmp = [0_u8; 1024];
-            while !buf.windows(4).any(|window| window == b"\r\n\r\n") {
-                match stream.read(&mut tmp) {
-                    Ok(0) | Err(_) => return,
-                    Ok(count) => buf.extend_from_slice(&tmp[..count]),
-                }
+            if !read_request_head(&mut stream) {
+                return;
             }
             let header = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 256\r\n\r\n";
             if stream.write_all(header.as_bytes()).is_err() {

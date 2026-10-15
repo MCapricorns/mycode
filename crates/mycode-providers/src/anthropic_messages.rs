@@ -98,6 +98,12 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
                     // whenever a signature exists. GLM coding plans also accept
                     // the unsigned thinking text from the previous turn.
                     ContentBlock::Thinking(thinking) => {
+                        if let Some(data) = redacted_thinking_data(thinking) {
+                            return Some(json!({
+                                "type": "redacted_thinking",
+                                "data": data,
+                            }));
+                        }
                         if let Some(signature) = thinking.signature.as_deref() {
                             return Some(json!({
                                 "type": "thinking",
@@ -160,6 +166,17 @@ fn block_content(content: &[ContentBlock]) -> Value {
     json!(parts)
 }
 
+/// Replay key for an Anthropic `redacted_thinking` block kept on a
+/// [`ThinkingBlock`]. Its encrypted `data` has no text or signature, so
+/// without this the block was dropped from the next request, and a tool
+/// loop with thinking enabled was rejected for not opening with thinking.
+const REDACTED_THINKING: &str = "redacted_thinking";
+
+fn redacted_thinking_data(thinking: &ThinkingBlock) -> Option<String> {
+    let replay: Value = serde_json::from_str(thinking.replay.as_deref()?).ok()?;
+    replay.get(REDACTED_THINKING)?.as_str().map(str::to_owned)
+}
+
 /// One content block being assembled from deltas.
 #[derive(Default)]
 enum BlockAccumulator {
@@ -168,6 +185,10 @@ enum BlockAccumulator {
     Thinking {
         text: String,
         signature: Option<String>,
+    },
+    /// Encrypted reasoning that must go back to the API unchanged.
+    RedactedThinking {
+        data: String,
     },
     Text {
         text: String,
@@ -183,6 +204,10 @@ enum BlockAccumulator {
 #[derive(Default)]
 pub(crate) struct MessagesReducer {
     blocks: Vec<BlockAccumulator>,
+    /// Wire `index` → position in `blocks`. Native blocks get their own
+    /// slots, so one can never overwrite a call the XML filter added or a
+    /// block opened for a delta that arrived without `content_block_start`.
+    block_slots: std::collections::HashMap<u64, usize>,
     current: usize,
     input_tokens: u64,
     output_tokens: u64,
@@ -221,6 +246,7 @@ impl MessagesReducer {
             BlockAccumulator::Thinking { text, signature } => {
                 !text.is_empty() || signature.is_some()
             }
+            BlockAccumulator::RedactedThinking { data } => !data.is_empty(),
             BlockAccumulator::Text { text } => !text.is_empty(),
             BlockAccumulator::ToolUse {
                 id,
@@ -251,6 +277,14 @@ impl MessagesReducer {
                     let mut thinking = ThinkingBlock::new(text);
                     thinking.signature = signature;
                     blocks.push(ContentBlock::Thinking(thinking));
+                }
+                BlockAccumulator::RedactedThinking { data } => {
+                    if !data.is_empty() {
+                        let replay = json!({ REDACTED_THINKING: data }).to_string();
+                        blocks.push(ContentBlock::Thinking(
+                            ThinkingBlock::new("").with_replay(replay),
+                        ));
+                    }
                 }
                 BlockAccumulator::Text { text } => {
                     blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
@@ -332,9 +366,12 @@ impl MessagesReducer {
         }
         let block = &event["content_block"];
         let accumulator = match block["type"].as_str().unwrap_or_default() {
-            "thinking" | "redacted_thinking" => BlockAccumulator::Thinking {
+            "thinking" => BlockAccumulator::Thinking {
                 text: block["thinking"].as_str().unwrap_or_default().to_owned(),
                 signature: block["signature"].as_str().map(str::to_owned),
+            },
+            "redacted_thinking" => BlockAccumulator::RedactedThinking {
+                data: block["data"].as_str().unwrap_or_default().to_owned(),
             },
             "tool_use" => BlockAccumulator::ToolUse {
                 id: block["id"].as_str().unwrap_or_default().to_owned(),
@@ -349,6 +386,7 @@ impl MessagesReducer {
             BlockAccumulator::Thinking { text, signature } => {
                 text.len() + signature.as_ref().map_or(0, String::len)
             }
+            BlockAccumulator::RedactedThinking { data } => data.len(),
             BlockAccumulator::ToolUse {
                 id,
                 name,
@@ -363,12 +401,17 @@ impl MessagesReducer {
                 "stream exceeded the output limit",
             )];
         }
-        let index = index as usize;
-        while self.blocks.len() <= index {
-            self.blocks.push(BlockAccumulator::Empty);
-        }
-        self.blocks[index] = accumulator;
-        self.current = index;
+        let position = match self.block_slots.get(&index) {
+            Some(&position) => position,
+            None => {
+                self.blocks.push(BlockAccumulator::Empty);
+                let position = self.blocks.len() - 1;
+                self.block_slots.insert(index, position);
+                position
+            }
+        };
+        self.blocks[position] = accumulator;
+        self.current = position;
         Vec::new()
     }
 
@@ -611,6 +654,81 @@ mod tests {
         assert_eq!(thinking_of(&message), "still here");
         assert!(message.text().contains("message_stop"));
         assert_eq!(message.stop_reason, StopReason::Error);
+    }
+
+    fn done(events: Vec<mycode_core::StreamEvent>) -> AssistantMessage {
+        match events.into_iter().last() {
+            Some(mycode_core::StreamEvent::Done { message }) => message,
+            other => panic!("expected done, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redacted_thinking_replays_its_encrypted_data() {
+        let mut reducer = MessagesReducer::new();
+        reducer.feed(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"ENCRYPTED"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"read","input":{}}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a.rs\"}"}}"#,
+        );
+        reducer.feed(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#);
+        let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+        assert_eq!(message.stop_reason, StopReason::ToolUse);
+        let body = build_body(
+            "claude-sonnet-5-5",
+            "https://api.anthropic.com/v1/messages",
+            &Request {
+                messages: vec![std::sync::Arc::new(Message::Assistant(message))],
+                ..Request::default()
+            },
+        );
+        let content = &body["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "redacted_thinking");
+        assert_eq!(content[0]["data"], "ENCRYPTED");
+        assert_eq!(content[1]["type"], "tool_use");
+    }
+
+    #[test]
+    fn a_native_block_never_overwrites_an_xml_tool_call() {
+        let mut reducer = MessagesReducer::new();
+        reducer.feed(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        );
+        let xml = concat!(
+            "<minimax:tool_call>",
+            "<invoke name=\"find\">",
+            "<parameter name=\"pattern\">*.rs</parameter>",
+            "</invoke>",
+            "</minimax:tool_call>",
+        );
+        let delta = serde_json::json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": xml},
+        });
+        reducer.feed(&delta.to_string());
+        // The XML call took position 1; the native block at wire index 1
+        // must get its own slot.
+        reducer.feed(
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_native","name":"read","input":{}}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a.rs\"}"}}"#,
+        );
+        let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+        let names: Vec<_> = message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolCall(call) => Some(call.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["find", "read"]);
     }
 
     #[test]

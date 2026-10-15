@@ -436,10 +436,48 @@ impl Workspace {
                 return;
             };
             let _ = this.update(cx, |workspace, cx| {
-                workspace.dispatch(BridgeCommand::ImportData { path }, cx);
+                workspace.import_confirm = None;
+                workspace.import_request = Some(path.clone());
+                workspace.dispatch(
+                    BridgeCommand::ImportData {
+                        path,
+                        confirm_mcp_commands: false,
+                    },
+                    cx,
+                );
+                cx.notify();
             });
         })
         .detach();
+    }
+
+    /// The bundle waiting for the MCP-command confirmation, if any.
+    pub(crate) fn import_confirm(&self) -> Option<&std::path::Path> {
+        self.import_confirm.as_deref()
+    }
+
+    /// Re-sends an import the user confirmed after it was refused for
+    /// changing MCP server commands.
+    pub(crate) fn on_confirm_import(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.import_confirm.take() else {
+            return;
+        };
+        self.import_request = Some(path.clone());
+        self.dispatch(
+            BridgeCommand::ImportData {
+                path,
+                confirm_mcp_commands: true,
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// Drops a refused import without applying it.
+    pub(crate) fn on_cancel_import(&mut self, cx: &mut Context<Self>) {
+        self.import_confirm = None;
+        self.import_request = None;
+        cx.notify();
     }
 }
 

@@ -436,7 +436,16 @@ impl Workspace {
                     cx,
                 );
             }
+            BridgeReply::Imported(Err(message))
+                if message == mycode_app::IMPORT_NEEDS_MCP_CONFIRM =>
+            {
+                // Not a failure: the Data card asks before MCP commands that
+                // start programs on this computer are added or replaced.
+                self.import_confirm = self.import_request.take();
+                cx.notify();
+            }
             BridgeReply::Imported(Ok(summary)) => {
+                self.import_request = None;
                 // Reload everything the bundle replaced: settings, key
                 // markers, and UI state. Sessions were not touched.
                 self.dispatch(BridgeCommand::LoadSettings, cx);
@@ -454,6 +463,7 @@ impl Workspace {
                 self.push_toast(message, crate::workspace::ToastKind::Info, cx);
             }
             BridgeReply::Imported(Err(message)) => {
+                self.import_request = None;
                 self.apply_action(
                     DesktopAction::Failed(format!(
                         "{} {message}",
@@ -507,7 +517,22 @@ impl Workspace {
             BridgeReply::ChatStarted(Ok(())) => {}
             // The turn unwinds over the event channel; the reply itself
             // carries no state.
-            BridgeReply::ChatCancelled(_) => {}
+            BridgeReply::ChatCancelled(Ok(())) => {}
+            // The core has no turn for this session, yet the composer still
+            // shows one running: settle it like a quiet cancel so Stop and
+            // the queue are not left stuck behind a turn that is gone.
+            BridgeReply::ChatCancelled(Err(_)) => {
+                if self.vm.sending {
+                    self.apply_action(
+                        DesktopAction::ChatFailed {
+                            message: CHAT_CANCELLED.to_owned(),
+                            head: String::new(),
+                        },
+                        cx,
+                    );
+                    self.pump_queued_send(cx);
+                }
+            }
             BridgeReply::Steered(_) => {}
             BridgeReply::SubagentCancelled(Err(message)) => {
                 self.push_toast(message, crate::workspace::ToastKind::Info, cx);

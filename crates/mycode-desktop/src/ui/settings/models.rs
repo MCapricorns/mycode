@@ -697,7 +697,6 @@ fn render_preset_form(
                 let sign_in = workspace.vm().copilot_sign_in.clone();
                 let error = workspace.vm().copilot_error.clone();
                 let sign_label = match preset.id.as_str() {
-                    "xai" => t("Sign in with SuperGrok / X", "使用 SuperGrok / X 登录"),
                     "openai-codex" => t("Sign in with ChatGPT", "使用 ChatGPT 登录"),
                     _ => t("Sign in with GitHub", "使用 GitHub 登录"),
                 };

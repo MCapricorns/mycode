@@ -80,7 +80,20 @@ pub(crate) fn run_core(
         let state = Arc::new(state);
         spawn_catalog_refresh(state.clone(), events.clone());
         spawn_update_check(state.clone(), events.clone());
-        while let Some(with_reply) = commands.recv().await {
+        let mut requests = tokio::task::JoinSet::<()>::new();
+        loop {
+            let with_reply = tokio::select! {
+                command = commands.recv() => match command {
+                    Some(command) => command,
+                    None => break,
+                },
+                Some(outcome) = requests.join_next(), if !requests.is_empty() => {
+                    if let Err(error) = outcome {
+                        eprintln!("core command task failed: {error}");
+                    }
+                    continue;
+                }
+            };
             match with_reply.command {
                 BridgeCommand::ChatTurn {
                     session,
@@ -224,11 +237,19 @@ pub(crate) fn run_core(
                     // await and every synchronous file operation.
                     let task_state = state.clone();
                     let reply = with_reply.reply;
-                    tokio::spawn(async move {
+                    requests.spawn(async move {
                         let outcome = handle(&task_state, &command).await;
                         let _ = reply.send(outcome);
                     });
                 }
+            }
+        }
+        // Accepted storage/config requests must finish before the shared
+        // service retires. Runtime drop would otherwise abort queued writes
+        // merely because the frontend stopped waiting for their replies.
+        while let Some(outcome) = requests.join_next().await {
+            if let Err(error) = outcome {
+                eprintln!("core command task failed: {error}");
             }
         }
         state.service.clone().shutdown().await;
@@ -245,7 +266,7 @@ fn push_unique_repair(
     repairs.push(repair);
 }
 
-fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
+pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
     let message = message.to_owned();
     match command {
         BridgeCommand::ListSessions => BridgeReply::Sessions(Err(message)),
@@ -512,10 +533,15 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             let outcome = blocking(move || crate::export::export_to_file(&home, &path)).await;
             BridgeReply::Exported(outcome)
         }
-        BridgeCommand::ImportData { path } => {
+        BridgeCommand::ImportData {
+            path,
+            confirm_mcp_commands,
+        } => {
             let home = state.home.clone();
             let path = path.clone();
-            let outcome = blocking(move || crate::export::import_from_file(&home, &path)).await;
+            let confirm = *confirm_mcp_commands;
+            let outcome =
+                blocking(move || crate::export::import_from_file(&home, &path, confirm)).await;
             BridgeReply::Imported(outcome)
         }
         BridgeCommand::ListResources { session_id } => {

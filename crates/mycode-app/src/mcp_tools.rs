@@ -114,30 +114,33 @@ impl ToolDyn for DynamicMcpTool {
                 "calling {} on MCP server {}",
                 self.tool_name, self.server_id
             ));
-            let mut client = self.client.lock().await;
             // The dispatcher does not select on the turn token while a tool
             // runs; bound the call here so Escape actually cancels an MCP call.
-            let call = client.call_tool(&self.tool_name, args);
-            let output = tokio::select! {
-            biased;
-            () = ctx.cancel.cancelled() => {
-            return Err(ToolError::Execution("MCP call cancelled".to_owned()));
-            }
-            result = call => result.map_err(|error| {
-            if error.is_connection_lost() {
-            self.broken.store(true, Ordering::Relaxed);
-            }
-            let detail = if error.is_connection_lost() {
-            format!(
-            "MCP server '{}' lost the connection: {error}",
-            self.server_id
-            )
-            } else {
-            format!("MCP server '{}': {error}", self.server_id)
+            // The client lock is inside the race too: another session's turn
+            // can hold this shared connection for a full request timeout.
+            let call = async {
+                let mut client = self.client.lock().await;
+                client.call_tool(&self.tool_name, args).await
             };
-            ToolError::Execution(detail)
-            })?,
+            let result = tokio::select! {
+                biased;
+                () = ctx.cancel.cancelled() => {
+                    return Err(ToolError::Execution("MCP call cancelled".to_owned()));
+                }
+                result = call => result,
             };
+            let output = result.map_err(|error| {
+                let detail = if error.is_connection_lost() {
+                    self.broken.store(true, Ordering::Relaxed);
+                    format!(
+                        "MCP server '{}' lost the connection: {error}",
+                        self.server_id
+                    )
+                } else {
+                    format!("MCP server '{}': {error}", self.server_id)
+                };
+                ToolError::Execution(detail)
+            })?;
             // A server that flags `isError` ran the tool and reported failure as
             // data. The model needs to read it to correct its arguments, so it
             // becomes an error *result* rather than a dispatcher failure.
@@ -154,11 +157,40 @@ impl ToolDyn for DynamicMcpTool {
 /// Bytes of an MCP tool result kept inline for the model.
 const MAX_MCP_TOOL_RESULT_BYTES: usize = 20 * 1024;
 
+/// Age after which a stored full-text MCP result is deleted. Every oversized
+/// result used to stay in `mcp-results` forever.
+const MCP_RESULT_RETENTION: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Removes stored results older than [`MCP_RESULT_RETENTION`]. Best-effort:
+/// a file that cannot be inspected or removed stays for the next sweep.
+fn prune_stale_mcp_results(dir: &std::path::Path, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("mcp-") || !name.ends_with(".txt") {
+            continue;
+        }
+        let expired = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > MCP_RESULT_RETENTION);
+        if expired {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Truncates oversized tool text and stores the full body beside the home.
 pub(crate) fn bound_mcp_result(dir: &std::path::Path, text: &str) -> String {
     if text.len() <= MAX_MCP_TOOL_RESULT_BYTES {
         return text.to_owned();
     }
+    prune_stale_mcp_results(dir, std::time::SystemTime::now());
     let id = format!(
         "mcp-{}-{}",
         std::process::id(),
@@ -590,19 +622,14 @@ async fn open_mcp_client(
                 .endpoint
                 .as_deref()
                 .ok_or("http server is missing its endpoint")?;
-            Arc::new(
-                crate::mcp_client::HttpChannel::new(
-                    endpoint,
-                    crate::mcp_client::HttpChannelOptions {
-                        key_header: crate::mcp_client::KeyHeader::parse(
-                            server.key_header.as_deref(),
-                        ),
-                        api_key,
-                        timeout,
-                    },
-                )
-                .map_err(|error| format!("MCP channel failed: {error}"))?,
-            )
+            Arc::new(crate::mcp_client::HttpChannel::new(
+                endpoint,
+                crate::mcp_client::HttpChannelOptions {
+                    key_header: crate::mcp_client::KeyHeader::parse(server.key_header.as_deref()),
+                    api_key,
+                    timeout,
+                },
+            ))
         }
         _ => return Err("unknown MCP transport".to_owned()),
     };
@@ -686,6 +713,40 @@ mod tests {
         assert_eq!(stored, text);
         assert_eq!(bound_mcp_result(&dir, "short"), "short");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn storing_a_result_sweeps_week_old_results_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "mycode-mcp-prune-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stale = dir.join("mcp-1-1.txt");
+        let fresh = dir.join("mcp-1-2.txt");
+        let unrelated = dir.join("notes.txt");
+        for path in [&stale, &fresh, &unrelated] {
+            std::fs::write(path, "body").unwrap();
+        }
+        let eight_days_ago =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60);
+        for path in [&stale, &unrelated] {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(eight_days_ago)
+                .unwrap();
+        }
+        bound_mcp_result(&dir, &"z".repeat(30 * 1024));
+        let kept = (!stale.exists(), fresh.exists(), unrelated.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            kept,
+            (true, true, true),
+            "stale removed, fresh and unrelated kept"
+        );
     }
 
     #[test]

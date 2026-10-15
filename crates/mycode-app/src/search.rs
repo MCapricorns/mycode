@@ -21,9 +21,12 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
     ];
     let needle = query.to_ascii_lowercase();
     let mut matches: Vec<String> = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
+    // Breadth-first, so the bounded collection holds the shallowest matches.
+    // A depth-first walk filled it from whichever subtree came first and
+    // could drop `src/lib.rs` for files nested ten levels down.
+    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
-    while let Some(dir) = stack.pop() {
+    while let Some(dir) = queue.pop_front() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -42,7 +45,7 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
                 {
                     continue;
                 }
-                stack.push(path);
+                queue.push_back(path);
             } else if meta.is_file() {
                 let Ok(rel) = path.strip_prefix(root) else {
                     continue;
@@ -81,4 +84,31 @@ fn finish_mention_matches(mut matches: Vec<String>) -> Vec<String> {
     matches.sort_by(|left, right| left.len().cmp(&right.len()).then_with(|| left.cmp(right)));
     matches.truncate(MAX_MATCHES);
     matches
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shallow_matches_survive_a_crowded_subtree() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-mention-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        // Sorts after `src`, so a depth-first walk descends here first.
+        let deep = root.join("zz").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        for index in 0..100 {
+            std::fs::write(deep.join(format!("lib_{index}.rs")), "").unwrap();
+        }
+        std::fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        let found = super::search_project_files(&root, "lib");
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            found.first().map(String::as_str),
+            Some("src/lib.rs"),
+            "{found:?}"
+        );
+    }
 }
