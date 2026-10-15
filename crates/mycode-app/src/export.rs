@@ -412,7 +412,9 @@ mod tests {
 
         let settings = mycode_config::read_app_settings(&home).unwrap();
         assert_eq!(settings.user_agent, "v1-agent");
-        assert_eq!(settings.appearance.palette, "ocean");
+        // The bundle still names a retired palette; it imports anyway.
+        assert_eq!(settings.appearance.theme, "dark");
+        assert_eq!(settings.appearance.legacy_palette, None, "dropped on write");
         // No conversation data is imported, and the vault stays untouched.
         assert!(!root.join("sessions").join("sess").exists());
         assert!(
