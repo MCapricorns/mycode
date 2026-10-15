@@ -228,21 +228,24 @@ impl SessionCore {
     /// payload bytes that exist nowhere durably yet, so its session stays
     /// resident until the reservation is consumed. A quiescent ledger is
     /// byte-for-byte reconstructible from the index (the commit authority),
-    /// so dropping it cannot lose events or weaken a later head CAS.
+    /// so dropping it cannot lose events or weaken a later head CAS. The
+    /// just-touched session also survives this trim: if every other ledger
+    /// is pinned, the working set temporarily exceeds the cap.
     pub(super) fn touch_resident(&mut self, session: &SessionId) {
         self.resident_clock = self.resident_clock.saturating_add(1);
         let touch = self.resident_clock;
         self.resident_touch.insert(session.clone(), touch);
-        self.trim_resident_sessions();
+        self.trim_resident_sessions(session);
     }
 
-    /// Evicts least-recently-loaded quiescent ledgers above the cap.
-    fn trim_resident_sessions(&mut self) {
+    /// Evicts least-recently-loaded quiescent ledgers other than the current
+    /// session above the cap.
+    fn trim_resident_sessions(&mut self, current: &SessionId) {
         while self.sessions.len() > MAX_RESIDENT_SESSIONS {
             let victim = self
                 .sessions
                 .iter()
-                .filter(|(_, ledger)| ledger.is_quiescent())
+                .filter(|(session, ledger)| *session != current && ledger.is_quiescent())
                 .min_by_key(|(session, _)| {
                     self.resident_touch
                         .get(*session)
@@ -251,8 +254,9 @@ impl SessionCore {
                 })
                 .map(|(session, _)| session.clone());
             let Some(victim) = victim else {
-                // Every candidate holds a live reservation; retry after the
-                // next load rather than dropping unpersisted payload bytes.
+                // Every other ledger holds a live reservation; retry after
+                // the next load rather than dropping payload bytes or the
+                // session this load needs to serve.
                 return;
             };
             self.sessions.remove(&victim);

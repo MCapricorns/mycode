@@ -1,4 +1,4 @@
-//! Device-code and subscription OAuth for GitHub Copilot, xAI, and Codex.
+//! Device-code OAuth for GitHub Copilot and Codex.
 //!
 //! These providers do not take only a pasted API key. The user authorizes
 //! MYCode, the resulting token is stored in the secret vault, and Copilot
@@ -14,8 +14,6 @@ use serde_json::Value;
 
 /// Provider id that authenticates through this module.
 pub const COPILOT_PROVIDER_ID: &str = "github-copilot";
-/// xAI SuperGrok / X Premium subscription.
-pub const XAI_PROVIDER_ID: &str = "xai";
 /// ChatGPT Plus/Pro Codex subscription.
 pub const OPENAI_CODEX_PROVIDER_ID: &str = "openai-codex";
 /// Public device-flow client id of the GitHub Copilot CLI app (no secret).
@@ -108,8 +106,6 @@ pub struct DeviceCodeStart {
 pub enum DeviceTokenPoll {
     /// Authorization granted; carries the OAuth access token.
     Granted(String),
-    /// Authorization granted with access+refresh (xAI / Codex-style).
-    GrantedOAuth(OAuthSecret),
     /// The user has not approved yet; keep polling.
     Pending,
     /// GitHub asked us to slow down; extend the interval.
@@ -381,10 +377,6 @@ fn decode_b64(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-const XAI_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
-const XAI_SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
-const XAI_DEVICE_CODE_URL: &str = "https://auth.x.ai/oauth2/device/code";
-const XAI_TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CODEX_USER_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 const CODEX_DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
@@ -392,91 +384,6 @@ const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_DEVICE_REDIRECT: &str = "https://auth.openai.com/deviceauth/callback";
 /// Page the user opens for Codex device login.
 pub const CODEX_VERIFICATION_URI: &str = "https://auth.openai.com/codex/device";
-/// Page the user opens for xAI device login.
-pub const XAI_VERIFICATION_URI: &str = "https://auth.x.ai/device";
-
-/// Starts the xAI device-code flow (pi `referrer=pi`).
-///
-/// # Errors
-///
-/// Returns a transport or endpoint-shape failure without embedded secrets.
-pub async fn start_xai_device_flow(call: &PinnedCall) -> Result<DeviceCodeStart, String> {
-    let response = pinned(
-        call,
-        reqwest::Method::POST,
-        XAI_DEVICE_CODE_URL,
-        &[("accept", "application/json")],
-        Some(crate::PinnedBody::Form(vec![
-            ("client_id".to_owned(), XAI_CLIENT_ID.to_owned()),
-            ("scope".to_owned(), XAI_SCOPE.to_owned()),
-            ("referrer".to_owned(), "pi".to_owned()),
-        ])),
-    )
-    .await
-    .map_err(|error| format!("xAI device-code request failed: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "xAI device-code endpoint returned {}",
-            response.status()
-        ));
-    }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("xAI device-code response was not JSON: {error}"))?;
-    parse_device_start(&payload)
-        .ok_or_else(|| "xAI device-code response was missing fields".to_owned())
-}
-
-/// Polls once for the xAI OAuth grant.
-///
-/// # Errors
-///
-/// Returns a transport failure; grant states arrive as [`DeviceTokenPoll`].
-pub async fn poll_xai_device_token(
-    call: &PinnedCall,
-    device_code: &str,
-) -> Result<DeviceTokenPoll, String> {
-    let response = pinned(
-        call,
-        reqwest::Method::POST,
-        XAI_TOKEN_URL,
-        &[("accept", "application/json")],
-        Some(crate::PinnedBody::Form(vec![
-            ("client_id".to_owned(), XAI_CLIENT_ID.to_owned()),
-            ("device_code".to_owned(), device_code.to_owned()),
-            (
-                "grant_type".to_owned(),
-                "urn:ietf:params:oauth:grant-type:device_code".to_owned(),
-            ),
-        ])),
-    )
-    .await
-    .map_err(|error| format!("xAI device-token poll failed: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "xAI device-token endpoint returned {}",
-            response.status()
-        ));
-    }
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("xAI device-token response was not JSON: {error}"))?;
-    if let Ok(secret) = secret_from_token_payload(&payload, None, false) {
-        return Ok(DeviceTokenPoll::GrantedOAuth(secret));
-    }
-    Ok(classify_device_poll(&payload))
-}
-
-/// Refreshes an xAI access token.
-///
-/// # Errors
-///
-/// Returns a transport or grant failure.
-pub async fn refresh_xai_token(call: &PinnedCall, refresh: &str) -> Result<OAuthSecret, String> {
-    refresh_form_token(call, XAI_TOKEN_URL, XAI_CLIENT_ID, refresh, None).await
-}
 
 /// Codex device-auth identifiers returned by the usercode endpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -647,25 +554,15 @@ pub async fn exchange_codex_code(
 ///
 /// Returns a transport or grant failure.
 pub async fn refresh_codex_token(call: &PinnedCall, refresh: &str) -> Result<OAuthSecret, String> {
-    refresh_form_token(call, CODEX_TOKEN_URL, CODEX_CLIENT_ID, refresh, Some(true)).await
-}
-
-async fn refresh_form_token(
-    call: &PinnedCall,
-    url: &str,
-    client_id: &str,
-    refresh: &str,
-    extract_account: Option<bool>,
-) -> Result<OAuthSecret, String> {
     let response = pinned(
         call,
         reqwest::Method::POST,
-        url,
+        CODEX_TOKEN_URL,
         &[("content-type", "application/x-www-form-urlencoded")],
         Some(crate::PinnedBody::Form(vec![
             ("grant_type".to_owned(), "refresh_token".to_owned()),
             ("refresh_token".to_owned(), refresh.to_owned()),
-            ("client_id".to_owned(), client_id.to_owned()),
+            ("client_id".to_owned(), CODEX_CLIENT_ID.to_owned()),
         ])),
     )
     .await
@@ -677,7 +574,7 @@ async fn refresh_form_token(
         .json()
         .await
         .map_err(|error| format!("token refresh was not JSON: {error}"))?;
-    secret_from_token_payload(&payload, Some(refresh), extract_account.unwrap_or(false))
+    secret_from_token_payload(&payload, Some(refresh), true)
 }
 
 fn secret_from_token_payload(

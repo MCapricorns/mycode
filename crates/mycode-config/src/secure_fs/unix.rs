@@ -157,21 +157,6 @@ pub(super) fn open_component(
     open_component_with_mounts(parent, name, flags, Mode::empty())
 }
 
-/// Creates one component with the private mode in the creating call itself.
-///
-/// Darwin resolves a contested `O_CREAT` without `O_EXCL` into `EACCES` (after
-/// another thread created a zero-mode entry) or a spurious `ENOENT`, so a
-/// caller that must create passes the final mode up front and treats an
-/// `EEXIST` from its `O_EXCL` attempt as a lost race to retry as an opener.
-pub(super) fn create_component(
-    parent: &File,
-    name: &OsStr,
-    flags: OFlags,
-    mode: Mode,
-) -> Result<std::os::fd::OwnedFd, ConfigError> {
-    open_component_with_mounts(parent, name, flags, mode)
-}
-
 fn open_component_with_mounts(
     parent: &File,
     name: &OsStr,

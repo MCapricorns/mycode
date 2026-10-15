@@ -28,14 +28,18 @@ mod fallback {
         Err(unavailable())
     }
 
+    pub(super) fn quarantine_file(
+        _root: &Path,
+        _components: &[OsString],
+        _backup: &std::ffi::OsStr,
+    ) -> Result<bool, ConfigError> {
+        Err(unavailable())
+    }
+
     pub(super) struct Transaction;
 
     impl Transaction {
         pub(super) fn begin(_root: &Path, _components: &[OsString]) -> Result<Self, ConfigError> {
-            Err(unavailable())
-        }
-
-        pub(super) fn require_private_lock(&self) -> Result<(), ConfigError> {
             Err(unavailable())
         }
 
@@ -76,7 +80,44 @@ pub fn read_owned_file(
     platform::read_file(&path.root, &path.components, maximum_bytes)
 }
 
-/// Runs one read-modify-replace callback under a persistent advisory lock.
+/// Moves one owned file aside to `backup` (a sibling name) without reading it.
+///
+/// Used to recover a document the strict read path rejects for its own
+/// permissions, owner, or type: the bytes are kept under the backup name and
+/// the original name is free for a fresh default. The owned home and its
+/// directories are still opened under the strict checks, so an untrusted
+/// home fails here instead of being repaired. `Ok(false)` means nothing was
+/// at the path.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the home cannot be opened safely or the
+/// rename fails.
+pub(crate) fn quarantine_owned_file(
+    home: &HomeLayout,
+    relative: &str,
+    backup: &str,
+) -> Result<bool, ConfigError> {
+    let path = OwnedPath::new(home, Path::new(relative))?;
+    require_file_name(&path)?;
+    let backup_path = OwnedPath::new(home, Path::new(backup))?;
+    let (Some((backup_name, backup_dirs)), Some((_, dirs))) = (
+        backup_path.components.split_last(),
+        path.components.split_last(),
+    ) else {
+        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
+    };
+    if backup_dirs != dirs {
+        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
+    }
+    platform::quarantine_file(&path.root, &path.components, backup_name)
+}
+
+/// Runs one read-modify-replace callback under an advisory lock.
+///
+/// The lock lives in the operating system (a lock on the directory handle on
+/// Unix, a named mutex on Windows), so no `<name>.lock` file is left beside
+/// the documents.
 ///
 /// # Errors
 ///
@@ -91,7 +132,6 @@ pub fn locked_update_owned_file(
     let path = OwnedPath::new(home, relative.as_ref())?;
     require_file_name(&path)?;
     let mut transaction = platform::Transaction::begin(&path.root, &path.components)?;
-    transaction.require_private_lock()?;
     let current = transaction.read(maximum_bytes)?;
     let replacement = update(current.as_ref().map(|bytes| bytes.as_slice()))?;
     if replacement.len() > maximum_bytes {
@@ -132,8 +172,9 @@ fn require_file_name(path: &OwnedPath) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Persistent lock file name for one owned file (`<name>.lock`).
-pub(in crate::secure_fs) fn lock_name(destination: &OsStr) -> OsString {
+/// Name of the `<name>.lock` file older builds kept beside each document.
+/// Transactions delete one when they see it.
+pub(in crate::secure_fs) fn legacy_lock_name(destination: &OsStr) -> OsString {
     let mut name = destination.to_os_string();
     name.push(".lock");
     name

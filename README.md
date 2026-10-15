@@ -11,7 +11,7 @@
 - 一个工作区挂多个文件夹。会话属于工作区。
 - 模型直接调用原生工具：`read`、`write`、`edit`、每平台一个 shell、`grep`、`find`。
 - 只读的 `scout` 和有界的 `artisan`，也可以在 `agents/` 里加角色。
-- 内置 [models.dev](https://models.dev) 目录。Copilot、Codex 和 xAI 用设备码登录。
+- 内置 [models.dev](https://models.dev) 目录。Copilot 和 Codex 用设备码登录，其它服务商（包括 xAI）粘贴 API key。
 - 中英界面，深色和浅色主题。
 
 ## 安装
@@ -57,7 +57,7 @@ A finished pelican SVG. Tool calls collapse to one line, and the reply includes 
 - One workspace mounts several folders. Sessions belong to the workspace.
 - The model calls native tools directly: `read`, `write`, `edit`, one shell per platform, `grep`, and `find`.
 - Read-only `scout` and bounded `artisan`, or custom roles under `agents/`.
-- Built-in [models.dev](https://models.dev) catalog. Copilot, Codex, and xAI sign in with a device code.
+- Built-in [models.dev](https://models.dev) catalog. Copilot and Codex sign in with a device code; other providers, xAI included, take a pasted API key.
 - English and Chinese UI, dark and light themes.
 
 ### Install

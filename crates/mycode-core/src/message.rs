@@ -130,12 +130,14 @@ pub struct ThinkingBlock {
     /// Provider reasoning-integrity signature, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
-    /// Vendor replay blob for the next Chat Completions request.
+    /// Vendor replay blob for the next request on the same wire.
     ///
     /// MiniMax stores either `{"reasoning_details":[...]}` (the original
     /// array, replayed verbatim) or `{"reasoning_content":true}` when `text`
-    /// itself is `reasoning_content`. Absent on older turns and on providers
-    /// that do not use this field. Anthropic signatures stay on `signature`.
+    /// itself is `reasoning_content`. Anthropic stores
+    /// `{"redacted_thinking":"<data>"}` for an encrypted block that has no
+    /// text. Absent on older turns and on providers that do not use this
+    /// field. Anthropic signatures stay on `signature`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay: Option<String>,
 }

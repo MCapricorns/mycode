@@ -31,13 +31,12 @@ ENDPOINT_FIXES = {
     "openai-codex": ("openai-responses", "https://chatgpt.com/backend-api/codex"),
 }
 
-# Sign-in providers. A device or OAuth vendor always uses ENDPOINT_FIXES,
+# Sign-in providers. A device-code vendor always uses ENDPOINT_FIXES,
 # never the console URL the cloud document happens to carry. Matches
 # `device_code_auth` in catalog/modelsdev.rs.
 DEVICE_AUTH = {
     "github-copilot": "device-code",
     "openai-codex": "device-code",
-    "xai": "oauth",
 }
 
 # Providers excluded from presets: cloud consoles with non-portable auth

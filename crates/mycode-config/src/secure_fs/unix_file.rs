@@ -11,7 +11,7 @@ use rustix::io::Errno;
 use zeroize::Zeroizing;
 
 use super as unix;
-use crate::secure_fs::owned_file::{lock_name, temporary_name};
+use crate::secure_fs::owned_file::{legacy_lock_name, temporary_name};
 use crate::{ConfigError, ConfigErrorKind};
 
 const FILE_MODE: rfs::RawMode = 0o600;
@@ -31,12 +31,14 @@ pub(in crate::secure_fs) fn read_file(
     read_bounded(file, maximum_bytes).map(Some)
 }
 
+/// One locked read-modify-replace.
+///
+/// The advisory lock is `flock` on the parent directory handle itself, so no
+/// `<name>.lock` file appears beside the documents. Every transaction opens
+/// its own directory description, so threads and processes both exclude.
 pub(in crate::secure_fs) struct Transaction {
     parent: File,
     name: OsString,
-    _lock: File,
-    /// Whether the persistent lock was already the private file when opened.
-    lock_was_private: bool,
 }
 
 impl Transaction {
@@ -53,32 +55,11 @@ impl Transaction {
             reject_wrong_case(&parent, component)?;
             parent = unix::create_or_open_directory(&parent, component, true)?;
         }
-        reject_wrong_case(&parent, &name)?;
-        let lock_name = lock_name(&name);
-        reject_wrong_case(&parent, &lock_name)?;
-        let (lock, lock_was_private) = open_lock(&parent, &lock_name)?;
-        reject_wrong_case(&parent, &lock_name)?;
-        File::lock(&lock)
+        File::lock(&parent)
             .map_err(|error| ConfigError::new(ConfigErrorKind::Lock).with_io_kind(error.kind()))?;
-        Ok(Self {
-            parent,
-            name,
-            _lock: lock,
-            lock_was_private,
-        })
-    }
-
-    /// Rejects a transaction whose persistent lock was widened before opening.
-    ///
-    /// A read-modify-write publishes content derived from what it just read,
-    /// so a lock file that another principal could hold or rewrite is an
-    /// access-control failure rather than something to tighten and continue.
-    pub(in crate::secure_fs) fn require_private_lock(&self) -> Result<(), ConfigError> {
-        if self.lock_was_private {
-            Ok(())
-        } else {
-            Err(ConfigError::new(ConfigErrorKind::AccessControl))
-        }
+        remove_legacy_lock(&parent, &name);
+        reject_wrong_case(&parent, &name)?;
+        Ok(Self { parent, name })
     }
 
     pub(in crate::secure_fs) fn read(
@@ -124,7 +105,44 @@ impl Transaction {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
-        let _ = File::unlock(&self._lock);
+        let _ = File::unlock(&self.parent);
+    }
+}
+
+/// Deletes a `<name>.lock` left by builds that locked through a file. Only a
+/// regular file is removed; anything else is left alone.
+fn remove_legacy_lock(parent: &File, name: &OsStr) {
+    let legacy = legacy_lock_name(name);
+    if let Ok(stat) = rfs::statat(parent.as_fd(), &legacy, AtFlags::SYMLINK_NOFOLLOW)
+        && rfs::FileType::from_raw_mode(stat.st_mode) == rfs::FileType::RegularFile
+    {
+        let _ = rfs::unlinkat(parent.as_fd(), &legacy, AtFlags::empty());
+    }
+}
+
+/// Moves one entry aside without reading it; see
+/// [`crate::secure_fs::owned_file::quarantine_owned_file`]. `renameat` moves
+/// a symlink itself, never its target.
+pub(in crate::secure_fs) fn quarantine_file(
+    root: &Path,
+    components: &[OsString],
+    backup: &OsStr,
+) -> Result<bool, ConfigError> {
+    let (name, directories) = components
+        .split_last()
+        .ok_or_else(|| ConfigError::new(ConfigErrorKind::PathEscape))?;
+    let mut parent = open_or_create_root(root)?;
+    for component in directories {
+        reject_wrong_case(&parent, component)?;
+        parent = unix::create_or_open_directory(&parent, component, true)?;
+    }
+    match rfs::renameat(parent.as_fd(), name, parent.as_fd(), backup) {
+        Ok(()) => {
+            unix::sync_directory(&parent)?;
+            Ok(true)
+        }
+        Err(Errno::NOENT) => Ok(false),
+        Err(error) => Err(unix::map_errno(error, ConfigErrorKind::Io)),
     }
 }
 
@@ -236,74 +254,6 @@ fn validate_replace_target(parent: &File, name: &OsStr) -> Result<(), ConfigErro
     Ok(())
 }
 
-fn open_lock(parent: &File, name: &OsStr) -> Result<(File, bool), ConfigError> {
-    let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW;
-    let create_flags = open_flags | OFlags::CREATE | OFlags::EXCL;
-    for _ in 0..MAX_CREATE_ATTEMPTS {
-        reject_non_regular_existing(parent, name)?;
-        match unix::open_component(parent, name, open_flags) {
-            Ok(descriptor) => {
-                let file = File::from(descriptor);
-                let stat = verify_regular_owner(&file).map_err(as_lock_error)?;
-                // A widened existing lock is tightened here, and the
-                // pre-tightening evidence is reported to callers that must
-                // fail closed instead.
-                let was_private = stat.st_mode & 0o777 == FILE_MODE;
-                rfs::fchmod(file.as_fd(), Mode::from_raw_mode(FILE_MODE))
-                    .map_err(|error| unix::map_errno(error, ConfigErrorKind::Lock))?;
-                verify_private_regular(&file).map_err(as_lock_error)?;
-                return Ok((file, was_private));
-            }
-            Err(error) if error.io_kind() == Some(io::ErrorKind::NotFound) => {}
-            Err(error) => return Err(remap(error, ConfigErrorKind::Lock)),
-        }
-        // `O_CREAT|O_EXCL` is the only Darwin create form that stays atomic
-        // under contention; the mode travels with the call so no racer can
-        // observe a zero-mode lock file. A lost race surfaces as `EEXIST` and
-        // retries through the existing-file branch above.
-        match unix::create_component(parent, name, create_flags, Mode::from_raw_mode(FILE_MODE)) {
-            Ok(descriptor) => {
-                let file = File::from(descriptor);
-                // A restrictive umask can still narrow the mode carried by the
-                // creating call, so the fresh lock is pinned to the exact mode.
-                rfs::fchmod(file.as_fd(), Mode::from_raw_mode(FILE_MODE))
-                    .map_err(|error| unix::map_errno(error, ConfigErrorKind::Lock))?;
-                verify_private_regular(&file).map_err(as_lock_error)?;
-                return Ok((file, true));
-            }
-            Err(error) if error.io_kind() == Some(io::ErrorKind::AlreadyExists) => {}
-            Err(error) => return Err(remap(error, ConfigErrorKind::Lock)),
-        }
-    }
-    Err(ConfigError::new(ConfigErrorKind::Lock).with_io_kind(io::ErrorKind::AlreadyExists))
-}
-
-/// Reports a lock-file failure, keeping access-control evidence intact.
-///
-/// A foreign owner or a widened mode is an access-control finding, not a
-/// transient lock error, so callers keep the fail-closed classification.
-fn as_lock_error(error: ConfigError) -> ConfigError {
-    if error.kind() == ConfigErrorKind::AccessControl {
-        error
-    } else {
-        remap(error, ConfigErrorKind::Lock)
-    }
-}
-
-fn reject_non_regular_existing(parent: &File, name: &OsStr) -> Result<(), ConfigError> {
-    match rfs::statat(parent.as_fd(), name, AtFlags::SYMLINK_NOFOLLOW) {
-        Ok(stat) => match rfs::FileType::from_raw_mode(stat.st_mode) {
-            rfs::FileType::Symlink => Err(ConfigError::new(ConfigErrorKind::LinkEscape)),
-            rfs::FileType::RegularFile => Ok(()),
-            _ => {
-                Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::InvalidData))
-            }
-        },
-        Err(Errno::NOENT) => Ok(()),
-        Err(error) => Err(unix::map_errno(error, ConfigErrorKind::Io)),
-    }
-}
-
 fn create_temporary(parent: &File, destination: &OsStr) -> Result<(File, OsString), ConfigError> {
     for _ in 0..MAX_CREATE_ATTEMPTS {
         let name = temporary_name(destination);
@@ -396,14 +346,6 @@ fn sync_file(file: &File) -> Result<(), ConfigError> {
 
 fn io_error(error: io::Error) -> ConfigError {
     ConfigError::new(ConfigErrorKind::Io).with_io_kind(error.kind())
-}
-
-fn remap(error: ConfigError, kind: ConfigErrorKind) -> ConfigError {
-    let mut mapped = ConfigError::new(kind);
-    if let Some(io_kind) = error.io_kind() {
-        mapped = mapped.with_io_kind(io_kind);
-    }
-    mapped
 }
 
 struct TemporaryName<'a> {

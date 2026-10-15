@@ -104,6 +104,9 @@ pub(crate) struct CompactScope<'a> {
     /// The history estimate alone stays under the trigger while the real
     /// request, which always sends this prefix, is already near the window.
     pub overhead_tokens: usize,
+    /// Stops an in-flight summary request. A cancelled attempt fails and
+    /// leaves the history unchanged.
+    pub cancel: &'a CancellationToken,
 }
 
 /// What a compaction attempt did with the checkpoint.
@@ -245,11 +248,16 @@ pub(crate) async fn compact_history(
     // leading messages on top of the old summary.
     let transcript =
         compaction_transcript(prior_summary, transcript_head(&history, head_end, covered));
-    let summarized = tokio::time::timeout(
-        SUMMARY_TIMEOUT,
-        summarize_transcript(scope.wire, scope.model, &transcript),
-    )
-    .await;
+    // The summary can run for minutes. A cancel drops the attempt (and its
+    // stream, which cancels the request) instead of holding the turn hostage.
+    let summarized = tokio::select! {
+        biased;
+        () = scope.cancel.cancelled() => Ok(Err("compaction cancelled".to_owned())),
+        summarized = tokio::time::timeout(
+            SUMMARY_TIMEOUT,
+            summarize_transcript(scope.wire, scope.model, &transcript),
+        ) => summarized,
+    };
     let summary = match summarized {
         Ok(Ok(summary)) => summary,
         Ok(Err(message)) => {
@@ -934,6 +942,7 @@ mod tests {
             // auto threshold, which is the case that used to skip the checkpoint.
             context_window: 200_000,
             overhead_tokens: 0,
+            cancel: &tokio_util::sync::CancellationToken::new(),
         };
         let manual = super::compact_history(&scope, history.clone(), true).await;
         assert_eq!(manual.status, CompactStatus::Wrote);
@@ -998,6 +1007,7 @@ mod tests {
             head: "head-1",
             context_window: 200_000,
             overhead_tokens: 0,
+            cancel: &tokio_util::sync::CancellationToken::new(),
         };
         // `/compact` no longer answers "nothing to compact" for a short
         // session: the whole ledger is summarized and the tail is empty.
@@ -1174,6 +1184,7 @@ mod tests {
             head: "head-1",
             context_window: 200_000,
             overhead_tokens: 0,
+            cancel: &tokio_util::sync::CancellationToken::new(),
         };
         let compacted = super::compact_history(&scope, large_history(), true).await;
         assert_eq!(compacted.status, CompactStatus::Wrote);
@@ -1208,6 +1219,7 @@ mod tests {
             head: "head-1",
             context_window: 200_000,
             overhead_tokens: 0,
+            cancel: &tokio_util::sync::CancellationToken::new(),
         };
         let compacted = super::compact_history(&scope, large_history(), true).await;
         match compacted.status {
@@ -1242,6 +1254,7 @@ mod tests {
             head: "head-1",
             context_window: 200_000,
             overhead_tokens: 0,
+            cancel: &tokio_util::sync::CancellationToken::new(),
         };
         let compacted = super::compact_history(&scope, large_history(), true).await;
         match compacted.status {
@@ -1403,6 +1416,7 @@ mod tests {
             head: "head-1",
             context_window: 200_000,
             overhead_tokens: 0,
+            cancel: &tokio_util::sync::CancellationToken::new(),
         };
         let compacted = super::compact_history(&scope, history.clone(), true).await;
         match compacted.status {

@@ -361,8 +361,10 @@ impl WebClient {
                     snippet: snippet.unwrap_or_default().to_owned(),
                 })
             })
-            .take(max_results)
+            // Drop blocked hits before counting, so one unfetchable top hit
+            // does not cost the model a usable result further down.
             .filter(|result| guard::is_fetchable_url(&result.url))
+            .take(max_results)
             .map(|mut result| {
                 result.title = guard::sanitize_remote_text(&result.title);
                 result.snippet = guard::sanitize_remote_text(&result.snippet);
@@ -661,6 +663,32 @@ mod tests {
         > {
             Box::pin(async move { Ok(self.body.clone()) })
         }
+    }
+
+    #[tokio::test]
+    async fn blocked_hits_do_not_use_up_the_result_count() {
+        let body = serde_json::json!({
+            "results": [
+                {"url": "http://insecure.example/a", "title": "blocked", "snippet": ""},
+                {"url": "https://example.com/one", "title": "one", "snippet": ""},
+                {"url": "https://example.com/two", "title": "two", "snippet": ""},
+                {"url": "https://example.com/three", "title": "three", "snippet": ""}
+            ]
+        });
+        let client = WebClient::new(
+            "https://search.example.com",
+            None,
+            Arc::new(StaticJson {
+                body: serde_json::to_vec(&body).unwrap(),
+            }),
+        )
+        .unwrap();
+        let hits = client
+            .search("query", 2, CancellationToken::new())
+            .await
+            .unwrap();
+        let titles: Vec<_> = hits.iter().map(|hit| hit.title.as_str()).collect();
+        assert_eq!(titles, ["one", "two"]);
     }
 
     const EXTRACT_FAILED: &[u8] = br#"{"code":-1,"error_code":"extract_failed","message":"Unable to extract content from the URL."}"#;

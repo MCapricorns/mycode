@@ -29,6 +29,8 @@
 //! tool, and `compaction`, `export`, `updates`, `web_client`, and
 //! `mcp_client` round out the housekeeping and I/O seams.
 
+#[cfg(test)]
+mod bridge_tests;
 mod compaction;
 mod dispatch;
 mod export;
@@ -42,6 +44,7 @@ pub mod protocol;
 pub use compaction::{
     display_summary_text, is_display_only_summary as is_compaction_summary, summary_body,
 };
+pub use export::IMPORT_NEEDS_MCP_CONFIRM;
 mod search;
 mod settings_io;
 mod state;
@@ -110,7 +113,7 @@ pub enum BridgeCommand {
         /// The key; empty clears the stored entry.
         api_key: String,
     },
-    /// Start an OAuth device-flow sign-in for Copilot, xAI, or Codex.
+    /// Start an OAuth device-flow sign-in for Copilot or Codex.
     StartOAuthSignIn {
         /// Catalog / settings provider id.
         provider_id: String,
@@ -234,6 +237,9 @@ pub enum BridgeCommand {
     ImportData {
         /// Bundle file chosen in an open dialog.
         path: PathBuf,
+        /// The user confirmed a bundle that changes MCP server commands.
+        /// Without it such an import fails with [`IMPORT_NEEDS_MCP_CONFIRM`].
+        confirm_mcp_commands: bool,
     },
     /// List discovered prompt resources for the session workspace.
     ListResources {
@@ -420,7 +426,7 @@ pub enum BridgeEvent {
         /// Short failure text. Not drawn as a full-width error in About.
         message: String,
     },
-    /// A device-flow sign-in (Copilot, xAI, or Codex) completed.
+    /// A device-flow sign-in (Copilot or Codex) completed.
     CopilotSignedIn,
     /// A device-flow sign-in failed or expired.
     CopilotSignInFailed {
@@ -613,34 +619,34 @@ impl CoreBridge {
         )
     }
 
-    /// Sends one command and returns the reply future.
+    /// Enqueues one command immediately and returns its reply future.
     ///
-    /// Dropping the returned future cancels the wait but never cancels the
-    /// durable core effect.
-    ///
-    /// # Panics
-    ///
-    /// Panics after [`CoreBridge::shutdown`].
+    /// Dropping the returned future cancels only the wait, not the accepted
+    /// durable core effect. The future holds no command sender, so keeping an
+    /// unpolled reply cannot keep [`CoreBridge::shutdown`] waiting.
+    /// A stopped bridge returns the error variant for the original command.
     pub fn request(
         &self,
         command: BridgeCommand,
     ) -> impl Future<Output = BridgeReply> + Send + 'static {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let sender = self.command_tx.clone();
+        let failure = dispatch::error_reply(
+            &command,
+            if self.command_tx.is_some() {
+                "core thread stopped"
+            } else {
+                "core bridge stopped"
+            },
+        );
+        let queued = self
+            .command_tx
+            .as_ref()
+            .is_some_and(|sender| sender.send(command.with_reply(reply_tx)).is_ok());
         async move {
-            // An unbounded send only fails when the worker stopped; surface
-            // that as the generic loss reply instead of panicking here.
-            let sender = match sender {
-                Some(sender) => sender,
-                None => return BridgeReply::Sessions(Err("core bridge stopped".to_owned())),
-            };
-            if sender.send(command.with_reply(reply_tx)).is_err() {
-                return BridgeReply::Sessions(Err("core thread stopped".to_owned()));
+            if !queued {
+                return failure;
             }
-            match reply_rx.await {
-                Ok(reply) => reply,
-                Err(_) => BridgeReply::Sessions(Err("core thread stopped".to_owned())),
-            }
+            reply_rx.await.unwrap_or(failure)
         }
     }
 

@@ -282,6 +282,11 @@ pub struct Workspace {
     /// Language last written into input placeholders. `u8::MAX` until the
     /// first frame, so a settings load that flips the language refreshes them.
     applied_language: u8,
+    /// Bundle of the import in flight, kept so a refusal can be confirmed.
+    import_request: Option<std::path::PathBuf>,
+    /// Bundle whose import changes MCP server commands and waits for the
+    /// user's explicit confirmation in the Data settings card.
+    import_confirm: Option<std::path::PathBuf>,
 }
 
 impl Workspace {
@@ -374,6 +379,8 @@ impl Workspace {
             applied_font_size: String::new(),
             applied_font_family: String::new(),
             applied_language: u8::MAX,
+            import_request: None,
+            import_confirm: None,
         });
         workspace.update(cx, |workspace, cx| {
             let filter = cx.new(|cx| {

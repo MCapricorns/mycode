@@ -1,5 +1,5 @@
-//! Provider OAuth device flows: Copilot, xAI, and Codex sign-in with their
-//! poll loops, token refresh, and settings upserts.
+//! Provider OAuth device flows: Copilot and Codex sign-in with their poll
+//! loops, token refresh, and settings upserts.
 
 use std::sync::Arc;
 
@@ -7,9 +7,8 @@ use mycode_config::{HomeLayout, ProviderSettings, replace_app_settings};
 use mycode_providers::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
     DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID, PinnedCall,
-    XAI_PROVIDER_ID, copilot_bearer, exchange_codex_code, parse_oauth_secret,
-    poll_codex_device_token, poll_device_token, poll_xai_device_token, refresh_codex_token,
-    refresh_xai_token, start_codex_device_flow, start_device_flow, start_xai_device_flow,
+    copilot_bearer, exchange_codex_code, parse_oauth_secret, poll_codex_device_token,
+    poll_device_token, refresh_codex_token, start_codex_device_flow, start_device_flow,
 };
 
 use crate::settings_io::{load_settings, render_config_error, save_provider_key};
@@ -17,7 +16,7 @@ use crate::state::{CoreState, UPDATE_USER_AGENT};
 use crate::{BridgeEvent, BridgeReply, CopilotSignInInfo};
 
 /// OpenAI device codes live fifteen minutes. `CodexDeviceStart` carries no
-/// expiry field (unlike the Copilot/xAI `DeviceCodeStart`), so the poll
+/// expiry field (unlike the Copilot `DeviceCodeStart`), so the poll
 /// deadline mirrors the documented lifetime.
 const CODEX_FLOW_LIFETIME_SECS: u64 = 15 * 60;
 
@@ -25,7 +24,7 @@ fn oauth_call() -> PinnedCall {
     PinnedCall::new(UPDATE_USER_AGENT, std::time::Duration::from_secs(30))
 }
 
-// Device flows for Copilot, xAI, and Codex.
+// Device flows for Copilot and Codex.
 
 /// Starts a device flow, opens the browser, and spawns the poll loop that
 /// finishes the sign-in (or reports failure) over the event channel.
@@ -37,23 +36,6 @@ pub(crate) async fn oauth_sign_in(
 ) -> BridgeReply {
     let call = oauth_call();
     match provider_id.as_str() {
-        XAI_PROVIDER_ID => {
-            let start = match start_xai_device_flow(&call).await {
-                Ok(start) => start,
-                Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
-            };
-            let uri = if start.verification_uri.is_empty() {
-                mycode_providers::XAI_VERIFICATION_URI.to_owned()
-            } else {
-                start.verification_uri.clone()
-            };
-            open_browser(&uri);
-            spawn_xai_poll(state, events, call, start.clone(), models);
-            BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
-                user_code: start.user_code,
-                verification_uri: uri,
-            }))
-        }
         OPENAI_CODEX_PROVIDER_ID => {
             let start = match start_codex_device_flow(&call).await {
                 Ok(start) => start,
@@ -85,29 +67,16 @@ pub(crate) async fn oauth_sign_in(
     }
 }
 
-/// Shared device-flow poll loop for Copilot and xAI: sleeps the flow's poll
-/// interval, enforces its expiry deadline, and forwards terminal outcomes
-/// over the event channel. `extract` pulls this flow's granted payload out
-/// of a poll result (the other `Granted` flavor is ignored, as before);
-/// `finish` completes the sign-in with it.
-#[allow(clippy::too_many_arguments)]
-fn spawn_device_poll<V, P, PF, X, F, FF>(
+/// Copilot device-flow poll loop: sleeps the flow's poll interval, enforces
+/// its expiry deadline, and forwards the terminal outcome over the event
+/// channel.
+fn spawn_copilot_poll(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
     call: PinnedCall,
     start: DeviceCodeStart,
     models: Vec<String>,
-    poll: P,
-    extract: X,
-    finish: F,
-) where
-    P: Fn(PinnedCall, String) -> PF + Send + 'static,
-    PF: std::future::Future<Output = Result<DeviceTokenPoll, String>> + Send,
-    X: Fn(DeviceTokenPoll) -> Option<V> + Send + 'static,
-    F: Fn(Arc<CoreState>, V, Vec<String>) -> FF + Send + 'static,
-    FF: std::future::Future<Output = Result<(), String>> + Send,
-    V: Send + 'static,
-{
+) {
     let mut interval_secs = start.interval_secs.max(1);
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(start.expires_in_secs.max(1));
@@ -121,7 +90,7 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
                 });
                 return;
             }
-            match poll(call.clone(), device_code.clone()).await {
+            match poll_device_token(&call, &device_code).await {
                 Ok(DeviceTokenPoll::Pending) => {}
                 Ok(DeviceTokenPoll::SlowDown) => interval_secs += 5,
                 Ok(DeviceTokenPoll::Denied(reason)) => {
@@ -130,13 +99,8 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
                     });
                     return;
                 }
-                Ok(outcome) => {
-                    // Granted or GrantedOAuth: whichever this flow treats as
-                    // its success payload; the other flavor keeps polling.
-                    let Some(granted) = extract(outcome) else {
-                        continue;
-                    };
-                    let outcome = finish(state.clone(), granted, models).await;
+                Ok(DeviceTokenPoll::Granted(github_token)) => {
+                    let outcome = finish_copilot_sign_in(&state, &github_token, &models).await;
                     let _ = events.send(match outcome {
                         Ok(()) => BridgeEvent::CopilotSignedIn,
                         Err(message) => BridgeEvent::CopilotSignInFailed { message },
@@ -150,54 +114,6 @@ fn spawn_device_poll<V, P, PF, X, F, FF>(
             }
         }
     });
-}
-
-fn spawn_copilot_poll(
-    state: Arc<CoreState>,
-    events: crate::BridgeEventTx,
-    call: PinnedCall,
-    start: DeviceCodeStart,
-    models: Vec<String>,
-) {
-    spawn_device_poll(
-        state,
-        events,
-        call,
-        start,
-        models,
-        |call, code| async move { poll_device_token(&call, &code).await },
-        |outcome| match outcome {
-            DeviceTokenPoll::Granted(token) => Some(token),
-            _ => None,
-        },
-        |state, github_token, models| async move {
-            finish_copilot_sign_in(&state, &github_token, &models).await
-        },
-    );
-}
-
-fn spawn_xai_poll(
-    state: Arc<CoreState>,
-    events: crate::BridgeEventTx,
-    call: PinnedCall,
-    start: DeviceCodeStart,
-    models: Vec<String>,
-) {
-    spawn_device_poll(
-        state,
-        events,
-        call,
-        start,
-        models,
-        |call, code| async move { poll_xai_device_token(&call, &code).await },
-        |outcome| match outcome {
-            DeviceTokenPoll::GrantedOAuth(secret) => Some(secret),
-            _ => None,
-        },
-        |state, secret, models| async move {
-            finish_oauth_sign_in(&state, XAI_PROVIDER_ID, &secret, &models).await
-        },
-    );
 }
 
 fn spawn_codex_poll(
@@ -355,23 +271,17 @@ fn upsert_catalog_provider(
     Ok(())
 }
 
-/// Which expired OAuth blob this crate can refresh in place.
-enum OAuthRefreshKind {
-    Xai,
-    Codex,
-    /// Copilot has no refresh grant. Any other id is refused too.
-    Excluded,
+/// Whether an expired OAuth blob stored for `provider_id` can be refreshed
+/// in place. Only Codex holds a refresh grant. Copilot exchanges its device
+/// token per request instead, and any other blob (such as one left by the
+/// retired xAI sign-in) is refused so a stale access token is not reused.
+fn refreshes_oauth(provider_id: &str) -> bool {
+    provider_id == OPENAI_CODEX_PROVIDER_ID
 }
 
-fn oauth_refresh_kind(provider_id: &str) -> OAuthRefreshKind {
-    if provider_id == XAI_PROVIDER_ID {
-        OAuthRefreshKind::Xai
-    } else if provider_id == OPENAI_CODEX_PROVIDER_ID {
-        OAuthRefreshKind::Codex
-    } else {
-        OAuthRefreshKind::Excluded
-    }
-}
+/// Shown when a stored OAuth blob expired and has no refresh grant here.
+const OAUTH_EXPIRED: &str =
+    "the saved sign-in expired and cannot be refreshed — paste an API key in Settings";
 
 /// Resolves the Authorization credential and extra headers for one provider
 /// request: Copilot exchanges its long-lived token for a live bearer, OAuth
@@ -393,19 +303,7 @@ pub(crate) async fn resolve_request_auth(
     if let Some(mut secret) = parse_oauth_secret(stored_key) {
         let now = crate::unix_now().as_secs();
         if secret.expired(now) {
-            let call = oauth_call();
-            // GitHub Copilot stores a device token, not an OAuth refresh grant.
-            // Its short-lived API bearer is already refreshed by
-            // `ensure_copilot_bearer` before this match. Unknown provider ids
-            // are refused the same way so a stale access token is not reused.
-            secret = match oauth_refresh_kind(provider.id.as_str()) {
-                OAuthRefreshKind::Xai => refresh_xai_token(&call, &secret.refresh).await?,
-                OAuthRefreshKind::Codex => refresh_codex_token(&call, &secret.refresh).await?,
-                OAuthRefreshKind::Excluded => {
-                    return Err("saved sign-in cannot be refreshed — sign in again".to_owned());
-                }
-            };
-            let _ = save_provider_key(home, &provider.id, &secret.encode());
+            secret = refresh_oauth_secret(home, provider, secret, now).await?;
         }
         let mut extra = Vec::new();
         if provider.id == OPENAI_CODEX_PROVIDER_ID {
@@ -425,6 +323,38 @@ pub(crate) async fn resolve_request_auth(
         return Ok((secret.access, extra));
     }
     Ok((stored_key.to_owned(), Vec::new()))
+}
+
+/// Serializes OAuth refreshes across turns and subagents.
+///
+/// Refresh grants rotate: two turns that start together on an expired token
+/// both spent the same refresh token, so the slower one failed (or stored the
+/// loser of the race). The second waiter now reuses the first one's result.
+static OAUTH_REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Refreshes one expired OAuth blob, or adopts a fresher one another turn
+/// stored while this one waited for the refresh lock.
+async fn refresh_oauth_secret(
+    home: &HomeLayout,
+    provider: &ProviderSettings,
+    expired: OAuthSecret,
+    now: u64,
+) -> Result<OAuthSecret, String> {
+    if !refreshes_oauth(&provider.id) {
+        return Err(OAUTH_EXPIRED.to_owned());
+    }
+    let _refreshing = OAUTH_REFRESH.lock().await;
+    let stored = mycode_config::read_provider_secrets(home)
+        .ok()
+        .and_then(|secrets| secrets.key(&provider.id).and_then(parse_oauth_secret));
+    if let Some(stored) = stored
+        && !stored.expired(now)
+    {
+        return Ok(stored);
+    }
+    let secret = refresh_codex_token(&oauth_call(), &expired.refresh).await?;
+    let _ = save_provider_key(home, &provider.id, &secret.encode());
+    Ok(secret)
 }
 
 /// Returns a live Copilot bearer, exchanging a fresh one when the cached copy
@@ -472,26 +402,89 @@ fn open_browser(url: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{OAuthRefreshKind, oauth_refresh_kind};
-    use mycode_providers::{COPILOT_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID};
+    use super::refreshes_oauth;
+    use mycode_providers::{COPILOT_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID};
 
     #[test]
-    fn expired_oauth_refresh_covers_xai_and_codex_only() {
-        assert!(matches!(
-            oauth_refresh_kind(XAI_PROVIDER_ID),
-            OAuthRefreshKind::Xai
+    fn expired_oauth_refresh_covers_codex_only() {
+        assert!(refreshes_oauth(OPENAI_CODEX_PROVIDER_ID));
+        assert!(!refreshes_oauth(COPILOT_PROVIDER_ID));
+        // The xAI sign-in was removed; its leftover blobs are not refreshed.
+        assert!(!refreshes_oauth("xai"));
+        assert!(!refreshes_oauth("unknown-provider"));
+    }
+
+    fn scratch_home(label: &str) -> (std::path::PathBuf, mycode_config::HomeLayout) {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-oauth-{label}-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
         ));
-        assert!(matches!(
-            oauth_refresh_kind(OPENAI_CODEX_PROVIDER_ID),
-            OAuthRefreshKind::Codex
-        ));
-        assert!(matches!(
-            oauth_refresh_kind(COPILOT_PROVIDER_ID),
-            OAuthRefreshKind::Excluded
-        ));
-        assert!(matches!(
-            oauth_refresh_kind("unknown-provider"),
-            OAuthRefreshKind::Excluded
-        ));
+        std::fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let home = mycode_config::HomeLayout::from_root(&root).unwrap();
+        (root, home)
+    }
+
+    fn secret(access: &str, expires: u64) -> mycode_providers::OAuthSecret {
+        mycode_providers::OAuthSecret {
+            kind: "oauth".to_owned(),
+            access: access.to_owned(),
+            refresh: format!("{access}-refresh"),
+            expires,
+            account_id: None,
+        }
+    }
+
+    fn provider(id: &str, base_url: &str) -> mycode_config::ProviderSettings {
+        mycode_config::ProviderSettings {
+            id: id.to_owned(),
+            kind: "openai-responses".to_owned(),
+            base_url: base_url.to_owned(),
+            models: vec!["model".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_waiting_refresh_adopts_the_token_another_turn_stored() {
+        let (root, home) = scratch_home("adopt");
+        let now = crate::unix_now().as_secs();
+        // The turn that won the race already stored a rotated token.
+        crate::settings_io::save_provider_key(
+            &home,
+            OPENAI_CODEX_PROVIDER_ID,
+            &secret("rotated", now + 3600).encode(),
+        )
+        .unwrap();
+        let codex = provider(
+            OPENAI_CODEX_PROVIDER_ID,
+            "https://chatgpt.com/backend-api/codex",
+        );
+        // This turn read the old token before the race; it must not spend
+        // the already rotated refresh grant.
+        let adopted = super::refresh_oauth_secret(&home, &codex, secret("stale", now), now)
+            .await
+            .expect("no network refresh");
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(adopted.access, "rotated");
+    }
+
+    #[tokio::test]
+    async fn an_expired_retired_xai_sign_in_asks_for_an_api_key() {
+        let (root, home) = scratch_home("xai");
+        let now = crate::unix_now().as_secs();
+        let xai = provider("xai", "https://api.x.ai/v1");
+        let stale = secret("old-grok", now).encode();
+        let copilot = tokio::sync::Mutex::new(None);
+        let outcome = super::resolve_request_auth(&home, &copilot, &xai, &stale).await;
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(outcome, Err(super::OAUTH_EXPIRED.to_owned()));
     }
 }

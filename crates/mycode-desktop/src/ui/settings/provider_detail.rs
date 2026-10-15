@@ -51,7 +51,7 @@ pub(super) fn render_provider_detail(
     let replacing = workspace.provider_key_replacing(&provider.id);
     let oauth = catalog.as_ref().is_some_and(|entry| {
         mycode_providers::catalog::uses_oauth_login(&entry.auth)
-            && matches!(entry.id.as_str(), "github-copilot" | "xai" | "openai-codex")
+            && matches!(entry.id.as_str(), "github-copilot" | "openai-codex")
     });
     let show_key = catalog
         .as_ref()
@@ -264,7 +264,6 @@ fn oauth_block(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let sign_label = match catalog_id {
-        "xai" => t("Sign in with SuperGrok / X", "使用 SuperGrok / X 登录"),
         "openai-codex" => t("Sign in with ChatGPT", "使用 ChatGPT 登录"),
         _ => t("Sign in with GitHub", "使用 GitHub 登录"),
     };

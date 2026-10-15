@@ -229,12 +229,8 @@ const FONT_FACES: &[FontFace] = &[
 #[must_use]
 pub fn font_family_label(id: &str) -> &'static str {
     match mycode_config::canonical_font_family(id) {
-        Some("Inter") => "Inter",
-        Some("Segoe UI") => "Segoe UI",
-        Some("PingFang") => "PingFang",
-        Some("Noto Sans") => "Noto Sans",
-        Some("Microsoft YaHei") => "Microsoft YaHei",
-        _ => crate::i18n::t("System", "系统"),
+        Some(mycode_config::SYSTEM_FONT_FAMILY) | None => crate::i18n::t("System", "系统"),
+        Some(family) => family,
     }
 }
 

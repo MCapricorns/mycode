@@ -21,11 +21,10 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use zeroize::Zeroizing;
 
 use super::{windows_acl, windows_open};
-use crate::secure_fs::owned_file::{lock_name, temporary_name};
+use crate::secure_fs::owned_file::{legacy_lock_name, temporary_name};
 use crate::{ConfigError, ConfigErrorKind};
 
 const READ_FILE_ACCESS: u32 = GENERIC_READ | READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
-const LOCK_FILE_ACCESS: u32 = GENERIC_READ | GENERIC_WRITE | READ_CONTROL | WRITE_DAC | SYNCHRONIZE;
 const TEMP_FILE_ACCESS: u32 =
     GENERIC_READ | GENERIC_WRITE | READ_CONTROL | WRITE_DAC | DELETE | SYNCHRONIZE;
 const MAX_TEMPORARY_ATTEMPTS: usize = 16;
@@ -47,10 +46,7 @@ pub(in crate::secure_fs) fn read_file(
 pub(in crate::secure_fs) struct Transaction {
     parent: File,
     name: OsString,
-    _lock: File,
-    /// Whether the persistent lock already carried the exact fixed descriptor
-    /// when it was opened.
-    lock_was_private: bool,
+    _lock: DirectoryLock,
 }
 
 impl Transaction {
@@ -62,35 +58,19 @@ impl Transaction {
             .split_last()
             .ok_or_else(|| ConfigError::new(ConfigErrorKind::PathEscape))?;
         let mut parent = open_or_create_root(root)?;
+        let mut directory = root.to_path_buf();
         for component in directories {
             parent = open_or_create_directory(&parent, component)?;
+            directory.push(component);
         }
+        let lock = DirectoryLock::acquire(&directory)?;
+        remove_legacy_lock(&parent, name);
         reject_wrong_case(&parent, name)?;
-        let lock_name = lock_name(name);
-        reject_wrong_case(&parent, &lock_name)?;
-        let (lock, lock_was_private) = open_lock(&parent, &lock_name)?;
-        reject_wrong_case(&parent, &lock_name)?;
-        File::lock(&lock)
-            .map_err(|error| ConfigError::new(ConfigErrorKind::Lock).with_io_kind(error.kind()))?;
         Ok(Self {
             parent,
             name: name.clone(),
             _lock: lock,
-            lock_was_private,
         })
-    }
-
-    /// Rejects a transaction whose persistent lock was widened before opening.
-    ///
-    /// A read-modify-write publishes content derived from what it just read,
-    /// so a lock file that another principal could hold or rewrite is an
-    /// access-control failure rather than something to tighten and continue.
-    pub(in crate::secure_fs) fn require_private_lock(&self) -> Result<(), ConfigError> {
-        if self.lock_was_private {
-            Ok(())
-        } else {
-            Err(ConfigError::new(ConfigErrorKind::AccessControl))
-        }
     }
 
     pub(in crate::secure_fs) fn read(
@@ -128,10 +108,107 @@ impl Transaction {
     }
 }
 
-impl Drop for Transaction {
-    fn drop(&mut self) {
-        let _ = File::unlock(&self._lock);
+/// Cross-process exclusion for one owned directory.
+///
+/// Held as a session-local named mutex keyed by the directory path, so no
+/// `<name>.lock` file appears beside the documents. A mutex belongs to the
+/// thread that acquired it; the raw handle keeps this type (and so a
+/// transaction) on that thread.
+struct DirectoryLock(windows_sys::Win32::Foundation::HANDLE);
+
+impl DirectoryLock {
+    fn acquire(directory: &Path) -> Result<Self, ConfigError> {
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{CreateMutexW, INFINITE, WaitForSingleObject};
+
+        let name: Vec<u16> = directory_lock_name(directory)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: `name` is a live NUL-terminated UTF-16 string; null security
+        // attributes request the default descriptor.
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            let error = io::Error::last_os_error();
+            return Err(ConfigError::new(ConfigErrorKind::Lock).with_io_kind(error.kind()));
+        }
+        // SAFETY: `handle` is the live mutex handle created above.
+        let waited = unsafe { WaitForSingleObject(handle, INFINITE) };
+        // An abandoned mutex (its holder crashed) is still acquired; the
+        // atomic replace means no half-written document can be behind it.
+        if waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED {
+            let error = io::Error::last_os_error();
+            // SAFETY: `handle` is live and not owned by this thread.
+            let _ = unsafe { CloseHandle(handle) };
+            return Err(ConfigError::new(ConfigErrorKind::Lock).with_io_kind(error.kind()));
+        }
+        Ok(Self(handle))
     }
+}
+
+impl Drop for DirectoryLock {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::ReleaseMutex;
+        // SAFETY: this thread owns the mutex acquired in `acquire`.
+        let _ = unsafe { ReleaseMutex(self.0) };
+        // SAFETY: the handle is live and closed exactly once.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// Mutex name for one directory: FNV-1a over the case-folded path, so every
+/// build and process agrees on it regardless of the spelling it was given.
+fn directory_lock_name(directory: &Path) -> String {
+    let key = directory
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase();
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in key.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("Local\\mycode-config-{hash:016x}")
+}
+
+/// Deletes a `<name>.lock` left by builds that locked through a file.
+/// Best-effort: one still held open by an old process is left for later.
+fn remove_legacy_lock(parent: &File, name: &OsStr) {
+    let legacy = legacy_lock_name(name);
+    if let Ok(Some(opened)) = windows_open::open_relative_file(
+        parent,
+        &legacy,
+        DELETE,
+        windows_open::OPEN_EXISTING_DISPOSITION,
+        None,
+    ) {
+        let _ = set_delete(&opened.file);
+    }
+}
+
+/// Moves one entry aside without reading it; see
+/// [`crate::secure_fs::owned_file::quarantine_owned_file`].
+pub(in crate::secure_fs) fn quarantine_file(
+    root: &Path,
+    components: &[OsString],
+    backup: &OsStr,
+) -> Result<bool, ConfigError> {
+    let (name, directories) = components
+        .split_last()
+        .ok_or_else(|| ConfigError::new(ConfigErrorKind::PathEscape))?;
+    let mut parent = open_or_create_root(root)?;
+    for component in directories {
+        parent = open_or_create_directory(&parent, component)?;
+    }
+    if windows_open::child_attributes(&parent, name)?.is_none() {
+        return Ok(false);
+    }
+    let entry = windows_open::open_for_rename(&parent, name)?;
+    rename_relative(&parent, &entry, backup)?;
+    super::flush_directory(&parent)?;
+    Ok(true)
 }
 
 fn open_or_create_root(root: &Path) -> Result<File, ConfigError> {
@@ -251,29 +328,6 @@ fn validate_replace_target(parent: &File, name: &OsStr) -> Result<(), ConfigErro
         windows_acl::require_current_owner(&file)?;
     }
     Ok(())
-}
-
-fn open_lock(parent: &File, name: &OsStr) -> Result<(File, bool), ConfigError> {
-    let descriptor = windows_acl::protected_descriptor()?;
-    let opened = windows_open::open_relative_file(
-        parent,
-        name,
-        LOCK_FILE_ACCESS,
-        windows_open::OPEN_OR_CREATE_FILE_DISPOSITION,
-        Some(&descriptor),
-    )?
-    .ok_or_else(|| ConfigError::new(ConfigErrorKind::Lock))?;
-    windows_acl::require_current_owner(&opened.file)?;
-    // A widened existing lock is tightened here, and the pre-tightening
-    // evidence is reported to callers that must fail closed instead.
-    // A lock created by this call has no previous holder. `NtCreateFile`
-    // can still attach inherited ACEs until the protected DACL is installed,
-    // so that pre-repair check is not evidence another principal held it.
-    let created = opened.created;
-    let was_private = windows_acl::verify_fixed_descriptor(&opened.file).is_ok();
-    windows_acl::secure_existing_object(&opened.file)?;
-    windows_acl::verify_fixed_descriptor(&opened.file)?;
-    Ok((opened.file, was_private || created))
 }
 
 fn create_temporary(parent: &File, destination: &OsStr) -> Result<TemporaryFile, ConfigError> {
@@ -529,6 +583,81 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    /// Replaces one file's DACL; the owner keeps WRITE_DAC implicitly. The
+    /// open skips `SYNCHRONIZE`, which an empty DACL does not grant.
+    fn set_dacl(path: &std::path::Path, descriptor: &super::windows_acl::SecurityDescriptor) {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, SetKernelObjectSecurity};
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path.parent().expect("parent"))
+            .expect("open parent directory");
+        let file = super::windows_open::open_unsynchronized(
+            &directory,
+            path.file_name().expect("file name"),
+            super::READ_CONTROL | super::WRITE_DAC,
+        )
+        .unwrap_or_else(|error| panic!("open {} for WRITE_DAC: {error:?}", path.display()));
+        // SAFETY: `file` is live with WRITE_DAC and `descriptor` stays live
+        // for this synchronous call.
+        let updated = unsafe {
+            SetKernelObjectSecurity(
+                file.as_raw_handle(),
+                DACL_SECURITY_INFORMATION,
+                descriptor.as_ptr(),
+            )
+        };
+        assert_ne!(updated, 0, "{}", std::io::Error::last_os_error());
+    }
+
+    /// The field report: a read-only `secrets.json` whose DACL grants nobody
+    /// anything blocked startup with "owned path access control failed".
+    #[test]
+    fn a_read_only_document_with_an_empty_dacl_is_moved_aside_and_reset() {
+        let tree = TempTree::new("empty-dacl");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).expect("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+        let path = root.join("secrets.json");
+        fs::write(&path, br#"{"providers":{"x":"y"}}"#).expect("write");
+        let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).expect("read-only");
+        set_dacl(
+            &path,
+            &super::windows_acl::empty_dacl_descriptor().expect("empty descriptor"),
+        );
+        let refused = crate::read_owned_file(&home, "secrets.json", 1024).expect_err("strict read");
+        assert_eq!(refused.kind(), crate::ConfigErrorKind::AccessControl);
+
+        let (secrets, repair) = crate::read_provider_secrets_with_repair(&home).expect("reset");
+        assert!(secrets.provider_ids().is_empty());
+        let repair = repair.expect("reported as reset");
+        let backup = root.join(&repair.backup);
+        assert!(backup.exists(), "the unreadable file was kept aside");
+        assert!(
+            crate::read_provider_secrets_with_repair(&home)
+                .expect("reread")
+                .1
+                .is_none(),
+            "the fresh document must read cleanly"
+        );
+
+        // Restore an ordinary DACL so the temp tree can be removed.
+        set_dacl(
+            &backup,
+            &super::windows_acl::protected_descriptor().expect("protected descriptor"),
+        );
+        let mut permissions = fs::metadata(&backup).expect("metadata").permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        let _ = fs::set_permissions(&backup, permissions);
     }
 
     #[test]

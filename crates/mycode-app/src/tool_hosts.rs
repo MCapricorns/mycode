@@ -81,11 +81,11 @@ impl AskRouter {
     }
 }
 
-/// Removes one session's registered ask channel when its turn's tool
-/// registry (the last owner of the channel) is dropped.
+/// Removes one session's registered ask channel when the ask that registered
+/// it ends: answered, dismissed, cancelled, or dropped with its turn.
 ///
-/// Without this, every session that ever ran a turn left one dead sender in
-/// the process-wide router, including sessions the user later deleted.
+/// Without this, every session that ever asked left one dead sender in the
+/// process-wide router, including sessions the user later deleted.
 pub(crate) struct AskSlot {
     session_id: String,
     generation: u64,
@@ -103,7 +103,7 @@ impl Drop for AskSlot {
 static ASK_ROUTER: std::sync::OnceLock<AskRouter> = std::sync::OnceLock::new();
 
 /// Registers a new answer channel for this session, replacing any previous
-/// one. The returned slot removes the registration when the turn ends.
+/// one. The returned slot removes the registration when the ask ends.
 pub(crate) fn register_ask(
     session_id: &str,
 ) -> (tokio::sync::oneshot::Receiver<Vec<String>>, AskSlot) {
@@ -136,10 +136,6 @@ pub(crate) fn dismiss_ask(session_id: &str) -> Result<(), String> {
 pub(crate) struct BridgeAskChannel {
     pub(crate) session_id: String,
     pub(crate) events: crate::BridgeEventTx,
-    pub(crate) answer: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<Vec<String>>>>,
-    /// Held for its Drop: retires the router registration when this turn's
-    /// tool registry goes away.
-    pub(crate) _slot: AskSlot,
 }
 
 impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
@@ -156,6 +152,12 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
         >,
     > {
         Box::pin(async move {
+            // One answer channel per question set. A turn-wide channel was
+            // spent by the first ask, so a second ask in the same turn showed
+            // its card yet failed at once as dismissed. Registering before
+            // the card goes out means an answer can never beat its channel,
+            // and the slot retires the entry however this wait ends.
+            let (answer, _slot) = register_ask(&self.session_id);
             let rows = questions
                 .iter()
                 .map(|question| crate::protocol::AskPrompt {
@@ -169,18 +171,12 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
                 session_id: self.session_id.clone(),
                 questions: rows,
             });
-            let rx = self
-                .answer
-                .lock()
-                .await
-                .take()
-                .ok_or_else(mycode_tools::builtin::user_dismissed)?;
             let answers = tokio::select! {
-            biased;
-            () = cancel.cancelled() => {
-            return Err(mycode_tools::ToolError::Execution("cancelled".into()));
-            }
-            answers = rx => answers.map_err(|_| mycode_tools::builtin::user_dismissed())?,
+                biased;
+                () = cancel.cancelled() => {
+                    return Err(mycode_tools::ToolError::Execution("cancelled".into()));
+                }
+                answers = answer => answers.map_err(|_| mycode_tools::builtin::user_dismissed())?,
             };
             Ok(questions
                 .iter()
@@ -354,6 +350,38 @@ mod tests {
         drop(slot);
         assert!(deliver_ask_answer("ses2-ask-retire", Vec::new()).is_err());
         assert!(dismiss_ask("ses2-ask-retire").is_err());
+    }
+
+    #[tokio::test]
+    async fn one_turn_can_ask_more_than_once() {
+        use mycode_tools::builtin::{AskChannel as _, AskQuestion};
+
+        let (events, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let channel = super::BridgeAskChannel {
+            session_id: "ses4-ask-twice".to_owned(),
+            events,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let questions = vec![AskQuestion {
+            question: "which one?".to_owned(),
+            choices: Vec::new(),
+            optional: false,
+            multiple: false,
+        }];
+        for reply in ["first", "second"] {
+            let user = async {
+                let request = requests.recv().await.expect("question card");
+                assert!(matches!(request, crate::BridgeEvent::AskRequested { .. }));
+                deliver_ask_answer("ses4-ask-twice", vec![reply.to_owned()])
+                    .expect("the ask must be waiting for this answer");
+            };
+            let (answers, ()) = tokio::join!(channel.ask(&questions, &cancel), user);
+            let answers = answers.expect("answered ask");
+            assert_eq!(answers[0].answer, reply);
+        }
+        // An answer with no question on screen is refused, not buffered for
+        // the next question.
+        assert!(deliver_ask_answer("ses4-ask-twice", vec!["stale".to_owned()]).is_err());
     }
 
     #[test]

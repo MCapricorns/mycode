@@ -376,8 +376,8 @@ fn verify_checksum(asset: &Path, checksum_file: &Path) -> Result<(), String> {
     if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("checksum sidecar malformed".to_owned());
     }
-    let actual = file_sha256_raw(asset)?;
-    if !actual.eq_ignore_ascii_case(expected.as_bytes()) {
+    let actual = file_sha256(asset)?;
+    if !actual.eq_ignore_ascii_case(&expected) {
         return Err("downloaded update failed its checksum verification".to_owned());
     }
     Ok(())
@@ -674,6 +674,63 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::asset_suffix_for;
 
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    #[test]
+    fn checksum_accepts_sha256_abc_known_vector() {
+        let dir = scratch("checksum-abc");
+        let asset = dir.join("update.asset");
+        let checksum = dir.join("update.sha256");
+        std::fs::write(&asset, b"abc").unwrap();
+        for sidecar in [
+            ABC_SHA256.to_owned(),
+            format!("{ABC_SHA256}  update.asset\n"),
+            format!("{} *update.asset\n", ABC_SHA256.to_ascii_uppercase()),
+        ] {
+            std::fs::write(&checksum, sidecar).unwrap();
+            assert_eq!(super::verify_checksum(&asset, &checksum), Ok(()));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checksum_rejects_tampered_asset() {
+        let dir = scratch("checksum-tampered");
+        let asset = dir.join("update.asset");
+        let checksum = dir.join("update.sha256");
+        std::fs::write(&asset, b"abd").unwrap();
+        std::fs::write(&checksum, format!("{ABC_SHA256}  update.asset\n")).unwrap();
+        let result = super::verify_checksum(&asset, &checksum);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            result,
+            Err("downloaded update failed its checksum verification".to_owned())
+        );
+    }
+
+    #[test]
+    fn checksum_rejects_malformed_sidecars() {
+        let dir = scratch("checksum-malformed");
+        let asset = dir.join("update.asset");
+        let checksum = dir.join("update.sha256");
+        std::fs::write(&asset, b"abc").unwrap();
+        for sidecar in [
+            String::new(),
+            " \t\n".to_owned(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "g".repeat(64),
+            "é".repeat(32),
+        ] {
+            std::fs::write(&checksum, sidecar).unwrap();
+            assert_eq!(
+                super::verify_checksum(&asset, &checksum),
+                Err("checksum sidecar malformed".to_owned())
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn published_platforms_match_release_assets() {
         assert_eq!(
@@ -690,7 +747,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     fn scratch(label: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "mycode-update-script-{label}-{}-{}",

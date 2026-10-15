@@ -1,12 +1,18 @@
 //! Backs up an unreadable owned document and publishes a canonical default.
 //!
 //! Startup reads of `settings.json`, `secrets.json`, and `ui.json` use this
-//! so a corrupt file cannot blank the window. The previous bytes stay beside
-//! the original as `{name}.broken-<nanos>`. Session ledgers are not documents
-//! this module handles.
+//! so a broken file cannot blank the window: damaged content, and a file the
+//! strict checks reject for its own permissions, owner, or type, are both
+//! moved aside and replaced with defaults. The previous file stays beside the
+//! original as `{name}.broken-<nanos>`. Session ledgers are not documents this
+//! module handles.
+
+use std::io;
 
 use crate::error::ConfigErrorKind;
-use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
+use crate::secure_fs::owned_file::{
+    locked_update_owned_file, quarantine_owned_file, read_owned_file,
+};
 use crate::{ConfigError, HomeLayout};
 
 /// A startup document that could not be parsed or validated.
@@ -43,6 +49,40 @@ pub(crate) fn is_document_damage(error: &ConfigError) -> bool {
     )
 }
 
+/// Whether a failed read points at the document file itself — permissions,
+/// owner, a link, or the wrong file type — rather than a passing I/O hiccup.
+///
+/// A file copied from another machine, or one whose ACL was stripped,
+/// failed here with `owned path access control failed` on every launch.
+fn is_unusable_file(error: &ConfigError) -> bool {
+    match error.kind() {
+        ConfigErrorKind::AccessControl | ConfigErrorKind::LinkEscape => true,
+        ConfigErrorKind::Io => !matches!(
+            error.io_kind(),
+            Some(
+                io::ErrorKind::Interrupted
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::ResourceBusy
+            )
+        ),
+        _ => false,
+    }
+}
+
+/// `{relative}.broken-<nanos>`, checked to be one safe sibling file name.
+fn backup_name(relative: &str) -> Result<String, ConfigError> {
+    if relative.is_empty() || relative.contains(['/', '\\']) {
+        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
+    }
+    let stamp = crate::unix_now().as_nanos();
+    let backup = format!("{relative}.broken-{stamp}");
+    if backup.len() > 200 || backup.ends_with(['.', ' ']) {
+        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
+    }
+    Ok(backup)
+}
+
 /// Copies `bytes` to `{relative}.broken-<nanos>` and leaves the original file
 /// in place.
 ///
@@ -55,14 +95,7 @@ pub fn quarantine_owned_bytes(
     relative: &'static str,
     bytes: &[u8],
 ) -> Result<DocumentRepair, ConfigError> {
-    if relative.is_empty() || relative.contains(['/', '\\']) {
-        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
-    }
-    let stamp = crate::unix_now().as_nanos();
-    let backup = format!("{relative}.broken-{stamp}");
-    if backup.len() > 200 || backup.ends_with(['.', ' ']) {
-        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
-    }
+    let backup = backup_name(relative)?;
     let payload = bytes.to_vec();
     let limit = payload.len().max(1);
     locked_update_owned_file(home, &backup, limit, |_| Ok(payload))?;
@@ -107,8 +140,35 @@ pub(crate) fn load_or_reset<T>(
                 Err(error) => Err(error),
             }
         }
+        Err(error) if is_unusable_file(&error) => {
+            reset_unreadable(home, relative, error, fallback, publish)
+        }
         Err(error) => Err(error),
     }
+}
+
+/// Moves a document the strict read rejected aside, unread, and publishes
+/// the default. When nothing can be moved (the failure was the home, not the
+/// file) the original error is returned unchanged.
+fn reset_unreadable<T>(
+    home: &HomeLayout,
+    relative: &'static str,
+    error: ConfigError,
+    fallback: impl FnOnce() -> T,
+    publish: impl FnOnce() -> Result<(), ConfigError>,
+) -> Result<Loaded<T>, ConfigError> {
+    let backup = backup_name(relative)?;
+    if !matches!(quarantine_owned_file(home, relative, &backup), Ok(true)) {
+        return Err(error);
+    }
+    publish()?;
+    Ok(Loaded {
+        value: fallback(),
+        repair: Some(DocumentRepair {
+            path: relative,
+            backup,
+        }),
+    })
 }
 
 fn reset_from_bytes<T>(
@@ -262,6 +322,97 @@ mod tests {
                 .unwrap()
                 .flatten()
                 .any(|entry| entry.file_name().to_string_lossy().contains(".broken-"))
+        );
+    }
+
+    fn names_in(home: &HomeLayout) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(home.root())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_file_the_strict_checks_reject_is_reset_instead_of_blocking_startup() {
+        let (_guard, home) = home("unusable");
+        // A plain write carries the wrong permissions for an owned document
+        // (an inherited ACL on Windows, 0644 on Unix); read-only is what the
+        // broken secrets.json in the field also carried.
+        for name in ["settings.json", "secrets.json", "ui.json"] {
+            let path = home.root().join(name);
+            std::fs::write(&path, b"{\"copied\":\"from another machine\"}").unwrap();
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&path, permissions).unwrap();
+        }
+
+        let (settings, settings_repair) = read_app_settings_with_repair(&home).unwrap();
+        assert_eq!(settings.appearance.palette, "slate");
+        let (_, secrets_repair) = read_provider_secrets_with_repair(&home).unwrap();
+        let (_, ui_repair) = read_ui_state_with_repair(&home).unwrap();
+        for repair in [settings_repair, secrets_repair, ui_repair] {
+            let repair = repair.expect("an unusable document is reported as reset");
+            assert!(home.root().join(&repair.backup).exists(), "backup kept");
+        }
+        // The fresh documents read back cleanly, so the next launch is quiet.
+        assert!(read_app_settings_with_repair(&home).unwrap().1.is_none());
+        assert!(
+            read_provider_secrets_with_repair(&home)
+                .unwrap()
+                .1
+                .is_none()
+        );
+        assert!(read_ui_state_with_repair(&home).unwrap().1.is_none());
+        for path in std::fs::read_dir(home.root()).unwrap().flatten() {
+            let mut permissions = path.metadata().unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            permissions.set_readonly(false);
+            let _ = std::fs::set_permissions(path.path(), permissions);
+        }
+    }
+
+    #[test]
+    fn writes_leave_no_lock_files_and_clear_old_ones() {
+        let (_guard, home) = home("locks");
+        // A home written by an older build still has its lock files.
+        std::fs::write(home.root().join("settings.json.lock"), b"").unwrap();
+        let mut settings = crate::AppSettings::default();
+        settings.appearance.palette = "ocean".to_owned();
+        replace_app_settings(&home, crate::AuthorityRevision::ABSENT, &settings).unwrap();
+        crate::replace_ui_state(&home, &crate::UiState::default()).unwrap();
+        let names = names_in(&home);
+        assert!(
+            names.iter().all(|name| !name.ends_with(".lock")),
+            "lock files left beside the documents: {names:?}"
+        );
+        assert!(names.contains(&"settings.json".to_owned()), "{names:?}");
+    }
+
+    #[test]
+    fn a_failed_migration_rewrite_is_reported_not_treated_as_damage() {
+        let (_guard, home) = home("rewrite");
+        write_private(&home, "ui.json", b"{}");
+        let error = super::load_or_reset(
+            &home,
+            "ui.json",
+            1024,
+            |_| -> Result<(), crate::ConfigError> {
+                Err(crate::ConfigError::new(crate::ConfigErrorKind::Io))
+            },
+            || (),
+            || panic!("a rewrite failure must not publish defaults"),
+        )
+        .err()
+        .expect("the rewrite failure surfaces");
+        assert_eq!(error.kind(), crate::ConfigErrorKind::Io);
+        assert!(
+            names_in(&home)
+                .iter()
+                .all(|name| !name.contains(".broken-")),
+            "a valid document was quarantined"
         );
     }
 

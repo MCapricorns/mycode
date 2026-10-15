@@ -25,15 +25,15 @@ pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
 
 /// Auth: an OAuth device-code sign-in (GitHub Copilot / Codex).
 pub const AUTH_DEVICE_CODE: &str = "device-code";
-/// Auth: subscription OAuth plus an optional pasted API key (xAI).
-pub const AUTH_OAUTH: &str = "oauth";
 
 /// Whether the settings preset should offer a sign-in button.
 ///
-/// True for device-code (Copilot, Codex) and subscription OAuth (xAI).
+/// True only for device-code providers (Copilot, Codex). Every other
+/// provider, xAI included, takes a pasted API key; an `oauth` value left in
+/// a catalog cache by an older build is just another API-key provider.
 #[must_use]
 pub fn uses_oauth_login(auth: &str) -> bool {
-    auth == AUTH_DEVICE_CODE || auth == AUTH_OAUTH
+    auth == AUTH_DEVICE_CODE
 }
 
 /// Upper bound for model entries in one provider.
@@ -116,8 +116,8 @@ pub struct CatalogProvider {
     pub base_url: String,
     /// Documentation URL, when published.
     pub doc: Option<String>,
-    /// Credential mode: `""` pastes an API key, `device-code` is a device
-    /// flow, and `oauth` is subscription OAuth (an API key may still be pasted).
+    /// Credential mode: `""` pastes an API key and `device-code` is a device
+    /// flow.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub auth: String,
     /// Model presets, sorted by id.
@@ -279,13 +279,6 @@ pub fn parse_snapshot(bytes: &[u8]) -> CatalogDocument {
 }
 
 pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> CatalogDocument {
-    if let Some(xai) = document
-        .providers
-        .iter_mut()
-        .find(|provider| provider.id == "xai")
-    {
-        xai.auth = AUTH_OAUTH.to_owned();
-    }
     if document.provider("openai-codex").is_none() {
         document.providers.push(openai_codex_preset());
         document.providers.sort_by(|a, b| a.id.cmp(&b.id));

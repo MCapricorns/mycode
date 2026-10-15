@@ -189,6 +189,33 @@ impl ResponsesReducer {
     }
 }
 
+impl ResponsesReducer {
+    /// Sets the full argument string on a call whose deltas never arrived.
+    /// A call that already streamed arguments keeps them.
+    fn fill_arguments(&mut self, index: Option<usize>, full: &str) -> Vec<StreamEvent> {
+        let Some(call) = index.and_then(|index| self.function_calls.get_mut(index)) else {
+            return Vec::new();
+        };
+        if !call.arguments.is_empty() || full.is_empty() {
+            return Vec::new();
+        }
+        if !charge_stream(&mut self.accumulated, full.len()) {
+            self.terminal_sent = true;
+            return vec![crate::driver::protocol_error(
+                "stream exceeded the output limit",
+            )];
+        }
+        call.arguments = full.to_owned();
+        if call.id.is_empty() {
+            return Vec::new();
+        }
+        vec![StreamEvent::ToolCallDelta {
+            id: call.id.clone(),
+            partial_json: full.to_owned(),
+        }]
+    }
+}
+
 impl FrameReducer for ResponsesReducer {
     fn feed(&mut self, data: &str) -> Vec<StreamEvent> {
         if self.terminal_sent {
@@ -218,7 +245,7 @@ impl FrameReducer for ResponsesReducer {
                     return vec![StreamEvent::TextDelta(part.to_owned())];
                 }
             }
-            "response.reasoning_summary_text.delta" => {
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 let part = event["delta"].as_str().unwrap_or_default();
                 if !part.is_empty() {
                     if !charge_stream(&mut self.accumulated, part.len()) {
@@ -273,6 +300,26 @@ impl FrameReducer for ResponsesReducer {
                     }
                 }
             }
+            // Gateways that skip the argument deltas still send the whole
+            // string when the item closes; without this the call ran with `{}`.
+            "response.function_call_arguments.done" => {
+                let full = event["arguments"].as_str().unwrap_or_default();
+                let index = self.function_calls.len().checked_sub(1);
+                return self.fill_arguments(index, full);
+            }
+            "response.output_item.done" => {
+                let item = &event["item"];
+                if item["type"].as_str() == Some("function_call") {
+                    let call_id = item["call_id"].as_str().unwrap_or_default();
+                    let index = self
+                        .function_calls
+                        .iter()
+                        .rposition(|call| !call_id.is_empty() && call.id == call_id)
+                        .or_else(|| self.function_calls.len().checked_sub(1));
+                    return self
+                        .fill_arguments(index, item["arguments"].as_str().unwrap_or_default());
+                }
+            }
             "response.completed" | "response.incomplete" => {
                 self.completed = true;
                 let response = &event["response"];
@@ -323,6 +370,42 @@ mod tests {
 
     use super::ResponsesReducer;
     use crate::driver::FrameReducer;
+
+    #[test]
+    fn arguments_sent_only_when_the_item_closes_are_kept() {
+        let mut reducer = ResponsesReducer::new();
+        reducer.feed(
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"read"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"read","arguments":"{\"path\":\"a.rs\"}"}}"#,
+        );
+        reducer.feed(
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_2","name":"grep"}}"#,
+        );
+        reducer
+            .feed(r#"{"type":"response.function_call_arguments.delta","delta":"{\"pattern\":"}"#);
+        reducer.feed(r#"{"type":"response.function_call_arguments.delta","delta":"\"x\"}"}"#);
+        // A done event never replaces arguments that already streamed.
+        reducer.feed(
+            r#"{"type":"response.function_call_arguments.done","arguments":"{\"pattern\":\"other\"}"}"#,
+        );
+        let events = reducer.feed(r#"{"type":"response.completed","response":{"usage":{}}}"#);
+        let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+            panic!("done");
+        };
+        let calls: Vec<_> = message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolCall(call) => Some(call.arguments.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls[0]["path"], "a.rs");
+        assert_eq!(calls[1]["pattern"], "x");
+        assert_eq!(message.stop_reason, StopReason::ToolUse);
+    }
 
     #[test]
     fn failed_event_keeps_reasoning_summary() {

@@ -419,6 +419,9 @@ pub(crate) struct CompletionsReducer {
     /// Splits a leading `<think>` wrapper out of `delta.content`.
     think: ThinkSplitter,
     tool_calls: Vec<ToolCallAccumulator>,
+    /// Wire `index` → position in `tool_calls`. Native calls get their own
+    /// slots, so they never land on a call the XML filter already added.
+    tool_slots: std::collections::HashMap<u64, usize>,
     usage: Option<Usage>,
     stop_reason: Option<StopReason>,
     /// Detail for [`StopReason::Error`], when the stream failed after bytes.
@@ -772,15 +775,37 @@ impl CompletionsReducer {
         fragment: &Value,
         events: &mut Vec<StreamEvent>,
     ) -> Result<(), &'static str> {
-        let index = fragment["index"].as_u64().unwrap_or_default();
-        if index > MAX_STREAM_INDEX {
+        // A missing index means a gateway that streams one call at a time.
+        let wire_index = fragment["index"].as_u64().unwrap_or_default();
+        if wire_index > MAX_STREAM_INDEX {
             return Err("tool call index exceeds the stream limit");
         }
-        let index = index as usize;
-        while self.tool_calls.len() <= index {
-            self.tool_calls.push(ToolCallAccumulator::default());
-        }
-        if let Some(id) = fragment["id"].as_str()
+        let fresh_id = fragment["id"].as_str().filter(|id| !id.is_empty());
+        let slot = self.tool_slots.get(&wire_index).copied();
+        // A different id at an index that already holds a call is a new
+        // call. Some servers stream every parallel call at index 0 (or with
+        // no index), each under its own id; merging them glued two argument
+        // objects into one invalid call.
+        let reuse =
+            slot.filter(
+                |position| match (self.tool_calls[*position].id.as_deref(), fresh_id) {
+                    (Some(known), Some(id)) => known == id,
+                    _ => true,
+                },
+            );
+        let index = match reuse {
+            Some(position) => position,
+            None => {
+                if self.tool_calls.len() > MAX_STREAM_INDEX as usize {
+                    return Err("tool call index exceeds the stream limit");
+                }
+                self.tool_calls.push(ToolCallAccumulator::default());
+                let position = self.tool_calls.len() - 1;
+                self.tool_slots.insert(wire_index, position);
+                position
+            }
+        };
+        if let Some(id) = fresh_id
             && self.tool_calls[index].id.is_none()
         {
             if !charge_stream(&mut self.accumulated, id.len()) {
@@ -797,11 +822,23 @@ impl CompletionsReducer {
                 });
             }
         }
-        if let Some(name) = fragment["function"]["name"].as_str() {
-            if !charge_stream(&mut self.accumulated, name.len()) {
-                return Err("stream exceeded the output limit");
+        if let Some(name) = fragment["function"]["name"].as_str()
+            && !name.is_empty()
+        {
+            // Gateways that resend the whole name on every fragment would
+            // otherwise build `readread…`; a name that grows from the
+            // current one replaces it, and only a new piece is appended.
+            if name != self.tool_calls[index].name.as_str() {
+                if !charge_stream(&mut self.accumulated, name.len()) {
+                    return Err("stream exceeded the output limit");
+                }
+                let call = &mut self.tool_calls[index];
+                if !call.name.is_empty() && name.starts_with(call.name.as_str()) {
+                    call.name = name.to_owned();
+                } else {
+                    call.name.push_str(name);
+                }
             }
-            self.tool_calls[index].name.push_str(name);
         }
         if let Some(arguments) = fragment["function"]["arguments"].as_str()
             && !arguments.is_empty()
@@ -918,6 +955,100 @@ mod tests {
         assert_eq!(thinking_of(&message), "plan the page");
         assert!(text_of(&message).contains("[error] the response was interrupted: error"));
         assert_eq!(message.stop_reason, StopReason::Error);
+    }
+
+    fn calls_of(message: &AssistantMessage) -> Vec<(String, String, serde_json::Value)> {
+        message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolCall(call) => {
+                    Some((call.id.clone(), call.name.clone(), call.arguments.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn parallel_calls_that_all_claim_index_zero_stay_separate() {
+        let mut reducer = CompletionsReducer::new();
+        for (id, path) in [("call_a", "a.rs"), ("call_b", "b.rs")] {
+            let start = serde_json::json!({"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": id, "type": "function",
+                "function": {"name": "read", "arguments": ""}
+            }]}}]});
+            reducer.feed(&start.to_string());
+            let arguments = serde_json::json!({"path": path}).to_string();
+            let (head, tail) = arguments.split_at(5);
+            for piece in [head, tail] {
+                let more = serde_json::json!({"choices": [{"delta": {"tool_calls": [{
+                    "index": 0, "function": {"arguments": piece}
+                }]}}]});
+                reducer.feed(&more.to_string());
+            }
+        }
+        reducer.feed(r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#);
+        let message = take_done(reducer.feed("[DONE]"));
+        let calls = calls_of(&message);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0].0, "call_a");
+        assert_eq!(calls[0].2["path"], "a.rs");
+        assert_eq!(calls[1].0, "call_b");
+        assert_eq!(calls[1].2["path"], "b.rs");
+        assert_eq!(message.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn a_name_resent_on_every_fragment_is_not_repeated() {
+        let mut reducer = CompletionsReducer::new();
+        for piece in [r#"{"path":"#, r#""a.rs"}"#] {
+            let chunk = serde_json::json!({"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "call_a",
+                "function": {"name": "read", "arguments": piece}
+            }]}}]});
+            reducer.feed(&chunk.to_string());
+        }
+        // A name split across fragments still joins.
+        for piece in ["gr", "ep"] {
+            let chunk = serde_json::json!({"choices": [{"delta": {"tool_calls": [{
+                "index": 1, "id": "call_b",
+                "function": {"name": piece, "arguments": ""}
+            }]}}]});
+            reducer.feed(&chunk.to_string());
+        }
+        reducer.feed(r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#);
+        let message = take_done(reducer.feed("[DONE]"));
+        let calls = calls_of(&message);
+        assert_eq!(calls[0].1, "read");
+        assert_eq!(calls[0].2["path"], "a.rs");
+        assert_eq!(calls[1].1, "grep");
+    }
+
+    #[test]
+    fn a_native_call_after_an_xml_call_keeps_its_own_arguments() {
+        let mut reducer = CompletionsReducer::new();
+        let xml = concat!(
+            "<minimax:tool_call>",
+            "<invoke name=\"find\">",
+            "<parameter name=\"pattern\">*.rs</parameter>",
+            "</invoke>",
+            "</minimax:tool_call>",
+        );
+        reducer.feed(&serde_json::json!({"choices": [{"delta": {"content": xml}}]}).to_string());
+        let native = serde_json::json!({"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "id": "call_native",
+            "function": {"name": "read", "arguments": "{\"path\":\"a.rs\"}"}
+        }]}, "finish_reason": "tool_calls"}]});
+        reducer.feed(&native.to_string());
+        let message = take_done(reducer.feed("[DONE]"));
+        let calls = calls_of(&message);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0].1, "find");
+        assert_eq!(calls[0].2["pattern"], "*.rs");
+        assert_eq!(calls[1].0, "call_native");
+        assert_eq!(calls[1].1, "read");
+        assert_eq!(calls[1].2["path"], "a.rs");
     }
 
     #[test]

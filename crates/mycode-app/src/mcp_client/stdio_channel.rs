@@ -204,29 +204,28 @@ impl StdioChannel {
     }
 
     async fn wait_for(&self, id: u64) -> Result<Value, McpError> {
+        let mut raw = Vec::new();
         loop {
-            let mut raw = String::new();
-            let count = self
-                .stdout
-                .lock()
-                .await
-                .read_line(&mut raw)
-                .await
-                .map_err(|error| {
-                    McpError::transport(format!("read from server failed: {error}"))
-                })?;
-            if count == 0 {
-                return Err(McpError::transport(self.closed_reason().await));
-            }
-            if raw.len() > MAX_MESSAGE_BYTES {
-                return Err(McpError::Oversized);
-            }
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                continue;
+            let read =
+                read_bounded_line(&mut *self.stdout.lock().await, &mut raw, MAX_MESSAGE_BYTES)
+                    .await
+                    .map_err(|error| {
+                        McpError::transport(format!("read from server failed: {error}"))
+                    })?;
+            match read {
+                LineRead::Eof => return Err(McpError::transport(self.closed_reason().await)),
+                LineRead::Oversized => return Err(McpError::Oversized),
+                LineRead::Line => {}
             }
             // Servers occasionally log to stdout; a non-JSON line is noise,
             // not a protocol failure.
+            let Ok(text) = std::str::from_utf8(&raw) else {
+                continue;
+            };
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
             let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
                 continue;
             };
@@ -307,6 +306,65 @@ impl JsonRpcChannel for StdioChannel {
         Box::pin(async move {
             StdioChannel::shutdown(self).await;
         })
+    }
+}
+
+/// Outcome of one [`read_bounded_line`].
+#[derive(Debug, PartialEq, Eq)]
+enum LineRead {
+    /// `line` holds one line (its newline included when present).
+    Line,
+    /// The line was longer than the limit. It was consumed through its
+    /// newline but not kept, so the next read starts on a fresh line.
+    Oversized,
+    /// The stream ended before any byte of a new line.
+    Eof,
+}
+
+/// Reads one newline-terminated line of at most `limit` bytes into `line`.
+///
+/// `read_line` buffers a whole line before its length can be checked, so a
+/// server that writes one huge line (or never a newline) could grow memory
+/// for a full request timeout. This keeps at most `limit` bytes.
+async fn read_bounded_line<R>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    limit: usize,
+) -> std::io::Result<LineRead>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    line.clear();
+    let mut oversized = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(if oversized {
+                LineRead::Oversized
+            } else if line.is_empty() {
+                LineRead::Eof
+            } else {
+                LineRead::Line
+            });
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let used = newline.map_or(available.len(), |index| index + 1);
+        if !oversized {
+            if line.len() + used > limit {
+                oversized = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&available[..used]);
+            }
+        }
+        reader.consume(used);
+        if newline.is_some() {
+            return Ok(if oversized {
+                LineRead::Oversized
+            } else {
+                LineRead::Line
+            });
+        }
     }
 }
 
@@ -489,6 +547,41 @@ mod tests {
     use super::filter_stdio_env;
     #[cfg(unix)]
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn stdout_lines_are_bounded_while_they_are_read() {
+        use super::{LineRead, read_bounded_line};
+
+        let input = format!("{{\"id\":1}}\n{}\n{{\"id\":2}}\ntail", "x".repeat(64)).into_bytes();
+        // A tiny buffer forces the long line across many fill_buf calls.
+        let mut reader = tokio::io::BufReader::with_capacity(8, input.as_slice());
+        let mut line = Vec::new();
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(line, b"{\"id\":1}\n");
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
+            LineRead::Oversized
+        );
+        assert!(line.len() <= 16, "an oversized line was buffered");
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
+            LineRead::Line,
+            "the line after an oversized one must still be readable"
+        );
+        assert_eq!(line, b"{\"id\":2}\n");
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(line, b"tail");
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
+            LineRead::Eof
+        );
+    }
 
     #[test]
     fn stdio_env_keeps_path_and_drops_secrets() {

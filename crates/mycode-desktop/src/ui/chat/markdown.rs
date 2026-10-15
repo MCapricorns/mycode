@@ -7,10 +7,14 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, TestSupportExt as _, div, px, rems,
+    StatefulInteractiveElement, Styled, TestSupportExt as _, Window, WindowTextSystem, div, px,
+    rems,
 };
 
 use crate::ui::skin;
+
+#[cfg(all(test, feature = "test-support"))]
+mod layout_tests;
 
 /// One block after the prose / code / table split.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,9 +40,8 @@ pub(super) fn split_markdown(source: &str) -> Vec<MarkdownBlock> {
     let mut index = 0;
     while index < lines.len() {
         let line = lines[index];
-        if is_fence(line) {
+        if let Some(marker) = opening_fence(line) {
             flush_prose(&mut prose, &mut blocks);
-            let marker = fence_marker(line);
             let mut fence = vec![line];
             index += 1;
             while index < lines.len() {
@@ -66,37 +69,49 @@ pub(super) fn split_markdown(source: &str) -> Vec<MarkdownBlock> {
 }
 
 fn flush_prose(prose: &mut Vec<&str>, blocks: &mut Vec<MarkdownBlock>) {
-    while prose.first().is_some_and(|line| line.trim().is_empty()) {
-        prose.remove(0);
+    if let Some(start) = prose.iter().position(|line| !line.trim().is_empty()) {
+        let end = prose
+            .iter()
+            .rposition(|line| !line.trim().is_empty())
+            .unwrap();
+        blocks.push(MarkdownBlock::Prose(prose[start..=end].join("\n")));
     }
-    while prose.last().is_some_and(|line| line.trim().is_empty()) {
-        prose.pop();
-    }
-    if prose.is_empty() {
-        return;
-    }
-    let text = prose.join("\n");
     prose.clear();
-    blocks.push(MarkdownBlock::Prose(text));
 }
 
-fn is_fence(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+#[derive(Clone, Copy)]
+struct Fence {
+    marker: u8,
+    length: usize,
 }
 
-fn fence_marker(line: &str) -> &str {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("~~~") {
-        "~~~"
-    } else {
-        "```"
+fn fence_line(line: &str) -> Option<&str> {
+    let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+    (indent <= 3).then_some(&line[indent..])
+}
+
+fn opening_fence(line: &str) -> Option<Fence> {
+    let line = fence_line(line)?;
+    let marker = *line.as_bytes().first()?;
+    if !matches!(marker, b'`' | b'~') {
+        return None;
     }
+    let length = line.bytes().take_while(|byte| *byte == marker).count();
+    if length < 3 || (marker == b'`' && line[length..].contains('`')) {
+        return None;
+    }
+    Some(Fence { marker, length })
 }
 
-fn is_closing_fence(line: &str, marker: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed == marker || (trimmed.starts_with(marker) && trimmed.len() == marker.len())
+fn is_closing_fence(line: &str, fence: Fence) -> bool {
+    let Some(line) = fence_line(line) else {
+        return false;
+    };
+    let length = line
+        .bytes()
+        .take_while(|byte| *byte == fence.marker)
+        .count();
+    length >= fence.length && line[length..].trim().is_empty()
 }
 
 struct ParsedTable {
@@ -105,19 +120,26 @@ struct ParsedTable {
 }
 
 fn table_at(lines: &[&str], start: usize) -> Option<ParsedTable> {
-    if start + 1 >= lines.len() {
+    if start + 1 >= lines.len()
+        || !looks_like_table_row(lines[start])
+        || !is_separator_row(lines[start + 1])
+    {
         return None;
     }
-    if !looks_like_table_row(lines[start]) || !is_separator_row(lines[start + 1]) {
+    let header = split_row(lines[start]);
+    let columns = header.len();
+    if columns != split_row(lines[start + 1]).len() {
         return None;
     }
-    let mut rows = vec![split_row(lines[start])];
+    let mut rows = vec![header];
     let mut index = start + 2;
     while index < lines.len()
         && looks_like_table_row(lines[index])
         && !is_separator_row(lines[index])
     {
-        rows.push(split_row(lines[index]));
+        let mut row = split_row(lines[index]);
+        row.resize(columns, String::new());
+        rows.push(row);
         index += 1;
     }
     Some(ParsedTable {
@@ -127,30 +149,45 @@ fn table_at(lines: &[&str], start: usize) -> Option<ParsedTable> {
 }
 
 fn looks_like_table_row(line: &str) -> bool {
-    let trimmed = line.trim();
-    !trimmed.is_empty() && trimmed.contains('|')
+    let mut escaped = false;
+    for byte in line.bytes() {
+        if byte == b'|' && !escaped {
+            return true;
+        }
+        escaped = byte == b'\\' && !escaped;
+    }
+    false
 }
 
 fn is_separator_row(line: &str) -> bool {
-    let trimmed = line.trim().trim_matches('|');
-    if !trimmed.contains('-') {
-        return false;
-    }
-    trimmed.split('|').all(|cell| {
-        let cell = cell.trim();
-        !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':'))
-    })
+    let cells = split_row(line);
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let cell = cell.strip_prefix(':').unwrap_or(cell);
+            let cell = cell.strip_suffix(':').unwrap_or(cell);
+            !cell.is_empty() && cell.bytes().all(|byte| byte == b'-')
+        })
 }
 
 fn split_row(line: &str) -> Vec<String> {
-    let mut body = line.trim();
-    if let Some(rest) = body.strip_prefix('|') {
-        body = rest;
+    let line = line.trim();
+    let mut cells = Vec::new();
+    let mut start = 0;
+    let mut escaped = false;
+    for (index, byte) in line.bytes().enumerate() {
+        if byte == b'|' && !escaped {
+            cells.push(&line[start..index]);
+            start = index + 1;
+        }
+        escaped = byte == b'\\' && !escaped;
     }
-    if let Some(rest) = body.strip_suffix('|') {
-        body = rest;
-    }
-    body.split('|').map(|cell| cell.trim().to_owned()).collect()
+    cells.push(&line[start..]);
+    let first = usize::from(line.starts_with('|'));
+    let end = cells.len() - usize::from(start == line.len());
+    cells[first..end.max(first)]
+        .iter()
+        .map(|cell| cell.trim().replace("\\|", "|"))
+        .collect()
 }
 
 /// Renders assistant markdown. Prose is left-aligned on the content column.
@@ -160,6 +197,7 @@ pub(super) fn render_markdown(
     text: SharedString,
     theme: &Theme,
     stream_fade: bool,
+    window: &Window,
 ) -> impl IntoElement {
     let blocks = split_markdown(text.as_ref());
     let last = blocks.len().saturating_sub(1);
@@ -177,16 +215,16 @@ pub(super) fn render_markdown(
             let fade = stream_fade && index == last;
             match block {
                 MarkdownBlock::Prose(body) => {
-                    prose_measure(text_view(format!("{id}-p{index}"), body, theme, fade))
+                    prose_measure(text_view(format!("{id}-p{index}"), body, fade))
                         .into_any_element()
                 }
                 MarkdownBlock::Code(body) => div()
                     .w_full()
                     .min_w_0()
-                    .child(text_view(format!("{id}-c{index}"), body, theme, fade))
+                    .child(text_view(format!("{id}-c{index}"), body, fade))
                     .into_any_element(),
                 MarkdownBlock::Table(rows) => {
-                    render_table(format!("{id}-t{index}"), &rows, theme).into_any_element()
+                    render_table(format!("{id}-t{index}"), &rows, theme, window).into_any_element()
                 }
             }
         }))
@@ -204,7 +242,7 @@ pub(super) fn prose_measure(child: impl IntoElement) -> impl IntoElement {
         .child(child)
 }
 
-fn text_view(id: String, text: String, _theme: &Theme, stream_fade: bool) -> impl IntoElement {
+fn text_view(id: String, text: String, stream_fade: bool) -> impl IntoElement {
     TextView::markdown(SharedString::from(id), SharedString::from(text))
         .style(prose_style())
         .selectable(true)
@@ -233,11 +271,16 @@ fn prose_style() -> TextViewStyle {
         .table_cell(cell)
 }
 
-fn render_table(id: String, rows: &[Vec<String>], theme: &Theme) -> impl IntoElement {
+fn render_table(
+    id: String,
+    rows: &[Vec<String>],
+    theme: &Theme,
+    window: &Window,
+) -> impl IntoElement {
     let Some(header) = rows.first() else {
         return div().into_any_element();
     };
-    let widths = column_widths(rows);
+    let widths = column_widths(rows, theme, window.text_system());
     let min_width: f32 = widths.iter().sum();
     let body = &rows[1..];
     let body_id = format!("{id}-body");
@@ -270,22 +313,59 @@ fn render_table(id: String, rows: &[Vec<String>], theme: &Theme) -> impl IntoEle
         .into_any_element()
 }
 
-fn column_widths(rows: &[Vec<String>]) -> Vec<f32> {
+fn column_widths(rows: &[Vec<String>], theme: &Theme, text_system: &WindowTextSystem) -> Vec<f32> {
     let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
-    (0..columns)
-        .map(|column| {
-            let chars = rows
-                .iter()
-                .map(|row| {
-                    row.get(column)
-                        .map(|cell| inline_visible_chars(cell))
-                        .unwrap_or(0)
-                })
-                .max()
-                .unwrap_or(1);
-            (chars as f32).mul_add(7.4, 28.).max(88.)
+    let mut widths = vec![88.0_f32; columns];
+    for (index, row) in rows.iter().enumerate() {
+        let weight = if index == 0 {
+            FontWeight::MEDIUM
+        } else {
+            FontWeight::NORMAL
+        };
+        for (column, cell) in row.iter().enumerate() {
+            let width = inline_width(&inline_spans(cell), weight, theme, text_system);
+            widths[column] = widths[column].max((f32::from(width) + 28.).ceil());
+        }
+    }
+    widths
+}
+
+/// Use the same font, weight, size, and inline-code padding as the painted
+/// spans. A fixed Latin character estimate clipped CJK and overlapped cells
+/// after changing the interface font or choosing the larger text sizes.
+fn inline_width(
+    spans: &[InlineSpan],
+    weight: FontWeight,
+    theme: &Theme,
+    text_system: &WindowTextSystem,
+) -> gpui_kit::Pixels {
+    spans
+        .iter()
+        .map(|span| {
+            let (text, family, padding) = match span {
+                InlineSpan::Bold(inner) => {
+                    return inline_width(inner, FontWeight::BOLD, theme, text_system);
+                }
+                InlineSpan::Text(text) => (text, theme.font_family.clone(), px(0.)),
+                InlineSpan::Code(text) => (text, theme.mono_font_family.clone(), px(6.)),
+            };
+            let mut font = gpui_kit::font(family);
+            font.weight = weight;
+            text_system
+                .shape_line(
+                    SharedString::from(text.clone()),
+                    theme.font_size * 0.875,
+                    &[gpui_kit::TextRun {
+                        len: text.len(),
+                        font,
+                        ..Default::default()
+                    }],
+                    None,
+                )
+                .width()
+                + padding
         })
-        .collect()
+        .sum()
 }
 
 /// One inline run inside a table cell.
@@ -296,20 +376,6 @@ enum InlineSpan {
     Bold(Vec<InlineSpan>),
     /// `` `...` ``. The backticks are not part of the text.
     Code(String),
-}
-
-/// Visible characters after bold and inline-code markers are removed.
-fn inline_visible_chars(source: &str) -> usize {
-    fn count(spans: &[InlineSpan]) -> usize {
-        spans
-            .iter()
-            .map(|span| match span {
-                InlineSpan::Text(text) | InlineSpan::Code(text) => text.chars().count(),
-                InlineSpan::Bold(inner) => count(inner),
-            })
-            .sum()
-    }
-    count(&inline_spans(source))
 }
 
 /// Splits a cell into bold, inline code, and plain text.
@@ -469,8 +535,65 @@ mod tests {
     }
 
     #[test]
+    fn longer_fences_keep_shorter_markers_and_tables_inside_code() {
+        let source = "````markdown\n```rust\nlet value = 1;\n```\n| code | only |\n| --- | --- |\n`````\n\nAfter";
+        let blocks = split_markdown(source);
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            matches!(&blocks[0], MarkdownBlock::Code(text) if text.contains("| code | only |") && text.ends_with("`````"))
+        );
+        assert_eq!(blocks[1], MarkdownBlock::Prose("After".into()));
+        let blocks = split_markdown("~~~~text\n~~~\nbody\n~~~~\nAfter");
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            matches!(&blocks[0], MarkdownBlock::Code(text) if text.contains("body") && text.ends_with("~~~~"))
+        );
+    }
+
+    #[test]
+    fn escaped_table_pipes_stay_in_their_cells() {
+        let source = "| expression | meaning |\n| --- | --- |\n| `a\\|b` | left\\|right |\n| ending\\| | slash\\\\|";
+        let blocks = split_markdown(source);
+        assert_eq!(blocks.len(), 1);
+        let MarkdownBlock::Table(rows) = &blocks[0] else {
+            panic!("expected a table");
+        };
+        assert_eq!(rows[1], ["`a|b`", "left|right"]);
+        assert_eq!(rows[2], ["ending|", "slash\\\\"]);
+    }
+
+    #[test]
+    fn tables_require_matching_header_columns_and_normalize_body_rows() {
+        let mismatched = "| one | two |\n| --- |\nnot a table";
+        assert_eq!(
+            split_markdown(mismatched),
+            [MarkdownBlock::Prose(mismatched.into())]
+        );
+        let invalid = "| one | two |\n| -:- | --- |";
+        assert_eq!(
+            split_markdown(invalid),
+            [MarkdownBlock::Prose(invalid.into())]
+        );
+        let blocks = split_markdown("| one | two |\n| --- | :---: |\n| a | b | ignored |\n| c |");
+        let MarkdownBlock::Table(rows) = &blocks[0] else {
+            panic!("expected a table");
+        };
+        assert_eq!(rows[1], ["a", "b"]);
+        assert_eq!(rows[2], ["c", ""]);
+    }
+
+    #[test]
+    fn long_blank_prefixes_do_not_become_empty_blocks() {
+        let source = format!("{}body\n\n", "\n".repeat(4096));
+        assert_eq!(
+            split_markdown(&source),
+            [MarkdownBlock::Prose("body".into())]
+        );
+    }
+
+    #[test]
     fn table_cells_render_bold_and_inline_code_without_markers() {
-        use super::{InlineSpan, inline_spans, inline_visible_chars};
+        use super::{InlineSpan, inline_spans};
 
         assert_eq!(
             inline_spans("**Tokio**"),
@@ -501,9 +624,6 @@ mod tests {
             inline_spans("`not closed"),
             vec![InlineSpan::Text("`not closed".into())]
         );
-        assert_eq!(inline_visible_chars("**Tokio**"), 5);
-        assert_eq!(inline_visible_chars("`mio`"), 3);
-        assert_eq!(inline_visible_chars("plain"), 5);
         assert_eq!(
             inline_spans("运行时 `mio`"),
             vec![

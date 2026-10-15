@@ -169,6 +169,81 @@ impl WorktreeLease {
     }
 }
 
+/// Releases a lease the run never handed off.
+///
+/// A parent cancel stops polling a running `agent` call and drops it
+/// mid-await. Without this guard the checkout stayed registered in the
+/// user's repository until the next app start.
+struct LeaseGuard(Option<WorktreeLease>);
+
+impl LeaseGuard {
+    fn path(&self) -> Option<&Path> {
+        self.0.as_ref().map(|lease| lease.path.as_path())
+    }
+}
+
+impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        let Some(lease) = self.0.take() else {
+            return;
+        };
+        // `git worktree remove` blocks; keep it off the runtime thread.
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn_blocking(move || lease.release())),
+            Err(_) => lease.release(),
+        }
+    }
+}
+
+/// Publishes one child's cancel token under `session_id:call_id` and
+/// unpublishes it however the run ends, including a dropped call.
+struct ChildCancelRegistration<'a> {
+    cancels: &'a std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+    call_id: &'a str,
+    key: String,
+}
+
+impl<'a> ChildCancelRegistration<'a> {
+    fn new(
+        cancels: &'a std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+        session_id: &str,
+        call_id: &'a str,
+        token: &CancellationToken,
+    ) -> Self {
+        let key = BridgeAgentHost::cancel_key(session_id, call_id);
+        if !call_id.is_empty()
+            && let Ok(mut slots) = cancels.lock()
+        {
+            slots.insert(key.clone(), token.clone());
+        }
+        Self {
+            cancels,
+            call_id,
+            key,
+        }
+    }
+}
+
+impl Drop for ChildCancelRegistration<'_> {
+    fn drop(&mut self) {
+        forget_subagent_cancel(self.cancels, self.call_id, &self.key);
+    }
+}
+
+/// Stops a spawned child run when its driver goes away, so a cancelled or
+/// dropped call cannot keep editing files after its result was returned.
+struct AbortOnDrop {
+    cancel: CancellationToken,
+    task: tokio::task::AbortHandle,
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.task.abort();
+    }
+}
+
 /// Captured diff cap handed back with a subagent result.
 const MAX_WORKTREE_DIFF_BYTES: usize = 256 * 1024;
 
@@ -429,6 +504,17 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
                 )));
             }
             let isolation = resolve_isolation(&role, request.isolation.as_deref());
+            // A parent interrupt stops the child. Leaving it running held the
+            // turn open, so Stop, send, and the window close never came back.
+            // The token is published before the run queues for a slot, so
+            // the card's stop button also reaches a run that is still waiting.
+            let child_cancel = cancel.child_token();
+            let _registration = ChildCancelRegistration::new(
+                &self.cancels,
+                &self.session_id,
+                call_id,
+                &child_cancel,
+            );
             let _ = progress.progress(agent_progress(&role.name, "queued", &request.description));
             let _ = progress.progress(agent_progress(&role.name, "prompt", &request.prompt));
             // `try_acquire` is the cap check: a waiter is past the limit.
@@ -450,11 +536,13 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
                         permit = self.slots.acquire() => {
                             permit.map_err(|_| fail("agent slots closed".to_owned()))?
                         }
-                        _ = cancel.cancelled() => return Err(fail("agent cancelled".to_owned())),
+                        () = child_cancel.cancelled() => {
+                            return Err(fail(format!("subagent {} cancelled", role.name)));
+                        }
                     }
                 }
             };
-            let lease = if isolation == RoleIsolation::Worktree {
+            let mut lease = LeaseGuard(if isolation == RoleIsolation::Worktree {
                 let home = self.home.clone();
                 let cwd = self.cwd.clone();
                 match tokio::task::spawn_blocking(move || WorktreeLease::acquire(&home, &cwd)).await
@@ -465,11 +553,18 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
                 }
             } else {
                 None
-            };
+            });
             let result = self
-                .drive_subagent(&request, &role, progress, cancel, call_id, lease.as_ref())
+                .drive_subagent(
+                    &request,
+                    &role,
+                    progress,
+                    cancel,
+                    &child_cancel,
+                    lease.path(),
+                )
                 .await;
-            let result = if let Some(lease) = lease {
+            let result = if let Some(lease) = lease.0.take() {
                 match tokio::task::spawn_blocking(move || handoff_worktree(lease, result)).await {
                     Ok(outcome) => outcome,
                     Err(error) => Err(fail(format!("worktree handoff failed: {error}"))),
@@ -496,17 +591,21 @@ impl BridgeAgentHost {
         role: &SubagentRole,
         progress: &mycode_tools::ToolStream,
         cancel: &CancellationToken,
-        call_id: &str,
-        lease: Option<&WorktreeLease>,
+        child_cancel: &CancellationToken,
+        worktree: Option<&Path>,
     ) -> Result<String, mycode_tools::ToolError> {
         let fail = |message: String| mycode_tools::ToolError::Execution(message);
+        let cancelled = || fail(format!("subagent {} cancelled", role.name));
         let started = Instant::now();
         let budget =
             Duration::from_secs(u64::from(self.settings.subagents.effective_timeout_secs()));
-        let run_dir = lease
-            .map(|lease| lease.path.clone())
-            .unwrap_or_else(|| self.cwd.clone());
+        let run_dir = worktree.map_or_else(|| self.cwd.clone(), Path::to_path_buf);
+        // An OAuth refresh rotates the stored token, so routing always runs
+        // to completion; the cancel is checked right after it.
         let resolved = self.resolve_route(&role.name).await.map_err(fail)?;
+        if child_cancel.is_cancelled() {
+            return Err(cancelled());
+        }
         let transport =
             ReqwestTransport::new().map_err(|_| fail("HTTP transport unavailable".to_owned()))?;
         let wire = WireProvider::new(resolved, Arc::new(transport));
@@ -516,13 +615,18 @@ impl BridgeAgentHost {
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>(),
         );
-        let (mcp_tools, mcp_warning) = crate::mcp_tools::connect_mcp_tools(
-            &self.home,
-            &self.settings,
-            &self.mcp_pool,
-            Some(&self.cwd),
-        )
-        .await;
+        // Stdio servers are spawned kill-on-drop, so a stop may abandon a
+        // slow handshake.
+        let (mcp_tools, mcp_warning) = tokio::select! {
+            biased;
+            () = child_cancel.cancelled() => return Err(cancelled()),
+            connected = crate::mcp_tools::connect_mcp_tools(
+                &self.home,
+                &self.settings,
+                &self.mcp_pool,
+                Some(&self.cwd),
+            ) => connected,
+        };
         let mcp_tools = if role.is_write_capable() {
             mcp_tools
         } else {
@@ -543,16 +647,7 @@ impl BridgeAgentHost {
         });
         let hooks = HookRunner::default();
 
-        // A parent interrupt stops the child. Leaving it running held the
-        // turn open, so Stop, send, and the window close never came back.
-        let child_cancel = cancel.child_token();
         let run_cancel = child_cancel.clone();
-        let cancel_key = Self::cancel_key(&self.session_id, call_id);
-        if !call_id.is_empty()
-            && let Ok(mut slots) = self.cancels.lock()
-        {
-            slots.insert(cancel_key.clone(), child_cancel.clone());
-        }
         let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
         let role_name = role.name.clone();
         let progress_sink = progress.clone();
@@ -574,7 +669,7 @@ impl BridgeAgentHost {
 
         let path = run_dir.display().to_string();
         let _ = progress.progress(agent_progress(&role.name, "path", &path));
-        let mut extra_roots = if lease.is_some() {
+        let mut extra_roots = if worktree.is_some() {
             Vec::new()
         } else {
             crate::turn::workspace_extra_roots(&self.home, &self.cwd)
@@ -604,7 +699,6 @@ impl BridgeAgentHost {
         let remaining = budget.saturating_sub(started.elapsed());
         if remaining.is_zero() {
             forwarder.abort();
-            forget_subagent_cancel(&self.cancels, call_id, &cancel_key);
             return Err(fail(subagent_timeout_message(&role_name, budget.as_secs())));
         }
         let run = tokio::spawn(async move {
@@ -637,15 +731,18 @@ impl BridgeAgentHost {
             }
             Ok(answer)
         });
-        let outcome = match finish_subagent_task(run, cancel, &child_cancel, remaining).await {
-            SubagentFinish::Cancelled => Err(fail(format!("subagent {role_name} cancelled"))),
+        // Also covers this future being dropped mid-await by a parent cancel.
+        let _stop_run = AbortOnDrop {
+            cancel: child_cancel.clone(),
+            task: run.abort_handle(),
+        };
+        match finish_subagent_task(run, cancel, child_cancel, remaining).await {
+            SubagentFinish::Cancelled => Err(cancelled()),
             SubagentFinish::TimedOut => {
                 Err(fail(subagent_timeout_message(&role_name, budget.as_secs())))
             }
             SubagentFinish::Finished(result) => result,
-        };
-        forget_subagent_cancel(&self.cancels, call_id, &cancel_key);
-        outcome
+        }
     }
 
     /// Resolves a per-role provider/model override, or inherits the turn.
@@ -946,6 +1043,70 @@ mod tests {
         let error = format_subagent_handoff("subagent failed", "diff-body");
         assert!(error.contains("subagent failed") && error.contains("diff-body"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_run_still_releases_its_worktree() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-wt-drop-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let repo = root.join("repo");
+        let home_root = root.join("home");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&home_root).unwrap();
+        git(&repo, &["init"]);
+        std::fs::write(repo.join("tracked.txt"), "old\n").unwrap();
+        git(&repo, &["add", "tracked.txt"]);
+        git(&repo, &["commit", "-m", "init"]);
+        let home = HomeLayout::from_root(&home_root).unwrap();
+        let lease = WorktreeLease::acquire(&home, &repo).unwrap();
+        let path = lease.path.clone();
+        let manifest = lease.manifest.clone();
+        // A parent cancel drops the `agent` call mid-await with the lease held.
+        drop(super::LeaseGuard(Some(lease)));
+        let released = tokio::time::timeout(Duration::from_secs(30), async {
+            while path.exists() || manifest.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(released.is_ok(), "the dropped lease stayed on disk");
+        let listed = super::git_command()
+            .arg("-C")
+            .arg(&repo)
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .unwrap();
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        assert_eq!(
+            listed.matches("worktree ").count(),
+            1,
+            "the repository still lists the leased checkout: {listed}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_driver_stops_its_child_and_unpublishes_the_cancel() {
+        let cancels = std::sync::Mutex::new(std::collections::HashMap::new());
+        let child = CancellationToken::new();
+        let registration = super::ChildCancelRegistration::new(&cancels, "ses", "call-1", &child);
+        assert!(cancels.lock().unwrap().contains_key("ses:call-1"));
+        let run = tokio::spawn(std::future::pending::<()>());
+        let guard = super::AbortOnDrop {
+            cancel: child.clone(),
+            task: run.abort_handle(),
+        };
+        drop(guard);
+        drop(registration);
+        assert!(child.is_cancelled());
+        let joined = tokio::time::timeout(Duration::from_secs(5), run)
+            .await
+            .expect("the child run kept going after its driver was dropped");
+        assert!(joined.unwrap_err().is_cancelled());
+        assert!(cancels.lock().unwrap().is_empty());
     }
 
     #[test]

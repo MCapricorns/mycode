@@ -21,12 +21,17 @@ use crate::oauth::resolve_request_auth;
 use crate::projection::{project_assistant_message, project_tool_result_message};
 use crate::protocol::CHAT_CANCELLED;
 use crate::state::{CoreState, model_context_window, model_output_limit};
-use crate::tool_hosts::{BridgeAskChannel, BridgeWebHost, register_ask};
+use crate::tool_hosts::{BridgeAskChannel, BridgeWebHost};
 
 /// One model turn: resolve the provider, stream the reply into the event
 /// channel, and commit the assistant message to the session ledger.
+///
+/// The turn's cancel token and steer inbox are published before the returned
+/// future is first polled. Setup (credentials, MCP connect, pre-turn
+/// compaction) can take a long time, and a cancel or a second turn for the
+/// same session must reach this one during it.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn chat_turn(
+pub(crate) fn chat_turn(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
     session: SessionId,
@@ -35,28 +40,91 @@ pub(crate) async fn chat_turn(
     provider_id: String,
     model: String,
     reasoning: Option<String>,
-) {
+) -> impl std::future::Future<Output = ()> + Send + 'static {
     let session_id = session.as_str().to_owned();
-    let cwd = state.project_dir(&session_id);
-    if let Err(message) = run_chat_turn(
-        &state,
-        &events,
-        &session_id,
-        session,
-        branch,
-        expected_head,
-        &provider_id,
-        &model,
-        reasoning.as_deref(),
-        cwd,
-    )
-    .await
-    {
-        let _ = events.send(BridgeEvent::ChatFailed {
+    let control = TurnControl::register(&state, &session_id);
+    async move {
+        let cwd = state.project_dir(&session_id);
+        if let Err(message) = run_chat_turn(
+            &state,
+            &events,
+            &session_id,
+            session,
+            branch,
+            expected_head,
+            &provider_id,
+            &model,
+            reasoning.as_deref(),
+            cwd,
+            &control,
+        )
+        .await
+        {
+            // A cancel that lands during setup surfaces as setup failing;
+            // report it as the quiet cancel the desktop expects.
+            let message = if control.cancel.is_cancelled() {
+                CHAT_CANCELLED.to_owned()
+            } else {
+                message
+            };
+            let _ = events.send(BridgeEvent::ChatFailed {
+                session_id,
+                message,
+                head: String::new(),
+            });
+        }
+    }
+}
+
+/// The live handles one turn publishes for the life of the turn: the cancel
+/// token Escape fires, and the inbox steers are pushed into.
+pub(crate) struct TurnControl {
+    cancel: CancellationToken,
+    steer: Arc<mycode_agent::SteerInbox>,
+    _cancel_guard: CancelGuard,
+    _steer_guard: SteerGuard,
+}
+
+impl TurnControl {
+    /// Publishes a fresh token and inbox for `session_id`, replacing any
+    /// earlier turn's entries. The caller cancels that earlier turn.
+    pub(crate) fn register(state: &CoreState, session_id: &str) -> Self {
+        let cancel = CancellationToken::new();
+        let cancel_guard = CancelGuard::register(state.turn_cancels.clone(), session_id, &cancel);
+        let steer = Arc::new(mycode_agent::SteerInbox::new());
+        let steer_guard = SteerGuard::register(
+            Arc::clone(&state.steer_inboxes),
             session_id,
-            message,
-            head: String::new(),
-        });
+            Arc::clone(&steer),
+        );
+        Self {
+            cancel,
+            steer,
+            _cancel_guard: cancel_guard,
+            _steer_guard: steer_guard,
+        }
+    }
+
+    /// Fails a setup step with the quiet cancel once the user has cancelled.
+    fn check(&self) -> Result<(), String> {
+        if self.cancel.is_cancelled() {
+            Err(CHAT_CANCELLED.to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Runs one setup step unless the user cancels first. Only steps with no
+    /// durable effect go through here, so dropping them loses nothing.
+    async fn unless_cancelled<T>(
+        &self,
+        step: impl std::future::Future<Output = T>,
+    ) -> Result<T, String> {
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => Err(CHAT_CANCELLED.to_owned()),
+            value = step => Ok(value),
+        }
     }
 }
 
@@ -242,6 +310,7 @@ async fn compact_session_now(
     }
     let head_stamp_text = head_spelling(&expected_head);
     let context_window = model_context_window(state, &provider, model);
+    let never_cancelled = CancellationToken::new();
     let scope = crate::compaction::CompactScope {
         home,
         wire: &wire,
@@ -251,6 +320,7 @@ async fn compact_session_now(
         head: &head_stamp_text,
         context_window,
         overhead_tokens: 0,
+        cancel: &never_cancelled,
     };
     let compacted = crate::compaction::compact_history(&scope, history, true).await;
     match compacted.status {
@@ -445,16 +515,21 @@ async fn run_chat_turn(
     model: &str,
     reasoning: Option<&str>,
     cwd: PathBuf,
+    control: &TurnControl,
 ) -> Result<(), String> {
     let home = &state.home;
     // Settings and keys are written by concurrently dispatched save
     // commands; a provider added moments ago may not have landed on disk
     // yet, so the lookup retries briefly before failing the turn.
-    let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
+    let (settings, provider, stored_key) = control
+        .unless_cancelled(turn_credentials(home, provider_id))
+        .await??;
     // Copilot stores its long-lived OAuth token where other providers keep
-    // an API key; each turn exchanges it for a short-lived bearer.
+    // an API key; each turn exchanges it for a short-lived bearer. A refresh
+    // rotates the stored token, so this step always runs to completion.
     let (bearer, extra_headers) =
         resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
+    control.check()?;
     let mut resolved =
         ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
@@ -475,6 +550,7 @@ async fn run_chat_turn(
         settings,
         provider,
         transport,
+        control,
     )
     .await
 }
@@ -496,6 +572,7 @@ async fn run_chat_turn_on(
     settings: AppSettings,
     provider: ProviderSettings,
     transport: Arc<dyn SseTransport>,
+    control: &TurnControl,
 ) -> Result<(), String> {
     let home = &state.home;
     let wire = WireProvider::new(resolved.clone(), transport);
@@ -511,7 +588,10 @@ async fn run_chat_turn_on(
     // tool_use/tool_result pairing providers validate.
     // Follow the durable tip when the desktop snapshot is behind. A stale
     // expected head otherwise surfaces as "the session moved on".
-    let expected_head = match state.service.open(&session).await {
+    let expected_head = match control
+        .unless_cancelled(state.service.open(&session))
+        .await?
+    {
         Ok(opened) => opened
             .heads
             .iter()
@@ -520,8 +600,14 @@ async fn run_chat_turn_on(
             .unwrap_or(expected_head),
         Err(_) => expected_head,
     };
-    let history = ledger_history(&state.service, &session, &branch, &expected_head)
-        .await
+    let history = control
+        .unless_cancelled(ledger_history(
+            &state.service,
+            &session,
+            &branch,
+            &expected_head,
+        ))
+        .await?
         .map_err(render_error)?;
     let usage_model = model.to_owned();
     let head_stamp_text = head_spelling(&expected_head);
@@ -533,23 +619,25 @@ async fn run_chat_turn_on(
     );
     // MCP servers connect here (spawn + handshake + tools/list): awaited on
     // the spawned turn task, so command processing never blocks. A server
-    // that fails to connect is skipped, never a failed turn.
-    let (mcp_tools, mcp_warning) =
-        crate::mcp_tools::connect_mcp_tools(home, &settings, &state.mcp_pool, Some(&cwd)).await;
+    // that fails to connect is skipped, never a failed turn. Stdio servers
+    // are spawned kill-on-drop, so a cancel may abandon a slow handshake.
+    let (mcp_tools, mcp_warning) = control
+        .unless_cancelled(crate::mcp_tools::connect_mcp_tools(
+            home,
+            &settings,
+            &state.mcp_pool,
+            Some(&cwd),
+        ))
+        .await?;
     let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
     let registry = Arc::new({
         let registry = ToolRegistry::new();
         mycode_tools::register_builtins(&registry);
         // ask_user rides the same registry; its channel forwards questions
         // to the UI over the event channel and waits on the shared router.
-        let ask_events = events.clone();
-        let ask_session = session_id.to_owned();
-        let (answer_rx, ask_slot) = register_ask(&ask_session);
         let channel: Arc<dyn mycode_tools::builtin::AskChannel> = Arc::new(BridgeAskChannel {
-            session_id: ask_session,
-            events: ask_events,
-            answer: tokio::sync::Mutex::new(Some(answer_rx)),
-            _slot: ask_slot,
+            session_id: session_id.to_owned(),
+            events: events.clone(),
         });
         registry.register(Arc::new(mycode_tools::builtin::AskTool::new(channel)));
         // `agent` delegates scoped work to a catalog role; slots, isolation,
@@ -624,11 +712,15 @@ async fn run_chat_turn_on(
         head: &head_stamp_text,
         context_window,
         overhead_tokens,
+        cancel: &control.cancel,
     };
     let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
+    // A written checkpoint is already on disk, so its card is published even
+    // when the user cancelled during the summary.
     if let Some(summary) = compacted.summary.as_deref() {
         let _ = publish_visible_summary(&writer, events, &session_id, summary, true).await;
     }
+    control.check()?;
     let history = compacted.messages;
 
     // Grok Build call pattern: a short index, then the model loads the
@@ -648,6 +740,7 @@ async fn run_chat_turn_on(
     let deferred = DeferredSummaries::default();
     let hook_deferred = deferred.clone();
     let hook_bus = agent_tx.clone();
+    let hook_cancel = control.cancel.clone();
     let hooks = HookRunner::default().with_before_request(move |mut request| {
         let home = compact_home.clone();
         let wire = compact_wire.clone();
@@ -657,7 +750,10 @@ async fn run_chat_turn_on(
         let head = compact_head.clone();
         let deferred = hook_deferred.clone();
         let bus = hook_bus.clone();
+        let cancel = hook_cancel.clone();
         async move {
+            // The turn token stops a summary the user no longer waits for;
+            // the agent then sees the cancel right after this hook.
             let scope = crate::compaction::CompactScope {
                 home: &home,
                 wire: &wire,
@@ -670,6 +766,7 @@ async fn run_chat_turn_on(
                     &request.system_prompt,
                     &request.tools,
                 ),
+                cancel: &cancel,
             };
             let compacted =
                 crate::compaction::compact_history(&scope, request.messages, false).await;
@@ -686,16 +783,6 @@ async fn run_chat_turn_on(
             request
         }
     });
-    let cancel = CancellationToken::new();
-    // Publish the token so an Escape-driven CancelChat can abort this turn;
-    // the guard unpublishes it on every exit path.
-    let _cancel_guard = CancelGuard::register(state.turn_cancels.clone(), &session_id, &cancel);
-    let steer = Arc::new(mycode_agent::SteerInbox::new());
-    let _steer_guard = SteerGuard::register(
-        Arc::clone(&state.steer_inboxes),
-        &session_id,
-        Arc::clone(&steer),
-    );
     let mut config = AgentConfig::new()
         .with_system_prompt(system_prompt)
         .with_prompt_cache_key(Some(session_id.clone()))
@@ -714,6 +801,7 @@ async fn run_chat_turn_on(
     let pump_events = events.clone();
     let pump_session_id = session_id.to_owned();
     let pump_deferred = deferred;
+    let pump_cancel = control.cancel.clone();
     let pump = tokio::spawn(async move {
         let mut pending_assistant: Option<std::sync::Arc<mycode_core::Message>> = None;
         let mut last_step: Option<crate::protocol::ConversationEntry> = None;
@@ -734,7 +822,20 @@ async fn run_chat_turn_on(
                     .await;
                     return;
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Every terminal event returns above, so a closed bus
+                    // means the agent stopped before its turn started: a
+                    // cancel during the first request's hook ends the
+                    // prompt without TurnStarted or TurnEnded. The desktop
+                    // still needs one terminal to leave the sending state.
+                    let message = if pump_cancel.is_cancelled() {
+                        CHAT_CANCELLED
+                    } else {
+                        "the turn ended before it started"
+                    };
+                    emit_chat_failed(&pump_events, &writer, &pump_session_id, message).await;
+                    return;
+                }
             };
             match event {
                 mycode_core::events::AgentEvent::MessageDelta(
@@ -1116,14 +1217,19 @@ async fn run_chat_turn_on(
 
     agent.seed_history(history);
     let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
-        .with_cancel(cancel)
+        .with_cancel(control.cancel.clone())
         .with_events(agent_tx)
         .with_cwd(cwd)
         .with_extra_roots(extra_roots)
         .with_read_roots(read_roots)
-        .with_steer(Some(steer));
+        .with_steer(Some(Arc::clone(&control.steer)));
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
+    // Close the agent bus (the env and the hook each hold a sender) so a
+    // turn that never started reaches the pump as a closed stream instead of
+    // leaving it parked forever.
+    drop(env);
+    drop(hooks);
     // Drain the pump before returning. An agent error already became
     // ChatFailed inside the pump; returning Err here would send a second one.
     let pump_ended = pump.await;
@@ -1411,9 +1517,13 @@ mod tests {
     }
 
     fn scratch() -> (std::path::PathBuf, HomeLayout) {
+        // The clock alone is too coarse on Windows: parallel tests calling
+        // this in the same tick shared one home and saw each other's files.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "mycode-turn-compact-{}-{}",
+            "mycode-turn-compact-{}-{}-{}",
             std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("scratch");
@@ -1505,6 +1615,7 @@ mod tests {
             events
         });
         let session_id = created.session_id.as_str().to_owned();
+        let control = super::TurnControl::register(&state, &session_id);
         super::run_chat_turn_on(
             &state,
             &tx,
@@ -1519,6 +1630,7 @@ mod tests {
             settings,
             provider,
             transport,
+            &control,
         )
         .await
         .expect("turn");
@@ -1891,6 +2003,7 @@ mod tests {
         head: HeadStamp,
     ) -> (Result<(), String>, Vec<crate::BridgeEvent>) {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let control = super::TurnControl::register(&fixture.state, fixture.session.as_str());
         let outcome = super::run_chat_turn_on(
             &fixture.state,
             &tx,
@@ -1905,6 +2018,7 @@ mod tests {
             fixture.settings.clone(),
             fixture.provider.clone(),
             transport,
+            &control,
         )
         .await;
         drop(tx);
@@ -2012,6 +2126,7 @@ mod tests {
         let session_id = session.as_str().to_owned();
         let turn_a = tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let control = super::TurnControl::register(&state, &session_id);
             let outcome = super::run_chat_turn_on(
                 &state,
                 &tx,
@@ -2026,6 +2141,7 @@ mod tests {
                 settings,
                 provider,
                 running,
+                &control,
             )
             .await;
             drop(tx);
@@ -2120,5 +2236,276 @@ mod tests {
         assert!(body.contains(PROMPT_B), "B lost its own prompt: {body}");
         assert_cache_key(&body, fixture.session.as_str());
         let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn chat_turn_publishes_its_controls_before_setup_runs() {
+        let fixture = turn_fixture().await;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let session_id = fixture.session.as_str();
+        let turn = super::chat_turn(
+            Arc::clone(&fixture.state),
+            tx,
+            fixture.session.clone(),
+            fixture.branch.clone(),
+            HeadStamp::Empty,
+            "local".to_owned(),
+            "test-model".to_owned(),
+            None,
+        );
+        // Not polled yet: a cancel or steer sent now must still find the turn.
+        assert!(
+            fixture
+                .state
+                .turn_cancels
+                .lock()
+                .expect("cancels")
+                .contains_key(session_id)
+        );
+        assert!(
+            fixture
+                .state
+                .steer_inboxes
+                .lock()
+                .expect("inboxes")
+                .contains_key(session_id)
+        );
+        drop(turn);
+        assert!(
+            !fixture
+                .state
+                .turn_cancels
+                .lock()
+                .expect("cancels")
+                .contains_key(session_id)
+        );
+        assert!(
+            !fixture
+                .state
+                .steer_inboxes
+                .lock()
+                .expect("inboxes")
+                .contains_key(session_id)
+        );
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn a_turn_cancelled_during_setup_never_reaches_the_model() {
+        let fixture = turn_fixture().await;
+        let transport = Arc::new(HistoryTransport {
+            bodies: Mutex::new(Vec::new()),
+            hang_partial: false,
+            partial_ready: Arc::new(tokio::sync::Notify::new()),
+        });
+        let (head, _) = crate::ledger::send_message(
+            &fixture.state.service,
+            &fixture.session,
+            &fixture.branch,
+            &HeadStamp::Empty,
+            PROMPT_A,
+        )
+        .await
+        .expect("prompt A");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let control = super::TurnControl::register(&fixture.state, fixture.session.as_str());
+        control.cancel.cancel();
+        let outcome = super::run_chat_turn_on(
+            &fixture.state,
+            &tx,
+            fixture.session.as_str(),
+            fixture.session.clone(),
+            fixture.branch.clone(),
+            parse_head(&head),
+            "test-model",
+            None,
+            fixture.cwd.clone(),
+            fixture.resolved.clone(),
+            fixture.settings.clone(),
+            fixture.provider.clone(),
+            transport.clone(),
+            &control,
+        )
+        .await;
+        assert_eq!(outcome, Err(crate::protocol::CHAT_CANCELLED.to_owned()));
+        assert!(transport.bodies.lock().expect("bodies").is_empty());
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    /// Hangs every compaction summary until its request is cancelled and
+    /// records whether the model was ever asked for a reply.
+    struct HangingSummaryTransport {
+        summary_started: Arc<tokio::sync::Notify>,
+        kinds: Mutex<Vec<&'static str>>,
+    }
+
+    impl SseTransport for HangingSummaryTransport {
+        fn post<'a>(
+            &'a self,
+            call: TransportCall,
+            cancel: tokio_util::sync::CancellationToken,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let body = String::from_utf8_lossy(&call.body).into_owned();
+                let (sender, stream) = tokio::sync::mpsc::channel(1);
+                if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                    self.kinds.lock().expect("kinds").push("summary");
+                    self.summary_started.notify_one();
+                    tokio::spawn(async move {
+                        cancel.cancelled().await;
+                        let _ = sender
+                            .send(Err(ProviderError::new(
+                                mycode_core::ProviderErrorKind::Cancelled,
+                            )))
+                            .await;
+                    });
+                    return Ok(stream);
+                }
+                self.kinds.lock().expect("kinds").push("reply");
+                sender
+                    .send(Ok(bytes::Bytes::from(reply_sse("unexpected reply"))))
+                    .await
+                    .expect("queue reply body");
+                Ok(stream)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
+        let (root, home) = scratch();
+        let mut settings = AppSettings::default();
+        settings.providers.push(ProviderSettings {
+            id: "local".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://example.com/v1".to_owned(),
+            models: vec!["test-model".to_owned()],
+            enabled: true,
+            // ~22k token auto threshold. The prior history fits, so setup
+            // does not compact; the request hook also counts the large
+            // prompt and starts a summary before the turn has started.
+            context_limit: Some(26_000),
+            max_output: None,
+        });
+        replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
+        replace_provider_secrets(
+            &home,
+            AuthorityRevision::ABSENT,
+            &ProviderSecrets::new().with_key("local", Some("test-key")),
+        )
+        .expect("secrets");
+        let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        let catalog = mycode_providers::catalog::current(&home);
+        let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+        let created = state.service.create().await.expect("session");
+        let mut head = HeadStamp::Empty;
+        for text in ["prior work", &"P".repeat(120_000)] {
+            let reservation = state
+                .service
+                .reserve_event(
+                    &created.session_id,
+                    &created.branch_id,
+                    EventKind::Message,
+                    None,
+                    text.as_bytes(),
+                )
+                .await
+                .expect("reserve");
+            head = state
+                .service
+                .append(&created.session_id, &created.branch_id, &head, &reservation)
+                .await
+                .expect("append")
+                .head;
+        }
+        let transport = Arc::new(HangingSummaryTransport {
+            summary_started: Arc::new(tokio::sync::Notify::new()),
+            kinds: Mutex::new(Vec::new()),
+        });
+        let provider = settings.providers[0].clone();
+        let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
+            .expect("resolve");
+        let session_id = created.session_id.as_str().to_owned();
+        let turn = tokio::spawn({
+            let state = Arc::clone(&state);
+            let transport: Arc<dyn SseTransport> = transport.clone();
+            let session_id = session_id.clone();
+            async move {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                let control = super::TurnControl::register(&state, &session_id);
+                let outcome = super::run_chat_turn_on(
+                    &state,
+                    &tx,
+                    &session_id,
+                    created.session_id,
+                    created.branch_id,
+                    head,
+                    "test-model",
+                    None,
+                    cwd,
+                    resolved,
+                    settings,
+                    provider,
+                    transport,
+                    &control,
+                )
+                .await;
+                drop(tx);
+                let mut events = Vec::new();
+                while let Ok(event) = rx.try_recv() {
+                    events.push(event);
+                }
+                (outcome, events)
+            }
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            transport.summary_started.notified(),
+        )
+        .await
+        .expect("the request hook never started a summary");
+        let token = state
+            .turn_cancels
+            .lock()
+            .expect("cancels")
+            .get(&session_id)
+            .cloned()
+            .expect("turn token");
+        token.cancel();
+        let (outcome, events) = tokio::time::timeout(std::time::Duration::from_secs(10), turn)
+            .await
+            .expect("a cancel inside the first request hook left the turn hanging")
+            .expect("turn task");
+        outcome.expect("a cancelled turn still returns");
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                crate::BridgeEvent::ChatFailed { message, .. }
+                    if message == crate::protocol::CHAT_CANCELLED
+            )),
+            "the desktop never heard the turn end: {events:?}"
+        );
+        assert_eq!(
+            *transport.kinds.lock().expect("kinds"),
+            ["summary"],
+            "a cancelled turn must not ask the model for a reply"
+        );
+        assert!(
+            !state
+                .turn_cancels
+                .lock()
+                .expect("cancels")
+                .contains_key(&session_id),
+            "the finished turn must unpublish its token"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -65,13 +65,31 @@ pub struct ImportSummary {
     pub secrets: usize,
 }
 
-fn settings_have_mcp_command(settings: &AppSettings) -> bool {
-    settings.mcp_servers.iter().any(|server| {
-        server
-            .command
-            .as_deref()
-            .is_some_and(|command| !command.trim().is_empty())
-    })
+/// Import refusal that the frontend answers with an explicit confirmation
+/// and a retry with `confirm_mcp_commands` set.
+pub const IMPORT_NEEDS_MCP_CONFIRM: &str =
+    "this bundle changes MCP server commands, which start programs on this computer";
+
+/// One stdio MCP launch line: server id, command, arguments, environment.
+type McpLaunch<'a> = (&'a str, &'a str, &'a [String], &'a BTreeMap<String, String>);
+
+/// Every stdio command a settings document can launch, in a stable order.
+fn mcp_launches(settings: &AppSettings) -> Vec<McpLaunch<'_>> {
+    let mut launches: Vec<McpLaunch<'_>> = settings
+        .mcp_servers
+        .iter()
+        .filter_map(|server| {
+            let command = server.command.as_deref().map(str::trim)?;
+            (!command.is_empty()).then_some((
+                server.id.as_str(),
+                command,
+                server.args.as_slice(),
+                &server.env,
+            ))
+        })
+        .collect();
+    launches.sort();
+    launches
 }
 
 fn bundle_secrets(secrets: &ProviderSecrets) -> BTreeMap<String, String> {
@@ -129,25 +147,15 @@ pub fn export_to_file(home: &HomeLayout, path: &Path) -> Result<ExportSummary, S
 /// Applies one bundle: settings, UI state, and provider keys replace local
 /// values. Conversation data is never imported.
 ///
-/// Refuses the whole import when local settings contain an MCP command and
-/// `confirm_mcp_commands` is false. The desktop import path leaves that flag
-/// false; there is no separate confirm dialog.
+/// Refuses the whole import with [`IMPORT_NEEDS_MCP_CONFIRM`] when the
+/// bundle would add, change, or remove an MCP stdio command. Re-importing a
+/// bundle whose commands match the local ones needs no confirmation.
 ///
 /// # Errors
 ///
 /// Returns a rendered message for a malformed bundle, a refused MCP-command
 /// replacement, or a failed write.
-pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary, String> {
-    import_from_file_with(home, path, false)
-}
-
-/// Same as [`import_from_file`] with an explicit MCP-command confirm flag.
-///
-/// # Errors
-///
-/// Returns a rendered message for a malformed bundle, a refused MCP-command
-/// replacement, or a failed write.
-pub fn import_from_file_with(
+pub fn import_from_file(
     home: &HomeLayout,
     path: &Path,
     confirm_mcp_commands: bool,
@@ -167,11 +175,13 @@ pub fn import_from_file_with(
         .validate()
         .map_err(|error| format!("settings: {error}"))?;
     let current_settings = read_app_settings(home).map_err(|error| format!("settings: {error}"))?;
-    if settings_have_mcp_command(&current_settings) && !confirm_mcp_commands {
-        return Err(
-            "import refused: this settings file contains MCP commands; confirm before replacing them"
-                .to_owned(),
-        );
+    // Stdio commands run on the next turn. A bundle that introduces or
+    // rewrites one must be confirmed, and so must one that drops the local
+    // ones. The old gate looked only at local commands: anyone with an MCP
+    // server could never import, while a bundle adding commands to an empty
+    // install went through unasked.
+    if !confirm_mcp_commands && mcp_launches(&current_settings) != mcp_launches(&bundle.settings) {
+        return Err(IMPORT_NEEDS_MCP_CONFIRM.to_owned());
     }
 
     // Secrets go first and through the secret-store CAS: the store validates
@@ -245,7 +255,7 @@ fn read_current_secrets_revision(home: &HomeLayout) -> Result<AuthorityRevision,
 
 #[cfg(test)]
 mod tests {
-    use super::{build_bundle, export_to_file, import_from_file, import_from_file_with};
+    use super::{build_bundle, export_to_file, import_from_file};
     use mycode_config::{
         AppSettings, AuthorityRevision, HomeLayout, McpServerSettings, ProviderSecrets,
         replace_app_settings, replace_provider_secrets,
@@ -337,7 +347,7 @@ mod tests {
             _todos: Vec::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
-        let summary = import_from_file(&home, &bundle_path).unwrap();
+        let summary = import_from_file(&home, &bundle_path, false).unwrap();
         assert_eq!(summary.secrets, 1);
         let stored = mycode_config::read_provider_secrets(&home).unwrap();
         assert_eq!(stored.key("zai"), Some("imported-key"));
@@ -386,7 +396,7 @@ mod tests {
         });
         let bundle_path = root.join("bundle.json");
         std::fs::write(&bundle_path, serde_json::to_vec(&v1).unwrap()).unwrap();
-        let summary = import_from_file(&home, &bundle_path).unwrap();
+        let summary = import_from_file(&home, &bundle_path, false).unwrap();
         assert_eq!(summary.secrets, 0);
 
         let settings = mycode_config::read_app_settings(&home).unwrap();
@@ -427,8 +437,8 @@ mod tests {
             _todos: Vec::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
-        let refused = import_from_file(&home, &bundle_path).unwrap_err();
-        assert!(refused.contains("confirm before replacing"), "{refused}");
+        let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
+        assert_eq!(refused, super::IMPORT_NEEDS_MCP_CONFIRM);
         let kept = mycode_config::read_app_settings(&home).unwrap();
         assert_eq!(kept.mcp_servers[0].command.as_deref(), Some("local-tool"));
         // The refusal covers the whole import: the vault is untouched too.
@@ -438,7 +448,7 @@ mod tests {
                 .provider_ids()
                 .is_empty()
         );
-        import_from_file_with(&home, &bundle_path, true).unwrap();
+        import_from_file(&home, &bundle_path, true).unwrap();
         let replaced = mycode_config::read_app_settings(&home).unwrap();
         assert_eq!(
             replaced.mcp_servers[0].command.as_deref(),
@@ -450,6 +460,68 @@ mod tests {
                 .key("zai"),
             Some("refused-key")
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn write_bundle(root: &std::path::Path, settings: AppSettings) -> std::path::PathBuf {
+        let bundle_path = root.join("bundle.json");
+        let bundle = super::ExportBundle {
+            format_version: super::EXPORT_FORMAT_VERSION,
+            kind: super::EXPORT_KIND.to_owned(),
+            exported_at_unix: 0,
+            settings,
+            ui_state: mycode_config::UiState::default(),
+            secrets: BTreeMap::new(),
+            _sessions: Vec::new(),
+            _todos: Vec::new(),
+        };
+        std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        bundle_path
+    }
+
+    #[test]
+    fn a_bundle_with_the_same_mcp_commands_imports_without_confirm() {
+        let (root, home) = scratch("mcp-same");
+        let current = AppSettings {
+            mcp_servers: vec![stdio_server("local-tool")],
+            ..AppSettings::default()
+        };
+        replace_app_settings(&home, AuthorityRevision::ABSENT, &current).unwrap();
+        // The user's own export, re-imported after an unrelated edit.
+        let bundle_path = write_bundle(
+            &root,
+            AppSettings {
+                user_agent: "edited-agent".to_owned(),
+                ..current
+            },
+        );
+        import_from_file(&home, &bundle_path, false).expect("unchanged commands need no confirm");
+        let imported = mycode_config::read_app_settings(&home).unwrap();
+        assert_eq!(imported.user_agent, "edited-agent");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_bundle_that_adds_an_mcp_command_needs_confirm() {
+        let (root, home) = scratch("mcp-add");
+        // A fresh install has no commands; the bundle would add one that
+        // runs on the next turn.
+        let bundle_path = write_bundle(
+            &root,
+            AppSettings {
+                mcp_servers: vec![stdio_server("surprise-tool")],
+                ..AppSettings::default()
+            },
+        );
+        let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
+        assert_eq!(refused, super::IMPORT_NEEDS_MCP_CONFIRM);
+        assert!(
+            mycode_config::read_app_settings(&home)
+                .unwrap()
+                .mcp_servers
+                .is_empty()
+        );
+        import_from_file(&home, &bundle_path, true).unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -465,7 +537,7 @@ mod tests {
         });
         let bundle_path = root.join("bundle.json");
         std::fs::write(&bundle_path, serde_json::to_vec(&future).unwrap()).unwrap();
-        let refused = import_from_file(&home, &bundle_path).unwrap_err();
+        let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
         assert!(refused.contains("not a MYCode export bundle"), "{refused}");
         let _ = std::fs::remove_dir_all(&root);
     }

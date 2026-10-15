@@ -27,10 +27,10 @@
 | `subagent` | `agent`：解析角色、工具白名单、并发许可、可选 worktree、按角色的模型路由、父提示里的委派表 |
 | `mcp_client` / `mcp_tools` | stdio 或 Streamable HTTP（协议版本 `2025-06-18`，每台最多 128 个工具，单条消息 1 MiB，请求超时 60 秒）。见下文 |
 | `web_client` | Querit、AnySearch、自定义后端。结果条数、URL 数、响应字节都有上限，Bearer 由传输层加 |
-| `oauth` | Copilot、xAI、Codex 的设备码登录，以及每次请求前的令牌处理。见下文 |
+| `oauth` | Copilot、Codex 的设备码登录，以及每次请求前的令牌处理。见下文 |
 | `settings_io` | 设置 CAS 和单把密钥的写入。读设置时补上探测到的 shell 和默认 User-Agent 并写回 |
 | `search` | 作曲栏 `@` 提到的项目文件：不区分大小写的子串，跳过 `.git`、`node_modules`、`target` 等目录，最多看 8192 项、返回 64 条 |
-| `export` | 产品数据的导出与导入包：设置、界面状态和会话日志，不带密钥。导入后为 JSONL 补建索引 |
+| `export` | 产品数据的导出与导入包：设置、界面状态和 API 密钥（明文），不带会话。导入会新增、修改或删除 MCP stdio 命令时先拒绝，桌面在“数据”卡片里让用户确认后再带 `confirm_mcp_commands` 重发 |
 | `updates` | 检查、下载、校验、准备重启安装。错误收成一行。macOS 用 `update.sh`；Windows 复制当前程序，带 `--mycode-apply-update` 等参数替换安装文件。没有 Linux 安装包，Linux 上没有对应平台的资源。换好并校验新二进制后，旧版本的备份文件会被删掉，不在安装目录里堆积。启动检查失败会送到界面提示 |
 
 ## 回合装配
@@ -69,9 +69,9 @@
 
 ## OAuth
 
-`StartOAuthSignIn` 支持 Copilot、xAI、Codex 三种设备码登录；Windows 和 macOS 会打开浏览器，其它平台只在面板上给出链接。成功后令牌写进密钥存储，并在设置里补上或更新这个提供商（没选模型时取目录里前 6 个支持工具调用的模型）。
+`StartOAuthSignIn` 支持 Copilot、Codex 两种设备码登录（xAI 只用 API key）；Windows 和 macOS 会打开浏览器，其它平台只在面板上给出链接。成功后令牌写进密钥存储，并在设置里补上或更新这个提供商（没选模型时取目录里前 6 个支持工具调用的模型）。
 
-每次请求前 `resolve_request_auth`：Copilot 用存下的 GitHub 令牌换一个短期 bearer，缓存到过期前 60 秒；xAI 和 Codex 的访问令牌过期时用 refresh token 换新并写回；其它提供商存的 OAuth 令牌过期时报错，要求重新登录。Codex 请求另外带 `chatgpt-account-id` 等头。子代理按角色换提供商时也走这条路径。
+每次请求前 `resolve_request_auth`：Copilot 用存下的 GitHub 令牌换一个短期 bearer，缓存到过期前 60 秒；Codex 的访问令牌过期时用 refresh token 换新并写回（全进程串行刷新，等锁的轮次直接采用别的轮次刚写回的新令牌）；其它提供商存的 OAuth 令牌（例如旧版本 xAI 登录留下的）过期时报错，提示改贴 API key。Codex 请求另外带 `chatgpt-account-id` 等头。子代理按角色换提供商时也走这条路径。
 
 ## 目录
 

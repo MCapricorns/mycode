@@ -7,7 +7,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    StatefulInteractiveElement, Styled, Window, anchored, deferred, div, px,
 };
 
 use crate::i18n::t;
@@ -16,6 +16,9 @@ use crate::view_model::{
     MentionGroup, MentionKind, preferred_slash_index, selected_reasoning_level,
 };
 use crate::workspace::Workspace;
+
+#[cfg(all(test, feature = "test-support"))]
+mod layout_tests;
 
 /// Fixed row height that keeps the menu rows visually uniform.
 const MENU_ROW_HEIGHT: gpui_kit::Pixels = px(30.);
@@ -27,30 +30,18 @@ pub(super) fn render_model_menu(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    debug_assert_eq!(model_menu_anchor(), MenuAnchor::ChipStart);
-    anchor_edge(
-        div()
-            .id("model-menu-layer")
-            .absolute()
-            .bottom(px(THINKING_MENU_CLEARANCE))
-            .occlude(),
+    composer_menu_layer(
+        "model-menu-layer",
         model_menu_anchor(),
+        crate::ui::model_picker::render_model_picker(
+            workspace,
+            window,
+            crate::ui::model_picker::ModelPickerTarget::Session,
+            menu_height_cap(window, 420.),
+            cx,
+        ),
     )
-    .child(crate::ui::model_picker::render_model_picker(
-        workspace,
-        window,
-        crate::ui::model_picker::ModelPickerTarget::Session,
-        menu_height_cap(window, 420.),
-        cx,
-    ))
     .into_any_element()
-}
-
-/// Where a composer menu sits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum MenuPlacement {
-    /// Directly above its chip. The transcript is not clipped.
-    AboveChip,
 }
 
 /// Which edge of the chip the menu shares, so a wide menu grows into the column.
@@ -100,12 +91,6 @@ pub(super) fn menu_height_cap(window: &Window, cap: f32) -> gpui_kit::Pixels {
     px(available.clamp(110., cap))
 }
 
-/// The thinking menu opens above its chip.
-#[must_use]
-pub(super) fn thinking_menu_placement() -> MenuPlacement {
-    MenuPlacement::AboveChip
-}
-
 /// The thinking menu shares the chip's right edge so it stays inside the column.
 #[must_use]
 pub(super) fn thinking_menu_anchor() -> MenuAnchor {
@@ -118,14 +103,29 @@ pub(super) fn model_menu_anchor() -> MenuAnchor {
     MenuAnchor::ChipStart
 }
 
-fn anchor_edge(
-    layer: gpui_kit::Stateful<gpui_kit::Div>,
+/// Keep the preferred chip edge, but clamp the panel when a wrapped footer
+/// puts that chip near a window edge. Deferred paint escapes the chat's clip
+/// and keeps menus above the surrounding chrome; the panel still occludes
+/// controls underneath it.
+fn composer_menu_layer(
+    id: &'static str,
     anchor: MenuAnchor,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    match anchor {
-        MenuAnchor::ChipStart => layer.left_0(),
-        MenuAnchor::ChipEnd => layer.right_0(),
-    }
+    panel: impl IntoElement,
+) -> impl IntoElement {
+    let layer = div().id(id).absolute().bottom(px(THINKING_MENU_CLEARANCE));
+    let (layer, corner) = match anchor {
+        MenuAnchor::ChipStart => (layer.left_0(), gpui_kit::Anchor::BottomLeft),
+        MenuAnchor::ChipEnd => (layer.right_0(), gpui_kit::Anchor::BottomRight),
+    };
+    layer.child(
+        deferred(
+            anchored()
+                .anchor(corner)
+                .snap_to_window_with_margin(px(8.))
+                .child(div().occlude().child(panel)),
+        )
+        .with_priority(1),
+    )
 }
 
 /// Thinking effort as its own short list, opened from the composer button.
@@ -138,17 +138,9 @@ pub(super) fn render_thinking_menu(
     let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
     let selected = selected_reasoning_level(workspace.vm()).to_owned();
     let weak = cx.weak_entity();
-    debug_assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
-    debug_assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);
-    anchor_edge(
-        div()
-            .id("thinking-menu-layer")
-            .absolute()
-            .bottom(px(THINKING_MENU_CLEARANCE))
-            .occlude(),
+    composer_menu_layer(
+        "thinking-menu-layer",
         thinking_menu_anchor(),
-    )
-    .child(
         menu_panel("thinking-menu", theme)
             .w(px(220.))
             .max_h(menu_height_cap(window, 320.))
@@ -359,14 +351,9 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MenuAnchor, MenuPlacement,
-        THINKING_MENU_CLEARANCE, model_menu_anchor, thinking_menu_anchor, thinking_menu_placement,
+        JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MenuAnchor, THINKING_MENU_CLEARANCE,
+        model_menu_anchor, thinking_menu_anchor,
     };
-
-    #[test]
-    fn thinking_menu_overlays_instead_of_blanking_a_full_width_row() {
-        assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
-    }
 
     #[test]
     fn thinking_menu_clears_the_jump_button() {
@@ -375,7 +362,6 @@ mod tests {
                 THINKING_MENU_CLEARANCE >= 88. + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + 8.
             );
         }
-        assert_eq!(thinking_menu_placement(), MenuPlacement::AboveChip);
         assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);
     }
 

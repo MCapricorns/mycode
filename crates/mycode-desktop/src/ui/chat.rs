@@ -47,10 +47,10 @@ pub(super) fn render_chat(
         let streaming = active.and_then(|c| c.streaming.as_ref());
         let show_welcome = entries.is_empty() && streaming.is_none() && !sending;
         let has_older = active.is_some_and(|conversation| conversation.older_before.is_some());
-        let items = coalesce_tools(collect_transcript_items(entries));
+        let blocks = collect_transcript_blocks(entries);
         let reduce_motion = cx.reduce_motion();
-        let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(items.len());
-        for item in items {
+        let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(blocks.len());
+        for item in blocks {
             match item {
                 TranscriptBlock::User { entry, index } => {
                     let child = if mycode_app::is_compaction_summary(&entry.text) {
@@ -76,7 +76,14 @@ pub(super) fn render_chat(
                     elements.push(appear(
                         &id,
                         reduce_motion,
-                        transcript::render_entry(entry, workspace, cx.theme(), show_reasoning, cx),
+                        transcript::render_entry(
+                            entry,
+                            workspace,
+                            cx.theme(),
+                            show_reasoning,
+                            window,
+                            cx,
+                        ),
                     ));
                 }
             }
@@ -88,6 +95,7 @@ pub(super) fn render_chat(
                     workspace,
                     cx.theme(),
                     show_reasoning,
+                    window,
                     cx,
                 )
                 .into_any_element()
@@ -103,6 +111,7 @@ pub(super) fn render_chat(
                         workspace,
                         cx.theme(),
                         show_reasoning,
+                        window,
                         cx,
                     )
                     .into_any_element()
@@ -233,32 +242,6 @@ struct ToolRow<'a> {
     result: Option<&'a ConversationEntry>,
 }
 
-fn coalesce_tools<'a>(items: Vec<TranscriptItem<'a>>) -> Vec<TranscriptBlock<'a>> {
-    let mut blocks = Vec::with_capacity(items.len());
-    let mut run: Vec<ToolRow<'a>> = Vec::new();
-    for item in items {
-        match item {
-            TranscriptItem::User { entry, index } => {
-                if !run.is_empty() {
-                    blocks.push(TranscriptBlock::Tools(std::mem::take(&mut run)));
-                }
-                blocks.push(TranscriptBlock::User { entry, index });
-            }
-            TranscriptItem::Tool { call, result } => run.push(ToolRow { call, result }),
-            TranscriptItem::Entry(entry) => {
-                if !run.is_empty() {
-                    blocks.push(TranscriptBlock::Tools(std::mem::take(&mut run)));
-                }
-                blocks.push(TranscriptBlock::Entry(entry));
-            }
-        }
-    }
-    if !run.is_empty() {
-        blocks.push(TranscriptBlock::Tools(run));
-    }
-    blocks
-}
-
 fn render_tool_run(
     tools: &[ToolRow<'_>],
     workspace: &Workspace,
@@ -321,62 +304,63 @@ fn render_one_tool(
         .into_any_element()
 }
 
-enum TranscriptItem<'a> {
-    User {
-        entry: &'a ConversationEntry,
-        index: usize,
-    },
-    Tool {
-        call: &'a ConversationEntry,
-        result: Option<&'a ConversationEntry>,
-    },
-    Entry(&'a ConversationEntry),
-}
+/// Groups the transcript in linear time without cloning message payloads.
+/// Results are indexed backwards so reused call ids still select the nearest
+/// later result, never one from an earlier turn. The forward pass groups tools
+/// directly, without a second intermediate item representation.
+fn collect_transcript_blocks(entries: &[ConversationEntry]) -> Vec<TranscriptBlock<'_>> {
+    let mut next_results = std::collections::HashMap::new();
+    let mut matched = vec![None; entries.len()];
+    for (index, entry) in entries.iter().enumerate().rev() {
+        if let Some(call) = entry.call_id.as_deref() {
+            match entry.kind {
+                EntryKind::ToolResult => {
+                    next_results.insert(call, entry);
+                }
+                EntryKind::ToolCall => matched[index] = next_results.get(call).copied(),
+                _ => {}
+            }
+        }
+    }
 
-/// Splits the raw entry list into display blocks: user messages become their
-/// own rows, each tool call merges with its matching result, and everything
-/// else (assistant text, orphan results, usage markers) passes through.
-fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem<'_>> {
-    let mut items = Vec::with_capacity(entries.len());
-    // Call ids whose tool call is already listed. Membership replaces a scan
-    // back over every earlier entry, which went quadratic on long tool runs.
-    let mut listed_calls: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut index = 0;
-    while index < entries.len() {
-        let entry = &entries[index];
-        if entry.kind == EntryKind::UserMessage {
-            items.push(TranscriptItem::User { entry, index });
-        } else if entry.kind == EntryKind::ToolCall {
+    let mut blocks = Vec::with_capacity(entries.len());
+    let mut run = Vec::new();
+    let mut listed_calls = std::collections::HashSet::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.kind == EntryKind::ToolCall {
             if let Some(call) = entry.call_id.as_deref() {
                 listed_calls.insert(call);
             }
-            let result = entry.call_id.as_deref().and_then(|call| {
-                entries[index + 1..].iter().find(|next| {
-                    next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
-                })
-            });
-            items.push(TranscriptItem::Tool {
+            run.push(ToolRow {
                 call: entry,
-                result,
+                result: matched[index],
             });
-        } else if entry.kind == EntryKind::AssistantMessage
-            && entry.text.trim().is_empty()
-            && entry.thinking.trim().is_empty()
-        {
-            // A step that only issued tool calls. The tool rows carry it.
-        } else if entry.kind == EntryKind::ToolResult
-            && entry
-                .call_id
-                .as_deref()
-                .is_some_and(|call| listed_calls.contains(call))
-        {
-            // Already shown inside its call's block above.
-        } else {
-            items.push(TranscriptItem::Entry(entry));
+            continue;
         }
-        index += 1;
+        if (entry.kind == EntryKind::AssistantMessage
+            && entry.text.trim().is_empty()
+            && entry.thinking.trim().is_empty())
+            || (entry.kind == EntryKind::ToolResult
+                && entry
+                    .call_id
+                    .as_deref()
+                    .is_some_and(|call| listed_calls.contains(call)))
+        {
+            continue;
+        }
+        if !run.is_empty() {
+            blocks.push(TranscriptBlock::Tools(std::mem::take(&mut run)));
+        }
+        blocks.push(if entry.kind == EntryKind::UserMessage {
+            TranscriptBlock::User { entry, index }
+        } else {
+            TranscriptBlock::Entry(entry)
+        });
     }
-    items
+    if !run.is_empty() {
+        blocks.push(TranscriptBlock::Tools(run));
+    }
+    blocks
 }
 
 /// The jump-to-latest control, docked in-flow right above the composer. The
@@ -454,7 +438,7 @@ fn render_older_chip(loading: bool, cx: &Context<Workspace>) -> impl IntoElement
 
 #[cfg(test)]
 mod nesting_tests {
-    use super::collect_transcript_items;
+    use super::{TranscriptBlock, collect_transcript_blocks};
     use crate::view_model::{ConversationEntry, EntryKind};
 
     fn call(id: &str, text: &str) -> ConversationEntry {
@@ -474,6 +458,64 @@ mod nesting_tests {
             text: text.into(),
             call_id: Some(id.to_owned()),
             thinking: String::new(),
+        }
+    }
+
+    #[test]
+    fn reused_call_ids_pair_with_the_nearest_later_result() {
+        let entries = vec![
+            result("a", "orphan"),
+            call("a", "first"),
+            call("b", "parallel"),
+            result("b", "parallel result"),
+            result("a", "first result"),
+            call("a", "second"),
+            result("a", "second result"),
+            call("a", "unfinished"),
+        ];
+        let blocks = collect_transcript_blocks(&entries);
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            matches!(&blocks[0], TranscriptBlock::Entry(entry) if entry.text.as_ref() == "orphan")
+        );
+        let TranscriptBlock::Tools(tools) = &blocks[1] else {
+            panic!("expected a tool run");
+        };
+        let results: Vec<_> = tools
+            .iter()
+            .map(|tool| tool.result.map(|entry| entry.text.as_ref()))
+            .collect();
+        assert_eq!(
+            results,
+            [
+                Some("first result"),
+                Some("parallel result"),
+                Some("second result"),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_large_parallel_run_keeps_every_result_with_its_call() {
+        let mut entries = Vec::new();
+        for index in 0..1024 {
+            entries.push(call(&index.to_string(), "read"));
+        }
+        for index in (0..1024).rev() {
+            entries.push(result(&index.to_string(), &format!("payload {index}")));
+        }
+        let blocks = collect_transcript_blocks(&entries);
+        assert_eq!(blocks.len(), 1);
+        let TranscriptBlock::Tools(tools) = &blocks[0] else {
+            panic!("expected a tool run");
+        };
+        assert_eq!(tools.len(), 1024);
+        for (index, tool) in tools.iter().enumerate() {
+            assert_eq!(
+                tool.result.expect("paired result").text.as_ref(),
+                format!("payload {index}")
+            );
         }
     }
 
@@ -503,7 +545,7 @@ mod nesting_tests {
             call("c", "read  c.rs"),
             result("c", "c"),
         ];
-        let blocks = super::coalesce_tools(collect_transcript_items(&entries));
+        let blocks = collect_transcript_blocks(&entries);
         assert!(matches!(
             blocks.first(),
             Some(super::TranscriptBlock::User { .. })

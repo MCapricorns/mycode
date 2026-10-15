@@ -362,11 +362,9 @@ pub(super) fn element_id(value: &str) -> String {
 }
 
 pub(super) fn ellipsis(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        text.to_owned()
-    } else {
-        let head: String = text.chars().take(max_chars).collect();
-        format!("{head}\u{2026}")
+    match text.char_indices().nth(max_chars) {
+        Some((end, _)) => format!("{}\u{2026}", &text[..end]),
+        None => text.to_owned(),
     }
 }
 
@@ -375,4 +373,19 @@ pub(super) fn project_label(path: &str) -> String {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn previews_truncate_at_character_boundaries_and_keep_exact_length_text() {
+        assert_eq!(super::ellipsis("", 0), "");
+        assert_eq!(super::ellipsis("abc", 0), "\u{2026}");
+        assert_eq!(super::ellipsis("abc", 3), "abc");
+        assert_eq!(super::ellipsis("abc", 2), "ab\u{2026}");
+        assert_eq!(
+            super::ellipsis("\u{4e2d}\u{1f680}tail", 2),
+            "\u{4e2d}\u{1f680}\u{2026}"
+        );
+    }
 }

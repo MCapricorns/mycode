@@ -249,11 +249,7 @@ fn font_family_field(selected: &str, open: bool, cx: &mut Context<Workspace>) ->
 fn font_family_id_for_label(label: &str) -> Option<&'static str> {
     match label {
         "System" | "系统" => Some(mycode_config::SYSTEM_FONT_FAMILY),
-        "Inter" => Some("Inter"),
-        "Segoe UI" => Some("Segoe UI"),
-        "PingFang" => Some("PingFang"),
-        "Noto Sans" => Some("Noto Sans"),
-        _ => None,
+        _ => mycode_config::canonical_font_family(label),
     }
 }
 
@@ -558,6 +554,19 @@ fn palette_cell(
                 .text_color(theme.foreground)
                 .child(crate::ui::desk::palette_label(id)),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_offered_font_label_selects_its_canonical_family() {
+        for family in mycode_config::VALID_FONT_FAMILIES {
+            let label = crate::ui::desk::font_family_label(family);
+            assert_eq!(super::font_family_id_for_label(label), Some(family));
+        }
+        assert_eq!(super::font_family_id_for_label("System"), Some("system"));
+        assert_eq!(super::font_family_id_for_label("unknown"), None);
+    }
 }
 
 #[cfg(all(test, feature = "test-support"))]
