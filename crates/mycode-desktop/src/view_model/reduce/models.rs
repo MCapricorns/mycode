@@ -593,10 +593,7 @@ mod tests {
             }],
         }));
         let borrowed = super::selected_reasoning_levels(&state);
-        assert_eq!(
-            borrowed,
-            vec!["off".to_owned(), "on".to_owned()]
-        );
+        assert_eq!(borrowed, vec!["off".to_owned(), "on".to_owned()]);
         assert_eq!(crate::view_model::selected_reasoning_level(&state), "on");
         let row = state
             .catalog
