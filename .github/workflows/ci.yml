@@ -10,10 +10,10 @@
 #
 # push to main: the same Linux check, plus plan the release and build the
 # three native release binaries. Release builds use `[profile.release]`
-# (fat LTO, one codegen unit) through cargo_release_build.sh. Each native
-# runner also compiles all test targets with Clippy; warnings fail the build.
-# A publish waits until the check and all three
-# builds succeed. When the workspace version is new, tag that commit and
+# (fat LTO, one codegen unit) through cargo_release_build.sh and treat
+# warnings as errors (`RUSTFLAGS=-Dwarnings`). They do not run tests or
+# clippy; the Linux check owns those. A publish waits until the check and all
+# three builds succeed. When the workspace version is new, tag that commit and
 # publish the archives.
 # release-plan chooses `v<workspace version>` when that tag is free. When
 # the tag already exists, it bumps the patch in Cargo.toml, Cargo.lock,
@@ -288,14 +288,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          components: clippy
-
-      - name: Native Clippy (all targets, deny warnings)
-        shell: bash
-        env:
-          CARGO_NET_RETRY: "10"
-          CARGO_HTTP_TIMEOUT: "60"
-        run: cargo clippy --workspace --all-targets --locked --target "${{ matrix.target }}" -- -D warnings
 
       - name: Build release binary
         shell: bash
