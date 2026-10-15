@@ -36,7 +36,7 @@
 | `document_repair` | 把内容损坏或文件本身不能用的产品文档挪到 `.broken-*`，再发布默认内容 |
 | `settings` | `settings.json`。损坏时备份后回到默认设置（无提供商、两个未启用的内置网页后端） |
 | `secrets` | `secrets.json`：每个 id 一把密钥，按 id 排序。空字符串表示清除。损坏时备份后变成空存储，钥匙只留在备份里 |
-| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用和星标、每会话模型钉选、自动更新开关。只作界面恢复，不当作产品配置的真相 |
+| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用和星标、每会话模型钉选、自动更新开关、思考是否全部收起（`thinkingCollapsed`，默认展开）。只作界面恢复，不当作产品配置的真相 |
 | `project_mcp` | 读 `<项目>/.mycode/mcp.json`。文件不是合法 MCP JSON 或 stdio 命令是 shell 字符串时返回错误；项目里的服务器与设置里同 id 的服务器冲突时，项目那条覆盖 |
 | `compaction` | `compaction.json`：摘要覆盖到哪条消息、哪个分支头，摘要最多 24000 字符。账本本身不改写 |
 | `subagents` | 内置 scout 与 artisan，再加上家目录 `agents/*.md` 和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |

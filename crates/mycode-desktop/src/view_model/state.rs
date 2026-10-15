@@ -73,6 +73,9 @@ pub(crate) struct WorkspaceState {
     pub queued: Vec<String>,
     /// Steers sent to the running turn that its ledger has not shown yet.
     pub pending_steers: Vec<String>,
+    /// Every thinking trace shows as one collapsed row. Persisted in
+    /// `ui.json`; expanded by default.
+    pub thinking_collapsed: bool,
     /// A send is in flight.
     pub sending: bool,
     /// Compaction card held until the in-flight reply is committed.
@@ -505,7 +508,11 @@ pub enum DesktopAction {
         recent_models: Vec<mycode_config::ModelPin>,
         /// Starred model pins, newest first.
         starred_models: Vec<mycode_config::ModelPin>,
+        /// Thinking traces start collapsed.
+        thinking_collapsed: bool,
     },
+    /// A thinking header was clicked: every trace expands or collapses.
+    ThinkingCollapsedToggled,
     /// The sidebar workspace switcher opened or closed.
     WorkspaceMenuToggled(bool),
     /// A workspace was created and became the active one.

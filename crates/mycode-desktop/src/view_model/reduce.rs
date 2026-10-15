@@ -826,7 +826,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             active_workspace: active,
             recent_models,
             starred_models,
+            thinking_collapsed,
         } => {
+            state.thinking_collapsed = thinking_collapsed;
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;
@@ -852,6 +854,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             {
                 remember_session_model(state, &session_id);
             }
+        }
+        DesktopAction::ThinkingCollapsedToggled => {
+            state.thinking_collapsed = !state.thinking_collapsed;
         }
         DesktopAction::WorkspaceMenuToggled(open) => {
             state.workspace_menu_open = open;
