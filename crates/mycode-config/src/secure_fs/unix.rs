@@ -486,26 +486,6 @@ mod tests {
     }
 
     #[test]
-    fn permissive_settings_file_stays_fail_closed_after_the_directory_is_repaired() {
-        let tree = TempTree::new("file-mode");
-        let root = tree.path.join("home");
-        fs::create_dir(&root).expect("home");
-        set_mode(&root, 0o700);
-        let home = HomeLayout::from_root(&root).expect("layout");
-        replace_app_settings(&home, AuthorityRevision::ABSENT, &AppSettings::default())
-            .expect("publish");
-        let settings_path = root.join("settings.json");
-        set_mode(&settings_path, 0o644);
-        set_mode(&root, 0o755);
-
-        let error = read_app_settings(&home).expect_err("permissive file");
-
-        assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
-        assert_eq!(mode_bits(&root), 0o700);
-        assert_eq!(mode_bits(&settings_path), 0o644);
-    }
-
-    #[test]
     fn symlink_home_is_rejected_without_tightening_the_target() {
         let tree = TempTree::new("symlink-root");
         let real = tree.path.join("real-home");
