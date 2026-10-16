@@ -52,6 +52,20 @@ pub fn anchor_tool_path(primary: &Path, extras: &[PathBuf], raw: &str) -> (PathB
     }
 }
 
+/// The OS temp directory in its resolved long spelling.
+///
+/// `TEMP` can hold an 8.3 short form (`C:\Users\LONGNA~1\...`) while the
+/// model writes the long form it sees elsewhere; the anchor match above is
+/// lexical, so the root is resolved once here. A failed resolve keeps the
+/// raw value.
+#[must_use]
+pub fn os_scratch_root() -> PathBuf {
+    let temp = std::env::temp_dir();
+    std::fs::canonicalize(&temp)
+        .map(|resolved| strip_verbatim_prefix(&resolved))
+        .unwrap_or(temp)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

@@ -438,7 +438,7 @@ pub(crate) fn workspace_extra_roots(
     home: &mycode_config::HomeLayout,
     cwd: &std::path::Path,
 ) -> Vec<std::path::PathBuf> {
-    let roots = match mycode_config::read_ui_state(home) {
+    let mut roots = match mycode_config::read_ui_state(home) {
         Ok(state) => {
             let cwd_text = cwd.display().to_string();
             let mut roots: Vec<std::path::PathBuf> = state
@@ -453,17 +453,45 @@ pub(crate) fn workspace_extra_roots(
         }
         Err(_) => Vec::new(),
     };
-    temp_extra_root(roots)
-}
-
-/// Appends the OS temp directory so file tools can stage throwaway artifacts
-/// (test fixtures, recordings, scratch pages) outside the project tree.
-pub(crate) fn temp_extra_root(mut roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
-    let temp = std::env::temp_dir();
-    if !roots.iter().any(|root| root == &temp) {
-        roots.push(temp);
+    // File tools can stage throwaway artifacts (test pages, recordings,
+    // fixtures) outside the project tree.
+    let scratch = mycode_tools::os_scratch_root();
+    if !roots.contains(&scratch) {
+        roots.push(scratch);
     }
     roots
+}
+
+/// Splits extra roots into user workspace folders and the OS scratch root.
+/// Prompts list the scratch root apart so the model stages files there
+/// without treating it as project code, and skill discovery skips it.
+pub(crate) fn split_scratch_root(
+    roots: &[std::path::PathBuf],
+) -> (Vec<&std::path::Path>, Option<&std::path::Path>) {
+    let scratch = mycode_tools::os_scratch_root();
+    let mut workspace = Vec::new();
+    let mut found = None;
+    for root in roots {
+        if *root == scratch {
+            found = Some(root.as_path());
+        } else {
+            workspace.push(root.as_path());
+        }
+    }
+    (workspace, found)
+}
+
+/// Prompt note for the scratch root. Self-contained so it reads the same
+/// with or without other workspace folders.
+pub(crate) fn push_scratch_note(system: &mut String, scratch: Option<&std::path::Path>) {
+    if let Some(scratch) = scratch {
+        system.push_str(&format!(
+            "\n\nScratch directory (OS temp): {}\nPut throwaway files (test pages, \
+recordings, fixtures) there with absolute paths instead of the project tree. It is not \
+project code: do not search it.",
+            scratch.display()
+        ));
+    }
 }
 
 /// OS user home directory for global `.agents` discovery.
@@ -553,7 +581,7 @@ guess parameters. When the user also wants a subagent, emit `search_tool` in the
 response as `agent`.\n</mcp>",
         );
     }
-    let mut roots: Vec<&std::path::Path> = extra_roots.iter().map(PathBuf::as_path).collect();
+    let (mut roots, scratch) = split_scratch_root(extra_roots);
     roots.sort();
     if !roots.is_empty() {
         system_prompt.push_str("\n\nWorkspace folders besides the session cwd:\n");
@@ -568,6 +596,7 @@ path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in 
 cwd.",
         ));
     }
+    push_scratch_note(&mut system_prompt, scratch);
     system_prompt
 }
 

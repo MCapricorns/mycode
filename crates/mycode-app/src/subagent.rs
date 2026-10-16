@@ -907,7 +907,10 @@ fn append_child_skills(
     settings: &mycode_config::SkillsSettings,
 ) {
     let mut skills = mycode_config::discover_skills(cwd, crate::turn::os_user_home().as_deref());
-    for extra in extras {
+    // Any local process can write under the OS temp root; skills come only
+    // from folders the user added.
+    let (workspace_roots, _) = crate::turn::split_scratch_root(extras);
+    for extra in workspace_roots {
         for skill in mycode_config::discover_skills(extra, None) {
             if skills.iter().any(|existing| existing.slug == skill.slug) {
                 continue;
@@ -942,9 +945,10 @@ fn subagent_system_prompt(
     system.push_str(&role.name);
     system.push_str("\n\n");
     system.push_str(&role.prompt);
-    if !extra_roots.is_empty() {
+    let (workspace_roots, scratch) = crate::turn::split_scratch_root(extra_roots);
+    if !workspace_roots.is_empty() {
         system.push_str("\n\nOther workspace folders (absolute paths only):\n");
-        for root in extra_roots {
+        for root in &workspace_roots {
             system.push_str(&format!("- {}\n", root.display()));
         }
         if let Some(shell_tool) = mycode_agent::shell_tool_name(registry) {
@@ -955,6 +959,7 @@ path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in 
             ));
         }
     }
+    crate::turn::push_scratch_note(&mut system, scratch);
     system.push_str("\n\n");
     if mycode_agent::shell_tool_name(registry).is_some() {
         system.push_str(
@@ -1266,6 +1271,45 @@ mod tests {
         assert!(
             prompt.contains("a `powershell` script"),
             "extra roots must name the active tool:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn the_scratch_root_is_listed_apart_from_workspace_folders() {
+        let home =
+            HomeLayout::from_root(std::env::temp_dir().join("mycode-child-scratch")).unwrap();
+        let role = builtin_roles().role("artisan").expect("artisan").clone();
+        let allowed = role.resolve_tools(&["read".into(), "shell".into()]);
+        let shell = mycode_tools::DetectedShell {
+            kind: mycode_tools::ShellKind::Pwsh,
+            program: std::path::PathBuf::from("pwsh.exe"),
+        };
+        let registry = super::child_registry_with(
+            &home,
+            &allowed,
+            mycode_tools::ShellTool::forcing(shell.clone()),
+        );
+        let scratch = mycode_tools::os_scratch_root();
+        let prompt = super::subagent_system_prompt(
+            &role,
+            &registry,
+            std::path::Path::new("/work"),
+            std::slice::from_ref(&scratch),
+            "windows",
+            "x86_64",
+            &shell,
+            &Default::default(),
+        );
+        assert!(
+            !prompt.contains("Other workspace folders"),
+            "temp alone is not a workspace folder:\n{prompt}"
+        );
+        assert!(
+            prompt.contains(&format!(
+                "Scratch directory (OS temp): {}",
+                scratch.display()
+            )),
+            "{prompt}"
         );
     }
 

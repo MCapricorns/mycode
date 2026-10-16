@@ -40,7 +40,7 @@ pub use builtin::{ShellTool, register_builtins};
 pub use ctx::ToolCtx;
 pub use invoke::prepare_tool_ctx;
 pub use registry::ToolRegistry;
-pub use roots::anchor_tool_path;
+pub use roots::{anchor_tool_path, os_scratch_root};
 pub use stream::{ToolProgress, ToolStream, ToolStreamItem, ToolStreamReceiver};
 pub use tool::{Tool, ToolDyn, ToolError, ToolResult};
 
