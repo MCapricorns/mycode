@@ -461,7 +461,7 @@ fn oauth_block(
                         div()
                             .text_xl()
                             .font_family(theme.mono_font_family.clone())
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
                             .child(sign_in.user_code),
                     ),
             )

@@ -234,7 +234,7 @@ fn action_strip(
 fn section_label(text: &str, theme: &Theme) -> impl IntoElement {
     div()
         .text_xs()
-        .font_weight(gpui_kit::FontWeight::MEDIUM)
+        .font_weight(crate::ui::skin::WEIGHT_STRONG)
         .text_color(theme.muted_foreground)
         .child(text.to_owned())
 }
@@ -444,7 +444,6 @@ fn date_group_header(group: DateGroup, first: bool, theme: &Theme) -> impl IntoE
         .when(!first, |this| this.pt_2p5())
         .pb(px(2.))
         .text_xs()
-        .font_weight(gpui_kit::FontWeight::MEDIUM)
         .text_color(desk.faint)
         .child(group.label())
 }

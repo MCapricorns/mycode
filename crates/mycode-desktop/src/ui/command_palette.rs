@@ -70,7 +70,7 @@ pub(super) fn render(
     let catalog = palette_catalog(workspace.vm());
     let weak = cx.weak_entity();
     let command = command_element(&state, &catalog, weak);
-    let scrim = theme.overlay.opacity(0.45);
+    let scrim = crate::ui::skin::modal_scrim(&theme);
     div()
         .id("command-palette-layer")
         .absolute()

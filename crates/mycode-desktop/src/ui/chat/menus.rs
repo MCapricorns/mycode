@@ -291,7 +291,7 @@ pub(super) fn render_mention_layer(
                         this.child(
                             div()
                                 .text_xs()
-                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                 .opacity(0.6)
                                 .px_2()
                                 .pt_1()

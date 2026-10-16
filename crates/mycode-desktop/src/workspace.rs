@@ -280,9 +280,6 @@ pub struct Workspace {
     expanded_tool_batches: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
-    /// Last UI font-family id applied to the theme. Empty until the first frame.
-    /// `"system"` covers both an empty stored value and the explicit system id.
-    applied_font_family: String,
     /// Language last written into input placeholders. `u8::MAX` until the
     /// first frame, so a settings load that flips the language refreshes them.
     applied_language: u8,
@@ -384,7 +381,6 @@ impl Workspace {
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
             applied_font_size: String::new(),
-            applied_font_family: String::new(),
             applied_language: u8::MAX,
             import_request: None,
             import_confirm: None,
@@ -1090,7 +1086,6 @@ impl Workspace {
         }
         crate::ui::desk::apply(Theme::global_mut(cx));
         self.applied_font_size.clear();
-        self.applied_font_family.clear();
         Theme::sync_base(cx);
     }
 
@@ -1113,32 +1108,9 @@ impl Workspace {
         self.on_save_settings(cx);
     }
 
-    /// Applies and persists the UI font family. The next frame paints it, and
-    /// the settings save writes `appearance.fontFamily`.
-    pub(crate) fn on_select_font_family(&mut self, font_family: &str, cx: &mut Context<Self>) {
-        let Some(font_family) = mycode_config::canonical_font_family(font_family) else {
-            return;
-        };
-        if self.vm.settings.as_ref().is_some_and(|settings| {
-            mycode_config::canonical_font_family(&settings.font_family) == Some(font_family)
-        }) {
-            return;
-        }
-        self.applied_font_family.clear();
-        self.apply_action(
-            DesktopAction::SettingsFontFamilySelected(font_family.to_owned()),
-            cx,
-        );
-        self.on_save_settings(cx);
-    }
-
-    pub(crate) fn on_toggle_font_family_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::FontFamilyMenuToggled(open), cx);
-    }
-
-    /// Paints the saved interface font size and family onto the window, once
-    /// per change. Both values come from the settings projection, which is
-    /// what gets written to `settings.json`.
+    /// Paints the saved interface font size and the OS UI font onto the
+    /// window, once per change. The size comes from the settings projection,
+    /// which is what gets written to `settings.json`.
     pub(crate) fn sync_interface_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let size_id = self
             .vm
@@ -1146,19 +1118,11 @@ impl Workspace {
             .as_ref()
             .map(|settings| settings.font_size.as_str())
             .unwrap_or("m");
-        let family_id = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| settings.font_family.as_str())
-            .unwrap_or(mycode_config::SYSTEM_FONT_FAMILY);
         let size_id = crate::ui::desk::normalize_font_size(size_id);
-        let family_key = mycode_config::canonical_font_family(family_id)
-            .unwrap_or(mycode_config::SYSTEM_FONT_FAMILY);
-        if self.applied_font_size == size_id && self.applied_font_family == family_key {
+        if self.applied_font_size == size_id {
             return;
         }
-        let family = crate::ui::desk::ui_font_family(family_id, cx);
+        let family = crate::ui::desk::ui_font_family(cx);
         let mono = crate::ui::desk::mono_font_family(cx);
         {
             let theme = Theme::global_mut(cx);
@@ -1169,7 +1133,6 @@ impl Workspace {
         window.set_rem_size(px(crate::ui::desk::interface_rem_px(size_id)));
         Theme::sync_base(cx);
         self.applied_font_size = size_id.to_owned();
-        self.applied_font_family = family_key.to_owned();
     }
 
     /// Rewrites placeholders that were captured when the input was created.

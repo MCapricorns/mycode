@@ -1,5 +1,8 @@
-//! The General settings page: language, appearance, typeface, size, and
-//! request identity.
+//! The General settings page: appearance, text size, language, and the
+//! network identity (proxy and User-Agent).
+//!
+//! The interface always paints the operating-system UI font; there is no
+//! typeface picker.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
 use gpui_kit::{
@@ -7,7 +10,7 @@ use gpui_kit::{
     TestSupportExt as _, Window, div, px,
 };
 
-use super::widgets::{choice_chips, dropdown_field, settings_card};
+use super::widgets::{choice_chips, dropdown_field, field_label, settings_card, settings_row};
 use crate::i18n::t;
 use crate::workspace::Workspace;
 
@@ -35,7 +38,7 @@ pub(super) fn render_general_section(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let ua_input = workspace.settings_ua_input(window, cx);
+    let ua_field = user_agent_field(workspace, window, cx);
     let proxy_row = proxy_field(workspace, window, cx);
     let theme_id = workspace
         .vm()
@@ -55,25 +58,12 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.font_size.clone())
         .unwrap_or_else(|| "m".to_owned());
-    let font_family = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.font_family.clone())
-        .unwrap_or_else(|| mycode_config::SYSTEM_FONT_FAMILY.to_owned());
     let language_label_now = language_label(&configured_language).to_owned();
     let language_options = ["auto", "en", "zh"]
         .iter()
         .map(|id| language_label(id).to_owned())
         .collect::<Vec<_>>();
-    let effective_ua = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.effective_user_agent.clone())
-        .unwrap_or_default();
     let theme_row = appearance_theme_field(&theme_id, cx);
-    let font_family_row = font_family_field(&font_family, workspace.vm().font_family_menu_open, cx);
     let font_row = font_size_field(&font_size, cx);
     let language_row = dropdown_field(
         "language",
@@ -94,37 +84,6 @@ pub(super) fn render_general_section(
         },
         cx,
     );
-    let ua_field = div()
-        .w_full()
-        .h_auto()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(
-            div()
-                .text_sm()
-                .child(t("HTTP User-Agent", "HTTP User-Agent")),
-        )
-        .child(
-            // Fixed height. `Input` is `size_full`; without a definite box
-            // its percentage height resolves against the scrollport.
-            div()
-                .w_full()
-                .h(px(30.))
-                .min_h(px(30.))
-                .max_h(px(30.))
-                .flex_none()
-                .text_sm()
-                .child(Input::new(&ua_input)),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("{}: {effective_ua}", t("Effective", "生效值"))),
-        )
-        .into_any_element();
     let theme = cx.theme();
     div()
         .id("general-section")
@@ -133,33 +92,70 @@ pub(super) fn render_general_section(
         .flex_none()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap(crate::ui::skin::space(4))
         .child(settings_card(
             "appearance",
             t("Appearance", "外观"),
             Some(t(
-                "Appearance, typeface, size, and language apply immediately and are saved to settings.",
-                "外观、字体、字号和语言立即生效并写入设置。",
+                "Applies immediately and is saved to settings.",
+                "立即生效并写入设置。",
             )),
             theme,
-            vec![
-                language_row,
-                theme_row,
-                font_family_row,
-                font_row,
-                ua_field,
-            ],
+            vec![theme_row, font_row, language_row],
         ))
         .child(settings_card(
             "network",
             t("Network", "网络"),
             Some(t(
-                "Proxy for model, search, and update requests. Saved to settings; local models always connect directly.",
-                "模型、搜索与更新请求使用的代理。写入设置；本地模型始终直连。",
+                "Proxy and identity for model, search, and update requests. Local models always connect directly.",
+                "模型、搜索与更新请求使用的代理和标识。本地模型始终直连。",
             )),
             theme,
-            vec![proxy_row],
+            vec![proxy_row, ua_field],
         ))
+        .into_any_element()
+}
+
+fn user_agent_field(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let ua_input = workspace.settings_ua_input(window, cx);
+    let effective_ua = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.effective_user_agent.clone())
+        .unwrap_or_default();
+    div()
+        .id("row-user-agent")
+        .w_full()
+        .h_auto()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(crate::ui::skin::space(2))
+        .child(field_label("HTTP User-Agent"))
+        .child(
+            // Fixed height. `Input` is `size_full`; without a definite box
+            // its percentage height resolves against the scrollport.
+            div()
+                .w_full()
+                .h(px(32.))
+                .min_h(px(32.))
+                .max_h(px(32.))
+                .flex_none()
+                .text_sm()
+                .child(Input::new(&ua_input)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .whitespace_normal()
+                .child(format!("{}: {effective_ua}", t("Effective", "生效值"))),
+        )
         .into_any_element()
 }
 
@@ -213,8 +209,16 @@ fn proxy_field(
             Some(mycode_config::ProxyPreference::Url(_))
         )
     });
-    let muted = cx.theme().muted_foreground;
-    let danger = cx.theme().danger;
+    let chips = choice_chips(
+        "proxy-mode",
+        &options,
+        mode,
+        |workspace, value, cx| workspace.on_select_proxy_mode(value, cx),
+        cx,
+    );
+    let theme = cx.theme();
+    let muted = theme.muted_foreground;
+    let danger = theme.danger;
     div()
         .id("row-proxy")
         .w_full()
@@ -222,22 +226,21 @@ fn proxy_field(
         .flex_none()
         .flex()
         .flex_col()
-        .gap_2()
-        .child(div().text_sm().child(t("Proxy", "代理")))
-        .child(choice_chips(
+        .gap(crate::ui::skin::space(2))
+        .child(settings_row(
             "proxy-mode",
-            &options,
-            mode,
-            |workspace, value, cx| workspace.on_select_proxy_mode(value, cx),
-            cx,
+            t("Proxy", "代理"),
+            None,
+            chips,
+            theme,
         ))
         .children(input.map(|input| {
             // Fixed height, as for the User-Agent field.
             div()
                 .w_full()
-                .h(px(30.))
-                .min_h(px(30.))
-                .max_h(px(30.))
+                .h(px(32.))
+                .min_h(px(32.))
+                .max_h(px(32.))
                 .flex_none()
                 .text_sm()
                 .child(Input::new(&input))
@@ -261,42 +264,6 @@ fn proxy_field(
         .into_any_element()
 }
 
-fn font_family_field(selected: &str, open: bool, cx: &mut Context<Workspace>) -> AnyElement {
-    let installed = crate::ui::desk::installed_font_names(cx);
-    let options = crate::ui::desk::available_font_family_ids(installed)
-        .into_iter()
-        .map(|id| crate::ui::desk::font_family_label(id).to_owned())
-        .collect::<Vec<_>>();
-    let current = crate::ui::desk::font_family_label(selected).to_owned();
-    dropdown_field(
-        "font-family",
-        t("Interface font", "界面字体"),
-        Some(t(
-            "System uses the operating-system UI font. Other choices are fonts this computer can load.",
-            "系统使用操作系统界面字体。其余选项是本机能够加载的字体。",
-        )),
-        &current,
-        &options,
-        open,
-        |workspace, open, cx| workspace.on_toggle_font_family_menu(open, cx),
-        |workspace, label, cx| {
-            if let Some(id) = font_family_id_for_label(label) {
-                workspace.on_select_font_family(id, cx);
-            }
-            workspace.on_toggle_font_family_menu(false, cx);
-        },
-        cx,
-    )
-}
-
-/// The id a displayed font label maps back to, in either language pack.
-fn font_family_id_for_label(label: &str) -> Option<&'static str> {
-    match label {
-        "System" | "系统" => Some(mycode_config::SYSTEM_FONT_FAMILY),
-        _ => mycode_config::canonical_font_family(label),
-    }
-}
-
 fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
     let options = ["s", "m", "l", "xl"]
         .into_iter()
@@ -307,48 +274,27 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
             )
         })
         .collect::<Vec<_>>();
+    let chips = choice_chips(
+        "font-size",
+        &options,
+        selected,
+        |workspace, value, cx| workspace.on_select_font_size(value, cx),
+        cx,
+    );
     div()
         .id("row-font-size")
         .w_full()
         .h_auto()
         .flex_none()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(
-            div()
-                .w_full()
-                .min_w_0()
-                .h_auto()
-                .flex_none()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(
-                    div()
-                        .text_sm()
-                        .whitespace_normal()
-                        .child(t("Interface font size", "界面字号")),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .whitespace_normal()
-                        .child(t(
-                            "S / M / L / XL, about 12 / 13 / 14 / 16 px. Chat, the sidebar, and settings follow it immediately.",
-                            "S / M / L / XL，大约 12 / 13 / 14 / 16 像素。对话、侧栏和设置会立即跟随。",
-                        )),
-                ),
-        )
-        .child(choice_chips(
-            "font-size",
-            &options,
-            selected,
-            |workspace, value, cx| workspace.on_select_font_size(value, cx),
-            cx,
+        .child(settings_row(
+            "font-size-row",
+            t("Text size", "界面字号"),
+            Some(t(
+                "Body text at about 12 / 14 / 16 / 18 px. The typeface is always the system UI font.",
+                "正文约 12 / 14 / 16 / 18 像素。字体固定使用系统界面字体。",
+            )),
+            chips,
+            cx.theme(),
         ))
         .test_support()
         .into_any_element()
@@ -359,50 +305,24 @@ fn appearance_theme_field(selected: &str, cx: &mut Context<Workspace>) -> AnyEle
         .into_iter()
         .map(|(id, label)| (id.to_owned(), label.to_owned()))
         .collect::<Vec<_>>();
-    div()
-        .id("row-appearance-theme")
-        .w_full()
-        .h_auto()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(crate::ui::skin::space(2))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(div().text_sm().child(t("Appearance", "外观")))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .whitespace_normal()
-                        .child(t("Dark or light.", "深色或浅色。")),
-                ),
-        )
-        .child(choice_chips(
-            "appearance-theme",
-            &options,
-            selected,
-            |workspace, value, cx| workspace.on_select_theme(value, cx),
-            cx,
-        ))
-        .into_any_element()
+    let chips = choice_chips(
+        "appearance-theme",
+        &options,
+        selected,
+        |workspace, value, cx| workspace.on_select_theme(value, cx),
+        cx,
+    );
+    settings_row(
+        "appearance-theme",
+        t("Theme", "主题"),
+        Some(t("Dark or light.", "深色或浅色。")),
+        chips,
+        cx.theme(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn every_offered_font_label_selects_its_canonical_family() {
-        for family in mycode_config::VALID_FONT_FAMILIES {
-            let label = crate::ui::desk::font_family_label(family);
-            assert_eq!(super::font_family_id_for_label(label), Some(family));
-        }
-        assert_eq!(super::font_family_id_for_label("System"), Some("system"));
-        assert_eq!(super::font_family_id_for_label("unknown"), None);
-    }
-
     #[test]
     fn language_dropdown_keeps_follow_system_visible_when_configured_auto() {
         assert_eq!(
@@ -441,12 +361,6 @@ mod appearance_layout {
     impl Render for AppearanceProbe {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
-            let font = probe_dropdown(
-                "font-family",
-                "Interface font",
-                "System uses the operating-system UI font. Other choices are fonts this computer can load.",
-                "System",
-            );
             let size_row = probe_font_size();
             let language = probe_dropdown(
                 "language",
@@ -511,9 +425,9 @@ mod appearance_layout {
                                         .child(settings_card(
                                             "appearance",
                                             "Appearance",
-                                            Some("Appearance, typeface, size, and language."),
+                                            Some("Applies immediately and is saved to settings."),
                                             &theme,
-                                            vec![language, font, size_row, agent],
+                                            vec![size_row, language, agent],
                                         )),
                                 )
                                 .test_support(),
@@ -608,62 +522,75 @@ mod appearance_layout {
             .into_any_element()
     }
 
-    /// Mirrors `font_size_field` plus `choice_chips`.
+    /// Mirrors `font_size_field`: a `settings_row` with the label column on
+    /// the left and the `choice_chips` track on the right.
     fn probe_font_size() -> gpui_kit::AnyElement {
         div()
             .id("row-font-size")
             .w_full()
             .h_auto()
             .flex_none()
-            .flex()
-            .flex_col()
-            .gap_2()
             .child(
                 div()
                     .w_full()
                     .min_w_0()
-                    .h_auto()
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(div().text_sm().whitespace_normal().child("Interface font size"))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .text_xs()
-                            .opacity(0.5)
-                            .whitespace_normal()
-                            .child("S / M / L / XL, about 12 / 13 / 14 / 16 px. Chat, the sidebar, and settings follow it immediately."),
-                    ),
-            )
-            .child(
-                div()
-                    .id("chips-font-size")
-                    .w_full()
-                    .min_w_0()
-                    .h_auto()
-                    .flex_none()
                     .flex()
                     .flex_row()
-                    .flex_wrap()
-                    .items_start()
-                    .content_start()
-                    .justify_start()
-                    .gap_1()
-                    .children(["s", "m", "l", "xl"].into_iter().map(|value| {
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(
                         div()
-                            .id(format!("font-size-{value}"))
-                            .h(px(28.))
-                            .px_2()
-                            .flex_none()
-                            .self_start()
                             .flex()
-                            .items_center()
-                            .child(value.to_uppercase())
-                            .test_support()
-                    })),
+                            .flex_col()
+                            .gap_0p5()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_sm().whitespace_normal().child("Text size"))
+                            .child(
+                                div()
+                                    .id("font-size-hint")
+                                    .text_xs()
+                                    .whitespace_normal()
+                                    .child(
+                                        "Body text at about 12 / 14 / 16 / 18 px. The typeface is always the system UI font.",
+                                    )
+                                    .test_support(),
+                            ),
+                    )
+                    .child(
+                        div().flex_none().child(
+                            div()
+                                .id("chips-font-size")
+                                .max_w_full()
+                                .min_w_0()
+                                .h_auto()
+                                .flex_none()
+                                .self_start()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .items_center()
+                                .gap(px(2.))
+                                .p(px(2.))
+                                .border_1()
+                                .test_support()
+                                .children(["s", "m", "l", "xl"].into_iter().map(|value| {
+                                    div()
+                                        .id(format!("font-size-{value}"))
+                                        .h(px(26.))
+                                        .min_w(px(40.))
+                                        .px(px(12.))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .whitespace_nowrap()
+                                        .child(value.to_uppercase())
+                                        .test_support()
+                                })),
+                        ),
+                    ),
             )
             .test_support()
             .into_any_element()
@@ -694,18 +621,18 @@ mod appearance_layout {
     }
 
     #[gpui_kit::test]
-    fn appearance_card_packs_language_font_size_and_user_agent(cx: &mut TestAppContext) {
+    fn appearance_card_packs_size_language_and_user_agent(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(|cx| cx.set_reduce_motion(true));
         let handle = cx.open_window(size(px(1280.), px(480.)), |_, _| AppearanceProbe);
         cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
-            let font = window.find("dropdown-font-family").bounds();
-            let font_row = window.find("dropdown-row-font-family").bounds();
-            let font_button = window.find("dropdown-button-font-family").bounds();
-            let font_hint = window.find("dropdown-hint-font-family").bounds();
             let size_row = window.find("row-font-size").bounds();
+            let track = window.find("chips-font-size").bounds();
+            let hint = window.find("font-size-hint").bounds();
             let language = window.find("dropdown-language").bounds();
+            let language_button = window.find("dropdown-button-language").bounds();
+            let language_hint = window.find("dropdown-hint-language").bounds();
             let agent = window.find("row-user-agent").bounds();
             let chip = window.find("font-size-s").bounds();
             let chip_xl = window.find("font-size-xl").bounds();
@@ -713,46 +640,40 @@ mod appearance_layout {
             let content = window.find("settings-content").bounds();
 
             assert!(
-                language.origin.y >= content.origin.y
-                    && language.bottom() <= content.bottom()
-                    && language.origin.y < font.origin.y,
-                "language should be on the first screen, above the font: language {language:?} font {font:?} content {content:?}"
+                size_row.origin.y >= content.origin.y && language.bottom() <= content.bottom(),
+                "size and language should be on the first screen: size {size_row:?} language {language:?} content {content:?}"
             );
             assert!(
-                font.size.height < px(120.)
-                    && size_row.size.height < px(120.)
-                    && (font.size.height - font_row.size.height).abs() <= px(2.),
-                "font controls should be the row, not a stretched section: font {font:?} row {font_row:?} size {size_row:?}"
+                size_row.size.height < px(80.) && language.size.height < px(120.),
+                "rows should be content-sized, not stretched: size {size_row:?} language {language:?}"
             );
             assert!(
-                (font_button.size.width - px(200.)).abs() <= px(2.)
-                    && (font_button.size.height - px(32.)).abs() <= px(2.)
-                    && font_button.right() <= card.right() + px(1.)
-                    && font_hint.right() <= font_button.left() + px(4.)
-                    && font_hint.size.height >= px(12.)
-                    && font_hint.size.height < px(80.)
-                    && chip_xl.right() <= card.right() + px(1.),
-                "font helper should wrap beside a dropdown that stays inside the card: hint {font_hint:?} button {font_button:?} card {card:?} chip {chip_xl:?}"
+                (language_button.size.width - px(200.)).abs() <= px(2.)
+                    && (language_button.size.height - px(32.)).abs() <= px(2.)
+                    && language_button.right() <= card.right() + px(1.)
+                    && language_hint.right() <= language_button.left() + px(4.),
+                "language dropdown should sit right of its helper, inside the card: hint {language_hint:?} button {language_button:?} card {card:?}"
+            );
+            assert!(
+                hint.right() <= track.left() + px(4.)
+                    && chip_xl.right() <= card.right() + px(1.)
+                    && track.right() > card.right() - px(80.),
+                "size track should sit at the right edge beside its helper: hint {hint:?} track {track:?} card {card:?}"
+            );
+            assert!(
+                chip.size.height > px(16.) && chip.size.height < px(40.),
+                "S chip should paint at content height, got {chip:?}"
             );
 
-            let font_gap = font.origin.y - language.bottom();
-            let size_gap = size_row.origin.y - font.bottom();
-            let agent_gap = agent.origin.y - size_row.bottom();
+            let language_gap = language.origin.y - size_row.bottom();
+            let agent_gap = agent.origin.y - language.bottom();
             assert!(
-                font_gap >= px(0.) && font_gap < px(80.),
-                "gap between language and interface font is {font_gap:?}"
-            );
-            assert!(
-                size_gap >= px(0.) && size_gap < px(80.),
-                "gap between interface font and S–XL is {size_gap:?}"
+                language_gap >= px(0.) && language_gap < px(80.),
+                "gap between size and language is {language_gap:?}"
             );
             assert!(
                 agent_gap >= px(0.) && agent_gap < px(80.),
-                "gap between S–XL and user-agent is {agent_gap:?}"
-            );
-            assert!(
-                chip.size.height > px(16.) && chip.size.height < px(48.),
-                "S chip should paint at content height, got {chip:?}"
+                "gap between language and user-agent is {agent_gap:?}"
             );
 
             // Scrolling the settings pane must not panic, and the rows have
@@ -762,52 +683,47 @@ mod appearance_layout {
                 ScrollDelta::Pixels(point(px(0.), px(-240.))),
                 cx,
             );
-            let font_after = window.find("dropdown-font-family").bounds();
             let size_after = window.find("row-font-size").bounds();
+            let language_after = window.find("dropdown-language").bounds();
             let agent_after = window.find("row-user-agent").bounds();
-            let scrolled_gap = size_after.origin.y - font_after.bottom();
-            let scrolled_agent = agent_after.origin.y - size_after.bottom();
+            let scrolled_gap = language_after.origin.y - size_after.bottom();
+            let scrolled_agent = agent_after.origin.y - language_after.bottom();
             assert!(
-                font_after.size.height < px(120.)
-                    && size_after.size.height < px(120.)
+                size_after.size.height < px(80.)
+                    && language_after.size.height < px(120.)
                     && scrolled_gap >= px(0.)
                     && scrolled_gap < px(80.)
                     && scrolled_agent >= px(0.)
                     && scrolled_agent < px(80.),
-                "scroll should keep font, size, and user-agent packed: font {font_after:?} size {size_after:?} ua {agent_after:?}"
+                "scroll should keep size, language, and user-agent packed: size {size_after:?} language {language_after:?} ua {agent_after:?}"
             );
         })
         .unwrap();
     }
 
     #[gpui_kit::test]
-    fn font_helper_wraps_inside_a_narrow_appearance_card(cx: &mut TestAppContext) {
+    fn size_helper_wraps_inside_a_narrow_appearance_card(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(|cx| cx.set_reduce_motion(true));
         let handle = cx.open_window(size(px(1024.), px(720.)), |_, _| AppearanceProbe);
         cx.update_window(handle.into(), |_, window, _cx| {
             window.render_frame(_cx);
-            let hint = window.find("dropdown-hint-font-family").bounds();
-            let button = window.find("dropdown-button-font-family").bounds();
+            let hint = window.find("font-size-hint").bounds();
+            let track = window.find("chips-font-size").bounds();
             let card = window.find("card-appearance").bounds();
             let language = window.find("dropdown-language").bounds();
             let content = window.find("settings-content").bounds();
-            let chip = window.find("font-size-xl").bounds();
             assert!(
                 language.bottom() <= content.bottom(),
                 "language should stay on the first screen, language {language:?} content {content:?}"
             );
             assert!(
-                button.right() <= card.right() + px(1.) && hint.right() <= button.left() + px(4.),
-                "dropdown and helper should stay inside the card: hint {hint:?} button {button:?} card {card:?}"
+                track.right() <= card.right() + px(1.) && hint.right() <= track.left() + px(4.),
+                "track and helper should stay inside the card: hint {hint:?} track {track:?} card {card:?}"
             );
             assert!(
                 hint.size.height > px(22.) && hint.size.height < px(80.),
-                "font helper should wrap onto more than one line, got {hint:?}"
-            );
-            assert!(
-                chip.right() <= card.right() + px(1.),
-                "size chips should stay inside the card, chip {chip:?} card {card:?}"
+                "size helper should wrap onto more than one line, got {hint:?}"
             );
         })
         .unwrap();

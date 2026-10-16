@@ -78,7 +78,7 @@ pub(super) fn render_tool_block(
                             div()
                                 .flex_shrink_0()
                                 .text_xs()
-                                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                 .text_color(theme.foreground)
                                 .child(verb),
                         )
@@ -152,7 +152,6 @@ pub(super) fn render_tool_batch(
                 .flex_1()
                 .truncate()
                 .text_xs()
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
                 .text_color(theme.foreground)
                 .child(summary),
         )

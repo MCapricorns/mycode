@@ -78,7 +78,7 @@ pub(crate) fn render(
                 .id("project-picker-scrim")
                 .absolute()
                 .size_full()
-                .bg(skin::scrim(&theme))
+                .bg(skin::modal_scrim(&theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_picker_cancel(cx);
                 })),
@@ -91,18 +91,12 @@ pub(crate) fn render(
                 .items_center()
                 .justify_center()
                 .child(
-                    div()
-                        .id("project-picker")
+                    skin::dialog_panel("project-picker", &theme)
                         .occlude()
                         .w(px(520.))
                         .h(px(480.))
                         .flex()
                         .flex_col()
-                        .rounded(skin::radius_card())
-                        .border_1()
-                        .border_color(skin::glass_border(&theme))
-                        .bg(skin::popover(&theme))
-                        .text_color(theme.foreground)
                         .overflow_hidden()
                         .on_click(|_, _, cx| {
                             cx.stop_propagation();
@@ -130,7 +124,7 @@ fn picker_header(theme: &gpui_kit::component::theme::Theme, path_label: &str) ->
         .child(
             div()
                 .text_sm()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                 .child(crate::i18n::t("Choose a project folder", "选择项目目录")),
         )
         .child(
@@ -157,6 +151,7 @@ fn picker_nav(cx: &mut Context<Workspace>, at_roots: bool) -> impl IntoElement {
                 "picker-up",
                 crate::i18n::t("Up", "上一级"),
                 !at_roots,
+                false,
                 theme,
             )
             .on_click(cx.listener(|workspace, _, _, cx| {
@@ -164,17 +159,23 @@ fn picker_nav(cx: &mut Context<Workspace>, at_roots: bool) -> impl IntoElement {
             })),
         )
         .child(
-            desk_button("picker-home", crate::i18n::t("Home", "主目录"), true, theme).on_click(
-                cx.listener(|workspace, _, _, cx| {
-                    workspace.on_picker_home(cx);
-                }),
-            ),
+            desk_button(
+                "picker-home",
+                crate::i18n::t("Home", "主目录"),
+                true,
+                false,
+                theme,
+            )
+            .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.on_picker_home(cx);
+            })),
         )
         .child(
             desk_button(
                 "picker-roots",
                 crate::i18n::t("This computer", "此电脑"),
                 !at_roots,
+                false,
                 theme,
             )
             .on_click(cx.listener(|workspace, _, _, cx| {
@@ -209,7 +210,6 @@ fn drive_strip(
                 .items_center()
                 .rounded(px(8.))
                 .text_sm()
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
                 .border_1()
                 .border_color(if selected {
                     theme.primary
@@ -348,6 +348,7 @@ fn picker_footer(
                         "picker-cancel",
                         crate::i18n::t("Cancel", "取消"),
                         true,
+                        false,
                         theme,
                     )
                     .on_click(cx.listener(|workspace, _, _, cx| {
@@ -359,6 +360,7 @@ fn picker_footer(
                         "picker-use",
                         crate::i18n::t("Use this folder", "使用此目录"),
                         !at_roots,
+                        true,
                         theme,
                     )
                     .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -370,14 +372,16 @@ fn picker_footer(
         )
 }
 
-/// Same glass, ink, and border as the welcome actions.
+/// Same glass, ink, and border as the welcome actions. `emphasized` is the
+/// dialog's confirm action.
 fn desk_button(
     id: &'static str,
     label: &'static str,
     enabled: bool,
+    emphasized: bool,
     theme: &gpui_kit::component::theme::Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    skin::glass_button(id, false, theme)
+    skin::glass_button(id, emphasized, theme)
         .when(!enabled, |this| this.opacity(0.45))
         .text_color(if enabled {
             theme.foreground

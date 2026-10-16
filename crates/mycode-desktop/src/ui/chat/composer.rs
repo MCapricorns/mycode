@@ -446,7 +446,7 @@ fn render_running_subagents(
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .text_color(desk.faint)
                         .child(format!("{}  {count}", t("RUNNING", "运行中"))),
                 ),
@@ -555,7 +555,7 @@ fn render_pending_steers(items: Vec<String>, cx: &mut Context<Workspace>) -> imp
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .text_color(desk.faint)
                         .child(format!("{}  {}", t("STEERING", "追加引导"), items.len())),
                 )
@@ -605,7 +605,7 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .text_color(desk.faint)
                         .child(format!("{}  {}", t("QUEUED", "已排队"), items.len())),
                 )

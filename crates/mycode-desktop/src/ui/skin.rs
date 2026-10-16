@@ -76,6 +76,51 @@ pub(super) fn frost_accent(theme: &Theme) -> Hsla {
     theme.accent
 }
 
+/// The one emphasis weight for chrome: page, card, and dialog titles, list
+/// item names, and table heads. Everything else is regular.
+///
+/// No 500 (medium) anywhere. Segoe UI and Microsoft YaHei UI ship no 500
+/// face, so DirectWrite paints a 500 run regular on Windows while macOS
+/// paints it medium, and half the emphasis vanished on one platform. 600 is
+/// a real Segoe UI face and resolves to the bold CJK face, so one weight
+/// reads as emphasis everywhere.
+pub(crate) const WEIGHT_STRONG: gpui_kit::FontWeight = gpui_kit::FontWeight::SEMIBOLD;
+
+/// Recessed track behind a segmented control, darker than the card in both
+/// modes so the raised thumb reads as the pick.
+pub(super) fn segment_track(theme: &Theme) -> Hsla {
+    if theme.mode.is_dark() {
+        with_alpha(theme.background, 0.6)
+    } else {
+        theme.secondary_hover
+    }
+}
+
+/// Raised thumb for the picked segment.
+pub(super) fn segment_thumb(theme: &Theme) -> Hsla {
+    if theme.mode.is_dark() {
+        lifted(theme.popover, 0.1, 1.)
+    } else {
+        theme.sidebar
+    }
+}
+
+/// Hairline lift under a segmented-control thumb.
+pub(super) fn thumb_shadow(theme: &Theme) -> Vec<BoxShadow> {
+    let alpha = if theme.mode.is_dark() { 0.4 } else { 0.12 };
+    vec![BoxShadow::new(px(0.), px(1.), hsla(0., 0., 0., alpha)).blur_radius(px(2.))]
+}
+
+/// Scrim behind every modal dialog. The update dialog, the ask card, the
+/// project picker, and the command palette dim the window the same way.
+pub(super) fn modal_scrim(theme: &Theme) -> Hsla {
+    if theme.mode.is_dark() {
+        hsla(0., 0., 0., 0.5)
+    } else {
+        hsla(0., 0., 0., 0.28)
+    }
+}
+
 /// Base step of the spacing scale. Padding, gaps, and radii are multiples of this.
 pub(super) const SPACE_PX: f32 = 4.;
 
@@ -220,11 +265,6 @@ pub(super) fn menu_scrim(theme: &Theme) -> Hsla {
     theme.overlay.opacity(0.55)
 }
 
-/// Scrim drawn over the app behind an open menu layer.
-pub(super) fn scrim(theme: &Theme) -> Hsla {
-    theme.overlay
-}
-
 /// The shared floating-panel recipe.
 pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
     div()
@@ -235,6 +275,12 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .bg(popover(theme))
         .shadow(elevation_shadow(theme))
         .text_color(theme.popover_foreground)
+}
+
+/// Modal dialogs (update, ask, project picker). Opaque: over the dimmed
+/// window a translucent card picks up the scrim and reads grey.
+pub(super) fn dialog_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
+    popover_panel(id, theme).bg(lifted(theme.popover, 0.03, 1.))
 }
 
 /// Thinking and model menus. Opaque so the transcript does not show through.

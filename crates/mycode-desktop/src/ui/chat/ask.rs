@@ -28,6 +28,7 @@ pub(crate) fn render_ask_overlay(
     let width = px((f32::from(viewport.width) * 0.4).clamp(420., 620.));
     let theme = cx.theme();
     let desk = Desk::of(theme);
+    let muted = theme.muted_foreground;
     div()
         .id("ask-layer")
         // Without occlusion GPUI still hovers and clicks the session list,
@@ -47,12 +48,12 @@ pub(crate) fn render_ask_overlay(
                 .id("ask-backdrop")
                 .absolute()
                 .size_full()
-                .bg(theme.background.opacity(0.45))
+                .bg(skin::modal_scrim(theme))
                 .cursor_default()
                 .on_click(cx.listener(|_, _, _, _| {})),
         )
         .child(
-            skin::popover_panel("ask-card", theme)
+            skin::dialog_panel("ask-card", theme)
                 .relative()
                 .w(width)
                 .max_h(max_height)
@@ -60,7 +61,7 @@ pub(crate) fn render_ask_overlay(
                 .flex()
                 .flex_col()
                 .gap_3()
-                .p_4()
+                .p_5()
                 .child(
                     div()
                         .flex()
@@ -71,7 +72,7 @@ pub(crate) fn render_ask_overlay(
                         .child(
                             div()
                                 .text_sm()
-                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                 .child(t("The agent needs your input", "代理需要你的输入")),
                         ),
                 )
@@ -132,13 +133,18 @@ pub(crate) fn render_ask_overlay(
                             )
                         })
                         .when(multiple, |this| {
-                            this.child(div().text_xs().opacity(0.5).child(t(
+                            this.child(div().text_xs().text_color(muted).child(t(
                                 "Select more than one, then answer",
                                 "可多选，选完后点回答",
                             )))
                         })
                         .when(optional, |this| {
-                            this.child(div().text_xs().opacity(0.5).child(t("Optional", "可选")))
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t("Optional", "可选")),
+                            )
                         })
                         .child(
                             div()

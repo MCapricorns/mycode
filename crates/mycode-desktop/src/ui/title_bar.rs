@@ -186,7 +186,7 @@ fn drag_region(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui_kit::FontWeight::BOLD)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .text_color(theme.foreground)
                         .child("MYCode"),
                 ),

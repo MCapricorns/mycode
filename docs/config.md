@@ -47,7 +47,7 @@
 
 `AppSettings` 是设置页的唯一文档。
 
-- **外观**：`appearance.theme` 接受 `dark` 或 `light`，其它值校验失败，整份文档按上面的规则备份并重置。色板已移除：旧文件里的 `appearance.palette` 不论写的是什么都照常读入、被忽略，下次保存时清除，不会因此重置整份文档。`appearance.language` 是 `auto` / `en` / `zh`。`appearance.fontSize` 是 `s` / `m` / `l` / `xl`，缺省为 `m`。`appearance.fontFamily` 缺省、空字符串或 `system` 表示操作系统界面字体；具名值为 `Inter`、`Segoe UI`、`PingFang`、`Noto Sans`
+- **外观**：`appearance.theme` 接受 `dark` 或 `light`，其它值校验失败，整份文档按上面的规则备份并重置。色板已移除：旧文件里的 `appearance.palette` 不论写的是什么都照常读入、被忽略，下次保存时清除，不会因此重置整份文档。`appearance.language` 是 `auto` / `en` / `zh`。`appearance.fontSize` 是 `s` / `m` / `l` / `xl`（正文 12 / 14 / 16 / 18 像素），缺省为 `m`。界面字体固定为操作系统界面字体：旧文件里的 `appearance.fontFamily` 不论写的是什么都照常读入、被忽略，下次保存时清除。
 - **User-Agent**：`userAgent`，缺省是 pi agent 形状 `pi (<平台> <版本>; <架构>)`
 - **代理**：`proxy`，空或 `auto` 为智能模式（系统代理开启时走系统代理；否则直连，直连不通的公网站点改走本机正在监听的 Clash 7890 / 7897 或 v2rayN 10809 并在本进程内记住）；`direct` 忽略一切代理；也可以写 `http` / `https` / `socks5` / `socks5h` 代理地址，只写 `host:port` 按 `http` 处理。环回、`.local` 和私网地址始终直连
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`），可选 `hiddenModels`（不出现在对话模型切换、最近使用推荐和命令面板里的模型 id，设置页仍列出以便重新显示）。密钥不在此列

@@ -86,12 +86,7 @@ pub(super) fn render_settings_view(
                             workspace.on_show_main_view(MainView::Chat, cx);
                         }))
                         .child(Icon::new(IconName::ArrowLeft).with_size(px(16.)))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                                .child(t("Back to desk", "返回工作台")),
-                        )
+                        .child(div().text_sm().child(t("Back to desk", "返回工作台")))
                         .child(
                             div()
                                 .px(px(6.))
@@ -167,7 +162,7 @@ pub(super) fn render_settings_view(
                                         .child(
                                             div()
                                                 .text_lg()
-                                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                                 .child(section.label()),
                                         )
                                         .child(
@@ -482,7 +477,6 @@ fn nav_row(
         .cursor_pointer()
         .when(selected, |this| {
             this.bg(crate::ui::skin::frost_accent(theme))
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
         })
         .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
         .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -557,7 +551,7 @@ pub(super) fn subview_header(
         .child(
             div()
                 .text_sm()
-                .font_weight(gpui_kit::FontWeight::BOLD)
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                 .child(title.to_owned()),
         )
         .when_some(hint, |this, hint| {

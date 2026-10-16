@@ -414,7 +414,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                         .child(
                             div()
                                 .text_sm()
-                                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                 .child(id.clone()),
                         )
                         .child(
@@ -698,7 +698,7 @@ fn render_mcp_form(
                 .flex_col()
                 .gap_2()
                 .text_sm()
-                .child(labeled_field(t("id", "标识"), id_input))
+                .child(labeled_field(t("id", "标识"), id_input, theme))
                 .child(transport_field)
                 // Only the fields the chosen transport uses are shown; the
                 // old form listed every field and users typed the full
@@ -707,6 +707,7 @@ fn render_mcp_form(
                     this.child(labeled_field(
                         t("endpoint (https URL)", "端点(https URL)"),
                         endpoint_input,
+                        theme,
                     ))
                     .child(labeled_field(
                         t(
@@ -714,6 +715,7 @@ fn render_mcp_form(
                             "API 密钥(保存在凭据库,以 Bearer 发送)",
                         ),
                         api_key_input,
+                        theme,
                     ))
                 })
                 .when(!is_http, |this| {
@@ -723,6 +725,7 @@ fn render_mcp_form(
                             "命令行(程序与参数,允许引号)",
                         ),
                         command_input,
+                        theme,
                     ))
                     .child(labeled_field(
                         t(
@@ -730,6 +733,7 @@ fn render_mcp_form(
                             "环境变量(KEY=VALUE,可选)",
                         ),
                         env_input,
+                        theme,
                     ))
                 })
                 .into_any_element(),
