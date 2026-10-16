@@ -30,8 +30,9 @@ mod updates_data;
 pub(crate) use settings_editor::normalized_key_input;
 
 /// Preferred first-window size. The origin is computed from the primary
-/// display so the window opens in the middle of the usable area.
-const WINDOW_SIZE: gpui_kit::Size<Pixels> = size(px(1520.), px(960.));
+/// display so the window opens in the middle of the usable area, and smaller
+/// screens shrink the request rather than clipping it.
+const WINDOW_SIZE: gpui_kit::Size<Pixels> = size(px(1760.), px(1040.));
 
 /// Centers the preferred size on the primary display's usable area, shrinking
 /// it when the screen is smaller than that size.
