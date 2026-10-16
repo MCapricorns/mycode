@@ -1,6 +1,5 @@
 //! Tool cards: one icon and a status dot per call, diff stats only for
 //! edits, and a one-line summary when several calls land in a row.
-use std::collections::HashMap;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::theme::Theme;
@@ -65,6 +64,9 @@ pub(super) fn render_tool_block(
                         .flex_shrink_0()
                         .text_color(theme.muted_foreground),
                 )
+                // Verb, then the short status (failed, +3 -1, in progress),
+                // then the target filling the rest and truncating. Nothing
+                // is pinned to the far edge of a wide window.
                 .child(
                     div()
                         .flex()
@@ -82,6 +84,9 @@ pub(super) fn render_tool_block(
                                 .text_color(theme.foreground)
                                 .child(verb),
                         )
+                        .when(!status.is_empty(), |label| {
+                            label.child(tool_status_node(&status, failed, theme))
+                        })
                         .when(!target.is_empty(), |label| {
                             label.child(
                                 div()
@@ -95,10 +100,7 @@ pub(super) fn render_tool_block(
                                     .child(target),
                             )
                         }),
-                )
-                .when(!status.is_empty(), |row| {
-                    row.child(tool_status_node(&status, failed, theme))
-                }),
+                ),
         );
     if expanded && let Some(result) = result {
         let body = div()
@@ -146,10 +148,11 @@ pub(super) fn render_tool_batch(
             workspace.on_toggle_tool_batch(&batch_id, cx);
         }))
         .child(status_dot(has_failed, has_unfinished, turn_running, theme))
+        // Content-sized, so the disclosure marker sits beside the summary
+        // instead of at the far edge of the row.
         .child(
             div()
                 .min_w_0()
-                .flex_1()
                 .truncate()
                 .text_xs()
                 .text_color(theme.foreground)
@@ -414,245 +417,10 @@ pub(super) fn tool_status(
             return format!("+{added} -{removed}");
         }
     }
-    if text.trim().is_empty() {
-        return t("done", "完成").to_owned();
-    }
-    status_snippet(text)
-}
-
-/// First prose line, or a neutral line count when every line is decoration,
-/// a raw byte window (`|347270:347292`), or character art.
-fn status_snippet(text: &str) -> String {
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || decoration_line(line) || raw_span_line(line) {
-            continue;
-        }
-        // Drop a markdown heading marker and the rule characters that frame
-        // ASCII art (`....Pelican....`, `# Tokio`). Digits and brackets stay.
-        let line = line.trim_matches(|c: char| c.is_whitespace() || is_rule_char(c));
-        if line.is_empty() || decoration_line(line) || raw_span_line(line) {
-            continue;
-        }
-        if status_line_passes(line) {
-            return ellipsis(line, 48);
-        }
-    }
-    lines_output_summary(text)
-}
-
-/// Whether `line` can sit on the right edge of a tool row.
-///
-/// A short scalar (`42`, `3.14`, `[1, 2, 3]`) is kept as written. Anything
-/// else has to be prose: at least two words, mostly letters and spaces, and
-/// not character art. One other token is kept when it is not art, so a URL
-/// or a single word framed by rule characters still summarizes. Art is a run
-/// of the same character (5 or more) or a high ratio of repeated characters.
-fn status_line_passes(line: &str) -> bool {
-    if is_short_scalar(line) {
-        return true;
-    }
-    if is_character_art(line) {
-        return false;
-    }
-    if prose_word_count(line) >= 2 {
-        return mostly_letters_and_spaces(line);
-    }
-    line.split_whitespace().count() == 1 && single_token_summary(line)
-}
-
-/// `42`, `3.14`, and `[1, 2, 3]`. A sign is allowed. Bracket lists are
-/// comma-separated numbers and nothing else.
-fn is_short_scalar(line: &str) -> bool {
-    if is_plain_number(line) {
-        return true;
-    }
-    let Some(inner) = line
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
-    else {
-        return false;
-    };
-    inner.split(',').all(|part| is_plain_number(part.trim())) && !inner.is_empty()
-}
-
-fn is_plain_number(text: &str) -> bool {
-    let rest = text
-        .strip_prefix(|c: char| c == '+' || c == '-')
-        .unwrap_or(text);
-    if rest.is_empty() {
-        return false;
-    }
-    let mut saw_dot = false;
-    let mut saw_digit = false;
-    for c in rest.chars() {
-        if c.is_ascii_digit() {
-            saw_digit = true;
-        } else if c == '.' && !saw_dot {
-            saw_dot = true;
-        } else {
-            return false;
-        }
-    }
-    saw_digit
-}
-
-/// A run of 5+ identical characters, or a long line drawn from a handful of
-/// glyphs. Spaces do not count, so `W O W O W O W O` is still art.
-fn is_character_art(line: &str) -> bool {
-    if has_run(line, 5) {
-        return true;
-    }
-    let mut counts: HashMap<char, usize> = HashMap::new();
-    let mut total = 0usize;
-    for c in line.chars() {
-        if c.is_whitespace() {
-            continue;
-        }
-        total += 1;
-        *counts.entry(c).or_insert(0) += 1;
-    }
-    if total < 8 {
-        return false;
-    }
-    let max = counts.values().copied().max().unwrap_or(0);
-    max * 2 >= total || counts.len() <= 3
-}
-
-fn has_run(line: &str, min: usize) -> bool {
-    let mut previous = None;
-    let mut run = 0usize;
-    for c in line.chars() {
-        if c.is_whitespace() {
-            continue;
-        }
-        if previous == Some(c) {
-            run += 1;
-        } else {
-            previous = Some(c);
-            run = 1;
-        }
-        if run >= min {
-            return true;
-        }
-    }
-    false
-}
-
-fn prose_word_count(line: &str) -> usize {
-    line.split_whitespace()
-        .filter(|word| word.chars().any(|c| c.is_alphabetic()))
-        .count()
-}
-
-/// Letters and spaces are the line. Digits and punctuation may appear, but
-/// they stay a minority, and the line still contains letters.
-fn mostly_letters_and_spaces(line: &str) -> bool {
-    let mut letters = 0usize;
-    let mut spaces = 0usize;
-    let mut other = 0usize;
-    for c in line.chars() {
-        if c.is_alphabetic() {
-            letters += 1;
-        } else if c.is_whitespace() {
-            spaces += 1;
-        } else {
-            other += 1;
-        }
-    }
-    let total = letters + spaces + other;
-    total > 0 && letters >= 2 && (letters + spaces) * 2 >= total && letters * 2 >= letters + other
-}
-
-/// A URL, a path, or one word such as `Pelican`. Symbol soup and short
-/// repeats are not summaries.
-fn single_token_summary(line: &str) -> bool {
-    let mut letters = 0usize;
-    let mut total = 0usize;
-    for c in line.chars() {
-        total += 1;
-        if c.is_alphabetic() {
-            letters += 1;
-        }
-    }
-    letters >= 4 && letters * 2 >= total
-}
-
-fn lines_output_summary(text: &str) -> String {
-    let count = text.lines().filter(|line| !line.trim().is_empty()).count();
-    if count == 0 {
-        return t("done", "完成").to_owned();
-    }
-    if count == 1 {
-        return t("1 line output", "1 行输出").to_owned();
-    }
-    if is_chinese() {
-        format!("{count} 行输出")
-    } else {
-        format!("{count} lines output")
-    }
-}
-
-/// A line is noise only when it is rules and box drawing, plus optional
-/// whitespace (`=====`, `-------`, `────`). Digits and brackets are output:
-/// `42`, `3.14`, and `[1, 2, 3]` are summaries. A banner that still contains
-/// a word (`===== tokio =====`) is noise when rule glyphs dominate it. Dots
-/// are not banner glyphs, so a row of dots is trimmed before the prose check
-/// instead of being discarded with its lettering.
-fn decoration_line(line: &str) -> bool {
-    let mut saw_ink = false;
-    for c in line.chars() {
-        if c.is_whitespace() {
-            continue;
-        }
-        saw_ink = true;
-        if !is_rule_char(c) {
-            saw_ink = false;
-            break;
-        }
-    }
-    if saw_ink {
-        return true;
-    }
-    let chars: Vec<char> = line.chars().collect();
-    let rules = chars.iter().filter(|c| is_banner_rule(**c)).count();
-    rules >= 6 && rules.saturating_mul(2) >= chars.len()
-}
-
-/// Rule and box-drawing glyphs. Whitespace is handled by the caller.
-fn is_rule_char(c: char) -> bool {
-    matches!(c, '=' | '-' | '_' | '*' | '~' | '#' | '.' | '|' | '+')
-        || ('\u{2500}'..='\u{257F}').contains(&c)
-}
-
-/// Glyphs that mark a text banner. `.` is omitted so a pelican row of dots
-/// is not discarded before its lettering is trimmed.
-fn is_banner_rule(c: char) -> bool {
-    matches!(c, '=' | '-' | '_' | '*' | '#' | '|' | '+' | '~')
-}
-
-/// A digit-heavy `|start:end` window from a raw output dump.
-fn raw_span_line(line: &str) -> bool {
-    let sample: String = line.chars().take(48).collect();
-    let len = sample.chars().count();
-    if len == 0 {
-        return false;
-    }
-    let digits = sample.chars().filter(|c| c.is_ascii_digit()).count();
-    if digits.saturating_mul(2) < len {
-        return false;
-    }
-    let core = sample
-        .trim()
-        .trim_matches(|c: char| matches!(c, '|' | '…' | '.' | ' '));
-    let Some((left, right)) = core.split_once(':') else {
-        return false;
-    };
-    let right = right.trim_end_matches(['…', '.']);
-    !left.is_empty()
-        && !right.is_empty()
-        && left.chars().all(|c| c.is_ascii_digit())
-        && right.chars().all(|c| c.is_ascii_digit())
+    // A finished call shows no excerpt: the green dot already says it is
+    // done, and the output is one click away. A first-line preview at the
+    // row's end only repeated the expanded body.
+    String::new()
 }
 
 /// Only edit and write previews use `+ ` / `- ` as a diff. Markdown from an
@@ -1059,8 +827,7 @@ mod tests {
     fn fetch_content_list_lines_are_not_a_diff() {
         let page = eleven_list_lines("[https://example.com/a]");
         let status = tool_status("fetch_content", Some(&result_entry(&page)), false);
-        assert_eq!(status, "[https://example.com/a]");
-        assert_ne!(status, "+0 -11");
+        assert_eq!(status, "");
         assert!(!shows_diff_preview("fetch_content", &page));
     }
 
@@ -1068,7 +835,7 @@ mod tests {
     fn web_search_snippets_are_not_a_diff() {
         let text = "[https://example.com] Docs\n- alpha\n- beta\n";
         let status = tool_status("web_search", Some(&result_entry(text)), false);
-        assert_eq!(status, "[https://example.com] Docs");
+        assert_eq!(status, "");
         assert!(!shows_diff_preview("web_search", text));
     }
 
@@ -1079,10 +846,33 @@ mod tests {
             text.push_str(&format!("- line {n}\n"));
         }
         let status = tool_status("agent", Some(&result_entry(&text)), false);
-        assert_eq!(status, "scout notes");
-        assert_ne!(status, "+0 -21");
+        assert_eq!(status, "");
         assert!(!shows_diff_preview("agent", &text));
         assert!(!shows_diff_preview("scout", &text));
+    }
+
+    #[test]
+    fn a_finished_call_shows_no_output_excerpt() {
+        for text in [
+            "42
+",
+            "compiled 3 files
+",
+            "   
+",
+            "name: context7-mcp
+",
+        ] {
+            assert_eq!(tool_status("bash", Some(&result_entry(text)), false), "");
+        }
+        assert_eq!(
+            tool_status("bash", Some(&result_entry("failed: exit 1")), false),
+            crate::i18n::t("failed", "失败")
+        );
+        assert_eq!(
+            tool_status("bash", None, true),
+            crate::i18n::t("in progress", "进行中")
+        );
     }
 
     #[test]
@@ -1107,127 +897,6 @@ mod tests {
             "+2 -0"
         );
         assert!(shows_diff_preview("write", text));
-    }
-
-    #[test]
-    fn raw_output_banners_are_not_the_summary() {
-        let banner = "===== tokio =====\n|347270:347292…\n-------\n";
-        assert_eq!(
-            tool_status("bash", Some(&result_entry(banner)), false),
-            "3 lines output"
-        );
-        let with_text = "===== tokio =====\n-------\ncompiled 3 files\n";
-        assert_eq!(
-            tool_status("bash", Some(&result_entry(with_text)), false),
-            "compiled 3 files"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("   \n")), false),
-            "done"
-        );
-    }
-
-    #[test]
-    fn numbers_and_brackets_are_the_summary() {
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("42\n")), false),
-            "42"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("3.14\n")), false),
-            "3.14"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("[1, 2, 3]\n")), false),
-            "[1, 2, 3]"
-        );
-    }
-
-    #[test]
-    fn ascii_art_dots_and_markdown_headings_are_trimmed() {
-        let pelican = format!("{}Pelican", ".".repeat(60));
-        assert_eq!(
-            tool_status("bash", Some(&result_entry(&pelican)), false),
-            "Pelican"
-        );
-        assert_eq!(
-            tool_status(
-                "bash",
-                Some(&result_entry("# Tokio Runtime — Fact Sheet\n")),
-                false
-            ),
-            "Tokio Runtime — Fact Sheet"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("...\n")), false),
-            "1 line output"
-        );
-    }
-
-    #[test]
-    fn ascii_art_is_not_the_summary() {
-        let pelican = "\
-      WWWWWWWW
-    WWWWWWWWWWWW
-   WWWWWWWWWWWWWW
-  DD.OOOOOOOOOOOOOOOOOO
- DDDDDDDDDDDDDDDDDDDDDD
-  WWWWWWWWWWWWWWWWWWWW
-";
-        assert_eq!(
-            tool_status("bash", Some(&result_entry(pelican)), false),
-            "6 lines output"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("WWWWWWWWWWWW\n")), false),
-            "1 line output"
-        );
-        assert_eq!(
-            tool_status(
-                "bash",
-                Some(&result_entry("DD.OOOOOOOOOOOOOOOOOO\n")),
-                false
-            ),
-            "1 line output"
-        );
-        let captioned = format!("{pelican}The pelican faces right\n");
-        assert_eq!(
-            tool_status("bash", Some(&result_entry(&captioned)), false),
-            "The pelican faces right"
-        );
-
-        let blocks = "████████████\n██        ██\n████████████\n▀▄▀▄▀▄▀▄▀▄▀▄▀\n";
-        assert_eq!(
-            tool_status("bash", Some(&result_entry(blocks)), false),
-            "4 lines output"
-        );
-
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("42\n")), false),
-            "42"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("3.14\n")), false),
-            "3.14"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("[1, 2, 3]\n")), false),
-            "[1, 2, 3]"
-        );
-        assert_eq!(
-            tool_status(
-                "bash",
-                Some(&result_entry(
-                    "===== tokio =====\n-------\n# Tokio Runtime — Fact Sheet\n"
-                )),
-                false
-            ),
-            "Tokio Runtime — Fact Sheet"
-        );
-        assert_eq!(
-            tool_status("bash", Some(&result_entry("compiled 3 files\n")), false),
-            "compiled 3 files"
-        );
     }
 
     #[test]
