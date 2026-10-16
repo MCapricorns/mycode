@@ -82,41 +82,36 @@ pub fn is_fetchable_url(value: &str) -> bool {
 /// and tab), and bidi overrides from untrusted remote text. Retrieved page
 /// text is data, never terminal input.
 pub fn sanitize_remote_text(value: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
+    if value.chars().all(is_clean_remote_char) {
+        return value.to_owned();
+    }
+    let mut chars = value.chars().peekable();
     let mut out = String::with_capacity(value.len());
-    let mut index = 0;
-    while index < chars.len() {
-        let current = chars[index];
+    while let Some(current) = chars.next() {
         match current {
-            '\u{1b}' => match chars.get(index + 1).copied() {
-                Some('[') => index = skip_csi(&chars, index + 2),
-                Some(']') => index = skip_osc(&chars, index + 2),
-                Some('P' | 'X' | '^' | '_') => {
-                    index = skip_control_string(&chars, index + 2);
-                }
-                Some(_) => index += 2,
-                None => index += 1,
+            '\u{1b}' => match chars.next() {
+                Some('[') => skip_csi(&mut chars),
+                Some(']') => skip_osc(&mut chars),
+                Some('P' | 'X' | '^' | '_') => skip_control_string(&mut chars),
+                Some(_) | None => {}
             },
-            '\u{9b}' => index = skip_csi(&chars, index + 1),
-            '\u{9d}' => index = skip_osc(&chars, index + 1),
-            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => {
-                index = skip_control_string(&chars, index + 1);
-            }
-            '\n' | '\t' => {
-                out.push(current);
-                index += 1;
-            }
-            _ if (current as u32) < 0x20 || matches!(current as u32, 0x7f..=0x9f) => {
-                index += 1;
-            }
-            _ if is_bidi_control(current) => index += 1,
-            _ => {
-                out.push(current);
-                index += 1;
-            }
+            '\u{9b}' => skip_csi(&mut chars),
+            '\u{9d}' => skip_osc(&mut chars),
+            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => skip_control_string(&mut chars),
+            '\n' | '\t' => out.push(current),
+            _ if !is_clean_remote_char(current) => {}
+            _ => out.push(current),
         }
     }
     out
+}
+
+fn is_clean_remote_char(current: char) -> bool {
+    current == '\n'
+        || current == '\t'
+        || ((current as u32) >= 0x20
+            && !matches!(current as u32, 0x7f..=0x9f)
+            && !is_bidi_control(current))
 }
 
 fn is_bidi_control(current: char) -> bool {
@@ -124,44 +119,34 @@ fn is_bidi_control(current: char) -> bool {
         0x061c | 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
 }
 
-fn skip_csi(chars: &[char], start: usize) -> usize {
-    let mut index = start;
-    while index < chars.len() {
-        let current = chars[index];
-        index += 1;
+fn skip_csi(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    for current in chars.by_ref() {
         if ('@'..='~').contains(&current) {
-            return index;
+            break;
         }
     }
-    index
 }
 
-fn skip_osc(chars: &[char], start: usize) -> usize {
-    let mut index = start;
-    while index < chars.len() {
-        let current = chars[index];
+fn skip_osc(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while let Some(current) = chars.next() {
         if current == '\u{7}' || current == '\u{9c}' {
-            return index + 1;
+            break;
         }
-        if current == '\u{1b}' && chars.get(index + 1) == Some(&'\\') {
-            return index + 2;
+        if current == '\u{1b}' && chars.peek() == Some(&'\\') {
+            chars.next();
+            break;
         }
-        index += 1;
     }
-    index
 }
 
-fn skip_control_string(chars: &[char], start: usize) -> usize {
-    let mut index = start;
-    while index < chars.len() {
-        let current = chars[index];
+fn skip_control_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while let Some(current) = chars.next() {
         if current == '\u{9c}' {
-            return index + 1;
+            break;
         }
-        if current == '\u{1b}' && chars.get(index + 1) == Some(&'\\') {
-            return index + 2;
+        if current == '\u{1b}' && chars.peek() == Some(&'\\') {
+            chars.next();
+            break;
         }
-        index += 1;
     }
-    index
 }

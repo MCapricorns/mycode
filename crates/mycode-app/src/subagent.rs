@@ -214,35 +214,11 @@ pub(crate) fn resolve_isolation(role: &SubagentRole, requested: Option<&str>) ->
     let chosen = requested
         .and_then(RoleIsolation::parse)
         .unwrap_or(role.isolation);
-    if chosen == RoleIsolation::Worktree && !role_is_write_capable(role) {
+    if chosen == RoleIsolation::Worktree && !role.is_write_capable() {
         RoleIsolation::Shared
     } else {
         chosen
     }
-}
-
-/// Whether `role` can actually mutate the workspace or call non-read-only tools.
-///
-/// Checked against the resolved allowlist rather than raw frontmatter names,
-/// so a role whose frontmatter only lists `agent`, `ask_user`, or unknown
-/// names is still treated as read-only for worktree and MCP filtering.
-#[must_use]
-fn role_is_write_capable(role: &SubagentRole) -> bool {
-    if !role.is_write_capable() {
-        return false;
-    }
-    let allowed = role.resolve_tools(
-        &PARENT_TOOL_NAMES
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect::<Vec<_>>(),
-    );
-    allowed.iter().any(|name| {
-        matches!(
-            name.as_str(),
-            "write" | "edit" | "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd"
-        )
-    })
 }
 
 impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
@@ -379,12 +355,7 @@ impl BridgeAgentHost {
         let transport = ReqwestTransport::new()
             .map_err(|error| fail(format!("HTTP transport unavailable: {error}")))?;
         let wire = WireProvider::new(resolved, Arc::new(transport));
-        let allowed = role.resolve_tools(
-            &PARENT_TOOL_NAMES
-                .iter()
-                .map(|name| (*name).to_owned())
-                .collect::<Vec<_>>(),
-        );
+        let allowed = role.resolve_tools(PARENT_TOOL_NAMES);
         // Stdio servers are spawned kill-on-drop, so a stop may abandon a
         // slow handshake.
         let (mcp_tools, mcp_warning) = tokio::select! {
@@ -397,7 +368,7 @@ impl BridgeAgentHost {
                 Some(&self.cwd),
             ) => connected,
         };
-        let mcp_tools = if role_is_write_capable(role) {
+        let mcp_tools = if role.is_write_capable() {
             mcp_tools
         } else {
             mcp_tools
@@ -751,7 +722,7 @@ fn child_registry_with(
             "read" => registry.register(Arc::new(mycode_tools::builtin::ReadTool)),
             "write" => registry.register(Arc::new(mycode_tools::builtin::WriteTool)),
             "edit" => registry.register(Arc::new(mycode_tools::builtin::EditTool)),
-            "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd" => {
+            "shell" | "bash" | "zsh" | "sh" | "pwsh" | "powershell" | "cmd" => {
                 if let Some(tool) = shell.take() {
                     registry.register(Arc::new(tool));
                 }

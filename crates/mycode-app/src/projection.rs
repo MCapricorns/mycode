@@ -8,30 +8,14 @@ use mycode_core::{AssistantMessage, ContentBlock};
 use crate::ledger::decode_text;
 use crate::protocol::{ConversationEntry, EntryKind};
 
-/// Latest prompt size carried by one ledger payload.
-///
-/// Current turns store it on the assistant message (`prompt_tokens` and
-/// `cache_read_tokens`). Older ledgers stored a `usage` event whose
-/// `context` / `context_cache` fields are the same meter. A payload with no
-/// positive prompt size is not a snapshot.
-pub(crate) fn meter_snapshot(kind: EventKind, payload: &[u8]) -> Option<(u64, u64)> {
-    let (context, cache) = match kind {
-        EventKind::Message => assistant_meter(payload)?,
-        EventKind::Usage => usage_event_meter(payload)?,
-        EventKind::ToolCall | EventKind::ToolResult | EventKind::Task => return None,
-    };
-    (context > 0).then_some((context, cache))
-}
-
-fn assistant_meter(payload: &[u8]) -> Option<(u64, u64)> {
-    let message: AssistantMessage = serde_json::from_slice(payload).ok()?;
-    let usage = message.usage?;
+fn assistant_meter(message: &AssistantMessage) -> Option<(u64, u64)> {
+    let usage = message.usage.as_ref()?;
     let context = if usage.prompt_tokens > 0 {
         usage.prompt_tokens
     } else {
         usage.input_tokens
     };
-    Some((context, usage.cache_read_tokens.unwrap_or(0)))
+    (context > 0).then_some((context, usage.cache_read_tokens.unwrap_or(0)))
 }
 
 fn usage_event_meter(payload: &[u8]) -> Option<(u64, u64)> {
@@ -41,26 +25,52 @@ fn usage_event_meter(payload: &[u8]) -> Option<(u64, u64)> {
         .get("context_cache")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    Some((context, cache))
+    (context > 0).then_some((context, cache))
 }
 
+#[cfg(test)]
+pub(crate) fn meter_snapshot(kind: EventKind, payload: &[u8]) -> Option<(u64, u64)> {
+    match kind {
+        EventKind::Message => {
+            let message: AssistantMessage = serde_json::from_slice(payload).ok()?;
+            assistant_meter(&message)
+        }
+        EventKind::Usage => usage_event_meter(payload),
+        EventKind::ToolCall | EventKind::ToolResult | EventKind::Task => None,
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn project_replayed_entry(
     event: &SessionEvent,
     payload: &[u8],
 ) -> Option<ConversationEntry> {
+    project_replayed_entry_with_meter(event, payload).0
+}
+
+pub(crate) fn project_replayed_entry_with_meter(
+    event: &SessionEvent,
+    payload: &[u8],
+) -> (Option<ConversationEntry>, Option<(u64, u64)>) {
     match event.kind {
         EventKind::Message => {
             // Assistant messages are typed JSON; a parse miss means the
             // payload is the user's plain-text message. Parse once.
             match serde_json::from_slice::<AssistantMessage>(payload) {
-                Ok(message) => Some(project_assistant_message(event.event_id.as_str(), &message)),
-                Err(_) => Some(ConversationEntry {
-                    event_id: event.event_id.as_str().to_owned(),
-                    kind: EntryKind::UserMessage,
-                    text: decode_text(payload).into(),
-                    call_id: None,
-                    thinking: String::new(),
-                }),
+                Ok(message) => (
+                    Some(project_assistant_message(event.event_id.as_str(), &message)),
+                    assistant_meter(&message),
+                ),
+                Err(_) => (
+                    Some(ConversationEntry {
+                        event_id: event.event_id.as_str().to_owned(),
+                        kind: EntryKind::UserMessage,
+                        text: decode_text(payload).into(),
+                        call_id: None,
+                        thinking: String::new(),
+                    }),
+                    None,
+                ),
             }
         }
         EventKind::ToolResult => {
@@ -72,7 +82,7 @@ pub(crate) fn project_replayed_entry(
             if let Some(call) = event.call_id.as_ref() {
                 entry.call_id = Some(call.as_str().to_owned());
             }
-            Some(entry)
+            (Some(entry), None)
         }
         EventKind::ToolCall => {
             let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
@@ -81,17 +91,20 @@ pub(crate) fn project_replayed_entry(
                 .or_else(|| value["toolCall"]["name"].as_str())
                 .unwrap_or("tool");
             let target = value["target"].as_str().unwrap_or("");
-            Some(ConversationEntry {
-                event_id: event.event_id.as_str().to_owned(),
-                kind: EntryKind::ToolCall,
-                text: mycode_core::tool_label(name, target).into(),
-                call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
-                thinking: String::new(),
-            })
+            (
+                Some(ConversationEntry {
+                    event_id: event.event_id.as_str().to_owned(),
+                    kind: EntryKind::ToolCall,
+                    text: mycode_core::tool_label(name, target).into(),
+                    call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
+                    thinking: String::new(),
+                }),
+                None,
+            )
         }
-        // Legacy durable usage records and todo snapshots. Neither is
-        // conversation; ledgers written by older builds still decode.
-        EventKind::Usage | EventKind::Task => None,
+        EventKind::Usage => (None, usage_event_meter(payload)),
+        // Legacy todo snapshots are not conversation.
+        EventKind::Task => (None, None),
     }
 }
 

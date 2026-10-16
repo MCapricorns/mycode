@@ -12,7 +12,7 @@ use mycode_config::HomeLayout;
 use mycode_core::Message;
 use mycode_core::{AssistantMessage, ToolResultMessage, UserMessage};
 
-use crate::projection::{meter_snapshot, project_replayed_entry};
+use crate::projection::project_replayed_entry_with_meter;
 use crate::protocol::{
     ActiveConversation, ConversationEntry, EntryKind, OlderTranscript, SessionSummary,
 };
@@ -193,11 +193,12 @@ async fn project_window(
     let mut context_used = 0u64;
     let mut context_cache = 0u64;
     for loaded in &window.items {
-        if let Some((context, cache)) = meter_snapshot(loaded.event.kind, &loaded.payload) {
+        let (entry, meter) = project_replayed_entry_with_meter(&loaded.event, &loaded.payload);
+        if let Some((context, cache)) = meter {
             context_used = context;
             context_cache = cache;
         }
-        if let Some(entry) = project_replayed_entry(&loaded.event, &loaded.payload) {
+        if let Some(entry) = entry {
             entries.push(entry);
         }
     }

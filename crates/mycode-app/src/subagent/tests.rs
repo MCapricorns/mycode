@@ -249,7 +249,7 @@ fn artisan_on_windows_powershell_does_not_receive_bash() {
 fn the_scratch_root_is_listed_apart_from_workspace_folders() {
     let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-scratch")).unwrap();
     let role = builtin_roles().role("artisan").expect("artisan").clone();
-    let allowed = role.resolve_tools(&["read".into(), "shell".into()]);
+    let allowed = role.resolve_tools(&["read", "shell"]);
     let shell = mycode_tools::DetectedShell {
         kind: mycode_tools::ShellKind::Pwsh,
         program: std::path::PathBuf::from("pwsh.exe"),
@@ -288,7 +288,7 @@ fn a_bash_allowlist_entry_still_launches_the_active_powershell_tool() {
     let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-alias")).unwrap();
     let mut role = builtin_roles().role("artisan").expect("artisan").clone();
     role.tools = Some(vec!["read".into(), "bash".into()]);
-    let allowed = role.resolve_tools(&["read".into(), "shell".into()]);
+    let allowed = role.resolve_tools(&["read", "shell"]);
     assert_eq!(allowed, vec!["read".to_owned(), "bash".to_owned()]);
     let shell = mycode_tools::DetectedShell {
         kind: mycode_tools::ShellKind::Pwsh,
@@ -741,7 +741,7 @@ fn role_with_only_unknown_or_parent_tools_stays_read_only() {
         prompt: "Review.".to_owned(),
         origin: RoleOrigin::Project,
     };
-    assert!(!super::role_is_write_capable(&role));
+    assert!(!role.is_write_capable());
     assert_eq!(
         super::resolve_isolation(&role, Some("worktree")),
         RoleIsolation::Shared
