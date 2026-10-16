@@ -227,7 +227,7 @@ async fn show_compaction_summary(
         .service
         .open(session)
         .await
-        .map_err(|_| "could not open the session".to_owned())?;
+        .map_err(|error| format!("could not open the session: {}", render_error(error)))?;
     let head = opened
         .heads
         .iter()
@@ -301,7 +301,12 @@ async fn publish_visible_summary(
     let event_id = writer
         .write(EventKind::Message, payload.as_bytes())
         .await
-        .map_err(|_| "could not write the compaction summary".to_owned())?;
+        .map_err(|error| {
+            format!(
+                "could not write the compaction summary: {}",
+                render_error(error)
+            )
+        })?;
     let entry = crate::protocol::ConversationEntry {
         event_id,
         kind: crate::protocol::EntryKind::UserMessage,
@@ -332,7 +337,7 @@ async fn compact_session_now(
         .service
         .open(session)
         .await
-        .map_err(|_| "could not open the session".to_owned())?;
+        .map_err(|error| format!("could not open the session: {}", render_error(error)))?;
     let current_head = opened
         .heads
         .iter()
@@ -353,8 +358,9 @@ async fn compact_session_now(
         ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
     resolved.headers.extend(extra_headers);
-    let transport: Arc<dyn SseTransport> =
-        Arc::new(ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?);
+    let transport: Arc<dyn SseTransport> = Arc::new(
+        ReqwestTransport::new().map_err(|error| format!("HTTP transport unavailable: {error}"))?,
+    );
     let wire = WireProvider::new(resolved, transport);
     let history = ledger_history(&state.service, session, branch, expected_head)
         .await
@@ -605,8 +611,9 @@ async fn run_chat_turn(
         ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
     resolved.headers.extend(extra_headers);
-    let transport: Arc<dyn SseTransport> =
-        Arc::new(ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?);
+    let transport: Arc<dyn SseTransport> = Arc::new(
+        ReqwestTransport::new().map_err(|error| format!("HTTP transport unavailable: {error}"))?,
+    );
     run_chat_turn_on(
         state,
         events,
@@ -1331,7 +1338,7 @@ async fn run_chat_turn_on(
         return Ok(());
     }
     outcome.map_err(|error| format!("turn failed: {error}"))?;
-    pump_ended.map_err(|_| "the turn pump stopped".to_owned())?;
+    pump_ended.map_err(|error| format!("the turn pump stopped: {error}"))?;
     Ok(())
 }
 

@@ -70,8 +70,8 @@ pub trait SseTransport: Send + Sync + 'static {
 /// reqwest-backed production transport.
 ///
 /// Each request builds a client that does not follow redirects and pins the
-/// resolved addresses. [`ReqwestTransport::new`] builds a throwaway client to
-/// check that TLS can start. The stored value is the idle ceiling between
+/// resolved addresses. [`ReqwestTransport::new`] checks once per process that
+/// TLS can start. The stored value is the idle ceiling between
 /// body chunks, not a total-request deadline.
 #[derive(Clone)]
 pub struct ReqwestTransport {
@@ -96,11 +96,22 @@ impl ReqwestTransport {
     ///
     /// Returns an unavailable error when the TLS backend cannot initialize.
     pub fn with_read_timeout(read_timeout: Duration) -> Result<Self, ProviderError> {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .build()
-            .map_err(|_| ProviderError::new(ProviderErrorKind::Unavailable))?;
+        // The TLS backend either starts in this process or it does not, so
+        // the probe client is built once instead of on every turn.
+        static TLS_PROBE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+        TLS_PROBE
+            .get_or_init(|| {
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .build()
+                    .map(drop)
+                    .map_err(|error| format!("TLS backend failed to start: {error}"))
+            })
+            .clone()
+            .map_err(|message| {
+                ProviderError::with_message(ProviderErrorKind::Unavailable, message)
+            })?;
         Ok(Self { read_timeout })
     }
 }

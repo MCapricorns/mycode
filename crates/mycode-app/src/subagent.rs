@@ -644,8 +644,8 @@ impl BridgeAgentHost {
         if child_cancel.is_cancelled() {
             return Err(cancelled());
         }
-        let transport =
-            ReqwestTransport::new().map_err(|_| fail("HTTP transport unavailable".to_owned()))?;
+        let transport = ReqwestTransport::new()
+            .map_err(|error| fail(format!("HTTP transport unavailable: {error}")))?;
         let wire = WireProvider::new(resolved, Arc::new(transport));
         let allowed = role.resolve_tools(
             &PARENT_TOOL_NAMES
