@@ -63,8 +63,10 @@ fn preference() -> ProxyPreference {
 pub(crate) enum Route {
     /// No proxy; the hop connects to its pinned addresses.
     Direct,
-    /// reqwest's own system-proxy detection, which matched this host.
-    System,
+    /// reqwest's own system-proxy detection, which matched this host. The
+    /// matched proxy URI keys the client cache, so a changed system proxy
+    /// builds a fresh client.
+    System(String),
     /// This proxy URL.
     Via(String),
 }
@@ -85,7 +87,7 @@ impl Route {
     ) -> Result<reqwest::ClientBuilder, String> {
         match self {
             Self::Direct => Ok(builder.no_proxy()),
-            Self::System => Ok(builder),
+            Self::System(_) => Ok(builder),
             Self::Via(url) => reqwest::Proxy::all(url.as_str())
                 .map(|proxy| builder.proxy(proxy))
                 .map_err(|error| format!("proxy is invalid: {error}")),
@@ -105,8 +107,8 @@ pub(crate) fn route_for(url: &reqwest::Url) -> Route {
         ProxyPreference::Direct => Route::Direct,
         ProxyPreference::Url(proxy) => Route::Via(proxy),
         ProxyPreference::Auto => {
-            if system_proxy_covers(url) {
-                Route::System
+            if let Some(proxy) = system_proxy(url) {
+                Route::System(proxy)
             } else if let Some(proxy) = learned(host) {
                 Route::Via(proxy)
             } else {
@@ -155,14 +157,13 @@ fn learned(host: &str) -> Option<String> {
         .cloned()
 }
 
-/// Whether the environment or OS proxy settings send `url` to a proxy. This
-/// is the same matcher reqwest's system-proxy detection uses.
-fn system_proxy_covers(url: &reqwest::Url) -> bool {
-    url.as_str().parse::<http::Uri>().is_ok_and(|uri| {
-        hyper_util::client::proxy::matcher::Matcher::from_system()
-            .intercept(&uri)
-            .is_some()
-    })
+/// The proxy the environment or OS settings send `url` to, if any. This is
+/// the same matcher reqwest's system-proxy detection uses.
+fn system_proxy(url: &reqwest::Url) -> Option<String> {
+    let uri = url.as_str().parse::<http::Uri>().ok()?;
+    hyper_util::client::proxy::matcher::Matcher::from_system()
+        .intercept(&uri)
+        .map(|intercept| intercept.uri().to_string())
 }
 
 /// The first listening local proxy port, cached for [`PROBE_TTL`].
@@ -209,7 +210,7 @@ mod tests {
     #[test]
     fn only_direct_skips_the_proxy() {
         assert!(!Route::Direct.proxied());
-        assert!(Route::System.proxied());
+        assert!(Route::System("http://127.0.0.1:7890/".to_owned()).proxied());
         assert!(Route::Via("http://127.0.0.1:7890".to_owned()).proxied());
     }
 }
