@@ -113,14 +113,11 @@ impl Workspace {
         if recalled.is_empty() {
             return;
         }
-        match index {
-            Some(index) => self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx),
-            None => {
-                for _ in 0..recalled.len() {
-                    self.apply_action(DesktopAction::QueuedMessageRemoved(0), cx);
-                }
-            }
-        }
+        let removed = match index {
+            Some(index) => DesktopAction::QueuedMessageRemoved(index),
+            None => DesktopAction::QueueCleared,
+        };
+        self.apply_action(removed, cx);
         let draft = self.composer.read(cx).value().to_string();
         let mut text = recalled.join("\n\n");
         if !draft.trim().is_empty() {

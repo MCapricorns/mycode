@@ -474,6 +474,12 @@ fn a_held_queue_stays_held_until_it_empties_or_a_new_session_opens() {
     assert!(state.queued.is_empty());
     assert!(!state.queue_paused, "the hold ends with the queue");
 
+    reduce(&mut state, DesktopAction::MessageQueued("five".to_owned()));
+    reduce(&mut state, DesktopAction::MessageQueued("six".to_owned()));
+    reduce(&mut state, DesktopAction::QueuePaused(true));
+    reduce(&mut state, DesktopAction::QueueCleared);
+    assert!(state.queued.is_empty() && !state.queue_paused);
+
     reduce(&mut state, DesktopAction::MessageQueued("four".to_owned()));
     reduce(&mut state, DesktopAction::QueuePaused(true));
     reduce(&mut state, DesktopAction::SessionDeleted);
