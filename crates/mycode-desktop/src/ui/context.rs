@@ -116,6 +116,36 @@ pub(crate) fn responsive_panel_bounds(
     ((drawer_right, drawer_width), (diff_right, diff_width))
 }
 
+const SUBAGENT_WINDOW_WIDTH: f32 = 320.;
+
+/// Right inset and width for the subagent window: it stacks left of
+/// Details, the changes drawer, and the diff panel, and clamps inside the
+/// viewport when every surface is open at once.
+#[must_use]
+pub(crate) fn subagent_window_bounds(
+    viewport_width: f32,
+    inspector_span: f32,
+    drawer_open: bool,
+    diff_open: bool,
+) -> (f32, f32) {
+    let ((drawer_right, drawer_width), (diff_right, diff_width)) =
+        responsive_panel_bounds(viewport_width, inspector_span, drawer_open);
+    let preferred = if diff_open {
+        diff_right + diff_width + PANEL_GAP
+    } else if drawer_open {
+        drawer_right + drawer_width + PANEL_GAP
+    } else {
+        // The strip the diff panel would occupy: clear of Details.
+        diff_right
+    };
+    let right = if preferred + SUBAGENT_WINDOW_WIDTH + PANEL_GAP <= viewport_width {
+        preferred
+    } else {
+        (viewport_width - SUBAGENT_WINDOW_WIDTH - PANEL_GAP).max(PANEL_GAP)
+    };
+    (right, SUBAGENT_WINDOW_WIDTH)
+}
+
 /// Proportional fill fraction in `0.0..=1.0` for the context usage bar.
 #[must_use]
 pub(crate) fn context_bar_fraction(value: u64, total: u64) -> f32 {
@@ -1216,9 +1246,11 @@ fn window_body(text: String) -> impl IntoElement {
     div().text_sm().whitespace_normal().child(text)
 }
 
-/// Small window for one running subagent so its progress is readable.
+/// Tall window for one running subagent so its progress is readable.
 pub(super) fn render_subagent_window(
     workspace: &mut Workspace,
+    window: &Window,
+    inspector_span: f32,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
@@ -1254,13 +1286,21 @@ pub(super) fn render_subagent_window(
     let now = job.as_ref().map(|job| job.step.clone()).unwrap_or_default();
     let log = job.map(|job| job.log).unwrap_or_default();
     let last = log.len().saturating_sub(1);
+    let viewport_width = f32::from(window.viewport_size().width);
+    let (window_right, window_width) = subagent_window_bounds(
+        viewport_width,
+        inspector_span,
+        workspace.vm().changes_panel_open,
+        workspace.git_diff_panel_open(),
+    );
     div()
         .id("subagent-window-layer")
+        .occlude()
         .absolute()
         .top(px(super::title_bar::BAR_HEIGHT + 8.))
-        .right(px(16.))
-        .w(px(320.))
-        .h(px(280.))
+        .right(px(window_right))
+        .bottom(px(12.))
+        .w(px(window_width))
         .flex()
         .flex_col()
         .rounded(super::skin::radius_card())
@@ -1403,6 +1443,29 @@ mod tests {
             beside_drawer,
             super::INSPECTOR_DOCKED_WIDTH + 12. + 480. + 12.
         );
+    }
+
+    #[test]
+    fn the_subagent_window_stacks_left_of_details_drawer_and_diff() {
+        let wide = 1520.;
+        // Alone: clear of Details by the panel gap.
+        let (right, width) =
+            super::subagent_window_bounds(wide, super::INSPECTOR_OVERLAY_SPAN, false, false);
+        assert_eq!(right, super::INSPECTOR_OVERLAY_SPAN + 12.);
+        assert_eq!(width, super::SUBAGENT_WINDOW_WIDTH);
+        // With the drawer open it moves left of the drawer.
+        let (right, _) =
+            super::subagent_window_bounds(wide, super::INSPECTOR_OVERLAY_SPAN, true, false);
+        assert!(right > super::INSPECTOR_OVERLAY_SPAN + 480.);
+        // With drawer and diff open it moves left of both when the window
+        // is wide enough to stack all three.
+        let (right, _) =
+            super::subagent_window_bounds(1920., super::INSPECTOR_OVERLAY_SPAN, true, true);
+        assert!(right > super::INSPECTOR_OVERLAY_SPAN + 480. + 560.);
+        // When everything cannot fit, it stays inside the viewport.
+        let (right, _) =
+            super::subagent_window_bounds(700., super::INSPECTOR_OVERLAY_SPAN, true, true);
+        assert!(right + super::SUBAGENT_WINDOW_WIDTH <= 700.);
     }
 
     #[test]

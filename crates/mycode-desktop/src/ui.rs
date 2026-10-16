@@ -173,7 +173,14 @@ pub fn render_root(
         .when(
             workspace.vm().subagent_window.is_some()
                 && crate::view_model::task_surface_visible(workspace.vm()),
-            |this| this.child(context::render_subagent_window(workspace, cx)),
+            |this| {
+                this.child(context::render_subagent_window(
+                    workspace,
+                    window,
+                    inspector_span,
+                    cx,
+                ))
+            },
         )
         .when(inspector_overlay, |this| {
             this.child(context::render_inspector_drawer(workspace, cx))
