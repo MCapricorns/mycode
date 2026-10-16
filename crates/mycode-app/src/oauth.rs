@@ -457,7 +457,9 @@ mod tests {
             "https://auth.openai.com/codex/device?a=1&b=2"
         ));
         assert!(!super::browsable_url("http://github.com/login/device"));
-        assert!(!super::browsable_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!super::browsable_url(
+            "file:///C:/Windows/System32/calc.exe"
+        ));
         assert!(!super::browsable_url("https://"));
         assert!(!super::browsable_url("https:///etc/passwd"));
         assert!(!super::browsable_url("https://x.example/\" & calc"));
