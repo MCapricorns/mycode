@@ -78,7 +78,7 @@
 
 同名文件的覆盖顺序是：内置 → `<家目录>/agents/` → 项目 `.mycode/agents/`。每份角色文件最多 32 KiB，目录最多 32 个角色。frontmatter 声明隔离方式（`shared` 或 `worktree`）、默认思考强度和工具白名单。启用与否、实际模型在设置里，不写进角色文件。
 
-提示资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，再是家目录的 `AGENTS.md` 和用户主目录的 `.agents/AGENTS.md`。每份最多 64 KiB，最多 16 份，合计进 prompt 最多 96K 字符。技能是 `.agents` 和 `.agents/skills` 下的 `*.md` 或 `<名字>/SKILL.md`，工作区和用户主目录各扫一遍，同名时工作区优先；发现不设上限，进 system prompt 时最多 32 个。目录只列 slug、标题和路径。匹配时用 `read` 按路径读取正文。用户主目录的 `.agents` 和 `.agents/skills` 是宿主发布的只读锚定根：`read` 可以按绝对路径读取其中的技能文件（子代理和 scout 同样如此），`edit` / `write` 对这两个根仍然拒绝。子代理（含 scout）拿到同一份目录。
+提示资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，再是家目录的 `AGENTS.md` 和用户主目录的 `.agents/AGENTS.md`。每份最多 64 KiB，最多 16 份，合计进 prompt 最多 96K 字符。技能是 `.agents` 和 `.agents/skills` 下的 `*.md` 或 `<名字>/SKILL.md`，工作区和用户主目录各扫一遍，同名时工作区优先；发现不设上限，进 system prompt 时最多 32 个。目录只列 slug、标题和路径。匹配时用 `read` 按路径读取正文。用户主目录的 `.agents` 和 `.agents/skills` 是宿主发布的只读锚定根：`read` 可以按绝对路径读取其中的技能文件（子代理和 scout 同样如此），`edit` / `write` 对这两个根仍然拒绝。子代理（含 scout）拿到同一份目录。设置里的 `skills.disabled` 记录被关掉的技能 slug（最多 256 个，不能重复）；关掉的技能不进主会话和子代理的技能目录，也不占 32 个名额。列表为空时不写入 `settings.json`。
 
 ## 不放在这里的东西
 

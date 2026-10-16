@@ -66,6 +66,8 @@ pub struct SettingsState {
     pub subagents: mycode_config::SubagentSettings,
     /// Tool-runtime preferences, including the platform shell.
     pub tools: mycode_config::ToolsSettings,
+    /// Skills switched off on the Skills page.
+    pub skills: mycode_config::SkillsSettings,
     /// A save is in flight.
     pub saving: bool,
     /// Unsaved local edits exist.
@@ -102,6 +104,7 @@ impl SettingsState {
             mcp_with_keys: Vec::new(),
             subagents: settings.subagents.clone(),
             tools: settings.tools.clone(),
+            skills: settings.skills.clone(),
             saving: false,
             dirty: false,
             edit_epoch: 0,
@@ -130,6 +133,7 @@ impl SettingsState {
             reasoning_effort: self.saved_reasoning.clone(),
             subagents: self.subagents.clone(),
             tools: self.tools.clone(),
+            skills: self.skills.clone(),
         }
     }
 

@@ -228,7 +228,7 @@ fn command_items(state: &WorkspaceState) -> Vec<PaletteItem> {
             checked: false,
         });
     }
-    for skill in &state.skills {
+    for skill in &state.enabled_skills() {
         let slug = skill.slug.trim();
         if slug.is_empty() {
             continue;
@@ -546,6 +546,36 @@ mod tests {
             item.command,
             PaletteCommand::OpenSettings(SettingsSection::Mcp)
         )));
+    }
+
+    #[test]
+    fn switched_off_skill_leaves_the_palette_and_marks_settings_dirty() {
+        let mut state = populated();
+        reduce(
+            &mut state,
+            DesktopAction::SettingsSkillToggled("review".to_owned(), false),
+        );
+        let settings = state.settings.as_ref().expect("settings");
+        assert!(settings.dirty);
+        assert_eq!(settings.to_settings().skills.disabled, ["review"]);
+        assert!(state.enabled_skills().is_empty());
+        assert_eq!(state.skills.len(), 1, "the Skills page still lists it");
+        assert!(
+            !labels_matching(&state, "/review")
+                .iter()
+                .any(|label| label.starts_with("/review"))
+        );
+
+        reduce(
+            &mut state,
+            DesktopAction::SettingsSkillToggled("review".to_owned(), true),
+        );
+        assert_eq!(state.enabled_skills().len(), 1);
+        assert!(
+            labels_matching(&state, "/review")
+                .iter()
+                .any(|label| label.starts_with("/review"))
+        );
     }
 
     #[test]

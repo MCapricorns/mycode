@@ -233,6 +233,20 @@ pub(crate) struct WorkspaceState {
     /// Whether the global command palette is open.
     pub command_palette_open: bool,
 }
+
+impl WorkspaceState {
+    /// Discovered skills minus the ones switched off on the Skills page.
+    /// The composer `/` menu and the command palette list only these.
+    pub(crate) fn enabled_skills(&self) -> Vec<SkillEntry> {
+        let disabled = self.settings.as_ref().map(|settings| &settings.skills);
+        self.skills
+            .iter()
+            .filter(|skill| disabled.is_none_or(|skills| skills.is_enabled(&skill.slug)))
+            .cloned()
+            .collect()
+    }
+}
+
 /// Everything the UI can do to the state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DesktopAction {
@@ -323,6 +337,8 @@ pub enum DesktopAction {
     SettingsBackendToggled(usize, bool),
     /// The settings editor changed subagent role routes.
     SettingsSubagentsChanged(mycode_config::SubagentSettings),
+    /// The Skills page switched one skill on or off.
+    SettingsSkillToggled(String, bool),
     /// The Agents-page model dropdown opened or closed.
     SubagentMenuToggled(Option<(String, String)>),
     /// The General-page language dropdown opened or closed.

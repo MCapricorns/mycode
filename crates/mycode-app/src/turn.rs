@@ -502,6 +502,7 @@ routine tool calls.
 /// depends on the workspace (cwd, AGENTS.md, skills, MCP, extra folders).
 /// A new session in another folder then still shares the leading prefix
 /// with every earlier one in the provider's prompt cache.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn session_system_prompt(
     home: &HomeLayout,
     cwd: &std::path::Path,
@@ -510,6 +511,7 @@ pub(crate) fn session_system_prompt(
     extra_roots: &[std::path::PathBuf],
     directive: &str,
     user_home: Option<&std::path::Path>,
+    skill_settings: &mycode_config::SkillsSettings,
 ) -> String {
     let resources = mycode_config::discover_resources(home, cwd);
     let mut system_prompt = String::from(SESSION_IDENTITY);
@@ -525,6 +527,7 @@ pub(crate) fn session_system_prompt(
     push_skill_catalog(
         &mut system_prompt,
         mycode_config::discover_skills(cwd, user_home),
+        skill_settings,
     );
     if let Some(note) = mcp_note {
         system_prompt.push_str("\n\n<mcp>\n");
@@ -554,8 +557,15 @@ cwd.",
     system_prompt
 }
 
-/// Appends the skill catalog, keeping at most [`mycode_config::MAX_SKILLS`].
-pub(crate) fn push_skill_catalog(prompt: &mut String, mut skills: Vec<mycode_config::SkillFile>) {
+/// Appends the catalog of enabled skills, keeping at most
+/// [`mycode_config::MAX_SKILLS`]. Skills switched off in settings are dropped
+/// before the cap so they do not take a slot.
+pub(crate) fn push_skill_catalog(
+    prompt: &mut String,
+    mut skills: Vec<mycode_config::SkillFile>,
+    settings: &mycode_config::SkillsSettings,
+) {
+    skills.retain(|skill| settings.is_enabled(&skill.slug));
     let hidden = skills.len().saturating_sub(mycode_config::MAX_SKILLS);
     skills.truncate(mycode_config::MAX_SKILLS);
     let Some(mut catalog) = mycode_config::render_skill_catalog(&skills) else {
@@ -782,6 +792,7 @@ async fn run_chat_turn_on(
         let registry = Arc::clone(&registry);
         let extra_roots = extra_roots.clone();
         let user_home = user_home.clone();
+        let skill_settings = settings.skills.clone();
         tokio::task::spawn_blocking(move || {
             session_system_prompt(
                 &home,
@@ -791,6 +802,7 @@ async fn run_chat_turn_on(
                 &extra_roots,
                 &directive,
                 user_home.as_deref(),
+                &skill_settings,
             )
         })
         .await
@@ -1537,6 +1549,35 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn skill_catalog_drops_skills_switched_off_in_settings() {
+        let skill = |slug: &str| mycode_config::SkillFile {
+            slug: slug.to_owned(),
+            title: format!("{slug} title"),
+            path: PathBuf::from(format!("/skills/{slug}/SKILL.md")),
+            global: false,
+        };
+        let mut settings = mycode_config::SkillsSettings::default();
+        settings.set_enabled("review", false);
+        let mut prompt = String::new();
+        super::push_skill_catalog(
+            &mut prompt,
+            vec![skill("deploy"), skill("review")],
+            &settings,
+        );
+        assert!(prompt.contains("/skills/deploy/SKILL.md"), "{prompt}");
+        assert!(!prompt.contains("review"), "{prompt}");
+
+        settings.set_enabled("deploy", false);
+        let mut prompt = String::new();
+        super::push_skill_catalog(
+            &mut prompt,
+            vec![skill("deploy"), skill("review")],
+            &settings,
+        );
+        assert!(prompt.is_empty(), "{prompt}");
+    }
+
+    #[test]
     fn turn_usage_sums_every_request_but_meters_the_latest_prompt() {
         let mut usage = super::TurnUsage::default();
         for prompt in [40_000, 52_000, 61_000] {
@@ -1888,7 +1929,16 @@ mod tests {
         let home = HomeLayout::from_root(&root).unwrap();
         let registry = ToolRegistry::new();
         mycode_tools::register_builtins(&registry);
-        let prompt = session_system_prompt(&home, &root, &registry, None, &[], "", None);
+        let prompt = session_system_prompt(
+            &home,
+            &root,
+            &registry,
+            None,
+            &[],
+            "",
+            None,
+            &Default::default(),
+        );
         assert!(
             prompt.contains(&format!(
                 "<environment>\nos: {} ({})\ncwd: {}",
@@ -1934,8 +1984,26 @@ mod tests {
         mycode_tools::register_builtins(&registry);
         let forward = vec![root.join("b"), root.join("a")];
         let reverse = vec![root.join("a"), root.join("b")];
-        let first = session_system_prompt(&home, &root, &registry, None, &forward, "", None);
-        let second = session_system_prompt(&home, &root, &registry, None, &reverse, "", None);
+        let first = session_system_prompt(
+            &home,
+            &root,
+            &registry,
+            None,
+            &forward,
+            "",
+            None,
+            &Default::default(),
+        );
+        let second = session_system_prompt(
+            &home,
+            &root,
+            &registry,
+            None,
+            &reverse,
+            "",
+            None,
+            &Default::default(),
+        );
         assert_eq!(first, second);
         let alpha = first.find("/alpha").unwrap();
         let middle = first.find("/middle").unwrap();
