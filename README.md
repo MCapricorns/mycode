@@ -1,89 +1,158 @@
-# mycode
+<div align="center">
 
-本地优先的桌面编码代理。对话和工具都在你的电脑上；你自己带 API 密钥。
+<img src="docs/images/banner.svg" alt="MYCode：本地优先的桌面编码代理" width="100%">
 
-![一次画完的鹈鹕 SVG：收起的工具摘要和图层对照表](docs/images/hero-v0.11.11.png)
+<p>
+  <a href="https://github.com/MCapricorns/mycode/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/MCapricorns/mycode?style=flat-square&label=%E7%89%88%E6%9C%AC&color=7c8cff"></a>
+  <a href="https://github.com/MCapricorns/mycode/releases"><img alt="下载量" src="https://img.shields.io/github/downloads/MCapricorns/mycode/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD"></a>
+  <a href="https://github.com/MCapricorns/mycode/actions"><img alt="构建" src="https://img.shields.io/github/actions/workflow/status/MCapricorns/mycode/release.yml?branch=main&style=flat-square&label=%E6%9E%84%E5%BB%BA"></a>
+  <img alt="平台" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS-555?style=flat-square">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-dea584?style=flat-square&logo=rust">
+  <a href="LICENSE"><img alt="许可" src="https://img.shields.io/github/license/MCapricorns/mycode?style=flat-square&label=%E8%AE%B8%E5%8F%AF"></a>
+  <a href="https://x.com/M_Capricorns"><img alt="关注 @M_Capricorns" src="https://img.shields.io/badge/X-%40M__Capricorns-000?style=flat-square&logo=x"></a>
+</p>
 
-一次画完的鹈鹕 SVG。工具调用收成一行，回复里是图层对照表。输入框居中，旁边是缓存环。
+**对话、工具和会话都留在你的电脑上。你带上自己的 API 密钥，剩下的交给它。**
+
+[下载](https://github.com/MCapricorns/mycode/releases/latest) · [快速开始](#快速开始) · [功能](#功能) · [架构](#架构) · [文档](docs/README.md) · [更新日志](CHANGELOG.md)
+
+</div>
+
+---
+
+<p align="center">
+  <img src="docs/images/hero-v0.11.11.png" alt="一次画完的鹈鹕 SVG：工具调用收成一行，回复里是图层对照表" width="100%">
+</p>
+<p align="center"><sub>一次画完的鹈鹕 SVG。工具调用收成一行，回复里是图层对照表；输入框居中，旁边是缓存环。</sub></p>
+
+## 为什么是 MYCode
+
+- **本地优先。** 界面不读密钥、不写文件、不发网络请求；模型请求只发往你配置的服务商。
+- **原生工具。** 模型直接调用 `read`、`write`、`edit`、`grep`、`find` 和当前平台的一个 shell。搜索在进程内完成，不依赖外部 `rg` / `fd`。
+- **省钱。** system prompt 在文件不变时字节稳定，请求带会话级 `prompt_cache_key`，前缀缓存命中率高；输入框旁的缓存环实时显示。
+- **不丢数据。** 会话账本用 revision 比较交换和原子替换提交；中途打断时已到达的内容照样入账。
 
 ## 功能
 
-- 一个工作区挂多个文件夹。会话属于工作区。
-- 模型直接调用原生工具：`read`、`write`、`edit`、每平台一个 shell、`grep`、`find`。
-- 只读的 `scout` 和有界的 `artisan`，也可以在 `agents/` 里加角色。
-- 内置 [models.dev](https://models.dev) 目录。Copilot 和 Codex 用设备码登录，其它服务商（包括 xAI）粘贴 API key。OpenDesign 网关有单独的入口，按密钥实时列出可用模型。
-- 中英界面，深色和浅色主题。
+| | |
+| --- | --- |
+| **工作区** | 一个工作区挂多个文件夹，会话属于工作区。改动面板跟随文件系统事件读 `git status`。 |
+| **模型** | 内置 [models.dev](https://models.dev) 目录（200+ 服务商）。Copilot、Codex 用设备码登录；其它服务商（含 xAI）粘贴 API key。OpenDesign 网关按密钥实时列模型。 |
+| **思考强度** | 按模型给出可选档位：关、低、高、Max……每个会话单独记住。 |
+| **子代理** | 只读的 `scout` 做代码搜索、网页调研、查 API 文档；`artisan` 在独立 worktree 里改代码。同时最多 8 个，不设超时；取消、停止或删除对话时一起结束。也可以在 `agents/` 里加自定义角色。 |
+| **技能** | 读取 `.agents/skills` 下的 `SKILL.md`，`/` 一键插入；设置里每个技能可以单独开关。 |
+| **MCP** | 支持 stdio 与 HTTP，多个服务器并发连接；只读工具可并发调用。 |
+| **网页** | 内置搜索与抓取后端，结果有字节上限。 |
+| **界面** | 中英双语、深浅主题、四档字号；`Ctrl-K` / `Cmd-K` 命令面板。 |
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/scouts-detail-v0.11.20.png" alt="三个 scout 并行调研 Tokio、async-std、smol"></td>
+    <td width="50%"><img src="docs/images/tool-steps-v0.11.20.png" alt="工具步骤收成一行，右侧显示结果摘要"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>三个 scout 并行调研，主代理汇总</sub></td>
+    <td align="center"><sub>每一步工具调用收成一行，右侧是结果摘要</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/composer-v0.11.20.png" alt="思考强度菜单与输入框、缓存环"></td>
+    <td width="50%"><img src="docs/images/subagents-v0.11.11.png" alt="对照表形式的调研结论"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>输入框：工作区、模型、思考强度、缓存环</sub></td>
+    <td align="center"><sub>调研结论直接渲染成表格</sub></td>
+  </tr>
+</table>
 
 ## 安装
 
-[Releases](https://github.com/MCapricorns/mycode/releases) 提供三个平台的压缩包：Windows x64、Windows ARM64、macOS Apple Silicon（zip 和 dmg），旁边有 `.sha256`。没有 Intel macOS 包，也没有 Linux 包。dmg 里的 app 是 ad-hoc 签名，首次打开用右键「打开」，或 `xattr -d com.apple.quarantine /Applications/MYCode.app`。说明用该版本的更新日志，再附上自上一个标签以来的 pull request。`github-actions[bot]` 写回版本时不会再开一次发布。
+从 [Releases](https://github.com/MCapricorns/mycode/releases/latest) 下载对应平台的压缩包，每个文件旁有 `.sha256`：
 
-从源码构建需要 Rust stable。Windows 用 MSVC。
+| 平台 | 文件 |
+| --- | --- |
+| Windows x64 | zip |
+| Windows ARM64 | zip |
+| macOS Apple Silicon | zip / dmg |
 
-```text
+暂无 Intel macOS 和 Linux 包。dmg 里的应用是 ad-hoc 签名，首次打开请右键「打开」，或执行：
+
+```sh
+xattr -d com.apple.quarantine /Applications/MYCode.app
+```
+
+应用内置更新：右上角提示可更新，下载并校验后确认即重启安装。
+
+### 从源码构建
+
+需要 Rust stable（Windows 用 MSVC 工具链）：
+
+```sh
+git clone https://github.com/MCapricorns/mycode.git
+cd mycode
 cargo build --release -p mycode-desktop
 ```
 
 ## 快速开始
 
-打开一个文件夹，在输入框里说话。`/` 列出 `/new`、`/compact`、`/settings`、技能和 MCP。输入框旁切换模型和思考强度。`Cmd-K`（macOS）或 `Ctrl-K`（Windows、Linux）打开命令面板，可搜索会话、模型、斜杠命令和设置页。`↑` `↓` 移动，Enter 打开，Esc 关闭。
+1. 打开设置 → 模型，登录 Copilot / Codex，或粘贴任意服务商的 API key。
+2. 回到工作台，添加一个文件夹。
+3. 在输入框里说出你要做的事。
 
-## 配置和工具
+| 操作 | 方式 |
+| --- | --- |
+| 斜杠命令 | 输入 `/`：`/new`、`/compact`、`/settings`、技能、MCP |
+| 切换模型 / 思考强度 | 输入框下方的两个芯片 |
+| 命令面板 | `Ctrl-K`（Windows）/ `Cmd-K`（macOS），搜索会话、模型、命令和设置页 |
+| 回合中追加指令 | 直接发送，会作为 Steer 注入当前回合 |
 
-未设置 `MYCODE_HOME` 时，数据在 `~/.mycode`：`settings.json`（不含密钥）、`secrets.json`、`ui.json`、会话和 `agents/`。
+## 架构
 
-模型直接发出 `read`、`write`、`edit`、`grep`、`find` 和当前平台的一个 shell 工具调用；MCP 工具按名字直接调用。`script` 模式跑会话解析出的那个解释器，`program` 模式按显式参数启动一个可执行文件。环境变量白名单不是沙箱，进程以当前用户权限运行。细节在 [docs/tools.md](docs/tools.md)。
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="七个 crate 的分层架构" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/images/message-flow.svg" alt="一条消息从输入框到 ChatDone 的流程" width="100%">
+</p>
+
+细节见 [docs/architecture.md](docs/architecture.md)。
+
+## 配置与数据
+
+未设置 `MYCODE_HOME` 时，数据在 `~/.mycode`：
+
+```text
+~/.mycode/
+├─ settings.json   服务商、MCP、网页、外观、子代理、技能开关（不含密钥）
+├─ secrets.json    API 密钥与 OAuth 令牌
+├─ ui.json         工作区、文件夹、每个会话的模型与思考档位
+├─ sessions.db     会话索引
+├─ sessions/       会话账本（JSONL）
+└─ agents/         自定义子代理角色
+```
+
+工具以当前用户权限运行，环境变量白名单不是沙箱。详见 [docs/tools.md](docs/tools.md) 和 [docs/config.md](docs/config.md)。
 
 ## 文档
 
-模块怎么分、一条消息怎么走完，见 [docs/README.md](docs/README.md)。更多界面截图在 [docs/desktop.md](docs/desktop.md)。
+| 文档 | 内容 |
+| --- | --- |
+| [docs/README.md](docs/README.md) | 总览与阅读顺序 |
+| [docs/architecture.md](docs/architecture.md) | crate 分层、一条消息怎么走、家目录 |
+| [docs/desktop.md](docs/desktop.md) | 界面与交互，更多截图 |
+| [docs/tools.md](docs/tools.md) | 内置工具与子代理 |
+| [docs/providers.md](docs/providers.md) | 协议适配与模型目录 |
+| [docs/config.md](docs/config.md) | 设置文档与上限 |
+
+## 社区
+
+- 关注 X（Twitter）：[@M_Capricorns](https://x.com/M_Capricorns)
+- 问题与建议：[GitHub Issues](https://github.com/MCapricorns/mycode/issues)
 
 ## 许可
 
 [Apache-2.0](LICENSE)
 
----
-
-## English
-
-mycode is a local-first desktop coding agent. The conversation and tools stay on your machine. You bring the API keys.
-
-![A finished pelican SVG: collapsed tool summaries and a comparison table](docs/images/hero-v0.11.11.png)
-
-A finished pelican SVG. Tool calls collapse to one line, and the reply includes a comparison table. The composer stays centered, with a cache ring.
-
-### Features
-
-- One workspace mounts several folders. Sessions belong to the workspace.
-- The model calls native tools directly: `read`, `write`, `edit`, one shell per platform, `grep`, and `find`.
-- Read-only `scout` and bounded `artisan`, or custom roles under `agents/`.
-- Built-in [models.dev](https://models.dev) catalog. Copilot and Codex sign in with a device code; other providers, xAI included, take a pasted API key. The OpenDesign gateway has its own entry that lists the models your key can use.
-- English and Chinese UI, dark and light themes.
-
-### Install
-
-[Releases](https://github.com/MCapricorns/mycode/releases) publish one archive for each of the three platforms: Windows x64, Windows ARM64, and macOS Apple Silicon (zip and dmg), each with a `.sha256`. There is no Intel macOS build and no Linux build. The app inside the dmg is ad-hoc signed; right-click → Open once, or `xattr -d com.apple.quarantine /Applications/MYCode.app`. The body starts with that version's changelog, then the pull requests since the previous tag. A version commit by `github-actions[bot]` does not start another release.
-
-Build from source with Rust stable. MSVC on Windows.
-
-```text
-cargo build --release -p mycode-desktop
-```
-
-### Quick start
-
-Open a folder and type. `/` lists `/new`, `/compact`, `/settings`, skills, and MCP. Switch model and thinking effort beside the composer. `Cmd-K` on macOS, or `Ctrl-K` on Windows and Linux, opens the command palette: search sessions, models, slash commands, and settings pages. `↑` `↓` move, Enter opens, Esc closes.
-
-### Config and tools
-
-`MYCODE_HOME` defaults to `~/.mycode` (`settings.json` without secrets, `secrets.json`, `ui.json`, sessions, and `agents/`).
-
-The model emits `read`, `write`, `edit`, `grep`, `find`, and one shell tool for the current platform directly; MCP tools are called by name. `script` mode runs the interpreter resolved for the session and `program` mode launches one executable with an explicit argument vector. The environment allowlist is not a sandbox; processes run with current-user authority. Details: [docs/tools.md](docs/tools.md).
-
-### Docs
-
-How the crates split and how one message moves: [docs/README.md](docs/README.md). More screenshots: [docs/desktop.md](docs/desktop.md).
-
-### License
-
-[Apache-2.0](LICENSE)
+<div align="center">
+<sub>用 Rust 和 GPUI 构建 · <a href="https://x.com/M_Capricorns">@M_Capricorns</a></sub>
+</div>

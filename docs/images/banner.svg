@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="MYCode：本地优先的桌面编码代理">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="0.55" stop-color="#151b2e"/>
+      <stop offset="1" stop-color="#1d1733"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.82" cy="0.18" r="0.6">
+      <stop offset="0" stop-color="#7c8cff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#7c8cff" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#ffffff" stroke-opacity="0.04"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="360" rx="24" fill="url(#bg)"/>
+  <rect width="1280" height="360" rx="24" fill="url(#grid)"/>
+  <rect width="1280" height="360" rx="24" fill="url(#glow)"/>
+
+  <g transform="translate(96 92) scale(0.6875)">
+    <rect x="8" y="8" width="240" height="240" rx="58" fill="#ffffff"/>
+    <path d="M76 182V82l52 56 52-56v100" fill="none" stroke="#000000" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC','Segoe UI',system-ui,sans-serif">
+    <text x="300" y="158" fill="#ffffff" font-size="68" font-weight="700" letter-spacing="1">MYCode</text>
+    <text x="302" y="210" fill="#c7cdf5" font-size="28">本地优先的桌面编码代理 · 你的电脑，你的密钥</text>
+    <g font-size="17" fill="#e6e9ff">
+      <rect x="302" y="240" width="92" height="34" rx="17" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="348" y="263" text-anchor="middle">Rust</text>
+      <rect x="406" y="240" width="92" height="34" rx="17" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="452" y="263" text-anchor="middle">GPUI</text>
+      <rect x="510" y="240" width="118" height="34" rx="17" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="569" y="263" text-anchor="middle">Windows</text>
+      <rect x="640" y="240" width="104" height="34" rx="17" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="692" y="263" text-anchor="middle">macOS</text>
+      <rect x="756" y="240" width="96" height="34" rx="17" fill="#7c8cff" fill-opacity="0.22" stroke="#7c8cff" stroke-opacity="0.6"/>
+      <text x="804" y="263" text-anchor="middle">MCP</text>
+    </g>
+  </g>
+
+  <g transform="translate(940 70)" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace" font-size="15">
+    <rect width="260" height="220" rx="16" fill="#0a0e1a" fill-opacity="0.85" stroke="#ffffff" stroke-opacity="0.12"/>
+    <circle cx="22" cy="22" r="5" fill="#ff5f57"/>
+    <circle cx="40" cy="22" r="5" fill="#febc2e"/>
+    <circle cx="58" cy="22" r="5" fill="#28c840"/>
+    <g fill="#9aa3c7">
+      <text x="20" y="64"><tspan fill="#28c840">●</tspan> read  src/lib.rs</text>
+      <text x="20" y="92"><tspan fill="#28c840">●</tspan> grep  "fn drive"</text>
+      <text x="20" y="120"><tspan fill="#28c840">●</tspan> edit  driver.rs <tspan fill="#3fb950">+12</tspan> <tspan fill="#f85149">-4</tspan></text>
+      <text x="20" y="148"><tspan fill="#7c8cff">●</tspan> agent scout ×3</text>
+      <text x="20" y="176"><tspan fill="#28c840">●</tspan> shell cargo test</text>
+      <text x="20" y="204" fill="#3fb950">  ✓ 161 passed</text>
+    </g>
+  </g>
+</svg>
