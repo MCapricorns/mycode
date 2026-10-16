@@ -53,7 +53,5 @@ pub use builtin::process::first_program_on_path;
 /// when the system clock predates the epoch.
 #[cfg(test)]
 pub(crate) fn unix_now() -> std::time::Duration {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+    mycode_core::unix_now()
 }

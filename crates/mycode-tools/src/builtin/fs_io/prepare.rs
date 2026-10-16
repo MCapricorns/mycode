@@ -11,35 +11,10 @@ use crate::builtin::fs_search::{
     SEARCH_TIME_LIMIT, map_target_kind_error, normalize_session_cwd, posix_relative_key,
     resolve_relative_argument, validate_component_name,
 };
-use crate::roots::anchor_tool_path;
+pub(crate) use crate::roots::anchor_file_path;
 use crate::tool::ToolError;
 
 use super::*;
-
-/// Anchors `raw` against `extra_roots` (for read-write file tools) or
-/// `extra_roots` + `read_roots` (for read-only file tools), matching
-/// [`crate::invoke::prepare_tool_ctx`].
-pub(crate) fn anchor_file_path(
-    cwd: &Path,
-    extra_roots: &[PathBuf],
-    read_roots: &[PathBuf],
-    reads_only: bool,
-    raw: &str,
-) -> (PathBuf, String) {
-    let anchors: Vec<PathBuf> = if reads_only {
-        extra_roots.iter().chain(read_roots).cloned().collect()
-    } else {
-        extra_roots.to_vec()
-    };
-    let (root, relative) = anchor_tool_path(cwd, &anchors, raw);
-    if root == cwd {
-        (cwd.to_path_buf(), raw.to_owned())
-    } else if relative.is_empty() {
-        (root, ".".to_owned())
-    } else {
-        (root, relative)
-    }
-}
 
 pub(super) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
     if cancel.is_cancelled() {

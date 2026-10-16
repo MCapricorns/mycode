@@ -294,7 +294,7 @@ pub(crate) fn excerpt_for_goal(content: &str, goal: &str, budget: usize) -> Stri
         let lead = cap_chars(content, budget.min(600));
         return format!("{lead}\n(no goal terms matched; leading excerpt)");
     }
-    if let Some(section) = best_section(&chunks, &terms, budget.max(SECTION_EXCERPT_CHARS)) {
+    if let Some(section) = best_section(&chunks, &scored, budget.max(SECTION_EXCERPT_CHARS)) {
         return section;
     }
     scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
@@ -411,14 +411,14 @@ fn goal_terms(goal: &str) -> Vec<String> {
 
 /// When a heading matches the goal, return that heading and everything under
 /// it until the next heading of the same or higher level.
-fn best_section(chunks: &[String], terms: &[String], budget: usize) -> Option<String> {
+fn best_section(
+    chunks: &[String],
+    scored: &[(usize, usize, &str)],
+    budget: usize,
+) -> Option<String> {
     let mut best: Option<(usize, usize)> = None;
-    for (index, chunk) in chunks.iter().enumerate() {
+    for &(score, index, chunk) in scored {
         if section_level(chunk).is_none() {
-            continue;
-        }
-        let score = score(chunk, terms);
-        if score == 0 {
             continue;
         }
         let replace = best.is_none_or(|(best_score, best_index)| {
@@ -459,19 +459,22 @@ fn best_section(chunks: &[String], terms: &[String], budget: usize) -> Option<St
 }
 
 fn section_level(chunk: &str) -> Option<u8> {
-    let line = chunk.trim().lines().next()?.trim();
-    let hashes = line.chars().take_while(|ch| *ch == '#').count();
+    let trimmed = chunk.trim();
+    let line = trimmed.lines().next()?.trim();
+    let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
     if (1..=6).contains(&hashes) {
-        let rest = line.chars().skip(hashes).collect::<String>();
+        let rest = &line[hashes..];
         if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('#') {
             return Some(hashes as u8);
         }
     }
-    if line.lines().count() == 1 && line.chars().count() <= 80 {
-        let lower = line.to_lowercase();
-        if lower.starts_with("version ") {
-            return Some(2);
-        }
+    if !trimmed.contains('\n')
+        && line.chars().count() <= 80
+        && line
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("version "))
+    {
+        return Some(2);
     }
     None
 }
@@ -948,6 +951,11 @@ Packaging boilerplate that should stay out.
         assert!(
             excerpt_chars * 4 < full,
             "expected at least 75% savings, full {full}, excerpt {excerpt_chars}"
+        );
+        assert_eq!(super::section_level("Version 1.99.0"), Some(2));
+        assert_eq!(
+            super::section_level("Version 1.99.0\nSecond line of a paragraph."),
+            None
         );
     }
 }
