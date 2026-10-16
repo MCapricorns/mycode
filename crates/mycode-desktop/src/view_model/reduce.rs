@@ -51,6 +51,49 @@ fn summary_waits_for_the_reply(state: &WorkspaceState) -> bool {
         })
 }
 
+/// Cuts a composer text to [`super::MAX_COMPOSER_CHARS`] in place.
+fn bounded_draft(mut text: String) -> String {
+    if let Some((cut, _)) = text.char_indices().nth(super::MAX_COMPOSER_CHARS) {
+        text.truncate(cut);
+    }
+    text
+}
+
+/// Appends one follow-up to the queue unless it is blank or the queue is full.
+fn queue_message(state: &mut WorkspaceState, text: String) {
+    let text = bounded_draft(text);
+    if !text.trim().is_empty() && state.queued.len() < super::MAX_QUEUED_MESSAGES {
+        state.queued.push(text);
+    }
+}
+
+/// Drops the turn-scoped view of the conversation leaving the screen: its
+/// queue, steers, live jobs, asks, held summary, and the in-flight flag.
+/// Events for a session that is not open are dropped, so none of this would
+/// ever be cleared once another conversation takes the screen.
+fn reset_turn_view(state: &mut WorkspaceState) {
+    state.sending = false;
+    state.pending_summary = None;
+    state.queued.clear();
+    state.queue_paused = false;
+    state.pending_steers.clear();
+    state.live_jobs.clear();
+    state.subagent_window = None;
+    state.changes_panel_open = false;
+    state.pending_ask = None;
+    state.ask_answers.clear();
+    state.history_loading = false;
+}
+
+/// Closes the turn on screen after it committed or failed.
+fn end_turn(state: &mut WorkspaceState) {
+    state.live_jobs.clear();
+    state.subagent_window = None;
+    state.pending_ask = None;
+    state.ask_answers.clear();
+    state.sending = false;
+}
+
 fn push_entry_once(conversation: &mut ActiveConversation, entry: mycode_app::ConversationEntry) {
     let already = conversation
         .entries
@@ -87,6 +130,15 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             | DesktopAction::SettingsSaved { .. }
             | DesktopAction::UiStateLoaded { .. }
     );
+    // Streaming ticks arrive many times a second and change no catalog the
+    // `/` menu lists; rebuilding it for each one is wasted work.
+    let streaming_tick = matches!(
+        action,
+        DesktopAction::ChatDelta(_)
+            | DesktopAction::ChatThinkingDelta(_)
+            | DesktopAction::ToolProgress { .. }
+            | DesktopAction::UsageSnapshot { .. }
+    );
     match action {
         DesktopAction::SessionsLoaded(mut sessions) => {
             let active_id = state.active.as_ref().map(|c| c.session_id.as_str());
@@ -112,6 +164,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             summary.active = true;
             state.sessions.insert(0, summary.clone());
             let session_id = summary.session_id.clone();
+            // A turn still running in the previous chat keeps running, but
+            // its events no longer reach this view; the fresh chat must not
+            // inherit its in-flight flag, queue, or asks.
+            reset_turn_view(state);
             state.active = Some(ActiveConversation {
                 session_id: summary.session_id,
                 branch_id: summary.root_branch_id,
@@ -123,27 +179,14 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 context_cache: 0,
             });
             remember_session_model(state, &session_id);
-            state.live_jobs.clear();
-            state.subagent_window = None;
-            state.changes_panel_open = false;
-            state.history_loading = false;
             // The composer meter reads these fields directly; a fresh session
             // starts with an empty meter.
             clear_session_usage(state);
         }
         DesktopAction::SessionDeleted => {
             state.active = None;
-            state.sending = false;
-            state.pending_summary = None;
-            state.queued.clear();
-            state.queue_paused = false;
-            state.live_jobs.clear();
-            state.subagent_window = None;
-            state.changes_panel_open = false;
-            state.pending_ask = None;
-            state.ask_answers.clear();
+            reset_turn_view(state);
             state.error = None;
-            state.history_loading = false;
             state.pending_welcome_send = None;
             clear_session_usage(state);
         }
@@ -152,16 +195,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             for session in &mut state.sessions {
                 session.active = false;
             }
-            state.sending = false;
-            state.pending_summary = None;
-            state.queued.clear();
-            state.queue_paused = false;
-            state.live_jobs.clear();
-            state.subagent_window = None;
-            state.changes_panel_open = false;
-            state.pending_ask = None;
-            state.ask_answers.clear();
-            state.history_loading = false;
+            reset_turn_view(state);
             state.composer_draft.clear();
             state.mention = None;
             state.pending_welcome_send = None;
@@ -188,17 +222,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             };
             if switched {
                 // Queue, tasks, and asks belong to the previous session.
-                state.queued.clear();
-                state.queue_paused = false;
-                state.pending_steers.clear();
-                state.live_jobs.clear();
-                state.subagent_window = None;
-                state.changes_panel_open = false;
-                state.pending_ask = None;
-                state.ask_answers.clear();
-                state.pending_summary = None;
-                state.sending = false;
-                state.history_loading = false;
+                reset_turn_view(state);
             }
             let session_id = conversation.session_id.clone();
             let restored_used = conversation.context_used;
@@ -230,7 +254,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ComposerChanged(text) => {
-            let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
+            let bounded = bounded_draft(text);
             state.mention = parse_mention(&bounded);
             state.composer_draft = bounded;
         }
@@ -238,7 +262,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if state.pending_welcome_send.is_none()
                 && let ComposerSubmit::StartTask(text) = composer_submit(state, &text)
             {
-                let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
+                let bounded = bounded_draft(text);
                 if !bounded.trim().is_empty() {
                     state.pending_welcome_send = Some(bounded);
                 }
@@ -270,10 +294,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.copilot_error = outcome.err();
         }
         DesktopAction::MessageQueued(text) => {
-            let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
-            if !bounded.trim().is_empty() && state.queued.len() < super::MAX_QUEUED_MESSAGES {
-                state.queued.push(bounded);
-            }
+            queue_message(state, text);
             state.composer_draft.clear();
             state.mention = None;
         }
@@ -283,27 +304,20 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 if let Some(position) = state.pending_steers.iter().position(|sent| *sent == text) {
                     state.pending_steers.remove(position);
                 }
-                let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
-                if !bounded.trim().is_empty() && state.queued.len() < super::MAX_QUEUED_MESSAGES {
-                    state.queued.push(bounded);
-                }
+                queue_message(state, text);
             }
         }
         DesktopAction::QueuedMessageRemoved(index) => {
             if index < state.queued.len() {
                 state.queued.remove(index);
             }
-            if state.queued.is_empty() {
-                state.queue_paused = false;
-            }
+            state.queue_paused &= !state.queued.is_empty();
         }
         DesktopAction::QueuedMessageTaken => {
             if !state.queued.is_empty() {
                 state.queued.remove(0);
             }
-            if state.queued.is_empty() {
-                state.queue_paused = false;
-            }
+            state.queue_paused &= !state.queued.is_empty();
         }
         DesktopAction::QueuePaused(paused) => {
             state.queue_paused = paused && !state.queued.is_empty();
@@ -321,7 +335,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.changes_panel_open = open;
         }
         DesktopAction::SubagentDismissed(call_id) => {
-            jobs::drop_live_job(state, &call_id);
+            drop_live_job(state, &call_id);
         }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
@@ -470,14 +484,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 }
                 conversation.streaming = None;
             }
-            state.live_jobs.clear();
-            state.subagent_window = None;
-            state.pending_ask = None;
-            state.ask_answers.clear();
+            end_turn(state);
             // The finished turn keeps its meter: the last live snapshot held
             // the turn's sums, so it becomes the completed-turn stats.
             state.last_turn = state.live_turn.take();
-            state.sending = false;
         }
         DesktopAction::ChatFailed { message, head } => {
             state.pending_steers.clear();
@@ -497,12 +507,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if message != CHAT_CANCELLED {
                 state.error = Some(message);
             }
-            state.live_jobs.clear();
-            state.subagent_window = None;
-            state.pending_ask = None;
-            state.ask_answers.clear();
+            end_turn(state);
             state.live_turn = None;
-            state.sending = false;
         }
         DesktopAction::CacheBreakArmed(cause) => arm_cache_watch(state, cause),
         DesktopAction::SteerCommitted {
@@ -1051,7 +1057,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
     if touches_providers {
         ensure_model_selection(state);
     }
-    fill_open_slash(state);
+    if !streaming_tick {
+        fill_open_slash(state);
+    }
 }
 
 /// Ceiling on entries held for one open conversation. The transcript pages
@@ -1095,9 +1103,6 @@ fn fill_open_slash(state: &mut WorkspaceState) {
     }
 }
 
-/// Applies one edit to the settings projection and marks the document dirty
-/// when the edit reports it changed something. Collapses the
-/// borrow-guard-mark boilerplate the settings arms share.
 /// Moves `models` out of or into `provider.hidden_models`. Returns whether
 /// the list changed. Hiding stops at the document's entry cap.
 fn set_models_shown(
@@ -1126,6 +1131,9 @@ fn set_models_shown(
     provider.hidden_models.len() != before
 }
 
+/// Applies one edit to the settings projection and marks the document dirty
+/// when the edit reports it changed something. Collapses the
+/// borrow-guard-mark boilerplate the settings arms share.
 fn edit_settings(state: &mut WorkspaceState, edit: impl FnOnce(&mut SettingsState) -> bool) {
     if let Some(settings) = state.settings.as_mut()
         && edit(settings)
@@ -2043,6 +2051,61 @@ mod tests {
         );
         assert_eq!(state.context_used, 25_000);
         assert_eq!(state.error.as_deref(), Some("provider down"));
+    }
+
+    #[test]
+    fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
+        let mut state = open(Vec::new(), None);
+        reduce(&mut state, DesktopAction::TurnArmed);
+        reduce(
+            &mut state,
+            DesktopAction::MessageQueued("follow up".to_owned()),
+        );
+        reduce(&mut state, DesktopAction::SteerSent("steer".to_owned()));
+        assert!(state.sending);
+        reduce(
+            &mut state,
+            DesktopAction::SessionCreated(mycode_app::SessionSummary {
+                session_id: "new".to_owned(),
+                root_branch_id: "branch".to_owned(),
+                title: String::new(),
+                updated_at_ms: None,
+                event_count: 0,
+                active: false,
+                corrupt: false,
+            }),
+        );
+        // The old turn's events no longer reach this view, so nothing would
+        // ever clear these for the fresh chat.
+        assert!(!state.sending);
+        assert!(state.queued.is_empty());
+        assert!(state.pending_steers.is_empty());
+        assert!(!state.history_loading);
+        assert_eq!(
+            state
+                .active
+                .as_ref()
+                .map(|active| active.session_id.as_str()),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn streaming_text_stops_at_the_character_cap() {
+        let mut state = open(Vec::new(), None);
+        // Three bytes per char: the byte fast path runs out well before the
+        // character cap, so both paths are exercised.
+        let chunk = "\u{4e2d}".repeat(1024);
+        for _ in 0..(mycode_app::MAX_STREAMING_CHARS / 1024 + 4) {
+            reduce(&mut state, DesktopAction::ChatDelta(chunk.clone()));
+        }
+        let text = &state
+            .active
+            .as_ref()
+            .and_then(|active| active.streaming.as_ref())
+            .expect("streaming")
+            .text;
+        assert_eq!(text.chars().count(), mycode_app::MAX_STREAMING_CHARS);
     }
 
     #[test]
