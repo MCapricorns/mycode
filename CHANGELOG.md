@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.11.24] - 2026-10-16
+
 ### Added
 
 - 网页搜索后端新增 Exa：设置页列出 Querit、AnySearch、Exa 三个厂商，点进各自详情页粘贴密钥（密钥只存凭据库，也支持 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY` / `EXA_API_KEY` 环境变量）。搜索走 `POST /search`（带 highlights 作摘要），取页面走 `POST /contents`，沿用同样的条数、字节和取消上限。
@@ -42,3 +44,6 @@
 - 项目目录里的 `.mycode/mcp.json` 不能再用已配置的服务 id 顶替用户自己的 MCP 服务，项目里的服务也拿不到用户保存的密钥；之前恶意仓库可以借同名服务把用户的密钥发到它指定的地址。
 - 更新只从本仓库的 GitHub Release 下载；压缩包里带盘符前缀的条目（如 `C:x.exe`）会被拒绝，不能写出暂存目录。
 - OAuth 登录打开浏览器不再经过 `cmd /c start`（服务器返回的地址里的 `&`、`|` 会被当成命令解析），且只打开 https 地址。
+
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.24...HEAD
+[0.11.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.24
