@@ -30,17 +30,18 @@ pub(crate) trait FrameReducer: Send + 'static {
 }
 
 /// Drives one provider request to exactly one terminal.
+///
+/// `retryable` says the body carries a field one of the retry rules can
+/// strip (a prompt cache key or replayed thinking); only then is a copy kept.
 pub(crate) async fn drive(
     transport: Arc<dyn crate::transport::SseTransport>,
     call: TransportCall,
+    retryable: bool,
     mut reducer: Box<dyn FrameReducer + Send>,
     sender: EventStreamSender,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    // A retry copy is kept only for bodies one of the retry rules can rewrite.
-    let prepared = (crate::cache::body_has_prompt_cache_key(&call.body)
-        || crate::anthropic_messages::body_replays_thinking(&call.body))
-    .then(|| {
+    let prepared = retryable.then(|| {
         (
             call.endpoint.clone(),
             call.headers.clone(),
@@ -236,6 +237,7 @@ mod tests {
         drive(
             transport.clone(),
             call(endpoint),
+            true,
             Box::new(CompletionsReducer::new()),
             sender,
             cancel,
@@ -287,6 +289,7 @@ mod tests {
                 headers: Vec::new(),
                 body: serde_json::to_vec(&body).unwrap(),
             },
+            crate::anthropic_messages::replays_thinking(&body),
             Box::new(crate::anthropic_messages::MessagesReducer::new()),
             sender,
             cancel,
@@ -311,6 +314,7 @@ mod tests {
         drive(
             transport.clone(),
             call(endpoint),
+            true,
             Box::new(CompletionsReducer::new()),
             sender,
             cancel,

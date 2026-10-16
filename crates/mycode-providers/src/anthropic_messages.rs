@@ -71,12 +71,27 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
     body
 }
 
-/// Whether a serialized Messages body replays provider thinking, so the
-/// driver keeps a copy for [`retry_body_without_thinking`].
+/// Whether a Messages body replays provider thinking in an assistant turn,
+/// so the driver keeps a copy for [`retry_body_without_thinking`].
 #[must_use]
-pub(crate) fn body_replays_thinking(body: &[u8]) -> bool {
-    let has = |needle: &[u8]| body.windows(needle.len()).any(|window| window == needle);
-    has(br#""type":"redacted_thinking""#) || has(br#""type":"thinking""#)
+pub(crate) fn replays_thinking(body: &Value) -> bool {
+    body.get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| {
+            messages
+                .iter()
+                .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+                .filter_map(|message| message.get("content").and_then(Value::as_array))
+                .flatten()
+                .any(is_thinking_block)
+        })
+}
+
+fn is_thinking_block(block: &Value) -> bool {
+    matches!(
+        block.get("type").and_then(Value::as_str),
+        Some("thinking" | "redacted_thinking")
+    )
 }
 
 /// Retry body for a 400 that rejects a replayed thinking signature.
@@ -110,12 +125,7 @@ pub(crate) fn retry_body_without_thinking(
             continue;
         };
         let before = blocks.len();
-        blocks.retain(|block| {
-            !matches!(
-                block.get("type").and_then(Value::as_str),
-                Some("thinking" | "redacted_thinking")
-            )
-        });
+        blocks.retain(|block| !is_thinking_block(block));
         stripped |= blocks.len() != before;
     }
     if !stripped {
@@ -986,7 +996,7 @@ mod tests {
             ]
         });
         let bytes = serde_json::to_vec(&body).unwrap();
-        assert!(super::body_replays_thinking(&bytes));
+        assert!(super::replays_thinking(&body));
         let rejected = ProviderError::with_message(
             ProviderErrorKind::Rejected,
             "HTTP 400 Bad Request: messages.1.content.0: Invalid `signature` in `thinking` block. \
@@ -1005,8 +1015,15 @@ mod tests {
 
         let other = ProviderError::with_message(ProviderErrorKind::Rejected, "HTTP 400: bad tool");
         assert!(super::retry_body_without_thinking(&other, &bytes).is_none());
-        let plain = serde_json::to_vec(&serde_json::json!({"messages": []})).unwrap();
-        assert!(!super::body_replays_thinking(&plain));
+        let plain = serde_json::json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": r#"{"type":"thinking"}"#}]},
+            {"role": "assistant", "content": [{"type": "text", "text": r#""type":"thinking""#}]}
+        ]});
+        assert!(
+            !super::replays_thinking(&plain),
+            "text mentioning thinking is not a block"
+        );
+        let plain = serde_json::to_vec(&plain).unwrap();
         assert!(super::retry_body_without_thinking(&rejected, &plain).is_none());
     }
 
