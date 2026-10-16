@@ -26,10 +26,7 @@ pub use providers::{
     MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings,
 };
 pub use proxy::{PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProxyPreference};
-pub use subagent_roles::{
-    DEFAULT_SUBAGENT_CONCURRENCY, DEFAULT_SUBAGENT_TIMEOUT_SECS, MAX_SUBAGENT_CONCURRENCY,
-    MAX_SUBAGENT_TIMEOUT_SECS, SubagentRoleSettings, SubagentSettings,
-};
+pub use subagent_roles::{SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings};
 pub use tools_shell::{ShellSettings, ToolsSettings};
 pub use user_agent::default_user_agent;
 pub use web::{MAX_WEB_BACKENDS, WebBackendSettings, WebSettings, builtin_web_backends};
@@ -771,21 +768,19 @@ mod tests {
     }
 
     #[test]
-    fn missing_subagent_timeout_uses_the_default_wall_clock() {
+    fn retired_subagent_limits_still_parse_and_are_dropped_on_save() {
         let bytes = br#"{
             "formatVersion": 1,
             "kind": "mycode-app-settings",
             "revision": 1,
-            "subagents": { "maxConcurrent": 2 }
+            "subagents": { "maxConcurrent": 99, "timeoutSecs": 600 }
         }"#;
         let parsed = decode_settings(bytes).expect("older subagent settings");
-        assert_eq!(parsed.settings.subagents.max_concurrent, 2);
-        assert_eq!(parsed.settings.subagents.timeout_secs, 0);
-        assert_eq!(
-            parsed.settings.subagents.effective_timeout_secs(),
-            super::DEFAULT_SUBAGENT_TIMEOUT_SECS
-        );
         assert!(parsed.settings.validate().is_ok());
+        let saved = serde_json::to_string(&parsed.settings.subagents).expect("encode");
+        assert!(!saved.contains("maxConcurrent"), "{saved}");
+        assert!(!saved.contains("timeoutSecs"), "{saved}");
+        assert_eq!(super::SUBAGENT_CONCURRENCY, 8);
     }
 
     struct TempDir(std::path::PathBuf);

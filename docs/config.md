@@ -55,7 +55,7 @@
 - **Shell**：没有可切换的 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。旧的 `tools.shell` 还能被读入，任何 `kind` 都不会让整份文档校验失败；启动时忽略它，并在写回时去掉。`MYCODE_SHELL` 不再覆盖选择，有具体取值时只提示一次。旧的 `tools.osSandbox` 同样只被读入并在启动时清掉：OS 沙箱已随功能移除，进程以当前用户权限运行
 - **网页**：后端 `kind` 为 `querit`、`anysearch` 或 `custom`，端点必须是 https，最多启用一个。默认带 Querit 和 AnySearch 两行，均未启用。密钥先看环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`，再看 `secrets.json` 的 `web-<id>`
 - **MCP**：`transport` 为 `stdio`（单个可执行文件加 `args`，不接受 shell 字符串）或 `http`（https 端点，`keyHeader` 为 `bearer` 或 `x-api-key`）。每服务器最多 32 个额外环境变量。密钥用 `mcp-<id>`
-- **子代理**：哪些角色启用（没写的角色默认启用）、模型路由、思考强度、并发。`subagents.maxConcurrent` 为 `0` 时使用默认的 4 个并发子代理，不是关闭委派，也不是零个名额。显式上限最高 6。`subagents.timeoutSecs` 是单个子代理的墙钟超时（秒）：`0` 使用默认的 20 分钟（1200 秒），不是关闭超时；显式值最高 7200 秒（2 小时）。排队等待并发名额不计入这段时间
+- **子代理**：哪些角色启用（没写的角色默认启用）、模型路由、思考强度。并发固定为 8 个，不是设置项。子代理没有超时，取消回合、停止子代理或删除对话时结束。旧文件里的 `maxConcurrent`、`timeoutSecs` 仍可读入，但会被忽略，下次保存时去掉。
 - **用量**：`usage.enabled`，默认开
 
 数量上限写在常量上：提供商 64、每提供商模型 128、MCP 服务器 64、网页后端 16、角色 32。
