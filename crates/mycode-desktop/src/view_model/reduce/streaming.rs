@@ -7,14 +7,7 @@ use crate::i18n::t;
 
 use crate::view_model::WorkspaceState;
 
-pub(super) fn tool_call_label(name: &str, target: &str) -> String {
-    let target = target.trim();
-    if target.is_empty() {
-        name.to_owned()
-    } else {
-        format!("{name}  {target}")
-    }
-}
+pub(super) use mycode_app::tool_label as tool_call_label;
 
 /// Ensures a live streaming bubble exists and updates its status line.
 pub(super) fn set_streaming_status(state: &mut WorkspaceState, status: &str) {

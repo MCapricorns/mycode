@@ -456,12 +456,7 @@ pub(super) fn ellipsis(text: &str, max_chars: usize) -> String {
     }
 }
 
-pub(super) fn project_label(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_owned())
-}
+pub(super) use crate::view_model::project_label;
 
 #[cfg(test)]
 mod tests {

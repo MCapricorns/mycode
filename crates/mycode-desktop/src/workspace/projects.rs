@@ -77,10 +77,7 @@ impl Workspace {
             .as_deref()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-        let user_home = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(std::path::PathBuf::from);
-        (workspace, user_home)
+        (workspace, mycode_config::os_user_home())
     }
 
     pub(super) fn refresh_skills(&mut self, cx: &mut Context<Self>) {
@@ -190,15 +187,20 @@ impl Workspace {
     }
 
     fn insert_skill_draft(&mut self, slug: &str, cx: &mut Context<Self>) {
-        let (workspace, user_home) = self.skill_roots();
-        let Some(skill) = mycode_config::discover_skills(&workspace, user_home.as_deref())
-            .into_iter()
-            .find(|skill| skill.slug == slug)
-        else {
-            return;
+        let (title, path) = if let Some(cached) =
+            self.vm.skills.iter().find(|skill| skill.slug == slug)
+        {
+            (cached.title.clone(), cached.path.clone())
+        } else {
+            let (workspace, user_home) = self.skill_roots();
+            let Some(skill) = mycode_config::discover_skills(&workspace, user_home.as_deref())
+                .into_iter()
+                .find(|skill| skill.slug == slug)
+            else {
+                return;
+            };
+            (skill.title, skill.path.display().to_string())
         };
-        let path = skill.path.display();
-        let title = skill.title;
         // Native tools run directly: ask for a plain read of the skill file.
         // (The retired run_code control channel used to wrap this request.)
         let text = if crate::i18n::is_chinese() {

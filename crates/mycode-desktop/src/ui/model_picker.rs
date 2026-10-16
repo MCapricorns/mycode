@@ -18,6 +18,7 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::skin::{self, menu_panel};
+pub(crate) use crate::view_model::{model_display_name, provider_display_name};
 use crate::view_model::{DesktopAction, WorkspaceState};
 use crate::workspace::Workspace;
 
@@ -28,6 +29,12 @@ pub(crate) struct ModelChoice {
     pub id: String,
     /// Catalog display name, or the id when the catalog has none.
     pub name: String,
+}
+
+impl AsRef<str> for ModelChoice {
+    fn as_ref(&self) -> &str {
+        &self.id
+    }
 }
 
 /// Who a pick is for. Session picks change the open chat; role picks only
@@ -94,8 +101,11 @@ pub(crate) fn merge_model_choices(
     catalog: &[(String, String)],
     configured: &[String],
 ) -> Vec<ModelChoice> {
+    let mut seen: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(catalog.len() + configured.len());
     let mut choices = Vec::with_capacity(catalog.len() + configured.len());
     for (id, name) in catalog {
+        seen.insert(id.as_str());
         let name = if name.is_empty() {
             id.clone()
         } else {
@@ -107,7 +117,7 @@ pub(crate) fn merge_model_choices(
         });
     }
     for id in configured {
-        if choices.iter().any(|choice| choice.id == *id) {
+        if !seen.insert(id.as_str()) {
             continue;
         }
         choices.push(ModelChoice {
@@ -177,7 +187,11 @@ fn recent_pins(vm: &WorkspaceState) -> Vec<mycode_config::ModelPin> {
 ///
 /// A non-empty query selects the first match. An empty query selects the
 /// current model when it is still in the list, otherwise the first row.
-pub(crate) fn preferred_index(ids: &[String], query: &str, selected: Option<&str>) -> usize {
+pub(crate) fn preferred_index<T: AsRef<str>>(
+    ids: &[T],
+    query: &str,
+    selected: Option<&str>,
+) -> usize {
     if ids.is_empty() {
         return 0;
     }
@@ -185,23 +199,8 @@ pub(crate) fn preferred_index(ids: &[String], query: &str, selected: Option<&str
         return 0;
     }
     selected
-        .and_then(|id| ids.iter().position(|item| item == id))
+        .and_then(|id| ids.iter().position(|item| item.as_ref() == id))
         .unwrap_or(0)
-}
-
-/// Catalog display name for one model, or the id when the catalog has none.
-pub(crate) fn model_display_name(vm: &WorkspaceState, provider: &str, model_id: &str) -> String {
-    vm.catalog
-        .as_ref()
-        .and_then(|catalog| catalog.model(provider, model_id))
-        .map(|model| {
-            if model.name.is_empty() {
-                model.id.clone()
-            } else {
-                model.name.clone()
-            }
-        })
-        .unwrap_or_else(|| model_id.to_owned())
 }
 
 /// Composer and default-model label: the model name only.
@@ -426,9 +425,10 @@ fn render_model_step(
     let choices = provider_model_choices(workspace.vm(), provider_id);
     let filtered = filter_model_choices(&choices, query);
     let selected = selected_in_provider(workspace.vm(), target, provider_id);
-    let ids: Vec<String> = filtered.iter().map(|choice| choice.id.clone()).collect();
-    let preferred =
-        workspace.model_highlight(ids.len(), preferred_index(&ids, query, selected.as_deref()));
+    let preferred = workspace.model_highlight(
+        filtered.len(),
+        preferred_index(&filtered, query, selected.as_deref()),
+    );
     let scroll = workspace.model_scroll().clone();
     let row_id_prefix = match target {
         ModelPickerTarget::Session => format!("model-{provider_id}"),
@@ -733,13 +733,6 @@ fn enabled_providers(vm: &WorkspaceState) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-fn provider_display_name(vm: &WorkspaceState, id: &str) -> String {
-    vm.catalog
-        .as_ref()
-        .map(|catalog| catalog.display_name(id))
-        .unwrap_or_else(|| id.to_owned())
-}
-
 fn current_provider(vm: &WorkspaceState, target: &ModelPickerTarget) -> Option<String> {
     match target {
         ModelPickerTarget::Session => vm.selected_provider.clone(),
@@ -838,6 +831,6 @@ mod tests {
         assert_eq!(preferred_index(&ids, "", Some("c")), 2);
         assert_eq!(preferred_index(&ids, "", Some("missing")), 0);
         assert_eq!(preferred_index(&ids, "bee", Some("c")), 0);
-        assert_eq!(preferred_index(&[], "", None), 0);
+        assert_eq!(preferred_index::<String>(&[], "", None), 0);
     }
 }

@@ -452,8 +452,7 @@ pub(super) fn tool_status(
         return t("failed", "失败").to_owned();
     }
     if tool_paints_diff(tool) {
-        let added = text.lines().filter(|line| diff_added_line(line)).count();
-        let removed = text.lines().filter(|line| diff_removed_line(line)).count();
+        let (added, removed) = count_diff_changes(text.lines());
         if added + removed > 0 {
             return format!("+{added} -{removed}");
         }
@@ -489,6 +488,19 @@ fn diff_added_line(line: &str) -> bool {
 
 fn diff_removed_line(line: &str) -> bool {
     (line.starts_with("-- ") || line.starts_with("- ")) && !line.starts_with("---")
+}
+
+fn count_diff_changes<'a>(lines: impl IntoIterator<Item = &'a str>) -> (usize, usize) {
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    for line in lines {
+        if diff_added_line(line) {
+            added += 1;
+        } else if diff_removed_line(line) {
+            removed += 1;
+        }
+    }
+    (added, removed)
 }
 
 /// `+3 -1` from [`tool_status`]. Only digit counts match, so a status line
@@ -618,7 +630,7 @@ fn number_diff(lines: &[&str]) -> Vec<NumberedLine> {
     let mut started = false;
     let mut out = Vec::with_capacity(lines.len());
     for line in lines {
-        if let Some((old, new)) = hunk_start(line) {
+        if let Some((old, new)) = parse_diff_hunk_header(line) {
             old_n = old;
             new_n = new;
             started = true;
@@ -684,18 +696,17 @@ fn number_diff(lines: &[&str]) -> Vec<NumberedLine> {
     out
 }
 
-fn hunk_start(line: &str) -> Option<(u32, u32)> {
+pub(crate) fn parse_diff_hunk_header(line: &str) -> Option<(u32, u32)> {
     let rest = line.strip_prefix("@@ ")?;
     let (old, rest) = rest.split_once(' ')?;
-    let new = rest.split_once(' ')?.0;
+    let new = rest.split_once(' ').map(|(head, _)| head).unwrap_or(rest);
     let old = old.strip_prefix('-')?.split(',').next()?;
     let new = new.strip_prefix('+')?.split(',').next()?;
     Some((old.parse().ok()?, new.parse().ok()?))
 }
 
 fn diff_preview(lines: &[&str], theme: &Theme) -> impl IntoElement {
-    let added = lines.iter().filter(|line| diff_added_line(line)).count();
-    let removed = lines.iter().filter(|line| diff_removed_line(line)).count();
+    let (added, removed) = count_diff_changes(lines.iter().copied());
     let numbered = number_diff(lines);
     let shown = numbered.len().min(80);
     let add_ink = crate::ui::desk::diff_ink(theme, true);

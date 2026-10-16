@@ -216,15 +216,7 @@ pub(super) fn session_bindings_forgotten(state: &mut WorkspaceState, session_id:
 /// The active workspace's folder list, shared by the mirror and the
 /// mutating transitions.
 fn active_folders(state: &WorkspaceState) -> Option<&[String]> {
-    match state.active_workspace.as_deref() {
-        Some(id) => state
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == id)
-            .map(|workspace| workspace.folders.as_slice())
-            .or_else(|| state.workspaces.first().map(|w| w.folders.as_slice())),
-        None => state.workspaces.first().map(|w| w.folders.as_slice()),
-    }
+    crate::view_model::active_workspace(state).map(|workspace| workspace.folders.as_slice())
 }
 
 /// The active workspace, mutably. `sync_workspace_roots` callers keep the

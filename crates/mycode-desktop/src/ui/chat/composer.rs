@@ -708,7 +708,7 @@ fn context_meter(workspace: &Workspace) -> Option<crate::view_model::ContextMete
     let vm = workspace.vm();
     let used = vm.context_used;
     let cached = vm.context_cache;
-    let window = super::super::context::model_context_window(vm);
+    let window = crate::view_model::model_context_window(vm);
     if used == 0 && cached == 0 && window == 0 {
         return None;
     }

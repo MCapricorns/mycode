@@ -13,6 +13,7 @@ mod welcome;
 pub(crate) use ask::render_ask_overlay;
 pub(crate) use composer::composer_placeholder;
 pub(crate) use menus::reasoning_row_label;
+pub(crate) use tools::parse_diff_hunk_header;
 pub(crate) use welcome::new_task_label;
 
 use gpui_kit::component::ActiveTheme as _;

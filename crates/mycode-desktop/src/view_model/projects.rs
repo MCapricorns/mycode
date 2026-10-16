@@ -1,10 +1,77 @@
 //! Project- and workspace-shaped projections: path comparison, session
 //! bindings, and the active-workspace view of the sidebar.
 
+use std::collections::HashMap;
+
 use mycode_app::SessionSummary;
 pub(crate) use mycode_config::same_project_path;
 
 use super::state::WorkspaceState;
+
+/// Short display label for a project folder path (its trailing component, or
+/// the full path when it has none).
+#[must_use]
+pub(crate) fn project_label(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_owned())
+}
+
+/// Pre-indexed session-to-workspace and session-to-project lookup tables so
+/// callers that iterate over all sessions (`workspace_session_rows`,
+/// `workspace_session_counts`, `command_palette`) run in linear time instead
+/// of scanning the binding vectors per session.
+pub(crate) struct SessionBindingsIndex<'a> {
+    first_workspace: Option<&'a mycode_config::WorkspaceDef>,
+    known_workspaces: HashMap<&'a str, &'a mycode_config::WorkspaceDef>,
+    owners: HashMap<&'a str, &'a str>,
+    projects: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> SessionBindingsIndex<'a> {
+    #[must_use]
+    pub(crate) fn new(state: &'a WorkspaceState) -> Self {
+        let first_workspace = state.workspaces.first();
+        let known_workspaces: HashMap<&'a str, &'a mycode_config::WorkspaceDef> = state
+            .workspaces
+            .iter()
+            .map(|workspace| (workspace.id.as_str(), workspace))
+            .collect();
+        let mut owners: HashMap<&'a str, &'a str> =
+            HashMap::with_capacity(state.session_workspaces.len());
+        for (session, workspace) in &state.session_workspaces {
+            owners.entry(session.as_str()).or_insert(workspace.as_str());
+        }
+        let mut projects: HashMap<&'a str, &'a str> =
+            HashMap::with_capacity(state.session_projects.len());
+        for (session, project) in &state.session_projects {
+            projects.entry(session.as_str()).or_insert(project.as_str());
+        }
+        Self {
+            first_workspace,
+            known_workspaces,
+            owners,
+            projects,
+        }
+    }
+
+    /// The workspace `session_id` belongs to, following [`workspace_of_session`].
+    #[must_use]
+    pub(crate) fn workspace_of(&self, session_id: &str) -> Option<&'a mycode_config::WorkspaceDef> {
+        self.owners
+            .get(session_id)
+            .and_then(|id| self.known_workspaces.get(id).copied())
+            .or(self.first_workspace)
+    }
+
+    /// The project path bound to `session_id`, if any.
+    #[must_use]
+    pub(crate) fn project_of(&self, session_id: &str) -> Option<&'a str> {
+        self.projects.get(session_id).copied()
+    }
+}
 
 /// The workspace the sidebar shows. A stale active id falls back to the
 /// first workspace, which is also where unbound sessions live.
@@ -53,37 +120,38 @@ pub(crate) fn workspace_session_rows<'a>(
     state: &'a WorkspaceState,
     workspace_id: &str,
 ) -> Vec<(&'a SessionSummary, Option<&'a str>)> {
-    use std::collections::{HashMap, HashSet};
-
-    let Some(first) = state.workspaces.first() else {
+    if state.workspaces.is_empty() {
         return Vec::new();
-    };
-    let known: HashSet<&str> = state
-        .workspaces
-        .iter()
-        .map(|workspace| workspace.id.as_str())
-        .collect();
-    let mut owners: HashMap<&str, &str> = HashMap::with_capacity(state.session_workspaces.len());
-    for (session, workspace) in &state.session_workspaces {
-        owners.entry(session.as_str()).or_insert(workspace.as_str());
     }
-    let mut projects: HashMap<&str, &str> = HashMap::with_capacity(state.session_projects.len());
-    for (session, project) in &state.session_projects {
-        projects.entry(session.as_str()).or_insert(project.as_str());
-    }
+    let index = SessionBindingsIndex::new(state);
     state
         .sessions
         .iter()
         .filter(|session| {
-            let owner = owners
-                .get(session.session_id.as_str())
-                .copied()
-                .filter(|id| known.contains(id))
-                .unwrap_or(first.id.as_str());
-            owner == workspace_id
+            index
+                .workspace_of(&session.session_id)
+                .is_some_and(|owner| owner.id == workspace_id)
         })
-        .map(|session| (session, projects.get(session.session_id.as_str()).copied()))
+        .map(|session| (session, index.project_of(&session.session_id)))
         .collect()
+}
+
+/// Counts how many sessions belong to each workspace in a single pass.
+/// Ownership follows [`workspace_of_session`], so unbound or stale-bound
+/// sessions are counted under the first workspace.
+#[must_use]
+pub(crate) fn workspace_session_counts(state: &WorkspaceState) -> HashMap<&str, usize> {
+    let mut counts: HashMap<&str, usize> = HashMap::with_capacity(state.workspaces.len());
+    if state.workspaces.is_empty() {
+        return counts;
+    }
+    let index = SessionBindingsIndex::new(state);
+    for session in &state.sessions {
+        if let Some(owner) = index.workspace_of(&session.session_id) {
+            *counts.entry(owner.id.as_str()).or_insert(0) += 1;
+        }
+    }
+    counts
 }
 
 /// Task cards belong to the open session's project. Leaving that project
@@ -219,6 +287,7 @@ mod tests {
             session_projects: vec![pair("in-first", "/a"), pair("in-first", "/b")],
             ..WorkspaceState::default()
         };
+        let counts = super::workspace_session_counts(&state);
         for id in ["first", "second"] {
             let rows = super::workspace_session_rows(&state, id);
             let expected: Vec<&str> = state
@@ -235,6 +304,7 @@ mod tests {
                 .map(|(session, _)| session.session_id.as_str())
                 .collect();
             assert_eq!(listed, expected, "{id}");
+            assert_eq!(counts.get(id).copied().unwrap_or(0), expected.len(), "{id}");
         }
         let first = super::workspace_session_rows(&state, "first");
         let bound = first

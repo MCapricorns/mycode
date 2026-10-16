@@ -16,8 +16,4 @@ pub mod workspace;
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
 /// when the system clock predates the epoch.
-pub(crate) fn unix_now() -> std::time::Duration {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-}
+pub(crate) use mycode_app::unix_now;

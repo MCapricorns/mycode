@@ -31,12 +31,13 @@ pub(crate) use self::command_palette::{
     palette_item,
 };
 pub(crate) use self::models::{
-    effective_reasoning_level, rank_model_ids, selected_reasoning_level,
+    effective_reasoning_level, model_context_window, model_display_name, provider_display_name,
+    rank_model_ids, selected_reasoning_level,
 };
 pub(crate) use self::projects::{
     active_workspace, has_open_folder, newest_session_in_project, open_session_is_empty,
-    project_of_session, same_project_path, task_surface_visible, workspace_of_session,
-    workspace_session_rows,
+    project_label, project_of_session, same_project_path, task_surface_visible,
+    workspace_of_session, workspace_session_counts, workspace_session_rows,
 };
 pub(crate) use self::reduce::{
     ComposerSubmit, close_floating_menus, composer_submit, preferred_slash_index,
