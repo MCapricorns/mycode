@@ -18,6 +18,14 @@ use crate::builtin::fs_search::{lexical_normalize, strip_prefix_lexical, strip_v
 /// session-cwd prepare path keeps its current errors.
 #[must_use]
 pub fn anchor_tool_path(primary: &Path, extras: &[PathBuf], raw: &str) -> (PathBuf, String) {
+    anchor_tool_path_iter(primary, extras.iter().map(PathBuf::as_path), raw)
+}
+
+fn anchor_tool_path_iter<'a>(
+    primary: &Path,
+    extras: impl IntoIterator<Item = &'a Path>,
+    raw: &str,
+) -> (PathBuf, String) {
     let argument = Path::new(raw);
     if !argument.is_absolute() {
         return (primary.to_path_buf(), raw.to_owned());
@@ -44,11 +52,42 @@ pub fn anchor_tool_path(primary: &Path, extras: &[PathBuf], raw: &str) -> (PathB
         } else {
             crate::builtin::fs_search::to_posix(&relative)
         };
-        best = Some((depth, extra.clone(), spelled));
+        best = Some((depth, extra.to_path_buf(), spelled));
     }
     match best {
         Some((_, root, relative)) => (root, relative),
         None => (primary.to_path_buf(), raw.to_owned()),
+    }
+}
+
+/// Anchors `raw` against `extra_roots` (for read-write file tools) or
+/// `extra_roots` + `read_roots` (for read-only file tools).
+#[must_use]
+pub(crate) fn anchor_file_path(
+    cwd: &Path,
+    extra_roots: &[PathBuf],
+    read_roots: &[PathBuf],
+    reads_only: bool,
+    raw: &str,
+) -> (PathBuf, String) {
+    let (root, relative) = if reads_only {
+        anchor_tool_path_iter(
+            cwd,
+            extra_roots
+                .iter()
+                .chain(read_roots)
+                .map(PathBuf::as_path),
+            raw,
+        )
+    } else {
+        anchor_tool_path_iter(cwd, extra_roots.iter().map(PathBuf::as_path), raw)
+    };
+    if root == cwd {
+        (cwd.to_path_buf(), raw.to_owned())
+    } else if relative.is_empty() {
+        (root, ".".to_owned())
+    } else {
+        (root, relative)
     }
 }
 

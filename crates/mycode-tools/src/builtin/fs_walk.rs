@@ -237,14 +237,7 @@ fn collect_listing(
     limiter: &WalkLimiter,
     cancel: &CancellationToken,
 ) -> io::Result<Vec<ListedName>> {
-    let mut listing = DirListing::new();
-    let mut names = Vec::new();
-    loop {
-        match listing.next(dir, limiter, cancel)? {
-            Some(entry) => names.push(entry),
-            None => return Ok(names),
-        }
-    }
+    DirListing::new().collect(dir, limiter, cancel)
 }
 
 fn sort_listing(entries: Vec<ListedName>) -> Vec<ListedName> {
@@ -335,9 +328,6 @@ struct ListedName {
 /// Per-directory listing. Names are collected up to the width cap, then
 /// sorted so match-budget truncation is a deterministic global prefix.
 struct DirListing {
-    pending: Vec<ListedName>,
-    next_index: usize,
-    loaded: bool,
     #[cfg(unix)]
     dirp: Option<UnixDirOwner>,
     #[cfg(windows)]
@@ -353,9 +343,6 @@ struct DirListing {
 impl DirListing {
     fn new() -> Self {
         Self {
-            pending: Vec::new(),
-            next_index: 0,
-            loaded: false,
             #[cfg(unix)]
             dirp: None,
             #[cfg(windows)]
@@ -369,38 +356,17 @@ impl DirListing {
         }
     }
 
-    fn next(
+    fn collect(
         &mut self,
         dir: &File,
         limiter: &WalkLimiter,
         cancel: &CancellationToken,
-    ) -> io::Result<Option<ListedName>> {
-        if matches!(limiter.check(cancel), ignore::WalkState::Quit) {
-            return Ok(None);
-        }
-        if !self.loaded {
-            self.load(dir, limiter, cancel)?;
-        }
-        if self.next_index >= self.pending.len() {
-            return Ok(None);
-        }
-        let entry = self.pending[self.next_index].clone();
-        self.next_index += 1;
-        Ok(Some(entry))
-    }
-
-    fn load(
-        &mut self,
-        dir: &File,
-        limiter: &WalkLimiter,
-        cancel: &CancellationToken,
-    ) -> io::Result<()> {
+    ) -> io::Result<Vec<ListedName>> {
         let mut entries = Vec::new();
         let width = limiter.max_dir_width();
         loop {
             if matches!(limiter.check(cancel), ignore::WalkState::Quit) {
-                self.loaded = true;
-                return Ok(());
+                return Ok(Vec::new());
             }
             match self.next_platform(dir, limiter, cancel)? {
                 None => break,
@@ -413,10 +379,7 @@ impl DirListing {
                 }
             }
         }
-        self.pending = sort_listing(entries);
-        self.next_index = 0;
-        self.loaded = true;
-        Ok(())
+        Ok(sort_listing(entries))
     }
 
     #[cfg(unix)]

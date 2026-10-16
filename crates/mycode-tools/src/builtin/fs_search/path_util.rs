@@ -83,16 +83,24 @@ pub(crate) fn windows_os_str_eq_ignore_case(left: &OsStr, right: &OsStr) -> bool
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Wdk::System::SystemServices::RtlUpcaseUnicodeChar;
 
-    let left: Vec<u16> = left.encode_wide().collect();
-    let right: Vec<u16> = right.encode_wide().collect();
-    if left.len() != right.len() {
-        return false;
+    let mut left = left.encode_wide();
+    let mut right = right.encode_wide();
+    loop {
+        match (left.next(), right.next()) {
+            (Some(left_unit), Some(right_unit)) => {
+                // SAFETY: `RtlUpcaseUnicodeChar` is a pure 1:1 mapping on a
+                // UTF-16 code unit and has no pointer preconditions.
+                let same = unsafe {
+                    RtlUpcaseUnicodeChar(left_unit) == RtlUpcaseUnicodeChar(right_unit)
+                };
+                if !same {
+                    return false;
+                }
+            }
+            (None, None) => return true,
+            _ => return false,
+        }
     }
-    left.iter().zip(&right).all(|(left_unit, right_unit)| {
-        // SAFETY: `RtlUpcaseUnicodeChar` is a pure 1:1 mapping on a
-        // UTF-16 code unit and has no pointer preconditions.
-        unsafe { RtlUpcaseUnicodeChar(*left_unit) == RtlUpcaseUnicodeChar(*right_unit) }
-    })
 }
 
 /// Component-kind-safe equality used by lexical containment and extraction.
@@ -115,13 +123,16 @@ pub(crate) fn components_within(
     candidate: &Path,
     eq: impl Fn(&OsStr, &OsStr) -> bool,
 ) -> bool {
-    let root: Vec<_> = root.components().collect();
-    let candidate: Vec<_> = candidate.components().collect();
-    candidate.len() >= root.len()
-        && root
-            .iter()
-            .zip(candidate.iter())
-            .all(|(left, right)| eq(left.as_os_str(), right.as_os_str()))
+    let mut candidate_components = candidate.components();
+    for root_component in root.components() {
+        let Some(candidate_component) = candidate_components.next() else {
+            return false;
+        };
+        if !eq(root_component.as_os_str(), candidate_component.as_os_str()) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Returns the relative suffix of `candidate` under `root`, if contained.
@@ -131,26 +142,21 @@ pub(crate) fn components_within(
 /// is not a relative path and fails closed. Windows name and prefix text
 /// uses `os_str_eq_lexical`.
 pub(crate) fn strip_prefix_lexical(root: &Path, candidate: &Path) -> Option<PathBuf> {
-    let root: Vec<_> = root.components().collect();
-    let candidate: Vec<_> = candidate.components().collect();
-    if candidate.len() < root.len() {
-        return None;
+    let mut candidate_components = candidate.components();
+    for root_component in root.components() {
+        let candidate_component = candidate_components.next()?;
+        if !lexical_components_equal(&root_component, &candidate_component) {
+            return None;
+        }
     }
-    if !root
-        .iter()
-        .zip(candidate.iter())
-        .all(|(left, right)| lexical_components_equal(left, right))
-    {
-        return None;
+    let mut relative = PathBuf::new();
+    for component in candidate_components {
+        if !matches!(component, Component::Normal(_)) {
+            return None;
+        }
+        relative.push(component.as_os_str());
     }
-    let suffix = &candidate[root.len()..];
-    if suffix
-        .iter()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return None;
-    }
-    Some(suffix.iter().collect())
+    Some(relative)
 }
 
 /// Converts Windows verbatim paths to stable plain forms.

@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::ctx::ToolCtx;
-use crate::roots::anchor_tool_path;
+use crate::roots::{anchor_file_path, anchor_tool_path};
 use crate::tool::ToolDyn;
 
 /// Builds the [`ToolCtx`] a tool executes with, including filesystem preflight.
@@ -52,12 +52,8 @@ pub async fn prepare_tool_ctx(
             .get("path")
             .and_then(Value::as_str)
             .ok_or_else(|| "file tool is missing a path argument".to_owned())?;
-        let anchors: Vec<PathBuf> = if tool.reads_only() {
-            extra_roots.iter().chain(read_roots).cloned().collect()
-        } else {
-            extra_roots.to_vec()
-        };
-        let (root, path) = anchored_file(cwd, &anchors, path);
+        let (root, path) =
+            anchor_file_path(cwd, extra_roots, read_roots, tool.reads_only(), path);
         let prepared = crate::prepare_file_async(root.clone(), path, cancel, access)
             .await
             .map_err(|error| error.to_string())?;
@@ -79,17 +75,6 @@ fn anchored_search(cwd: &Path, extras: &[PathBuf], raw: Option<&str>) -> (PathBu
         (root, None)
     } else {
         (root, Some(relative))
-    }
-}
-
-fn anchored_file(cwd: &Path, extras: &[PathBuf], raw: &str) -> (PathBuf, String) {
-    let (root, relative) = anchor_tool_path(cwd, extras, raw);
-    if root == cwd {
-        (cwd.to_path_buf(), raw.to_owned())
-    } else if relative.is_empty() {
-        (root, ".".to_owned())
-    } else {
-        (root, relative)
     }
 }
 
