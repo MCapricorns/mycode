@@ -200,7 +200,7 @@ mod tests {
         sending.sending = true;
         assert!(!open_session_is_empty(&sending));
 
-        let mut hidden_history = blank.clone();
+        let mut hidden_history = blank;
         hidden_history.active.as_mut().expect("open").older_before = Some("e0".to_owned());
         assert!(!open_session_is_empty(&hidden_history));
 

@@ -23,7 +23,7 @@ impl Workspace {
         if self.mention_query.as_ref() == Some(&(kind, fragment.clone())) {
             return;
         }
-        self.mention_query = Some((kind, fragment.clone()));
+        self.mention_query = Some((kind, fragment));
         if kind == crate::view_model::MentionKind::Command {
             // Reload skills so `/` lists them even before Settings was opened.
             // The reducer rebuilds the menu, including enabled MCP servers.

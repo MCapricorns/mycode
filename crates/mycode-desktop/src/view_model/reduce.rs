@@ -956,7 +956,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             let picked: Option<String> = if level == "default" || level.is_empty() {
                 None
             } else if selected_reasoning_levels(state).contains(&level) {
-                Some(level.clone())
+                Some(level)
             } else {
                 return;
             };
@@ -1745,7 +1745,7 @@ mod tests {
             call_id: None,
             thinking: String::new(),
         };
-        reduce(&mut state, DesktopAction::SummaryShown(summary.clone()));
+        reduce(&mut state, DesktopAction::SummaryShown(summary));
         let held = state.active.as_ref().expect("open");
         assert!(
             held.entries

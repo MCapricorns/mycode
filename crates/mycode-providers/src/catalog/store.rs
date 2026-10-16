@@ -302,7 +302,7 @@ pub async fn refresh(
             .get("etag")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned)
-            .or(existing.etag.clone());
+            .or_else(|| existing.etag.clone());
         let refreshed = CachedCatalog {
             fetched_at: unix_now(),
             etag,

@@ -791,7 +791,7 @@ fn render_preset_form(
                 .child({
                     let weak = cx.weak_entity();
                     let list_models = models.clone();
-                    let list_checked = checked.clone();
+                    let list_checked = checked;
                     let shown = list_models.len().clamp(1, 8);
                     let list_height = px((shown as f32) * 28. + 2.);
                     let empty = models.is_empty();

@@ -116,7 +116,7 @@ mod tests {
         let specs = registry.specs();
         let names: Vec<_> = specs.iter().map(|spec| spec.name.as_str()).collect();
         let mut sorted = names.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         assert_eq!(names, sorted);
         let first = serde_json::to_string(&*specs).unwrap();
         let second = serde_json::to_string(&*registry.specs()).unwrap();

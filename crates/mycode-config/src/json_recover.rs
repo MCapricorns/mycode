@@ -54,7 +54,7 @@ pub(crate) fn relax_trailing_commas(bytes: &[u8]) -> Result<Vec<u8>, ConfigError
     let text =
         std::str::from_utf8(bytes).map_err(|_| ConfigError::new(ConfigErrorKind::NonUtf8))?;
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
+    let mut chars = text.chars();
     let mut in_string = false;
     let mut escape = false;
     while let Some(ch) = chars.next() {
@@ -74,11 +74,13 @@ pub(crate) fn relax_trailing_commas(bytes: &[u8]) -> Result<Vec<u8>, ConfigError
             out.push(ch);
             continue;
         }
-        if ch == ',' {
-            let mut look = chars.clone();
-            if matches!(look.find(|next| !next.is_whitespace()), Some('}' | ']')) {
-                continue;
-            }
+        if ch == ','
+            && matches!(
+                chars.clone().find(|next| !next.is_whitespace()),
+                Some('}' | ']')
+            )
+        {
+            continue;
         }
         out.push(ch);
     }

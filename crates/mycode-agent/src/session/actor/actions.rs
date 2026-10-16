@@ -526,7 +526,7 @@ impl SessionCore {
         if ledger.branches.len() >= MAX_BRANCHES {
             return Err(OpFail::Domain(SessionError::Limit));
         }
-        let new_branch = row.view.new_branch_id.clone();
+        let new_branch = row.view.new_branch_id;
         if ledger.branches.contains_key(&new_branch) {
             return Err(OpFail::Domain(SessionError::Corrupt));
         }
