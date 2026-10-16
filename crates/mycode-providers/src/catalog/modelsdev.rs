@@ -54,10 +54,30 @@ fn excluded(npm: &str) -> bool {
         .any(|token| npm.contains(token))
 }
 
+/// One map entry that failed to decode is skipped instead of failing the
+/// whole document. models.dev is community-edited: a single odd value (a
+/// `null` effort, a number where a string belongs) used to empty the
+/// catalog, and the refresh reported "no usable providers".
+struct Lenient<T>(Option<T>);
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(Self(serde_json::from_value(value).ok()))
+    }
+}
+
+/// A string field that may be `null`, which reads as empty.
+fn nullable_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct ModelsDevModel {
+    #[serde(deserialize_with = "nullable_string")]
     name: String,
+    #[serde(deserialize_with = "nullable_string")]
     status: String,
     reasoning: bool,
     tool_call: bool,
@@ -73,9 +93,10 @@ struct ModelsDevModel {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct ModelsDevReasoningOption {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", deserialize_with = "nullable_string")]
     kind: String,
-    values: Vec<String>,
+    /// `null` marks the vendor default and is not a selectable token.
+    values: Vec<Option<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -95,11 +116,15 @@ struct ModelsDevCost {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct ModelsDevProvider {
+    #[serde(deserialize_with = "nullable_string")]
     npm: String,
+    #[serde(deserialize_with = "nullable_string")]
     name: String,
+    #[serde(deserialize_with = "nullable_string")]
     api: String,
+    #[serde(deserialize_with = "nullable_string")]
     doc: String,
-    models: std::collections::BTreeMap<String, ModelsDevModel>,
+    models: std::collections::BTreeMap<String, Lenient<ModelsDevModel>>,
 }
 
 fn number(value: &serde_json::Value) -> Option<f64> {
@@ -111,13 +136,16 @@ fn number(value: &serde_json::Value) -> Option<f64> {
 /// Parses and normalizes a raw models.dev `api.json` payload.
 #[must_use]
 pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
-    let Ok(raw) =
-        serde_json::from_slice::<std::collections::BTreeMap<String, ModelsDevProvider>>(bytes)
-    else {
+    let Ok(raw) = serde_json::from_slice::<
+        std::collections::BTreeMap<String, Lenient<ModelsDevProvider>>,
+    >(bytes) else {
         return CatalogDocument::default();
     };
     let mut providers = Vec::new();
-    for (provider_id, entry) in raw {
+    for (provider_id, Lenient(entry)) in raw {
+        let Some(entry) = entry else {
+            continue;
+        };
         if !valid_provider_id(&provider_id) || excluded(&entry.npm) {
             continue;
         }
@@ -144,10 +172,13 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
             }
         };
         let mut models = Vec::new();
-        for (model_id, model) in entry.models {
+        for (model_id, Lenient(model)) in entry.models {
             if models.len() >= super::MAX_MODELS_PER_PROVIDER {
                 break;
             }
+            let Some(model) = model else {
+                continue;
+            };
             // Any status at all (deprecated, retired, preview-only) drops
             // the model: only unflagged entries ship as presets.
             if !valid_model_id(&model_id) || clean_text(&model.status).is_some() {
@@ -191,7 +222,7 @@ fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
         match option.kind.as_str() {
             "toggle" => toggle = true,
             "effort" => {
-                for value in &option.values {
+                for value in option.values.iter().flatten() {
                     push_effort(&mut efforts, value, MAX_EFFORTS);
                 }
             }

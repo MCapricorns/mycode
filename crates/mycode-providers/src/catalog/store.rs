@@ -391,6 +391,43 @@ mod tests {
     }
 
     #[test]
+    fn one_odd_models_dev_entry_does_not_empty_the_catalog() {
+        let body = json!({
+            "acme": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Acme",
+                "api": "https://api.acme.example/v1",
+                "doc": null,
+                "models": {
+                    "think-1": {
+                        "name": "Think 1",
+                        "reasoning": true,
+                        "reasoning_options": [{"type": "effort", "values": [null, "low", "high"]}]
+                    },
+                    "broken": {"name": 42},
+                    "plain": {"name": null}
+                }
+            },
+            "garbage": "not a provider"
+        });
+        let document = super::parse_models_dev(body.to_string().as_bytes());
+        assert!(has_cloud_providers(&document));
+        let acme = document.provider("acme").expect("acme survives");
+        let think = acme
+            .models
+            .iter()
+            .find(|m| m.id == "think-1")
+            .expect("think-1");
+        assert_eq!(think.reasoning_efforts, ["low", "high"]);
+        assert!(
+            acme.models
+                .iter()
+                .any(|m| m.id == "plain" && m.name == "plain")
+        );
+        assert!(acme.models.iter().all(|m| m.id != "broken"));
+    }
+
+    #[test]
     fn parse_cache_normalizes_and_rejects_empty_or_invalid_provider_sets() {
         let empty = json!({
             "formatVersion": CACHE_FORMAT_VERSION,
