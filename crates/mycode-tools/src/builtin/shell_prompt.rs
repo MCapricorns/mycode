@@ -250,38 +250,32 @@ not a tool failure. Default timeout: 120 s. There is no permission prompt.";
 const POWERSHELL_SNIPPET: &str = "\
 powershell: mode script runs one PowerShell command (command), including a \
 here-string piped to python that edits files; mode program runs one \
-kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
-Only for what `find`, `grep`, `read`, `write`, and `edit` cannot do (builds, tests, git, running programs); never to list directories, read files, or search text.";
+kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
 
 const BASH_SNIPPET: &str = "\
 bash: mode script runs one bash command (command), including a Python heredoc \
 or short script that edits files; mode program runs one kernel image or shebang wrapper \
-with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
-Only for what `find`, `grep`, `read`, `write`, and `edit` cannot do (builds, tests, git, running programs); never to list directories, read files, or search text.";
+with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
 
 const ZSH_SNIPPET: &str = "\
 zsh: mode script runs one zsh command (command), including a Python heredoc \
 or short script that edits files; mode program runs one kernel image or shebang wrapper \
-with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
-Only for what `find`, `grep`, `read`, `write`, and `edit` cannot do (builds, tests, git, running programs); never to list directories, read files, or search text.";
+with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
 
 const SH_SNIPPET: &str = "\
 sh: mode script runs one POSIX sh command (command), including a Python heredoc \
 or short script that edits files; mode program runs one kernel image or shebang wrapper \
-with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
-Only for what `find`, `grep`, `read`, `write`, and `edit` cannot do (builds, tests, git, running programs); never to list directories, read files, or search text.";
+with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
 
 const CMD_SNIPPET: &str = "\
 cmd: mode script runs one cmd.exe command (command); mode program runs one \
-kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script. \
-Only for what `find`, `grep`, `read`, `write`, and `edit` cannot do (builds, tests, git, running programs); never to list directories, read files, or search text.";
+kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
 
 const POWERSHELL7_GUIDANCE: &str = "\
 The `powershell` tool runs PowerShell 7 (`pwsh`). Write PowerShell, not bash or cmd.
 - Each call starts a new process in the session cwd. `cd` and `$env:` assignments do not persist.
 - `&&` and `||` are allowed. Read environment variables with `$env:NAME`. Redirect errors with `2>$null`, not `2>/dev/null`.
-- The path separator is `\\`. Quote paths that contain spaces. `/` is also accepted.
-- Inspect files with `read`, `grep`, and `find` before reaching for the shell.";
+- The path separator is `\\`. Quote paths that contain spaces. `/` is also accepted.";
 
 const POWERSHELL51_GUIDANCE: &str = "\
 The `powershell` tool runs Windows PowerShell 5.1 (`powershell.exe`), not PowerShell 7 and not bash.
@@ -289,33 +283,28 @@ The `powershell` tool runs Windows PowerShell 5.1 (`powershell.exe`), not PowerS
 - Do not use bash heredocs, `$(...)`, or `2>/dev/null`. Use `$env:NAME` and `2>$null`.
 - The ternary operator and `&&` pipelines are PowerShell 7 only.
 - Each call starts a new process in the session cwd. `cd` and `$env:` assignments do not persist.
-- The path separator is `\\`. Quote paths that contain spaces.
-- Inspect files with `read`, `grep`, and `find` before reaching for the shell.";
+- The path separator is `\\`. Quote paths that contain spaces.";
 
 const BASH_GUIDANCE: &str = "\
 The `bash` tool runs bash (`bash -c`). Write bash, not PowerShell or cmd.
 - Each call starts a new process in the session cwd. `cd` and `export` do not persist.
 - Pipes, `&&`, `||`, `$VAR`, and `$(...)` are bash.
-- The path separator is `/`. Quote paths that contain spaces.
-- Inspect files with `read`, `grep`, and `find` before reaching for the shell.";
+- The path separator is `/`. Quote paths that contain spaces.";
 
 const ZSH_GUIDANCE: &str = "\
 The `zsh` tool runs zsh (`zsh -c`). Write zsh, not bash-only syntax, PowerShell, or cmd.
 - Each call starts a new process in the session cwd. `cd` and `export` do not persist.
-- Pipes, `&&`, `||`, `$VAR`, and `$(...)` are zsh. The path separator is `/`.
-- Inspect files with `read`, `grep`, and `find` before reaching for the shell.";
+- Pipes, `&&`, `||`, `$VAR`, and `$(...)` are zsh. The path separator is `/`.";
 
 const SH_GUIDANCE: &str = "\
 The `sh` tool runs POSIX sh (`sh -c`). Write POSIX sh, not bash arrays, `[[ ]]`, PowerShell, or cmd.
 - Each call starts a new process in the session cwd. `cd` and `export` do not persist.
-- Pipes, `&&`, `||`, `$VAR`, and `$(...)` are POSIX. The path separator is `/`.
-- Inspect files with `read`, `grep`, and `find` before reaching for the shell.";
+- Pipes, `&&`, `||`, `$VAR`, and `$(...)` are POSIX. The path separator is `/`.";
 
 const CMD_GUIDANCE: &str = "\
 The `cmd` tool runs `cmd.exe /d /s /c` because PowerShell was not found.
 - Use `%VAR%` and cmd quoting. This is not bash and not PowerShell.
-- Each call starts a new process in the session cwd.
-- Prefer `read`, `grep`, `find`, `write`, and `edit` over cmd for file work.";
+- Each call starts a new process in the session cwd.";
 
 #[cfg(test)]
 mod tests {
