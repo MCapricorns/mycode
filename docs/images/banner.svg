@@ -34,7 +34,7 @@
       <text x="569" y="263" text-anchor="middle">Windows</text>
       <rect x="640" y="240" width="104" height="34" rx="17" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
       <text x="692" y="263" text-anchor="middle">macOS</text>
-      <rect x="756" y="240" width="96" height="34" rx="17" fill="#7c8cff" fill-opacity="0.22" stroke="#7c8cff" stroke-opacity="0.6"/>
+      <rect x="756" y="240" width="96" height="34" rx="17" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
       <text x="804" y="263" text-anchor="middle">MCP</text>
     </g>
   </g>
