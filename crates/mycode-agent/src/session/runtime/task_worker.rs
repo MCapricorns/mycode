@@ -171,13 +171,15 @@ impl<A: PackTaskActor> TaskActorClient<A> {
     }
 
     pub(crate) fn close(&self, operation: TaskActorOperationId) {
-        if let Some(close) = self
+        // Bind first: an `if let` scrutinee would keep the map locked while
+        // `close` takes the admission lock and wakes waiters.
+        let close = self
             .live
             .lock()
             .expect("task actor live-operation lock")
             .get(&operation)
-            .cloned()
-        {
+            .cloned();
+        if let Some(close) = close {
             close.close();
         }
     }
