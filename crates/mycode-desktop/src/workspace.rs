@@ -1492,8 +1492,6 @@ impl Workspace {
         if text.trim().is_empty() {
             return;
         }
-        let id = self.next_toast_id;
-        self.next_toast_id = self.next_toast_id.wrapping_add(1);
         if self
             .toasts
             .iter()
@@ -1501,6 +1499,8 @@ impl Workspace {
         {
             return;
         }
+        let id = self.next_toast_id;
+        self.next_toast_id = self.next_toast_id.wrapping_add(1);
         self.toasts.push(Toast { id, text, kind });
         // A click handler repaints on its own. A toast pushed from the event
         // pump (compaction finishing, a while after "Compacting…") does not,
@@ -1512,8 +1512,12 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(lifetime).await;
             let _ = this.update(cx, |workspace, cx| {
+                let before = workspace.toasts.len();
                 workspace.toasts.retain(|toast| toast.id != id);
-                cx.notify();
+                // A toast closed by hand already repainted.
+                if workspace.toasts.len() != before {
+                    cx.notify();
+                }
             });
         })
         .detach();
