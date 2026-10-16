@@ -209,7 +209,10 @@ impl WalkLimiter {
     /// Stops all walkers; the first reason wins.
     pub fn stop(&self, reason: &'static str) {
         self.quit.store(true, Ordering::Release);
-        let mut slot = self.stop_reason.lock().expect("stop_reason poisoned");
+        let mut slot = self
+            .stop_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if slot.is_none() {
             *slot = Some(reason);
         }
@@ -217,7 +220,10 @@ impl WalkLimiter {
 
     /// Returns why the walk stopped early, if it did.
     pub fn stopped_reason(&self) -> Option<&'static str> {
-        *self.stop_reason.lock().expect("stop_reason poisoned")
+        *self
+            .stop_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Checks cancellation, deadline, and any prior global stop.
@@ -230,7 +236,10 @@ impl WalkLimiter {
             self.stop("cancelled");
             return WalkState::Quit;
         }
-        let deadline = *self.deadline.lock().expect("deadline poisoned");
+        let deadline = *self
+            .deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if Instant::now() >= deadline {
             self.stop("time limit reached");
             return WalkState::Quit;
@@ -249,7 +258,10 @@ impl WalkLimiter {
     /// Replaces the limiter deadline with the same absolute instant the
     /// outer timer uses.
     pub fn refresh_deadline_at(&self, deadline: Instant) {
-        *self.deadline.lock().expect("deadline poisoned") = deadline;
+        *self
+            .deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = deadline;
     }
 
     /// Atomically reserves capacity for one actual file read.
@@ -257,7 +269,10 @@ impl WalkLimiter {
         if requested == 0 {
             return ScanReservation::Granted(0);
         }
-        let mut budget = self.scan_budget.lock().expect("scan budget poisoned");
+        let mut budget = self
+            .scan_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if budget.claimed >= cap {
             return if budget.inflight == 0 {
                 ScanReservation::Exhausted
@@ -280,7 +295,10 @@ impl WalkLimiter {
         assert!(actual <= reserved, "actual read exceeded its reservation");
         let reserved = u64::try_from(reserved).expect("reserved read size must fit in u64");
         let actual = u64::try_from(actual).expect("actual read size must fit in u64");
-        let mut budget = self.scan_budget.lock().expect("scan budget poisoned");
+        let mut budget = self
+            .scan_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(
             budget.inflight >= reserved,
             "settled scan exceeded in-flight reservations"
@@ -333,7 +351,10 @@ impl IoErrors {
 
     pub fn record(&self, rel: &str, err: &io::Error) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        let mut samples = self.samples.lock().expect("io error samples poisoned");
+        let mut samples = self
+            .samples
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if samples.len() < self.sample_cap {
             samples.push(format!("{rel}: {err}"));
         }
@@ -345,7 +366,7 @@ impl IoErrors {
             self.count.load(Ordering::Relaxed),
             self.samples
                 .lock()
-                .expect("io error samples poisoned")
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
         )
     }

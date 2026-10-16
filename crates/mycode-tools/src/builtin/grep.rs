@@ -253,7 +253,11 @@ impl FileSink<'_> {
         if lines.is_empty() {
             self.release_path_charge();
         } else {
-            let mut heap = self.state.heap.lock().expect("grep results lock poisoned");
+            let mut heap = self
+                .state
+                .heap
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for line in lines {
                 if heap.len() < self.cap {
                     heap.push(line);
@@ -774,7 +778,12 @@ fn assemble_report(
     cap: usize,
     limits: &Limits,
 ) -> ToolResult {
-    let heap = std::mem::take(&mut *state.heap.lock().expect("grep results lock poisoned"));
+    let heap = std::mem::take(
+        &mut *state
+            .heap
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
     let matches = heap.into_sorted_vec();
     let entries: Vec<String> = matches
         .iter()

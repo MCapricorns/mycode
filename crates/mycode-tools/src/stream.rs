@@ -97,7 +97,10 @@ impl ToolStream {
     }
 
     fn send(&self, item: ToolStreamItem) -> bool {
-        let mut terminated = self.state.lock().expect("tool stream state lock poisoned");
+        let mut terminated = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *terminated {
             return false;
         }

@@ -176,7 +176,7 @@ impl<A: PackTaskActor> TaskActorClient<A> {
         let close = self
             .live
             .lock()
-            .expect("task actor live-operation lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&operation)
             .cloned();
         if let Some(close) = close {
@@ -189,7 +189,7 @@ impl<A: PackTaskActor> TaskActorClient<A> {
         let live = self
             .live
             .lock()
-            .expect("task actor live-operation lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -219,7 +219,7 @@ impl TaskCloseSignal {
             self.state
                 .admission
                 .lock()
-                .expect("task close admission lock")
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take(),
         );
         self.state.notification.notify_waiters();
@@ -248,7 +248,7 @@ impl TaskCloseSignal {
             .state
             .admission
             .lock()
-            .expect("task close admission lock");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.is_closed() {
             drop(admission);
         } else {
@@ -341,7 +341,9 @@ async fn run_worker<A: PackTaskActor>(
     for operation in operations.into_values() {
         operation.close.close();
     }
-    live.lock().expect("task actor live-operation lock").clear();
+    live.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
 }
 
 async fn invoke_operation<A: PackTaskActor>(
@@ -385,7 +387,7 @@ async fn invoke_operation<A: PackTaskActor>(
         },
     );
     live.lock()
-        .expect("task actor live-operation lock")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(id, close.clone());
     let expiry = sender.clone();
     tokio::spawn(async move {
@@ -433,7 +435,7 @@ async fn close_operation<A: PackTaskActor>(
     };
     operation.close.close();
     live.lock()
-        .expect("task actor live-operation lock")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .remove(&id);
     actor.drop_operation(operation.operation).await.is_ok() && actor.is_available()
 }
