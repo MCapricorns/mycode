@@ -37,7 +37,7 @@ mod turn;
 pub use agent::{Agent, AgentConfig};
 pub use env::{SteerInbox, TurnEnv};
 pub use hooks::HookRunner;
-pub use prompt::build_system_prompt;
+pub use prompt::{build_system_prompt, shell_tool_name};
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
 /// when the system clock predates the epoch.
