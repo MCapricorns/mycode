@@ -80,43 +80,31 @@ pub(super) fn render_sidebar(
 ) -> impl IntoElement {
     let roots = workspace.vm().workspace_roots.clone();
     let cwd = workspace.vm().project_dir.clone();
-    let bindings = workspace.vm().session_projects.clone();
     let view = workspace.vm().view;
-    let active_id =
-        crate::view_model::active_workspace(workspace.vm()).map(|workspace| workspace.id.clone());
-    let active_name = crate::view_model::active_workspace(workspace.vm())
+    let active = crate::view_model::active_workspace(workspace.vm());
+    let active_id = active.map(|workspace| workspace.id.clone());
+    let active_name = active
         .map(|workspace| workspace.name.clone())
         .unwrap_or_else(|| t("Workspace", "工作区").to_owned());
     // Sessions of the workspace the sidebar shows. A session without a
     // membership predates named workspaces and belongs to the first one.
-    // The list is filtered by reference; only the shown rows are cloned.
-    let in_workspace = |session: &SessionSummary| {
-        crate::view_model::workspace_of_session(workspace.vm(), &session.session_id).is_some_and(
-            |owner| {
-                active_id
-                    .as_ref()
-                    .is_some_and(|active| owner.id.as_str() == active.as_str())
-            },
-        )
-    };
-    let workspace_sessions: Vec<SessionSummary> = workspace
-        .vm()
-        .sessions
-        .iter()
-        .filter(|session| in_workspace(session))
-        .cloned()
-        .collect();
-    let session_count = workspace_sessions.len();
+    // Rows are filtered by reference; only the shown ones are cloned.
     let filter = workspace.vm().session_filter.clone();
-    let visible_sessions: Vec<&SessionSummary> = workspace_sessions
-        .iter()
-        .filter(|summary| {
-            let project = bindings
-                .iter()
-                .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
-            let title = displayed_session_title(summary, project);
-            crate::view_model::session_title_matches(&title, &filter)
+    let rows = active_id.as_deref().map_or_else(Vec::new, |id| {
+        crate::view_model::workspace_session_rows(workspace.vm(), id)
+    });
+    let session_count = rows.len();
+    let filtering = !filter.trim().is_empty();
+    let visible_sessions: Vec<(SessionSummary, Option<String>)> = rows
+        .into_iter()
+        .filter(|(summary, project)| {
+            !filtering
+                || crate::view_model::session_title_matches(
+                    &displayed_session_title(summary, *project),
+                    &filter,
+                )
         })
+        .map(|(summary, project)| (summary.clone(), project.map(str::to_owned)))
         .collect();
     let filter_miss = !filter.trim().is_empty() && visible_sessions.is_empty() && session_count > 0;
     let filter_input = workspace.session_filter_input();
@@ -138,7 +126,6 @@ pub(super) fn render_sidebar(
         .child(sessions_section(
             cx,
             &visible_sessions,
-            &bindings,
             cwd.as_deref(),
             session_count,
             filter_miss,
@@ -328,8 +315,7 @@ fn folders_section(
 /// Sessions of the workspace the sidebar shows. Separate from folders.
 fn sessions_section(
     cx: &mut Context<Workspace>,
-    sessions: &[&SessionSummary],
-    bindings: &[(String, String)],
+    sessions: &[(SessionSummary, Option<String>)],
     cwd: Option<&str>,
     session_count: usize,
     filter_miss: bool,
@@ -337,7 +323,7 @@ fn sessions_section(
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let now = chrono::Local::now();
-    let grouped_rows = build_grouped_session_rows(sessions, bindings, cwd, now, cx);
+    let grouped_rows = build_grouped_session_rows(sessions, cwd, now, cx);
     div()
         .id("sidebar-sessions")
         .flex_1()
@@ -402,35 +388,38 @@ fn sessions_section(
 }
 
 fn build_grouped_session_rows(
-    sessions: &[&SessionSummary],
-    bindings: &[(String, String)],
+    sessions: &[(SessionSummary, Option<String>)],
     cwd: Option<&str>,
     now: chrono::DateTime<chrono::Local>,
     cx: &Context<Workspace>,
 ) -> Vec<gpui_kit::AnyElement> {
     let theme = cx.theme();
-    let mut elements = Vec::new();
-    let mut first_group = true;
-    for group in DateGroup::ALL {
-        let mut group_sessions = sessions
+    // Each session is bucketed once instead of once per date group.
+    let mut buckets: Vec<Vec<&(SessionSummary, Option<String>)>> =
+        vec![Vec::new(); DateGroup::ALL.len()];
+    for row in sessions {
+        let group = classify_session_group(row.0.updated_at_ms, row.0.corrupt, now);
+        if let Some(index) = DateGroup::ALL
             .iter()
-            .copied()
-            .filter(|summary| {
-                classify_session_group(summary.updated_at_ms, summary.corrupt, now) == group
-            })
-            .peekable();
-        if group_sessions.peek().is_none() {
+            .position(|candidate| *candidate == group)
+        {
+            buckets[index].push(row);
+        }
+    }
+    let mut elements = Vec::with_capacity(sessions.len() + DateGroup::ALL.len());
+    let mut first_group = true;
+    for (group, group_sessions) in DateGroup::ALL.into_iter().zip(buckets) {
+        if group_sessions.is_empty() {
             continue;
         }
         elements.push(date_group_header(group, first_group, theme).into_any_element());
         first_group = false;
-        for summary in group_sessions {
-            let project = bindings
-                .iter()
-                .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
+        for (summary, project) in group_sessions {
             let relative =
                 format_session_relative_time(summary.updated_at_ms, summary.corrupt, now);
-            elements.push(session_row(summary, project, cwd, relative, cx).into_any_element());
+            elements.push(
+                session_row(summary, project.as_deref(), cwd, relative, cx).into_any_element(),
+            );
         }
     }
     elements
