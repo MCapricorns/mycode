@@ -53,18 +53,12 @@ pub(crate) fn provider_choices(
     target: &ModelPickerTarget,
 ) -> Vec<ProviderChoice> {
     let enabled = enabled_providers(vm);
-    let ids = enabled.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
-    let (starred, recent) = visible_pins(&vm.starred_models, &vm.recent_models, &ids);
+    let recent = recent_pins(vm);
     let mut choices = Vec::new();
     if matches!(target, ModelPickerTarget::Role(_)) {
         choices.push(ProviderChoice::Inherit);
     }
-    choices.extend(
-        starred
-            .into_iter()
-            .chain(recent)
-            .map(|pin| ProviderChoice::Pin(pin.clone())),
-    );
+    choices.extend(recent.into_iter().map(ProviderChoice::Pin));
     choices.extend(
         enabled
             .into_iter()
@@ -80,13 +74,11 @@ pub(crate) fn provider_scroll_index(
     index: usize,
 ) -> usize {
     let enabled = enabled_providers(vm);
-    let ids = enabled.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
-    let (starred, recent) = visible_pins(&vm.starred_models, &vm.recent_models, &ids);
+    let recent = recent_pins(vm);
     let inherited = usize::from(matches!(target, ModelPickerTarget::Role(_)));
     index
-        + usize::from(!starred.is_empty() && index >= inherited)
-        + usize::from(!recent.is_empty() && index >= inherited + starred.len())
-        + usize::from(!enabled.is_empty() && index >= inherited + starred.len() + recent.len())
+        + usize::from(!recent.is_empty() && index >= inherited)
+        + usize::from(!enabled.is_empty() && index >= inherited + recent.len())
 }
 
 /// Fixed height of one virtualized model row.
@@ -144,30 +136,41 @@ pub(crate) fn filter_model_choices(choices: &[ModelChoice], query: &str) -> Vec<
         .collect()
 }
 
-/// Starred pins, then recent pins that are not already starred.
-///
-/// Providers that are not enabled are omitted. The caller passes the enabled
-/// provider ids.
-pub(crate) fn visible_pins<'a>(
-    starred: &'a [mycode_config::ModelPin],
-    recent: &'a [mycode_config::ModelPin],
-    enabled: &[String],
-) -> (
-    Vec<&'a mycode_config::ModelPin>,
-    Vec<&'a mycode_config::ModelPin>,
-) {
-    let enabled = |pin: &mycode_config::ModelPin| enabled.iter().any(|id| id == &pin.provider);
-    let starred: Vec<_> = starred.iter().filter(|pin| enabled(pin)).collect();
-    let recent: Vec<_> = recent
+/// Whether the chat picker offers `model` from `provider`: the provider is
+/// enabled and settings do not hide the model.
+pub(crate) fn offers_model(vm: &WorkspaceState, provider: &str, model: &str) -> bool {
+    vm.settings.as_ref().is_some_and(|settings| {
+        settings
+            .providers
+            .iter()
+            .any(|entry| entry.id == provider && entry.enabled && entry.shows_model(model))
+    })
+}
+
+/// How many recently used models the picker suggests above the providers.
+pub(crate) const RECENT_SHOWN: usize = 3;
+
+/// The first [`RECENT_SHOWN`] pins `offered` accepts, newest first. A
+/// disabled provider or a hidden model is skipped, not counted.
+pub(crate) fn visible_recent(
+    recent: &[mycode_config::ModelPin],
+    offered: impl Fn(&mycode_config::ModelPin) -> bool,
+) -> Vec<&mycode_config::ModelPin> {
+    recent
         .iter()
-        .filter(|pin| {
-            enabled(pin)
-                && !starred
-                    .iter()
-                    .any(|star| star.provider == pin.provider && star.model == pin.model)
-        })
-        .collect();
-    (starred, recent)
+        .filter(|pin| offered(pin))
+        .take(RECENT_SHOWN)
+        .collect()
+}
+
+/// The recent models this picker suggests.
+fn recent_pins(vm: &WorkspaceState) -> Vec<mycode_config::ModelPin> {
+    visible_recent(&vm.recent_models, |pin| {
+        offers_model(vm, &pin.provider, &pin.model)
+    })
+    .into_iter()
+    .cloned()
+    .collect()
 }
 
 /// Row Enter should activate.
@@ -213,8 +216,27 @@ pub(crate) fn selected_model_label(vm: &WorkspaceState) -> String {
     }
 }
 
-/// Every model the picker shows for one configured provider.
+/// Every model the chat picker shows for one configured provider: the
+/// provider's full list without the models settings hide.
 pub(crate) fn provider_model_choices(vm: &WorkspaceState, provider_id: &str) -> Vec<ModelChoice> {
+    let mut choices = all_provider_model_choices(vm, provider_id);
+    if let Some(provider) = vm.settings.as_ref().and_then(|settings| {
+        settings
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+    }) {
+        choices.retain(|choice| provider.shows_model(&choice.id));
+    }
+    choices
+}
+
+/// Catalog and configured models for one provider, hidden ones included.
+/// The settings page lists these so a hidden model can be shown again.
+pub(crate) fn all_provider_model_choices(
+    vm: &WorkspaceState,
+    provider_id: &str,
+) -> Vec<ModelChoice> {
     let catalog = vm
         .catalog
         .as_ref()
@@ -285,30 +307,13 @@ fn render_provider_step(
 ) -> AnyElement {
     let theme = cx.theme().clone();
     let enabled = enabled_providers(workspace.vm());
-    let (starred, recent) = visible_pins(
-        &workspace.vm().starred_models,
-        &workspace.vm().recent_models,
-        &enabled.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
-    );
-    let starred: Vec<_> = starred.into_iter().cloned().collect();
-    let recent: Vec<_> = recent.into_iter().cloned().collect();
+    let recent = recent_pins(workspace.vm());
     let mut rows: Vec<AnyElement> = Vec::new();
     let preferred = workspace.provider_highlight(provider_choices(workspace.vm(), target).len());
     let mut index = 0;
     if let ModelPickerTarget::Role(role) = target {
         rows.push(session_model_row(role, index == preferred, cx));
         index += 1;
-    }
-    if !starred.is_empty() {
-        rows.push(section_label(
-            "model-picker-starred",
-            t("Starred", "星标"),
-            &theme,
-        ));
-        for pin in &starred {
-            rows.push(pin_row(workspace, pin, target, index == preferred, cx));
-            index += 1;
-        }
     }
     if !recent.is_empty() {
         rows.push(section_label(
@@ -421,7 +426,6 @@ fn render_model_step(
     let preferred =
         workspace.model_highlight(ids.len(), preferred_index(&ids, query, selected.as_deref()));
     let scroll = workspace.model_scroll().clone();
-    let starred = workspace.vm().starred_models.clone();
     let row_id_prefix = match target {
         ModelPickerTarget::Session => format!("model-{provider_id}"),
         ModelPickerTarget::Role(role) => format!("agent-model-{role}-{provider_id}"),
@@ -464,9 +468,6 @@ fn render_model_step(
                                     &target,
                                     index == preferred,
                                     selected.as_deref() == Some(list_rows[index].id.as_str()),
-                                    starred.iter().any(|pin| {
-                                        pin.provider == provider && pin.model == list_rows[index].id
-                                    }),
                                     &weak,
                                     &theme,
                                 )
@@ -528,7 +529,6 @@ fn model_row(
     target: &ModelPickerTarget,
     preferred: bool,
     selected: bool,
-    starred: bool,
     weak: &gpui_kit::WeakEntity<Workspace>,
     theme: &gpui_kit::component::theme::Theme,
 ) -> AnyElement {
@@ -536,9 +536,6 @@ fn model_row(
     let provider_id = provider.to_owned();
     let target = target.clone();
     let weak_select = weak.clone();
-    let weak_star = weak.clone();
-    let star_model = model_id.clone();
-    let star_provider = provider_id.clone();
     div()
         .id(format!("{id_prefix}-row-{model_id}"))
         .h(px(MODEL_ROW_HEIGHT))
@@ -587,36 +584,6 @@ fn model_row(
                     )
                 }),
         )
-        .child(
-            div()
-                .id(format!("model-star-{provider}-{id}", id = choice.id))
-                .size(px(26.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .flex_shrink_0()
-                .rounded(skin::radius_control())
-                .cursor_pointer()
-                .text_color(if starred {
-                    theme.primary
-                } else {
-                    theme.muted_foreground
-                })
-                .hover(|this| this.bg(skin::frost_hover(theme)))
-                .on_click(move |_, _, cx| {
-                    let _ = weak_star.update(cx, |workspace, cx| {
-                        workspace.on_toggle_model_star(&star_provider, &star_model, cx);
-                    });
-                })
-                .child(
-                    Icon::new(if starred {
-                        IconName::StarFill
-                    } else {
-                        IconName::Star
-                    })
-                    .xsmall(),
-                ),
-        )
         .into_any_element()
 }
 
@@ -654,11 +621,6 @@ fn pin_row(
     let name = model_display_name(workspace.vm(), &provider, &model);
     let provider_name = provider_display_name(workspace.vm(), &provider);
     let target = target.clone();
-    let starred = workspace
-        .vm()
-        .starred_models
-        .iter()
-        .any(|item| item.provider == provider && item.model == model);
     div()
         .id(format!("model-pin-{provider}-{model}"))
         .when(highlighted, |this| this.bg(skin::frost_accent(theme)))
@@ -692,14 +654,9 @@ fn pin_row(
                 .gap(px(1.))
                 .px_1()
                 .cursor_pointer()
-                .on_click({
-                    let provider = provider.clone();
-                    let model = model.clone();
-                    let target = target.clone();
-                    cx.listener(move |workspace, _, _, cx| {
-                        select_model(workspace, &target, &provider, &model, cx);
-                    })
-                })
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    select_model(workspace, &target, &provider, &model, cx);
+                }))
                 .child(div().text_sm().truncate().child(name))
                 .child(
                     div()
@@ -707,35 +664,6 @@ fn pin_row(
                         .truncate()
                         .text_color(theme.muted_foreground)
                         .child(provider_name),
-                ),
-        )
-        .child(
-            div()
-                .id(format!("model-pin-star-{provider}-{model}"))
-                .size(px(26.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .text_color(if starred {
-                    theme.primary
-                } else {
-                    theme.muted_foreground
-                })
-                .on_click({
-                    let provider = provider.clone();
-                    let model = model.clone();
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_toggle_model_star(&provider, &model, cx);
-                    })
-                })
-                .child(
-                    Icon::new(if starred {
-                        IconName::StarFill
-                    } else {
-                        IconName::Star
-                    })
-                    .xsmall(),
                 ),
         )
         .into_any_element()
@@ -842,7 +770,8 @@ pub(crate) fn selected_in_provider(
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelChoice, filter_model_choices, merge_model_choices, preferred_index, visible_pins,
+        ModelChoice, RECENT_SHOWN, filter_model_choices, merge_model_choices, preferred_index,
+        visible_recent,
     };
     use mycode_config::ModelPin;
 
@@ -882,18 +811,21 @@ mod tests {
     }
 
     #[test]
-    fn pins_drop_disabled_providers_and_skip_starred_recents() {
-        let starred = vec![ModelPin::new("openai", "gpt")];
+    fn recent_suggestions_skip_unoffered_pins_and_stop_at_three() {
         let recent = vec![
+            ModelPin::new("off", "disabled"),
             ModelPin::new("openai", "gpt"),
+            ModelPin::new("openai", "hidden"),
             ModelPin::new("openai", "o3"),
-            ModelPin::new("off", "hidden"),
+            ModelPin::new("openai", "o4"),
+            ModelPin::new("openai", "o5"),
         ];
-        let enabled = vec!["openai".to_owned()];
-        let (starred, recent) = visible_pins(&starred, &recent, &enabled);
-        assert_eq!(starred.len(), 1);
-        assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].model, "o3");
+        let shown = visible_recent(&recent, |pin| {
+            pin.provider == "openai" && pin.model != "hidden"
+        });
+        let models: Vec<_> = shown.iter().map(|pin| pin.model.as_str()).collect();
+        assert_eq!(models, ["gpt", "o3", "o4"]);
+        assert_eq!(shown.len(), RECENT_SHOWN);
     }
 
     #[test]

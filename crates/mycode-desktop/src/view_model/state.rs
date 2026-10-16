@@ -196,8 +196,6 @@ pub(crate) struct WorkspaceState {
     pub picker_query: String,
     /// Models picked from the session picker, newest first.
     pub recent_models: Vec<mycode_config::ModelPin>,
-    /// Models starred in the picker, newest first.
-    pub starred_models: Vec<mycode_config::ModelPin>,
     /// Provider id open on the Models page, when the user drilled in.
     pub provider_detail: Option<String>,
     /// Filter text for the settings navigation.
@@ -265,7 +263,7 @@ pub enum DesktopAction {
     /// A request failed.
     Failed(String),
     /// Settings loaded from the core.
-    SettingsLoaded(SettingsState),
+    SettingsLoaded(Box<SettingsState>),
     /// The user picked a UI language (`auto`, `en`, `zh`); applies live and
     /// persists with settings.
     SettingsLanguageSelected(String),
@@ -294,6 +292,15 @@ pub enum DesktopAction {
     },
     /// The settings editor toggled a provider row's enabled flag.
     SettingsProviderToggled(usize, bool),
+    /// The provider page showed or hid models in the chat model picker.
+    SettingsModelsShown {
+        /// Provider id.
+        provider: String,
+        /// Model ids to change.
+        models: Vec<String>,
+        /// `true` shows them, `false` hides them.
+        shown: bool,
+    },
     /// The settings editor replaced one provider endpoint.
     ///
     /// The value is the trimmed base URL. API keys are not part of this edit.
@@ -513,7 +520,6 @@ pub enum DesktopAction {
         /// Recent model pins, newest first.
         recent_models: Vec<mycode_config::ModelPin>,
         /// Starred model pins, newest first.
-        starred_models: Vec<mycode_config::ModelPin>,
         /// Thinking traces start collapsed.
         thinking_collapsed: bool,
     },
@@ -582,13 +588,6 @@ pub enum DesktopAction {
     ModelMenuBrowse(Option<String>),
     /// The model step's search box changed.
     PickerQueryChanged(String),
-    /// The user starred or unstarred one model.
-    ModelStarToggled {
-        /// Provider id.
-        provider: String,
-        /// Model id.
-        model: String,
-    },
     /// The settings navigation filter changed.
     SettingsQueryChanged(String),
     /// The Models page opened or closed one provider's detail.

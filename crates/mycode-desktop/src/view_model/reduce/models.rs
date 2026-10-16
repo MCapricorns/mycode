@@ -393,6 +393,7 @@ mod tests {
                 enabled: true,
                 context_limit: None,
                 max_output: None,
+                hidden_models: Vec::new(),
             }],
             ..mycode_config::AppSettings::default()
         };
@@ -475,6 +476,7 @@ mod tests {
                 enabled: true,
                 context_limit: None,
                 max_output: None,
+                hidden_models: Vec::new(),
             }],
             ..mycode_config::AppSettings::default()
         };
@@ -526,6 +528,7 @@ mod tests {
                 enabled: true,
                 context_limit: None,
                 max_output: None,
+                hidden_models: Vec::new(),
             }],
             ..mycode_config::AppSettings::default()
         };

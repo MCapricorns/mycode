@@ -1050,23 +1050,6 @@ impl Workspace {
         }
     }
 
-    /// Stars or unstars one model and persists the pin list.
-    pub(crate) fn on_toggle_model_star(
-        &mut self,
-        provider: &str,
-        model: &str,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_action(
-            DesktopAction::ModelStarToggled {
-                provider: provider.to_owned(),
-                model: model.to_owned(),
-            },
-            cx,
-        );
-        self.persist_ui_state(cx);
-    }
-
     pub(crate) fn on_open_provider_detail(&mut self, id: &str, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ProviderDetailOpened(Some(id.to_owned())), cx);
     }

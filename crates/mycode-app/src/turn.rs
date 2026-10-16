@@ -1657,6 +1657,7 @@ mod tests {
             // the `read` result (the whole 20k-char fixture) pushes the next hook over it.
             context_limit: Some(26_000),
             max_output: None,
+            hidden_models: Vec::new(),
         });
         replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
         replace_provider_secrets(
@@ -2069,6 +2070,7 @@ mod tests {
             enabled: true,
             context_limit: Some(200_000),
             max_output: None,
+            hidden_models: Vec::new(),
         });
         replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
         replace_provider_secrets(
@@ -2500,6 +2502,7 @@ mod tests {
             // prompt and starts a summary before the turn has started.
             context_limit: Some(26_000),
             max_output: None,
+            hidden_models: Vec::new(),
         });
         replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
         replace_provider_secrets(

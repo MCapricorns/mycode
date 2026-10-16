@@ -9,6 +9,9 @@ use crate::ConfigError;
 pub const MAX_PROVIDERS: usize = 64;
 /// Maximum models listed by one provider entry.
 pub const MAX_MODELS_PER_PROVIDER: usize = 128;
+/// Maximum hidden model ids on one provider entry. Large gateway catalogs
+/// list several hundred models, and "hide all" records each of them.
+pub const MAX_HIDDEN_MODELS_PER_PROVIDER: usize = 2048;
 
 /// One configured first-party provider endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +35,18 @@ pub struct ProviderSettings {
     /// Max output tokens override; absent keeps the provider default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output: Option<u64>,
+    /// Model ids kept out of the chat model picker. The settings page still
+    /// lists them so they can be shown again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_models: Vec<String>,
+}
+
+impl ProviderSettings {
+    /// Whether the chat model picker offers `model`.
+    #[must_use]
+    pub fn shows_model(&self, model: &str) -> bool {
+        !self.hidden_models.iter().any(|hidden| hidden == model)
+    }
 }
 
 /// Wire protocols accepted by [`ProviderSettings::kind`].
@@ -80,6 +95,18 @@ impl AppSettings {
                 return Err(invalid(&format!(
                     "{field}.id: duplicates an earlier provider id"
                 )));
+            }
+            if provider.hidden_models.len() > MAX_HIDDEN_MODELS_PER_PROVIDER {
+                return Err(invalid(&format!(
+                    "{field}.hiddenModels: at most {MAX_HIDDEN_MODELS_PER_PROVIDER} entries"
+                )));
+            }
+            for (model_index, model) in provider.hidden_models.iter().enumerate() {
+                bounded_text(model, MAX_FIELD_BYTES).map_err(|_| {
+                    invalid(&format!(
+                        "{field}.hiddenModels[{model_index}]: too long or contains line breaks or NUL"
+                    ))
+                })?;
             }
             for (model_index, model) in provider.models.iter().enumerate() {
                 bounded_text(model, MAX_FIELD_BYTES).map_err(|_| {

@@ -943,6 +943,7 @@ mod tests {
             enabled: true,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         };
         let resolved = mycode_providers::ResolvedProvider::resolve(
             &settings,
@@ -1183,6 +1184,7 @@ mod tests {
             enabled: true,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         };
         let resolved =
             mycode_providers::ResolvedProvider::resolve(&settings, model, "test-key", "test-agent")

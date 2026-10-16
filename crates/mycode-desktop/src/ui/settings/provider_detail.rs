@@ -84,6 +84,7 @@ pub(super) fn render_provider_detail(
     );
     let theme = cx.theme().clone();
     let id = provider.id.clone();
+    let models = models_card(workspace, &provider, &theme, cx);
     div()
         .id("provider-detail")
         .flex()
@@ -125,7 +126,135 @@ pub(super) fn render_provider_detail(
             )
             .into_any_element(),
         )
+        .child(models)
         .into_any_element()
+}
+
+/// Every model this provider offers, each with a switch that shows or hides
+/// it in the chat model picker.
+fn models_card(
+    workspace: &Workspace,
+    provider: &mycode_config::ProviderSettings,
+    theme: &gpui_kit::component::theme::Theme,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let choices = crate::ui::model_picker::all_provider_model_choices(workspace.vm(), &provider.id);
+    let shown = choices
+        .iter()
+        .filter(|choice| provider.shows_model(&choice.id))
+        .count();
+    let all_ids: Vec<String> = choices.iter().map(|choice| choice.id.clone()).collect();
+    let bulk = |id: &'static str, label: &'static str, show: bool, disabled: bool| {
+        let provider_id = provider.id.clone();
+        let models = all_ids.clone();
+        Button::new(id)
+            .label(label)
+            .small()
+            .ghost()
+            .disabled(disabled)
+            .on_click(cx.listener(move |workspace, _, _, cx| {
+                workspace.apply_action(
+                    DesktopAction::SettingsModelsShown {
+                        provider: provider_id.clone(),
+                        models: models.clone(),
+                        shown: show,
+                    },
+                    cx,
+                );
+            }))
+    };
+    let toolbar = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .flex_1()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!(
+                    "{} {shown} / {}",
+                    t("Shown in chat:", "对话中显示:"),
+                    choices.len()
+                )),
+        )
+        .child(bulk(
+            "provider-models-show-all",
+            t("Show all", "全部显示"),
+            true,
+            shown == choices.len(),
+        ))
+        .child(bulk(
+            "provider-models-hide-all",
+            t("Hide all", "全部隐藏"),
+            false,
+            shown == 0,
+        ))
+        .into_any_element();
+    let mut rows = vec![toolbar];
+    rows.extend(choices.into_iter().enumerate().map(|(index, choice)| {
+        let visible = provider.shows_model(&choice.id);
+        let provider_id = provider.id.clone();
+        let model = choice.id.clone();
+        div()
+            .id(("provider-model-row", index))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .py_0p5()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_sm()
+                            .truncate()
+                            .when(!visible, |this| this.text_color(theme.muted_foreground))
+                            .child(choice.name.clone()),
+                    )
+                    .when(choice.name != choice.id, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .truncate()
+                                .text_color(theme.muted_foreground)
+                                .font_family(theme.mono_font_family.clone())
+                                .child(choice.id.clone()),
+                        )
+                    }),
+            )
+            .child(
+                Switch::new(("provider-model-shown", index))
+                    .checked(visible)
+                    .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
+                        workspace.apply_action(
+                            DesktopAction::SettingsModelsShown {
+                                provider: provider_id.clone(),
+                                models: vec![model.clone()],
+                                shown: *checked,
+                            },
+                            cx,
+                        );
+                    })),
+            )
+            .into_any_element()
+    }));
+    settings_card(
+        "provider-models",
+        t("Models", "模型"),
+        Some(t(
+            "Hidden models stay out of the chat model picker, its recent suggestions, and the command palette.",
+            "隐藏的模型不会出现在对话的模型切换、最近使用推荐和命令面板中。",
+        )),
+        theme,
+        rows,
+    )
+    .into_any_element()
 }
 
 fn missing_provider(cx: &mut Context<Workspace>) -> AnyElement {

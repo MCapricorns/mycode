@@ -523,7 +523,7 @@ impl Workspace {
                     self.ua_sync_pending = true;
                     self.proxy_sync_pending = true;
                 }
-                self.apply_action(DesktopAction::SettingsLoaded(state), cx);
+                self.apply_action(DesktopAction::SettingsLoaded(Box::new(state)), cx);
             }
             BridgeReply::Exported(Ok(_summary)) => {}
             BridgeReply::Exported(Err(message)) => {
@@ -740,7 +740,6 @@ impl Workspace {
                         session_workspaces: ui_state.session_workspaces,
                         active_workspace: ui_state.active_workspace,
                         recent_models: ui_state.recent_models,
-                        starred_models: ui_state.starred_models,
                         thinking_collapsed: ui_state.thinking_collapsed,
                     },
                     cx,

@@ -518,6 +518,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.error = Some(message);
         }
         DesktopAction::SettingsLoaded(settings) => {
+            let settings = *settings;
             match state.settings.as_mut() {
                 Some(current) if current.dirty || current.saving => {
                     // Key badges live outside the settings document. Refresh
@@ -609,6 +610,19 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 }
                 settings.proxy = value;
                 true
+            });
+        }
+        DesktopAction::SettingsModelsShown {
+            provider,
+            models,
+            shown,
+        } => {
+            edit_settings(state, |settings| {
+                settings
+                    .providers
+                    .iter_mut()
+                    .find(|entry| entry.id == provider)
+                    .is_some_and(|entry| set_models_shown(entry, models, shown))
             });
         }
         DesktopAction::SettingsProviderToggled(index, enabled) => {
@@ -827,7 +841,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             session_workspaces,
             active_workspace: active,
             recent_models,
-            starred_models,
             thinking_collapsed,
         } => {
             state.thinking_collapsed = thinking_collapsed;
@@ -839,7 +852,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.session_workspaces = session_workspaces;
             state.active_workspace = active;
             state.recent_models = recent_models;
-            state.starred_models = starred_models;
             state.default_reasoning = selected_reasoning;
             sync_workspace_roots(state);
             state.auto_update = auto_update;
@@ -937,9 +949,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.picker_query.clear();
         }
         DesktopAction::PickerQueryChanged(query) => state.picker_query = query,
-        DesktopAction::ModelStarToggled { provider, model } => {
-            let _ = mycode_config::toggle_star(&mut state.starred_models, &provider, &model);
-        }
         DesktopAction::SettingsQueryChanged(query) => state.settings_query = query,
         DesktopAction::ProviderDetailOpened(provider) => {
             state.provider_detail = provider;
@@ -1096,6 +1105,34 @@ fn fill_open_slash(state: &mut WorkspaceState) {
 /// Applies one edit to the settings projection and marks the document dirty
 /// when the edit reports it changed something. Collapses the
 /// borrow-guard-mark boilerplate the settings arms share.
+/// Moves `models` out of or into `provider.hidden_models`. Returns whether
+/// the list changed. Hiding stops at the document's entry cap.
+fn set_models_shown(
+    provider: &mut mycode_config::ProviderSettings,
+    models: Vec<String>,
+    shown: bool,
+) -> bool {
+    let before = provider.hidden_models.len();
+    if shown {
+        let models: std::collections::HashSet<String> = models.into_iter().collect();
+        provider
+            .hidden_models
+            .retain(|hidden| !models.contains(hidden));
+        return provider.hidden_models.len() != before;
+    }
+    let mut hidden: std::collections::HashSet<String> =
+        provider.hidden_models.iter().cloned().collect();
+    for model in models {
+        if hidden.len() >= mycode_config::MAX_HIDDEN_MODELS_PER_PROVIDER {
+            break;
+        }
+        if hidden.insert(model.clone()) {
+            provider.hidden_models.push(model);
+        }
+    }
+    provider.hidden_models.len() != before
+}
+
 fn edit_settings(state: &mut WorkspaceState, edit: impl FnOnce(&mut SettingsState) -> bool) {
     if let Some(settings) = state.settings.as_mut()
         && edit(settings)
@@ -1146,6 +1183,37 @@ mod tests {
         ActiveConversation, ConversationEntry, DesktopAction, EntryKind, TurnStats, UpdateState,
         WorkspaceState,
     };
+
+    #[test]
+    fn hiding_and_showing_models_edits_the_provider_hidden_list() {
+        let mut provider = mycode_config::ProviderSettings {
+            id: "openai".to_owned(),
+            kind: "openai-responses".to_owned(),
+            base_url: "https://api.openai.com/v1".to_owned(),
+            models: vec!["gpt".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+            hidden_models: Vec::new(),
+        };
+        let ids = |models: &[&str]| models.iter().map(|id| (*id).to_owned()).collect();
+        assert!(super::set_models_shown(
+            &mut provider,
+            ids(&["a", "b", "a"]),
+            false
+        ));
+        assert_eq!(provider.hidden_models, ["a", "b"]);
+        assert!(!provider.shows_model("a"));
+        assert!(provider.shows_model("gpt"));
+        assert!(!super::set_models_shown(&mut provider, ids(&["b"]), false));
+        assert!(super::set_models_shown(
+            &mut provider,
+            ids(&["a", "z"]),
+            true
+        ));
+        assert_eq!(provider.hidden_models, ["b"]);
+        assert!(!super::set_models_shown(&mut provider, ids(&["z"]), true));
+    }
 
     fn user(id: &str, text: &str) -> ConversationEntry {
         ConversationEntry {

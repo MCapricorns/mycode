@@ -116,8 +116,8 @@ fn render_models_list_page(
                 "default-model",
                 t("Default model", "默认模型"),
                 Some(t(
-                    "Pick a provider, then search. Starred and recent models stay at the top.",
-                    "先选服务商，再搜索。星标和最近使用的模型固定在顶部。",
+                    "The three most recent models are suggested at the top; pick any other from its provider.",
+                    "顶部推荐最近使用的 3 个模型；其他模型从对应服务商里选。",
                 )),
                 theme,
                 vec![
@@ -1066,6 +1066,7 @@ pub(crate) fn build_custom_provider(
         enabled: true,
         context_limit,
         max_output,
+        hidden_models: Vec::new(),
     };
     let probe = mycode_config::AppSettings {
         providers: vec![provider.clone()],

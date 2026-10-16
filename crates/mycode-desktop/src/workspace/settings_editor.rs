@@ -682,6 +682,7 @@ impl Workspace {
                 enabled: true,
                 context_limit: None,
                 max_output: None,
+                hidden_models: Vec::new(),
             },
         };
         self.apply_action(DesktopAction::SettingsProviderAdded(row), cx);
