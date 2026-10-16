@@ -2,6 +2,7 @@
 //! per-role model routes, the parent-prompt delegation directive, and the
 //! wall-clock limit on a running child.
 
+use std::fmt::Write as _;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -690,14 +691,15 @@ fn subagent_system_prompt(
     if !workspace_roots.is_empty() {
         system.push_str("\n\nOther workspace folders (absolute paths only):\n");
         for root in &workspace_roots {
-            system.push_str(&format!("- {}\n", root.display()));
+            let _ = writeln!(system, "- {}", root.display());
         }
         if let Some(shell_tool) = mycode_agent::shell_tool_name(registry) {
-            system.push_str(&format!(
+            let _ = write!(
+                system,
                 "Relative paths stay in this run's cwd. For the other folders, pass an \
 absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
 path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in this run's cwd.",
-            ));
+            );
         }
     }
     crate::turn::push_scratch_note(&mut system, scratch);

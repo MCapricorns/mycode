@@ -6,6 +6,7 @@
 //! prompt (goals, files, decisions, errors, next steps). The session ledger
 //! is never rewritten; only the in-memory request history shrinks.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mycode_core::{Message, Provider as _, Request, StreamEvent};
@@ -584,7 +585,7 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> 
             Message::ToolResult(_) => "tool",
         };
         let text = excerpt(&message_text(message));
-        transcript.push_str(&format!("[{role}] {text}\n\n"));
+        let _ = write!(transcript, "[{role}] {text}\n\n");
     }
     let count = transcript.chars().count();
     if count > TRANSCRIPT_CAP_CHARS {

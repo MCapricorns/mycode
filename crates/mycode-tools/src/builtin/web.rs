@@ -11,6 +11,7 @@
 
 use parking_lot::Mutex;
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -231,7 +232,7 @@ fn render_hits(hits: &[WebHit]) -> String {
         }
         let title = collapse_ws(&hit.title);
         let snippet = cap_chars(&collapse_ws(&hit.snippet), MAX_SNIPPET_CHARS);
-        rendered.push_str(&format!("[{url}] {title}\n{snippet}\n\n"));
+        let _ = write!(rendered, "[{url}] {title}\n{snippet}\n\n");
     }
     if rendered.is_empty() {
         "no results".to_owned()
@@ -250,17 +251,18 @@ fn render_pages(pages: &[WebPage], goal: Option<&str>) -> String {
             } else {
                 " (excerpts for goal)"
             };
-            rendered.push_str(&format!("[{}]{note}\n{excerpt}\n\n", page.url));
+            let _ = write!(rendered, "[{}]{note}\n{excerpt}\n\n", page.url);
         } else {
             let cut = page.content.chars().count() > MAX_PAGE_EXCERPT_CHARS;
             let excerpt: String = page.content.chars().take(MAX_PAGE_EXCERPT_CHARS).collect();
             let truncated = page.truncated || cut;
-            rendered.push_str(&format!(
+            let _ = write!(
+                rendered,
                 "[{}]{}\n{}\n\n",
                 page.url,
                 if truncated { " (truncated)" } else { "" },
                 excerpt
-            ));
+            );
         }
     }
     if rendered.is_empty() {
@@ -448,9 +450,10 @@ fn best_section(chunks: &[String], terms: &[String], budget: usize) -> Option<St
     }
     let mut text = parts.join("\n\n");
     if truncated {
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n\n(section truncated at {budget} characters; the rest of this heading was omitted)"
-        ));
+        );
     }
     Some(text)
 }
@@ -663,6 +666,7 @@ async fn cached_pages(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -864,17 +868,19 @@ mod tests {
     fn goal_excerpts_are_much_smaller_than_the_full_page() {
         let mut page = String::new();
         for index in 0..40 {
-            page.push_str(&format!(
+            let _ = write!(
+                page,
                 "Section {index} talks about unrelated packaging details and release checklists.\n\n"
-            ));
+            );
         }
         page.push_str(
             "Token refresh uses a rotating refresh_token and replaces the access token in place.\n\n",
         );
         for index in 0..40 {
-            page.push_str(&format!(
+            let _ = write!(
+                page,
                 "Appendix {index} repeats boilerplate that the goal does not need.\n\n"
-            ));
+            );
         }
         let full = page.chars().count();
         let excerpt = super::excerpt_for_goal(
@@ -891,9 +897,7 @@ mod tests {
         assert!(excerpt.contains("refresh_token"), "{excerpt}");
         let mut notes = String::from("## Version 1.98.0\n\nOld notes.\n\n## Version 1.99.0\n\n");
         for index in 0..62 {
-            notes.push_str(&format!(
-                "- Change number {index} updates the compiler.\n\n"
-            ));
+            let _ = write!(notes, "- Change number {index} updates the compiler.\n\n");
         }
         notes.push_str("## Version 1.100.0\n\nLater notes.\n");
         let section = super::excerpt_for_goal(
@@ -907,9 +911,10 @@ mod tests {
         assert!(!section.contains("Version 1.100.0"), "{section}");
         let mut long = String::from("## Version 1.99.0\n\n### Language\n\n");
         for index in 0..120 {
-            long.push_str(&format!(
+            let _ = write!(
+                long,
                 "- Language bullet {index} is a reasonably long change note about the compiler.\n\n"
-            ));
+            );
         }
         long.push_str(
             "### Cargo\n\n- Cargo bullet one adds a resolver flag.\n\n- Cargo bullet two changes the index.\n\n### Rustdoc\n\n- Rustdoc bullet lists private items.\n\n### Compatibility Notes\n\n- Compatibility note about the ABI.\n\n### Internal Changes\n\n- Internal change to the query system.\n\n## Version 1.100.0\n\nLater.\n",

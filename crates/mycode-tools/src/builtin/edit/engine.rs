@@ -3,6 +3,7 @@ use aho_corasick::{AhoCorasick, MatchKind};
 use memchr::memmem::Finder;
 use regex::RegexBuilder;
 use serde_json::json;
+use std::fmt::Write as _;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -43,7 +44,7 @@ pub(super) fn edit_result(
     if detached_hardlink {
         text.push_str(" (detached_hardlink=true: this directory entry now names a new inode)");
     }
-    text.push_str(&format!("\n[revision {revision}]"));
+    let _ = write!(text, "\n[revision {revision}]");
     ToolResult::text(text).with_details(json!({
         "path": path_key,
         "replacements": applied.replacements,

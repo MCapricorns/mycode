@@ -35,6 +35,7 @@ mod unix;
 mod windows;
 
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -539,15 +540,18 @@ fn format_result(
     let mut text = text;
     if truncated {
         let total = stdout.total_bytes.saturating_add(stderr.total_bytes);
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n[output truncated: showed first {MAX_OUTPUT_BYTES} of {total} bytes]"
-        ));
+        );
     }
 
     let is_error = forced_error || status.is_some_and(|s| !s.success());
     if is_error {
         match &status {
-            Some(s) => text.push_str(&format!("\n[exit code: {}]", display_exit(s))),
+            Some(s) => {
+                let _ = write!(text, "\n[exit code: {}]", display_exit(s));
+            }
             None => match notice {
                 Some(notice) => {
                     text.push('\n');

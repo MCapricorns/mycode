@@ -4,6 +4,7 @@
 use gpui_kit::AppContext as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{Context, Window};
+use std::fmt::Write as _;
 
 use mycode_app::{BridgeCommand, SessionId};
 
@@ -538,7 +539,7 @@ impl Workspace {
                     if !draft.is_empty() && !draft.ends_with(char::is_whitespace) {
                         draft.push(' ');
                     }
-                    draft.push_str(&format!("@{} ", path.display()));
+                    let _ = write!(draft, "@{} ", path.display());
                 }
                 workspace.pending_composer_prefill = Some(draft.clone());
                 workspace.apply_action(DesktopAction::ComposerChanged(draft), cx);
