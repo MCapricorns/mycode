@@ -94,6 +94,12 @@ impl ToolDyn for DynamicMcpTool {
         Some(self.snippet.as_str())
     }
 
+    /// A server that declares `readOnlyHint` may serve this call beside
+    /// other reads; each connection still takes one request at a time.
+    fn parallel_safe(&self) -> bool {
+        self.read_only
+    }
+
     fn execute_dyn<'a>(
         &'a self,
         args: Value,
@@ -238,15 +244,24 @@ pub(crate) fn mcp_server_is_direct(tools: &[crate::mcp_client::McpTool]) -> bool
 pub(crate) struct McpPool {
     fingerprint: u64,
     broken: Arc<AtomicBool>,
-    tools: Vec<Arc<DynamicMcpTool>>,
+    /// One slot per enabled server, in settings order. `None` is a server
+    /// that did not connect; the next turn retries only those.
+    servers: Vec<Option<Vec<Arc<DynamicMcpTool>>>>,
     warning: Option<String>,
+}
+
+impl McpPool {
+    fn tools(&self) -> Vec<Arc<DynamicMcpTool>> {
+        self.servers.iter().flatten().flatten().cloned().collect()
+    }
 }
 
 /// Connects every enabled MCP server and flattens its tools.
 ///
-/// A matching live pool is reused only when every enabled server connected.
-/// A server that fails to spawn, handshake, or list tools is skipped for
-/// this turn and is not cached, so the next turn tries it again. Runs
+/// Servers that connected stay live across turns while the settings
+/// fingerprint holds and no connection broke. A server that fails to spawn,
+/// handshake, or list tools is skipped for this turn and retried on the
+/// next one, without restarting the servers that are already up. Runs
 /// inside the spawned turn task on the single-threaded core runtime —
 /// plain `.await` only, never `block_on`.
 pub(crate) async fn connect_mcp_tools(
@@ -269,57 +284,83 @@ pub(crate) async fn connect_mcp_tools(
         return (Vec::new(), None);
     };
     let fingerprint = mcp_fingerprint(&servers, &secrets);
-    {
-        let guard = pool.lock().await;
-        if let Some(cached) = guard.as_ref()
-            && cached.fingerprint == fingerprint
-            && !cached.broken.load(Ordering::Relaxed)
-        {
-            return (cached.tools.clone(), cached.warning.clone());
-        }
-    }
     let enabled: Vec<_> = servers.iter().filter(|server| server.enabled).collect();
-    let mut tools = Vec::new();
-    let mut connected = 0usize;
-    let broken = Arc::new(AtomicBool::new(false));
+    let (broken, mut slots) = {
+        let guard = pool.lock().await;
+        match guard.as_ref() {
+            Some(cached)
+                if cached.fingerprint == fingerprint
+                    && !cached.broken.load(Ordering::Relaxed)
+                    && cached.servers.len() == enabled.len() =>
+            {
+                if cached.servers.iter().all(Option::is_some) {
+                    return (cached.tools(), cached.warning.clone());
+                }
+                (Arc::clone(&cached.broken), cached.servers.clone())
+            }
+            _ => (Arc::new(AtomicBool::new(false)), vec![None; enabled.len()]),
+        }
+    };
     let result_dir = Arc::new(home.root().join("mcp-results"));
-    for server in &enabled {
-        let api_key = secrets
-            .key(&format!("mcp-{}", server.id))
-            .map(str::to_owned);
-        // The channel timeout bounds every request over the channel's
-        // lifetime — including each tools/call during the turn — so it must
-        // be the full request budget, not a connect-phase bound. A 10s value
-        // here made every tool call that outlasted it fail with Timeout and
-        // drop the connection mid-turn.
-        let Ok(mut client) = open_mcp_client(server, api_key).await else {
+    // Missing servers start together: a turn waits for the slowest
+    // handshake, not the sum of them. The futures stay owned by this one, so
+    // a cancelled turn still drops (and kills) every half-started server.
+    // Slots keep the settings order, so the tool list is the same bytes
+    // every turn.
+    let handshakes = enabled
+        .iter()
+        .zip(&slots)
+        .filter(|(_, slot)| slot.is_none())
+        .map(|(server, _)| {
+            let api_key = secrets
+                .key(&format!("mcp-{}", server.id))
+                .map(str::to_owned);
+            async move {
+                // The channel timeout bounds every request over the channel's
+                // lifetime — including each tools/call during the turn — so
+                // it must be the full request budget, not a connect-phase
+                // bound. A 10s value here made every tool call that outlasted
+                // it fail with Timeout and drop the connection mid-turn.
+                let mut client = open_mcp_client(server, api_key).await.ok()?;
+                let listed = client.list_tools().await.ok()?;
+                Some((client, listed))
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut opened = futures_util::future::join_all(handshakes).await.into_iter();
+    for (server, slot) in enabled.iter().zip(slots.iter_mut()) {
+        if slot.is_some() {
+            continue;
+        }
+        let Some((client, listed)) = opened.next().flatten() else {
             continue;
         };
-        let Ok(listed) = client.list_tools().await else {
-            continue;
-        };
-        connected += 1;
         let direct = mcp_server_is_direct(&listed);
         let client = Arc::new(tokio::sync::Mutex::new(client));
-        for tool in listed {
-            tools.push(Arc::new(DynamicMcpTool::new(
-                server.id.clone(),
-                tool,
-                client.clone(),
-                Arc::clone(&broken),
-                direct,
-                Arc::clone(&result_dir),
-            )));
-        }
+        *slot = Some(
+            listed
+                .into_iter()
+                .map(|tool| {
+                    Arc::new(DynamicMcpTool::new(
+                        server.id.clone(),
+                        tool,
+                        client.clone(),
+                        Arc::clone(&broken),
+                        direct,
+                        Arc::clone(&result_dir),
+                    ))
+                })
+                .collect(),
+        );
     }
-    if connected == enabled.len() {
-        *pool.lock().await = Some(McpPool {
-            fingerprint,
-            broken,
-            tools: tools.clone(),
-            warning: project_warning.clone(),
-        });
-    }
+    let live = McpPool {
+        fingerprint,
+        broken,
+        servers: slots,
+        warning: project_warning.clone(),
+    };
+    let tools = live.tools();
+    *pool.lock().await = Some(live);
     (tools, project_warning)
 }
 
@@ -522,6 +563,10 @@ impl ToolDyn for SearchTool {
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
         Some("search_tool: fetch one MCP inputSchema before use_tool. Never guess parameters.")
+    }
+
+    fn parallel_safe(&self) -> bool {
+        true
     }
 
     fn execute_dyn<'a>(

@@ -47,6 +47,8 @@ reqwest = { version = "0.13.5", default-features = false, features = [
 ] }
 bytes = "1.12.1"
 tokio-util = "0.7.20"
+# `join_all` over borrowed futures; already in the graph through reqwest.
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 globset = "0.4.20"
 ignore = "0.4.33"
 # ripgrep's search core, linked in-process without an external executable.

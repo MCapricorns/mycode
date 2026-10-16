@@ -19,11 +19,8 @@
 //! A provider or transport failure is the same shape of partial, with
 //! the provider's detail on the interruption line, but the turn completes.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::Poll;
 
 use mycode_core::MycodeError;
 use mycode_core::events::{AgentEvent, TurnOutcome};
@@ -283,8 +280,8 @@ async fn agent_loop(
         } else {
             // `agent` calls overlap the rest of this response, so a child
             // and another tool requested together actually run together.
-            // Non-agent tools run one after another in model order.
-            // Results are written back in call order.
+            // Adjacent read-only calls run as one batch; every other tool
+            // runs alone, in model order. Results go back in call order.
             let valid_calls: Vec<ToolCall> = calls
                 .into_iter()
                 .filter(|call| !call.id.is_empty() && !call.name.is_empty())
@@ -332,48 +329,21 @@ fn is_agent_call(call: &ToolCall) -> bool {
     call.name == "agent"
 }
 
-/// Joins same-type borrowed futures concurrently, preserving input order.
-///
-/// Local stand-in for `futures_util::future::join_all`: the dispatched tool
-/// futures borrow the turn environment, so `tokio::task::JoinSet` (which
-/// takes owned futures) cannot take its place. Every child registers the
-/// shared waker, so the task parks between events instead of spinning;
-/// dropping the joined future drops all children.
-async fn join_all<F>(futures: Vec<F>) -> Vec<F::Output>
-where
-    F: Future,
-{
-    let mut futures: Vec<Pin<Box<F>>> = futures.into_iter().map(Box::pin).collect();
-    let mut outputs: Vec<Option<F::Output>> = Vec::with_capacity(futures.len());
-    outputs.resize_with(futures.len(), || None);
-    let mut remaining = futures.len();
-    let joined = std::future::poll_fn(move |context| {
-        for (index, future) in futures.iter_mut().enumerate() {
-            if outputs[index].is_none()
-                && let Poll::Ready(output) = future.as_mut().poll(context)
-            {
-                outputs[index] = Some(output);
-                remaining -= 1;
-            }
-        }
-        if remaining == 0 {
-            Poll::Ready(std::mem::take(&mut outputs))
-        } else {
-            Poll::Pending
-        }
-    })
-    .await;
-    joined
-        .into_iter()
-        .map(|slot| slot.expect("every slot fills before Ready"))
-        .collect()
+/// Whether `call` names a registered tool that may overlap other such calls.
+fn is_parallel_safe(env: &TurnEnv<'_>, call: &ToolCall) -> bool {
+    env.tools
+        .get(&call.name)
+        .is_some_and(|tool| tool.parallel_safe())
 }
 
 /// Runs one response's tool calls.
 ///
-/// Every `agent` call starts immediately. The other calls run in their original
-/// order at the same time, so an MCP lookup is not stuck behind a child.
-/// Each call still gets one result, placed back in the model's call order.
+/// Every `agent` call starts immediately. The other calls run beside them, so
+/// an MCP lookup is not stuck behind a child. Among those, each run of
+/// adjacent parallel-safe calls (reads, searches, web lookups) is one batch;
+/// a call that can change something waits for the batch before it and runs
+/// alone, so reads never observe a half-applied edit. Each call still gets
+/// one result, placed back in the model's call order.
 async fn dispatch_response_calls(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
@@ -403,15 +373,31 @@ async fn dispatch_response_calls(
             .iter()
             .map(|index| turn::dispatch_tool_call(env, token, &calls[*index]))
             .collect::<Vec<_>>();
-        join_all(futures).await
+        futures_util::future::join_all(futures).await
     };
     let others = async move {
         let mut messages = Vec::with_capacity(other_ids.len());
-        for index in &other_ids {
+        let mut next = 0;
+        while next < other_ids.len() {
             if token.is_cancelled() {
-                messages.push(turn::fail_cancelled_call(env, &calls[*index]));
+                messages.push(turn::fail_cancelled_call(env, &calls[other_ids[next]]));
+                next += 1;
+                continue;
+            }
+            let batch_len = other_ids[next..]
+                .iter()
+                .take_while(|index| is_parallel_safe(env, &calls[**index]))
+                .count();
+            if batch_len > 1 {
+                let futures = other_ids[next..next + batch_len]
+                    .iter()
+                    .map(|index| turn::dispatch_tool_call(env, token, &calls[*index]))
+                    .collect::<Vec<_>>();
+                messages.extend(futures_util::future::join_all(futures).await);
+                next += batch_len;
             } else {
-                messages.push(turn::dispatch_tool_call(env, token, &calls[*index]).await);
+                messages.push(turn::dispatch_tool_call(env, token, &calls[other_ids[next]]).await);
+                next += 1;
             }
         }
         messages
@@ -989,6 +975,142 @@ mod tests {
             "steer missing from the next request: {}",
             seen[1]
         );
+    }
+
+    struct BatchProvider {
+        steps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Provider for BatchProvider {
+        fn stream<'a>(
+            &'a self,
+            _request: &'a Request,
+            cancel: CancellationToken,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                let step = self.steps.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (sender, stream) = EventStream::channel(cancel);
+                let call = |id: &str, name: &str| {
+                    ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                        id,
+                        name,
+                        serde_json::json!({}),
+                    ))
+                };
+                let message = if step == 0 {
+                    mycode_core::AssistantMessage {
+                        blocks: vec![
+                            call("r1", "probe_read"),
+                            call("r2", "probe_read"),
+                            call("w", "probe_write"),
+                            call("r3", "probe_read"),
+                        ],
+                        usage: None,
+                        stop_reason: StopReason::ToolUse,
+                    }
+                } else {
+                    mycode_core::AssistantMessage {
+                        blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new("done"))],
+                        usage: None,
+                        stop_reason: StopReason::Stop,
+                    }
+                };
+                sender.send(StreamEvent::Done { message }).await;
+                Ok(stream)
+            })
+        }
+    }
+
+    struct ProbeTool {
+        name: &'static str,
+        parallel: bool,
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl mycode_tools::ToolDyn for ProbeTool {
+        fn spec(&self) -> mycode_core::ToolSpec {
+            mycode_core::ToolSpec {
+                name: self.name.to_owned(),
+                description: "records when it runs".to_owned(),
+                params_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+
+        fn parallel_safe(&self) -> bool {
+            self.parallel
+        }
+
+        fn execute_dyn<'a>(
+            &'a self,
+            _args: serde_json::Value,
+            ctx: &'a mycode_tools::ToolCtx,
+            _out: &'a mut mycode_tools::ToolStream,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let id = ctx.call_id.clone();
+                self.log.lock().expect("log").push(format!("start {id}"));
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                self.log.lock().expect("log").push(format!("end {id}"));
+                Ok(mycode_tools::ToolResult::text(id))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn adjacent_reads_overlap_and_a_write_runs_alone() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let tools = ToolRegistry::new();
+        for (name, parallel) in [("probe_read", true), ("probe_write", false)] {
+            tools.register(std::sync::Arc::new(ProbeTool {
+                name,
+                parallel,
+                log: std::sync::Arc::clone(&log),
+            }));
+        }
+        let provider = BatchProvider {
+            steps: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let hooks = HookRunner::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks);
+        let mut agent = Agent::new(AgentConfig::new());
+        agent
+            .prompt(Message::User(UserMessage::text("go")), &env)
+            .await
+            .expect("completed turn");
+        let log = log.lock().expect("log").clone();
+        let at = |entry: &str| {
+            log.iter()
+                .position(|seen| seen == entry)
+                .unwrap_or_else(|| panic!("{entry} missing from {log:?}"))
+        };
+        assert!(
+            at("start r2") < at("end r1"),
+            "reads did not overlap: {log:?}"
+        );
+        assert!(
+            at("end r1") < at("start w") && at("end r2") < at("start w"),
+            "{log:?}"
+        );
+        assert!(at("end w") < at("start r3"), "{log:?}");
+        let results: Vec<_> = agent
+            .state()
+            .messages()
+            .iter()
+            .filter_map(|message| match message.as_ref() {
+                Message::ToolResult(result) => Some(result.tool_call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results, ["r1", "r2", "w", "r3"]);
     }
 
     struct LengthThenStop {

@@ -155,6 +155,16 @@ pub trait Tool: Send + Sync + 'static {
         self.file_access().is_some()
     }
 
+    /// Whether calls to this tool may run at the same time as other calls
+    /// that are also parallel-safe.
+    ///
+    /// True only for tools that change nothing: content reads and searches
+    /// by default, plus tools that opt in. Anything that writes, spawns a
+    /// process, or asks the user runs alone, in the model's order.
+    fn parallel_safe(&self) -> bool {
+        self.reads_only() || self.search_access().is_some()
+    }
+
     /// Rewrites model-emitted arguments into the schema shape before validation.
     ///
     /// The default leaves arguments unchanged. `ask_user` uses this so XML
@@ -206,6 +216,10 @@ pub trait ToolDyn: Send + Sync {
     /// Whether dispatch should bind a local file capability first.
     fn requires_file_preflight(&self) -> bool {
         self.file_access().is_some()
+    }
+    /// Whether calls may run alongside other parallel-safe calls.
+    fn parallel_safe(&self) -> bool {
+        false
     }
     /// Validate `args` against the tool's schema (`Self::spec().params_schema`),
     /// deserialize, and execute. Wrong-shaped arguments fail with
@@ -316,6 +330,10 @@ impl<T: Tool> ToolDyn for T {
 
     fn requires_file_preflight(&self) -> bool {
         Tool::requires_file_preflight(self)
+    }
+
+    fn parallel_safe(&self) -> bool {
+        Tool::parallel_safe(self)
     }
 
     fn execute_dyn<'a>(
