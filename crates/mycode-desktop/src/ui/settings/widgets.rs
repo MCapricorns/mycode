@@ -178,13 +178,11 @@ pub(super) fn choice_chips(
                 .rounded(crate::ui::skin::radius_control())
                 .border_1()
                 .border_color(if selected {
-                    theme.primary
+                    crate::ui::skin::border_strong(theme)
                 } else {
                     theme.border
                 })
-                .when(selected, |this| {
-                    this.bg(crate::ui::skin::frost_accent(theme))
-                })
+                .when(selected, |this| this.bg(crate::ui::skin::frost(theme)))
                 .text_sm()
                 .cursor_pointer()
                 .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))

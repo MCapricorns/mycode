@@ -364,12 +364,10 @@ fn render_provider_step(
                     .rounded(skin::radius_control())
                     .cursor_pointer()
                     .hover(|this| this.bg(skin::frost_hover(&theme)))
-                    .when(index == preferred, |this| {
-                        this.bg(skin::frost_accent(&theme))
-                    })
+                    .when(index == preferred, |this| this.bg(skin::frost(&theme)))
                     .border_1()
                     .border_color(if index == preferred {
-                        theme.primary.opacity(0.4)
+                        skin::border_strong(&theme)
                     } else {
                         theme.transparent
                     })
@@ -546,7 +544,7 @@ fn model_row(
         .items_center()
         .gap_1()
         .rounded(skin::radius_control())
-        .when(preferred, |this| this.bg(skin::frost_accent(theme)))
+        .when(preferred, |this| this.bg(skin::frost(theme)))
         .child(
             div()
                 .id(format!("{id_prefix}-{model_id}"))
@@ -580,7 +578,7 @@ fn model_row(
                         Icon::new(IconName::Check)
                             .xsmall()
                             .flex_shrink_0()
-                            .text_color(theme.primary),
+                            .text_color(theme.foreground),
                     )
                 }),
         )
@@ -623,10 +621,10 @@ fn pin_row(
     let target = target.clone();
     div()
         .id(format!("model-pin-{provider}-{model}"))
-        .when(highlighted, |this| this.bg(skin::frost_accent(theme)))
+        .when(highlighted, |this| this.bg(skin::frost(theme)))
         .border_1()
         .border_color(if highlighted {
-            theme.primary.opacity(0.4)
+            skin::border_strong(theme)
         } else {
             theme.transparent
         })
@@ -674,10 +672,10 @@ fn session_model_row(role: &str, highlighted: bool, cx: &Context<Workspace>) -> 
     let role = role.to_owned();
     div()
         .id(format!("agent-model-{role}-inherit-inherit"))
-        .when(highlighted, |this| this.bg(skin::frost_accent(theme)))
+        .when(highlighted, |this| this.bg(skin::frost(theme)))
         .border_1()
         .border_color(if highlighted {
-            theme.primary.opacity(0.4)
+            skin::border_strong(theme)
         } else {
             theme.transparent
         })
