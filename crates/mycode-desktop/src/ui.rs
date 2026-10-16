@@ -198,6 +198,11 @@ pub fn render_root(
                 cx,
             ))
         })
+        // The pending question is a session modal: it tops every panel so
+        // the answer path is never covered.
+        .when(workspace.vm().pending_ask.is_some(), |this| {
+            this.child(chat::render_ask_overlay(workspace, window, cx))
+        })
         .when(workspace.vm().update_dialog_open, |this| {
             this.child(update_dialog::render_update_dialog(workspace, cx))
         })

@@ -1,5 +1,6 @@
-//! The chat column: conversation transcript, the pending-ask panel, and the
-//! integrated composer. Both fill the strip between the sidebar and Details.
+//! The chat column: conversation transcript and the integrated composer.
+//! The pending-ask question floats as a window-level overlay from `ui.rs`.
+//! Both fill the strip between the sidebar and Details.
 mod ask;
 mod composer;
 mod markdown;
@@ -9,6 +10,7 @@ mod tools;
 mod transcript;
 mod welcome;
 
+pub(crate) use ask::render_ask_overlay;
 pub(crate) use composer::composer_placeholder;
 pub(crate) use menus::reasoning_row_label;
 pub(crate) use welcome::new_task_label;
@@ -227,9 +229,6 @@ pub(super) fn render_chat(
                 .is_some_and(|mention| !mention.items.is_empty()),
             |this| this.child(menus::render_mention_layer(workspace, cx)),
         )
-        .when(workspace.vm().pending_ask.is_some(), |this| {
-            this.child(ask::render_ask_panel(workspace, window, cx))
-        })
         // The jump-to-latest row rides the same docked pattern, right above
         // the composer and outside it, and shows only while the transcript
         // trails its tail.
