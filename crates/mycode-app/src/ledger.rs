@@ -291,24 +291,22 @@ pub(crate) async fn ledger_history(
 fn order_tool_results(history: &mut [Arc<Message>]) {
     let mut index = 0;
     while index < history.len() {
-        let Message::Assistant(assistant) = history[index].as_ref() else {
-            index += 1;
-            continue;
-        };
-        let calls: Vec<String> = assistant
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                mycode_core::ContentBlock::ToolCall(call) => Some(call.id.clone()),
-                _ => None,
-            })
-            .collect();
         let start = index + 1;
         let mut end = start;
         while end < history.len() && matches!(history[end].as_ref(), Message::ToolResult(_)) {
             end += 1;
         }
-        if end - start > 1 {
+        if end - start > 1
+            && let Message::Assistant(assistant) = history[index].as_ref()
+        {
+            let calls: Vec<String> = assistant
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    mycode_core::ContentBlock::ToolCall(call) => Some(call.id.clone()),
+                    _ => None,
+                })
+                .collect();
             history[start..end].sort_by_key(|message| match message.as_ref() {
                 Message::ToolResult(result) => calls
                     .iter()
@@ -317,7 +315,7 @@ fn order_tool_results(history: &mut [Arc<Message>]) {
                 _ => usize::MAX,
             });
         }
-        index = end.max(start);
+        index = end;
     }
 }
 

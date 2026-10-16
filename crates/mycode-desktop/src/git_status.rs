@@ -215,11 +215,7 @@ fn cap_diff(text: &str) -> String {
     if text.len() <= DIFF_CAP_BYTES {
         return text.to_owned();
     }
-    let mut end = DIFF_CAP_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
+    format!("{}…", &text[..text.floor_char_boundary(DIFF_CAP_BYTES)])
 }
 
 fn is_new_file(root: &Path, path: &str, allow_staged: bool) -> bool {
