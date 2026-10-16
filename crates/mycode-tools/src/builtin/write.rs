@@ -21,7 +21,9 @@ pub struct WriteTool;
 #[derive(Deserialize, JsonSchema)]
 pub struct WriteArgs {
     /// Path of the file to write. Relative paths resolve against the
-    /// session cwd; missing parent directories are created.
+    /// session cwd; writable absolute paths stay inside the session cwd,
+    /// an added workspace root, or the OS temp directory. Missing parent
+    /// directories are created.
     pub path: String,
     /// The complete new content of the file.
     pub content: String,
@@ -54,11 +56,12 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write a UTF-8 text file inside the session cwd. Missing files are \
-         created atomically (parents created as needed). Existing files are \
-         replaced only when `expected_revision` matches a prior read, or \
-         `overwrite` is true. The two options cannot be combined. Hidden \
-         files are writable. Does not follow symlinks or reparse points."
+        "Write a UTF-8 text file inside the session cwd, an added workspace \
+         root, or the OS temp directory. Missing files are created atomically \
+         (parents created as needed). Existing files are replaced only when \
+         `expected_revision` matches a prior read, or `overwrite` is true. \
+         The two options cannot be combined. Hidden files are writable. \
+         Does not follow symlinks or reparse points."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
