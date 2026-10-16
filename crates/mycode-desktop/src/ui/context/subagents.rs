@@ -14,13 +14,17 @@ use crate::workspace::Workspace;
 pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let desk = crate::ui::desk::Desk::of(theme);
-    let jobs = workspace.vm().live_jobs.clone();
-    let capped = crate::view_model::capped_artisan_count(&jobs);
+    let jobs = &workspace.vm().live_jobs;
+    let capped = crate::view_model::capped_artisan_count(jobs);
     let summary = if jobs.len() == 1 {
         t("1 running", "1 个运行中").to_owned()
     } else {
         format!("{} {}", jobs.len(), t("running", "个运行中"))
     };
+    let rows: Vec<(String, String, String, bool)> = jobs
+        .iter()
+        .map(|job| (job.call_id.clone(), job.title(), job.step_label(), job.capped))
+        .collect();
     div()
         .id("subagents")
         .flex()
@@ -54,80 +58,80 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                     .child(crate::view_model::capped_artisan_status(capped)),
             )
         })
-        .children(jobs.into_iter().enumerate().map(|(index, job)| {
-            let call_id = job.call_id.clone();
-            let cancel_id = job.call_id.clone();
-            let title = job.title();
-            let step = job.step_label();
-            let warned = job.capped;
-            div()
-                .id(format!("subagent-{index}"))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .px_1()
-                .py(px(4.))
-                .rounded(crate::ui::skin::radius_control())
-                .cursor_pointer()
-                .hover(|card| card.bg(crate::ui::skin::frost_hover(theme)))
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_open_subagent(&call_id, cx);
-                }))
-                .child(
+        .children(
+            rows.into_iter()
+                .enumerate()
+                .map(|(index, (call_id, title, step, warned))| {
+                    let cancel_id = call_id.clone();
                     div()
+                        .id(format!("subagent-{index}"))
                         .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .min_w_0()
-                        .child(crate::ui::lamp(if warned {
-                            theme.warning
-                        } else {
-                            desk.amber
+                        .flex_col()
+                        .gap_1()
+                        .px_1()
+                        .py(px(4.))
+                        .rounded(crate::ui::skin::radius_control())
+                        .cursor_pointer()
+                        .hover(|card| card.bg(crate::ui::skin::frost_hover(theme)))
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_open_subagent(&call_id, cx);
                         }))
                         .child(
                             div()
-                                .flex_1()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
                                 .min_w_0()
-                                .text_xs()
-                                .truncate()
-                                .text_color(theme.foreground)
-                                .child(title),
+                                .child(crate::ui::lamp(if warned {
+                                    theme.warning
+                                } else {
+                                    desk.amber
+                                }))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .truncate()
+                                        .text_color(theme.foreground)
+                                        .child(title),
+                                )
+                                .child(
+                                    div()
+                                        .id(format!("subagent-cancel-{index}"))
+                                        .flex_shrink_0()
+                                        .px_1()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .h(px(18.))
+                                        .rounded(px(4.))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .hover(|this| this.text_color(theme.danger))
+                                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                                            cx.stop_propagation();
+                                            workspace.on_cancel_subagent(&cancel_id, cx);
+                                        }))
+                                        .child(t("Cancel", "取消")),
+                                ),
                         )
                         .child(
                             div()
-                                .id(format!("subagent-cancel-{index}"))
-                                .flex_shrink_0()
-                                .px_1()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .h(px(18.))
-                                .rounded(px(4.))
-                                .cursor_pointer()
+                                .pl(px(15.))
                                 .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .hover(|this| this.text_color(theme.danger))
-                                .on_click(cx.listener(move |workspace, _, _, cx| {
-                                    cx.stop_propagation();
-                                    workspace.on_cancel_subagent(&cancel_id, cx);
-                                }))
-                                .child(t("Cancel", "取消")),
-                        ),
-                )
-                .child(
-                    div()
-                        .pl(px(15.))
-                        .text_xs()
-                        .truncate()
-                        .text_color(if warned {
-                            theme.warning_foreground
-                        } else {
-                            theme.muted_foreground
-                        })
-                        .child(step),
-                )
-        }))
+                                .truncate()
+                                .text_color(if warned {
+                                    theme.warning_foreground
+                                } else {
+                                    theme.muted_foreground
+                                })
+                                .child(step),
+                        )
+                }),
+        )
 }
 
 fn window_label(text: &str, theme: &Theme) -> impl IntoElement {
@@ -157,19 +161,7 @@ pub(crate) fn render_subagent_window(
         .iter()
         .find(|job| job.call_id == call_id)
         .cloned();
-    let title = job.as_ref().map(|job| {
-        if job.role.is_empty() {
-            if job.label.is_empty() {
-                t("Subagent", "子代理").to_owned()
-            } else {
-                job.label.clone()
-            }
-        } else if job.label.is_empty() {
-            job.role.clone()
-        } else {
-            format!("{} · {}", job.role, job.label)
-        }
-    });
+    let title = job.as_ref().map(crate::view_model::LiveJob::title);
     let goal = job
         .as_ref()
         .map(|job| job.label.clone())

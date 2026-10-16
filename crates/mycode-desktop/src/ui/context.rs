@@ -486,43 +486,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         })
 }
 
-pub(crate) fn model_context_window(vm: &crate::view_model::WorkspaceState) -> u64 {
-    let shown = vm.selected_model.as_deref();
-    let provider_id = vm.selected_provider.as_deref();
-    let base_url = provider_id.and_then(|id| {
-        vm.settings.as_ref().and_then(|settings| {
-            settings
-                .providers
-                .iter()
-                .find(|provider| provider.id == id)
-                .map(|provider| provider.base_url.as_str())
-        })
-    });
-    let catalog_context = vm.catalog.as_ref().and_then(|catalog| {
-        let provider_id = provider_id?;
-        if let Some(model_id) = shown {
-            return catalog
-                .model_for_endpoint(provider_id, base_url, model_id)
-                .map(|model| model.context)
-                .filter(|context| *context > 0);
-        }
-        catalog
-            .provider(provider_id)?
-            .models
-            .first()
-            .map(|model| model.context)
-            .filter(|context| *context > 0)
-    });
-    let override_context = vm.settings.as_ref().and_then(|settings| {
-        settings
-            .providers
-            .iter()
-            .find(|provider| Some(provider.id.as_str()) == vm.selected_provider.as_deref())
-            .and_then(|provider| provider.context_limit)
-            .filter(|context| *context > 0)
-    });
-    override_context.or(catalog_context).unwrap_or(0)
-}
+pub(crate) use crate::view_model::model_context_window;
 
 fn stat_line(
     label: &str,

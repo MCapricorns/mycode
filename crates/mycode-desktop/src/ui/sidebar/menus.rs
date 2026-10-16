@@ -116,25 +116,11 @@ pub(crate) fn render_workspace_menu_layer(
         crate::view_model::active_workspace(workspace.vm()).map(|workspace| workspace.id.clone());
     let rename_open = workspace.vm().workspace_rename_open;
     let rename_input = workspace.workspace_rename_input.clone();
-    let session_count = |id: &str| -> usize {
-        let first = workspaces.first().map(|workspace| workspace.id.as_str());
-        workspace
-            .vm()
-            .sessions
-            .iter()
-            .filter(|session| {
-                match workspace
-                    .vm()
-                    .session_workspaces
-                    .iter()
-                    .find(|(existing, _)| existing == &session.session_id)
-                {
-                    Some((_, bound)) => bound == id,
-                    None => first == Some(id),
-                }
-            })
-            .count()
-    };
+    let session_counts: std::collections::HashMap<String, usize> =
+        crate::view_model::workspace_session_counts(workspace.vm())
+            .into_iter()
+            .map(|(id, count)| (id.to_owned(), count))
+            .collect();
     let mut panel = skin::popover_panel("workspace-menu", theme)
         .absolute()
         .top(workspace_menu_top())
@@ -189,7 +175,7 @@ pub(crate) fn render_workspace_menu_layer(
         for item in &workspaces {
             let id = item.id.clone();
             let selected = active_id.as_deref() == Some(id.as_str());
-            let count = session_count(&id);
+            let count = session_counts.get(&id).copied().unwrap_or(0);
             panel = panel.child(
                 div()
                     .id(format!("workspace-menu-{}", element_id(&item.id)))

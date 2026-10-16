@@ -71,14 +71,13 @@ impl Workspace {
         } else {
             None
         };
-        let ids: Vec<String> = filtered.iter().map(|choice| choice.id.clone()).collect();
         let preferred = crate::ui::model_picker::preferred_index(
-            &ids,
+            &filtered,
             &self.vm.picker_query,
             selected.as_deref(),
         );
-        let index = self.model_highlight(ids.len(), preferred);
-        let Some(model) = ids.get(index).cloned() else {
+        let index = self.model_highlight(filtered.len(), preferred);
+        let Some(model) = filtered.get(index).map(|choice| choice.id.clone()) else {
             return;
         };
         if let Some((role, _)) = role {

@@ -8,7 +8,8 @@
 use std::collections::HashSet;
 
 use super::chat::COMPOSER_COMMANDS;
-use super::projects::{project_of_session, workspace_of_session};
+use super::models::{model_display_name, provider_display_name};
+use super::projects::{SessionBindingsIndex, project_label};
 use super::settings::SettingsSection;
 use super::state::{MainView, WorkspaceState};
 use crate::i18n::t;
@@ -126,24 +127,26 @@ fn session_items(state: &WorkspaceState) -> Vec<PaletteItem> {
         keywords: words(&["new", "session", "task", "新建", "会话", "任务"]),
         checked: false,
     }];
+    let bindings = SessionBindingsIndex::new(state);
     for session in &state.sessions {
         if session.corrupt {
             continue;
         }
-        let project = project_of_session(&state.session_projects, &session.session_id);
-        let workspace_name =
-            workspace_of_session(state, &session.session_id).map(|desk| desk.name.as_str());
+        let project = bindings.project_of(&session.session_id);
+        let workspace_name = bindings
+            .workspace_of(&session.session_id)
+            .map(|desk| desk.name.as_str());
         let title = if !session.title.trim().is_empty() {
             one_line(session.title.trim())
         } else if let Some(project) = project {
-            folder_name(project)
+            project_label(project)
         } else {
             t("New task", "新建任务").to_owned()
         };
         let mut keywords = words(&["session", "会话"]);
         keywords.push(session.session_id.clone());
         if let Some(project) = project {
-            keywords.push(folder_name(project));
+            keywords.push(project_label(project));
         }
         if let Some(name) = workspace_name {
             keywords.push(name.to_owned());
@@ -183,8 +186,8 @@ fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
         if !seen.insert((provider.to_owned(), model.to_owned())) {
             return;
         }
-        let provider_name = provider_name(state, provider);
-        let model_name = model_name(state, provider, model);
+        let provider_name = provider_display_name(state, provider);
+        let model_name = model_display_name(state, provider, model);
         let mut keywords = words(&["model", "模型"]);
         keywords.push(provider.to_owned());
         keywords.push(provider_name.clone());
@@ -245,48 +248,38 @@ fn command_items(state: &WorkspaceState) -> Vec<PaletteItem> {
             checked: false,
         });
     }
-    let servers = state
-        .settings
-        .as_ref()
-        .map(|settings| {
-            settings
-                .mcp_servers
-                .iter()
-                .filter(|server| server.enabled)
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for server in servers {
-        let mut keywords = words(&["mcp", "command", "命令"]);
-        keywords.push(server.id.clone());
-        items.push(PaletteItem {
-            command: PaletteCommand::Slash(format!("mcp:{}", server.id)),
-            label: format!("/{} · {}", server.id, t("MCP server", "MCP 服务")),
-            keywords,
-            checked: false,
-        });
-        let Some(tools) = state
-            .mcp_tools
-            .iter()
-            .find(|(id, _)| id == &server.id)
-            .map(|(_, tools)| tools.clone())
-        else {
-            continue;
-        };
-        for tool in tools {
-            if tool.is_empty() {
-                continue;
-            }
-            let mut keywords = words(&["mcp", "tool", "工具", "command", "命令"]);
+    if let Some(settings) = state.settings.as_ref() {
+        for server in settings.mcp_servers.iter().filter(|server| server.enabled) {
+            let mut keywords = words(&["mcp", "command", "命令"]);
             keywords.push(server.id.clone());
-            keywords.push(tool.clone());
             items.push(PaletteItem {
-                command: PaletteCommand::Slash(format!("mcp:{}/{}", server.id, tool)),
-                label: format!("/{}/{} · {}", server.id, tool, t("MCP tool", "MCP 工具")),
+                command: PaletteCommand::Slash(format!("mcp:{}", server.id)),
+                label: format!("/{} · {}", server.id, t("MCP server", "MCP 服务")),
                 keywords,
                 checked: false,
             });
+            let Some(tools) = state
+                .mcp_tools
+                .iter()
+                .find(|(id, _)| id == &server.id)
+                .map(|(_, tools)| tools.as_slice())
+            else {
+                continue;
+            };
+            for tool in tools {
+                if tool.is_empty() {
+                    continue;
+                }
+                let mut keywords = words(&["mcp", "tool", "工具", "command", "命令"]);
+                keywords.push(server.id.clone());
+                keywords.push(tool.clone());
+                items.push(PaletteItem {
+                    command: PaletteCommand::Slash(format!("mcp:{}/{}", server.id, tool)),
+                    label: format!("/{}/{} · {}", server.id, tool, t("MCP tool", "MCP 工具")),
+                    keywords,
+                    checked: false,
+                });
+            }
         }
     }
     items
@@ -350,37 +343,6 @@ fn section_keywords(section: SettingsSection) -> &'static [&'static str] {
         SettingsSection::Data => &["data", "数据", "export", "import", "导出", "导入"],
         SettingsSection::About => &["about", "关于", "version", "updates", "版本", "更新"],
     }
-}
-
-fn provider_name(state: &WorkspaceState, id: &str) -> String {
-    state
-        .catalog
-        .as_ref()
-        .map(|catalog| catalog.display_name(id))
-        .unwrap_or_else(|| id.to_owned())
-}
-
-fn model_name(state: &WorkspaceState, provider: &str, model_id: &str) -> String {
-    state
-        .catalog
-        .as_ref()
-        .and_then(|catalog| catalog.model(provider, model_id))
-        .map(|model| {
-            if model.name.is_empty() {
-                model.id.clone()
-            } else {
-                model.name.clone()
-            }
-        })
-        .unwrap_or_else(|| model_id.to_owned())
-}
-
-fn folder_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| path.to_owned())
 }
 
 fn one_line(text: &str) -> String {

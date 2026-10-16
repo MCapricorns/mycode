@@ -166,18 +166,14 @@ impl Workspace {
                 } else {
                     let selected =
                         crate::ui::model_picker::selected_in_provider(&self.vm, &target, &provider);
-                    let ids = filtered
-                        .iter()
-                        .map(|choice| choice.id.clone())
-                        .collect::<Vec<_>>();
                     let preferred = crate::ui::model_picker::preferred_index(
-                        &ids,
+                        &filtered,
                         &self.vm.picker_query,
                         selected.as_deref(),
                     );
                     let index = moved(
-                        self.model_highlight(ids.len(), preferred),
-                        ids.len(),
+                        self.model_highlight(filtered.len(), preferred),
+                        filtered.len(),
                         key == "down",
                     );
                     self.menu_navigation.model = Some(index);

@@ -436,7 +436,7 @@ fn numbered_diff_rows(lines: &[String]) -> Vec<NumberedDiffRow> {
     let mut new_n = 1u32;
     let mut rows = Vec::with_capacity(lines.len());
     for line in lines {
-        if let Some((old, new)) = hunk_numbers(line) {
+        if let Some((old, new)) = crate::ui::chat::parse_diff_hunk_header(line) {
             old_n = old;
             new_n = new;
             rows.push(NumberedDiffRow {
@@ -473,15 +473,6 @@ fn numbered_diff_rows(lines: &[String]) -> Vec<NumberedDiffRow> {
         });
     }
     rows
-}
-
-fn hunk_numbers(line: &str) -> Option<(u32, u32)> {
-    let rest = line.strip_prefix("@@ ")?;
-    let (old, rest) = rest.split_once(' ')?;
-    let new = rest.split_once(' ').map(|(head, _)| head).unwrap_or(rest);
-    let old = old.strip_prefix('-')?.split(',').next()?;
-    let new = new.strip_prefix('+')?.split(',').next()?;
-    Some((old.parse().ok()?, new.parse().ok()?))
 }
 
 fn diff_lines(diff: &str) -> Vec<String> {
