@@ -29,6 +29,10 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         "model": model,
         "input": input,
         "stream": true,
+        // The ChatGPT Codex backend rejects stored responses outright
+        // ("Store must be set to false"); every caller replays the full
+        // input each turn, so server-side state is never depended on.
+        "store": false,
     });
     if !request.system_prompt.is_empty() {
         body["instructions"] = json!(request.system_prompt.join(SYSTEM_JOIN));
@@ -423,6 +427,16 @@ mod tests {
 
     use super::ResponsesReducer;
     use crate::driver::FrameReducer;
+
+    #[test]
+    fn codex_bodies_are_never_stored_server_side() {
+        let body = super::build_body(
+            "gpt-5.6-sol",
+            "https://chatgpt.com/backend-api/codex/responses",
+            &mycode_core::Request::new(),
+        );
+        assert_eq!(body["store"], serde_json::json!(false));
+    }
 
     #[test]
     fn arguments_sent_only_when_the_item_closes_are_kept() {
