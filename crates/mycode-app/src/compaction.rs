@@ -76,7 +76,7 @@ pub(crate) fn estimate_prefix_tokens(system: &[String], tools: &[mycode_core::To
     for tool in tools {
         chars = chars.saturating_add(tool.name.chars().count());
         chars = chars.saturating_add(tool.description.chars().count());
-        chars = chars.saturating_add(tool.params_schema.to_string().len());
+        chars = chars.saturating_add(mycode_core::encoded_json_len(&tool.params_schema).unwrap_or(0));
     }
     mycode_config::estimate_token_count(chars)
 }

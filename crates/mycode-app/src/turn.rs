@@ -427,7 +427,7 @@ async fn run_chat_turn_on(
     if let Some(token) = reasoning {
         if let Some(level) = mycode_core::ReasoningLevel::parse(token) {
             config = config.with_reasoning(level);
-        } else if effort_token_ok(token) {
+        } else if mycode_config::is_valid_effort_token(token) {
             config = config.with_reasoning_token(Some(token.to_owned()));
         }
     }
@@ -491,14 +491,6 @@ fn split_latest_user(
     };
     let prior = history.into_iter().take(index).collect();
     Ok((prior, prompt))
-}
-
-fn effort_token_ok(token: &str) -> bool {
-    let len = token.chars().count();
-    (1..=32).contains(&len)
-        && token.chars().all(|character| {
-            character.is_ascii_alphanumeric() || character == '-' || character == '_'
-        })
 }
 
 fn user_has_text(user: &mycode_core::UserMessage) -> bool {

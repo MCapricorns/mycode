@@ -233,9 +233,8 @@ pub(crate) fn mcp_server_is_direct(tools: &[crate::mcp_client::McpTool]) -> bool
     const MAX_DIRECT_SCHEMA_BYTES: usize = 2048;
     tools.len() <= MAX_DIRECT_TOOLS
         && tools.iter().all(|tool| {
-            serde_json::to_vec(&tool.input_schema)
-                .map(|bytes| bytes.len() <= MAX_DIRECT_SCHEMA_BYTES)
-                .unwrap_or(false)
+            mycode_core::check_encoded_json_bound(&tool.input_schema, MAX_DIRECT_SCHEMA_BYTES)
+                .is_ok()
         })
 }
 

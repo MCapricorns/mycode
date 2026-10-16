@@ -17,7 +17,7 @@ pub(crate) fn workspace_extra_roots(
             let mut roots: Vec<std::path::PathBuf> = state
                 .workspace_roots
                 .into_iter()
-                .filter(|root| !same_dir(root, &cwd_text))
+                .filter(|root| !mycode_config::same_project_path(root, &cwd_text))
                 .map(std::path::PathBuf::from)
                 .collect();
             roots.sort();
@@ -68,12 +68,7 @@ project code: do not search it.",
     }
 }
 
-/// OS user home directory for global `.agents` discovery.
-pub(crate) fn os_user_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(std::path::PathBuf::from)
-}
+pub(crate) use mycode_config::os_user_home;
 
 /// Compact environment facts for the system prompt: OS, arch, the session
 /// cwd, and the one shell tool `script` mode resolves to right now. Shared
@@ -199,16 +194,6 @@ pub(crate) fn push_skill_catalog(
     }
     prompt.push_str("\n\n");
     prompt.push_str(&catalog);
-}
-
-fn same_dir(left: &str, right: &str) -> bool {
-    let left = left.trim().trim_end_matches(['/', '\\']);
-    let right = right.trim().trim_end_matches(['/', '\\']);
-    if cfg!(windows) {
-        left.eq_ignore_ascii_case(right)
-    } else {
-        left == right
-    }
 }
 
 #[cfg(test)]
