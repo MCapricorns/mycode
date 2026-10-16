@@ -541,8 +541,8 @@ fn mounts_differ(left: &File, right: &File) -> io::Result<bool> {
 }
 
 #[cfg(test)]
-static FORCED_ANCESTOR_BOUNDARY: std::sync::Mutex<Option<FileIdentity>> =
-    std::sync::Mutex::new(None);
+static FORCED_ANCESTOR_BOUNDARY: parking_lot::Mutex<Option<FileIdentity>> =
+    parking_lot::Mutex::new(None);
 
 /// Forces the next ancestor hop from `dir` to look like a mount boundary.
 ///
@@ -578,10 +578,8 @@ pub(crate) fn force_ancestor_mount_boundary(dir: &Path) -> io::Result<ForcedAnce
 }
 
 #[cfg(test)]
-fn ancestor_boundary_slot() -> std::sync::MutexGuard<'static, Option<FileIdentity>> {
-    FORCED_ANCESTOR_BOUNDARY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+fn ancestor_boundary_slot() -> parking_lot::MutexGuard<'static, Option<FileIdentity>> {
+    FORCED_ANCESTOR_BOUNDARY.lock()
 }
 
 #[cfg(test)]

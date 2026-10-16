@@ -58,11 +58,11 @@ impl<T> FadeTarget for T where T: AnimationExt + Styled + IntoElement + Sized + 
 /// [`MOTION_PROBE_TTL`] instead of calling into the OS each repaint.
 #[must_use]
 pub(super) fn system_prefers_reduced_motion() -> Option<bool> {
-    use std::sync::{Mutex, PoisonError};
+    use parking_lot::Mutex;
     use std::time::Instant;
 
     static LAST: Mutex<Option<(Instant, Option<bool>)>> = Mutex::new(None);
-    let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut last = LAST.lock();
     if let Some((at, answer)) = *last
         && at.elapsed() < MOTION_PROBE_TTL
     {

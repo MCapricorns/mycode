@@ -1,7 +1,7 @@
 //! SIGURG signal ownership for Unix worker interruption.
 
+use parking_lot::Mutex;
 use std::io;
-use std::sync::Mutex;
 
 #[cfg(unix)]
 #[derive(Debug)]
@@ -56,9 +56,7 @@ pub(super) fn handler_is_default(handler: usize) -> bool {
 /// installed.
 #[cfg(unix)]
 pub(crate) fn acquire_interrupt_signal() -> io::Result<SignalGuard> {
-    let mut slot = signal_state()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let mut slot = signal_state().lock();
     match slot.as_mut() {
         Some(state) => {
             let current = current_sigurg_handler()?;
@@ -106,9 +104,7 @@ pub(super) fn install_our_sigurg() -> io::Result<libc::sigaction> {
 #[cfg(unix)]
 impl Drop for SignalGuard {
     fn drop(&mut self) {
-        let mut slot = signal_state()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let mut slot = signal_state().lock();
         let Some(state) = slot.as_mut() else {
             return;
         };

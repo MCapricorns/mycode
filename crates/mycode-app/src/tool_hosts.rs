@@ -22,7 +22,7 @@ const ANYSEARCH_KEY_ENV: &str = "ANYSEARCH_API_KEY";
 #[derive(Default)]
 struct AskRouter {
     next: std::sync::atomic::AtomicU64,
-    pending: std::sync::Mutex<std::collections::HashMap<String, PendingAsk>>,
+    pending: parking_lot::Mutex<std::collections::HashMap<String, PendingAsk>>,
 }
 
 /// One registered answer channel with its issuance generation.
@@ -35,16 +35,13 @@ impl AskRouter {
     fn register(&self, session_id: &str) -> (tokio::sync::oneshot::Receiver<Vec<String>>, AskSlot) {
         let generation = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                session_id.to_owned(),
-                PendingAsk {
-                    generation,
-                    answer: tx,
-                },
-            );
+        self.pending.lock().insert(
+            session_id.to_owned(),
+            PendingAsk {
+                generation,
+                answer: tx,
+            },
+        );
         (
             rx,
             AskSlot {
@@ -57,27 +54,19 @@ impl AskRouter {
     fn deliver(&self, session_id: &str, answers: Vec<String>) -> bool {
         self.pending
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session_id)
             .is_some_and(|ask| ask.answer.send(answers).is_ok())
     }
 
     fn dismiss(&self, session_id: &str) -> bool {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(session_id)
-            .is_some()
+        self.pending.lock().remove(session_id).is_some()
     }
 
     /// Removes one registration, but only when it still maps to that slot's
     /// issuance. A follow-up turn for the same session re-registers with a
     /// newer generation and must not lose its channel to the old turn's exit.
     fn retire(&self, slot: &AskSlot) {
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut pending = self.pending.lock();
         if pending
             .get(&slot.session_id)
             .is_some_and(|ask| ask.generation == slot.generation)

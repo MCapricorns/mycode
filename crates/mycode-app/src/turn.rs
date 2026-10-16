@@ -1372,14 +1372,14 @@ async fn emit_chat_failed(
 
 /// Removes one session's turn token from the cancel registry on scope exit.
 struct CancelGuard {
-    cancels: Arc<std::sync::Mutex<HashMap<String, Arc<CancellationToken>>>>,
+    cancels: Arc<parking_lot::Mutex<HashMap<String, Arc<CancellationToken>>>>,
     session_id: String,
     token: Arc<CancellationToken>,
 }
 
 impl CancelGuard {
     fn register(
-        cancels: Arc<std::sync::Mutex<HashMap<String, Arc<CancellationToken>>>>,
+        cancels: Arc<parking_lot::Mutex<HashMap<String, Arc<CancellationToken>>>>,
         session_id: &str,
         token: &CancellationToken,
     ) -> Self {
@@ -1387,9 +1387,7 @@ impl CancelGuard {
         // same session replaces the entry; the guard keeps its own token to
         // avoid removing the successor's live token on drop.
         let token = Arc::new(token.clone());
-        let mut map = cancels
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut map = cancels.lock();
         map.insert(session_id.to_owned(), token.clone());
         drop(map);
         Self {
@@ -1403,10 +1401,7 @@ impl CancelGuard {
 impl Drop for CancelGuard {
     fn drop(&mut self) {
         // Remove the entry only while it still maps to this turn's token.
-        let mut map = self
-            .cancels
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut map = self.cancels.lock();
         if map
             .get(&self.session_id)
             .is_some_and(|live| Arc::ptr_eq(live, &self.token))
@@ -1418,20 +1413,18 @@ impl Drop for CancelGuard {
 
 /// Publishes one session's steer inbox for the life of its turn.
 struct SteerGuard {
-    inboxes: Arc<std::sync::Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
+    inboxes: Arc<parking_lot::Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
     session_id: String,
     inbox: Arc<mycode_agent::SteerInbox>,
 }
 
 impl SteerGuard {
     fn register(
-        inboxes: Arc<std::sync::Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
+        inboxes: Arc<parking_lot::Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
         session_id: &str,
         inbox: Arc<mycode_agent::SteerInbox>,
     ) -> Self {
-        let mut map = inboxes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut map = inboxes.lock();
         map.insert(session_id.to_owned(), Arc::clone(&inbox));
         drop(map);
         Self {
@@ -1444,10 +1437,7 @@ impl SteerGuard {
 
 impl Drop for SteerGuard {
     fn drop(&mut self) {
-        let mut map = self
-            .inboxes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut map = self.inboxes.lock();
         if map
             .get(&self.session_id)
             .is_some_and(|live| Arc::ptr_eq(live, &self.inbox))
@@ -2368,7 +2358,6 @@ mod tests {
             .state
             .turn_cancels
             .lock()
-            .expect("cancels")
             .get(fixture.session.as_str())
             .cloned()
             .expect("turn token");
@@ -2461,39 +2450,11 @@ mod tests {
             None,
         );
         // Not polled yet: a cancel or steer sent now must still find the turn.
-        assert!(
-            fixture
-                .state
-                .turn_cancels
-                .lock()
-                .expect("cancels")
-                .contains_key(session_id)
-        );
-        assert!(
-            fixture
-                .state
-                .steer_inboxes
-                .lock()
-                .expect("inboxes")
-                .contains_key(session_id)
-        );
+        assert!(fixture.state.turn_cancels.lock().contains_key(session_id));
+        assert!(fixture.state.steer_inboxes.lock().contains_key(session_id));
         drop(turn);
-        assert!(
-            !fixture
-                .state
-                .turn_cancels
-                .lock()
-                .expect("cancels")
-                .contains_key(session_id)
-        );
-        assert!(
-            !fixture
-                .state
-                .steer_inboxes
-                .lock()
-                .expect("inboxes")
-                .contains_key(session_id)
-        );
+        assert!(!fixture.state.turn_cancels.lock().contains_key(session_id));
+        assert!(!fixture.state.steer_inboxes.lock().contains_key(session_id));
         let _ = std::fs::remove_dir_all(&fixture.root);
     }
 
@@ -2683,7 +2644,6 @@ mod tests {
         let token = state
             .turn_cancels
             .lock()
-            .expect("cancels")
             .get(&session_id)
             .cloned()
             .expect("turn token");
@@ -2707,11 +2667,7 @@ mod tests {
             "a cancelled turn must not ask the model for a reply"
         );
         assert!(
-            !state
-                .turn_cancels
-                .lock()
-                .expect("cancels")
-                .contains_key(&session_id),
+            !state.turn_cancels.lock().contains_key(&session_id),
             "the finished turn must unpublish its token"
         );
         let _ = std::fs::remove_dir_all(root);
@@ -2798,8 +2754,8 @@ mod tests {
         let control = super::TurnControl::register(&fixture.state, &session_id);
         let cancels = Arc::clone(&fixture.state.turn_cancels);
         let inboxes = Arc::clone(&fixture.state.steer_inboxes);
-        let cancel_hold = cancels.lock().expect("lock cancels");
-        let inbox_hold = inboxes.lock().expect("lock inboxes");
+        let cancel_hold = cancels.lock();
+        let inbox_hold = inboxes.lock();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let dropper = std::thread::spawn(move || {
@@ -2821,21 +2777,11 @@ mod tests {
             .expect("cleanup completes after unlock");
         dropper.join().expect("dropper thread");
         assert!(
-            !fixture
-                .state
-                .turn_cancels
-                .lock()
-                .expect("cancels")
-                .contains_key(&session_id),
+            !fixture.state.turn_cancels.lock().contains_key(&session_id),
             "contended drop leaked the turn cancel token"
         );
         assert!(
-            !fixture
-                .state
-                .steer_inboxes
-                .lock()
-                .expect("inboxes")
-                .contains_key(&session_id),
+            !fixture.state.steer_inboxes.lock().contains_key(&session_id),
             "contended drop leaked the steer inbox"
         );
         let _ = std::fs::remove_dir_all(&fixture.root);
@@ -2851,18 +2797,12 @@ mod tests {
             .state
             .steer_inboxes
             .lock()
-            .expect("inboxes")
             .get(&session_id)
             .expect("published inbox")
             .push("one more thing");
         assert_eq!(control.retire_steers(), vec!["one more thing".to_owned()]);
         assert!(
-            !fixture
-                .state
-                .steer_inboxes
-                .lock()
-                .expect("inboxes")
-                .contains_key(&session_id),
+            !fixture.state.steer_inboxes.lock().contains_key(&session_id),
             "a retired turn must not accept steers it can no longer send"
         );
         assert!(control.retire_steers().is_empty());

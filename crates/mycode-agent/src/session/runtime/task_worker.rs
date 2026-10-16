@@ -1,8 +1,9 @@
 //! Serialized owner loop for one session actor, and non-blocking operation cleanup.
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::{Instant, timeout_at};
@@ -173,12 +174,7 @@ impl<A: PackTaskActor> TaskActorClient<A> {
     pub(crate) fn close(&self, operation: TaskActorOperationId) {
         // Bind first: an `if let` scrutinee would keep the map locked while
         // `close` takes the admission lock and wakes waiters.
-        let close = self
-            .live
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&operation)
-            .cloned();
+        let close = self.live.lock().get(&operation).cloned();
         if let Some(close) = close {
             close.close();
         }
@@ -186,13 +182,7 @@ impl<A: PackTaskActor> TaskActorClient<A> {
 
     /// Closes every live operation and aborts the worker; idempotent.
     pub(crate) fn shutdown(&self) {
-        let live = self
-            .live
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let live = self.live.lock().values().cloned().collect::<Vec<_>>();
         for close in live {
             close.close();
         }
@@ -215,13 +205,7 @@ impl TaskCloseSignal {
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return false;
         }
-        drop(
-            self.state
-                .admission
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take(),
-        );
+        drop(self.state.admission.lock().take());
         self.state.notification.notify_waiters();
         true
     }
@@ -244,11 +228,7 @@ impl TaskCloseSignal {
     }
 
     fn bind_admission(&self, admission: TaskOperationAdmission) {
-        let mut slot = self
-            .state
-            .admission
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut slot = self.state.admission.lock();
         if self.is_closed() {
             drop(admission);
         } else {
@@ -341,9 +321,7 @@ async fn run_worker<A: PackTaskActor>(
     for operation in operations.into_values() {
         operation.close.close();
     }
-    live.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clear();
+    live.lock().clear();
 }
 
 async fn invoke_operation<A: PackTaskActor>(
@@ -386,9 +364,7 @@ async fn invoke_operation<A: PackTaskActor>(
             close: close.clone(),
         },
     );
-    live.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(id, close.clone());
+    live.lock().insert(id, close.clone());
     let expiry = sender.clone();
     tokio::spawn(async move {
         tokio::select! {
@@ -434,9 +410,7 @@ async fn close_operation<A: PackTaskActor>(
         return true;
     };
     operation.close.close();
-    live.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&id);
+    live.lock().remove(&id);
     actor.drop_operation(operation.operation).await.is_ok() && actor.is_available()
 }
 

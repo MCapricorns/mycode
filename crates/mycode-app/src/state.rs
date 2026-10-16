@@ -1,10 +1,10 @@
 //! Shared per-process core state owned by the bridge thread, plus the
 //! catalog and update-check background refreshes that run against it.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::RwLock;
 
 use mycode_agent::session::SessionId;
@@ -86,17 +86,13 @@ impl CoreState {
 
     /// Copies startup repair notices. Later loads still need the same list.
     pub(crate) fn startup_repairs_snapshot(&self) -> Vec<DocumentRepair> {
-        self.startup_repairs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        self.startup_repairs.lock().clone()
     }
 
     /// The tool working directory for one session.
     pub(crate) fn project_dir(&self, session_id: &str) -> PathBuf {
         self.projects
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(session_id)
             .cloned()
             .unwrap_or_else(|| self.home.root().join(mycode_config::SCRATCH_DIR))
@@ -109,12 +105,7 @@ pub(crate) fn set_project_dir(
     session_id: &str,
     path: Option<&str>,
 ) -> Result<(), String> {
-    // Same poisoned-recovery form as the other `projects` lock sites: a
-    // panicked holder must not take the settings command down with it.
-    let mut projects = state
-        .projects
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut projects = state.projects.lock();
     let Some(path) = path else {
         projects.remove(session_id);
         return Ok(());

@@ -15,8 +15,8 @@
 //! entirely private (local models and localhost MCP). Later hops must resolve
 //! to public addresses, including a different host.
 
+use parking_lot::Mutex;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -508,7 +508,7 @@ const MAX_CACHED_CLIENTS: usize = 16;
 
 /// The cached client for `key`, built on first use.
 fn pooled_client(key: ClientKey) -> Result<reqwest::Client, String> {
-    let mut clients = CLIENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut clients = CLIENTS.lock();
     if let Some(index) = clients.iter().position(|(cached, _)| *cached == key) {
         let entry = clients.remove(index);
         let client = entry.1.clone();

@@ -19,7 +19,8 @@
 //! sent one. The internal tool channel is currently unbounded. `ToolStream`
 //! remains the tool-dispatch stream and is not the provider event API.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -97,10 +98,7 @@ impl ToolStream {
     }
 
     fn send(&self, item: ToolStreamItem) -> bool {
-        let mut terminated = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut terminated = self.state.lock();
         if *terminated {
             return false;
         }
@@ -126,16 +124,16 @@ mod tests {
     fn a_closed_receiver_does_not_latch_the_terminal() {
         let stream = ToolStream::closed();
         assert!(!stream.terminal(ToolResult::text("done")));
-        assert!(!*stream.state.lock().expect("lock"));
+        assert!(!*stream.state.lock());
         assert!(!stream.progress("later"));
-        assert!(!*stream.state.lock().expect("lock"));
+        assert!(!*stream.state.lock());
     }
 
     #[test]
     fn a_delivered_terminal_rejects_later_items() {
         let (stream, mut rx) = ToolStream::channel();
         assert!(stream.terminal(ToolResult::text("done")));
-        assert!(*stream.state.lock().expect("lock"));
+        assert!(*stream.state.lock());
         assert!(!stream.progress("later"));
         let item = rx.rx.try_recv().expect("terminal queued");
         assert!(matches!(item, ToolStreamItem::Terminal(_)));

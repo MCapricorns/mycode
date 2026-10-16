@@ -9,10 +9,11 @@
 //! I/O keeps confirmed results but adds a model-visible incomplete lower-bound
 //! notice. Output uses `/`; no external `fd` executable is used. Cancellation
 //! or future drop is supervised until the worker is interrupted and joined.
+use parking_lot::Mutex;
 use std::collections::BinaryHeap;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use globset::GlobMatcher;
@@ -204,10 +205,7 @@ fn run_find(
                 match root.validate_target() {
                     Ok(()) => {
                         state.total.fetch_add(1, Ordering::Relaxed);
-                        let mut heap = state
-                            .heap
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let mut heap = state.heap.lock();
                         offer(
                             &mut heap,
                             &state.limiter,
@@ -261,10 +259,7 @@ fn run_find(
                 // Report only after metadata confirmation. The enumerated
                 // name is never sufficient by itself.
                 state.total.fetch_add(1, Ordering::Relaxed);
-                let mut heap = state
-                    .heap
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut heap = state.heap.lock();
                 offer(
                     &mut heap,
                     &state.limiter,
@@ -302,12 +297,7 @@ fn find_report(
     effective_limit: usize,
     limits: &Limits,
 ) -> ToolResult {
-    let heap = std::mem::take(
-        &mut *state
-            .heap
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    );
+    let heap = std::mem::take(&mut *state.heap.lock());
     let paths = heap.into_sorted_vec();
     let entries: Vec<String> = paths
         .iter()

@@ -151,9 +151,7 @@ pub(crate) fn run_core(
                     let reply = with_reply.reply;
                     let cancels = state.subagent_cancels.clone();
                     tokio::spawn(async move {
-                        let mut map = cancels
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut map = cancels.lock();
                         let outcome = match map.remove(&key) {
                             Some(token) => {
                                 token.cancel();
@@ -166,10 +164,7 @@ pub(crate) fn run_core(
                     });
                 }
                 BridgeCommand::Steer { session_id, text } => {
-                    let inboxes = state
-                        .steer_inboxes
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let inboxes = state.steer_inboxes.lock();
                     let outcome = match inboxes.get(&session_id) {
                         Some(inbox) => {
                             inbox.push(text);
@@ -184,9 +179,7 @@ pub(crate) fn run_core(
                     let reply = with_reply.reply;
                     let cancels = state.turn_cancels.clone();
                     tokio::spawn(async move {
-                        let map = cancels
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let map = cancels.lock();
                         let outcome = match map.get(&session_id) {
                             Some(token) => {
                                 token.cancel();
@@ -346,10 +339,7 @@ async fn blocking<T: Send + 'static>(
 /// subagent map is left alone so a follow-up turn does not cancel work
 /// the user is steering.
 fn cancel_turn(state: &CoreState, session_id: &str) {
-    let mut turns = state
-        .turn_cancels
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut turns = state.turn_cancels.lock();
     if let Some(token) = turns.remove(session_id) {
         token.cancel();
     }
@@ -362,10 +352,7 @@ fn cancel_turn(state: &CoreState, session_id: &str) {
 /// Session deletion uses this. A new chat turn uses [`cancel_turn`] only.
 fn cancel_session_work(state: &CoreState, session_id: &str) {
     cancel_turn(state, session_id);
-    let mut subagents = state
-        .subagent_cancels
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut subagents = state.subagent_cancels.lock();
     let prefix = format!("{session_id}:");
     subagents.retain(|key, token| {
         if key.starts_with(&prefix) {
@@ -531,11 +518,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             // gone. Leaving it made tool cwd and file search keep using a
             // session the user had already deleted.
             if deleted.is_ok() {
-                state
-                    .projects
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(session_id.as_str());
+                state.projects.lock().remove(session_id.as_str());
             }
             BridgeReply::SessionDeleted(deleted)
         }
