@@ -195,11 +195,11 @@ fn menu_row(
         .cursor_pointer()
         .border_1()
         .border_color(if highlighted {
-            theme.primary.opacity(0.4)
+            skin::border_strong(theme)
         } else {
             theme.transparent
         })
-        .when(highlighted, |this| this.bg(skin::frost_accent(theme)))
+        .when(highlighted, |this| this.bg(skin::frost(theme)))
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)
         .child(div().min_w_0().truncate().child(label))
@@ -208,7 +208,7 @@ fn menu_row(
                 Icon::new(IconName::Check)
                     .xsmall()
                     .flex_shrink_0()
-                    .text_color(theme.primary),
+                    .text_color(theme.foreground),
             )
         })
 }
