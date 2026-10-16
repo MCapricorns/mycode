@@ -129,6 +129,10 @@ impl Tool for WebSearchTool {
         )
     }
 
+    fn parallel_safe(&self) -> bool {
+        true
+    }
+
     async fn execute(
         &self,
         args: Self::Args,
@@ -189,6 +193,10 @@ impl Tool for FetchContentTool {
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(FETCH_CONTENT_SNIPPET)
+    }
+
+    fn parallel_safe(&self) -> bool {
+        true
     }
 
     async fn execute(

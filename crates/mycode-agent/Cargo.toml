@@ -18,6 +18,7 @@ rusqlite.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+futures-util.workspace = true
 
 [lints]
 workspace = true
