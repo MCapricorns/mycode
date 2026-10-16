@@ -669,8 +669,8 @@ fn session_row(
             format!("session-delete-{}", summary.session_id),
             IconName::Trash,
             "session-row",
-            cx.listener(move |workspace, _, window, cx| {
-                workspace.on_delete_session(&session_id, window, cx);
+            cx.listener(move |workspace, _, _, cx| {
+                workspace.on_delete_session(&session_id, cx);
             }),
             cx,
         ))

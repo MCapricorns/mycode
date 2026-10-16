@@ -1,6 +1,6 @@
 //! Destructive conversation operations. Resolve ledger identities before a
-//! rewind, and ask for explicit confirmation before deleting durable data.
-use gpui_kit::{Context, Window};
+//! rewind; a session delete runs from its row without a dialog.
+use gpui_kit::Context;
 use mycode_app::{
     ActiveConversation, BranchId, BridgeCommand, BridgeReply, SessionEventId, SessionId,
 };
@@ -142,35 +142,13 @@ impl Workspace {
         );
     }
 
-    /// The cancel button is first so dismissing the dialog never deletes data.
-    pub(crate) fn on_delete_session(
-        &mut self,
-        session_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let answer = window.prompt(
-            gpui_kit::PromptLevel::Warning,
-            crate::i18n::t("Delete this session?", "删除此会话？"),
-            Some(crate::i18n::t(
-                "Its conversation history will be permanently deleted. Workspace files are not affected. This cannot be undone.",
-                "会话历史将被永久删除，无法撤销。工作区文件不会受到影响。",
-            )),
-            &[crate::i18n::t("Cancel", "取消"), crate::i18n::t("Delete session", "删除会话")], cx,
-        );
-        let session_id = session_id.to_owned();
-        cx.spawn(async move |this, cx| {
-            if answer.await != Ok(1) {
-                return;
-            }
-            let _ = this.update(cx, |workspace, cx| {
-                workspace.delete_confirmed(session_id, cx)
-            });
-        })
-        .detach();
+    /// Deletes one session straight from its row's trash button. The row
+    /// control is a deliberate hover target, so no confirmation dialog.
+    pub(crate) fn on_delete_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        self.delete_session(session_id.to_owned(), cx);
     }
 
-    fn delete_confirmed(&mut self, session_id: String, cx: &mut Context<Self>) {
+    fn delete_session(&mut self, session_id: String, cx: &mut Context<Self>) {
         let request = self.bridge.request(BridgeCommand::DeleteSession {
             session_id: session_id.clone(),
         });
