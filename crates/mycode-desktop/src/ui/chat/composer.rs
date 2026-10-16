@@ -225,9 +225,7 @@ pub(super) fn render_composer(
                                         .items_center()
                                         .justify_center()
                                         .rounded_full()
-                                        .border_1()
-                                        .border_color(theme.border.opacity(0.6))
-                                        .bg(skin::frost(theme))
+                                        .bg(toolbar_fill(theme))
                                         .cursor_pointer()
                                         .text_color(theme.muted_foreground)
                                         .hover(|this| {
@@ -291,14 +289,12 @@ fn composer_round_button(
         .flex_shrink_0()
         .ml_auto()
         .rounded_full()
-        .border_1()
         .flex()
         .items_center()
         .justify_center()
         .when(sending || can_send, |this| this.cursor_pointer())
         .when(sending, |this| {
             this.bg(accent.opacity(0.14))
-                .border_color(accent)
                 .text_color(accent)
                 .hover(move |style| style.bg(accent.opacity(0.24)))
         })
@@ -306,12 +302,7 @@ fn composer_round_button(
             this.bg(if can_send {
                 accent
             } else {
-                theme.secondary.opacity(0.45)
-            })
-            .border_color(if can_send {
-                accent
-            } else {
-                theme.border.opacity(0.55)
+                toolbar_fill(theme)
             })
             .text_color(if can_send {
                 accent_ink
@@ -319,7 +310,7 @@ fn composer_round_button(
                 theme.muted_foreground
             })
             .when(can_send, move |this| {
-                this.hover(move |style| style.bg(accent_hover).border_color(accent_hover))
+                this.hover(move |style| style.bg(accent_hover))
             })
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
@@ -335,6 +326,12 @@ fn composer_round_button(
         .when(!sending, |this| {
             this.child(Icon::new(IconName::ArrowUp).small())
         })
+}
+
+/// Fill for the composer toolbar controls. They carry no border, so the
+/// fill alone marks each control on the composer card.
+fn toolbar_fill(theme: &gpui_kit::component::theme::Theme) -> gpui_kit::Hsla {
+    theme.secondary
 }
 
 /// Pill chip for composer controls (folder, model, thinking).
@@ -356,12 +353,7 @@ fn composer_pill_chip(
     let fill = if open {
         theme.secondary_hover
     } else {
-        skin::frost(theme)
-    };
-    let border = if open {
-        theme.primary.opacity(0.55)
-    } else {
-        theme.border.opacity(0.55)
+        toolbar_fill(theme)
     };
     div()
         .id(format!("composer-{id}-chip"))
@@ -375,8 +367,6 @@ fn composer_pill_chip(
         .px(px(9.))
         .h(px(26.))
         .rounded(px(6.))
-        .border_1()
-        .border_color(border)
         .bg(fill)
         .text_xs()
         .cursor_pointer()
@@ -404,8 +394,7 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
         .px(px(7.))
         .h(px(24.))
         .rounded(px(6.))
-        .border_1()
-        .border_color(theme.border.opacity(0.45))
+        .bg(toolbar_fill(theme))
         .text_xs()
         .text_color(theme.muted_foreground)
         .cursor_pointer()
@@ -695,9 +684,7 @@ fn composer_meter_chip(
         .px(skin::space(2))
         .h(px(26.))
         .rounded(px(6.))
-        .border_1()
-        .border_color(theme.border.opacity(0.45))
-        .bg(skin::frost(theme))
+        .bg(toolbar_fill(theme))
         .text_xs()
         .when_some(meter.hit_percent, |row, percent| {
             row.child(cache_ring(percent, theme))
