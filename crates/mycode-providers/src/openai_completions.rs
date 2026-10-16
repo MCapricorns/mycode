@@ -13,8 +13,7 @@ use crate::driver::FrameReducer;
 use crate::wire_common::{
     MAX_STREAM_INDEX, ReasoningReplay, SYSTEM_JOIN, append_interruption, apply_reasoning_effort,
     assemble_blocks_with_replay, assembled_stop_reason, charge_stream, join_text, join_thinking,
-    merge_usage, provider_error_detail, reasoning_replay, record_provider_stop, tool_parameters,
-    usage_from_value,
+    merge_usage, provider_error_detail, record_provider_stop, tool_parameters, usage_from_value,
 };
 
 /// Converts one provider-neutral request into a completions body.
@@ -74,7 +73,7 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
         Message::Assistant(assistant) => {
             let text = join_text(&assistant.blocks);
             let thinking = join_thinking(&assistant.blocks);
-            let replay = reasoning_replay(model, endpoint);
+            let replay = crate::family::reasoning_replay(model, endpoint);
             let tool_calls: Vec<Value> = assistant
                 .blocks
                 .iter()

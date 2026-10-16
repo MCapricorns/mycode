@@ -37,7 +37,10 @@ pub(crate) fn record_provider_stop(
     let reason = map_stop_reason(token);
     if reason == StopReason::Error {
         if interrupt.is_none() {
-            *interrupt = Some(token.to_owned());
+            *interrupt = Some(match token {
+                "refusal" => "the model declined to continue (refusal)".to_owned(),
+                other => other.to_owned(),
+            });
         }
         *current = Some(StopReason::Error);
     } else if *current != Some(StopReason::Error) {
@@ -50,12 +53,15 @@ pub(crate) fn record_provider_stop(
 /// `length` / `max_tokens` must stay [`StopReason::Length`]. The agent
 /// refuses to execute tool calls that were cut off by the output limit;
 /// folding those tokens into `Stop` makes it run the partial arguments.
+/// Anthropic's `model_context_window_exceeded` is the same cut-off. Its
+/// `refusal` (a safety decline with HTTP 200) is an error: the reply may be
+/// empty, and the user needs to see why the turn stopped.
 #[must_use]
 pub(crate) fn map_stop_reason(token: &str) -> StopReason {
     match token {
         "tool_calls" | "function_call" | "tool_use" => StopReason::ToolUse,
-        "length" | "max_tokens" => StopReason::Length,
-        "error" | "network_error" | "content_filter" | "sensitive" => StopReason::Error,
+        "length" | "max_tokens" | "model_context_window_exceeded" => StopReason::Length,
+        "error" | "network_error" | "content_filter" | "sensitive" | "refusal" => StopReason::Error,
         _ => StopReason::Stop,
     }
 }
@@ -97,11 +103,6 @@ pub(crate) fn charge_stream(used: &mut usize, extra: usize) -> bool {
     }
 }
 
-/// Zhipu / Z.AI / BigModel, including a model id that contains `glm`.
-pub(crate) fn glm_target(model: &str, endpoint: &str) -> bool {
-    crate::family::glm_target(model, endpoint)
-}
-
 /// Which chat API the body is for. Responses uses `reasoning.effort`; chat
 /// completions uses `reasoning_effort` for the same OpenAI-shaped models.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,13 +132,6 @@ pub(crate) enum ReasoningReplay {
     MiniMax,
 }
 
-/// Vendors that reject a follow-up unless prior reasoning is echoed.
-pub(crate) fn reasoning_replay(model: &str, endpoint: &str) -> ReasoningReplay {
-    // Completions is the only caller. MiniMax Messages replays signed
-    // thinking blocks on its own adapter and never asks for this shape.
-    crate::family::reasoning_replay(model, endpoint)
-}
-
 /// Applies the requested reasoning effort to an OpenAI-style body.
 ///
 /// Field choice follows OpenCode's models.dev transform: the gateway decides
@@ -149,7 +143,7 @@ pub(crate) fn apply_reasoning_effort(
     endpoint: &str,
     level: ReasoningLevel,
 ) {
-    apply_thinking_request(body, model, endpoint, level, ThinkingWire::Completions);
+    crate::family::apply_chat_thinking(body, model, endpoint, level, ThinkingWire::Completions);
 }
 
 /// Applies reasoning fields on an OpenAI Responses body.
@@ -159,7 +153,7 @@ pub(crate) fn apply_responses_thinking(
     endpoint: &str,
     level: ReasoningLevel,
 ) {
-    apply_thinking_request(body, model, endpoint, level, ThinkingWire::Responses);
+    crate::family::apply_chat_thinking(body, model, endpoint, level, ThinkingWire::Responses);
 }
 
 /// Applies Anthropic Messages thinking fields, including the output cap when
@@ -170,7 +164,7 @@ pub(crate) fn apply_anthropic_thinking(
     endpoint: &str,
     level: ReasoningLevel,
 ) {
-    apply_thinking_request(body, model, endpoint, level, ThinkingWire::Anthropic);
+    crate::family::apply_anthropic_thinking_policy(body, model, endpoint, level);
 }
 
 /// Parameters object placed on a tool definition.
@@ -186,20 +180,6 @@ pub(crate) fn tool_parameters(tool: &mycode_core::ToolSpec) -> Value {
     let mut schema = tool.params_schema.clone();
     mycode_core::inline_schema_refs(&mut schema);
     schema
-}
-
-fn apply_thinking_request(
-    body: &mut Value,
-    model: &str,
-    endpoint: &str,
-    level: ReasoningLevel,
-    wire: ThinkingWire,
-) {
-    if wire == ThinkingWire::Anthropic {
-        crate::family::apply_anthropic_thinking_policy(body, model, endpoint, level);
-        return;
-    }
-    crate::family::apply_chat_thinking(body, model, endpoint, level, wire);
 }
 
 pub(crate) fn token_count(value: &Value, keys: &[&str]) -> u64 {
@@ -821,7 +801,7 @@ mod tests {
             assert_eq!(off["reasoning_effort"], "none", "{model}");
             assert!(off.get("thinking").is_none(), "{model}");
             assert_eq!(
-                super::reasoning_replay(model, proxy),
+                crate::family::reasoning_replay(model, proxy),
                 super::ReasoningReplay::Omit,
                 "{model}"
             );
@@ -831,15 +811,18 @@ mod tests {
         assert_eq!(kimi_k30["thinking"]["type"], "disabled");
         assert!(kimi_k30.get("reasoning_effort").is_none());
         assert_eq!(
-            super::reasoning_replay("k3", proxy),
+            crate::family::reasoning_replay("k3", proxy),
             super::ReasoningReplay::Content
         );
         assert_eq!(
-            super::reasoning_replay("k3-256k", "https://api.kimi.com/coding/v1/chat/completions"),
+            crate::family::reasoning_replay(
+                "k3-256k",
+                "https://api.kimi.com/coding/v1/chat/completions"
+            ),
             super::ReasoningReplay::Content
         );
         assert_eq!(
-            super::reasoning_replay(
+            crate::family::reasoning_replay(
                 "kimi-for-coding",
                 "http://127.0.0.1:18080/kimi/v1/chat/completions"
             ),

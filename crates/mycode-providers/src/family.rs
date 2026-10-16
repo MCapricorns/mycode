@@ -761,7 +761,14 @@ fn apply_openai_effort(
 
 fn apply_claude_adaptive(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     if level == ReasoningLevel::Off {
-        body["thinking"] = json!({ "type": "disabled" });
+        // Claude 5+ may answer `{type: "disabled"}` with a 400. Omitting
+        // `thinking` runs them adaptive, and the lowest effort is the
+        // closest they get to off.
+        if claude_thinking_always_on(model_id) {
+            body["output_config"] = json!({ "effort": "low" });
+        } else {
+            body["thinking"] = json!({ "type": "disabled" });
+        }
         return;
     }
     let mut thinking = json!({ "type": "adaptive" });
@@ -857,6 +864,33 @@ fn claude_adaptive(model_id: &str) -> bool {
         return true;
     }
     claude_summarized_display(model_id)
+}
+
+/// Claude generations that get no `thinking: disabled` for Off.
+///
+/// Fable, Mythos, Opus 5.5, and Sonnet 5.5 answer `disabled` with a 400,
+/// and Opus 5 and Haiku 5.5 accept it only at some efforts. Which minor
+/// release drops the switch next is not knowable ahead of time, so every
+/// Claude 5 or later model takes the form all of them accept: adaptive
+/// thinking at the lowest effort.
+fn claude_thinking_always_on(model_id: &str) -> bool {
+    if !model_id.contains("claude") {
+        return false;
+    }
+    model_id.contains("fable")
+        || model_id.contains("mythos")
+        || claude_version(model_id).is_some_and(|(major, _)| major >= 5)
+}
+
+/// Whether `model` keeps thinking on when the request asks for
+/// [`ReasoningLevel::Off`]. Thinking spends output tokens, so a caller that
+/// sizes `max_tokens` for a no-thinking reply has to leave room for it.
+#[must_use]
+pub fn keeps_thinking_when_off(model: &str) -> bool {
+    let model_id = model.to_ascii_lowercase();
+    claude_thinking_always_on(&model_id)
+        || is_k3_model(&model_id)
+        || model_id.contains("kimi-k2.7-code")
 }
 
 fn claude_summarized_display(model_id: &str) -> bool {
@@ -968,6 +1002,33 @@ mod tests {
             anthropic_family_name("claude-sonnet-4-6", "https://api.anthropic.com/v1/messages"),
             "claude-adaptive"
         );
+    }
+
+    #[test]
+    fn claude_5_off_is_lowest_effort_and_older_claude_is_disabled() {
+        let endpoint = "https://api.anthropic.com/v1/messages";
+        for model in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-opus-5-6",
+            "claude-haiku-5-5",
+            "claude-fable-5-1",
+            "anthropic.claude-opus-5",
+        ] {
+            let mut body = json!({});
+            super::apply_anthropic_thinking_policy(&mut body, model, endpoint, ReasoningLevel::Off);
+            assert!(body.get("thinking").is_none(), "{model}: {body}");
+            assert_eq!(body["output_config"]["effort"], "low", "{model}");
+            assert!(super::keeps_thinking_when_off(model), "{model}");
+        }
+        for model in ["claude-sonnet-4-6", "claude-opus-4-8", "claude-sonnet-4-5"] {
+            let mut body = json!({});
+            super::apply_anthropic_thinking_policy(&mut body, model, endpoint, ReasoningLevel::Off);
+            assert_eq!(body["thinking"]["type"], "disabled", "{model}");
+            assert!(!super::keeps_thinking_when_off(model), "{model}");
+        }
+        assert!(!super::keeps_thinking_when_off("glm-5.3"));
+        assert!(super::keeps_thinking_when_off("k3-256k"));
     }
 
     #[test]

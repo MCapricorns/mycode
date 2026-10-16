@@ -628,11 +628,11 @@ fn excerpt(text: &str) -> String {
     )
 }
 
-/// Models that reject an explicit thinking disable keep the provider
-/// default. The wire `Off` mapping already omits the rejected field; the
-/// summary needs a larger output cap so thinking cannot consume it all.
+/// Models that reject an explicit thinking disable keep thinking on for the
+/// summary. The wire `Off` mapping omits the rejected field; the summary
+/// needs a larger output cap so thinking cannot consume it all.
 fn summary_max_output(model: &str) -> u64 {
-    if model.to_ascii_lowercase().contains("kimi-k2.7-code") {
+    if mycode_providers::keeps_thinking_when_off(model) {
         SUMMARY_OUTPUT_WITH_THINKING
     } else {
         SUMMARY_OUTPUT_TOKENS
@@ -1062,6 +1062,11 @@ mod tests {
     fn a_model_that_cannot_disable_thinking_gets_a_larger_summary_cap() {
         assert_eq!(super::summary_max_output("glm-5.3"), 8_192);
         assert_eq!(super::summary_max_output("kimi-k2.7-code"), 32_768);
+        assert_eq!(
+            super::summary_max_output("k3-256k"),
+            32_768,
+            "K3 has no thinking off switch"
+        );
     }
 
     #[test]

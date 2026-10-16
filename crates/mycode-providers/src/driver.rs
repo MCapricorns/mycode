@@ -37,7 +37,10 @@ pub(crate) async fn drive(
     sender: EventStreamSender,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let prepared = crate::cache::body_has_prompt_cache_key(&call.body).then(|| {
+    // A retry copy is kept only for bodies one of the retry rules can rewrite.
+    let prepared = (crate::cache::body_has_prompt_cache_key(&call.body)
+        || crate::anthropic_messages::body_replays_thinking(&call.body))
+    .then(|| {
         (
             call.endpoint.clone(),
             call.headers.clone(),
@@ -53,6 +56,9 @@ pub(crate) async fn drive(
             };
             let Some(stripped) =
                 crate::cache::retry_body_without_prompt_cache_key(&endpoint, &error, &original)
+                    .or_else(|| {
+                        crate::anthropic_messages::retry_body_without_thinking(&error, &original)
+                    })
             else {
                 let _ = sender.send(StreamEvent::Error(error)).await;
                 return;
@@ -255,6 +261,42 @@ mod tests {
         }
         assert!(saw_done);
         assert!(!crate::cache::wants_prompt_cache_key(endpoint));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_thinking_signature_is_retried_without_thinking() {
+        let transport = Arc::new(Scripted {
+            bodies: Mutex::new(Vec::new()),
+            steps: Mutex::new(vec![
+                Err("HTTP 400: Invalid `signature` in `thinking` block"),
+                Ok(b"data: {\"type\":\"message_stop\"}\n\n"),
+            ]),
+        });
+        let cancel = CancellationToken::new();
+        let (sender, _stream) = mycode_core::EventStream::channel(cancel.clone());
+        let body = serde_json::json!({
+            "messages": [{"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "", "signature": "s"},
+                {"type": "text", "text": "hi"}
+            ]}]
+        });
+        drive(
+            transport.clone(),
+            TransportCall {
+                endpoint: "https://api.anthropic.com/v1/messages".to_owned(),
+                headers: Vec::new(),
+                body: serde_json::to_vec(&body).unwrap(),
+            },
+            Box::new(crate::anthropic_messages::MessagesReducer::new()),
+            sender,
+            cancel,
+        )
+        .await;
+        let bodies = transport.bodies.lock().expect("bodies").clone();
+        assert_eq!(bodies.len(), 2);
+        let retried = String::from_utf8(bodies[1].clone()).unwrap();
+        assert!(!retried.contains("thinking"), "{retried}");
+        assert!(retried.contains("\"hi\""), "{retried}");
     }
 
     #[tokio::test]
