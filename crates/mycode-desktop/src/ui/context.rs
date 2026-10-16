@@ -1291,6 +1291,7 @@ pub(super) fn render_subagent_window(
     let now = job.as_ref().map(|job| job.step.clone()).unwrap_or_default();
     let log = job.map(|job| job.log).unwrap_or_default();
     let last = log.len().saturating_sub(1);
+    let scroll = workspace.subagent_scroll_handle().clone();
     let viewport_width = f32::from(window.viewport_size().width);
     let (window_right, window_width) = subagent_window_bounds(
         viewport_width,
@@ -1356,6 +1357,7 @@ pub(super) fn render_subagent_window(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&scroll)
                 .p_3()
                 .flex()
                 .flex_col()
