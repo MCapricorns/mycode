@@ -170,14 +170,14 @@ fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
     if enabled.is_empty() {
         return Vec::new();
     }
-    let enabled_ids: HashSet<&str> = enabled
-        .iter()
-        .map(|provider| provider.id.as_str())
-        .collect();
     let mut seen = HashSet::new();
     let mut items = Vec::new();
     let mut push = |provider: &str, model: &str| {
-        if !enabled_ids.contains(provider) || model.is_empty() {
+        // A hidden model stays out of the palette as it does the picker.
+        let offered = enabled
+            .iter()
+            .any(|entry| entry.id == provider && entry.shows_model(model));
+        if !offered || model.is_empty() {
             return;
         }
         if !seen.insert((provider.to_owned(), model.to_owned())) {
@@ -204,13 +204,10 @@ fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
             checked,
         });
     };
-    for pin in &state.starred_models {
-        push(&pin.provider, &pin.model);
-    }
     for pin in &state.recent_models {
         push(&pin.provider, &pin.model);
     }
-    for provider in enabled {
+    for provider in &enabled {
         for model in &provider.models {
             push(&provider.id, model);
         }
@@ -414,6 +411,7 @@ mod tests {
             enabled,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         }
     }
 
@@ -460,7 +458,7 @@ mod tests {
             mcp_tools: vec![("docs".to_owned(), vec!["search".to_owned()])],
             selected_provider: Some("openai".to_owned()),
             selected_model: Some("gpt-5".to_owned()),
-            starred_models: vec![mycode_config::ModelPin::new("openai", "gpt-5")],
+            recent_models: vec![mycode_config::ModelPin::new("openai", "gpt-5")],
             ..WorkspaceState::default()
         }
     }

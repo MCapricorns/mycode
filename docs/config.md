@@ -36,7 +36,7 @@
 | `document_repair` | 把内容损坏或文件本身不能用的产品文档挪到 `.broken-*`，再发布默认内容 |
 | `settings` | `settings.json`。损坏时备份后回到默认设置（无提供商、两个未启用的内置网页后端） |
 | `secrets` | `secrets.json`：每个 id 一把密钥，按 id 排序。空字符串表示清除。损坏时备份后变成空存储，钥匙只留在备份里 |
-| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用和星标、每会话模型钉选、自动更新开关、思考是否全部收起（`thinkingCollapsed`，默认展开）。只作界面恢复，不当作产品配置的真相 |
+| `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用、每会话模型钉选、自动更新开关、思考是否全部收起（`thinkingCollapsed`，默认展开）。只作界面恢复，不当作产品配置的真相 |
 | `project_mcp` | 读 `<项目>/.mycode/mcp.json`。文件不是合法 MCP JSON 或 stdio 命令是 shell 字符串时返回错误；项目里的服务器与设置里同 id 的服务器冲突时，项目那条覆盖 |
 | `compaction` | `compaction.json`：摘要覆盖到哪条消息、哪个分支头，摘要最多 24000 字符。账本本身不改写 |
 | `subagents` | 内置 scout 与 artisan，再加上家目录 `agents/*.md` 和项目 `.mycode/agents/*.md`。角色是带少量 frontmatter 的 Markdown |
@@ -50,7 +50,7 @@
 - **外观**：`appearance.theme` 接受 `dark` 或 `light`，其它值校验失败，整份文档按上面的规则备份并重置。色板已移除：旧文件里的 `appearance.palette` 不论写的是什么都照常读入、被忽略，下次保存时清除，不会因此重置整份文档。`appearance.language` 是 `auto` / `en` / `zh`。`appearance.fontSize` 是 `s` / `m` / `l` / `xl`，缺省为 `m`。`appearance.fontFamily` 缺省、空字符串或 `system` 表示操作系统界面字体；具名值为 `Inter`、`Segoe UI`、`PingFang`、`Noto Sans`
 - **User-Agent**：`userAgent`，缺省是 pi agent 形状 `pi (<平台> <版本>; <架构>)`
 - **代理**：`proxy`，空或 `auto` 为智能模式（系统代理开启时走系统代理；否则直连，直连不通的公网站点改走本机正在监听的 Clash 7890 / 7897 或 v2rayN 10809 并在本进程内记住）；`direct` 忽略一切代理；也可以写 `http` / `https` / `socks5` / `socks5h` 代理地址，只写 `host:port` 按 `http` 处理。环回、`.local` 和私网地址始终直连
-- **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`）。密钥不在此列
+- **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`），可选 `hiddenModels`（不出现在对话模型切换、最近使用推荐和命令面板里的模型 id，设置页仍列出以便重新显示）。密钥不在此列
 - **思考强度**：`reasoningEffort` 是保存的默认值，必须是 models.dev 档位（`off`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）。会话里选的模型和强度不写这里，见下文 `ui.json`
 - **Shell**：没有可切换的 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。旧的 `tools.shell` 还能被读入，任何 `kind` 都不会让整份文档校验失败；启动时忽略它，并在写回时去掉。`MYCODE_SHELL` 不再覆盖选择，有具体取值时只提示一次。旧的 `tools.osSandbox` 同样只被读入并在启动时清掉：OS 沙箱已随功能移除，进程以当前用户权限运行
 - **网页**：后端 `kind` 为 `querit`、`anysearch` 或 `custom`，端点必须是 https，最多启用一个。默认带 Querit 和 AnySearch 两行，均未启用。密钥先看环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY`，再看 `secrets.json` 的 `web-<id>`
@@ -62,7 +62,7 @@
 
 ## 界面状态里有什么
 
-`ui.json` 的上限同样是常量：最近项目 16、工作区 16、每个工作区的文件夹 8、会话→项目 256、会话→工作区 512、最近模型 8、星标模型 24。
+`ui.json` 的上限同样是常量：最近项目 16、工作区 16、每个工作区的文件夹 8、会话→项目 256、会话→工作区 512、最近模型 8（选择器只推荐其中仍可用的前 3 个）。
 
 - **会话模型**：每个会话一条 `SessionModelPin`（服务商、模型、可选思考强度），最多 128 条，新的在前。切换会话时恢复各自的钉选，一个会话改模型不影响别的会话。`selectedReasoning` 是作曲栏最后一次选的强度，新会话从它起步（按模型公布的档位自适应收敛）
 - 删除会话时一并清掉它的项目、工作区和模型钉选

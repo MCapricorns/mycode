@@ -486,6 +486,7 @@ mod tests {
             enabled: true,
             context_limit: None,
             max_output: Some(4_096),
+            hidden_models: Vec::new(),
         };
         assert_eq!(
             super::model_output_limit(&state, &provider, "listed"),

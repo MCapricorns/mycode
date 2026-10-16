@@ -22,7 +22,9 @@ pub use mcp::{
     MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, builtin_mcp_servers, is_mcp_executable,
     split_command_line,
 };
-pub use providers::{MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings};
+pub use providers::{
+    MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings,
+};
 pub use proxy::{PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProxyPreference};
 pub use subagent_roles::{
     DEFAULT_SUBAGENT_CONCURRENCY, DEFAULT_SUBAGENT_TIMEOUT_SECS, MAX_SUBAGENT_CONCURRENCY,

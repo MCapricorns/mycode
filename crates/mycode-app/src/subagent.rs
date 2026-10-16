@@ -1666,6 +1666,7 @@ mod tests {
             enabled: true,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         };
         let codex = ProviderSettings {
             id: OPENAI_CODEX_PROVIDER_ID.to_owned(),
@@ -1675,6 +1676,7 @@ mod tests {
             enabled: true,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         };
         let mut subagents = SubagentSettings::default();
         subagents.roles.push(SubagentRoleSettings {

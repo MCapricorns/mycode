@@ -70,10 +70,11 @@ pub(crate) fn write_owned_test_bytes(
 #[doc(inline)]
 pub use settings::{
     AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, DEFAULT_SUBAGENT_TIMEOUT_SECS,
-    LegacyUsageSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS,
-    MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_TIMEOUT_SECS,
-    MAX_WEB_BACKENDS, McpServerSettings, PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProviderSettings,
-    ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SYSTEM_FONT_FAMILY, ShellSettings,
+    LegacyUsageSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_HIDDEN_MODELS_PER_PROVIDER,
+    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS,
+    MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_TIMEOUT_SECS, MAX_WEB_BACKENDS, McpServerSettings,
+    PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProviderSettings, ProxyPreference,
+    SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SYSTEM_FONT_FAMILY, ShellSettings,
     SubagentRoleSettings, SubagentSettings, ToolsSettings, VALID_FONT_FAMILIES, VALID_FONT_SIZES,
     VALID_LANGUAGES, VALID_THEMES, WebBackendSettings, WebSettings, builtin_mcp_servers,
     builtin_web_backends, canonical_font_family, default_user_agent, is_mcp_executable,
@@ -89,7 +90,7 @@ pub use ui_state::{
     MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES, MAX_WORKSPACE_NAME_CHARS,
     MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UiState, WorkspaceDef,
     read_ui_state, read_ui_state_with_repair, remember_model, replace_ui_state, same_project_path,
-    session_model, toggle_star, upsert_session_model,
+    session_model, upsert_session_model,
 };
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero

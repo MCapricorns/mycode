@@ -339,6 +339,7 @@ mod tests {
             enabled: true,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         });
         let state = super::SettingsState::from_settings(&document, 3, vec!["gateway".to_owned()]);
         let rejected = state

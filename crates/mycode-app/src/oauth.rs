@@ -278,6 +278,7 @@ fn upsert_catalog_provider(
             enabled: true,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         }),
     }
     replace_app_settings(home, revision, &settings).map_err(|error| render_config_error(&error))?;
@@ -474,6 +475,7 @@ mod tests {
             enabled: true,
             context_limit: None,
             max_output: None,
+            hidden_models: Vec::new(),
         }
     }
 
