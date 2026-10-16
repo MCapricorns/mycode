@@ -120,14 +120,14 @@ pub enum BridgeCommand {
         /// Model ids to bind to the provider once the sign-in succeeds.
         models: Vec<String>,
     },
-    /// Run one model turn over stored history and stream the reply.
+    /// Run one model turn over stored history and stream the reply. The
+    /// turn reads the branch's durable head itself, so a snapshot that is
+    /// behind cannot fail it.
     ChatTurn {
         /// Target session.
         session: SessionId,
         /// Target branch.
         branch: BranchId,
-        /// Head observed after the user message commit.
-        expected_head: HeadStamp,
         /// Provider identity from settings.
         provider_id: String,
         /// Model id offered by that provider.

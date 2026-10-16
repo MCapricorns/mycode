@@ -981,7 +981,7 @@ impl Workspace {
             self.apply_action(failed_start("no open session".to_owned()), cx);
             return;
         }
-        let Some((session, branch, expected_head)) = self.open_turn_target() else {
+        let Some((session, branch, _)) = self.open_turn_target() else {
             self.apply_action(
                 failed_start("the open session could not be read".to_owned()),
                 cx,
@@ -1047,7 +1047,6 @@ impl Workspace {
             BridgeCommand::ChatTurn {
                 session,
                 branch,
-                expected_head,
                 provider_id: provider.id.clone(),
                 model,
                 reasoning,
