@@ -16,25 +16,16 @@
 //! re-read from the opened handle before read, confirm, descent, and
 //! reporting. Ignore parse/build/load failures are terminating. Ancestor
 //! ignore discovery that stops at a mount boundary is not a failure; ordinary
-//! per-path I/O is a model-visible incomplete lower bound. Unix uses
+//! per-path I/O is a model-visible incomplete lower bound. macOS uses
 //! root-relative `openat` calls with no-follow traversal. Windows opens
 //! every component relative to retained directory handles with `NtOpenFile`,
 //! rejects reparse points, and validates final Unicode handle paths against
 //! the retained allowed-root handle.
 //!
-//! Linux opens each child with `openat2(RESOLVE_BENEATH | RESOLVE_NO_XDEV |
-//! RESOLVE_NO_SYMLINKS)` so bind mounts cannot be crossed, including at
-//! find confirmation. After that open, Linux proves the mount with
-//! `STATX_MNT_ID`: an overlay directory and a file in it may differ in
-//! `st_dev` while staying on one mount, and a bind mount is still a boundary
-//! when the mount id changes. Find confirmation on Linux/Android uses
-//! `O_PATH` so a mode-`000` name can be reported without content-read
-//! permission; other Unix confirms with no-follow metadata (`fstatat`) and
-//! the same `st_dev` / type / `nlink` checks, and fails closed when that
-//! proof is unavailable.
-//! Other Unix descent still uses `openat(O_NOFOLLOW)` plus `st_dev`; that is
-//! the mount identity on Darwin/BSD, which have no Linux-style same-`st_dev`
-//! bind mounts. Platforms without handle-relative open fail closed. Regular
+//! macOS descent uses `openat(O_NOFOLLOW)` plus `st_dev`, which is the mount
+//! identity on Darwin. Find confirmation uses no-follow metadata (`fstatat`)
+//! and the same `st_dev` / type / `nlink` checks, and fails closed when that
+//! proof is unavailable. Platforms without handle-relative open fail closed. Regular
 //! files with a link count other than one are refused so a cwd-visible
 //! hardlink cannot expose an inode that also lives outside the allowed root.
 //! Directory listings are collected up to a width cap, decorated once with

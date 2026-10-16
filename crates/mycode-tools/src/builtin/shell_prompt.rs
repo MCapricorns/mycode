@@ -343,7 +343,7 @@ mod tests {
             kind: ShellKind::Bash,
             program: PathBuf::from("/bin/bash"),
         };
-        let block = render_environment_block("linux", "x86_64", cwd, &bash);
+        let block = render_environment_block("macos", "aarch64", cwd, &bash);
         assert!(block.contains("shell_tool: bash"), "{block}");
         assert!(block.contains("Write bash, not PowerShell"), "{block}");
         assert!(block.contains("The path separator is `/`."), "{block}");
@@ -362,7 +362,7 @@ mod tests {
             kind: ShellKind::Sh,
             program: PathBuf::from("/bin/sh"),
         };
-        let block = render_environment_block("linux", "x86_64", cwd, &sh);
+        let block = render_environment_block("macos", "aarch64", cwd, &sh);
         assert!(block.contains("shell_tool: sh"), "{block}");
         assert!(block.contains("POSIX"), "{block}");
         assert!(!block.contains("translated"), "{block}");

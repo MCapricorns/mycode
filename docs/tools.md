@@ -47,7 +47,7 @@
 
 Windows 上脚本模式按层侦查，命中一层就停：PowerShell 7（`pwsh`），然后 Windows PowerShell 5.1（`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`）。`pwsh` 的候选顺序是 PATH 里的 `pwsh.exe`、`Program Files\PowerShell\7`、预览版、WindowsApps 里的 `Microsoft.PowerShell_*` 包、WinGet 和 scoop。常规映像优先。`WindowsApps\pwsh.exe` 这种直接放在 `WindowsApps` 目录下的商店执行别名只在没有常规 `pwsh` 时使用，并且按路径形状识别，不看文件大小；包目录里的 `pwsh.exe` 仍算常规映像。不选择 Git Bash、MSYS2、Cygwin，也不选 WSL 的 `System32\bash.exe` / `SysWOW64\bash.exe`：会话 cwd 是 Windows 路径。SysWOW64 里的 32 位 `powershell.exe` 也不选。两层都没有时，运行时退到 `%SystemRoot%\System32\cmd.exe`（`/d /s /c`），工具名变成 `cmd`，这个退路不写入设置。Windows 自带的是 5.1，不是 5.0；它和 PowerShell 7 的 `&&` 不通用，所以只有没找到 `pwsh` 时才用它，提示词也改成 5.1 的语法。这和 Codex、Gemini CLI 的 Windows 顺序一致；pi 和 Claude Code 在 Windows 上以 bash 为先，这里不跟，因为要优先 PowerShell 7。
 
-Linux / macOS 先看 `$SHELL`。它是绝对路径且文件名是 bash、zsh 或 sh 时就用它。否则 macOS 依次试 `/bin/zsh`、`/bin/bash`、PATH 里的 zsh 和 bash，再试 `sh`；其它 Unix 依次试 bash、zsh、`sh`。`$SHELL` 若是 pwsh、fish 或其他家族，就跳过。这些系统不选择 pwsh 或 cmd。工具名跟实际解释器走。
+macOS 先看 `$SHELL`。它是绝对路径且文件名是 bash、zsh 或 sh 时就用它。否则依次试 `/bin/zsh`、`/bin/bash`、PATH 里的 zsh 和 bash，再试 `sh`。`$SHELL` 若是 pwsh、fish 或其他家族，就跳过。macOS 上不选择 pwsh 或 cmd。工具名跟实际解释器走。
 
 `MYCODE_SHELL` 和设置里的 `tools.shell` 都不再切换解释器。环境变量有具体取值时提示一次并忽略；设置里的旧字段仍能读入，启动时清掉，下次保存就不再写出。
 
@@ -57,7 +57,7 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 
 进程输出先认 BOM，再认没有 BOM 的 UTF-16LE（PowerShell 往管道写中文时经常这样，这些字节有时也是合法 UTF-8），然后才是严格 UTF-8。还不行时，Windows 依次试 OEM 代码页、ANSI 代码页和控制台输出代码页（中文 Windows 上 `cmd` 的 `dir` 往往是 GBK）。标准输出和标准错误都会再整理一次：有 `#< CLIXML` 时抽出 `Error` 和 `Warning` 节点，`_xHHHH_`（包括 `_x001B_`）还原成字符，ANSI / VT 序列去掉。没有这些标记的普通文本保持原样。
 
-`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon；其它 Unix 目标只有共用路径）。发布包只覆盖这三个平台。摘要复查和参数组装共用。其它 Unix 目标（musl、Android、BSD）不支持直接启动映像。背后只有当前这一个解释器，没有 `exec`，也不会同时有 `bash` 和 `powershell`。角色白名单里的 `shell` 仍表示这个进程工具。
+`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon）。发布包只覆盖这三个平台。摘要复查和参数组装共用。其它目标不支持直接启动映像。背后只有当前这一个解释器，没有 `exec`，也不会同时有 `bash` 和 `powershell`。角色白名单里的 `shell` 仍表示这个进程工具。
 
 ## 搜索的边界
 
@@ -65,8 +65,7 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 
 `grep` 和 `find` 只解析一次工作目录，之后所有打开都相对保留的根句柄，不再按路径名重新解析，也不跟随符号链接。不跨挂载点：
 
-- **Linux**：每个子项用 `openat2(RESOLVE_BENEATH | RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS)` 打开，内核没有 `openat2` 时直接失败，不退回 `openat`。打开后用 `STATX_MNT_ID` 比较父子的挂载 ID：ID 相同就是同一挂载，即使 overlay 让目录和文件的 `st_dev` 不同；ID 不同就是越界，包括 `st_dev` 相同的 bind mount。拿不到挂载 ID 时退回比较 `st_dev`。`fs_io/unix.rs` 里 `read` / `write` / `edit` 的打开用同一规则
-- **其它 Unix**：`openat(O_NOFOLLOW)` 后比较 `st_dev`，那里 `st_dev` 就是挂载身份
+- **macOS**：`openat(O_NOFOLLOW)` 后比较父子的 `st_dev`，那里 `st_dev` 就是挂载身份。`fs_io/unix.rs` 里 `read` / `write` / `edit` 的打开用同一规则
 - **Windows**：每个分量相对保留的目录句柄用 `NtOpenFile` 打开，拒绝重解析点
 
 搜索时链接数不为 1 的普通文件被拒，避免工作目录里的硬链接暴露根外的 inode（文件工具允许硬链接，写入时发布新 inode）。向上找祖先目录的 ignore 文件时碰到挂载边界就停，这不算失败，搜索照常返回结果。

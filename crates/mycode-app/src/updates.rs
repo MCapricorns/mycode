@@ -3,8 +3,8 @@
 //! The checker resolves the latest published release, picks the release
 //! asset matching the running platform, and compares semantic versions. The
 //! installer downloads the asset plus its `.sha256` sidecar, verifies the
-//! digest, and extracts the new binary into a staging directory. macOS and
-//! Linux hand the swap to a detached shell script. Windows copies the running
+//! digest, and extracts the new binary into a staging directory. macOS hands
+//! the swap to a detached shell script. Windows copies the running
 //! executable and relaunches that copy with `--mycode-apply-update` so the
 //! helper can replace the install after this process exits. Asset names and
 //! staging conventions are produced by the release jobs in
@@ -183,8 +183,8 @@ fn resolve_asset(
 }
 
 /// `Ok(None)` is an unsupported target (no published archive). A supported
-/// target with no matching file is an error, so Linux is not reported as
-/// already up to date when the zip is missing from the release.
+/// target with no matching file is an error, so a supported platform is not
+/// reported as already up to date when its zip is missing from the release.
 fn resolve_asset_for(
     os: &str,
     arch: &str,
@@ -466,7 +466,7 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
 /// updater can replace the binary and relaunch it.
 ///
 /// Windows launches a copy of this executable with [`apply::APPLY_UPDATE_ARG`].
-/// macOS and Linux launch `update.sh`.
+/// macOS launches `update.sh`.
 ///
 /// # Errors
 ///

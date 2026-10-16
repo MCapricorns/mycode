@@ -42,7 +42,7 @@ pub(crate) struct StableHandle {
     ///
     /// Used on Unix platforms without `O_PATH` so find can retain a
     /// metadata-only capability for a mode-`000` file.
-    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+    #[cfg(unix)]
     pub(crate) named_child: Option<OsString>,
     #[cfg(windows)]
     pub(crate) final_path: PathBuf,
@@ -57,7 +57,7 @@ impl StableHandle {
             file: self.file.try_clone()?,
             identity: self.identity,
             kind: self.kind,
-            #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+            #[cfg(unix)]
             named_child: self.named_child.clone(),
             #[cfg(windows)]
             final_path: self.final_path.clone(),
@@ -67,7 +67,7 @@ impl StableHandle {
     }
 
     pub(crate) fn current_identity(&self) -> io::Result<(FileIdentity, FsEntryKind)> {
-        #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+        #[cfg(unix)]
         if let Some(name) = &self.named_child {
             return unix_named_identity(&self.file, name);
         }
@@ -75,7 +75,7 @@ impl StableHandle {
     }
 
     pub(crate) fn is_content_file(&self) -> bool {
-        #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+        #[cfg(unix)]
         {
             self.named_child.is_none()
         }
@@ -83,10 +83,7 @@ impl StableHandle {
         {
             !self.metadata_only
         }
-        #[cfg(not(any(
-            windows,
-            all(unix, not(any(target_os = "linux", target_os = "android")))
-        )))]
+        #[cfg(not(any(windows, unix)))]
         {
             true
         }
@@ -335,9 +332,7 @@ impl ResolvedRoot {
     /// Confirms one listed child without requiring content-read permission.
     ///
     /// Find reports names the caller can list even when file contents are
-    /// unreadable. Linux/Android confirm with `openat2` + `O_PATH` and the
-    /// same `RESOLVE_BENEATH | NO_XDEV | NO_SYMLINKS` bits as descent.
-    /// Other Unix confirms with no-follow metadata and the current
+    /// unreadable. macOS confirms with no-follow metadata and the current
     /// mount / type / `nlink` checks, and fails closed when that proof is
     /// unavailable. Windows opens with `FILE_READ_ATTRIBUTES` rather than
     /// `FILE_GENERIC_READ`.
@@ -374,18 +369,7 @@ fn confirm_child_identity(
     name: &OsStr,
     expected: FsEntryKind,
 ) -> io::Result<FileIdentity> {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        let _ = allowed;
-        let file = open_named_unix(parent, name, Some(expected), SearchAccess::Metadata)?;
-        let opened = stable_from_file(file)?;
-        if handle_is_hidden(&opened, name)? {
-            return Err(hidden_entry_error());
-        }
-        Ok(opened.identity)
-    }
-
-    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+    #[cfg(unix)]
     {
         let _ = allowed;
         confirm_named_unix_metadata(parent, name, Some(expected))?;

@@ -749,8 +749,8 @@ def _expect_workflow_contract() -> None:
     )
     _expect("linux-gpui-deps" not in workflow, "Linux GPUI composite action is wired again")
     _expect(
-        workflow.count("runs-on: ubuntu-latest") == 4,
-        "check, release-plan, release-publish, and release-cleanup should be the only literal ubuntu-latest jobs",
+        workflow.count("runs-on: ubuntu-latest") == 3,
+        "release-plan, release-publish, and release-cleanup should be the only literal ubuntu-latest jobs",
     )
     _expect("cargo-audit" not in workflow, "cargo-audit job remains")
     for job in ("release-plan", "release-publish", "release-cleanup"):
@@ -897,10 +897,6 @@ def _expect_workflow_contract() -> None:
     _expect("三个平台的 zip" in intro, "changelog policy is not three release platforms")
     _expect("Linux x86_64" not in intro, "changelog policy still ships Linux x86_64")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
-    _expect(
-        "x86_64-unknown-linux-gnu" in changelog,
-        "Linux archive missing from changelog",
-    )
     _expect("cargo test --workspace" in intro, "changelog policy omits PR workspace tests")
     _expect(
         "cargo clippy --workspace --all-targets" in intro,
@@ -983,7 +979,8 @@ def _expect_single_workflow(workflow: str) -> None:
     _expect("Package (Linux)" not in build, "Linux packaging step is back in release builds")
     _expect("libxkbcommon-dev" not in build, "Linux GPUI packages are back in release builds")
     check = _yaml_job(workflow, "check")
-    _expect("runs-on: ubuntu-latest" in check, "workspace check is not on ubuntu-latest")
+    _expect("runs-on: windows-latest" in check, "workspace check is not on windows-latest")
+    _expect("apt-get" not in check, "Linux packages are back in the workspace check")
     _expect("cargo test --workspace" in check, "workspace check does not test")
     _expect("components: clippy" in check, "workspace check does not install clippy")
     _expect(

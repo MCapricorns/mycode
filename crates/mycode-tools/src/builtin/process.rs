@@ -1,10 +1,8 @@
 //! Shared process-containment authority for native execution builtins.
 //!
-//! Unix children are enrolled in a dedicated process group. On Linux the
-//! child is also a subreaper, so grandchildren that lose their parent stay
-//! in the tree instead of moving to init. Teardown signals every descendant
-//! (including a `setsid` child in a new session) and then the process group
-//! (including same-group orphans). Windows children are enrolled in a
+//! macOS children are enrolled in a dedicated process group. Teardown
+//! signals every descendant (including a `setsid` child in a new session)
+//! and then the process group (including same-group orphans). Windows children are enrolled in a
 //! kill-on-close Job Object that does not allow breakaway, before their
 //! initial thread resumes. Teardown reports real Job or process-group
 //! errors; an invalid Windows Job handle is not treated as evidence that
@@ -18,11 +16,8 @@ pub use pathext::first_program_on_path;
 
 use std::sync::OnceLock;
 
-use tokio::process::Child;
 use tokio::sync::{Mutex, MutexGuard};
 
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-pub(crate) use output::collect_child_output;
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
@@ -99,19 +94,6 @@ pub(crate) struct ProcessTree {
 }
 
 impl ProcessTree {
-    /// Enrolls a Unix child whose spawn requested `process_group(0)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the child has already been reaped or the
-    /// resulting group id is degenerate or equals the caller's group.
-    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-    pub(crate) fn enroll_unix(child: &Child) -> std::io::Result<Self> {
-        Ok(Self {
-            group: UnixProcessGroupId::for_child(child)?,
-        })
-    }
-
     /// Enrolls a Unix process-group leader identified by its pid.
     ///
     /// Used when the child is not a `tokio::process::Child` (raw `posix_spawn`).
@@ -137,23 +119,17 @@ impl ProcessTree {
     /// # Errors
     ///
     /// Returns a process-group or Job Object termination error.
-    pub(crate) fn terminate(&self, child: Option<&Child>) -> std::io::Result<()> {
+    pub(crate) fn terminate(&self) -> std::io::Result<()> {
         #[cfg(unix)]
         {
-            let result = match child {
-                Some(child) => self.group.kill(child),
-                None => self.group.kill_saved(),
-            };
-            ignore_missing_process_group(result)
+            ignore_missing_process_group(self.group.kill_saved())
         }
         #[cfg(windows)]
         {
-            let _ = child;
             self.job.terminate()
         }
         #[cfg(not(any(unix, windows)))]
         {
-            let _ = child;
             Ok(())
         }
     }
@@ -185,24 +161,11 @@ pub(crate) fn combine_teardown_results(
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy)]
 struct UnixProcessGroupId {
-    leader_pid: u32,
     group_id: libc::pid_t,
 }
 
 #[cfg(unix)]
 impl UnixProcessGroupId {
-    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-    fn for_child(child: &Child) -> std::io::Result<Self> {
-        let pid = child
-            .id()
-            .ok_or_else(|| std::io::Error::other("child exited before process-group enrollment"))?;
-        // Command::process_group(0) performs setpgid(0, 0) before exec and
-        // makes spawn fail if that setup fails. Do not require the child to
-        // remain in the group here: a program can deliberately escape after
-        // exec, and termination-time identity checks handle that safely.
-        Self::new(pid)
-    }
-
     fn new(pid: u32) -> std::io::Result<Self> {
         if pid <= 1 {
             return Err(std::io::Error::new(
@@ -227,27 +190,7 @@ impl UnixProcessGroupId {
                 format!("refusing the caller's own process-group id {pid}"),
             ));
         }
-        Ok(Self {
-            leader_pid: pid,
-            group_id,
-        })
-    }
-
-    fn current_leader(self, current_child_id: Option<u32>) -> std::io::Result<libc::pid_t> {
-        match current_child_id {
-            Some(pid) if pid == self.leader_pid => Ok(self.group_id),
-            Some(pid) => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "refusing process-group signal: Child::id is {pid}, saved leader is {}",
-                    self.leader_pid
-                ),
-            )),
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "refusing process-group signal after Child::id was cleared",
-            )),
-        }
+        Ok(Self { group_id })
     }
 
     fn validated_group(
@@ -274,11 +217,6 @@ impl UnixProcessGroupId {
         Ok(self.group_id)
     }
 
-    fn kill(self, child: &Child) -> std::io::Result<()> {
-        let leader = self.current_leader(child.id())?;
-        self.kill_leader(leader)
-    }
-
     fn kill_saved(self) -> std::io::Result<()> {
         self.kill_leader(self.group_id)
     }
@@ -296,8 +234,7 @@ impl UnixProcessGroupId {
         // names only the original group. Descendants are signaled first, while
         // the leader is alive and parent links still point at this tree.
         // `killpg` then covers same-group processes that were reparented
-        // outside the tree. Any validation failure skips both signals and
-        // lets the Child-handle fallback below kill only the leader.
+        // outside the tree. Any validation failure skips both signals.
         let descendants = signal_descendants(leader);
         // SAFETY: `target` is positive, foreign, and was just observed as the
         // matching, still-reserved child leader's process group.
@@ -324,8 +261,8 @@ const DESCENDANT_KILL_PASSES: usize = 3;
 
 /// `SIGKILL` every descendant of `root`, not `root` itself.
 ///
-/// Process-group signals miss a `setsid` child. The walk uses parent links,
-/// which on Linux still include orphans because the shell is a subreaper.
+/// Process-group signals miss a `setsid` child; the walk follows parent
+/// links instead.
 #[cfg(unix)]
 fn signal_descendants(root: libc::pid_t) -> std::io::Result<()> {
     let mut error = None;
@@ -349,50 +286,6 @@ fn signal_descendants(root: libc::pid_t) -> std::io::Result<()> {
         Some(err) => Err(err),
         None => Ok(()),
     }
-}
-
-#[cfg(target_os = "linux")]
-fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
-    let mut children: std::collections::HashMap<libc::pid_t, Vec<libc::pid_t>> =
-        std::collections::HashMap::new();
-    for entry in std::fs::read_dir("/proc")?.flatten() {
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<libc::pid_t>() else {
-            continue;
-        };
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            continue;
-        };
-        let Some(ppid) = ppid_from_stat(&stat) else {
-            continue;
-        };
-        children.entry(ppid).or_default().push(pid);
-    }
-    let mut out = Vec::new();
-    let mut stack = vec![root];
-    let mut seen = std::collections::HashSet::new();
-    seen.insert(root);
-    while let Some(pid) = stack.pop() {
-        let Some(kids) = children.get(&pid) else {
-            continue;
-        };
-        for kid in kids {
-            if seen.insert(*kid) {
-                out.push(*kid);
-                stack.push(*kid);
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Parent pid from `/proc/<pid>/stat`. `comm` may contain spaces and
-/// parentheses, so the parse starts after the last `)`.
-#[cfg(target_os = "linux")]
-fn ppid_from_stat(stat: &str) -> Option<libc::pid_t> {
-    let rest = stat.rsplit_once(')')?.1;
-    let mut fields = rest.split_whitespace();
-    let _state = fields.next()?;
-    fields.next()?.parse().ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -440,14 +333,9 @@ fn direct_children(parent: libc::pid_t) -> Vec<libc::pid_t> {
     buf.into_iter().filter(|pid| *pid > 1).collect()
 }
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn list_descendants(_root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
-    Ok(Vec::new())
-}
-
 #[cfg(unix)]
 fn get_process_group(pid: libc::pid_t) -> std::io::Result<libc::pid_t> {
-    // SAFETY: `pid` was range-checked from Child::id and getpgid only observes
+    // SAFETY: `pid` was range-checked at enrollment and getpgid only observes
     // process metadata. A return value of -1 is the documented failure value.
     let group = unsafe { libc::getpgid(pid) };
     if group == -1 {
@@ -491,18 +379,5 @@ mod resume_source {
             source.contains("parent process"),
             "document which PATH CreateProcessW searches"
         );
-    }
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
-    use super::ppid_from_stat;
-
-    #[test]
-    fn stat_ppid_ignores_parentheses_inside_comm() {
-        assert_eq!(ppid_from_stat("12 (bash) S 7 12 12"), Some(7));
-        assert_eq!(ppid_from_stat("9 (sleep 303) S 5 9 9"), Some(5));
-        assert_eq!(ppid_from_stat("3 (a) b) S 42 1 1"), Some(42));
-        assert!(ppid_from_stat("no paren").is_none());
     }
 }

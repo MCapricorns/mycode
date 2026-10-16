@@ -1,20 +1,20 @@
 # One workflow for pull requests and for main.
 #
-# pull_request (check): Linux only, dev/test profile. Runs
+# pull_request (check): Windows only, dev/test profile. Runs
 # `cargo test --workspace` and
 # `cargo clippy --workspace --all-targets -- -D warnings`
-# on ubuntu-latest, with `--locked`. The whole workspace is covered.
+# on windows-latest, with `--locked`. The whole workspace is covered.
 # No fat LTO, no `cargo build --release`, no packaging, no tag, no
 # GitHub Release, no version bump. Release builds stay on the main push
 # so a pull request does not wait on four LTO links.
 #
-# push to main: the same Linux check, plus plan the release and build the
+# push to main: the same Windows check, plus plan the release and build the
 # three native release binaries. Each release build first refreshes the
 # vendored provider-catalog snapshot from models.dev (best effort; a failed
 # fetch keeps the committed snapshot). Release builds use `[profile.release]`
 # (fat LTO, one codegen unit) through cargo_release_build.sh and treat
 # warnings as errors (`RUSTFLAGS=-Dwarnings`). They do not run tests or
-# clippy; the Linux check owns those. A publish waits until the check and all
+# clippy; the Windows check owns those. A publish waits until the check and all
 # three builds succeed. When the workspace version is new, tag that commit and
 # publish the archives.
 # release-plan chooses `v<workspace version>` when that tag is free. When
@@ -30,13 +30,12 @@
 #   windows-11-arm  -> aarch64-pc-windows-msvc
 #   macos-latest    -> aarch64-apple-darwin
 # windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-# image; it is not a cross-compile from windows-latest. There is no Linux
-# product build: the Linux runner only compiles and tests the workspace
-# for check. There is no fmt job. cargo build retries crates.io
+# image; it is not a cross-compile from windows-latest. The product does
+# not support Linux, so no job compiles it there. There is no fmt job. cargo build retries crates.io
 # DNS and download failures (the macOS release of 797dfde died resolving
 # index.crates.io). Compile errors are not retried.
 #
-# After the Linux check and those three builds succeed and the plan asked
+# After the Windows check and those three builds succeed and the plan asked
 # to publish, release-publish creates the tag and uploads the archives from that
 # commit, then advances main. The advance fast-forwards when it can.
 # When main moved during the build, the version bump is replayed onto
@@ -48,9 +47,9 @@
 # version ref and the later main update are pushed with GITHUB_TOKEN,
 # which does not start another workflow run. release-plan also ignores
 # github-actions[bot], so a replayed version bump cannot publish a
-# second patch. check, release-plan, release-publish, and release-cleanup
-# run on ubuntu-latest. check compiles and tests the workspace. The other
-# three do not compile the product.
+# second patch. check runs on windows-latest and compiles and tests the
+# workspace. release-plan, release-publish, and release-cleanup run on
+# ubuntu-latest and do not compile the product.
 #
 # Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
@@ -83,7 +82,7 @@ jobs:
     # Dev/test profile only. Pull requests run this job and nothing else.
     # A main push runs it beside the release builds; publish waits for it.
     name: check
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -92,40 +91,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
-      - name: Install Linux system packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config \
-            libfontconfig1-dev \
-            libfreetype-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libxcb1-dev \
-            libxcb-composite0-dev \
-            libxcb-cursor-dev \
-            libxcb-icccm4-dev \
-            libxcb-image0-dev \
-            libxcb-keysyms1-dev \
-            libxcb-randr0-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-shm0-dev \
-            libxcb-util-dev \
-            libxcb-xfixes0-dev \
-            libxcb-xkb-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxrandr-dev \
-            libwayland-dev \
-            libssl-dev \
-            clang \
-            libclang-dev
 
       - name: cargo test --workspace
         shell: bash

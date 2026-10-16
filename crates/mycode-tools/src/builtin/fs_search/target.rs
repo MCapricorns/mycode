@@ -352,7 +352,7 @@ fn unix_open_alias(
     limiter: &WalkLimiter,
     cancel: &CancellationToken,
 ) -> io::Result<(StableHandle, OsString)> {
-    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+    #[cfg(unix)]
     if access == SearchAccess::Metadata && expected != Some(FsEntryKind::Directory) {
         confirm_named_unix_metadata(parent, name, expected)?;
         let (identity, kind) = unix_named_identity(parent, name)?;

@@ -1,10 +1,9 @@
 //! Proves `shell` program mode launches a kernel image on each product target.
 //!
-//! The module is empty off those targets: Windows x64, Windows ARM64,
-//! Linux x86_64 GNU, and macOS Apple Silicon.
+//! The module is empty off those targets: Windows x64, Windows ARM64, and
+//! macOS Apple Silicon.
 #![cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
 ))]
 
@@ -97,15 +96,10 @@ fn launch_target() -> (String, Vec<String>, &'static str, Option<&'static str>) 
 
 #[cfg(not(windows))]
 fn launch_target() -> (String, Vec<String>, &'static str, Option<&'static str>) {
-    let image = if cfg!(target_os = "linux") {
-        "elf"
-    } else {
-        "mach-o"
-    };
     (
         "/bin/echo".to_owned(),
         vec!["mycode-shell-ok".to_owned()],
-        image,
+        "mach-o",
         Some("mycode-shell-ok"),
     )
 }
@@ -144,13 +138,11 @@ async fn shebang_wrapper_runs_its_interpreter() {
     assert!(!result.is_error, "{text}");
     assert!(text.contains("wrapper-ok shebang-ok"), "{text}");
     let details = result.details.expect("details");
-    let image = if cfg!(target_os = "linux") {
-        "elf"
-    } else {
-        "mach-o"
-    };
     assert!(
-        details["image"].as_str().unwrap_or("").starts_with(image),
+        details["image"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("mach-o"),
         "{details}"
     );
     let wrapper = details["wrapper"].as_str().unwrap_or("");

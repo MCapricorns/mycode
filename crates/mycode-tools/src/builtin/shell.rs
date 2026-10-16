@@ -6,9 +6,8 @@
 //! * `script` runs `command` in the resolved interpreter. Windows prefers
 //!   PowerShell 7 (`pwsh`), then Windows PowerShell 5.1 (`powershell.exe`).
 //!   `cmd.exe` is the runtime fallback when neither exists. Git Bash, MSYS2,
-//!   Cygwin, and WSL are not selected. Linux and macOS use `$SHELL` when it
-//!   is bash, zsh, or sh, then the platform default (`zsh` on macOS, `bash`
-//!   elsewhere). Commands are not rewritten between shells.
+//!   Cygwin, and WSL are not selected. macOS uses `$SHELL` when it is bash,
+//!   zsh, or sh, then `zsh`. Commands are not rewritten between shells.
 //! * `program` spawns `program` with an explicit `args` vector and does not
 //!   parse a shell command string. A PE, ELF, or Mach-O image runs directly.
 //!   A direct shebang wrapper runs its interpreter with the script path and
@@ -1168,10 +1167,6 @@ fn command_too_long_with(
          for executable {executable_name} is {maximum}"
     ))
 }
-
-#[cfg(all(test, target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-#[path = "shell_lifecycle_test.rs"]
-mod lifecycle_test;
 
 #[cfg(test)]
 mod mode_tests {
