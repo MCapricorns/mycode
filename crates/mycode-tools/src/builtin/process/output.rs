@@ -3,12 +3,8 @@
 //! Streams are drained together while a fixed retained prefix is kept. The
 //! retained size covers a UTF-16 BOM plus two raw bytes per rendered UTF-8
 //! byte so truncation remains observable after decoding.
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-use std::process::ExitStatus;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-use tokio::process::{Child, ChildStderr, ChildStdout};
 
 /// Combined stdout+stderr cap per call (~50 KiB, then a notice).
 pub(crate) const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -34,28 +30,6 @@ impl CapturedStream {
             total_bytes: 0,
         }
     }
-}
-
-/// Read both pipes until the leader exits, then stop.
-///
-/// A background child inherits the pipes and would keep a read-to-EOF pending
-/// until it exits. The tool returns when the shell exits. Bytes already
-/// written are drained; a later write from a surviving child is not waited on.
-/// Timeout and cancel still terminate the tree before this wait is reaped, so
-/// the leader pid stays reserved for that kill.
-///
-/// # Errors
-///
-/// Returns the first I/O error from either pipe or from the wait.
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-pub(crate) async fn collect_child_output(
-    child: &mut Child,
-    stdout_pipe: &mut Option<ChildStdout>,
-    stderr_pipe: &mut Option<ChildStderr>,
-    stdout: &mut CapturedStream,
-    stderr: &mut CapturedStream,
-) -> std::io::Result<ExitStatus> {
-    collect_until_exit(stdout_pipe, stderr_pipe, stdout, stderr, child.wait()).await
 }
 
 /// How long to keep reading after the leader exits, so output it already

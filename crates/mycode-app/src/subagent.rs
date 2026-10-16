@@ -1498,8 +1498,8 @@ mod tests {
             &registry,
             &root,
             &[],
-            "linux",
-            "x86_64",
+            "macos",
+            "aarch64",
             &shell,
             &Default::default(),
         );
@@ -1534,8 +1534,8 @@ mod tests {
             &registry,
             std::path::Path::new("/work"),
             &[],
-            "linux",
-            "x86_64",
+            "macos",
+            "aarch64",
             &shell,
             &Default::default(),
         );

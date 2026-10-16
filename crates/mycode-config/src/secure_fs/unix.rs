@@ -163,25 +163,10 @@ fn open_component_with_mounts(
     flags: OFlags,
     mode: Mode,
 ) -> Result<std::os::fd::OwnedFd, ConfigError> {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        let resolve = rfs::ResolveFlags::BENEATH | rfs::ResolveFlags::NO_SYMLINKS;
-        rfs::openat2(parent.as_fd(), name, flags, mode, resolve).map_err(|error| {
-            if error == Errno::NOSYS {
-                ConfigError::new(ConfigErrorKind::AccessControl)
-                    .with_io_kind(io::ErrorKind::Unsupported)
-            } else {
-                map_errno(error, ConfigErrorKind::Io)
-            }
-        })
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    {
-        // The caller supplies one validated component and O_NOFOLLOW, so the
-        // portable openat fallback remains anchored to `parent`.
-        rfs::openat(parent.as_fd(), name, flags, mode)
-            .map_err(|error| map_errno(error, ConfigErrorKind::Io))
-    }
+    // The caller supplies one validated component and O_NOFOLLOW, so the
+    // openat stays anchored to `parent`.
+    rfs::openat(parent.as_fd(), name, flags, mode)
+        .map_err(|error| map_errno(error, ConfigErrorKind::Io))
 }
 
 /// Pins a directory owned by the current user to mode `0o700`.
@@ -235,14 +220,8 @@ fn sync_created_directory(directory: &File, parent: &File) -> Result<(), ConfigE
     sync_directory(parent)
 }
 
-#[cfg(target_vendor = "apple")]
 pub(super) fn sync_directory(directory: &File) -> Result<(), ConfigError> {
     rfs::fcntl_fullfsync(directory.as_fd()).map_err(|error| map_errno(error, ConfigErrorKind::Io))
-}
-
-#[cfg(not(target_vendor = "apple"))]
-pub(super) fn sync_directory(directory: &File) -> Result<(), ConfigError> {
-    rfs::fsync(directory.as_fd()).map_err(|error| map_errno(error, ConfigErrorKind::Io))
 }
 
 pub(super) fn map_errno(error: Errno, kind: ConfigErrorKind) -> ConfigError {

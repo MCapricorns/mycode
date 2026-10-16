@@ -407,12 +407,6 @@ fn pin_candidate(path: &Path, cancel: &CancellationToken) -> Result<PinnedImage,
             "program is not a kernel-loadable PE image".into(),
         )));
     }
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    if kind != ImageKind::Elf {
-        return Err(ResolveError::Other(ToolError::InvalidArgs(
-            "program is not a kernel-loadable ELF image".into(),
-        )));
-    }
     #[cfg(target_os = "macos")]
     if !matches!(kind, ImageKind::MachO { .. }) {
         return Err(ResolveError::Other(ToolError::InvalidArgs(
@@ -557,20 +551,6 @@ fn file_identity(_file: &File) -> Result<FileIdentity, ToolError> {
 
 #[cfg(unix)]
 fn canonical_from_handle(file: &File) -> Result<PathBuf, ToolError> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::fd::AsRawFd as _;
-        let fd = file.as_raw_fd();
-        let link = std::fs::read_link(format!("/proc/self/fd/{fd}")).map_err(|err| {
-            ToolError::InvalidArgs(format!("program canonical path is unavailable: {err}"))
-        })?;
-        if !link.is_absolute() {
-            return Err(ToolError::InvalidArgs(
-                "program canonical path is not absolute".into(),
-            ));
-        }
-        Ok(link)
-    }
     #[cfg(target_os = "macos")]
     {
         use rustix::fd::AsFd as _;
@@ -586,13 +566,6 @@ fn canonical_from_handle(file: &File) -> Result<PathBuf, ToolError> {
             ));
         }
         Ok(path)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = file;
-        Err(ToolError::Execution(
-            "direct program launch is not supported on this platform".into(),
-        ))
     }
 }
 

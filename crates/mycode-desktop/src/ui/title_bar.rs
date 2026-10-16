@@ -2,7 +2,8 @@
 //!
 //! The system title bar is hidden when the window opens. This strip is the
 //! only chrome: it is draggable, a double-click on the empty area toggles
-//! zoom, and minimize / zoom / close sit on the right.
+//! zoom, and on Windows minimize / zoom / close sit on the right. macOS keeps
+//! its native traffic lights.
 //!
 //! On Windows the first `window_control_area` hitbox that contains the
 //! pointer wins, and a parent `Drag` region is inserted before its children.
@@ -26,11 +27,11 @@ use crate::view_model::{MainView, UpdateState};
 use crate::workspace::Workspace;
 
 pub(super) const BAR_HEIGHT: f32 = 40.;
-/// Caption hit target on Windows and Linux.
+/// Caption hit target on Windows.
 const CONTROL_HIT: f32 = 46.;
 /// Space between minimize, zoom, and close.
 const CONTROL_GAP: f32 = 1.;
-/// Inset from the window edge so Linux CSD's resize band does not cover close.
+/// Inset from the window edge so the resize border does not cover close.
 const CAPTION_EDGE: f32 = 4.;
 const TITLE_INSET: f32 = 12.;
 /// Leading space reserved on macOS for native traffic-light window controls.
@@ -45,11 +46,6 @@ const fn title_leading_inset(is_macos: bool) -> f32 {
     }
 }
 
-#[must_use]
-const fn paints_custom_caption_buttons(is_macos: bool, is_wasm: bool) -> bool {
-    !is_macos && !is_wasm
-}
-
 struct CaptionButton {
     id: &'static str,
     icon: IconName,
@@ -57,7 +53,7 @@ struct CaptionButton {
     close: bool,
 }
 
-/// Right-side order on every desktop: minimize, zoom, close.
+/// Right-side order: minimize, zoom, close.
 fn caption_buttons(maximized: bool) -> [CaptionButton; 3] {
     [
         CaptionButton {
@@ -136,7 +132,7 @@ fn drag_region(
 ) -> impl IntoElement {
     let theme = cx.theme().clone();
     // Windows treats `Drag` as HTCAPTION, which already moves and
-    // double-click-zooms the window. macOS and Linux own that gesture.
+    // double-click-zooms the window. On macOS the app owns that gesture.
     let state = window.use_state(cx, |_, _| TitleDrag { armed: false });
     div()
         .id("title-drag")
@@ -241,9 +237,8 @@ fn title_controls(
         .pr(px(CAPTION_EDGE))
         // The drag strip is a sibling, and a normal hitbox does not block it.
         // On Windows the first `window_control_area` that contains the pointer
-        // wins, so a Drag region under this strip becomes HTCAPTION. On Linux
-        // the same overlap arms `start_window_move`, and the client-side
-        // resize band is an ancestor `on_mouse_down`. Either one takes the
+        // wins, so a Drag region under this strip becomes HTCAPTION. On macOS
+        // the same overlap arms `start_window_move`. Either one takes the
         // pointer before mouse-up, so a plain `on_click` never opens the
         // inspector. Occlude drops the drag region out of the hit test.
         .occlude()
@@ -286,8 +281,8 @@ fn title_controls(
 /// Panel toggle in the title strip.
 ///
 /// Caption buttons already consume the press. This button has to do the same,
-/// or Linux delivers the press to the drag region or the resize backdrop and
-/// the click never completes. GPUI registers `on_mouse_down` listeners before
+/// or macOS delivers the press to the drag region's ancestors and the click
+/// never completes. GPUI registers `on_mouse_down` listeners before
 /// the click's internal press handler and then runs the bubble phase in
 /// reverse, so the click arms and this guard then stops the ancestor.
 fn inspector_toggle_button(
@@ -324,16 +319,8 @@ fn inspector_toggle_button(
 }
 
 fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl IntoElement {
-    if !paints_custom_caption_buttons(cfg!(target_os = "macos"), cfg!(target_family = "wasm")) {
-        return div().id("window-controls");
-    }
-    // A compositor that refuses client decorations still paints its own
-    // min/max/close. Skip ours so the two sets are not stacked.
-    #[cfg(target_os = "linux")]
-    if !matches!(
-        window.window_decorations(),
-        gpui_kit::Decorations::Client { .. }
-    ) {
+    // macOS paints native traffic lights; only Windows needs caption buttons.
+    if !cfg!(target_os = "windows") {
         return div().id("window-controls");
     }
     let theme = cx.theme().clone();
@@ -392,24 +379,7 @@ fn caption_button(
         .flex_shrink_0()
         .text_color(theme.foreground)
         .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
-        .when(cfg!(target_os = "windows"), |this| {
-            this.window_control_area(area)
-        })
-        .when(cfg!(not(target_os = "windows")), |this| {
-            this.on_mouse_down(MouseButton::Left, |_, window, cx| {
-                window.prevent_default();
-                cx.stop_propagation();
-            })
-            .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                match area {
-                    WindowControlArea::Min => window.minimize_window(),
-                    WindowControlArea::Max => window.zoom_window(),
-                    WindowControlArea::Close => window.remove_window(),
-                    WindowControlArea::Drag => {}
-                }
-            })
-        })
+        .window_control_area(area)
         .child(Icon::new(icon).small())
 }
 
@@ -426,9 +396,6 @@ mod tests {
         assert_eq!(title_leading_inset(false), TITLE_INSET);
         assert_eq!(title_leading_inset(true), MACOS_TRAFFIC_LIGHT_INSET);
         assert!(title_leading_inset(true) > title_leading_inset(false));
-        assert!(paints_custom_caption_buttons(false, false));
-        assert!(!paints_custom_caption_buttons(true, false));
-        assert!(!paints_custom_caption_buttons(false, true));
         let normal: Vec<_> = caption_buttons(false)
             .into_iter()
             .map(|button| button.id)

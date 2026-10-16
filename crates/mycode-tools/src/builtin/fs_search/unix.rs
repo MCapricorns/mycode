@@ -67,7 +67,7 @@ pub(crate) fn unix_reopen_dir_for_listing(parent: &File) -> io::Result<File> {
         flags,
         SearchAccess::Content,
     )?;
-    // SAFETY: `descriptor` is a fresh owned fd from `openat`/`openat2`.
+    // SAFETY: `descriptor` is a fresh owned fd from `openat`.
     Ok(unsafe { File::from_raw_fd(descriptor) })
 }
 
@@ -206,121 +206,21 @@ pub(crate) fn unix_on_disk_component_name(
 }
 
 /// Clears thread-local errno before `readdir` so EOF is not a stale error.
-///
-/// Symbols match `libc` 0.2.189. Unknown Unix errno ABIs fail at compile
-/// time rather than treating a leftover errno as a listing failure.
 #[cfg(unix)]
 pub(crate) fn unix_clear_errno() {
     // SAFETY: writing 0 into thread-local errno distinguishes `readdir`
     // EOF from a real failure after a previous fallible syscall.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "emscripten",
-        target_os = "fuchsia",
-        target_os = "hurd",
-        target_os = "l4re",
-        target_os = "redox",
-        target_os = "dragonfly"
-    ))]
-    unsafe {
-        *libc::__errno_location() = 0;
-    }
-    #[cfg(any(target_os = "android", target_os = "openbsd", target_os = "netbsd"))]
-    unsafe {
-        *libc::__errno() = 0;
-    }
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-        target_os = "freebsd"
-    ))]
     unsafe {
         *libc::__error() = 0;
     }
-    #[cfg(any(target_os = "solaris", target_os = "illumos"))]
-    unsafe {
-        *libc::___errno() = 0;
-    }
-    #[cfg(target_os = "aix")]
-    unsafe {
-        *libc::_Errno() = 0;
-    }
-    #[cfg(target_os = "haiku")]
-    unsafe {
-        *libc::_errnop() = 0;
-    }
-    #[cfg(target_os = "nto")]
-    unsafe {
-        *libc::__get_errno_ptr() = 0;
-    }
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "emscripten",
-        target_os = "fuchsia",
-        target_os = "hurd",
-        target_os = "l4re",
-        target_os = "redox",
-        target_os = "dragonfly",
-        target_os = "android",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-        target_os = "freebsd",
-        target_os = "solaris",
-        target_os = "illumos",
-        target_os = "aix",
-        target_os = "haiku",
-        target_os = "nto"
-    )))]
-    {
-        compile_error!("readdir errno ABI is not implemented for this Unix target");
-    }
 }
 
-/// True when `left` and `right` are not the same mount.
-///
-/// Linux uses `STATX_MNT_ID` when both ids are present, so a bind mount is a
-/// boundary even if `st_dev` matches, and an overlay device split is not.
-/// Other Unix uses `st_dev`, which is the mount identity there.
+/// True when `left` and `right` are not the same mount (`st_dev` differs).
 #[cfg(unix)]
 pub(crate) fn unix_mounts_differ(left: &File, right: &File) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
 
-    let left_dev = left.metadata()?.dev();
-    let right_dev = right.metadata()?.dev();
-    match (unix_mount_id(left), unix_mount_id(right)) {
-        (Some(left_id), Some(right_id)) => Ok(left_id != right_id),
-        _ => Ok(left_dev != right_dev),
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn unix_mount_id(file: &File) -> Option<u64> {
-    use std::ffi::OsStr;
-    use std::os::fd::AsFd;
-
-    let stat = rustix::fs::statx(
-        file.as_fd(),
-        OsStr::new(""),
-        rustix::fs::AtFlags::EMPTY_PATH,
-        rustix::fs::StatxFlags::MNT_ID,
-    )
-    .ok()?;
-    rustix::fs::StatxFlags::from_bits_truncate(stat.stx_mask)
-        .contains(rustix::fs::StatxFlags::MNT_ID)
-        .then_some(stat.stx_mnt_id)
-}
-
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
-fn unix_mount_id(_file: &File) -> Option<u64> {
-    None
+    Ok(left.metadata()?.dev() != right.metadata()?.dev())
 }
 
 #[cfg(unix)]
@@ -330,7 +230,7 @@ pub(crate) fn stable_from_file(file: File) -> io::Result<StableHandle> {
         file,
         identity,
         kind,
-        #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+        #[cfg(unix)]
         named_child: None,
     })
 }
@@ -377,32 +277,25 @@ pub(crate) fn open_named_unix(
     match access {
         SearchAccess::Content => flags |= libc::O_RDONLY | libc::O_NONBLOCK,
         SearchAccess::Metadata => {
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            {
-                flags |= libc::O_PATH;
-            }
-            #[cfg(not(any(target_os = "linux", target_os = "android")))]
-            {
-                let _ = flags;
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "metadata-only child fds require O_PATH",
-                ));
-            }
+            let _ = flags;
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "metadata-only child fds require O_PATH",
+            ));
         }
     }
     if matches!(expected, Some(FsEntryKind::Directory)) {
         flags |= libc::O_DIRECTORY;
     }
     let descriptor = open_unix_descriptor(parent.as_raw_fd(), c_name.as_ptr(), flags, access)?;
-    // SAFETY: the descriptor is a fresh owned fd from `openat`/`openat2`.
+    // SAFETY: the descriptor is a fresh owned fd from `openat`.
     let file = unsafe { File::from_raw_fd(descriptor) };
     enforce_unix_child_containment(parent, &file, expected)?;
     Ok(file)
 }
 
 /// Reads one named Unix child's identity without following its final link.
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+#[cfg(unix)]
 pub(crate) fn unix_named_identity(
     parent: &File,
     name: &OsStr,
@@ -470,9 +363,9 @@ pub(crate) fn unix_named_identity(
 
 /// Confirms `name` with no-follow metadata and mount/type/`nlink` proof.
 ///
-/// Used on Unix platforms without `O_PATH`/`openat2`. Lookup does not open
-/// the child for reading; inability to prove containment fails closed.
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+/// Lookup does not open the child for reading; inability to prove
+/// containment fails closed.
+#[cfg(unix)]
 pub(crate) fn confirm_named_unix_metadata(
     parent: &File,
     name: &OsStr,
@@ -548,10 +441,7 @@ pub(crate) fn confirm_named_unix_metadata(
 
 /// Opens `name` relative to `dirfd` without following links.
 ///
-/// Linux uses `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_XDEV |
-/// RESOLVE_NO_SYMLINKS`. Kernels without `openat2` fail closed rather than
-/// falling back to mount-crossing `openat`. Other Unix uses `openat` and
-/// relies on the post-open `st_dev` / `st_nlink` check.
+/// Uses `openat` and relies on the post-open `st_dev` / `st_nlink` check.
 #[cfg(unix)]
 fn open_unix_descriptor(
     dirfd: std::os::fd::RawFd,
@@ -559,12 +449,6 @@ fn open_unix_descriptor(
     flags: libc::c_int,
     access: SearchAccess,
 ) -> io::Result<std::os::fd::RawFd> {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        let descriptor = openat2_beneath(dirfd, c_name, flags, access)?;
-        Ok(descriptor)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         let _ = access;
         // SAFETY: `dirfd` is a live directory fd, `c_name` is NUL-terminated,
@@ -575,55 +459,6 @@ fn open_unix_descriptor(
         }
         Ok(descriptor)
     }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-#[repr(C)]
-struct OpenHow {
-    flags: u64,
-    mode: u64,
-    resolve: u64,
-}
-
-/// Required Linux/Android `openat2` containment policy.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const OPENAT2_REQUIRED_RESOLVE: u64 = 0x01 | 0x04 | 0x08;
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn openat2_beneath(
-    dirfd: std::os::fd::RawFd,
-    c_name: *const libc::c_char,
-    flags: libc::c_int,
-    access: SearchAccess,
-) -> io::Result<std::os::fd::RawFd> {
-    let how = OpenHow {
-        flags: flags as u64,
-        mode: 0,
-        resolve: OPENAT2_REQUIRED_RESOLVE,
-    };
-    let _ = access;
-    // SAFETY: `dirfd` is a live directory fd, `c_name` is a NUL-terminated
-    // component, and `how` is the documented 24-byte `open_how` layout.
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            dirfd,
-            c_name,
-            std::ptr::addr_of!(how),
-            std::mem::size_of::<OpenHow>(),
-        )
-    };
-    if descriptor < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ENOSYS) {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "openat2 is required to prove NO_XDEV/BENEATH containment",
-            ));
-        }
-        return Err(map_unix_open_error(error));
-    }
-    Ok(descriptor as std::os::fd::RawFd)
 }
 
 #[cfg(unix)]

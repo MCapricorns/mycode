@@ -11,10 +11,9 @@
 //! point to the packaged image (`exec::resolve`), and discovery accepts the
 //! alias only when that image can be opened.
 //!
-//! Linux and macOS follow Codex's user-shell rule, limited to POSIX shells.
+//! macOS follows Codex's user-shell rule, limited to POSIX shells.
 //! `$SHELL` wins when it is an absolute `bash`, `zsh`, or `sh`. Otherwise
-//! macOS tries `zsh`, then `bash`, then `sh`; other Unix tries `bash`, then
-//! `zsh`, then `sh`. `pwsh` and `cmd` are never selected there.
+//! it tries `zsh`, then `bash`, then `sh`. `pwsh` and `cmd` are never selected there.
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -323,12 +322,12 @@ fn detect_posix_shell() -> Option<DetectedShell> {
     choose_posix_shell(
         std::env::var_os("SHELL").as_deref(),
         std::env::var_os("PATH").as_deref(),
-        cfg!(target_os = "macos"),
         |program| program.is_file(),
     )
 }
 
-/// POSIX search order. Existence is not required.
+/// POSIX search order (macOS: zsh, then bash, then sh). Existence is not
+/// required.
 ///
 /// `$SHELL` is first when it is an absolute `bash`, `zsh`, or `sh`. Relative
 /// values and other families (`pwsh`, `fish`, `nu`) are skipped.
@@ -336,7 +335,6 @@ fn detect_posix_shell() -> Option<DetectedShell> {
 pub(crate) fn posix_shell_candidates(
     user_shell: Option<&OsStr>,
     path_var: Option<&OsStr>,
-    macos: bool,
 ) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(value) = user_shell {
@@ -345,18 +343,10 @@ pub(crate) fn posix_shell_candidates(
             candidates.push(path);
         }
     }
-    if macos {
-        candidates.push(PathBuf::from("/bin/zsh"));
-        candidates.push(PathBuf::from("/bin/bash"));
-        candidates.extend(path_named_files(path_var, "zsh"));
-        candidates.extend(path_named_files(path_var, "bash"));
-    } else {
-        candidates.push(PathBuf::from("/bin/bash"));
-        candidates.push(PathBuf::from("/usr/bin/bash"));
-        candidates.extend(path_named_files(path_var, "bash"));
-        candidates.extend(path_named_files(path_var, "zsh"));
-        candidates.push(PathBuf::from("/bin/zsh"));
-    }
+    candidates.push(PathBuf::from("/bin/zsh"));
+    candidates.push(PathBuf::from("/bin/bash"));
+    candidates.extend(path_named_files(path_var, "zsh"));
+    candidates.extend(path_named_files(path_var, "bash"));
     candidates.push(PathBuf::from("/bin/sh"));
     candidates.extend(path_named_files(path_var, "sh"));
     candidates
@@ -367,10 +357,9 @@ pub(crate) fn posix_shell_candidates(
 pub(crate) fn choose_posix_shell(
     user_shell: Option<&OsStr>,
     path_var: Option<&OsStr>,
-    macos: bool,
     exists: impl Fn(&Path) -> bool,
 ) -> Option<DetectedShell> {
-    posix_shell_candidates(user_shell, path_var, macos)
+    posix_shell_candidates(user_shell, path_var)
         .into_iter()
         .find(|program| exists(program))
         .map(|program| DetectedShell {
@@ -654,36 +643,33 @@ mod tests {
         let sh = Path::new("/bin/sh");
         let have = |path: &Path| path == zsh || path == bash || path == sh;
 
-        let picked = choose_posix_shell(Some(OsStr::new("/bin/zsh")), None, false, have).unwrap();
-        assert_eq!(picked.kind, ShellKind::Zsh);
-        assert_eq!(picked.program, zsh);
+        let picked = choose_posix_shell(Some(OsStr::new("/bin/bash")), None, have).unwrap();
+        assert_eq!(picked.kind, ShellKind::Bash);
+        assert_eq!(picked.program, bash);
 
-        let picked =
-            choose_posix_shell(Some(OsStr::new("/usr/bin/fish")), None, false, have).unwrap();
-        assert_eq!(picked.kind, ShellKind::Bash, "fish is not the tool shell");
+        let picked = choose_posix_shell(Some(OsStr::new("/usr/bin/fish")), None, have).unwrap();
+        assert_eq!(picked.kind, ShellKind::Zsh, "fish is not the tool shell");
 
-        let picked =
-            choose_posix_shell(Some(OsStr::new("/usr/bin/pwsh")), None, false, have).unwrap();
-        assert_eq!(picked.kind, ShellKind::Bash, "pwsh is not a POSIX shell");
+        let picked = choose_posix_shell(Some(OsStr::new("/usr/bin/pwsh")), None, have).unwrap();
+        assert_eq!(picked.kind, ShellKind::Zsh, "pwsh is not a POSIX shell");
         assert_ne!(picked.program, PathBuf::from("/usr/bin/pwsh"));
 
-        let macos = choose_posix_shell(None, None, true, have).unwrap();
-        assert_eq!(macos.program, zsh);
+        let default = choose_posix_shell(None, None, have).unwrap();
+        assert_eq!(default.program, zsh);
 
-        let linux =
-            choose_posix_shell(None, None, false, |path| path == bash || path == sh).unwrap();
-        assert_eq!(linux.program, bash);
+        let no_zsh = choose_posix_shell(None, None, |path| path == bash || path == sh).unwrap();
+        assert_eq!(no_zsh.program, bash);
 
-        let only_sh = choose_posix_shell(None, None, false, |path| path == sh).unwrap();
+        let only_sh = choose_posix_shell(None, None, |path| path == sh).unwrap();
         assert_eq!(only_sh.kind, ShellKind::Sh);
 
-        assert!(choose_posix_shell(None, None, false, |_| false).is_none());
+        assert!(choose_posix_shell(None, None, |_| false).is_none());
     }
 
     #[cfg(not(windows))]
     #[test]
     fn relative_user_shell_is_not_searched() {
-        let candidates = posix_shell_candidates(Some(OsStr::new("bash")), None, false);
+        let candidates = posix_shell_candidates(Some(OsStr::new("bash")), None);
         assert!(
             candidates.iter().all(|path| path != Path::new("bash")),
             "{candidates:?}"

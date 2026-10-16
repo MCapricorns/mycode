@@ -10,7 +10,7 @@
 //! detached `cmd` script is not used: it could copy a backup and then fail to
 //! replace a locked image.
 //!
-//! macOS and Linux keep the shell script in the parent module.
+//! macOS keeps the shell script in the parent module.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

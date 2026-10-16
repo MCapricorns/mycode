@@ -106,7 +106,7 @@ impl IgnoreStack {
             if files_same_identity(&parent, &current)? {
                 return Ok(());
             }
-            // The workspace may itself be a mount (Linux `/tmp` on tmpfs).
+            // The workspace may itself be a mount (an external volume).
             // Ignore files above that boundary are unreachable without a
             // cross-mount open, which search containment rejects. Stopping
             // here keeps the walk inside the workspace.

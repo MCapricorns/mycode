@@ -2,7 +2,7 @@
 //!
 //! GPUI in this tree has no per-element backdrop filter. The blur is the
 //! window material (`WindowBackgroundAppearance::Blurred`: macOS visual
-//! effect, Windows DWM blur, Wayland KDE blur). These fills are the
+//! effect, Windows DWM blur). These fills are the
 //! translucent half: low enough that the material shows, high enough that
 //! ink stays readable when a platform cannot blur and a light desktop
 //! shows through. The reading column stays closer to solid than the rails.

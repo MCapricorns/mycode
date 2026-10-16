@@ -60,8 +60,6 @@ const TRAFFIC_LIGHTS: gpui_kit::Point<Pixels> = gpui_kit::point(px(16.), px(14.)
 /// Window options for the app-drawn chrome.
 ///
 /// The system title bar stays hidden on every desktop:
-/// - Linux: `WindowDecorations::Client` asks X11/Wayland not to paint a server
-///   title bar. That request is a no-op on other platforms.
 /// - Windows: `appears_transparent` extends the client area over the caption.
 ///   Min, max, and close still go through `WindowControlArea`.
 /// - macOS: `appears_transparent` and `app_owns_titlebar_drag` drop the system
@@ -70,7 +68,6 @@ fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
     let mut options = gpui_kit::component::TitleBar::window_options();
     options.window_bounds = Some(WindowBounds::Windowed(bounds));
     options.window_min_size = Some(size(px(960.), px(560.)));
-    options.window_decorations = Some(gpui_kit::WindowDecorations::Client);
     options.app_owns_titlebar_drag = true;
     let titlebar = options
         .titlebar
@@ -100,8 +97,8 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     let options = client_window_options(startup_bounds(cx));
     cx.open_window(options, |window, cx| {
         // Platform blur behind translucent chrome. GPUI has no per-element
-        // backdrop filter; macOS, Windows, and KDE Wayland implement this
-        // appearance, and other sessions simply composite the translucent fills.
+        // backdrop filter; macOS and Windows implement this appearance, and a
+        // system without blur simply composites the translucent fills.
         window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Blurred);
         // Start in dark mode until the saved appearance arrives, then sync
         // the Desk colors into Base.
@@ -1676,10 +1673,6 @@ mod tests {
             origin: gpui_kit::point(px(0.), px(0.)),
             size: WINDOW_SIZE,
         });
-        assert_eq!(
-            options.window_decorations,
-            Some(gpui_kit::WindowDecorations::Client)
-        );
         assert!(options.app_owns_titlebar_drag);
         let titlebar = options.titlebar.expect("custom title bar");
         assert!(titlebar.appears_transparent);

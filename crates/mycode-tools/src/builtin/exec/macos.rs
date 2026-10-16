@@ -156,7 +156,7 @@ impl MacChild {
         let Some(pid) = state.pid else {
             return Ok(());
         };
-        let containment = process_tree.terminate(None);
+        let containment = process_tree.terminate();
         let leader = if containment.is_ok() {
             Ok(())
         } else {
@@ -248,7 +248,7 @@ impl SpawnedPid {
         match self.process_tree.as_ref() {
             None => kill_leader_and_reap(self.pid),
             Some(process_tree) => {
-                process_tree.terminate(None)?;
+                process_tree.terminate()?;
                 reap_pid(self.pid)
             }
         }

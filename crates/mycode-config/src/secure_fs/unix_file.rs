@@ -136,12 +136,6 @@ pub(in crate::secure_fs) fn quarantine_file(
         reject_wrong_case(&parent, component)?;
         parent = unix::create_or_open_directory(&parent, component, true)?;
     }
-    #[cfg(any(
-        target_vendor = "apple",
-        target_os = "linux",
-        target_os = "android",
-        target_os = "redox"
-    ))]
     let renamed = rfs::renameat_with(
         parent.as_fd(),
         name,
@@ -149,28 +143,6 @@ pub(in crate::secure_fs) fn quarantine_file(
         backup,
         rfs::RenameFlags::NOREPLACE,
     );
-    #[cfg(not(any(
-        target_vendor = "apple",
-        target_os = "linux",
-        target_os = "android",
-        target_os = "redox"
-    )))]
-    let renamed = {
-        // Coordinate with owned-file writers on platforms without an atomic
-        // no-replace rename. The directory handle releases this lock on drop.
-        parent
-            .lock()
-            .map_err(|error| ConfigError::new(ConfigErrorKind::Io).with_io_kind(error.kind()))?;
-        match rfs::statat(parent.as_fd(), backup, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(_) => {
-                return Err(ConfigError::new(ConfigErrorKind::Io)
-                    .with_io_kind(io::ErrorKind::AlreadyExists));
-            }
-            Err(Errno::NOENT) => {}
-            Err(error) => return Err(unix::map_errno(error, ConfigErrorKind::Io)),
-        }
-        rfs::renameat(parent.as_fd(), name, parent.as_fd(), backup)
-    };
     match renamed {
         Ok(()) => {
             unix::sync_directory(&parent)?;
@@ -369,14 +341,8 @@ fn read_bounded(mut file: File, maximum_bytes: usize) -> Result<Zeroizing<Vec<u8
     }
 }
 
-#[cfg(target_vendor = "apple")]
 fn sync_file(file: &File) -> Result<(), ConfigError> {
     rfs::fcntl_fullfsync(file.as_fd()).map_err(|error| unix::map_errno(error, ConfigErrorKind::Io))
-}
-
-#[cfg(not(target_vendor = "apple"))]
-fn sync_file(file: &File) -> Result<(), ConfigError> {
-    rfs::fsync(file.as_fd()).map_err(|error| unix::map_errno(error, ConfigErrorKind::Io))
 }
 
 fn io_error(error: io::Error) -> ConfigError {

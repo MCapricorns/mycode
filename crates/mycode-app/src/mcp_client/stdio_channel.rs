@@ -459,10 +459,8 @@ fn filter_stdio_env(
 
 /// Platform launch flags.
 ///
-/// Unix puts the child in its own process group. Linux also asks the kernel
-/// to kill that process when the spawning thread dies. MCP stdio is spawned
-/// on the core bridge thread, which stays up for the life of the process.
-/// The signal is not inherited across fork, so grandchildren are not covered.
+/// macOS puts the child in its own process group so shutdown can signal the
+/// whole group.
 ///
 /// Windows does not use this function. [`launch_stdio_process`] creates the
 /// process suspended, assigns a kill-on-close Job, and resumes
@@ -472,34 +470,6 @@ fn configure_command(builder: &mut tokio::process::Command) {
     #[cfg(unix)]
     {
         builder.process_group(0);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        // SAFETY: `pre_exec` runs in the forked child before exec. `prctl`
-        // only arms the parent-death signal and does not allocate or lock.
-        // The signal is tied to the thread that called `spawn`. A parent
-        // that is already gone has reparented this child to init; exit
-        // instead of staying up.
-        unsafe {
-            builder.pre_exec(|| {
-                // `prctl` and `getppid` do not allocate. Called once in the
-                // forked child, before any other thread exists.
-                let rc = libc::prctl(
-                    libc::PR_SET_PDEATHSIG,
-                    libc::SIGKILL as libc::c_ulong,
-                    0,
-                    0,
-                    0,
-                );
-                if rc == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::getppid() == 1 {
-                    libc::_exit(1);
-                }
-                Ok(())
-            });
-        }
     }
 }
 

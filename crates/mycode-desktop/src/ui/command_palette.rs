@@ -1,4 +1,4 @@
-//! Global command palette. Cmd-K on macOS and Ctrl-K on Windows and Linux.
+//! Global command palette. Cmd-K on macOS and Ctrl-K on Windows.
 //!
 //! The list is the view-model catalog. This module only paints it and
 //! recognizes the shortcut. Confirming a row goes back through the workspace
@@ -23,7 +23,7 @@ use super::skin::menu_panel;
 
 gpui_kit::actions!(mycode, [ToggleCommandPalette]);
 
-/// Cmd on macOS, Ctrl on Windows and Linux, with no other modifiers.
+/// Cmd on macOS, Ctrl on Windows, with no other modifiers.
 #[must_use]
 pub(crate) fn is_command_palette_shortcut(keystroke: &Keystroke) -> bool {
     if !keystroke.key.eq_ignore_ascii_case("k") {

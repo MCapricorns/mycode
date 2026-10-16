@@ -10,8 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::prepare::PreparedInvocation;
 use super::resolve::PinnedImage;
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-use crate::builtin::process::collect_child_output;
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
@@ -129,7 +127,6 @@ pub(super) async fn run_pinned(
 ) -> Result<RunOutcome, ToolError> {
     #[cfg(any(
         all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     ))]
     {
@@ -156,7 +153,6 @@ pub(super) async fn run_pinned(
     }
     #[cfg(not(any(
         all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
@@ -169,7 +165,6 @@ pub(super) async fn run_pinned(
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
     test
 ))]
@@ -355,7 +350,6 @@ impl Drop for CancelSpawnOnDrop {
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
     test
 ))]
@@ -407,7 +401,6 @@ where
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
     test
 ))]
@@ -425,7 +418,6 @@ async fn cleanup_started_spawn<T: SpawnCleanup>(
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 fn spawn_program(
@@ -434,11 +426,6 @@ fn spawn_program(
     gate: &SpawnGate,
 ) -> Result<SpawnedProgram, SpawnFailure> {
     let (pinned, argv0, args, cwd, env) = prepared.into_spawn_parts();
-    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-    let (child, process_tree, pinned, lease) =
-        super::linux::spawn_linux(pinned, &argv0, &args, &cwd, &env, lease, gate)?;
-    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-    let metadata = ExecutionMetadata::default();
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     let (child, process_tree, pinned) =
         super::windows::spawn_windows(pinned, &argv0, &args, &cwd, &env, gate)?;
@@ -453,8 +440,6 @@ fn spawn_program(
     Ok(SpawnedProgram {
         metadata,
         live: Some(LiveSpawn {
-            #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-            inner: Inner::Tokio(child),
             #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
             inner: Inner::Windows(child),
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -479,8 +464,6 @@ struct LiveSpawn {
 }
 
 enum Inner {
-    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-    Tokio(tokio::process::Child),
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     Windows(super::windows::WindowsChild),
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -488,7 +471,6 @@ enum Inner {
     /// Platform without a supported process runtime.
     #[cfg(not(any(
         all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     Unsupported,
@@ -504,7 +486,6 @@ impl Drop for SpawnedProgram {
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 impl SpawnCleanup for SpawnedProgram {
@@ -537,17 +518,9 @@ fn take_pending_cleanup(pending: &parking_lot::Mutex<Option<LiveSpawn>>) -> Opti
 
 fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
     match &mut live.inner {
-        #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-        Inner::Tokio(child) => {
-            if let Err(error) = live.process_tree.terminate(Some(child)) {
-                let _ = child.start_kill();
-                return Err(error);
-            }
-            wait_tokio_child_blocking(child)
-        }
         #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
         Inner::Windows(child) => {
-            let containment = live.process_tree.terminate(None);
+            let containment = live.process_tree.terminate();
             if containment.is_err() {
                 let _ = child.terminate();
             }
@@ -561,53 +534,17 @@ fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
         }
         #[cfg(not(any(
             all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-            all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
             all(target_os = "macos", target_arch = "aarch64")
         )))]
         Inner::Unsupported => Ok(()),
     }
 }
 
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-async fn wait_tokio_child(child: &mut tokio::process::Child) -> Result<(), std::io::Error> {
-    loop {
-        match child.wait().await {
-            Ok(_) => return Ok(()),
-            Err(error) if error.raw_os_error() == Some(libc::ECHILD) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-pub(super) fn wait_tokio_child_blocking(
-    child: &mut tokio::process::Child,
-) -> Result<(), std::io::Error> {
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(error) if error.raw_os_error() == Some(libc::ECHILD) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-}
-
 async fn teardown_live(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
     match &mut live.inner {
-        #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-        Inner::Tokio(child) => {
-            if let Err(error) = live.process_tree.terminate(Some(child)) {
-                let _ = child.start_kill();
-                return Err(error);
-            }
-            wait_tokio_child(child).await
-        }
         #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
         Inner::Windows(child) => {
-            let containment = live.process_tree.terminate(None);
+            let containment = live.process_tree.terminate();
             let leader = if containment.is_ok() {
                 child.wait().await.map(|_| ())
             } else {
@@ -631,7 +568,6 @@ async fn teardown_live(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
         }
         #[cfg(not(any(
             all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-            all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
             all(target_os = "macos", target_arch = "aarch64")
         )))]
         Inner::Unsupported => Ok(()),
@@ -697,13 +633,6 @@ impl SpawnedProgram {
             .as_mut()
             .ok_or_else(|| std::io::Error::other("spawned program already cleaned up"))?;
         match &mut live.inner {
-            #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-            Inner::Tokio(child) => {
-                let mut stdout_pipe = Some(child.stdout.take().expect("stdout was piped"));
-                let mut stderr_pipe = Some(child.stderr.take().expect("stderr was piped"));
-                collect_child_output(child, &mut stdout_pipe, &mut stderr_pipe, stdout, stderr)
-                    .await
-            }
             #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
             Inner::Windows(child) => {
                 let mut stdout_pipe = child.take_stdout();
@@ -732,7 +661,6 @@ impl SpawnedProgram {
             }
             #[cfg(not(any(
                 all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-                all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
                 all(target_os = "macos", target_arch = "aarch64")
             )))]
             Inner::Unsupported => Err(std::io::Error::other(

@@ -14,8 +14,8 @@
 //! stdout/stderr are captured with the shared 50 KiB
 //! truncation cap; a non-zero exit is an error result, not a tool failure.
 //! Timeout and cancel await terminate-and-reap; dropping the future transfers
-//! cleanup ownership. Launch is Windows x64, Windows ARM64, Linux x86_64 GNU,
-//! and macOS Apple Silicon. Other Unix (musl, Android, BSD) is unsupported.
+//! cleanup ownership. Launch is Windows x64, Windows ARM64, and macOS Apple
+//! Silicon; every other target is unsupported.
 //! Windows x64 and Windows ARM64 share the `CreateProcessW` path.
 mod argv;
 #[cfg(windows)]
@@ -24,17 +24,12 @@ pub(crate) use argv::{
 };
 mod env;
 mod image;
-#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
-mod linux;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos;
 mod prepare;
 mod resolve;
 mod spawn;
-#[cfg(any(
-    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
-))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod unix;
 #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod windows;
