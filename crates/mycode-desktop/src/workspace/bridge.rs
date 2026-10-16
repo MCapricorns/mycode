@@ -99,7 +99,7 @@ fn failed_start(message: String) -> DesktopAction {
 
 impl Workspace {
     pub(super) fn apply_event(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
-        let active_session = self.vm.active.as_ref().map(|c| c.session_id.clone());
+        let active_session = self.open_session_id();
         let matches_active = |session_id: &str| active_session.as_deref() == Some(session_id);
         let action = match event {
             BridgeEvent::ChatText { session_id, delta } => {
@@ -919,7 +919,7 @@ impl Workspace {
             );
             return;
         }
-        let Some(conversation) = self.vm.active.clone() else {
+        if self.vm.active.is_none() {
             self.push_toast(
                 crate::i18n::t("Open a chat before compacting.", "先打开一个对话再压缩。")
                     .to_owned(),
@@ -927,11 +927,8 @@ impl Workspace {
                 cx,
             );
             return;
-        };
-        let (Some(session), Some(branch)) = (
-            SessionId::parse(&conversation.session_id),
-            BranchId::parse(&conversation.branch_id),
-        ) else {
+        }
+        let Some((session, branch, expected_head)) = self.open_turn_target() else {
             return;
         };
         let Some(settings) = self.vm.settings.as_ref() else {
@@ -971,7 +968,7 @@ impl Workspace {
             BridgeCommand::CompactSession {
                 session,
                 branch,
-                expected_head: crate::workspace::parse_head(&conversation.head),
+                expected_head,
                 provider_id,
                 model,
             },
@@ -980,21 +977,17 @@ impl Workspace {
     }
 
     fn begin_chat_turn(&mut self, cx: &mut Context<Self>) {
-        let Some(conversation) = self.vm.active.clone() else {
+        if self.vm.active.is_none() {
             self.apply_action(failed_start("no open session".to_owned()), cx);
             return;
-        };
-        let (Some(session), Some(branch)) = (
-            SessionId::parse(&conversation.session_id),
-            BranchId::parse(&conversation.branch_id),
-        ) else {
+        }
+        let Some((session, branch, expected_head)) = self.open_turn_target() else {
             self.apply_action(
                 failed_start("the open session could not be read".to_owned()),
                 cx,
             );
             return;
         };
-        let expected_head = crate::workspace::parse_head(&conversation.head);
         let Some(settings) = self.vm.settings.as_ref() else {
             self.apply_action(failed_start("settings are still loading".to_owned()), cx);
             return;
@@ -1131,16 +1124,9 @@ impl Workspace {
         if draft.trim().is_empty() {
             return;
         }
-        let Some(conversation) = self.vm.active.clone() else {
+        let Some((session, branch, expected_head)) = self.open_turn_target() else {
             return;
         };
-        let (Some(session), Some(branch)) = (
-            SessionId::parse(&conversation.session_id),
-            BranchId::parse(&conversation.branch_id),
-        ) else {
-            return;
-        };
-        let expected_head = crate::workspace::parse_head(&conversation.head);
         self.queue_hold_on_return = false;
         self.apply_action(DesktopAction::TurnArmed, cx);
         if clear_composer {

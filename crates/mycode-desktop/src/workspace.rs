@@ -821,12 +821,7 @@ impl Workspace {
     /// Steers the running turn. The composer clears immediately. If the turn
     /// ended before the inbox was registered, the text is queued instead.
     fn dispatch_steer(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session_id) = self
-            .vm
-            .active
-            .as_ref()
-            .map(|conversation| conversation.session_id.clone())
-        else {
+        let Some(session_id) = self.open_session_id() else {
             self.enqueue_follow_up(draft, window, cx);
             return;
         };
@@ -960,12 +955,7 @@ impl Workspace {
 
     /// Stops one running subagent. The parent turn and the other children stay.
     pub(crate) fn on_cancel_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
-        let Some(session_id) = self
-            .vm
-            .active
-            .as_ref()
-            .map(|conversation| conversation.session_id.clone())
-        else {
+        let Some(session_id) = self.open_session_id() else {
             return;
         };
         if call_id.is_empty() {
@@ -1423,19 +1413,17 @@ impl Workspace {
         if self.vm.sending || self.vm.history_loading || self.scroll_hold.is_some() {
             return;
         }
-        let Some(active) = self.vm.active.clone() else {
+        let Some(before) = self
+            .vm
+            .active
+            .as_ref()
+            .and_then(|active| active.older_before.clone())
+        else {
             return;
         };
-        let Some(before) = active.older_before.clone() else {
+        let Some((session, branch, expected_head)) = self.open_turn_target() else {
             return;
         };
-        let Some(session) = mycode_app::SessionId::parse(&active.session_id) else {
-            return;
-        };
-        let Some(branch) = mycode_app::BranchId::parse(&active.branch_id) else {
-            return;
-        };
-        let expected_head = parse_head(&active.head);
         self.apply_action(DesktopAction::HistoryLoadStarted, cx);
         self.dispatch(
             BridgeCommand::LoadOlder {
@@ -1446,6 +1434,26 @@ impl Workspace {
             },
             cx,
         );
+    }
+
+    /// Session, branch, and head of the open conversation, read without
+    /// cloning its transcript. `None` without an open chat or when its ids
+    /// do not parse.
+    fn open_turn_target(&self) -> Option<(mycode_app::SessionId, mycode_app::BranchId, HeadStamp)> {
+        let active = self.vm.active.as_ref()?;
+        Some((
+            mycode_app::SessionId::parse(&active.session_id)?,
+            mycode_app::BranchId::parse(&active.branch_id)?,
+            parse_head(&active.head),
+        ))
+    }
+
+    /// The open conversation's session id.
+    fn open_session_id(&self) -> Option<String> {
+        self.vm
+            .active
+            .as_ref()
+            .map(|conversation| conversation.session_id.clone())
     }
 
     // ---- accessors for the render layer ----

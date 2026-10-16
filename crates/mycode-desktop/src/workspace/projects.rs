@@ -360,11 +360,7 @@ impl Workspace {
         }
         self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
         if self.active_can_adopt(project)
-            && let Some(session_id) = self
-                .vm
-                .active
-                .as_ref()
-                .map(|conversation| conversation.session_id.clone())
+            && let Some(session_id) = self.open_session_id()
         {
             self.attach_project(&session_id, project, cx);
             return;
@@ -507,11 +503,7 @@ impl Workspace {
             );
             return;
         }
-        self.picker_chat_session = self
-            .vm
-            .active
-            .as_ref()
-            .map(|active| active.session_id.clone());
+        self.picker_chat_session = self.open_session_id();
         self.project_picker = Some(crate::ui::project_picker::browse(
             self.vm.project_dir.as_ref().map(std::path::PathBuf::from),
         ));
@@ -520,11 +512,7 @@ impl Workspace {
 
     /// Adds explicit file references; it never silently switches the workspace.
     pub(crate) fn on_attach_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let session = self
-            .vm
-            .active
-            .as_ref()
-            .map(|active| active.session_id.clone());
+        let session = self.open_session_id();
         let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
             files: true,
             directories: false,
@@ -666,12 +654,7 @@ impl Workspace {
         self.focused_project = Some(project.to_owned());
         self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
-        let Some(session_id) = self
-            .vm
-            .active
-            .as_ref()
-            .map(|conversation| conversation.session_id.clone())
-        else {
+        let Some(session_id) = self.open_session_id() else {
             self.pending_project = Some(project.to_owned());
             self.dispatch(BridgeCommand::CreateSession, cx);
             self.refresh_skills(cx);
@@ -712,12 +695,7 @@ impl Workspace {
             return;
         }
         if self.active_can_adopt(project) {
-            let session_id = self
-                .vm
-                .active
-                .as_ref()
-                .map(|conversation| conversation.session_id.clone())
-                .expect("active session");
+            let session_id = self.open_session_id().expect("active session");
             self.attach_project(&session_id, project, cx);
             return;
         }
