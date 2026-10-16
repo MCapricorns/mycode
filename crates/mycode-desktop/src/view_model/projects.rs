@@ -44,6 +44,48 @@ pub fn workspace_of_session<'a>(
     }
 }
 
+/// The sessions `workspace_id` lists, in stored order, each with its
+/// project binding. Ownership follows [`workspace_of_session`]; the
+/// membership and binding tables are indexed once instead of scanned per
+/// session, which made the sidebar quadratic in the session count.
+#[must_use]
+pub(crate) fn workspace_session_rows<'a>(
+    state: &'a WorkspaceState,
+    workspace_id: &str,
+) -> Vec<(&'a SessionSummary, Option<&'a str>)> {
+    use std::collections::{HashMap, HashSet};
+
+    let Some(first) = state.workspaces.first() else {
+        return Vec::new();
+    };
+    let known: HashSet<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.id.as_str())
+        .collect();
+    let mut owners: HashMap<&str, &str> = HashMap::with_capacity(state.session_workspaces.len());
+    for (session, workspace) in &state.session_workspaces {
+        owners.entry(session.as_str()).or_insert(workspace.as_str());
+    }
+    let mut projects: HashMap<&str, &str> = HashMap::with_capacity(state.session_projects.len());
+    for (session, project) in &state.session_projects {
+        projects.entry(session.as_str()).or_insert(project.as_str());
+    }
+    state
+        .sessions
+        .iter()
+        .filter(|session| {
+            let owner = owners
+                .get(session.session_id.as_str())
+                .copied()
+                .filter(|id| known.contains(id))
+                .unwrap_or(first.id.as_str());
+            owner == workspace_id
+        })
+        .map(|session| (session, projects.get(session.session_id.as_str()).copied()))
+        .collect()
+}
+
 /// Task cards belong to the open session's project. Leaving that project
 /// hides them instead of leaving another project's work on screen.
 #[must_use]
@@ -143,6 +185,64 @@ mod tests {
             ..WorkspaceState::default()
         };
         assert!(!has_open_folder(&state));
+    }
+
+    #[test]
+    fn workspace_rows_match_workspace_of_session() {
+        let workspace = |id: &str| mycode_config::WorkspaceDef {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            folders: Vec::new(),
+        };
+        let session = |id: &str| crate::view_model::SessionSummary {
+            session_id: id.to_owned(),
+            root_branch_id: "br".to_owned(),
+            title: String::new(),
+            updated_at_ms: None,
+            event_count: 1,
+            active: false,
+            corrupt: false,
+        };
+        let pair = |left: &str, right: &str| (left.to_owned(), right.to_owned());
+        let state = WorkspaceState {
+            workspaces: vec![workspace("first"), workspace("second")],
+            sessions: ["unbound", "in-second", "stale", "in-first"]
+                .into_iter()
+                .map(session)
+                .collect(),
+            session_workspaces: vec![
+                pair("in-second", "second"),
+                pair("stale", "removed"),
+                pair("in-first", "first"),
+                pair("in-first", "second"),
+            ],
+            session_projects: vec![pair("in-first", "/a"), pair("in-first", "/b")],
+            ..WorkspaceState::default()
+        };
+        for id in ["first", "second"] {
+            let rows = super::workspace_session_rows(&state, id);
+            let expected: Vec<&str> = state
+                .sessions
+                .iter()
+                .filter(|session| {
+                    super::workspace_of_session(&state, &session.session_id)
+                        .is_some_and(|owner| owner.id == id)
+                })
+                .map(|session| session.session_id.as_str())
+                .collect();
+            let listed: Vec<&str> = rows
+                .iter()
+                .map(|(session, _)| session.session_id.as_str())
+                .collect();
+            assert_eq!(listed, expected, "{id}");
+        }
+        let first = super::workspace_session_rows(&state, "first");
+        let bound = first
+            .iter()
+            .find(|(session, _)| session.session_id == "in-first")
+            .and_then(|(_, project)| *project);
+        assert_eq!(bound, Some("/a"), "the first binding wins, as before");
+        assert!(super::workspace_session_rows(&WorkspaceState::default(), "first").is_empty());
     }
 
     #[test]
