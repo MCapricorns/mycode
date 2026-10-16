@@ -16,6 +16,7 @@
 //! to public addresses, including a different host.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -455,20 +456,12 @@ async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, HopFailure> 
         .iter()
         .map(|ip| SocketAddr::new(*ip, port))
         .collect();
-    let mut builder = call.route.apply(
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(crate::transport::CONNECT_TIMEOUT),
-    )?;
-    if let Some(user_agent) = call.user_agent {
-        builder = builder.user_agent(user_agent);
-    }
-    if !sockets.is_empty() {
-        builder = builder.resolve_to_addrs(host, &sockets);
-    }
-    let client = builder
-        .build()
-        .map_err(|error| format!("http client unavailable: {error}"))?;
+    let client = pooled_client(ClientKey {
+        route: call.route.clone(),
+        host: host.to_ascii_lowercase(),
+        sockets,
+        user_agent: call.user_agent.map(str::to_owned),
+    })?;
     let mut request = client.request(call.method.clone(), call.url);
     for (name, value) in call.headers {
         request = request.header(name, value);
@@ -494,6 +487,53 @@ async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, HopFailure> 
         unreachable: error.is_connect(),
         message: format!("request failed: {error}"),
     })
+}
+
+/// Everything a hop's client is built from. Hops with equal keys share one
+/// client, so keep-alive connections and TLS sessions carry over between
+/// requests to the same endpoint instead of handshaking every turn.
+#[derive(Clone, PartialEq, Eq)]
+struct ClientKey {
+    route: crate::proxy::Route,
+    host: String,
+    /// The pin. A changed DNS answer is a different key.
+    sockets: Vec<SocketAddr>,
+    user_agent: Option<String>,
+}
+
+/// Clients kept for reuse, most recently used last.
+static CLIENTS: Mutex<Vec<(ClientKey, reqwest::Client)>> = Mutex::new(Vec::new());
+/// Distinct endpoints whose clients stay cached.
+const MAX_CACHED_CLIENTS: usize = 16;
+
+/// The cached client for `key`, built on first use.
+fn pooled_client(key: ClientKey) -> Result<reqwest::Client, String> {
+    let mut clients = CLIENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(index) = clients.iter().position(|(cached, _)| *cached == key) {
+        let entry = clients.remove(index);
+        let client = entry.1.clone();
+        clients.push(entry);
+        return Ok(client);
+    }
+    let mut builder = key.route.apply(
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(crate::transport::CONNECT_TIMEOUT),
+    )?;
+    if let Some(user_agent) = key.user_agent.as_deref() {
+        builder = builder.user_agent(user_agent);
+    }
+    if !key.sockets.is_empty() {
+        builder = builder.resolve_to_addrs(&key.host, &key.sockets);
+    }
+    let client = builder
+        .build()
+        .map_err(|error| format!("http client unavailable: {error}"))?;
+    if clients.len() >= MAX_CACHED_CLIENTS {
+        clients.remove(0);
+    }
+    clients.push((key, client.clone()));
+    Ok(client)
 }
 
 pub(crate) fn public_host(host: &str) -> bool {
