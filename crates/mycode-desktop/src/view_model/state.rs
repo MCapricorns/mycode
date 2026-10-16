@@ -71,6 +71,9 @@ pub(crate) struct WorkspaceState {
     pub pending_welcome_send: Option<String>,
     /// Follow-ups waiting for the in-flight turn to finish.
     pub queued: Vec<String>,
+    /// The user stopped the turn, so the queue waits for an explicit send
+    /// (or a recall into the composer) instead of starting on its own.
+    pub queue_paused: bool,
     /// Steers sent to the running turn that its ledger has not shown yet.
     pub pending_steers: Vec<String>,
     /// Every thinking trace shows as one collapsed row. Persisted in
@@ -448,6 +451,8 @@ pub enum DesktopAction {
     QueuedMessageTaken,
     /// One queued follow-up moved to the front so an interrupt can send it.
     QueuedMessagePromoted(usize),
+    /// The queue was held after a user stop, or released by an explicit send.
+    QueuePaused(bool),
     /// Opens or closes the subagent detail window.
     SubagentWindowChanged(Option<String>),
     /// The user closed one running subagent from its row.

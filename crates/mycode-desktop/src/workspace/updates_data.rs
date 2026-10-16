@@ -399,6 +399,13 @@ impl Workspace {
             self.on_dismiss_ask(cx);
             dismissed = true;
         }
+        // A queue is the nearest layer: Escape takes it back into the
+        // composer for editing. The next Escape stops the turn, and a stop
+        // never sends what is queued.
+        if !dismissed && !self.vm.queued.is_empty() {
+            self.on_recall_queued(None, window, cx);
+            dismissed = true;
+        }
         if !dismissed && self.vm.sending {
             self.on_cancel_chat(cx);
         }
