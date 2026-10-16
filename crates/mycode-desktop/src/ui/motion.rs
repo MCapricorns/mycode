@@ -53,8 +53,31 @@ impl<T> FadeTarget for T where T: AnimationExt + Styled + IntoElement + Sized + 
 /// Windows reports client-area animations; macOS reports the workspace
 /// accessibility display option. GPUI's own [`gpui_kit::App::reduce_motion`]
 /// is what the fades read after this value is applied.
+///
+/// The root view asks on every frame, so the answer is reused for
+/// [`MOTION_PROBE_TTL`] instead of calling into the OS each repaint.
 #[must_use]
 pub(super) fn system_prefers_reduced_motion() -> Option<bool> {
+    use std::sync::{Mutex, PoisonError};
+    use std::time::Instant;
+
+    static LAST: Mutex<Option<(Instant, Option<bool>)>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((at, answer)) = *last
+        && at.elapsed() < MOTION_PROBE_TTL
+    {
+        return answer;
+    }
+    let answer = query_reduced_motion();
+    *last = Some((Instant::now(), answer));
+    answer
+}
+
+/// How long one reduce-motion answer is reused. A changed OS setting shows
+/// up within this delay.
+const MOTION_PROBE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn query_reduced_motion() -> Option<bool> {
     #[cfg(windows)]
     {
         windows_prefers_reduced_motion()
