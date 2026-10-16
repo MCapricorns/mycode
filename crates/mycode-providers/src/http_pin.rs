@@ -148,16 +148,8 @@ pub fn connection_addresses(
     let class = classify_addresses(addrs);
     match mode {
         PinMode::PublicHttps => {
-            if parsed.scheme() != "https" {
-                return Err("public requests must use https".to_owned());
-            }
-            if parsed.port().is_some_and(|port| port != 443) {
-                return Err("public requests must use port 443".to_owned());
-            }
+            check_public_https(&parsed)?;
             let host = parsed.host_str().unwrap_or("");
-            if !public_host(host) {
-                return Err(format!("host is not public: {host}"));
-            }
             if class == AddressClass::AllPublic {
                 return Ok(addrs.to_vec());
             }
@@ -236,33 +228,26 @@ fn decide_redirect(
 
 /// Sends `request`, pinning DNS and re-checking every redirect.
 ///
+/// A hop that goes through a proxy (see [`crate::proxy`]) is not pinned:
+/// the proxy resolves the host. The local DNS answer is still checked when
+/// one arrives, and a host whose answer is entirely local skips the proxy.
+///
 /// # Errors
 ///
 /// Returns a transport, DNS, pin, or redirect failure. The response body is
 /// left unread so streaming callers can consume it.
 pub async fn send_pinned(request: PinnedRequest) -> Result<reqwest::Response, String> {
-    let mut method = request.method;
-    let mut url = request.url;
-    let mut body = request.body;
+    let mut method = request.method.clone();
+    let mut url = request.url.clone();
+    let mut body = request.body.clone();
     for hop in 0..MAX_REDIRECTS {
         if request.cancel.is_cancelled() {
             return Err("request cancelled".to_owned());
         }
-        let looked_up = lookup_addresses(&url).await?;
-        let addrs = connection_addresses(request.mode, hop, &url, &looked_up)?;
         let response = tokio::select! {
             biased;
             () = request.cancel.cancelled() => return Err("request cancelled".to_owned()),
-            sent = send_once(OnceCall {
-                method: &method,
-                url: &url,
-                headers: &request.headers,
-                body: body.as_ref(),
-                addrs: &addrs,
-                timeout: request.timeout,
-                read_timeout: request.read_timeout,
-                user_agent: request.user_agent.as_deref(),
-            }) => sent?,
+            sent = send_hop(&request, hop, &method, &url, body.as_ref()) => sent?,
         };
         if !request.follow_redirects {
             return Ok(response);
@@ -288,6 +273,121 @@ pub async fn send_pinned(request: PinnedRequest) -> Result<reqwest::Response, St
         }
     }
     Err("too many redirects".to_owned())
+}
+
+/// How long a proxied hop waits for the advisory local DNS answer. The
+/// proxy resolves the host itself, so a slow or poisoned resolver must not
+/// hold the request.
+const ADVISORY_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Sends one hop on its route. In auto mode, a direct hop that cannot reach
+/// a public host is retried once through a listening local proxy.
+async fn send_hop(
+    request: &PinnedRequest,
+    hop: u32,
+    method: &reqwest::Method,
+    url: &str,
+    body: Option<&PinnedBody>,
+) -> Result<reqwest::Response, String> {
+    use crate::proxy::Route;
+
+    let parsed = reqwest::Url::parse(url).map_err(|_| format!("url is invalid: {url}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "url has no host".to_owned())?;
+    let call = |route: Route, addrs: Vec<IpAddr>| OnceCall {
+        method,
+        url,
+        headers: &request.headers,
+        body,
+        addrs,
+        route,
+        timeout: request.timeout,
+        read_timeout: request.read_timeout,
+        user_agent: request.user_agent.as_deref(),
+    };
+    let route = crate::proxy::route_for(&parsed);
+    if route.proxied() {
+        let looked_up = tokio::time::timeout(ADVISORY_LOOKUP_TIMEOUT, lookup_addresses(url))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        let sent = if looked_up.is_empty() {
+            check_url(request.mode, url)?;
+            send_once(call(route.clone(), Vec::new())).await
+        } else {
+            let addrs = connection_addresses(request.mode, hop, url, &looked_up)?;
+            if addrs
+                .iter()
+                .all(|ip| !is_public_ip(*ip) && !is_fake_ip(*ip))
+            {
+                // A LAN or loopback answer: the proxy cannot reach it.
+                send_once(call(Route::Direct, addrs)).await
+            } else {
+                send_once(call(route.clone(), Vec::new())).await
+            }
+        };
+        return sent.map_err(|failure| {
+            if failure.unreachable && matches!(route, Route::Via(_)) {
+                crate::proxy::forget(host);
+            }
+            failure.message
+        });
+    }
+    let failure = match lookup_addresses(url).await {
+        Ok(looked_up) => {
+            let addrs = connection_addresses(request.mode, hop, url, &looked_up)?;
+            let public = addrs.iter().all(|ip| is_public_ip(*ip));
+            match send_once(call(Route::Direct, addrs)).await {
+                Ok(response) => return Ok(response),
+                Err(failure) if failure.unreachable && public => failure.message,
+                Err(failure) => return Err(failure.message),
+            }
+        }
+        Err(message) => message,
+    };
+    // Direct could not reach a public host, or DNS failed: a blocked or
+    // poisoned route. Retry once through a listening local proxy.
+    let Some(proxy) = crate::proxy::fallback_for(host).await else {
+        return Err(failure);
+    };
+    check_url(request.mode, url)?;
+    send_once(call(Route::Via(proxy), Vec::new()))
+        .await
+        .map_err(|retry| {
+            crate::proxy::forget(host);
+            format!("{failure}; through local proxy: {}", retry.message)
+        })
+}
+
+/// URL-level policy for a hop whose addresses this process cannot see
+/// because a proxy resolves the host.
+fn check_url(mode: PinMode, url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| format!("url is invalid: {url}"))?;
+    if mode == PinMode::PublicHttps {
+        return check_public_https(&parsed);
+    }
+    let host = parsed.host_str().unwrap_or("");
+    if !public_host(host) {
+        return Err(format!("host is not public: {host}"));
+    }
+    Ok(())
+}
+
+/// https on port 443 to a host name that is not local.
+fn check_public_https(parsed: &reqwest::Url) -> Result<(), String> {
+    if parsed.scheme() != "https" {
+        return Err("public requests must use https".to_owned());
+    }
+    if parsed.port().is_some_and(|port| port != 443) {
+        return Err("public requests must use port 443".to_owned());
+    }
+    let host = parsed.host_str().unwrap_or("");
+    if !public_host(host) {
+        return Err(format!("host is not public: {host}"));
+    }
+    Ok(())
 }
 
 async fn lookup_addresses(url: &str) -> Result<Vec<IpAddr>, String> {
@@ -318,13 +418,32 @@ struct OnceCall<'a> {
     url: &'a str,
     headers: &'a [(String, String)],
     body: Option<&'a PinnedBody>,
-    addrs: &'a [IpAddr],
+    /// Pinned addresses; empty when a proxy resolves the host.
+    addrs: Vec<IpAddr>,
+    route: crate::proxy::Route,
     timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     user_agent: Option<&'a str>,
 }
 
-async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, String> {
+/// Why one hop produced no response.
+struct HopFailure {
+    message: String,
+    /// The connection never opened (refused, reset during the handshake, or
+    /// connect timeout), so nothing was sent and a retry is safe.
+    unreachable: bool,
+}
+
+impl From<String> for HopFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            unreachable: false,
+        }
+    }
+}
+
+async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, HopFailure> {
     let parsed =
         reqwest::Url::parse(call.url).map_err(|_| format!("url is invalid: {}", call.url))?;
     let host = parsed
@@ -336,9 +455,11 @@ async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, String> {
         .iter()
         .map(|ip| SocketAddr::new(*ip, port))
         .collect();
-    let mut builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(crate::transport::CONNECT_TIMEOUT);
+    let mut builder = call.route.apply(
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(crate::transport::CONNECT_TIMEOUT),
+    )?;
     if let Some(user_agent) = call.user_agent {
         builder = builder.user_agent(user_agent);
     }
@@ -364,15 +485,18 @@ async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, String> {
     let sent = if let Some(idle) = call.read_timeout {
         match tokio::time::timeout(idle, pending).await {
             Ok(result) => result,
-            Err(_) => return Err("request failed: read timed out".to_owned()),
+            Err(_) => return Err("request failed: read timed out".to_owned().into()),
         }
     } else {
         pending.await
     };
-    sent.map_err(|error| format!("request failed: {error}"))
+    sent.map_err(|error| HopFailure {
+        unreachable: error.is_connect(),
+        message: format!("request failed: {error}"),
+    })
 }
 
-fn public_host(host: &str) -> bool {
+pub(crate) fn public_host(host: &str) -> bool {
     let lower = host.to_ascii_lowercase();
     if lower.is_empty()
         || matches!(lower.as_str(), "localhost" | "localhost.localdomain")

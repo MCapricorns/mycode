@@ -22,6 +22,9 @@ pub(crate) fn normalized_key_input(raw: &str) -> Option<String> {
     (!key.is_empty() && !key.eq_ignore_ascii_case("bearer")).then_some(key)
 }
 
+/// The URL the custom proxy mode starts from: Clash's mixed port.
+pub(crate) const DEFAULT_PROXY_URL: &str = "http://127.0.0.1:7890";
+
 impl Workspace {
     pub(crate) fn settings_ua_input(
         &mut self,
@@ -62,6 +65,92 @@ impl Workspace {
             self.ua_sync_pending = false;
         }
         input
+    }
+
+    /// The proxy URL field. Only a value that parses as a proxy reaches the
+    /// settings document, so a half-typed URL never fails a save.
+    pub(crate) fn settings_proxy_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if self.proxy_input.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(DEFAULT_PROXY_URL));
+            cx.subscribe_in(
+                &input,
+                window,
+                |workspace, entity, event, _, cx| match event {
+                    InputEvent::Change => {
+                        let text = entity.read(cx).value().trim().to_owned();
+                        if matches!(
+                            mycode_config::ProxyPreference::parse(&text),
+                            Some(mycode_config::ProxyPreference::Url(_))
+                        ) {
+                            workspace.apply_action(
+                                DesktopAction::SettingsProxyChanged {
+                                    value: text,
+                                    typed: true,
+                                },
+                                cx,
+                            );
+                        }
+                    }
+                    InputEvent::Blur => workspace.flush_settings_text_save(cx),
+                    InputEvent::Focus | InputEvent::PressEnter { .. } => {}
+                },
+            )
+            .detach();
+            self.proxy_input = Some(input);
+        }
+        let input = self.proxy_input.clone().expect("proxy input");
+        if self.proxy_sync_pending {
+            let target = self
+                .vm
+                .settings
+                .as_ref()
+                .map(|settings| settings.proxy.clone())
+                .filter(|proxy| {
+                    matches!(
+                        mycode_config::ProxyPreference::parse(proxy),
+                        Some(mycode_config::ProxyPreference::Url(_))
+                    )
+                })
+                .unwrap_or_default();
+            let current = input.read(cx).value().to_string();
+            if current != target {
+                input.update(cx, |state, cx| state.set_value(target, window, cx));
+            }
+            self.proxy_sync_pending = false;
+        }
+        input
+    }
+
+    /// Picks the proxy mode from the General page: `auto`, `direct`, or
+    /// `custom`. Custom keeps a stored URL, or starts from Clash's default
+    /// port.
+    pub(crate) fn on_select_proxy_mode(&mut self, mode: &str, cx: &mut Context<Self>) {
+        let current = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.proxy.clone())
+            .unwrap_or_default();
+        let value = match mode {
+            "direct" => mycode_config::PROXY_DIRECT.to_owned(),
+            "custom" => match mycode_config::ProxyPreference::parse(&current) {
+                Some(mycode_config::ProxyPreference::Url(_)) => return,
+                _ => DEFAULT_PROXY_URL.to_owned(),
+            },
+            _ => String::new(),
+        };
+        self.proxy_sync_pending = true;
+        self.apply_action(
+            DesktopAction::SettingsProxyChanged {
+                value,
+                typed: false,
+            },
+            cx,
+        );
     }
 
     pub(crate) fn provider_form(

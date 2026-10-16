@@ -4320,6 +4320,8 @@ name = "mycode-providers"
 version = "0.11.17"
 dependencies = [
  "bytes",
+ "http",
+ "hyper-util",
  "mycode-config",
  "mycode-core",
  "reqwest",

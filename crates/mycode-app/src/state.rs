@@ -146,6 +146,8 @@ pub(crate) async fn refresh_catalog(
         Ok(Err(error)) => return BridgeReply::Catalog(Err(render_config_error(&error))),
         Err(error) => return BridgeReply::Catalog(Err(format!("catalog task failed: {error}"))),
     };
+    // The catalog refresh can be the first request after launch.
+    crate::settings_io::apply_network(&settings);
     let outcome = mycode_providers::catalog::refresh(
         &state.home,
         &settings.effective_user_agent(),

@@ -36,6 +36,7 @@ pub(super) fn render_general_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let ua_input = workspace.settings_ua_input(window, cx);
+    let proxy_row = proxy_field(workspace, window, cx);
     let theme_id = workspace
         .vm()
         .settings
@@ -149,6 +150,114 @@ pub(super) fn render_general_section(
                 ua_field,
             ],
         ))
+        .child(settings_card(
+            "network",
+            t("Network", "网络"),
+            Some(t(
+                "Proxy for model, search, and update requests. Saved to settings; local models always connect directly.",
+                "模型、搜索与更新请求使用的代理。写入设置；本地模型始终直连。",
+            )),
+            theme,
+            vec![proxy_row],
+        ))
+        .into_any_element()
+}
+
+/// Mode chip id for one stored proxy value.
+fn proxy_mode(stored: &str) -> &'static str {
+    match mycode_config::ProxyPreference::parse(stored) {
+        Some(mycode_config::ProxyPreference::Direct) => "direct",
+        Some(mycode_config::ProxyPreference::Url(_)) => "custom",
+        _ => "auto",
+    }
+}
+
+fn proxy_field(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let stored = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.proxy.clone())
+        .unwrap_or_default();
+    let mode = proxy_mode(&stored);
+    let options = [
+        ("auto", t("Auto", "智能")),
+        ("direct", t("Direct", "直连")),
+        ("custom", t("Custom", "自定义")),
+    ]
+    .into_iter()
+    .map(|(id, label)| (id.to_owned(), label.to_owned()))
+    .collect::<Vec<_>>();
+    let hint = match mode {
+        "direct" => t(
+            "Every request connects directly, ignoring the system proxy.",
+            "所有请求直连，忽略系统代理。",
+        ),
+        "custom" => t(
+            "http, https, socks5, or socks5h. A bare host:port such as 127.0.0.1:7890 is read as http.",
+            "支持 http、https、socks5、socks5h。只填 host:port（如 127.0.0.1:7890）按 http 处理。",
+        ),
+        _ => t(
+            "Uses the system proxy when one is on (Clash \"System Proxy\"). Otherwise connects directly, and a blocked host is retried through a running local Clash (7890 / 7897) or v2rayN (10809) and remembered.",
+            "系统代理开启时使用系统代理（Clash「系统代理」）。否则直连；直连不通的站点会自动改走本机正在运行的 Clash（7890 / 7897）或 v2rayN（10809），并记住该站点。",
+        ),
+    };
+    let input = (mode == "custom").then(|| workspace.settings_proxy_input(window, cx));
+    let invalid = input.as_ref().is_some_and(|input| {
+        !matches!(
+            mycode_config::ProxyPreference::parse(input.read(cx).value().trim()),
+            Some(mycode_config::ProxyPreference::Url(_))
+        )
+    });
+    let muted = cx.theme().muted_foreground;
+    let danger = cx.theme().danger;
+    div()
+        .id("row-proxy")
+        .w_full()
+        .h_auto()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(div().text_sm().child(t("Proxy", "代理")))
+        .child(choice_chips(
+            "proxy-mode",
+            &options,
+            mode,
+            |workspace, value, cx| workspace.on_select_proxy_mode(value, cx),
+            cx,
+        ))
+        .children(input.map(|input| {
+            // Fixed height, as for the User-Agent field.
+            div()
+                .w_full()
+                .h(px(30.))
+                .min_h(px(30.))
+                .max_h(px(30.))
+                .flex_none()
+                .text_sm()
+                .child(Input::new(&input))
+        }))
+        .child(
+            div()
+                .w_full()
+                .min_w_0()
+                .text_xs()
+                .whitespace_normal()
+                .text_color(if invalid { danger } else { muted })
+                .child(if invalid {
+                    t(
+                        "Not a proxy URL yet; the last valid one stays in use.",
+                        "还不是有效的代理地址；继续使用上一个有效值。",
+                    )
+                } else {
+                    hint
+                }),
+        )
         .into_any_element()
 }
 

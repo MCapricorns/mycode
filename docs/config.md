@@ -49,6 +49,7 @@
 
 - **外观**：`appearance.theme` 接受 `dark` 或 `light`，其它值校验失败，整份文档按上面的规则备份并重置。色板已移除：旧文件里的 `appearance.palette` 不论写的是什么都照常读入、被忽略，下次保存时清除，不会因此重置整份文档。`appearance.language` 是 `auto` / `en` / `zh`。`appearance.fontSize` 是 `s` / `m` / `l` / `xl`，缺省为 `m`。`appearance.fontFamily` 缺省、空字符串或 `system` 表示操作系统界面字体；具名值为 `Inter`、`Segoe UI`、`PingFang`、`Noto Sans`
 - **User-Agent**：`userAgent`，缺省是 pi agent 形状 `pi (<平台> <版本>; <架构>)`
+- **代理**：`proxy`，空或 `auto` 为智能模式（系统代理开启时走系统代理；否则直连，直连不通的公网站点改走本机正在监听的 Clash 7890 / 7897 或 v2rayN 10809 并在本进程内记住）；`direct` 忽略一切代理；也可以写 `http` / `https` / `socks5` / `socks5h` 代理地址，只写 `host:port` 按 `http` 处理。环回、`.local` 和私网地址始终直连
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`）。密钥不在此列
 - **思考强度**：`reasoningEffort` 是保存的默认值，必须是 models.dev 档位（`off`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）。会话里选的模型和强度不写这里，见下文 `ui.json`
 - **Shell**：没有可切换的 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。旧的 `tools.shell` 还能被读入，任何 `kind` 都不会让整份文档校验失败；启动时忽略它，并在写回时去掉。`MYCODE_SHELL` 不再覆盖选择，有具体取值时只提示一次。旧的 `tools.osSandbox` 同样只被读入并在启动时清掉：OS 沙箱已随功能移除，进程以当前用户权限运行

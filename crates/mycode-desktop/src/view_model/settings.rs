@@ -33,6 +33,8 @@ pub struct SettingsState {
     pub user_agent: String,
     /// Effective User-Agent preview.
     pub effective_user_agent: String,
+    /// Stored proxy preference: empty or `auto`, `direct`, or a proxy URL.
+    pub proxy: String,
     /// Configured providers.
     pub providers: Vec<mycode_config::ProviderSettings>,
     /// Configured search backends.
@@ -86,6 +88,7 @@ impl SettingsState {
             revision,
             user_agent: settings.user_agent.clone(),
             effective_user_agent: settings.effective_user_agent(),
+            proxy: settings.proxy.clone(),
             providers: settings.providers.clone(),
             web_backends: merge_web_backends(&settings.web.backends),
             mcp_servers: settings.mcp_servers.clone(),
@@ -110,6 +113,7 @@ impl SettingsState {
     pub fn to_settings(&self) -> mycode_config::AppSettings {
         mycode_config::AppSettings {
             user_agent: self.user_agent.clone(),
+            proxy: self.proxy.clone(),
             providers: self.providers.clone(),
             web: mycode_config::WebSettings {
                 backends: self.web_backends.clone(),

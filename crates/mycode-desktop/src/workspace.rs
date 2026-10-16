@@ -154,6 +154,9 @@ pub struct Workspace {
     pub(crate) composer_steer: bool,
     ua_input: Option<Entity<InputState>>,
     ua_sync_pending: bool,
+    proxy_input: Option<Entity<InputState>>,
+    /// The proxy field shows the stored URL on its next render.
+    proxy_sync_pending: bool,
     provider_form: Option<Entity<ProviderForm>>,
     backend_form: Option<Entity<BackendForm>>,
     mcp_form: Option<Entity<McpForm>>,
@@ -316,6 +319,8 @@ impl Workspace {
             composer_steer: false,
             ua_input: None,
             ua_sync_pending: false,
+            proxy_input: None,
+            proxy_sync_pending: false,
             provider_form: None,
             backend_form: None,
             mcp_form: None,
@@ -571,7 +576,11 @@ impl Workspace {
         // not been laid out yet, so the handle still describes the frame the
         // user is looking at.
         let follow_tail = grew && self.conversation_follows_tail();
-        let text_edit = matches!(action, DesktopAction::SettingsUserAgentChanged(_));
+        let text_edit = matches!(
+            action,
+            DesktopAction::SettingsUserAgentChanged(_)
+                | DesktopAction::SettingsProxyChanged { typed: true, .. }
+        );
         let epoch_before = self
             .vm
             .settings
