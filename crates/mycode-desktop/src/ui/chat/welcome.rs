@@ -1,4 +1,5 @@
-//! Empty-desk welcome. A warm gradient wordmark, actions, and recent folders.
+//! Empty-desk welcome. A warm gradient wordmark, Open folder, and recent
+//! folders.
 //!
 //! The only action is Open folder. [`new_task_label`] is shared with the
 //! sidebar control and untitled session rows, so a rename is one edit.
@@ -23,6 +24,9 @@ const NEW_TASK_LABEL: (&str, &str) = ("New task", "新建任务");
 
 const WORDMARK: &str = "MYCode";
 
+/// Recent folders listed under the actions.
+const MAX_WELCOME_RECENTS: usize = 6;
+
 /// One color sweep across the wordmark when the desk mounts.
 const WORDMARK_SWEEP_MS: u64 = 1400;
 
@@ -31,10 +35,8 @@ const WORDMARK_SWEEP_MS: u64 = 1400;
 const WORDMARK_SPAN: f32 = 0.75;
 
 const TAGLINE_NO_FOLDER: (&str, &str) = ("Open a folder to get started", "打开一个目录即可开始");
-const TAGLINE_HAS_FOLDER: (&str, &str) = (
-    "Start a task in this workspace",
-    "在此工作区开始一个任务",
-);
+const TAGLINE_HAS_FOLDER: (&str, &str) =
+    ("Start a task in this workspace", "在此工作区开始一个任务");
 
 /// The new-task label. The sidebar control and untitled session rows call
 /// this.
@@ -56,7 +58,13 @@ pub(super) fn render_welcome(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
-    let recents = workspace.vm().recents.clone();
+    let recents: Vec<String> = workspace
+        .vm()
+        .recents
+        .iter()
+        .take(MAX_WELCOME_RECENTS)
+        .cloned()
+        .collect();
     let has_folder = has_open_folder(workspace.vm());
     let (tagline_en, tagline_zh) = empty_desk_tagline(has_folder);
     div()
@@ -108,7 +116,7 @@ pub(super) fn render_welcome(
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.on_open_project_dialog(cx);
                     })),
-                )
+                ),
         )
         .when(!recents.is_empty(), |this| {
             this.child(
@@ -127,10 +135,9 @@ pub(super) fn render_welcome(
                             .pb_1()
                             .child(t("Recent", "最近")),
                     )
-                    .children(recents.iter().take(6).map(|project| {
-                        let project = project.clone();
+                    .children(recents.iter().map(|project| {
                         div()
-                            .id(format!("recent-{}", element_id(&project)))
+                            .id(format!("recent-{}", element_id(project)))
                             .group("recent-row")
                             .flex()
                             .flex_row()
@@ -159,10 +166,10 @@ pub(super) fn render_welcome(
                                     .min_w_0()
                                     .text_sm()
                                     .truncate()
-                                    .child(project_label(&project)),
+                                    .child(project_label(project)),
                             )
                             .child(hover_delete_button(
-                                format!("recent-remove-{}", element_id(&project)),
+                                format!("recent-remove-{}", element_id(project)),
                                 IconName::X,
                                 "recent-row",
                                 {
@@ -186,7 +193,7 @@ fn welcome_action(
     theme: &Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     let ink = theme.foreground;
-    // Outline only: neither action takes a fill; the wordmark carries color.
+    // Outline only: the action takes no fill; the wordmark carries color.
     skin::glass_button(id, false, theme)
         .text_color(ink)
         .child(Icon::new(icon).with_size(px(15.)).text_color(ink))

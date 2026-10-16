@@ -79,12 +79,11 @@ pub(super) fn render_chat(
                     ));
                 }
                 TranscriptBlock::Entry(entry) => {
-                    let id = entry.event_id.clone();
                     if show_speaker {
                         turn_has_assistant_header = true;
                     }
                     elements.push(appear(
-                        &id,
+                        &entry.event_id,
                         reduce_motion,
                         transcript::render_entry(
                             entry,

@@ -48,7 +48,6 @@ pub(super) fn render_streaming_entry(
     };
     let has_text = !streaming.text.trim().is_empty();
     desk_shell(
-        "streaming",
         div()
             .w_full()
             .min_w_0()
@@ -170,7 +169,6 @@ pub(super) fn render_entry(
 /// Timeline block shell around one committed entry.
 fn desk_block(entry: &ConversationEntry, content: impl IntoElement) -> impl IntoElement {
     desk_shell(
-        &entry.event_id,
         div()
             .id(format!("entry-{}", entry.event_id))
             .w_full()
@@ -184,7 +182,7 @@ fn desk_block(entry: &ConversationEntry, content: impl IntoElement) -> impl Into
     )
 }
 
-fn desk_shell(_id: &str, content: impl IntoElement) -> impl IntoElement {
+fn desk_shell(content: impl IntoElement) -> impl IntoElement {
     div()
         .group("ledger-row")
         .relative()
@@ -627,7 +625,7 @@ pub(super) fn render_user_entry(
     div()
         .id(format!("entry-{}", entry.event_id))
         .group("user-entry")
-        .child(desk_shell(&entry.event_id, markdown::prose_measure(column)))
+        .child(desk_shell(markdown::prose_measure(column)))
         .test_support()
         .into_any_element()
 }
@@ -996,10 +994,9 @@ mod layout {
                                 .child(
                                     div()
                                         .id(format!("entry-{}", self.0.event_id))
-                                        .child(super::desk_shell(
-                                            &self.0.event_id,
-                                            super::markdown::prose_measure(column),
-                                        ))
+                                        .child(super::desk_shell(super::markdown::prose_measure(
+                                            column,
+                                        )))
                                         .test_support(),
                                 )
                                 .test_support(),
