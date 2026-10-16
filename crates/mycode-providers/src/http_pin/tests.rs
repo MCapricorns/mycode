@@ -439,3 +439,34 @@ fn redirect_statuses_choose_method_and_url() {
     ));
     assert!(decide_redirect(301, None, "https://example.com").is_err());
 }
+
+#[test]
+fn a_redirect_to_another_origin_drops_credentials() {
+    let headers = vec![
+        ("Authorization".to_owned(), "Bearer sk-secret".to_owned()),
+        ("x-api-key".to_owned(), "sk-secret".to_owned()),
+        ("X-Context7-Key".to_owned(), "secret".to_owned()),
+        ("Accept".to_owned(), "text/event-stream".to_owned()),
+        ("content-type".to_owned(), "application/json".to_owned()),
+    ];
+    let kept = super::cross_origin_headers(&headers);
+    assert_eq!(
+        kept,
+        vec![
+            ("Accept".to_owned(), "text/event-stream".to_owned()),
+            ("content-type".to_owned(), "application/json".to_owned()),
+        ]
+    );
+    assert_eq!(
+        super::origin_of("https://API.example.com/v1"),
+        super::origin_of("https://api.example.com:443/other")
+    );
+    assert_ne!(
+        super::origin_of("https://api.example.com/v1"),
+        super::origin_of("https://cdn.example.com/v1")
+    );
+    assert_ne!(
+        super::origin_of("https://api.example.com/v1"),
+        super::origin_of("https://api.example.com:8443/v1")
+    );
+}
