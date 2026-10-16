@@ -17,11 +17,16 @@ use crate::view_model::ConversationEntry;
 use crate::workspace::Workspace;
 
 /// One tool row. Clicking it reveals the result without changing the call.
+///
+/// A `cancellable` row is an `agent` call whose subagent still runs: it ends
+/// in an `x` that stops that child alone, and a click on the row opens the
+/// subagent window, since there is no result to reveal yet.
 pub(super) fn render_tool_block(
     call: &ConversationEntry,
     result: Option<&ConversationEntry>,
     turn_running: bool,
     expanded: bool,
+    cancellable: bool,
     reduce_motion: bool,
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
@@ -33,6 +38,11 @@ pub(super) fn render_tool_block(
     let (verb, target) = tool_call_parts(call.text.as_ref(), result.is_some(), turn_running);
     let status = tool_status(tool, result, turn_running);
     let event_id = call.event_id.clone();
+    let live_call = cancellable
+        .then(|| call.call_id.clone())
+        .flatten()
+        .unwrap_or_default();
+    let cancel = cancellable.then(|| subagent_cancel_button(&call.event_id, live_call.clone(), cx));
     let mut row = div()
         .id(format!("tool-{}", call.event_id))
         .flex()
@@ -55,7 +65,11 @@ pub(super) fn render_tool_block(
                 .cursor_pointer()
                 .hover(|row| row.bg(theme.secondary_hover.opacity(0.55)))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_toggle_tool_row(&event_id, cx);
+                    if live_call.is_empty() {
+                        workspace.on_toggle_tool_row(&event_id, cx);
+                    } else {
+                        workspace.on_open_subagent(&live_call, cx);
+                    }
                 }))
                 .child(status_dot(failed, unfinished, turn_running, theme))
                 .child(
@@ -100,7 +114,8 @@ pub(super) fn render_tool_block(
                                     .child(target),
                             )
                         }),
-                ),
+                )
+                .children(cancel),
         );
     if expanded && let Some(result) = result {
         let body = div()
@@ -116,6 +131,32 @@ pub(super) fn render_tool_block(
         ));
     }
     row.into_any_element()
+}
+
+/// The `x` on a running `agent` row. It stops that subagent only; the
+/// parent turn and its other children keep going.
+fn subagent_cancel_button(
+    event_id: &str,
+    call_id: String,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("tool-cancel-{event_id}"))
+        .size(px(20.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .rounded(skin::radius_xs())
+        .cursor_pointer()
+        .text_color(theme.muted_foreground)
+        .hover(|this| this.bg(skin::frost_hover(theme)).text_color(theme.danger))
+        .on_click(cx.listener(move |workspace, _, _, cx| {
+            cx.stop_propagation();
+            workspace.on_cancel_subagent(&call_id, cx);
+        }))
+        .child(Icon::new(IconName::X).xsmall())
 }
 
 /// One line for a run of tool calls. Clicking it reveals the cards.

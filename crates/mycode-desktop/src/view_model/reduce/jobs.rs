@@ -19,9 +19,11 @@ pub(super) fn tool_started(
     target: String,
 ) {
     let label = tool_call_label(&name, &target);
-    set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
     if name == AGENT_PROGRESS_PREFIX {
         upsert_live_job(state, &call_id, "", "starting");
+        refresh_subagent_status(state);
+    } else {
+        set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
     }
     if let Some(conversation) = state.active.as_mut() {
         conversation.entries.push(ConversationEntry {
@@ -42,20 +44,26 @@ pub(super) fn tool_progress(
     name: String,
     message: String,
 ) {
+    let agent_event = is_agent_event(&name, &message);
     apply_live_job_progress(state, &call_id, &name, &message);
-    let capped = crate::view_model::capped_artisan_count(&state.live_jobs);
-    let running = state.live_jobs.len();
-    let status = if capped > 0 {
-        crate::view_model::capped_artisan_status(capped)
-    } else if running > 1 {
-        format!("{running} {}", t("subagents running", "个子代理运行中"))
-    } else if is_agent_event(&name, &message) {
-        live_job_status(state, &call_id)
-    } else if name.is_empty() {
+    if agent_event || !state.live_jobs.is_empty() {
+        refresh_subagent_status(state);
+        return;
+    }
+    let status = if name.is_empty() {
         message
     } else {
         format!("{name}: {message}")
     };
+    set_streaming_status(state, &status);
+}
+
+/// Points the status line at the running subagents, or back at the parent
+/// turn once the last one has finished. What each child is doing stays on
+/// its transcript row and in the inspector.
+pub(super) fn refresh_subagent_status(state: &mut WorkspaceState) {
+    let status = crate::view_model::subagent_wait_status(&state.live_jobs)
+        .unwrap_or_else(|| t("Waiting for the next step", "等待下一步").to_owned());
     set_streaming_status(state, &status);
 }
 
@@ -172,7 +180,9 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
                     job.capped = false;
                 }
             }
-            "done" => drop_live_job(state, call_id),
+            "done" => {
+                drop_live_job(state, call_id);
+            }
             "tool" => {
                 upsert_live_job(
                     state,
@@ -231,30 +241,10 @@ fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a 
         .find(|job| job.call_id == call_id)
 }
 
-fn live_job_status(state: &WorkspaceState, call_id: &str) -> String {
-    let job = if call_id.is_empty() {
-        state.live_jobs.last()
-    } else {
-        state.live_jobs.iter().find(|job| job.call_id == call_id)
-    };
-    let Some(job) = job else {
-        return t("subagent", "子代理").to_owned();
-    };
-    let who = if job.role.is_empty() {
-        t("subagent", "子代理")
-    } else {
-        job.role.as_str()
-    };
-    let detail = if matches!(job.step.as_str(), "queued" | "starting") && !job.label.is_empty() {
-        job.label.as_str()
-    } else {
-        job.step.as_str()
-    };
-    format!("{who} · {detail}")
-}
-
 /// Removes one finished job and any detail window still showing it.
-pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) {
+/// Returns whether a job left the list.
+pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) -> bool {
+    let before = state.live_jobs.len();
     if call_id.is_empty() {
         state.live_jobs.pop();
     } else {
@@ -263,6 +253,7 @@ pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) {
     if !call_id.is_empty() && state.subagent_window.as_deref() == Some(call_id) {
         state.subagent_window = None;
     }
+    state.live_jobs.len() < before
 }
 
 #[cfg(test)]
@@ -280,6 +271,67 @@ mod tests {
         assert!(parse_agent_progress("task|scout|queued|look").is_none());
         assert!(is_agent_event("agent", "starting"));
         assert!(!is_agent_event("task", "task|scout|queued|look"));
+    }
+
+    #[test]
+    fn a_running_agent_leaves_its_step_off_the_status_line() {
+        use crate::view_model::{
+            ActiveConversation, ConversationEntry, DesktopAction, EntryKind, WorkspaceState,
+        };
+
+        let mut state = WorkspaceState {
+            sending: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+                context_used: 0,
+                context_cache: 0,
+            }),
+            ..WorkspaceState::default()
+        };
+        let status = |state: &WorkspaceState| {
+            state
+                .active
+                .as_ref()
+                .and_then(|conversation| conversation.streaming.as_ref())
+                .map(|streaming| streaming.status.clone())
+                .unwrap_or_default()
+        };
+        super::super::reduce(
+            &mut state,
+            DesktopAction::ToolStarted {
+                call_id: "c1".to_owned(),
+                name: "agent".to_owned(),
+                target: "scout map tokio".to_owned(),
+            },
+        );
+        let waiting = status(&state);
+        assert!(!waiting.contains("tokio"), "{waiting}");
+        super::super::reduce(
+            &mut state,
+            DesktopAction::ToolProgress {
+                call_id: "c1".to_owned(),
+                name: "agent".to_owned(),
+                message: "agent|scout|tool|read src/lib.rs".to_owned(),
+            },
+        );
+        assert_eq!(status(&state), waiting);
+        super::super::reduce(
+            &mut state,
+            DesktopAction::ToolResultAppended(ConversationEntry {
+                event_id: "res-c1".to_owned(),
+                kind: EntryKind::ToolResult,
+                text: "done".into(),
+                call_id: Some("c1".to_owned()),
+                thinking: String::new(),
+            }),
+        );
+        assert!(state.live_jobs.is_empty());
+        assert_ne!(status(&state), waiting);
     }
 
     #[test]

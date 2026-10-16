@@ -4,8 +4,8 @@
 //! attach `+` button and a `⌘K` / `Ctrl+K` hint. While a turn is running the
 //! action slot is Stop: it ends the whole turn, including every subagent. Text
 //! sent during that turn is a steer to the main model and does not cancel the
-//! children. Running scouts and artisans sit above the card, each with its own
-//! cancel.
+//! children. Each running scout or artisan is cancelled from its own `agent`
+//! row in the transcript.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -77,12 +77,6 @@ pub(super) fn render_composer(
     let steering = workspace.vm().pending_steers.clone();
     let steer_panel =
         (!steering.is_empty()).then(|| render_pending_steers(steering, cx).into_any_element());
-    let running = workspace.vm().live_jobs.clone();
-    let running_panel = if running.is_empty() {
-        None
-    } else {
-        Some(render_running_subagents(running, cx).into_any_element())
-    };
     if workspace.composer_steer != sending {
         workspace.composer_steer = sending;
         let placeholder = composer_placeholder(sending);
@@ -171,7 +165,6 @@ pub(super) fn render_composer(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .when_some(running_panel, |this, running| this.child(running))
                 .when_some(steer_panel, |this, steering| this.child(steering))
                 .when_some(queue_panel, |this, queue| this.child(queue))
                 .child(
@@ -406,134 +399,6 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
         .child(shortcut_label())
 }
 
-/// Running subagents (`scout`, `artisan`) above the composer; each row can be
-/// inspected or cancelled.
-fn render_running_subagents(
-    jobs: Vec<crate::view_model::LiveJob>,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let desk = Desk::of(theme);
-    let capped = crate::view_model::capped_artisan_count(&jobs);
-    let count = jobs.len();
-    div()
-        .id("running-subagents")
-        .flex()
-        .flex_col()
-        .gap_1()
-        .w_full()
-        .pb_1()
-        .when(capped > 0, |this| {
-            this.child(
-                div()
-                    .id("running-subagents-cap")
-                    .text_xs()
-                    .whitespace_normal()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(6.))
-                    .bg(theme.warning.opacity(0.18))
-                    .text_color(theme.warning_foreground)
-                    .child(crate::view_model::capped_artisan_status(capped)),
-            )
-        })
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(crate::ui::lamp(desk.amber))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                        .text_color(desk.faint)
-                        .child(format!("{}  {count}", t("RUNNING", "运行中"))),
-                ),
-        )
-        .child(
-            div()
-                .id("running-subagents-list")
-                .w_full()
-                .max_h(px(168.))
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .children(jobs.into_iter().enumerate().map(|(index, job)| {
-                    let call_id = job.call_id.clone();
-                    let cancel_id = job.call_id.clone();
-                    let title = job.title();
-                    let step = job.step_label();
-                    let warned = job.capped;
-                    div()
-                        .id(format!("running-subagent-{index}"))
-                        .flex()
-                        .flex_col()
-                        .gap(px(1.))
-                        .px_1()
-                        .py(px(2.))
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .hover(|row| row.bg(skin::frost_hover(theme)))
-                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                            workspace.on_open_subagent(&call_id, cx);
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap_2()
-                                .min_w_0()
-                                .child(crate::ui::lamp(if warned {
-                                    theme.warning
-                                } else {
-                                    desk.amber
-                                }))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_xs()
-                                        .truncate()
-                                        .text_color(theme.foreground)
-                                        .child(title),
-                                )
-                                .child(
-                                    div()
-                                        .id(format!("running-subagent-cancel-{index}"))
-                                        .flex_shrink_0()
-                                        .px_1()
-                                        .text_xs()
-                                        .cursor_pointer()
-                                        .text_color(theme.muted_foreground)
-                                        .hover(|this| this.text_color(theme.danger))
-                                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                                            cx.stop_propagation();
-                                            workspace.on_cancel_subagent(&cancel_id, cx);
-                                        }))
-                                        .child(t("Cancel", "取消")),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .pl(px(15.))
-                                .text_xs()
-                                .truncate()
-                                .text_color(if warned {
-                                    theme.warning_foreground
-                                } else {
-                                    theme.muted_foreground
-                                })
-                                .child(step),
-                        )
-                })),
-        )
-}
-
-/// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
 /// Steers already sent to the running turn. The model reads them at its next
 /// step; until the ledger commits one, this is the only place it shows.
 fn render_pending_steers(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
