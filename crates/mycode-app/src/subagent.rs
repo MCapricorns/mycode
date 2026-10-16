@@ -707,6 +707,7 @@ impl BridgeAgentHost {
             let registry = Arc::clone(&registry);
             let run_dir = run_dir.clone();
             let shell = shell.clone();
+            let skill_settings = self.settings.skills.clone();
             tokio::task::spawn_blocking(move || {
                 let mut extra_roots = if has_worktree {
                     Vec::new()
@@ -722,6 +723,7 @@ impl BridgeAgentHost {
                     std::env::consts::OS,
                     std::env::consts::ARCH,
                     &shell,
+                    &skill_settings,
                 );
                 (extra_roots, system)
             })
@@ -902,7 +904,12 @@ fn thinking_for(role: &SubagentRole, settings: &SubagentSettings) -> RoleThinkin
         .unwrap_or(role.thinking)
 }
 
-fn append_child_skills(system: &mut String, cwd: &Path, extras: &[PathBuf]) {
+fn append_child_skills(
+    system: &mut String,
+    cwd: &Path,
+    extras: &[PathBuf],
+    settings: &mycode_config::SkillsSettings,
+) {
     let mut skills = mycode_config::discover_skills(cwd, crate::turn::os_user_home().as_deref());
     for extra in extras {
         for skill in mycode_config::discover_skills(extra, None) {
@@ -918,11 +925,12 @@ fn append_child_skills(system: &mut String, cwd: &Path, extras: &[PathBuf]) {
             .then_with(|| left.global.cmp(&right.global))
             .then_with(|| left.path.cmp(&right.path))
     });
-    crate::turn::push_skill_catalog(system, skills);
+    crate::turn::push_skill_catalog(system, skills, settings);
 }
 
 /// System prompt for one child run. The shell block and the tool list name
 /// the same interpreter the child can actually call.
+#[allow(clippy::too_many_arguments)]
 fn subagent_system_prompt(
     role: &SubagentRole,
     registry: &ToolRegistry,
@@ -931,6 +939,7 @@ fn subagent_system_prompt(
     os: &str,
     arch: &str,
     shell: &mycode_tools::DetectedShell,
+    skill_settings: &mycode_config::SkillsSettings,
 ) -> String {
     let mut system = String::from(SUBAGENT_SYSTEM_PROMPT);
     system.push_str("\n\n# Role: ");
@@ -964,7 +973,7 @@ path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in 
         );
         system.push_str(&render_os_block(os, arch, run_dir));
     }
-    append_child_skills(&mut system, run_dir, extra_roots);
+    append_child_skills(&mut system, run_dir, extra_roots, skill_settings);
     if registry.get("search_tool").is_some() {
         system.push_str(
             "\n\nMCP tools are connected. For any MCP tool other than the direct ones, call \
@@ -1249,6 +1258,7 @@ mod tests {
             "windows",
             "x86_64",
             &shell,
+            &Default::default(),
         );
         assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
         assert!(prompt.contains("Windows PowerShell 5.1"), "{prompt}");
@@ -1288,6 +1298,7 @@ mod tests {
             "windows",
             "x86_64",
             &shell,
+            &Default::default(),
         );
         assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
         assert!(prompt.contains("PowerShell 7"), "{prompt}");
@@ -1321,6 +1332,7 @@ mod tests {
             "macos",
             "aarch64",
             &zsh,
+            &Default::default(),
         );
         assert!(prompt.contains("shell_tool: zsh"), "{prompt}");
         assert!(prompt.contains("Write zsh"), "{prompt}");
@@ -1348,6 +1360,7 @@ mod tests {
             "windows",
             "x86_64",
             &cmd,
+            &Default::default(),
         );
         assert!(prompt.contains("shell_tool: cmd"), "{prompt}");
         assert!(prompt.contains("cmd.exe"), "{prompt}");
@@ -1392,6 +1405,7 @@ mod tests {
             "windows",
             "x86_64",
             &shell,
+            &Default::default(),
         );
         assert!(
             !prompt.contains("shell_tool:"),
@@ -1439,8 +1453,16 @@ mod tests {
             &allowed,
             mycode_tools::ShellTool::forcing(shell.clone()),
         );
-        let prompt =
-            super::subagent_system_prompt(&scout, &registry, &root, &[], "linux", "x86_64", &shell);
+        let prompt = super::subagent_system_prompt(
+            &scout,
+            &registry,
+            &root,
+            &[],
+            "linux",
+            "x86_64",
+            &shell,
+            &Default::default(),
+        );
         assert!(prompt.contains("/aaa-scout"), "{prompt}");
         assert!(prompt.contains("read the matching SKILL.md"), "{prompt}");
         let _ = std::fs::remove_dir_all(&root);
@@ -1475,6 +1497,7 @@ mod tests {
             "linux",
             "x86_64",
             &shell,
+            &Default::default(),
         );
         assert!(prompt.contains("<tool_calling>"), "{prompt}");
         assert!(

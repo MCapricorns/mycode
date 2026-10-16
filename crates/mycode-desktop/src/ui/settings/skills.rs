@@ -2,8 +2,10 @@
 //! project and user `.agents` trees.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div};
 
 use super::widgets::settings_card;
@@ -14,6 +16,12 @@ use crate::workspace::Workspace;
 pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyElement {
     let theme: &Theme = cx.theme();
     let skills = workspace.vm().skills.clone();
+    let preferences = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.skills.clone())
+        .unwrap_or_default();
     let rows: Vec<AnyElement> = if skills.is_empty() {
         vec![
             div()
@@ -32,6 +40,7 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
             .into_iter()
             .map(|skill| {
                 let slug = skill.slug.clone();
+                let enabled = preferences.is_enabled(&skill.slug);
                 let scope = if skill.global {
                     t("user", "用户")
                 } else {
@@ -57,6 +66,7 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                             .flex()
                             .flex_col()
                             .gap_0p5()
+                            .when(!enabled, |this| this.opacity(0.55))
                             .child(
                                 div()
                                     .text_sm()
@@ -80,13 +90,32 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                             ),
                     )
                     .child(
-                        Button::new(format!("skill-use-{}", skill.slug))
-                            .label(t("Use", "使用"))
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_use_skill(&slug, cx);
-                            })),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .when(enabled, |this| {
+                                let slug = slug.clone();
+                                this.child(
+                                    Button::new(format!("skill-use-{}", skill.slug))
+                                        .label(t("Use", "使用"))
+                                        .small()
+                                        .outline()
+                                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                                            workspace.on_use_skill(&slug, cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                Switch::new(format!("skill-enabled-{}", skill.slug))
+                                    .checked(enabled)
+                                    .on_click(cx.listener(
+                                        move |workspace, checked: &bool, _, cx| {
+                                            workspace.on_skill_enabled(&slug, *checked, cx);
+                                        },
+                                    )),
+                            ),
                     )
                     .into_any_element()
             })
@@ -119,9 +148,10 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
             t("Slash commands", "斜杠命令"),
             Some(t(
                 "Type / in the composer to insert a skill. Workspace .agents/skills win \
-                 over the same slug in ~/.agents.",
+                 over the same slug in ~/.agents. A switched-off skill is left out of \
+                 the / menu and the agent's skill list.",
                 "在输入框输入 / 即可插入技能。工作区 .agents/skills 中的同名技能优先于 \
-                 ~/.agents。",
+                 ~/.agents。关掉的技能不会出现在 / 菜单和智能体的技能列表里。",
             )),
             theme,
             rows,

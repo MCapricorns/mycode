@@ -717,6 +717,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 true
             });
         }
+        DesktopAction::SettingsSkillToggled(slug, enabled) => {
+            edit_settings(state, |settings| {
+                settings.skills.set_enabled(&slug, enabled)
+            });
+        }
         DesktopAction::SubagentMenuToggled(menu) => {
             let opening = menu.is_some();
             state.subagent_menu = menu;
@@ -1090,7 +1095,7 @@ fn fill_open_slash(state: &mut WorkspaceState) {
     }) else {
         return;
     };
-    let skills = state.skills.clone();
+    let skills = state.enabled_skills();
     let servers = state
         .settings
         .as_ref()

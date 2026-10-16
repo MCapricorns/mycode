@@ -13,6 +13,7 @@
 mod mcp;
 mod providers;
 mod proxy;
+mod skills;
 mod subagent_roles;
 mod tools_shell;
 mod user_agent;
@@ -26,6 +27,7 @@ pub use providers::{
     MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings,
 };
 pub use proxy::{PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProxyPreference};
+pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
 pub use subagent_roles::{SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings};
 pub use tools_shell::{ShellSettings, ToolsSettings};
 pub use user_agent::default_user_agent;
@@ -33,6 +35,7 @@ pub use web::{MAX_WEB_BACKENDS, WebBackendSettings, WebSettings, builtin_web_bac
 
 use serde::{Deserialize, Serialize};
 
+use skills::skills_are_default;
 use subagent_roles::subagents_are_default;
 use tools_shell::tools_are_default;
 
@@ -192,6 +195,9 @@ pub struct AppSettings {
     /// Tool-runtime preferences. A legacy `shell` value is ignored.
     #[serde(default, skip_serializing_if = "tools_are_default")]
     pub tools: ToolsSettings,
+    /// Skills the user switched off.
+    #[serde(default, skip_serializing_if = "skills_are_default")]
+    pub skills: SkillsSettings,
 }
 
 impl Default for AppSettings {
@@ -209,6 +215,7 @@ impl Default for AppSettings {
             reasoning_effort: None,
             subagents: SubagentSettings::default(),
             tools: ToolsSettings::default(),
+            skills: SkillsSettings::default(),
         }
     }
 }
@@ -296,6 +303,7 @@ impl AppSettings {
         }
         self.validate_subagent_roles()?;
         self.validate_tools_shell()?;
+        self.validate_skills()?;
         Ok(())
     }
 }

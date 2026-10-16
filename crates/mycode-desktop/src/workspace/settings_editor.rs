@@ -988,6 +988,15 @@ impl Workspace {
         }
     }
 
+    // ---- skills ----
+
+    pub(crate) fn on_skill_enabled(&mut self, slug: &str, enabled: bool, cx: &mut Context<Self>) {
+        self.apply_action(
+            DesktopAction::SettingsSkillToggled(slug.to_owned(), enabled),
+            cx,
+        );
+    }
+
     // ---- subagent routes ----
 
     pub(crate) fn on_subagent_role_enabled(
