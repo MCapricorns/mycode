@@ -1,0 +1,271 @@
+//! Git worktree leases for write-capable roles: acquire a detached
+//! checkout, hand its diff back with the result, and reclaim leases a
+//! crashed process left behind.
+
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+use mycode_config::HomeLayout;
+
+/// `git` for a worktree lease. On Windows the desktop process has no
+/// console, so a plain spawn of `git.exe` allocates a black window.
+pub(super) fn git_command() -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        // CREATE_NO_WINDOW: do not allocate a console for this child.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = std::process::Command::new("git");
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("git")
+    }
+}
+
+/// One git worktree lease: a disposable checkout plus its manifest, so a
+/// crashed process can recover leases on the next start.
+pub(crate) struct WorktreeLease {
+    pub(crate) path: PathBuf,
+    pub(crate) manifest: PathBuf,
+}
+
+impl WorktreeLease {
+    /// Creates a detached worktree of the current repository HEAD.
+    pub(crate) fn acquire(home: &HomeLayout, repo: &Path) -> Result<Self, String> {
+        let stamp = crate::unix_now().as_millis();
+        let id = format!("agent-{}-{stamp}", std::process::id());
+        let leases = home.root().join(WORKTREE_LEASE_DIR);
+        std::fs::create_dir_all(&leases).map_err(|error| format!("lease dir: {error}"))?;
+        let path = leases.join(&id);
+        let output = git_command()
+            .arg("-C")
+            .arg(repo)
+            .args(["worktree", "add", "--detach"])
+            .arg(&path)
+            .output()
+            .map_err(|error| format!("git worktree: {error}"))?;
+        if !output.status.success() {
+            let _ = std::fs::remove_dir(&path);
+            let reason = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("git worktree add failed: {}", reason.trim()));
+        }
+        let manifest = leases.join(format!("{id}.json"));
+        let record = serde_json::json!({
+            "repo": repo.to_string_lossy(),
+            "path": path.to_string_lossy(),
+        });
+        std::fs::write(&manifest, record.to_string())
+            .map_err(|error| format!("lease manifest: {error}"))?;
+        Ok(Self { path, manifest })
+    }
+
+    /// Releases the lease; best-effort because the work may be done.
+    pub(crate) fn release(self) {
+        let output = git_command()
+            .arg("-C")
+            .arg(&self.path)
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.path)
+            .output();
+        // Retry by repo path when the lease checkout itself is broken.
+        if matches!(&output, Ok(result) if !result.status.success())
+            && let Ok(record) = std::fs::read(&self.manifest)
+            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&record)
+            && let Some(repo) = value["repo"].as_str()
+        {
+            let _ = git_command()
+                .arg("-C")
+                .arg(repo)
+                .args(["worktree", "remove", "--force"])
+                .arg(&self.path)
+                .output();
+        }
+        let _ = std::fs::remove_file(&self.manifest);
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Releases a lease the run never handed off.
+///
+/// A parent cancel stops polling a running `agent` call and drops it
+/// mid-await. Without this guard the checkout stayed registered in the
+/// user's repository until the next app start.
+pub(super) struct LeaseGuard(pub(super) Option<WorktreeLease>);
+
+impl LeaseGuard {
+    pub(super) fn path(&self) -> Option<&Path> {
+        self.0.as_ref().map(|lease| lease.path.as_path())
+    }
+}
+
+impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        let Some(lease) = self.0.take() else {
+            return;
+        };
+        // `git worktree remove` blocks; keep it off the runtime thread.
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn_blocking(move || lease.release())),
+            Err(_) => lease.release(),
+        }
+    }
+}
+
+/// Captured diff cap handed back with a subagent result.
+const MAX_WORKTREE_DIFF_BYTES: usize = 256 * 1024;
+
+/// Reads the worktree diff while the checkout still exists.
+pub(crate) fn capture_worktree_diff(path: &Path) -> String {
+    let mut out = String::new();
+    match git_command()
+        .arg("-C")
+        .arg(path)
+        .args(["diff", "--binary", "--no-ext-diff", "HEAD"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            out.push_str(&String::from_utf8_lossy(&output.stdout));
+        }
+        Ok(output) => {
+            out.push_str("worktree diff failed: ");
+            out.push_str(String::from_utf8_lossy(&output.stderr).trim());
+            out.push('\n');
+        }
+        Err(error) => {
+            let _ = writeln!(out, "worktree diff failed: {error}");
+        }
+    }
+    // `core.quotepath=off` keeps non-ASCII file names as raw UTF-8 instead
+    // of octal escapes; the escaped spelling would fail the `path.join`
+    // lookup below on Windows and any non-ASCII path.
+    match git_command()
+        .arg("-c")
+        .arg("core.quotepath=off")
+        .arg("-C")
+        .arg(path)
+        .args(["status", "--porcelain", "-uall"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let Some(name) = line.strip_prefix("?? ") else {
+                    continue;
+                };
+                let name = name.trim();
+                if name.is_empty() || name.contains("..") {
+                    continue;
+                }
+                let file = path.join(name);
+                let _ = writeln!(out, "diff --git a/{name} b/{name}");
+                match std::fs::read_to_string(&file) {
+                    Ok(body) => {
+                        out.push_str("new file\n--- /dev/null\n+++ b/");
+                        out.push_str(name);
+                        out.push('\n');
+                        out.push_str(&body);
+                        if !body.ends_with('\n') {
+                            out.push('\n');
+                        }
+                    }
+                    Err(error) => {
+                        let _ = writeln!(out, "new file unreadable: {error}");
+                    }
+                }
+            }
+        }
+        Ok(output) => {
+            out.push_str("worktree status failed: ");
+            out.push_str(String::from_utf8_lossy(&output.stderr).trim());
+            out.push('\n');
+        }
+        Err(error) => {
+            let _ = writeln!(out, "worktree status failed: {error}");
+        }
+    }
+    cap_diff(out)
+}
+
+fn cap_diff(mut text: String) -> String {
+    if text.len() <= MAX_WORKTREE_DIFF_BYTES {
+        return text;
+    }
+    text.truncate(text.floor_char_boundary(MAX_WORKTREE_DIFF_BYTES));
+    text.push_str("\n... diff truncated\n");
+    text
+}
+
+/// Joins a subagent answer with the diff captured from its worktree.
+#[must_use]
+pub(crate) fn format_subagent_handoff(result: &str, diff: &str) -> String {
+    if diff.trim().is_empty() {
+        return result.to_owned();
+    }
+    format!("{result}\n\n<worktree-diff>\n{diff}</worktree-diff>")
+}
+
+/// Captures the diff, then releases the worktree.
+///
+/// The diff is part of both the success string and the error string. The
+/// checkout is removed only after that string is built.
+pub(crate) fn handoff_worktree(
+    lease: WorktreeLease,
+    result: Result<String, mycode_tools::ToolError>,
+) -> Result<String, mycode_tools::ToolError> {
+    let diff = capture_worktree_diff(&lease.path);
+    let outcome = match result {
+        Ok(text) => Ok(format_subagent_handoff(&text, &diff)),
+        Err(error) => Err(mycode_tools::ToolError::Execution(format_subagent_handoff(
+            &error.to_string(),
+            &diff,
+        ))),
+    };
+    lease.release();
+    outcome
+}
+
+/// Directory for worktree leases created by this build.
+const WORKTREE_LEASE_DIR: &str = "agent-worktrees";
+/// Lease directory written when the delegation tool was still named `task`.
+const LEGACY_WORKTREE_LEASE_DIR: &str = "task-worktrees";
+
+/// Removes leases left behind by a crashed process. Best-effort: a lease
+/// whose repo is gone is simply deleted from disk.
+///
+/// Older builds stored leases under [`LEGACY_WORKTREE_LEASE_DIR`]. Both
+/// directories are reclaimed so a rename does not orphan a checkout.
+pub(crate) fn recover_agent_worktrees(home: &HomeLayout) {
+    recover_worktree_lease_dir(home, WORKTREE_LEASE_DIR);
+    recover_worktree_lease_dir(home, LEGACY_WORKTREE_LEASE_DIR);
+}
+
+fn recover_worktree_lease_dir(home: &HomeLayout, directory: &str) {
+    let leases = home.root().join(directory);
+    let Ok(entries) = std::fs::read_dir(&leases) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            if let Ok(bytes) = std::fs::read(&path)
+                && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                && let (Some(repo), Some(lease)) = (value["repo"].as_str(), value["path"].as_str())
+            {
+                let _ = git_command()
+                    .arg("-C")
+                    .arg(repo)
+                    .args(["worktree", "remove", "--force"])
+                    .arg(lease)
+                    .output();
+            }
+            let _ = std::fs::remove_file(&path);
+        } else {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}

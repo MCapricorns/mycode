@@ -1,9 +1,8 @@
 //! The workspace window view: title bar, sessions sidebar, chat column,
 //! right inspector, and the full-page settings view.
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Root;
 use gpui_kit::component::command::CommandState;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -15,19 +14,25 @@ use mycode_config::HomeLayout;
 
 use crate::ui::{BackendForm, McpForm, ProviderForm};
 use crate::view_model::{DesktopAction, MainView, WorkspaceState, reduce};
-use mycode_app::{BridgeCommand, BridgeEventRx, BridgeReply, CoreBridge};
+use mycode_app::{BridgeCommand, BridgeEventRx, CoreBridge};
 
+mod appearance;
 mod bridge;
+mod composer_send;
 mod conversation;
 mod git;
+mod history;
 mod menus;
+mod model_menu;
 mod palette;
 mod projects;
 mod settings_editor;
 mod stream_frame;
+mod toasts;
 mod updates_data;
 
 pub(crate) use settings_editor::normalized_key_input;
+pub(crate) use toasts::{Toast, ToastKind};
 
 /// Preferred first-window size. The origin is computed from the primary
 /// display so the window opens in the middle of the usable area, and smaller
@@ -109,21 +114,6 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         cx.new(|cx| Root::new(workspace, window, cx))
     })
     .expect("open the MYCode window");
-}
-
-/// Notice severity. Errors remain visible until explicitly dismissed.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToastKind {
-    Info,
-    /// A cache collapse or another condition the user should notice.
-    Warning,
-    Error,
-}
-
-pub(crate) struct Toast {
-    pub(crate) id: u64,
-    pub(crate) text: String,
-    pub(crate) kind: ToastKind,
 }
 
 /// Scroll position captured before older entries are prepended.
@@ -635,40 +625,6 @@ impl Workspace {
         self.session_filter_input.clone()
     }
 
-    /// Previous offset and content height for one prepend, consumed by the
-    /// chat column on the frame that paints the new rows.
-    pub(crate) fn take_scroll_anchor(&mut self) -> Option<(Pixels, Pixels)> {
-        self.scroll_hold
-            .take()
-            .map(|hold| (hold.offset_y, hold.content_height))
-    }
-
-    /// Theme-change scroll hold, consumed by the next conversation paint.
-    ///
-    /// The bool is whether the column was pinned to the tail.
-    pub(crate) fn take_appearance_scroll(&mut self) -> Option<(bool, Pixels)> {
-        self.appearance_scroll
-            .take()
-            .map(|hold| (hold.pinned, hold.offset_y))
-    }
-
-    /// True when the conversation column is within a few pixels of the bottom.
-    ///
-    /// The handle stores a positive max extent and a negative live offset, so
-    /// their sum is about zero at the tail and positive after a scroll upward.
-    /// Before the first layout both are zero, which still follows.
-    pub(crate) fn conversation_follows_tail(&self) -> bool {
-        follows_tail(
-            self.conversation_scroll.offset().y,
-            self.conversation_scroll.max_offset().y,
-        )
-    }
-
-    /// The conversation column's scroll handle.
-    pub(crate) fn conversation_scroll_handle(&self) -> &gpui_kit::ScrollHandle {
-        &self.conversation_scroll
-    }
-
     fn dispatch(&self, command: BridgeCommand, cx: &mut Context<Self>) {
         let scope = bridge::ReplyScope::for_command(&command);
         let request = self.bridge.request(command);
@@ -787,216 +743,6 @@ impl Workspace {
         self.request_open_session(session_id, cx);
     }
 
-    pub(crate) fn on_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let draft = self.composer.read(cx).value().to_string();
-        if draft != self.vm.composer_draft {
-            self.apply_action(DesktopAction::ComposerChanged(draft.clone()), cx);
-        }
-        if self.welcome_send_session.is_some() || self.vm.pending_welcome_send.is_some() {
-            return;
-        }
-        if self.vm.active.is_none() {
-            self.submit_from_welcome(&draft, cx);
-            return;
-        }
-        if self.vm.sending {
-            if !draft.trim().is_empty() {
-                self.dispatch_steer(draft, window, cx);
-            }
-            return;
-        }
-        if !draft.trim().is_empty() {
-            self.send(draft, window, cx);
-            return;
-        }
-        // Send with an empty composer is an explicit send of the queue,
-        // so it also releases a queue held by a stop.
-        self.apply_action(DesktopAction::QueuePaused(false), cx);
-        self.pump_queued_send(cx);
-    }
-
-    /// Steers the running turn. The composer clears immediately. If the turn
-    /// ended before the inbox was registered, the text is queued instead.
-    fn dispatch_steer(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session_id) = self.open_session_id() else {
-            self.enqueue_follow_up(draft, window, cx);
-            return;
-        };
-        self.apply_action(DesktopAction::ComposerChanged(String::new()), cx);
-        self.composer
-            .update(cx, |state, cx| state.set_value("", window, cx));
-        // Shown above the composer until the ledger commits it.
-        self.apply_action(DesktopAction::SteerSent(draft.clone()), cx);
-        let request = self.bridge.request(BridgeCommand::Steer {
-            session_id,
-            text: draft.clone(),
-        });
-        cx.spawn(async move |this, cx| {
-            let reply = request.await;
-            if matches!(reply, BridgeReply::Steered(Err(_))) {
-                let _ = this.update(cx, |workspace, cx| {
-                    workspace.apply_action(DesktopAction::SteersReturned(vec![draft]), cx);
-                    // The turn may have finished between the click and the
-                    // reply. Pump so the text does not sit in the queue.
-                    workspace.pump_queued_send(cx);
-                });
-            }
-        })
-        .detach();
-    }
-
-    /// Enter or send on the welcome desk starts a task with that text.
-    ///
-    /// The session is created the same way as New task. The draft is sent
-    /// once that session's conversation is open.
-    fn submit_from_welcome(&mut self, draft: &str, cx: &mut Context<Self>) {
-        if self.vm.pending_welcome_send.is_some() {
-            return;
-        }
-        match crate::view_model::composer_submit(&self.vm, draft) {
-            crate::view_model::ComposerSubmit::StartTask(text) => {
-                self.apply_action(DesktopAction::WelcomeSendHeld(text), cx);
-                if !self.on_new_session(cx) {
-                    self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
-                }
-            }
-            crate::view_model::ComposerSubmit::NeedFolder => {
-                self.push_toast(
-                    crate::i18n::t("Open a folder to get started.", "打开一个目录即可开始。"),
-                    crate::workspace::ToastKind::Info,
-                    cx,
-                );
-            }
-            crate::view_model::ComposerSubmit::Send | crate::view_model::ComposerSubmit::Ignore => {
-            }
-        }
-    }
-
-    pub(crate) fn on_remove_queued(&mut self, index: usize, cx: &mut Context<Self>) {
-        cx.stop_propagation();
-        self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx);
-    }
-
-    /// Takes queued follow-ups back into the composer so they can be edited
-    /// or dropped: one item, or the whole queue when `index` is `None`.
-    /// Recalled text goes above any draft already in the composer.
-    pub(crate) fn on_recall_queued(
-        &mut self,
-        index: Option<usize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.stop_propagation();
-        let recalled: Vec<String> = match index {
-            Some(index) => self.vm.queued.get(index).cloned().into_iter().collect(),
-            None => self.vm.queued.clone(),
-        };
-        if recalled.is_empty() {
-            return;
-        }
-        match index {
-            Some(index) => self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx),
-            None => {
-                for _ in 0..recalled.len() {
-                    self.apply_action(DesktopAction::QueuedMessageRemoved(0), cx);
-                }
-            }
-        }
-        let draft = self.composer.read(cx).value().to_string();
-        let mut text = recalled.join("\n\n");
-        if !draft.trim().is_empty() {
-            text.push_str("\n\n");
-            text.push_str(&draft);
-        }
-        self.composer.update(cx, |state, cx| {
-            state.set_value(text.clone(), window, cx);
-            state.focus(window, cx);
-        });
-        self.apply_action(DesktopAction::ComposerChanged(text), cx);
-    }
-
-    /// Sends a held queue now. While a turn still runs, the queue is only
-    /// released and starts when that turn ends.
-    pub(crate) fn on_resume_queued(&mut self, cx: &mut Context<Self>) {
-        cx.stop_propagation();
-        self.apply_action(DesktopAction::QueuePaused(false), cx);
-        self.pump_queued_send(cx);
-    }
-
-    /// Opens or closes the detail card for one running subagent.
-    pub(crate) fn on_open_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
-        let next = if call_id.is_empty() || self.vm.subagent_window.as_deref() == Some(call_id) {
-            None
-        } else {
-            Some(call_id.to_owned())
-        };
-        self.apply_action(DesktopAction::SubagentWindowChanged(next), cx);
-    }
-
-    /// Opens or closes the full working-tree changes drawer.
-    pub(crate) fn on_toggle_changes_panel(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ChangesPanelToggled(open), cx);
-    }
-
-    /// Stops the in-flight turn and sends one queued follow-up immediately.
-    pub(crate) fn on_interrupt_queued(&mut self, index: usize, cx: &mut Context<Self>) {
-        cx.stop_propagation();
-        self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
-        self.apply_action(DesktopAction::QueuePaused(false), cx);
-        if self.vm.sending {
-            self.cancel_turn(cx);
-            return;
-        }
-        self.pump_queued_send(cx);
-    }
-
-    /// Stops one running subagent. The parent turn and the other children stay.
-    pub(crate) fn on_cancel_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
-        let Some(session_id) = self.open_session_id() else {
-            return;
-        };
-        if call_id.is_empty() {
-            return;
-        }
-        self.apply_action(DesktopAction::SubagentDismissed(call_id.to_owned()), cx);
-        self.dispatch(
-            BridgeCommand::CancelSubagent {
-                session_id,
-                call_id: call_id.to_owned(),
-            },
-            cx,
-        );
-    }
-
-    /// Aborts the in-flight turn; its terminal event resets the sending state.
-    ///
-    /// A plain stop (Stop or Escape) holds the queue: the follow-ups stay
-    /// listed, and steers the turn hands back join them, but nothing is sent
-    /// until the user sends or recalls them.
-    pub(crate) fn on_cancel_chat(&mut self, cx: &mut Context<Self>) {
-        if !self.vm.sending {
-            return;
-        }
-        self.apply_action(DesktopAction::QueuePaused(true), cx);
-        self.queue_hold_on_return = true;
-        self.cancel_turn(cx);
-    }
-
-    fn cancel_turn(&mut self, cx: &mut Context<Self>) {
-        let Some(conversation) = self.vm.active.as_ref() else {
-            return;
-        };
-        if !self.vm.sending {
-            return;
-        }
-        self.dispatch(
-            BridgeCommand::CancelChat {
-                session_id: conversation.session_id.clone(),
-            },
-            cx,
-        );
-    }
-
     /// Switches the main area between chat and settings.
     pub(crate) fn on_show_main_view(&mut self, view: MainView, cx: &mut Context<Self>) {
         let entering_settings = view == MainView::Settings && self.vm.view != MainView::Settings;
@@ -1015,227 +761,6 @@ impl Workspace {
             self.settings_focus_pending = false;
         }
         pending
-    }
-
-    pub(crate) fn on_toggle_model_menu(
-        &mut self,
-        open: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_action(DesktopAction::ModelMenuToggled(open), cx);
-        if open && let Some(input) = self.model_picker_input.clone() {
-            input.update(cx, |state, cx| state.set_value("", window, cx));
-        }
-    }
-
-    /// Moves the open picker into one provider, or back to the provider step.
-    ///
-    /// Entering a provider asks the next render to focus the search box.
-    /// Does not record a model selection.
-    pub(crate) fn on_browse_model_provider(
-        &mut self,
-        provider_id: Option<&str>,
-        cx: &mut Context<Self>,
-    ) {
-        self.picker_focus_pending = provider_id.is_some();
-        self.apply_action(
-            DesktopAction::ModelMenuBrowse(provider_id.map(str::to_owned)),
-            cx,
-        );
-    }
-
-    /// Whether the model step should focus its search box this frame.
-    pub(crate) fn take_model_step_focus(&mut self) -> bool {
-        if self.vm.model_menu_browse.is_none() {
-            return false;
-        }
-        let pending = self.picker_focus_pending;
-        self.picker_focus_pending = false;
-        pending
-    }
-
-    /// Enter in the model search box selects the preferred row.
-    pub(crate) fn accept_model_search(&mut self, cx: &mut Context<Self>) {
-        let Some(provider) = self.vm.model_menu_browse.clone() else {
-            return;
-        };
-        let choices = crate::ui::model_picker::provider_model_choices(&self.vm, &provider);
-        let filtered =
-            crate::ui::model_picker::filter_model_choices(&choices, &self.vm.picker_query);
-        if filtered.is_empty() {
-            return;
-        }
-        let role = self
-            .vm
-            .subagent_menu
-            .clone()
-            .filter(|(_, field)| field == "model");
-        let selected = if let Some((role, _)) = &role {
-            self.vm
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.subagents.role(role))
-                .filter(|entry| entry.provider.as_deref() == Some(provider.as_str()))
-                .and_then(|entry| entry.model.clone())
-        } else if self.vm.selected_provider.as_deref() == Some(provider.as_str()) {
-            self.vm.selected_model.clone()
-        } else {
-            None
-        };
-        let ids: Vec<String> = filtered.iter().map(|choice| choice.id.clone()).collect();
-        let preferred = crate::ui::model_picker::preferred_index(
-            &ids,
-            &self.vm.picker_query,
-            selected.as_deref(),
-        );
-        let index = self.model_highlight(ids.len(), preferred);
-        let Some(model) = ids.get(index).cloned() else {
-            return;
-        };
-        if let Some((role, _)) = role {
-            self.on_set_subagent_route(&role, Some(provider), Some(model), cx);
-            self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
-        } else if self.vm.model_menu_open {
-            self.on_select_model_on(&provider, &model, cx);
-        }
-    }
-
-    pub(crate) fn on_open_provider_detail(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProviderDetailOpened(Some(id.to_owned())), cx);
-    }
-
-    pub(crate) fn on_close_provider_detail(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProviderDetailOpened(None), cx);
-    }
-
-    pub(crate) fn on_toggle_reasoning_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ReasoningMenuToggled(open), cx);
-    }
-
-    /// Applies and persists dark or light.
-    pub(crate) fn on_select_theme(&mut self, theme_id: &str, cx: &mut Context<Self>) {
-        let theme_id = crate::ui::desk::normalize_theme(theme_id);
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.theme == theme_id)
-        {
-            return;
-        }
-        self.capture_appearance_scroll();
-        self.paint_appearance(theme_id, cx);
-        self.apply_action(
-            DesktopAction::SettingsThemeSelected(theme_id.to_owned()),
-            cx,
-        );
-        self.on_save_settings(cx);
-    }
-
-    pub(super) fn paint_appearance(&mut self, theme_id: &str, cx: &mut Context<Self>) {
-        let mode = crate::ui::desk::theme_mode(theme_id);
-        if cx.theme().mode != mode {
-            Theme::change(mode, None, cx);
-        }
-        crate::ui::desk::apply(Theme::global_mut(cx));
-        self.applied_font_size.clear();
-        Theme::sync_base(cx);
-    }
-
-    /// Applies and persists the interface font size. The next frame paints it.
-    pub(crate) fn on_select_font_size(&mut self, font_size: &str, cx: &mut Context<Self>) {
-        let font_size = crate::ui::desk::normalize_font_size(font_size);
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.font_size == font_size)
-        {
-            return;
-        }
-        self.applied_font_size.clear();
-        self.apply_action(
-            DesktopAction::SettingsFontSizeSelected(font_size.to_owned()),
-            cx,
-        );
-        self.on_save_settings(cx);
-    }
-
-    /// Paints the saved interface font size and the OS UI font onto the
-    /// window, once per change. The size comes from the settings projection,
-    /// which is what gets written to `settings.json`.
-    pub(crate) fn sync_interface_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let size_id = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| settings.font_size.as_str())
-            .unwrap_or("m");
-        let size_id = crate::ui::desk::normalize_font_size(size_id);
-        if self.applied_font_size == size_id {
-            return;
-        }
-        let family = crate::ui::desk::ui_font_family(cx);
-        let mono = crate::ui::desk::mono_font_family(cx);
-        {
-            let theme = Theme::global_mut(cx);
-            crate::ui::desk::apply_font_size(theme, size_id);
-            theme.font_family = family;
-            theme.mono_font_family = mono;
-        }
-        window.set_rem_size(px(crate::ui::desk::interface_rem_px(size_id)));
-        Theme::sync_base(cx);
-        self.applied_font_size = size_id.to_owned();
-    }
-
-    /// Rewrites placeholders that were captured when the input was created.
-    ///
-    /// `t()` is live, but `InputState` stores the placeholder string. Switching
-    /// to English left the Chinese settings-search placeholder in the box.
-    pub(crate) fn sync_localized_placeholders(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let lang = u8::from(crate::i18n::is_chinese());
-        if self.applied_language == lang {
-            return;
-        }
-        self.applied_language = lang;
-        let composer_placeholder = crate::ui::composer_placeholder(self.vm.sending);
-        self.composer.update(cx, |state, cx| {
-            state.set_placeholder(composer_placeholder, window, cx);
-        });
-        let pairs: [(&Option<Entity<InputState>>, &str); 5] = [
-            (
-                &self.session_filter_input,
-                crate::i18n::t("Search sessions", "搜索会话"),
-            ),
-            (
-                &self.settings_search_input,
-                crate::i18n::t("Search settings", "搜索设置"),
-            ),
-            (
-                &self.model_picker_input,
-                crate::i18n::t("Filter by name or id", "按名称或 id 筛选"),
-            ),
-            (
-                &self.preset_model_search_input,
-                crate::i18n::t("Filter models", "筛选模型"),
-            ),
-            (
-                &self.preset_search_input,
-                crate::i18n::t("Filter providers…", "筛选服务商…"),
-            ),
-        ];
-        for (input, placeholder) in pairs {
-            if let Some(input) = input {
-                input.update(cx, |state, cx| {
-                    state.set_placeholder(placeholder, window, cx);
-                });
-            }
-        }
     }
 
     /// Opens, closes, or pins the inspector. Does not touch the session.
@@ -1281,158 +806,6 @@ impl Workspace {
         self.persist_ui_state(cx);
     }
 
-    /// Applies and persists the UI language. The whole window re-renders on
-    /// the next frame, so no theme-style refresh is needed.
-    pub(crate) fn on_select_language(&mut self, language: &str, cx: &mut Context<Self>) {
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.language == language)
-        {
-            return;
-        }
-        self.apply_action(
-            DesktopAction::SettingsLanguageSelected(language.to_owned()),
-            cx,
-        );
-        self.on_save_settings(cx);
-    }
-
-    pub(crate) fn on_toggle_language_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::LanguageMenuToggled(open), cx);
-    }
-
-    pub(crate) fn on_select_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProviderSelected(provider_id.to_owned()), cx);
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.dirty)
-        {
-            self.on_save_settings(cx);
-        }
-        self.persist_ui_state(cx);
-    }
-
-    /// Picks one model of the selected provider. The reducer appends an
-    /// unknown model to the provider row (so the next turn can use it) or
-    /// refuses the pick at the per-provider cap.
-    pub(crate) fn on_select_model_on(
-        &mut self,
-        provider_id: &str,
-        model_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        if self.vm.selected_provider.as_deref() != Some(provider_id) {
-            self.on_select_provider(provider_id, cx);
-        }
-        self.on_select_model(model_id, cx);
-    }
-
-    pub(crate) fn on_select_model(&mut self, model_id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ModelSelected(model_id.to_owned()), cx);
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.dirty)
-        {
-            self.on_save_settings(cx);
-        }
-        self.persist_ui_state(cx);
-    }
-
-    /// Stores the reasoning effort on the open session. Other sessions keep
-    /// the effort they already chose.
-    pub(crate) fn on_select_reasoning(&mut self, level: &str, cx: &mut Context<Self>) {
-        self.apply_action(
-            DesktopAction::SettingsReasoningChanged(level.to_owned()),
-            cx,
-        );
-        self.persist_ui_state(cx);
-    }
-
-    /// Moves the conversation column to the newest line.
-    pub(crate) fn scroll_conversation_to_bottom(&mut self, cx: &mut Context<Self>) {
-        self.conversation_scroll.scroll_to_bottom();
-        cx.notify();
-    }
-
-    /// Loads the next older page when the viewport is within a short distance
-    /// of the top. A transcript that still fits does not chain-load. The
-    /// notify keeps the docked jump-to-latest row in step with the scroll
-    /// position.
-    pub(crate) fn on_conversation_scrolled(&mut self, cx: &mut Context<Self>) {
-        cx.notify();
-        if self.vm.history_loading || self.scroll_hold.is_some() || !self.near_history_top() {
-            return;
-        }
-        self.request_older(cx);
-    }
-
-    /// Chip click. Works even when the tail still fits on screen.
-    pub(crate) fn on_load_older(&mut self, cx: &mut Context<Self>) {
-        self.request_older(cx);
-    }
-
-    fn near_history_top(&self) -> bool {
-        near_history_top(
-            self.conversation_scroll.offset().y,
-            self.conversation_scroll.max_offset().y,
-        )
-    }
-
-    fn capture_appearance_scroll(&mut self) {
-        self.appearance_scroll = Some(AppearanceScroll {
-            pinned: self.conversation_follows_tail(),
-            offset_y: self.conversation_scroll.offset().y,
-        });
-    }
-
-    fn capture_scroll_hold(&mut self) {
-        let offset = self.conversation_scroll.offset();
-        let height = self
-            .conversation_scroll
-            .bounds_for_item(0)
-            .map(|bounds| bounds.size.height)
-            .unwrap_or(px(0.));
-        self.scroll_hold = Some(ScrollHold {
-            offset_y: offset.y,
-            content_height: height,
-        });
-    }
-
-    fn request_older(&mut self, cx: &mut Context<Self>) {
-        // `scroll_hold` is the frame where a previous page is still being
-        // anchored. Starting another read here would measure the wrong height.
-        if self.vm.sending || self.vm.history_loading || self.scroll_hold.is_some() {
-            return;
-        }
-        let Some(before) = self
-            .vm
-            .active
-            .as_ref()
-            .and_then(|active| active.older_before.clone())
-        else {
-            return;
-        };
-        let Some((session, branch, expected_head)) = self.open_turn_target() else {
-            return;
-        };
-        self.apply_action(DesktopAction::HistoryLoadStarted, cx);
-        self.dispatch(
-            BridgeCommand::LoadOlder {
-                session,
-                branch,
-                expected_head,
-                before,
-            },
-            cx,
-        );
-    }
-
     /// Session, branch, and head of the open conversation, read without
     /// cloning its transcript. `None` without an open chat or when its ids
     /// do not parse.
@@ -1457,103 +830,6 @@ impl Workspace {
 
     pub(crate) fn vm(&self) -> &WorkspaceState {
         &self.vm
-    }
-
-    pub(crate) fn toasts(&self) -> &[Toast] {
-        &self.toasts
-    }
-
-    /// Records documents reset at startup and shows one notice after the
-    /// settings and UI replies have both had a chance to arrive.
-    pub(crate) fn note_config_repairs(
-        &mut self,
-        repairs: &[mycode_config::DocumentRepair],
-        cx: &mut Context<Self>,
-    ) {
-        let mut added = false;
-        for repair in repairs {
-            if self
-                .repaired_configs
-                .iter()
-                .any(|existing| existing == repair.path)
-            {
-                continue;
-            }
-            self.repaired_configs.push(repair.path.to_owned());
-            added = true;
-        }
-        if !added || self.repair_toast_armed {
-            return;
-        }
-        self.repair_toast_armed = true;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(500))
-                .await;
-            let _ = this.update(cx, |workspace, cx| {
-                let names = workspace.repaired_configs.join(", ");
-                workspace.push_toast(
-                    format!(
-                        "{} {names}. {}",
-                        crate::i18n::t("Reset unreadable config:", "已重置无法读取的配置:"),
-                        crate::i18n::t(
-                            "The previous files were kept beside them.",
-                            "原文件已留在旁边。",
-                        ),
-                    ),
-                    ToastKind::Info,
-                    cx,
-                );
-            });
-        })
-        .detach();
-    }
-
-    /// Keeps errors until dismissal; other notices expire after a readable delay.
-    pub(crate) fn push_toast(
-        &mut self,
-        text: impl Into<String>,
-        kind: ToastKind,
-        cx: &mut Context<Self>,
-    ) {
-        let text = text.into();
-        if text.trim().is_empty() {
-            return;
-        }
-        if self
-            .toasts
-            .iter()
-            .any(|toast| toast.kind == kind && toast.text == text)
-        {
-            return;
-        }
-        let id = self.next_toast_id;
-        self.next_toast_id = self.next_toast_id.wrapping_add(1);
-        self.toasts.push(Toast { id, text, kind });
-        // A click handler repaints on its own. A toast pushed from the event
-        // pump (compaction finishing, a while after "Compacting…") does not,
-        // so the row was removed by its timer before the window ever drew it.
-        cx.notify();
-        let Some(lifetime) = toast_lifetime(kind) else {
-            return;
-        };
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(lifetime).await;
-            let _ = this.update(cx, |workspace, cx| {
-                let before = workspace.toasts.len();
-                workspace.toasts.retain(|toast| toast.id != id);
-                // A toast closed by hand already repainted.
-                if workspace.toasts.len() != before {
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
-    pub(crate) fn on_dismiss_toast(&mut self, id: u64, cx: &mut Context<Self>) {
-        self.toasts.retain(|toast| toast.id != id);
-        cx.notify();
     }
 
     pub(crate) fn take_manual_update_check(&mut self) -> bool {
@@ -1621,27 +897,6 @@ pub(crate) fn parse_env_line(
     Ok(env)
 }
 
-fn toast_lifetime(kind: ToastKind) -> Option<Duration> {
-    match kind {
-        ToastKind::Error => None,
-        ToastKind::Warning => Some(Duration::from_secs(10)),
-        ToastKind::Info => Some(Duration::from_secs(5)),
-    }
-}
-
-fn near_history_top(offset_y: Pixels, max_offset_y: Pixels) -> bool {
-    max_offset_y > px(1.) && offset_y > px(-64.)
-}
-
-/// Slack around the bottom edge. A reader a few pixels short of the tail
-/// still follows the stream; anything further up is history.
-const TAIL_SLACK: Pixels = px(48.);
-
-fn follows_tail(offset_y: Pixels, max_offset_y: Pixels) -> bool {
-    let gap = offset_y + max_offset_y;
-    gap >= -TAIL_SLACK && gap <= TAIL_SLACK
-}
-
 /// Renders the whole window; split across the `ui` submodule.
 impl Workspace {
     pub(crate) fn render_root(
@@ -1680,36 +935,5 @@ mod tests {
         assert_eq!(titlebar.traffic_light_position, Some(TRAFFIC_LIGHTS));
         assert!(f32::from(TRAFFIC_LIGHTS.x) >= 0.);
         assert!(f32::from(TRAFFIC_LIGHTS.y) >= 0.);
-    }
-
-    #[test]
-    fn history_autoload_uses_the_positive_scroll_extent() {
-        assert!(!near_history_top(px(0.), px(0.)));
-        assert!(near_history_top(px(0.), px(800.)));
-        assert!(near_history_top(px(-32.), px(800.)));
-        assert!(!near_history_top(px(-100.), px(800.)));
-        assert!(!near_history_top(px(-800.), px(800.)));
-    }
-
-    #[test]
-    fn errors_have_no_expiry_and_other_notices_have_reading_time() {
-        assert_eq!(toast_lifetime(ToastKind::Error), None);
-        assert_eq!(
-            toast_lifetime(ToastKind::Info),
-            Some(Duration::from_secs(5))
-        );
-        assert_eq!(
-            toast_lifetime(ToastKind::Warning),
-            Some(Duration::from_secs(10))
-        );
-    }
-
-    #[test]
-    fn tail_follow_stays_at_the_bottom_and_lets_go_when_scrolled_up() {
-        assert!(follows_tail(px(0.), px(0.)));
-        assert!(follows_tail(px(-800.), px(800.)));
-        assert!(follows_tail(px(-780.), px(800.)));
-        assert!(!follows_tail(px(-100.), px(800.)));
-        assert!(!follows_tail(px(0.), px(800.)));
     }
 }
