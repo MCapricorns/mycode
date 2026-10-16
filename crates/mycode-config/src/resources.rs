@@ -151,9 +151,8 @@ fn collect_skills(
                 push_skill(&skill, path.file_name(), skills, seen, global);
             }
         } else if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md") || name.ends_with(".md"))
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
         {
             push_skill(&path, path.file_stem(), skills, seen, global);
         }
@@ -310,6 +309,19 @@ mod tests {
                 home.0.join(".agents").join("skills")
             ]
         );
+    }
+
+    #[test]
+    fn a_flat_skill_file_matches_its_extension_in_any_case() {
+        let workspace = temp("flat-case");
+        let skills = workspace.0.join(".agents").join("skills");
+        fs::create_dir_all(&skills).unwrap();
+        fs::write(skills.join("upper.MD"), "# upper\n").unwrap();
+        fs::write(skills.join("lower.md"), "# lower\n").unwrap();
+        fs::write(skills.join("notes.txt"), "not a skill\n").unwrap();
+        let found = discover_skills(&workspace.0, None);
+        let slugs: Vec<_> = found.iter().map(|skill| skill.slug.as_str()).collect();
+        assert_eq!(slugs, ["lower", "upper"]);
     }
 
     #[test]
