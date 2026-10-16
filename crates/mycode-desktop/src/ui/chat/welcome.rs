@@ -1,8 +1,7 @@
-//! Empty-desk welcome. A gradient wordmark, actions, and recent folders.
+//! Empty-desk welcome. A warm gradient wordmark, actions, and recent folders.
 //!
-//! With no folder open there is one action: Open folder. Once a folder is
-//! open, a second outline action starts a task. Both surfaces share
-//! [`new_task_label`], so a rename is one edit.
+//! The only action is Open folder. [`new_task_label`] is shared with the
+//! sidebar control and untitled session rows, so a rename is one edit.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::theme::Theme;
@@ -18,8 +17,8 @@ use crate::ui::{element_id, hover_delete_button, project_label, skin};
 use crate::view_model::has_open_folder;
 use crate::workspace::Workspace;
 
-/// Shared label for a new task: the empty-desk action, the sidebar
-/// control, and an untitled session row.
+/// Shared label for a new task: the sidebar control and an untitled
+/// session row.
 const NEW_TASK_LABEL: (&str, &str) = ("New task", "新建任务");
 
 const WORDMARK: &str = "MYCode";
@@ -27,18 +26,18 @@ const WORDMARK: &str = "MYCode";
 /// One color sweep across the wordmark when the desk mounts.
 const WORDMARK_SWEEP_MS: u64 = 1400;
 
-/// Share of the cyclic ramp the resting wordmark spans: blue to violet,
-/// leaving the pink-to-blue return for the sweep.
+/// Share of the cyclic ramp the resting wordmark spans: amber to rose,
+/// leaving the return to amber for the sweep.
 const WORDMARK_SPAN: f32 = 0.75;
 
-const TAGLINE_NO_FOLDER: (&str, &str) = ("Open a folder to get started.", "打开一个目录即可开始。");
+const TAGLINE_NO_FOLDER: (&str, &str) = ("Open a folder to get started", "打开一个目录即可开始");
 const TAGLINE_HAS_FOLDER: (&str, &str) = (
-    "Start a task in this workspace.",
-    "在此工作区开始一个任务。",
+    "Start a task in this workspace",
+    "在此工作区开始一个任务",
 );
 
-/// The new-task label. The empty desk, the sidebar control, and untitled
-/// session rows all call this.
+/// The new-task label. The sidebar control and untitled session rows call
+/// this.
 #[must_use]
 pub(crate) fn new_task_label() -> &'static str {
     t(NEW_TASK_LABEL.0, NEW_TASK_LABEL.1)
@@ -62,34 +61,43 @@ pub(super) fn render_welcome(
     let (tagline_en, tagline_zh) = empty_desk_tagline(has_folder);
     div()
         .id("welcome")
+        .w_full()
         .flex()
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_3()
-        .py(px(72.))
+        .pt(px(160.))
+        .pb(px(72.))
         .child(
             div()
                 .id("welcome-title")
-                .text_3xl()
+                .w_full()
+                .text_center()
+                .text_size(px(44.))
+                .line_height(px(52.))
                 .font_weight(gpui_kit::FontWeight::BOLD)
                 .child(render_wordmark(theme.mode.is_dark(), cx.reduce_motion())),
         )
         .child(
             div()
                 .id("welcome-tagline")
-                .text_sm()
+                .w_full()
+                .text_center()
+                .mt(px(10.))
+                .text_size(px(14.))
                 .text_color(theme.muted_foreground)
                 .child(t(tagline_en, tagline_zh)),
         )
         .child(
             div()
                 .id("welcome-actions")
+                .w_full()
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_2()
-                .mt_2()
+                .justify_center()
+                .gap(px(10.))
+                .mt(px(28.))
                 .child(
                     welcome_action(
                         "welcome-open-project",
@@ -101,19 +109,6 @@ pub(super) fn render_welcome(
                         workspace.on_open_project_dialog(cx);
                     })),
                 )
-                .when(has_folder, |actions| {
-                    actions.child(
-                        welcome_action(
-                            "welcome-new-task",
-                            IconName::MessageSquare,
-                            new_task_label(),
-                            theme,
-                        )
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_new_session(cx);
-                        })),
-                    )
-                }),
         )
         .when(!recents.is_empty(), |this| {
             this.child(
@@ -218,13 +213,13 @@ fn render_wordmark(dark: bool, reduce_motion: bool) -> gpui_kit::AnyElement {
         .into_any_element()
 }
 
-/// Blue, indigo, violet, pink: the Desk info, accent, and violet hues, with
-/// deeper shades in light mode so the letters keep contrast on the page.
+/// Amber, orange, coral, rose, with deeper shades in light mode so the
+/// letters keep contrast on the page.
 fn wordmark_stops(dark: bool) -> [Hsla; 4] {
     let stops: [u32; 4] = if dark {
-        [0x60A5FA, 0x7C8CFF, 0xA78BFA, 0xF0ABFC]
+        [0xFBBF24, 0xFB923C, 0xF87171, 0xF472B6]
     } else {
-        [0x2563EB, 0x4353D8, 0x7C3AED, 0xC026D3]
+        [0xD97706, 0xEA580C, 0xDC2626, 0xDB2777]
     };
     stops.map(|hex| gpui_kit::rgb(hex).into())
 }
@@ -291,20 +286,20 @@ mod tests {
         }
         assert_eq!(empty_desk_tagline(false), TAGLINE_NO_FOLDER);
         assert_eq!(empty_desk_tagline(true), TAGLINE_HAS_FOLDER);
-        assert_eq!(TAGLINE_NO_FOLDER.0, "Open a folder to get started.");
-        assert_eq!(TAGLINE_HAS_FOLDER.0, "Start a task in this workspace.");
+        assert_eq!(TAGLINE_NO_FOLDER.0, "Open a folder to get started");
+        assert_eq!(TAGLINE_HAS_FOLDER.0, "Start a task in this workspace");
         assert_eq!(NEW_TASK_LABEL.0, "New task");
     }
 
     #[test]
-    fn the_resting_wordmark_starts_on_blue_and_never_goes_grey() {
+    fn the_resting_wordmark_starts_on_amber_and_never_goes_grey() {
         for dark in [true, false] {
             let stops = wordmark_stops(dark);
             let runs = wordmark_highlights(dark, 0.);
             assert_eq!(runs.len(), WORDMARK.chars().count());
             let first = runs[0].1.color.expect("first letter color").to_rgb();
-            let blue = stops[0].to_rgb();
-            assert!((first.r - blue.r).abs() < 1e-3 && (first.b - blue.b).abs() < 1e-3);
+            let amber = stops[0].to_rgb();
+            assert!((first.r - amber.r).abs() < 1e-3 && (first.b - amber.b).abs() < 1e-3);
             for (_, style) in &runs {
                 let color = style.color.expect("letter color");
                 assert!(color.s > 0.3, "letters stay saturated, got {color:?}");
