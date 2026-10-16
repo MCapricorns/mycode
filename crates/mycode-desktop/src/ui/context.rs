@@ -117,6 +117,10 @@ pub(crate) fn responsive_panel_bounds(
 }
 
 const SUBAGENT_WINDOW_WIDTH: f32 = 320.;
+/// Bottom inset for the subagent window. It stops above the tallest
+/// composer (input cap, toolbar, jump row) so its occluding body never
+/// covers the send or stop button where the two overlap horizontally.
+const SUBAGENT_WINDOW_BOTTOM_CLEAR: f32 = 248.;
 
 /// Right inset and width for the subagent window: it stacks left of
 /// Details, the changes drawer, and the diff panel, and clamps inside the
@@ -1246,7 +1250,8 @@ fn window_body(text: String) -> impl IntoElement {
     div().text_sm().whitespace_normal().child(text)
 }
 
-/// Tall window for one running subagent so its progress is readable.
+/// Tall window for one running subagent so its progress is readable. It
+/// ends above the composer so the composer controls stay clickable.
 pub(super) fn render_subagent_window(
     workspace: &mut Workspace,
     window: &Window,
@@ -1299,7 +1304,8 @@ pub(super) fn render_subagent_window(
         .absolute()
         .top(px(super::title_bar::BAR_HEIGHT + 8.))
         .right(px(window_right))
-        .bottom(px(12.))
+        .bottom(px(SUBAGENT_WINDOW_BOTTOM_CLEAR))
+        .min_h(px(200.))
         .w(px(window_width))
         .flex()
         .flex_col()
