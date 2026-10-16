@@ -91,6 +91,14 @@ pub struct SkillFile {
     pub global: bool,
 }
 
+/// Operating-system user home directory for global `.agents` discovery.
+#[must_use]
+pub fn os_user_home() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
 /// Host-global skill catalog roots for read-only tool anchoring.
 ///
 /// The workspace `.agents` tree sits inside the session cwd and needs no

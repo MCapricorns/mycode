@@ -252,18 +252,13 @@ pub(crate) fn push_effort(efforts: &mut Vec<String>, value: &str, cap: usize) {
         return;
     };
     let token = token.to_ascii_lowercase();
-    if token == "default" || !effort_token_ok(&token) || efforts.len() >= cap {
+    if token == "default"
+        || !mycode_config::is_valid_effort_token(&token)
+        || efforts.len() >= cap
+    {
         return;
     }
     if !efforts.iter().any(|existing| existing == &token) {
         efforts.push(token);
     }
-}
-
-fn effort_token_ok(token: &str) -> bool {
-    let len = token.chars().count();
-    (1..=32).contains(&len)
-        && token.chars().all(|character| {
-            character.is_ascii_alphanumeric() || character == '-' || character == '_'
-        })
 }

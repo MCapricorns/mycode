@@ -140,7 +140,7 @@ const PARENT_ONLY_TOOLS: &[&str] = &["agent", "ask_user"];
 /// of them, or the stable name `shell`.
 fn canonical_tool_name(name: &str) -> &str {
     match name {
-        "bash" | "zsh" | "sh" | "powershell" | "cmd" => "shell",
+        "bash" | "zsh" | "sh" | "pwsh" | "powershell" | "cmd" => "shell",
         other => other,
     }
 }
@@ -171,20 +171,21 @@ impl SubagentRole {
     /// read-only. Parent-only tools (`agent`, `ask_user`) never
     /// reach a child, so depth stays at one.
     #[must_use]
-    pub fn resolve_tools(&self, parent_tools: &[String]) -> Vec<String> {
+    pub fn resolve_tools<S: AsRef<str>>(&self, parent_tools: &[S]) -> Vec<String> {
         let live = |name: &str| {
             let name = canonical_tool_name(name);
             !PARENT_ONLY_TOOLS.contains(&name)
                 && parent_tools
                     .iter()
-                    .any(|parent| canonical_tool_name(parent) == name)
+                    .any(|parent| canonical_tool_name(parent.as_ref()) == name)
         };
         let declared: Vec<String> = match &self.tools {
             Some(tools) => tools.iter().filter(|name| live(name)).cloned().collect(),
             None => parent_tools
                 .iter()
-                .filter(|name| !PARENT_ONLY_TOOLS.contains(&name.as_str()))
-                .cloned()
+                .map(AsRef::as_ref)
+                .filter(|name| !PARENT_ONLY_TOOLS.contains(name))
+                .map(str::to_owned)
                 .collect(),
         };
         if self.name == "scout" {
@@ -200,6 +201,8 @@ impl SubagentRole {
     /// Whether this role may write the tree (and therefore take a worktree).
     ///
     /// Scout is never write-capable. An omitted allowlist inherits writers.
+    /// Roles that only list read-only tools, parent-only tools (`agent`,
+    /// `ask_user`), or unknown tool names are treated as read-only.
     #[must_use]
     pub fn is_write_capable(&self) -> bool {
         if self.name == "scout" {
@@ -209,7 +212,7 @@ impl SubagentRole {
             None => true,
             Some(tools) => tools
                 .iter()
-                .any(|name| !READ_ONLY_TOOLS.contains(&name.as_str())),
+                .any(|name| matches!(canonical_tool_name(name), "write" | "edit" | "shell")),
         }
     }
 
@@ -559,13 +562,7 @@ mod tests {
     #[test]
     fn children_inherit_shell_and_not_the_agent_tool() {
         let artisan = role("artisan", None);
-        let tools = artisan.resolve_tools(&[
-            "read".into(),
-            "write".into(),
-            "shell".into(),
-            "agent".into(),
-            "ask_user".into(),
-        ]);
+        let tools = artisan.resolve_tools(&["read", "write", "shell", "agent", "ask_user"]);
         assert_eq!(
             tools,
             vec!["read".to_owned(), "write".to_owned(), "shell".to_owned()]
@@ -584,13 +581,7 @@ mod tests {
                 "shell".into(),
             ]),
         );
-        let tools = narrow.resolve_tools(&[
-            "read".into(),
-            "grep".into(),
-            "find".into(),
-            "shell".into(),
-            "agent".into(),
-        ]);
+        let tools = narrow.resolve_tools(&["read", "grep", "find", "shell", "agent"]);
         assert_eq!(
             tools,
             vec![
@@ -605,7 +596,23 @@ mod tests {
     #[test]
     fn powershell_in_a_role_matches_the_parent_shell_tool() {
         let role = role("artisan", Some(vec!["read".into(), "powershell".into()]));
-        let tools = role.resolve_tools(&["read".into(), "shell".into()]);
+        let tools = role.resolve_tools(&["read", "shell"]);
         assert_eq!(tools, vec!["read".to_owned(), "powershell".to_owned()]);
+    }
+
+    #[test]
+    fn write_capability_requires_an_actual_mutating_tool() {
+        assert!(!role("scout", None).is_write_capable());
+        assert!(role("artisan", None).is_write_capable());
+        assert!(!role("reviewer", Some(vec!["read".into(), "grep".into()])).is_write_capable());
+        assert!(
+            !role(
+                "coordinator",
+                Some(vec!["read".into(), "agent".into(), "ask_user".into(), "unknown".into()])
+            )
+            .is_write_capable()
+        );
+        assert!(role("writer", Some(vec!["read".into(), "edit".into()])).is_write_capable());
+        assert!(role("runner", Some(vec!["pwsh".into()])).is_write_capable());
     }
 }

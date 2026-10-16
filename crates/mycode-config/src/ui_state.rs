@@ -166,12 +166,18 @@ pub fn session_model<'a>(
     pins.iter().find(|pin| pin.session_id == session_id)
 }
 
+/// Returns whether `value` is a syntactically valid effort token (`1..=32`
+/// ASCII alphanumeric, `-`, or `_` bytes).
+#[must_use]
+pub fn is_valid_effort_token(value: &str) -> bool {
+    (1..=32).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 fn valid_effort_token(value: &str) -> bool {
-    let len = value.chars().count();
-    (1..=32).contains(&len)
-        && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || character == '-' || character == '_'
-        })
+    is_valid_effort_token(value)
 }
 
 /// Durable desktop UI state.

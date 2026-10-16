@@ -5,7 +5,6 @@
 //! the cache; on any failure the cached or vendored snapshot keeps the
 //! product fully functional offline.
 use std::sync::{Arc, OnceLock, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use mycode_config::{HomeLayout, locked_update_owned_file, read_owned_file};
 use serde::{Deserialize, Serialize};
@@ -101,10 +100,7 @@ pub(crate) fn clear_active() {
 }
 
 pub(crate) fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
+    mycode_core::unix_now().as_secs()
 }
 
 /// Reads the catalog cache and reports a quarantine when the file was damaged.
