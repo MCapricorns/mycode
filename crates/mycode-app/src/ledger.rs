@@ -277,7 +277,48 @@ pub(crate) async fn ledger_history(
         Ok(())
     })
     .await?;
+    order_tool_results(&mut history);
     Ok(history)
+}
+
+/// Puts each run of tool results back in its assistant message's call order.
+///
+/// The ledger commits a result when its call finishes, so calls that ran
+/// together land in completion order. The agent's in-memory history keeps
+/// call order, and the next turn has to resend the same bytes or the
+/// provider's prefix cache misses from the first reordered result on. The
+/// count of messages is unchanged, so compaction indexes stay valid.
+fn order_tool_results(history: &mut [Arc<Message>]) {
+    let mut index = 0;
+    while index < history.len() {
+        let Message::Assistant(assistant) = history[index].as_ref() else {
+            index += 1;
+            continue;
+        };
+        let calls: Vec<String> = assistant
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                mycode_core::ContentBlock::ToolCall(call) => Some(call.id.clone()),
+                _ => None,
+            })
+            .collect();
+        let start = index + 1;
+        let mut end = start;
+        while end < history.len() && matches!(history[end].as_ref(), Message::ToolResult(_)) {
+            end += 1;
+        }
+        if end - start > 1 {
+            history[start..end].sort_by_key(|message| match message.as_ref() {
+                Message::ToolResult(result) => calls
+                    .iter()
+                    .position(|id| *id == result.tool_call_id)
+                    .unwrap_or(usize::MAX),
+                _ => usize::MAX,
+            });
+        }
+        index = end.max(start);
+    }
 }
 
 /// Rewinds the branch so everything from the recalled message onward is
@@ -542,6 +583,49 @@ impl HeadWriter {
 #[cfg(test)]
 mod tests {
     use super::{VISIBLE_EVENTS, load_older, open_conversation};
+
+    #[test]
+    fn replayed_tool_results_follow_the_call_order() {
+        use std::sync::Arc;
+
+        use mycode_core::{
+            AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
+            UserMessage,
+        };
+        let result = |id: &str| {
+            Arc::new(Message::ToolResult(ToolResultMessage {
+                tool_call_id: id.to_owned(),
+                content: Vec::new(),
+                is_error: false,
+                details: None,
+            }))
+        };
+        let call =
+            |id: &str| ContentBlock::ToolCall(ToolCall::new(id, "read", serde_json::json!({})));
+        let mut history = vec![
+            Arc::new(Message::User(UserMessage::text("go"))),
+            Arc::new(Message::Assistant(AssistantMessage {
+                blocks: vec![call("a"), call("b"), call("c")],
+                usage: None,
+                stop_reason: StopReason::ToolUse,
+            })),
+            result("c"),
+            result("a"),
+            result("b"),
+            Arc::new(Message::User(UserMessage::text("steer"))),
+        ];
+        super::order_tool_results(&mut history);
+        let ids: Vec<_> = history
+            .iter()
+            .filter_map(|message| match message.as_ref() {
+                Message::ToolResult(result) => Some(result.tool_call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+        assert_eq!(history.len(), 6);
+        assert!(matches!(history[5].as_ref(), Message::User(_)));
+    }
     use mycode_agent::session::{EventKind, HeadStamp, SessionService};
     use mycode_config::HomeLayout;
 
