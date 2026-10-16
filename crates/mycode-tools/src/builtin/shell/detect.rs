@@ -39,6 +39,16 @@ pub enum ShellKind {
 }
 
 impl ShellKind {
+    /// Every shell family supported by discovery or runtime fallback.
+    pub const ALL: [Self; 6] = [
+        Self::Pwsh,
+        Self::WindowsPowerShell,
+        Self::Bash,
+        Self::Zsh,
+        Self::Sh,
+        Self::Cmd,
+    ];
+
     /// Stable name for logs and tests.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -62,6 +72,12 @@ impl ShellKind {
             Self::Sh => "sh",
             Self::Cmd => "cmd",
         }
+    }
+
+    /// Whether `name` is the model-facing tool name of any [`ShellKind`].
+    #[must_use]
+    pub fn is_tool_name(name: &str) -> bool {
+        Self::ALL.into_iter().any(|kind| kind.tool_name() == name)
     }
 
     /// Whether script mode launches PowerShell (`pwsh` or `powershell.exe`).
