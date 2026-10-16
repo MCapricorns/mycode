@@ -214,7 +214,7 @@ fn render_models_list_page(
                         .child(
                             Button::new("add-from-catalog")
                                 .icon(IconName::Plus)
-                                .label(t("Add from catalog\u{2026}", "从目录添加\u{2026}"))
+                                .label(t("Add from model library\u{2026}", "从模型库添加\u{2026}"))
                                 .small()
                                 .primary()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -302,7 +302,7 @@ fn render_models_catalog_page(
     // because its container had no height bound at all.
     let preset_rows = std::rc::Rc::new(preset_rows);
     let preset_list_weak = cx.weak_entity();
-    let list_height = px((preset_rows.len().clamp(1, 9) as f32) * PRESET_ROW_HEIGHT.as_f32() + 2.);
+    let list_height = px((preset_rows.len().clamp(1, 12) as f32) * PRESET_ROW_HEIGHT.as_f32() + 2.);
     let list_rows = preset_rows.clone();
     let presets_empty = preset_rows.is_empty();
     let preset_list = div()
@@ -356,14 +356,14 @@ fn render_models_catalog_page(
     let has_preset = workspace.vm().active_preset.is_some();
     let header = super::subview_header(
         if has_preset {
-            t("Catalog", "目录")
+            t("Model library", "模型库")
         } else {
             t("Providers", "服务商")
         },
         if has_preset {
             t("Configure provider", "配置服务商")
         } else {
-            t("Add from catalog", "从目录添加")
+            t("Add from model library", "从模型库添加")
         },
         if has_preset {
             None
@@ -382,7 +382,6 @@ fn render_models_catalog_page(
         },
         cx,
     );
-    let theme = cx.theme();
     div()
         .id("models-catalog-page")
         .flex()
@@ -390,26 +389,17 @@ fn render_models_catalog_page(
         .gap_3()
         .child(header)
         .when(workspace.vm().active_preset.is_none(), |this| {
+            // No second card header here: the subview header above already
+            // names the page, so the search field starts immediately.
             this.child(
-                settings_card(
-                    "catalog-search",
-                    t("Choose a provider", "选择服务商"),
-                    Some(t(
-                        "Filter by name or id, then pick a provider to configure.",
-                        "按名称或 id 过滤,然后选择一个服务商进行配置。",
-                    )),
-                    theme,
-                    vec![
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(div().h(px(30.)).text_sm().child(Input::new(&preset_search)))
-                            .child(preset_list)
-                            .into_any_element(),
-                    ],
-                )
-                .into_any_element(),
+                div()
+                    .id("catalog-search")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().h(px(30.)).text_sm().child(Input::new(&preset_search)))
+                    .child(preset_list)
+                    .into_any_element(),
             )
         })
         .when(workspace.vm().active_preset.is_some(), |this| {
@@ -448,8 +438,8 @@ fn render_opendesign_page(
         t("Providers", "服务商"),
         "OpenDesign",
         Some(t(
-            "Gateway at amr-link.open-design.ai, separate from the models.dev catalog.",
-            "amr-link.open-design.ai 网关，独立于 models.dev 目录。",
+            "Gateway at amr-link.open-design.ai, separate from the model library.",
+            "amr-link.open-design.ai 网关，独立于模型库。",
         )),
         |workspace, cx| {
             workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
