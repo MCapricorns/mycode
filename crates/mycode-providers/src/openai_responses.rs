@@ -249,7 +249,7 @@ impl ResponsesReducer {
                 "stream exceeded the output limit",
             )];
         }
-        call.arguments = full.to_owned();
+        full.clone_into(&mut call.arguments);
         if call.id.is_empty() {
             return Vec::new();
         }
@@ -365,12 +365,12 @@ impl FrameReducer for ResponsesReducer {
                         if call.id.is_empty()
                             && let Some(id) = item["call_id"].as_str().filter(|id| !id.is_empty())
                         {
-                            call.id = id.to_owned();
+                            id.clone_into(&mut call.id);
                         }
                         if call.name.is_empty()
                             && let Some(name) = item["name"].as_str().filter(|n| !n.is_empty())
                         {
-                            call.name = name.to_owned();
+                            name.clone_into(&mut call.name);
                         }
                     }
                     return self
