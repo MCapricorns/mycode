@@ -227,7 +227,7 @@ pub(super) fn render_chat(
                 .mention
                 .as_ref()
                 .is_some_and(|mention| !mention.items.is_empty()),
-            |this| this.child(menus::render_mention_layer(workspace, cx)),
+            |this| this.child(menus::render_mention_layer(workspace, window, cx)),
         )
         // The jump-to-latest row rides the same docked pattern, right above
         // the composer and outside it, and shows only while the transcript

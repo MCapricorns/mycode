@@ -232,9 +232,11 @@ pub(crate) fn reasoning_row_label(level: &str) -> String {
 }
 
 /// The `@` file and `/` command autocomplete panel, docked in-flow above
-/// the composer like the model menu.
+/// the composer like the model menu. Slash rows stay one flat list: group
+/// headings only added divisions to scroll past.
 pub(super) fn render_mention_layer(
     workspace: &mut Workspace,
+    window: &Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
@@ -250,12 +252,7 @@ pub(super) fn render_mention_layer(
     let preferred = workspace.mention_highlight();
     let scroll = workspace.mention_scroll().clone();
     let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
-    let mut previous: Option<MentionGroup> = None;
     for (index, item) in mention.items.iter().enumerate() {
-        if mention.kind == MentionKind::Command && previous != Some(item.group) {
-            previous = Some(item.group);
-            rows.push(slash_heading(item.group, theme));
-        }
         let label = mention_label(item);
         let row_id = mention_row_id(index, item);
         rows.push(
@@ -283,7 +280,7 @@ pub(super) fn render_mention_layer(
             div().w_full().child(
                 menu_panel("mention-menu", theme)
                     .w_full()
-                    .max_h(px(300.))
+                    .max_h(menu_height_cap(window, 400.))
                     .overflow_y_scroll()
                     .track_scroll(&scroll)
                     .p_2()
@@ -309,29 +306,6 @@ pub(super) fn render_mention_layer(
 
 fn mention_row_id(index: usize, item: &crate::view_model::MentionItem) -> String {
     format!("mention-{index}-{:?}-{}", item.group, item.insert)
-}
-
-fn slash_heading(group: MentionGroup, theme: &Theme) -> gpui_kit::AnyElement {
-    let label = match group {
-        MentionGroup::Command => t("Commands", "命令"),
-        MentionGroup::Skill => t("Skills", "技能"),
-        MentionGroup::Mcp => t("MCP", "MCP"),
-        MentionGroup::File => t("Files", "文件"),
-    };
-    div()
-        .id(match group {
-            MentionGroup::Command => "mention-heading-commands",
-            MentionGroup::Skill => "mention-heading-skills",
-            MentionGroup::Mcp => "mention-heading-mcp",
-            MentionGroup::File => "mention-heading-files",
-        })
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-        .text_color(theme.muted_foreground)
-        .px_2()
-        .pt_1()
-        .child(label)
-        .into_any_element()
 }
 
 fn mention_label(item: &crate::view_model::MentionItem) -> String {
