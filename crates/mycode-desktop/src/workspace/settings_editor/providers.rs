@@ -303,21 +303,24 @@ impl Workspace {
             return;
         };
         let typed = input.read(cx).value().to_string();
-        let Some(settings) = self.vm.settings.clone() else {
-            return;
+        let previewed = {
+            let Some(settings) = self.vm.settings.as_ref() else {
+                return;
+            };
+            let Some(current) = settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .map(|provider| provider.base_url.clone())
+            else {
+                return;
+            };
+            if typed.trim() == current {
+                return;
+            }
+            settings.preview_provider_base_url(id, &typed)
         };
-        let Some(current) = settings
-            .providers
-            .iter()
-            .find(|provider| provider.id == id)
-            .map(|provider| provider.base_url.clone())
-        else {
-            return;
-        };
-        if typed.trim() == current {
-            return;
-        }
-        match settings.preview_provider_base_url(id, &typed) {
+        match previewed {
             Ok(base_url) => {
                 input.update(cx, |state, cx| {
                     state.set_value(base_url.clone(), window, cx)

@@ -16,9 +16,10 @@ fn result_entry(text: &str) -> ConversationEntry {
 
 /// Eleven markdown list lines are what QA saw counted as deletions.
 fn eleven_list_lines(header: &str) -> String {
+    use std::fmt::Write as _;
     let mut page = format!("{header}\n");
     for n in 1..=11 {
-        page.push_str(&format!("- line {n}\n"));
+        let _ = writeln!(page, "- line {n}");
     }
     page
 }
@@ -41,9 +42,10 @@ fn web_search_snippets_are_not_a_diff() {
 
 #[test]
 fn agent_and_scout_markdown_is_not_a_diff() {
+    use std::fmt::Write as _;
     let mut text = String::from("scout notes\n");
     for n in 1..=21 {
-        text.push_str(&format!("- line {n}\n"));
+        let _ = writeln!(text, "- line {n}");
     }
     let status = tool_status("agent", Some(&result_entry(&text)), false);
     assert_eq!(status, "");
@@ -77,9 +79,10 @@ fn a_finished_call_shows_no_output_excerpt() {
 
 #[test]
 fn edit_removals_still_summarize_as_a_diff() {
+    use std::fmt::Write as _;
     let mut text = String::from("edited src/lib.rs\n");
     for n in 1..=11 {
-        text.push_str(&format!("- line {n}\n"));
+        let _ = writeln!(text, "- line {n}");
     }
     assert_eq!(
         tool_status("edit", Some(&result_entry(&text)), false),

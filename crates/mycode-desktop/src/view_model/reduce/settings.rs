@@ -130,29 +130,16 @@ pub(super) fn provider_removed(state: &mut WorkspaceState, index: usize) {
     });
 }
 
-pub(super) fn backend_added(
-    state: &mut WorkspaceState,
-    backend: mycode_config::WebBackendSettings,
-) {
-    edit_settings(state, |settings| {
-        if settings.web_backends.len() < mycode_config::MAX_WEB_BACKENDS {
-            settings.web_backends.push(backend);
-            true
-        } else {
-            false
-        }
-    });
-}
-
+/// Removes a stored backend row (a `custom` leftover the UI still lists).
+/// `web_detail` cannot point at a removed row: only vendor rows open one,
+/// and vendors cannot be removed.
 pub(super) fn backend_removed(state: &mut WorkspaceState, index: usize) {
-    edit_settings(state, |settings| {
-        if index < settings.web_backends.len() {
-            settings.web_backends.remove(index);
-            true
-        } else {
-            false
-        }
-    });
+    if let Some(settings) = state.settings.as_mut()
+        && index < settings.web_backends.len()
+    {
+        settings.web_backends.remove(index);
+        mark_settings_dirty(settings);
+    }
 }
 
 /// Enabling one web backend disables the others; at most one is active.

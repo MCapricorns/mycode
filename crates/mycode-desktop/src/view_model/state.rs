@@ -9,7 +9,6 @@ use mycode_app::{
 use super::chat::{ComposerMention, LiveJob};
 use super::settings::{
     CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
-    WebSubview,
 };
 use super::usage::{CacheAlert, CacheBreak, CacheWatch, TurnStats};
 
@@ -223,8 +222,8 @@ pub(crate) struct WorkspaceState {
     pub models_subview: ModelsSubview,
     /// An OpenDesign `/models` listing is in flight.
     pub opendesign_loading: bool,
-    /// The Web search settings sub-page.
-    pub web_subview: WebSubview,
+    /// Vendor backend open on the Web page, when the user drilled in.
+    pub web_detail: Option<String>,
     /// The MCP settings sub-page.
     pub mcp_subview: McpSubview,
     /// Whether the custom provider form's protocol dropdown is open.
@@ -328,9 +327,7 @@ pub enum DesktopAction {
     SettingsProviderAdded(mycode_config::ProviderSettings),
     /// The settings editor removed a provider row.
     SettingsProviderRemoved(usize),
-    /// The settings editor added a web backend row.
-    SettingsBackendAdded(mycode_config::WebBackendSettings),
-    /// The settings editor removed a web backend row.
+    /// The settings editor removed a stored web backend row.
     SettingsBackendRemoved(usize),
     /// The settings editor toggled a web backend.
     SettingsBackendToggled(usize, bool),
@@ -628,8 +625,8 @@ pub enum DesktopAction {
     ShowModelsSubview(ModelsSubview),
     /// An OpenDesign model listing started (`true`) or finished.
     OpenDesignLoading(bool),
-    /// The Web search settings sub-page changed.
-    ShowWebSubview(WebSubview),
+    /// The Web page opened or closed one vendor's detail.
+    WebDetailOpened(Option<String>),
     /// The MCP settings sub-page changed.
     ShowMcpSubview(McpSubview),
     /// The custom provider form's protocol dropdown opened or closed.

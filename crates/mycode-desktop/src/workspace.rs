@@ -12,7 +12,7 @@ use gpui_kit::{px, size};
 use mycode_app::{HeadStamp, SessionEventId};
 use mycode_config::HomeLayout;
 
-use crate::ui::{BackendForm, McpForm, ProviderForm};
+use crate::ui::{McpForm, ProviderForm};
 use crate::view_model::{DesktopAction, MainView, WorkspaceState, reduce};
 use mycode_app::{BridgeCommand, BridgeEventRx, CoreBridge};
 
@@ -146,7 +146,6 @@ pub struct Workspace {
     /// The proxy field shows the stored URL on its next render.
     proxy_sync_pending: bool,
     provider_form: Option<Entity<ProviderForm>>,
-    backend_form: Option<Entity<BackendForm>>,
     mcp_form: Option<Entity<McpForm>>,
     mcp_key_input: Option<Entity<InputState>>,
     mcp_json_input: Option<Entity<TextareaState>>,
@@ -313,7 +312,6 @@ impl Workspace {
             proxy_input: None,
             proxy_sync_pending: false,
             provider_form: None,
-            backend_form: None,
             mcp_form: None,
             mcp_key_input: None,
             mcp_json_input: None,
@@ -696,13 +694,14 @@ impl Workspace {
         self.apply_action(DesktopAction::ShowModelsSubview(view), cx);
     }
 
-    /// Switches the Web search settings sub-page.
-    pub(crate) fn on_show_web_subview(
-        &mut self,
-        view: crate::view_model::WebSubview,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_action(DesktopAction::ShowWebSubview(view), cx);
+    /// Opens one vendor's Web detail page (key, enable switch, endpoint).
+    pub(crate) fn on_open_web_detail(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::WebDetailOpened(Some(id.to_owned())), cx);
+    }
+
+    /// Returns from a Web vendor detail to the backend list.
+    pub(crate) fn on_close_web_detail(&mut self, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::WebDetailOpened(None), cx);
     }
 
     /// Switches the MCP settings sub-page.

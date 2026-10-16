@@ -79,16 +79,20 @@ fn role_card(
     role: &mycode_config::SubagentRole,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let Some(settings) = workspace.vm().settings.clone() else {
-        return div().into_any_element();
+    let (enabled, thinking, provider, model) = {
+        let Some(settings) = workspace.vm().settings.as_ref() else {
+            return div().into_any_element();
+        };
+        let entry = settings.subagents.role(&role.name);
+        (
+            entry.is_none_or(|item| item.enabled),
+            entry
+                .and_then(|item| item.thinking.clone())
+                .unwrap_or_else(|| "inherit".to_owned()),
+            entry.and_then(|item| item.provider.clone()),
+            entry.and_then(|item| item.model.clone()),
+        )
     };
-    let entry = settings.subagents.role(&role.name);
-    let enabled = entry.is_none_or(|item| item.enabled);
-    let thinking = entry
-        .and_then(|item| item.thinking.clone())
-        .unwrap_or_else(|| "inherit".to_owned());
-    let provider = entry.and_then(|item| item.provider.clone());
-    let model = entry.and_then(|item| item.model.clone());
     let open = workspace
         .vm()
         .subagent_menu

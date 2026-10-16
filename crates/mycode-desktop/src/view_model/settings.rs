@@ -88,7 +88,7 @@ impl SettingsState {
             effective_user_agent: settings.effective_user_agent(),
             proxy: settings.proxy.clone(),
             providers: settings.providers.clone(),
-            web_backends: merge_web_backends(&settings.web.backends),
+            web_backends: mycode_config::merged_web_backends(&settings.web.backends),
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.effective_theme().to_owned(),
             language: settings.appearance.language.clone(),
@@ -164,21 +164,6 @@ impl SettingsState {
     }
 }
 
-/// Built-in Querit / AnySearch rows always appear; user backends append.
-fn merge_web_backends(
-    configured: &[mycode_config::WebBackendSettings],
-) -> Vec<mycode_config::WebBackendSettings> {
-    let mut backends = mycode_config::builtin_web_backends();
-    for backend in configured {
-        if let Some(slot) = backends.iter_mut().find(|item| item.id == backend.id) {
-            *slot = backend.clone();
-        } else {
-            backends.push(backend.clone());
-        }
-    }
-    backends
-}
-
 /// The Models settings sub-page: provider list, catalog picker, the
 /// OpenDesign gateway, or the custom-endpoint form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -192,16 +177,6 @@ pub enum ModelsSubview {
     /// apart from the models.dev catalog.
     OpenDesign,
     /// The custom endpoint form.
-    Custom,
-}
-
-/// The Web search settings sub-page.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WebSubview {
-    /// Vendor rows and custom backends, keys hidden behind a lock.
-    #[default]
-    List,
-    /// The custom backend form.
     Custom,
 }
 

@@ -61,8 +61,7 @@ pub(super) fn render_composer(
     let has_session = workspace.vm().active.is_some();
     let sending = workspace.vm().sending;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
-    let queued = workspace.vm().queued.clone();
-    let has_queue = !queued.is_empty();
+    let has_queue = !workspace.vm().queued.is_empty();
     let can_send = if has_session {
         has_draft || has_queue
     } else {
@@ -70,13 +69,14 @@ pub(super) fn render_composer(
     };
     let queue_panel = if has_queue {
         let paused = workspace.vm().queue_paused;
-        Some(render_queued_followups(queued, sending, paused, cx).into_any_element())
+        Some(
+            render_queued_followups(&workspace.vm().queued, sending, paused, cx).into_any_element(),
+        )
     } else {
         None
     };
-    let steering = workspace.vm().pending_steers.clone();
-    let steer_panel =
-        (!steering.is_empty()).then(|| render_pending_steers(steering, cx).into_any_element());
+    let steer_panel = (!workspace.vm().pending_steers.is_empty())
+        .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
     if workspace.composer_steer != sending {
         workspace.composer_steer = sending;
         let placeholder = composer_placeholder(sending);
@@ -401,7 +401,7 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
 
 /// Steers already sent to the running turn. The model reads them at its next
 /// step; until the ledger commits one, this is the only place it shows.
-fn render_pending_steers(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
+fn render_pending_steers(items: &[String], cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let desk = Desk::of(theme);
     div()
@@ -437,8 +437,8 @@ fn render_pending_steers(items: Vec<String>, cx: &mut Context<Workspace>) -> imp
                         )),
                 ),
         )
-        .children(items.into_iter().enumerate().map(|(index, text)| {
-            let preview: SharedString = ellipsis(&text, 72).into();
+        .children(items.iter().enumerate().map(|(index, text)| {
+            let preview: SharedString = ellipsis(text, 72).into();
             div()
                 .id(SharedString::from(format!("steer-{index}")))
                 .min_w_0()
@@ -454,7 +454,7 @@ fn render_pending_steers(items: Vec<String>, cx: &mut Context<Workspace>) -> imp
 /// Queued follow-ups with explicit actions: recall (back into the composer
 /// to edit or drop), interrupt and send, or send a queue a stop is holding.
 fn render_queued_followups(
-    items: Vec<String>,
+    items: &[String],
     sending: bool,
     paused: bool,
     cx: &mut Context<Workspace>,
@@ -535,8 +535,8 @@ fn render_queued_followups(
                     )),
                 ),
         )
-        .children(items.into_iter().enumerate().map(|(index, text)| {
-            let preview: SharedString = ellipsis(&text, 72).into();
+        .children(items.iter().enumerate().map(|(index, text)| {
+            let preview: SharedString = ellipsis(text, 72).into();
             div()
                 .id(SharedString::from(format!("queued-{index}")))
                 .flex()

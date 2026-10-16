@@ -23,10 +23,10 @@
 | `turn` | 一次 `ChatTurn` 和 `/compact`：读设置和密钥、解析 provider、注册工具、跑 `Agent`、把消息、工具结果和用量提交回账本 |
 | `projection` | 账本事件 → 转录行。用量行拼成 `provider/model: in / out · ctx · hit · cache · tok/s`，桌面重放这些行恢复每个模型的累计 |
 | `compaction` | 历史压缩。见下文 |
-| `tool_hosts` | `ask_user` 和网页工具怎么接到桥。Querit / AnySearch 的密钥先看 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY` 环境变量，再看密钥存储 |
+| `tool_hosts` | `ask_user` 和网页工具怎么接到桥。Querit / AnySearch / Exa 的密钥先看 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY` / `EXA_API_KEY` 环境变量，再看密钥存储 |
 | `subagent` | `agent`：解析角色、工具白名单、并发许可、可选 worktree、按角色的模型路由、父提示里的委派表 |
 | `mcp_client` / `mcp_tools` | stdio 或 Streamable HTTP（协议版本 `2025-06-18`，每台最多 128 个工具，单条消息 1 MiB，请求超时 60 秒）。见下文 |
-| `web_client` | Querit、AnySearch、自定义后端。结果条数、URL 数、响应字节都有上限，Bearer 由传输层加 |
+| `web_client` | Querit、AnySearch、Exa，以及旧设置里的自定义后端。结果条数、URL 数、响应字节都有上限，Bearer 由传输层加 |
 | `oauth` | Copilot、Codex 的设备码登录，以及每次请求前的令牌处理。见下文 |
 | `settings_io` | 设置 CAS 和单把密钥的写入。读设置时补上探测到的 shell 和默认 User-Agent 并写回 |
 | `search` | 作曲栏 `@` 提到的项目文件：不区分大小写的子串，跳过 `.git`、`node_modules`、`target` 等目录，最多看 8192 项、返回 64 条 |

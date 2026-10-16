@@ -31,7 +31,10 @@ pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
 pub use subagent_roles::{SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings};
 pub use tools_shell::{ShellSettings, ToolsSettings};
 pub use user_agent::default_user_agent;
-pub use web::{MAX_WEB_BACKENDS, WebBackendSettings, WebSettings, builtin_web_backends};
+pub use web::{
+    MAX_WEB_BACKENDS, WebBackendSettings, WebSettings, builtin_web_backends, merged_web_backends,
+    web_key_env,
+};
 
 use serde::{Deserialize, Serialize};
 

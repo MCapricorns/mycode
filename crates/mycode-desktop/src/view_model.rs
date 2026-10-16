@@ -52,7 +52,6 @@ pub(crate) use self::usage::{
 // types must be too (`private_interfaces`).
 pub use self::settings::{
     CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
-    WebSubview,
 };
 pub use self::state::{DesktopAction, MainView, UpdateState};
 pub use self::usage::CacheBreak;

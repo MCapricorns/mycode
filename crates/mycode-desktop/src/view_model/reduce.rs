@@ -593,7 +593,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsProviderAdded(provider) => settings::provider_added(state, provider),
         DesktopAction::SettingsProviderRemoved(index) => settings::provider_removed(state, index),
-        DesktopAction::SettingsBackendAdded(backend) => settings::backend_added(state, backend),
         DesktopAction::SettingsBackendRemoved(index) => settings::backend_removed(state, index),
         DesktopAction::SettingsBackendToggled(index, enabled) => {
             settings::backend_toggled(state, index, enabled);
@@ -664,6 +663,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ShowMainView(view) => {
             state.view = view;
             state.provider_detail = None;
+            state.web_detail = None;
             // Crossing views closes every floating menu so no stale layer
             // renders above the destination view.
             close_floating_menus(state);
@@ -671,6 +671,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ShowSettingsSection(section) => {
             if section != super::SettingsSection::Models {
                 state.provider_detail = None;
+            }
+            if section != super::SettingsSection::Web {
+                state.web_detail = None;
             }
             state.model_menu_open = false;
             state.model_menu_browse = None;
@@ -862,7 +865,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             active_preset_changed(state, preset);
         }
         DesktopAction::OpenDesignLoading(loading) => state.opendesign_loading = loading,
-        DesktopAction::ShowWebSubview(view) => state.web_subview = view,
+        DesktopAction::WebDetailOpened(backend) => state.web_detail = backend,
         DesktopAction::ShowMcpSubview(view) => {
             state.mcp_subview = view;
             state.mcp_transport_menu_open = false;

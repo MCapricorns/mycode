@@ -6,7 +6,7 @@ use gpui_kit::{AppContext as _, Context, Entity, Window};
 
 use mycode_app::BridgeCommand;
 
-use crate::ui::{BackendForm, McpForm, build_custom_backend, build_mcp_server};
+use crate::ui::{McpForm, build_mcp_server};
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
@@ -154,52 +154,8 @@ impl Workspace {
 
     // ---- web search backends ----
 
-    pub(crate) fn backend_form(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<BackendForm> {
-        self.backend_form
-            .get_or_insert_with(|| BackendForm::new(window, cx))
-            .clone()
-    }
-
-    pub(crate) fn on_add_backend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = self.backend_form.clone() else {
-            return;
-        };
-        let (id, kind, endpoint) = {
-            let read = form.read(cx);
-            (
-                read.id.read(cx).value().to_string(),
-                read.kind.read(cx).value().to_string(),
-                read.endpoint.read(cx).value().to_string(),
-            )
-        };
-        let existing: Vec<String> = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| {
-                settings
-                    .web_backends
-                    .iter()
-                    .map(|backend| backend.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let backend = match build_custom_backend(&existing, &id, &kind, &endpoint) {
-            Ok(backend) => backend,
-            Err(message) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
-                return;
-            }
-        };
-        self.apply_action(DesktopAction::SettingsBackendAdded(backend), cx);
-        form.update(cx, |form, cx| form.clear(window, cx));
-        self.on_show_web_subview(crate::view_model::WebSubview::List, cx);
-    }
-
+    /// Removes a stored backend row. Only legacy `custom` rows are
+    /// removable; vendor rows never show the control.
     pub(crate) fn on_remove_backend(&mut self, index: usize, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::SettingsBackendRemoved(index), cx);
     }
@@ -611,13 +567,21 @@ impl Workspace {
 
     /// Persists the settings document under CAS when local edits exist.
     pub(crate) fn on_save_settings(&mut self, cx: &mut Context<Self>) {
-        let Some(settings) = self.vm.settings.clone() else {
+        let Some((document, edit_epoch, revision)) = self
+            .vm
+            .settings
+            .as_ref()
+            .filter(|settings| !settings.saving && settings.dirty)
+            .map(|settings| {
+                (
+                    settings.to_settings(),
+                    settings.edit_epoch,
+                    settings.revision,
+                )
+            })
+        else {
             return;
         };
-        if settings.saving || !settings.dirty {
-            return;
-        }
-        let document = settings.to_settings();
         if let Err(message) = document.validate() {
             self.apply_action(
                 DesktopAction::SettingsSaveFailed(format!("invalid settings: {message}")),
@@ -625,9 +589,9 @@ impl Workspace {
             );
             return;
         }
-        self.settings_save_epoch = settings.edit_epoch;
+        self.settings_save_epoch = edit_epoch;
         self.vm.settings.as_mut().expect("settings").saving = true;
-        let revision = mycode_config::AuthorityRevision::new(settings.revision)
+        let revision = mycode_config::AuthorityRevision::new(revision)
             .unwrap_or(mycode_config::AuthorityRevision::ABSENT);
         cx.notify();
         self.dispatch(

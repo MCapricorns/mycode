@@ -34,48 +34,51 @@ pub(super) fn render_mcp_section(
 }
 
 fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
-    let Some(settings) = workspace.vm().settings.clone() else {
-        return div().into_any_element();
-    };
-    let listed_tools = workspace.vm().mcp_tools.clone();
-    let probing = workspace.vm().mcp_probing.clone();
-    let mcp_rows: Vec<McpRow> = settings
-        .mcp_servers
-        .iter()
-        .enumerate()
-        .map(|(index, server)| {
-            let target = match server.transport.as_str() {
-                "stdio" => {
-                    let mut line = server.command.clone().unwrap_or_default();
-                    for arg in &server.args {
-                        line.push(' ');
-                        line.push_str(arg);
-                    }
-                    line
-                }
-                _ => server.endpoint.clone().unwrap_or_default(),
-            };
-            McpRow {
-                id: server.id.clone(),
-                transport: server.transport.clone(),
-                target,
-                enabled: server.enabled,
-                keyed: settings.mcp_with_keys.iter().any(|id| id == &server.id),
-                index,
-                tools: listed_tools
-                    .iter()
-                    .find(|(id, _)| *id == server.id)
-                    .map(|(_, tools)| tools.clone()),
-                probing: probing.contains(&server.id),
-            }
-        })
-        .collect();
-    let has_catalog = mycode_config::builtin_mcp_servers().iter().any(|server| {
-        !settings
+    let (mcp_rows, has_catalog) = {
+        let vm = workspace.vm();
+        let Some(settings) = vm.settings.as_ref() else {
+            return div().into_any_element();
+        };
+        let rows: Vec<McpRow> = settings
             .mcp_servers
             .iter()
-            .any(|configured| configured.id == server.id)
-    });
+            .enumerate()
+            .map(|(index, server)| {
+                let target = match server.transport.as_str() {
+                    "stdio" => {
+                        let mut line = server.command.clone().unwrap_or_default();
+                        for arg in &server.args {
+                            line.push(' ');
+                            line.push_str(arg);
+                        }
+                        line
+                    }
+                    _ => server.endpoint.clone().unwrap_or_default(),
+                };
+                McpRow {
+                    id: server.id.clone(),
+                    transport: server.transport.clone(),
+                    target,
+                    enabled: server.enabled,
+                    keyed: settings.mcp_with_keys.iter().any(|id| id == &server.id),
+                    index,
+                    tools: vm
+                        .mcp_tools
+                        .iter()
+                        .find(|(id, _)| *id == server.id)
+                        .map(|(_, tools)| tools.clone()),
+                    probing: vm.mcp_probing.contains(&server.id),
+                }
+            })
+            .collect();
+        let has_catalog = mycode_config::builtin_mcp_servers().iter().any(|server| {
+            !settings
+                .mcp_servers
+                .iter()
+                .any(|configured| configured.id == server.id)
+        });
+        (rows, has_catalog)
+    };
     let mcp_row_elements: Vec<AnyElement> =
         mcp_rows.into_iter().map(|row| mcp_row(row, cx)).collect();
 
@@ -167,19 +170,21 @@ fn render_mcp_catalog_page(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let Some(settings) = workspace.vm().settings.clone() else {
-        return div().into_any_element();
+    let catalog_rows: Vec<(String, String)> = {
+        let Some(settings) = workspace.vm().settings.as_ref() else {
+            return div().into_any_element();
+        };
+        mycode_config::builtin_mcp_servers()
+            .into_iter()
+            .filter(|server| {
+                !settings
+                    .mcp_servers
+                    .iter()
+                    .any(|configured| configured.id == server.id)
+            })
+            .map(|server| (server.id, server.transport))
+            .collect()
     };
-    let catalog_rows: Vec<(String, String)> = mycode_config::builtin_mcp_servers()
-        .into_iter()
-        .filter(|server| {
-            !settings
-                .mcp_servers
-                .iter()
-                .any(|configured| configured.id == server.id)
-        })
-        .map(|server| (server.id, server.transport))
-        .collect();
     let catalog_row_elements: Vec<AnyElement> = catalog_rows
         .iter()
         .map(|(id, transport)| builtin_catalog_row(id, transport, cx))

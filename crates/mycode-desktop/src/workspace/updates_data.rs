@@ -52,7 +52,7 @@ pub(crate) enum SettingsBack {
     ClosePreset,
     /// Catalog or custom-endpoint back returns to the provider list.
     ModelsList,
-    /// Custom web-backend back returns to the backend list.
+    /// A web-vendor detail's back returns to the backend list.
     WebList,
     /// Catalog, JSON, or custom MCP back returns to the server list.
     McpList,
@@ -66,10 +66,10 @@ pub(crate) fn settings_back_target(
     models: crate::view_model::ModelsSubview,
     provider_open: bool,
     preset_open: bool,
-    web: crate::view_model::WebSubview,
+    web_detail_open: bool,
     mcp: crate::view_model::McpSubview,
 ) -> SettingsBack {
-    use crate::view_model::{McpSubview, ModelsSubview, SettingsSection, WebSubview};
+    use crate::view_model::{McpSubview, ModelsSubview, SettingsSection};
     match section {
         SettingsSection::Models => match models {
             ModelsSubview::List if provider_open => SettingsBack::CloseProviderDetail,
@@ -79,7 +79,7 @@ pub(crate) fn settings_back_target(
             }
             ModelsSubview::List => SettingsBack::Desk,
         },
-        SettingsSection::Web if web != WebSubview::List => SettingsBack::WebList,
+        SettingsSection::Web if web_detail_open => SettingsBack::WebList,
         SettingsSection::Mcp if mcp != McpSubview::List => SettingsBack::McpList,
         _ => SettingsBack::Desk,
     }
@@ -370,7 +370,7 @@ impl Workspace {
                 self.vm.models_subview,
                 self.vm.provider_detail.is_some(),
                 self.vm.active_preset.is_some(),
-                self.vm.web_subview,
+                self.vm.web_detail.is_some(),
                 self.vm.mcp_subview,
             ) {
                 SettingsBack::CloseProviderDetail => self.on_close_provider_detail(cx),
@@ -379,7 +379,7 @@ impl Workspace {
                     self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
                 }
                 SettingsBack::WebList => {
-                    self.on_show_web_subview(crate::view_model::WebSubview::List, cx);
+                    self.on_close_web_detail(cx);
                 }
                 SettingsBack::McpList => {
                     self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
@@ -524,7 +524,7 @@ fn collect_ask_answers(
 #[cfg(test)]
 mod tests {
     use super::{DismissLayer, SettingsBack, settings_back_target, top_dismiss_layer};
-    use crate::view_model::{McpSubview, ModelsSubview, SettingsSection, WebSubview};
+    use crate::view_model::{McpSubview, ModelsSubview, SettingsSection};
 
     fn question(optional: bool) -> mycode_app::AskPrompt {
         mycode_app::AskPrompt {
@@ -589,7 +589,7 @@ mod tests {
                 ModelsSubview::List,
                 false,
                 false,
-                WebSubview::List,
+                false,
                 McpSubview::List,
             )
         };
@@ -601,7 +601,7 @@ mod tests {
                 ModelsSubview::List,
                 true,
                 false,
-                WebSubview::List,
+                false,
                 McpSubview::List,
             ),
             SettingsBack::CloseProviderDetail
@@ -612,7 +612,7 @@ mod tests {
                 ModelsSubview::Catalog,
                 false,
                 true,
-                WebSubview::List,
+                false,
                 McpSubview::List,
             ),
             SettingsBack::ClosePreset
@@ -623,7 +623,7 @@ mod tests {
                 ModelsSubview::Catalog,
                 false,
                 false,
-                WebSubview::List,
+                false,
                 McpSubview::List,
             ),
             SettingsBack::ModelsList
@@ -634,7 +634,7 @@ mod tests {
                 ModelsSubview::Custom,
                 false,
                 false,
-                WebSubview::List,
+                false,
                 McpSubview::List,
             ),
             SettingsBack::ModelsList
@@ -647,7 +647,7 @@ mod tests {
                 ModelsSubview::OpenDesign,
                 false,
                 true,
-                WebSubview::List,
+                false,
                 McpSubview::List,
             ),
             SettingsBack::ModelsList
@@ -658,7 +658,7 @@ mod tests {
                 ModelsSubview::List,
                 false,
                 false,
-                WebSubview::Custom,
+                true,
                 McpSubview::List,
             ),
             SettingsBack::WebList
@@ -670,7 +670,7 @@ mod tests {
                     ModelsSubview::List,
                     false,
                     false,
-                    WebSubview::List,
+                    false,
                     subview,
                 ),
                 SettingsBack::McpList,
