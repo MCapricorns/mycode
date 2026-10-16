@@ -314,6 +314,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
             state.queue_paused &= !state.queued.is_empty();
         }
+        DesktopAction::QueueCleared => {
+            state.queued.clear();
+            state.queue_paused = false;
+        }
         DesktopAction::QueuedMessageTaken => {
             if !state.queued.is_empty() {
                 state.queued.remove(0);

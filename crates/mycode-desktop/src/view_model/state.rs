@@ -447,6 +447,8 @@ pub enum DesktopAction {
     SteersReturned(Vec<String>),
     /// The user dismissed one queued follow-up.
     QueuedMessageRemoved(usize),
+    /// The whole queue went back to the composer.
+    QueueCleared,
     /// The next queued follow-up was taken to send.
     QueuedMessageTaken,
     /// One queued follow-up moved to the front so an interrupt can send it.
