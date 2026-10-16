@@ -24,6 +24,7 @@ mod http_pin;
 mod oauth;
 mod openai_completions;
 mod openai_responses;
+mod proxy;
 mod sse;
 pub mod transport;
 mod wire_common;
@@ -48,6 +49,7 @@ pub use oauth::{
     poll_codex_device_token, poll_device_token, refresh_codex_token, start_codex_device_flow,
     start_device_flow,
 };
+pub use proxy::set_proxy_preference;
 pub use transport::{ReqwestTransport, SseTransport, TransportCall};
 
 /// OpenAI-compatible completions path appended to the base URL.

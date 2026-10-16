@@ -72,12 +72,12 @@ pub use settings::{
     AppSettings, AppearanceSettings, DEFAULT_SUBAGENT_CONCURRENCY, DEFAULT_SUBAGENT_TIMEOUT_SECS,
     LegacyUsageSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS,
     MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_TIMEOUT_SECS,
-    MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_PATH,
-    SYSTEM_FONT_FAMILY, ShellSettings, SubagentRoleSettings, SubagentSettings, ToolsSettings,
-    VALID_FONT_FAMILIES, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES, WebBackendSettings,
-    WebSettings, builtin_mcp_servers, builtin_web_backends, canonical_font_family,
-    default_user_agent, is_mcp_executable, read_app_settings, read_app_settings_with_repair,
-    replace_app_settings, split_command_line,
+    MAX_WEB_BACKENDS, McpServerSettings, PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProviderSettings,
+    ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SYSTEM_FONT_FAMILY, ShellSettings,
+    SubagentRoleSettings, SubagentSettings, ToolsSettings, VALID_FONT_FAMILIES, VALID_FONT_SIZES,
+    VALID_LANGUAGES, VALID_THEMES, WebBackendSettings, WebSettings, builtin_mcp_servers,
+    builtin_web_backends, canonical_font_family, default_user_agent, is_mcp_executable,
+    read_app_settings, read_app_settings_with_repair, replace_app_settings, split_command_line,
 };
 #[doc(inline)]
 pub use subagents::{

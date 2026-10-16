@@ -10,9 +10,17 @@ mycode-core = { path = "../mycode-core" }
 mycode-config = { path = "../mycode-config" }
 bytes.workspace = true
 reqwest = { workspace = true, features = ["json", "form"] }
+# The same matcher reqwest's `system-proxy` detection uses; it tells a hop
+# whether the environment or OS proxy covers its host. Both are already in
+# the dependency graph through reqwest.
+http = "1.5.0"
+hyper-util = { version = "0.1.20", default-features = false, features = [
+    "client-proxy",
+    "client-proxy-system",
+] }
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net"] }
 tokio-util.workspace = true
 
 [lints]

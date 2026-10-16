@@ -521,6 +521,7 @@ impl Workspace {
                 if !preserve_editor {
                     self.paint_appearance(&state.theme, cx);
                     self.ua_sync_pending = true;
+                    self.proxy_sync_pending = true;
                 }
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
             }

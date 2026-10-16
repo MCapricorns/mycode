@@ -98,6 +98,7 @@ pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String>
         repairs.push(repair);
     }
     let (provider_keys, mcp_keys) = split_key_ids(&secrets);
+    apply_network(&settings);
     Ok(LoadedSettings {
         settings,
         revision,
@@ -116,7 +117,13 @@ pub(crate) fn save_settings(
     let _ = discard_stored_shell(&mut settings);
     let revision = replace_app_settings(home, expected_revision, &settings)
         .map_err(|error| render_config_error(&error))?;
+    apply_network(&settings);
     Ok(revision)
+}
+
+/// Installs the document's proxy preference for every later request.
+pub(crate) fn apply_network(settings: &AppSettings) {
+    mycode_providers::set_proxy_preference(settings.proxy_preference());
 }
 
 pub(crate) fn render_config_error(error: &mycode_config::ConfigError) -> String {

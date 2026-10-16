@@ -602,6 +602,15 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 true
             });
         }
+        DesktopAction::SettingsProxyChanged { value, .. } => {
+            edit_settings(state, |settings| {
+                if settings.proxy == value {
+                    return false;
+                }
+                settings.proxy = value;
+                true
+            });
+        }
         DesktopAction::SettingsProviderToggled(index, enabled) => {
             edit_settings(state, |settings| {
                 settings.providers.get_mut(index).is_some_and(|provider| {

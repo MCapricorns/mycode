@@ -12,6 +12,7 @@
 
 mod mcp;
 mod providers;
+mod proxy;
 mod subagent_roles;
 mod tools_shell;
 mod user_agent;
@@ -22,6 +23,7 @@ pub use mcp::{
     split_command_line,
 };
 pub use providers::{MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings};
+pub use proxy::{PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProxyPreference};
 pub use subagent_roles::{
     DEFAULT_SUBAGENT_CONCURRENCY, DEFAULT_SUBAGENT_TIMEOUT_SECS, MAX_SUBAGENT_CONCURRENCY,
     MAX_SUBAGENT_TIMEOUT_SECS, SubagentRoleSettings, SubagentSettings,
@@ -165,6 +167,10 @@ pub struct AppSettings {
     /// Outbound User-Agent. Defaults to the pi agent identity so the
     /// value is present in `settings.json` and stays configurable.
     pub user_agent: String,
+    /// Outbound proxy: empty or `auto`, `direct`, or a proxy URL. See
+    /// [`ProxyPreference`].
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub proxy: String,
     /// Configured providers.
     pub providers: Vec<ProviderSettings>,
     /// Web search settings.
@@ -193,6 +199,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             user_agent: default_user_agent(),
+            proxy: String::new(),
             providers: Vec::new(),
             // Both first-class vendors ship ready; the user pastes an API
             // key and enables one. At most one backend may be enabled.
@@ -262,6 +269,7 @@ impl AppSettings {
             |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
         bounded_text(&self.user_agent, MAX_FIELD_BYTES)
             .map_err(|_| invalid("userAgent: too long or contains line breaks or NUL"))?;
+        self.validate_proxy().map_err(invalid)?;
         if let Some(level) = self.reasoning_effort.as_deref()
             && (level == "default" || crate::RoleThinking::parse(level).is_none())
         {

@@ -284,6 +284,14 @@ pub enum DesktopAction {
     },
     /// The settings editor changed the User-Agent.
     SettingsUserAgentChanged(String),
+    /// The settings editor changed the proxy preference. `typed` edits come
+    /// from the URL field and save on the text debounce.
+    SettingsProxyChanged {
+        /// New stored value: empty, `direct`, or a valid proxy URL.
+        value: String,
+        /// Whether the URL field produced it.
+        typed: bool,
+    },
     /// The settings editor toggled a provider row's enabled flag.
     SettingsProviderToggled(usize, bool),
     /// The settings editor replaced one provider endpoint.
