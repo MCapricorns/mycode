@@ -219,7 +219,6 @@ pub(super) fn render_composer(
                                         .items_center()
                                         .justify_center()
                                         .rounded_full()
-                                        .bg(toolbar_fill(theme))
                                         .cursor_pointer()
                                         .text_color(theme.muted_foreground)
                                         .hover(|this| {
@@ -260,7 +259,7 @@ fn composer_elevation(dark: bool) -> Vec<BoxShadow> {
     vec![BoxShadow::new(px(0.), px(8.), hsla(0., 0., 0., alpha)).blur_radius(px(24.))]
 }
 
-/// Filled accent circle while idle, accent ring with a square while a turn runs.
+/// Send arrow while idle, stop square while a turn runs.
 ///
 /// Stop ends the whole turn and every subagent. It sits where the send
 /// arrow sits.
@@ -270,9 +269,7 @@ fn composer_round_button(
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let accent = theme.primary;
-    let accent_hover = super::super::desk::deepen(accent);
-    let accent_ink = theme.primary_foreground;
+    let active = sending || can_send;
     div()
         .id(if sending {
             "composer-stop"
@@ -286,26 +283,14 @@ fn composer_round_button(
         .flex()
         .items_center()
         .justify_center()
-        .when(sending || can_send, |this| this.cursor_pointer())
-        .when(sending, |this| {
-            this.bg(accent.opacity(0.14))
-                .text_color(accent)
-                .hover(move |style| style.bg(accent.opacity(0.24)))
+        .text_color(if active {
+            theme.foreground
+        } else {
+            theme.muted_foreground
         })
-        .when(!sending, |this| {
-            this.bg(if can_send {
-                accent
-            } else {
-                toolbar_fill(theme)
-            })
-            .text_color(if can_send {
-                accent_ink
-            } else {
-                theme.muted_foreground
-            })
-            .when(can_send, move |this| {
-                this.hover(move |style| style.bg(accent_hover))
-            })
+        .when(active, |this| {
+            this.cursor_pointer()
+                .hover(|style| style.bg(theme.secondary_hover))
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
             if sending {
@@ -315,17 +300,11 @@ fn composer_round_button(
             }
         }))
         .when(sending, |this| {
-            this.child(div().size(px(9.)).rounded(px(2.)).bg(accent))
+            this.child(div().size(px(9.)).rounded(px(2.)).bg(theme.foreground))
         })
         .when(!sending, |this| {
             this.child(Icon::new(IconName::ArrowUp).small())
         })
-}
-
-/// Fill for the composer toolbar controls. They carry no border, so the
-/// fill alone marks each control on the composer card.
-fn toolbar_fill(theme: &gpui_kit::component::theme::Theme) -> gpui_kit::Hsla {
-    theme.secondary
 }
 
 /// Pill chip for composer controls (folder, model, thinking).
@@ -344,11 +323,6 @@ fn composer_pill_chip(
     } else {
         theme.muted_foreground
     };
-    let fill = if open {
-        theme.secondary_hover
-    } else {
-        toolbar_fill(theme)
-    };
     div()
         .id(format!("composer-{id}-chip"))
         .flex()
@@ -361,7 +335,7 @@ fn composer_pill_chip(
         .px(px(9.))
         .h(px(26.))
         .rounded(px(6.))
-        .bg(fill)
+        .when(open, |this| this.bg(theme.secondary_hover))
         .text_xs()
         .cursor_pointer()
         .text_color(ink)
@@ -388,7 +362,6 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
         .px(px(7.))
         .h(px(24.))
         .rounded(px(6.))
-        .bg(toolbar_fill(theme))
         .text_xs()
         .text_color(theme.muted_foreground)
         .cursor_pointer()
@@ -605,19 +578,17 @@ fn queue_action(
         .flex()
         .items_center()
         .rounded(skin::radius_xs())
-        .border_1()
-        .border_color(if strong {
-            crate::ui::desk::primary_edge(theme.primary)
-        } else {
-            skin::glass_border(theme)
-        })
-        .when(strong, |this| {
-            this.bg(crate::ui::desk::primary_fill(theme.accent, theme.primary))
-        })
         .text_xs()
-        .text_color(theme.foreground)
+        .text_color(if strong {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
         .cursor_pointer()
-        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .hover(|this| {
+            this.bg(skin::frost_hover(theme))
+                .text_color(theme.foreground)
+        })
         .child(label)
 }
 
@@ -636,7 +607,6 @@ fn composer_meter_chip(
         .px(skin::space(2))
         .h(px(26.))
         .rounded(px(6.))
-        .bg(toolbar_fill(theme))
         .text_xs()
         .when_some(meter.hit_percent, |row, percent| {
             row.child(cache_ring(percent, theme))
@@ -662,7 +632,11 @@ fn composer_meter_chip(
 
 /// A 16px ring whose stroke is the cache-hit share of the latest prompt.
 fn cache_ring(percent: u64, theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
-    let svg = cache_ring_svg(percent, theme.muted_foreground.opacity(0.35), theme.primary);
+    let svg = cache_ring_svg(
+        percent,
+        theme.muted_foreground.opacity(0.35),
+        theme.muted_foreground,
+    );
     div()
         .id("composer-cache-ring")
         .flex_shrink_0()

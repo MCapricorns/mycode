@@ -193,12 +193,6 @@ fn menu_row(
         .rounded(skin::radius_control())
         .text_sm()
         .cursor_pointer()
-        .border_1()
-        .border_color(if highlighted {
-            skin::border_strong(theme)
-        } else {
-            theme.transparent
-        })
         .when(highlighted, |this| this.bg(skin::frost(theme)))
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)

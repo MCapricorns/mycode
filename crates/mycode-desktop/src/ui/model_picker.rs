@@ -364,12 +364,6 @@ fn render_provider_step(
                     .cursor_pointer()
                     .hover(|this| this.bg(skin::frost_hover(&theme)))
                     .when(index == preferred, |this| this.bg(skin::frost(&theme)))
-                    .border_1()
-                    .border_color(if index == preferred {
-                        skin::border_strong(&theme)
-                    } else {
-                        theme.transparent
-                    })
                     .on_click(cx.listener(move |workspace, _, _, cx| {
                         workspace.on_browse_model_provider(Some(&provider_id), cx);
                     }))
@@ -387,7 +381,7 @@ fn render_provider_step(
                         this.child(
                             Icon::new(IconName::Check)
                                 .xsmall()
-                                .text_color(theme.primary),
+                                .text_color(theme.foreground),
                         )
                     })
                     .child(
@@ -628,12 +622,6 @@ fn pin_row(
     div()
         .id(format!("model-pin-{provider}-{model}"))
         .when(highlighted, |this| this.bg(skin::frost(theme)))
-        .border_1()
-        .border_color(if highlighted {
-            skin::border_strong(theme)
-        } else {
-            theme.transparent
-        })
         // Two lines (model name and provider). A 32px catalog row clips the
         // second line into the next "Recent" row.
         .min_h(px(44.))
@@ -679,12 +667,6 @@ fn session_model_row(role: &str, highlighted: bool, cx: &Context<Workspace>) -> 
     div()
         .id(format!("agent-model-{role}-inherit-inherit"))
         .when(highlighted, |this| this.bg(skin::frost(theme)))
-        .border_1()
-        .border_color(if highlighted {
-            skin::border_strong(theme)
-        } else {
-            theme.transparent
-        })
         .h(px(36.))
         .px_2()
         .flex()
