@@ -13,7 +13,7 @@ fn private_redirect_is_rejected() {
     let error = validate_hop(
         PinMode::CheckRedirect,
         1,
-        "http://127.0.0.1/secret",
+        "https://127.0.0.1/secret",
         &[ip([127, 0, 0, 1])],
     )
     .unwrap_err();
@@ -84,10 +84,32 @@ fn first_hop_may_be_private() {
     validate_hop(
         PinMode::CheckRedirect,
         0,
-        "http://127.0.0.1:11434/v1/chat/completions",
+        "https://127.0.0.1:11434/v1/chat/completions",
         &[ip([127, 0, 0, 1])],
     )
     .unwrap();
+}
+
+#[test]
+fn checked_requests_never_use_plain_http() {
+    let first = validate_hop(
+        PinMode::CheckRedirect,
+        0,
+        "http://api.example.com/v1/chat/completions",
+        &[ip([1, 1, 1, 1])],
+    )
+    .unwrap_err();
+    assert!(first.contains("https"), "{first}");
+    // A redirect cannot downgrade an https request.
+    let downgrade = validate_hop(
+        PinMode::CheckRedirect,
+        1,
+        "http://cdn.example/asset",
+        &[ip([8, 8, 8, 8])],
+    )
+    .unwrap_err();
+    assert!(downgrade.contains("https"), "{downgrade}");
+    assert!(super::check_url(PinMode::CheckRedirect, "http://cdn.example/asset").is_err());
 }
 
 fn v6(value: &str) -> IpAddr {
