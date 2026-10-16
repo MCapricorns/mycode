@@ -309,6 +309,12 @@ fn render_tool_run(
                 .is_some_and(|entry| entry.text.starts_with("failed:"))
         });
         let has_unfinished = tools.iter().any(|tool| tool.result.is_none());
+        // A running subagent's cancel `x` must stay reachable, so a run
+        // holding one stays open while it lives.
+        let open = open
+            || tools
+                .iter()
+                .any(|tool| tool_cancellable(tool, workspace, turn_running));
         let mut column = div()
             .w_full()
             .min_w_0()
@@ -365,6 +371,7 @@ fn render_one_tool(
     cx: &gpui_kit::Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let expanded = workspace.tool_row_open(&tool.call.event_id);
+    let cancellable = tool_cancellable(tool, workspace, turn_running);
     div()
         .w_full()
         .min_w_0()
@@ -375,10 +382,20 @@ fn render_one_tool(
             tool.result,
             turn_running,
             expanded,
+            cancellable,
             reduce_motion,
             cx,
         ))
         .into_any_element()
+}
+
+fn tool_cancellable(tool: &ToolRow<'_>, workspace: &Workspace, turn_running: bool) -> bool {
+    crate::view_model::subagent_cancellable(
+        tool.call.call_id.as_deref(),
+        tool.result.is_some(),
+        turn_running,
+        &workspace.vm().live_jobs,
+    )
 }
 
 /// Groups the transcript in linear time without cloning message payloads.

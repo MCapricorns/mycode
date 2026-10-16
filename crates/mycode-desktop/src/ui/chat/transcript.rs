@@ -24,9 +24,9 @@ pub(super) struct AssistantDisplay {
 
 /// The in-flight assistant turn: a live status line, then thinking and text.
 ///
-/// Subagent progress lives on this one status line, the running list above
-/// the composer, and the inspector panel. The transcript itself stays free
-/// of per-child rows.
+/// While subagents run the status line only says the turn is waiting for
+/// them. Each child's task and cancel sit on its `agent` row in the
+/// transcript, and its steps in the inspector and the subagent window.
 pub(super) fn render_streaming_entry(
     streaming: &StreamingReply,
     workspace: &Workspace,
@@ -41,10 +41,11 @@ pub(super) fn render_streaming_entry(
         speaker: show_speaker,
     } = display;
     let desk = Desk::of(theme);
+    let working = t("WORKING", "工作中");
     let status = if streaming.status.is_empty() {
-        t("Working", "工作中").to_owned()
+        working.to_owned()
     } else {
-        streaming.status.clone()
+        format!("{working} · {}", streaming.status)
     };
     let has_text = !streaming.text.trim().is_empty();
     desk_shell(
@@ -58,7 +59,7 @@ pub(super) fn render_streaming_entry(
             .gap_2()
             .child(markdown::prose_measure(status_line(
                 "streaming-status",
-                &format!("{} · {status}", t("WORKING", "工作中")),
+                &status,
                 desk.amber,
                 theme,
             )))
@@ -93,18 +94,6 @@ pub(super) fn render_streaming_entry(
                     true,
                     window,
                 ))
-            })
-            .when(streaming.thinking.trim().is_empty() && !has_text, |this| {
-                this.child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .truncate()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(status),
-                )
             }),
     )
 }

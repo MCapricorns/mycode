@@ -24,7 +24,7 @@ pub(crate) use mycode_app::{
 
 pub(crate) use self::chat::{
     LiveJob, MentionGroup, MentionItem, MentionKind, capped_artisan_count, capped_artisan_status,
-    session_title_matches,
+    session_title_matches, subagent_cancellable, subagent_wait_status,
 };
 pub(crate) use self::command_palette::{
     PaletteCatalog, PaletteCommand, PaletteGroup, PaletteGroupId, PaletteItem, palette_catalog,

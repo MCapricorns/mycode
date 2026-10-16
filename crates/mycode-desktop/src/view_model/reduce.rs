@@ -24,7 +24,7 @@ pub(crate) use self::models::{
 
 pub(crate) use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
 use self::composer::{parse_mention, slash_items};
-use self::jobs::{drop_live_job, tool_progress, tool_started};
+use self::jobs::{drop_live_job, refresh_subagent_status, tool_progress, tool_started};
 use self::models::{
     active_preset_changed, apply_session_model, assign_fresh_session_model, ensure_model_selection,
     model_selected, provider_selected, remember_active_session_model, remember_session_model,
@@ -336,7 +336,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.changes_panel_open = open;
         }
         DesktopAction::SubagentDismissed(call_id) => {
-            drop_live_job(state, &call_id);
+            if drop_live_job(state, &call_id) && state.sending {
+                refresh_subagent_status(state);
+            }
         }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
@@ -368,8 +370,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             message,
         } => tool_progress(state, call_id, name, message),
         DesktopAction::ToolResultAppended(entry) => {
-            if let Some(call_id) = entry.call_id.as_deref() {
-                drop_live_job(state, call_id);
+            if let Some(call_id) = entry.call_id.as_deref()
+                && drop_live_job(state, call_id)
+                && state.sending
+            {
+                refresh_subagent_status(state);
             }
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);

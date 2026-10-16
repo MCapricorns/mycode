@@ -115,6 +115,41 @@ pub(crate) fn capped_artisan_status(count: usize) -> String {
     }
 }
 
+/// Status-line copy while subagents run. The transcript row of each `agent`
+/// call already names its task, so the line only says the turn is waiting;
+/// a cap warning is the one detail it still carries.
+#[must_use]
+pub(crate) fn subagent_wait_status(jobs: &[LiveJob]) -> Option<String> {
+    let capped = capped_artisan_count(jobs);
+    match jobs.len() {
+        0 => None,
+        _ if capped > 0 => Some(capped_artisan_status(capped)),
+        1 => Some(crate::i18n::t("Waiting for the agent to finish", "等待代理结束").to_owned()),
+        count => Some(if crate::i18n::is_chinese() {
+            format!("等待 {count} 个代理结束")
+        } else {
+            format!("Waiting for {count} agents to finish")
+        }),
+    }
+}
+
+/// Whether a transcript `agent` row still owns a running subagent and so
+/// shows a cancel `x`. A finished call, a stopped turn, or a job that has
+/// already left the live list shows none.
+#[must_use]
+pub(crate) fn subagent_cancellable(
+    call_id: Option<&str>,
+    finished: bool,
+    turn_running: bool,
+    jobs: &[LiveJob],
+) -> bool {
+    !finished
+        && turn_running
+        && call_id
+            .filter(|id| !id.is_empty())
+            .is_some_and(|id| jobs.iter().any(|job| job.call_id == id))
+}
+
 /// The mention trigger parsed from the composer draft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MentionKind {
@@ -159,6 +194,41 @@ mod tests {
             .title(),
             "artisan"
         );
+    }
+
+    #[test]
+    fn only_a_live_unfinished_agent_row_can_be_cancelled() {
+        let jobs = vec![super::LiveJob {
+            call_id: "c1".to_owned(),
+            ..super::LiveJob::default()
+        }];
+        assert!(super::subagent_cancellable(Some("c1"), false, true, &jobs));
+        assert!(!super::subagent_cancellable(Some("c1"), true, true, &jobs));
+        assert!(!super::subagent_cancellable(
+            Some("c1"),
+            false,
+            false,
+            &jobs
+        ));
+        assert!(!super::subagent_cancellable(Some("c2"), false, true, &jobs));
+        assert!(!super::subagent_cancellable(None, false, true, &jobs));
+        assert!(!super::subagent_cancellable(Some(""), false, true, &[]));
+    }
+
+    #[test]
+    fn the_wait_status_names_no_agent_step() {
+        assert_eq!(super::subagent_wait_status(&[]), None);
+        let job = super::LiveJob {
+            call_id: "c1".to_owned(),
+            role: "scout".to_owned(),
+            label: "map tokio".to_owned(),
+            step: "running read src/lib.rs".to_owned(),
+            ..super::LiveJob::default()
+        };
+        let one = super::subagent_wait_status(std::slice::from_ref(&job)).expect("one job");
+        assert!(!one.contains("tokio") && !one.contains("read"), "{one}");
+        let two = super::subagent_wait_status(&[job.clone(), job]).expect("two jobs");
+        assert!(two.contains('2'), "{two}");
     }
 
     #[test]
