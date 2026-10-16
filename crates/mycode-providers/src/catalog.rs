@@ -341,21 +341,48 @@ fn openai_codex_preset() -> CatalogProvider {
         doc: Some("https://developers.openai.com/codex".to_owned()),
         auth: AUTH_DEVICE_CODE.to_owned(),
         models: [
-            ("o3-pro", "o3-pro"),
-            ("o3", "o3"),
-            ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
-            ("gpt-5.5", "GPT-5.5"),
-            ("gpt-5.6-luna", "GPT-5.6 Luna"),
-            ("gpt-5.6-sol", "GPT-5.6 Sol"),
-            ("gpt-5.6-terra", "GPT-5.6 Terra"),
-            ("gpt-6-astra", "GPT-6 Astra"),
+            ("o3-pro", "o3-pro", &[][..]),
+            ("o3", "o3", &["low", "medium", "high"]),
+            (
+                "gpt-5.3-codex-spark",
+                "GPT-5.3 Codex Spark",
+                &["none", "low", "medium", "high", "xhigh"],
+            ),
+            (
+                "gpt-5.5",
+                "GPT-5.5",
+                &["none", "low", "medium", "high", "xhigh"],
+            ),
+            (
+                "gpt-5.6-luna",
+                "GPT-5.6 Luna",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            (
+                "gpt-5.6-sol",
+                "GPT-5.6 Sol",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            (
+                "gpt-5.6-terra",
+                "GPT-5.6 Terra",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            (
+                "gpt-6-astra",
+                "GPT-6 Astra",
+                &["low", "medium", "high", "xhigh", "max"],
+            ),
         ]
         .into_iter()
-        .map(|(id, name)| CatalogModel {
+        .map(|(id, name, efforts)| CatalogModel {
             id: id.to_owned(),
             name: name.to_owned(),
             reasoning: true,
             tool_call: true,
+            // Effort ladders mirror the models.dev rows for the same model
+            // ids; `o3-pro` publishes none and stays on the provider default.
+            reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
             ..CatalogModel::default()
         })
         .collect(),
@@ -378,6 +405,39 @@ mod tests {
         assert_eq!(
             levels,
             vec!["low".to_owned(), "high".to_owned(), "max".to_owned()]
+        );
+    }
+
+    #[test]
+    fn codex_preset_publishes_the_models_dev_effort_ladders() {
+        let provider = super::openai_codex_preset();
+        let model = |id: &str| {
+            provider
+                .models
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap_or_else(|| panic!("preset model {id}"))
+        };
+        assert_eq!(
+            model("gpt-5.6-sol").reasoning_levels(),
+            vec![
+                "off".to_owned(),
+                "low".to_owned(),
+                "medium".to_owned(),
+                "high".to_owned(),
+                "xhigh".to_owned(),
+                "max".to_owned()
+            ]
+        );
+        assert_eq!(
+            model("o3").reasoning_levels(),
+            vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()]
+        );
+        // models.dev publishes no ladder for `o3-pro`; it stays on the
+        // provider default instead of a guessed one.
+        assert_eq!(
+            model("o3-pro").reasoning_levels(),
+            vec!["default".to_owned()]
         );
     }
 
