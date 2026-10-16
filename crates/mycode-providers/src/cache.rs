@@ -189,12 +189,11 @@ pub(crate) fn retry_body_without_prompt_cache_key(
     serde_json::to_vec(&value).ok()
 }
 
-/// Whether the serialized body includes a cache key, so the driver can keep
-/// a retry copy only for those requests.
+/// Whether the request body sets a cache key, so the driver can keep a retry
+/// copy only for those requests.
 #[must_use]
-pub(crate) fn body_has_prompt_cache_key(body: &[u8]) -> bool {
-    body.windows(b"prompt_cache_key".len())
-        .any(|window| window == b"prompt_cache_key")
+pub(crate) fn has_prompt_cache_key(body: &Value) -> bool {
+    body.get("prompt_cache_key").is_some()
 }
 
 /// Clamps a cache key to [`PROMPT_CACHE_KEY_MAX_CHARS`] Unicode scalars.
