@@ -235,6 +235,9 @@ pub struct Workspace {
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
     conversation_scroll: gpui_kit::ScrollHandle,
+    /// The subagent window's body. It follows the newest step the same way
+    /// the conversation follows its tail.
+    subagent_scroll: gpui_kit::ScrollHandle,
     /// Captured when older entries are prepended. The chat column applies it
     /// in the same frame, after layout and before the scroller positions its
     /// children. gpui's offset grows more negative toward the bottom, so the
@@ -357,6 +360,7 @@ impl Workspace {
             project_picker: None,
             picker_chat_session: None,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
+            subagent_scroll: gpui_kit::ScrollHandle::new(),
             scroll_hold: None,
             appearance_scroll: None,
             git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
@@ -564,6 +568,7 @@ impl Workspace {
         // not been laid out yet, so the handle still describes the frame the
         // user is looking at.
         let follow_tail = grew && self.conversation_follows_tail();
+        let subagent_before = self.subagent_window_mark();
         let text_edit = matches!(
             action,
             DesktopAction::SettingsUserAgentChanged(_)
@@ -599,6 +604,7 @@ impl Workspace {
         if self.vm.view == MainView::Chat && follow_tail {
             self.conversation_scroll.scroll_to_bottom();
         }
+        self.follow_subagent_window(subagent_before);
         let epoch_after = self
             .vm
             .settings

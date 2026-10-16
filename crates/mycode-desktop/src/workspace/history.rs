@@ -47,6 +47,41 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The subagent window body's scroll handle.
+    pub(crate) fn subagent_scroll_handle(&self) -> &gpui_kit::ScrollHandle {
+        &self.subagent_scroll
+    }
+
+    /// The open subagent window, its log length, and whether its body sits
+    /// on the newest step, read before an update lands.
+    pub(super) fn subagent_window_mark(&self) -> SubagentMark {
+        let call_id = self.vm.subagent_window.clone();
+        let log_len = call_id.as_deref().map_or(0, |call_id| {
+            self.vm
+                .live_jobs
+                .iter()
+                .find(|job| job.call_id == call_id)
+                .map_or(0, |job| job.log.len())
+        });
+        SubagentMark {
+            call_id,
+            log_len,
+            at_tail: follows_tail(
+                self.subagent_scroll.offset().y,
+                self.subagent_scroll.max_offset().y,
+            ),
+        }
+    }
+
+    /// Opens a different subagent at its newest step, and keeps an open one
+    /// there as steps arrive. A reader who scrolled up keeps that position.
+    pub(super) fn follow_subagent_window(&mut self, before: SubagentMark) {
+        let after = self.subagent_window_mark();
+        if subagent_window_follows(&before, &after) {
+            self.subagent_scroll.scroll_to_bottom();
+        }
+    }
+
     /// Loads the next older page when the viewport is within a short distance
     /// of the top. A transcript that still fits does not chain-load. The
     /// notify keeps the docked jump-to-latest row in step with the scroll
@@ -121,6 +156,21 @@ impl Workspace {
     }
 }
 
+/// Subagent window state captured around one update.
+pub(super) struct SubagentMark {
+    call_id: Option<String>,
+    log_len: usize,
+    at_tail: bool,
+}
+
+fn subagent_window_follows(before: &SubagentMark, after: &SubagentMark) -> bool {
+    match (&before.call_id, &after.call_id) {
+        (_, None) => false,
+        (Some(old), Some(new)) if old == new => after.log_len != before.log_len && before.at_tail,
+        _ => true,
+    }
+}
+
 fn near_history_top(offset_y: Pixels, max_offset_y: Pixels) -> bool {
     max_offset_y > px(1.) && offset_y > px(-64.)
 }
@@ -145,6 +195,41 @@ mod tests {
         assert!(near_history_top(px(-32.), px(800.)));
         assert!(!near_history_top(px(-100.), px(800.)));
         assert!(!near_history_top(px(-800.), px(800.)));
+    }
+
+    #[test]
+    fn the_subagent_window_follows_new_steps_only_from_its_tail() {
+        let mark = |call_id: Option<&str>, log_len, at_tail| SubagentMark {
+            call_id: call_id.map(str::to_owned),
+            log_len,
+            at_tail,
+        };
+        // Opening a window, or switching to another child, starts at the end.
+        assert!(subagent_window_follows(
+            &mark(None, 0, true),
+            &mark(Some("a"), 3, true)
+        ));
+        assert!(subagent_window_follows(
+            &mark(Some("a"), 3, false),
+            &mark(Some("b"), 1, false)
+        ));
+        // A new step follows only a reader already at the bottom.
+        assert!(subagent_window_follows(
+            &mark(Some("a"), 3, true),
+            &mark(Some("a"), 4, true)
+        ));
+        assert!(!subagent_window_follows(
+            &mark(Some("a"), 3, false),
+            &mark(Some("a"), 4, false)
+        ));
+        assert!(!subagent_window_follows(
+            &mark(Some("a"), 3, true),
+            &mark(Some("a"), 3, true)
+        ));
+        assert!(!subagent_window_follows(
+            &mark(Some("a"), 3, true),
+            &mark(None, 0, true)
+        ));
     }
 
     #[test]
