@@ -12,7 +12,7 @@ Complete the task with the tools listed below. Do not invent tools. \
 Tool results are the source of truth; do not claim a command ran unless its result is in the conversation.";
 
 /// Names the one shell tool in `tools`, if the process registered one.
-fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
+pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
     let names = tools.names();
     ["powershell", "bash", "zsh", "sh", "cmd"]
         .into_iter()
@@ -37,7 +37,7 @@ fn tool_calling(shell_tool: &str) -> String {
     let hint = edit_hint(shell_tool);
     format!(
         "<tool_calling>\n\
-- Independent calls in one response run together. Do not wait between them.\n\
+- Put independent reads in one response: `read`, `grep`, `find`, and web lookups emitted together run at the same time. Edits and `{shell_tool}` calls run one at a time, in the order you emit them.\n\
 - Use the dedicated tools first: `find` lists and locates files and directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n\
 - Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
 - Read existing content before changing it. Change files with `write` and `edit`. {hint}\n\
