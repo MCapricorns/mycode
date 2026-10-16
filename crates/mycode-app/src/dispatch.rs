@@ -98,7 +98,6 @@ pub(crate) fn run_core(
                 BridgeCommand::ChatTurn {
                     session,
                     branch,
-                    expected_head,
                     provider_id,
                     model,
                     reasoning,
@@ -115,7 +114,6 @@ pub(crate) fn run_core(
                         events.clone(),
                         session,
                         branch,
-                        expected_head,
                         provider_id,
                         model,
                         reasoning,

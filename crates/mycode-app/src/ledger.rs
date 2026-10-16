@@ -84,6 +84,38 @@ pub(crate) async fn inspect_summaries(
     Ok(summaries)
 }
 
+/// The durable head of `branch`, read fresh from the session.
+pub(crate) async fn branch_head(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+) -> Result<HeadStamp, SessionError> {
+    let opened = service.open(session).await?;
+    opened
+        .heads
+        .iter()
+        .find(|head| &head.branch_id == branch)
+        .map(|head| head.head.clone())
+        .ok_or(SessionError::NotFound)
+}
+
+/// Fails with [`HEAD_MOVED_ON`] unless `branch` is still at `expected_head`.
+pub(crate) async fn ensure_branch_head(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    expected_head: &HeadStamp,
+) -> Result<(), String> {
+    let current = branch_head(service, session, branch)
+        .await
+        .map_err(render_error)?;
+    if &current == expected_head {
+        Ok(())
+    } else {
+        Err(HEAD_MOVED_ON.to_owned())
+    }
+}
+
 pub(crate) async fn open_conversation(
     service: &SessionService,
     session: &SessionId,
@@ -130,15 +162,7 @@ pub(crate) async fn load_older(
     expected_head: &HeadStamp,
     before: &str,
 ) -> Result<OlderTranscript, String> {
-    let opened = service.open(session).await.map_err(render_error)?;
-    let current = opened
-        .heads
-        .iter()
-        .find(|head| &head.branch_id == branch)
-        .ok_or_else(|| render_error(SessionError::NotFound))?;
-    if &current.head != expected_head {
-        return Err(HEAD_MOVED_ON.to_owned());
-    }
+    ensure_branch_head(service, session, branch, expected_head).await?;
     let cursor = SessionEventId::parse(before)
         .ok_or_else(|| "the history cursor is not a valid event id".to_owned())?;
     let (entries, older, _, _) =
@@ -334,17 +358,7 @@ pub(crate) async fn recall_message(
     // The rewind must land on the branch the UI still sees; a stale head
     // fails closed with the same moved-on error SendMessage's
     // compare-and-swap produces.
-    let opened = service.open(session).await.map_err(render_error)?;
-    let current = opened
-        .heads
-        .iter()
-        .find(|head| &head.branch_id == branch)
-        .ok_or_else(|| render_error(SessionError::NotFound))?;
-    if &current.head != expected_head {
-        // The `Conflict` variant is constructed inside the session service,
-        // so its rendered wording is spelled here instead.
-        return Err(HEAD_MOVED_ON.to_owned());
-    }
+    ensure_branch_head(service, session, branch, expected_head).await?;
     let target = SessionEventId::parse(to_event)
         .ok_or_else(|| "the rewind target is not a valid event id".to_owned())?;
     let reservation = service
