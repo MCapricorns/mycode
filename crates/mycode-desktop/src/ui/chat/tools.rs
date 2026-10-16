@@ -293,7 +293,7 @@ pub(super) fn tool_call_parts(
                 t("Found", "已查找")
             }
         }
-        "bash" | "zsh" | "sh" | "shell" | "pwsh" | "powershell" | "cmd" => {
+        tool if is_shell_tool(tool) => {
             if active {
                 t("Running", "正在运行")
             } else {
@@ -333,13 +333,17 @@ pub(super) fn tool_call_parts(
     (verb.to_owned(), target)
 }
 
+fn is_shell_tool(tool: &str) -> bool {
+    tool == "shell" || mycode_tools::ShellKind::is_tool_name(tool)
+}
+
 fn tool_icon(tool: &str) -> IconName {
     match tool {
         "read" => IconName::FileText,
         "edit" | "write" => IconName::FilePen,
         "grep" | "search" => IconName::Search,
         "find" => IconName::FolderSearch,
-        "bash" | "zsh" | "sh" | "shell" | "pwsh" | "powershell" | "cmd" => IconName::Terminal,
+        tool if is_shell_tool(tool) => IconName::Terminal,
         "web_search" | "fetch_content" => IconName::Globe,
         "agent" => IconName::Bot,
         "ask" | "ask_user" => IconName::MessageSquare,
@@ -374,7 +378,7 @@ fn tool_kind(tool: &str) -> &'static str {
         "read" => "read",
         "edit" | "write" => "edit",
         "grep" | "find" | "search" => "search",
-        "bash" | "zsh" | "sh" | "shell" | "pwsh" | "powershell" | "cmd" => "shell",
+        tool if is_shell_tool(tool) => "shell",
         "web_search" | "fetch_content" => "web",
         "agent" => "agent",
         "ask" | "ask_user" => "ask",

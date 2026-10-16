@@ -13,11 +13,10 @@ Tool results are the source of truth; do not claim a command ran unless its resu
 
 /// Names the one shell tool in `tools`, if the process registered one.
 pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
-    let names = tools.names();
-    ["powershell", "bash", "zsh", "sh", "cmd"]
+    tools
+        .names()
         .into_iter()
-        .find(|name| names.iter().any(|registered| registered == name))
-        .map(str::to_owned)
+        .find(|name| mycode_tools::ShellKind::is_tool_name(name))
 }
 
 fn edit_hint(shell_tool: &str) -> &'static str {

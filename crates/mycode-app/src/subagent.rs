@@ -722,7 +722,7 @@ fn child_registry_with(
             "read" => registry.register(Arc::new(mycode_tools::builtin::ReadTool)),
             "write" => registry.register(Arc::new(mycode_tools::builtin::WriteTool)),
             "edit" => registry.register(Arc::new(mycode_tools::builtin::EditTool)),
-            "shell" | "bash" | "zsh" | "sh" | "pwsh" | "powershell" | "cmd" => {
+            name if name == "shell" || mycode_tools::ShellKind::is_tool_name(name) => {
                 if let Some(tool) = shell.take() {
                     registry.register(Arc::new(tool));
                 }

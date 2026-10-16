@@ -140,7 +140,7 @@ const PARENT_ONLY_TOOLS: &[&str] = &["agent", "ask_user"];
 /// of them, or the stable name `shell`.
 fn canonical_tool_name(name: &str) -> &str {
     match name {
-        "bash" | "zsh" | "sh" | "pwsh" | "powershell" | "cmd" => "shell",
+        "bash" | "zsh" | "sh" | "powershell" | "cmd" => "shell",
         other => other,
     }
 }
@@ -613,6 +613,6 @@ mod tests {
             .is_write_capable()
         );
         assert!(role("writer", Some(vec!["read".into(), "edit".into()])).is_write_capable());
-        assert!(role("runner", Some(vec!["pwsh".into()])).is_write_capable());
+        assert!(role("runner", Some(vec!["powershell".into()])).is_write_capable());
     }
 }
