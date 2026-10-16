@@ -833,7 +833,7 @@ impl CompletionsReducer {
                 }
                 let call = &mut self.tool_calls[index];
                 if !call.name.is_empty() && name.starts_with(call.name.as_str()) {
-                    call.name = name.to_owned();
+                    name.clone_into(&mut call.name);
                 } else {
                     call.name.push_str(name);
                 }
