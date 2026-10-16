@@ -405,14 +405,21 @@ async fn ensure_copilot_bearer(
 
 /// Opens the verification page on Windows and macOS. Other targets leave
 /// the URL for the sign-in panel; this function does not launch a browser.
+///
+/// The device-flow server names the URL, so only a plain `https://` URL is
+/// launched. Windows hands it to the URL protocol handler directly: `cmd
+/// /c start` would parse `&`, `|`, and `^` in the URL as shell syntax.
 fn open_browser(url: &str) {
+    if !browsable_url(url) {
+        return;
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
 
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
+        let _ = std::process::Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", url])
             .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
@@ -426,10 +433,36 @@ fn open_browser(url: &str) {
     }
 }
 
+/// An `https://` URL with a host and no whitespace, quote, or control
+/// character.
+fn browsable_url(url: &str) -> bool {
+    url.strip_prefix("https://").is_some_and(|rest| {
+        !rest.is_empty()
+            && !rest.starts_with('/')
+            && !rest
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control() || ch == '"')
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::refreshes_oauth;
     use mycode_providers::{COPILOT_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID};
+
+    #[test]
+    fn only_plain_https_urls_open_a_browser() {
+        assert!(super::browsable_url("https://github.com/login/device"));
+        assert!(super::browsable_url(
+            "https://auth.openai.com/codex/device?a=1&b=2"
+        ));
+        assert!(!super::browsable_url("http://github.com/login/device"));
+        assert!(!super::browsable_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!super::browsable_url("https://"));
+        assert!(!super::browsable_url("https:///etc/passwd"));
+        assert!(!super::browsable_url("https://x.example/\" & calc"));
+        assert!(!super::browsable_url("https://x.example/\nline"));
+    }
 
     #[test]
     fn expired_oauth_refresh_covers_codex_only() {
