@@ -243,6 +243,9 @@ pub async fn send_pinned(request: PinnedRequest) -> Result<reqwest::Response, St
     let mut method = request.method.clone();
     let mut url = request.url.clone();
     let mut body = request.body.clone();
+    let first_origin = origin_of(&request.url);
+    // Built on the first redirect that leaves the original origin.
+    let mut foreign_headers: Option<Vec<(String, String)>> = None;
     for hop in 0..MAX_REDIRECTS {
         if request.cancel.is_cancelled() {
             return Err("request cancelled".to_owned());
@@ -250,7 +253,13 @@ pub async fn send_pinned(request: PinnedRequest) -> Result<reqwest::Response, St
         let response = tokio::select! {
             biased;
             () = request.cancel.cancelled() => return Err("request cancelled".to_owned()),
-            sent = send_hop(&request, hop, &method, &url, body.as_ref()) => sent?,
+            sent = send_hop(&request, hop, &method, &url, body.as_ref(), {
+                if first_origin.is_some() && origin_of(&url) == first_origin {
+                    &request.headers
+                } else {
+                    foreign_headers.get_or_insert_with(|| cross_origin_headers(&request.headers))
+                }
+            }) => sent?,
         };
         if !request.follow_redirects {
             return Ok(response);
@@ -285,12 +294,40 @@ const ADVISORY_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Sends one hop on its route. In auto mode, a direct hop that cannot reach
 /// a public host is retried once through a listening local proxy.
+/// Scheme, host, and port of `url`; `None` when it does not parse.
+fn origin_of(url: &str) -> Option<(String, String, Option<u16>)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    Some((
+        parsed.scheme().to_owned(),
+        parsed.host_str()?.to_ascii_lowercase(),
+        parsed.port_or_known_default(),
+    ))
+}
+
+/// Headers a redirect may carry to another origin. Credentials (an
+/// `authorization` header, `x-api-key`, an MCP server's own key header, a
+/// cookie) were meant for the host the caller named, so only content
+/// negotiation survives.
+fn cross_origin_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "accept" | "accept-language" | "content-type"
+            )
+        })
+        .cloned()
+        .collect()
+}
+
 async fn send_hop(
     request: &PinnedRequest,
     hop: u32,
     method: &reqwest::Method,
     url: &str,
     body: Option<&PinnedBody>,
+    headers: &[(String, String)],
 ) -> Result<reqwest::Response, String> {
     use crate::proxy::Route;
 
@@ -301,7 +338,7 @@ async fn send_hop(
     let call = |route: Route, addrs: Vec<IpAddr>| OnceCall {
         method,
         url,
-        headers: &request.headers,
+        headers,
         body,
         addrs,
         route,
