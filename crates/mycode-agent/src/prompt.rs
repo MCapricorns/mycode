@@ -246,7 +246,7 @@ mod tests {
         ))));
         let prompt = build_system_prompt(&registry);
         assert!(
-            prompt.contains("agent: scout for web research"),
+            prompt.contains("agent: scout for read-only research"),
             "the agent snippet must point broad research at scout:\n{prompt}"
         );
         assert!(prompt.contains("scout"), "{prompt}");

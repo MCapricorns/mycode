@@ -16,7 +16,6 @@ use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
 use mycode_tools::ToolRegistry;
 use tokio::sync::Semaphore;
-use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 /// Subagent system brief: one-shot work, no user channel.
@@ -70,7 +69,7 @@ impl BridgeAgentHost {
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
         copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
     ) -> Self {
-        let slots = settings.subagents.effective_concurrency() as usize;
+        let slots = mycode_config::SUBAGENT_CONCURRENCY as usize;
         Self {
             resolved,
             home,
@@ -434,21 +433,19 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .map(|role| role.catalog_line())
         .collect::<Vec<_>>()
         .join("\n");
-    let cap = settings.effective_concurrency();
-    let timeout_secs = settings.effective_timeout_secs();
+    let cap = mycode_config::SUBAGENT_CONCURRENCY;
     let dispatch = [
-        "Use `agent` only when the work can run independently in parallel, the brief has clear boundaries, and doing so will actually cut cost or improve completion quality — not for trivial single-file work or vague wandering.",
-        "You decide whether to delegate. Prefer `agent` with agent \"scout\" for web research, vendor docs, and a repository-wide map: independent scout calls run together in one response, and each returns a short map. Do not spend this chat on a long chain of `web_search` and `fetch_content` for that kind of task. A `fetch_content` result that reports HTTP 4xx or extract_failed is final for that URL. A narrow question does not need `scout`. Delegating broad research to scout is your judgment.",
-        "`artisan` when the brief names files, outcome, and checks, or a chunk you can integrate while you stay orchestrator. It does not merge, commit, or open a PR. Expect a short outcome, paths, and what to verify — not a diff.",
-        "At the same moment, do not fan out many parallel `artisan`s. Serialize when you can: one `artisan` at a time unless the briefs are clearly independent and you can integrate them separately.",
-        "Do it yourself for a trivial single-file read, edit, typo, or one-liner; when you already have the context; or as a nested agent on the same brief. A vague ask gets a clarification or `scout` first, not an `artisan` sent to wander.",
+        "Delegate a piece of work when it stands on its own and would otherwise fill this conversation with reading or trial and error. Keep it here when it is small, when you already hold the context, or when your very next step needs the answer.",
+        "`scout` is read-only. It searches the code (`read`, `grep`, `find`) and the web (`web_search`, `fetch_content`) and returns a short map: paths, lines, URLs, and the facts they support. Send it repository-wide questions (where X is handled, who calls Y, how a module is laid out), vendor docs, API references, and changelogs, instead of a long chain of searches here. It cannot run commands, build, test, or edit, so never give it work that needs those.",
+        "Split a broad question into several independent scout briefs in one response; they run together. One narrow lookup you can do with a single `grep` or `read` does not need a scout.",
+        "`artisan` implements one bounded change in its own worktree when the brief names the files, the outcome, and the checks. It does not commit, merge, or open a PR, and it returns a short outcome, the paths it changed, and what to verify, not a diff. Run artisans side by side only when their briefs touch separate files; otherwise one at a time.",
+        "Do not delegate a trivial read, edit, typo, or one-liner, or a vague task. Clarify a vague ask, or scout it first; do not send an artisan to wander.",
     ];
     let limit = format!(
-        "Send one self-contained brief. The child has no parent conversation and returns once. \
-         Independent `agent` calls in one response run together. \
-         Write-capable roles use a worktree, so concurrent artisans do not share the session checkout. \
-         The host runs at most {cap} subagents at once. An artisan started past that cap waits, and the user is warned. \
-         Each child stops after {timeout_secs} seconds of wall-clock time; time spent waiting for a slot does not count."
+        "Every brief stands alone: the child cannot see this conversation and answers once. \
+         Name the goal, the paths or URLs you already know, and the shape of the answer you want. \
+         At most {cap} subagents run at once; the rest wait for a slot, and an artisan past that cap warns the user. \
+         A child runs until it answers, or until the user stops it, cancels this turn, or deletes the conversation."
     );
     let dispatch_block = dispatch
         .iter()
@@ -563,11 +560,9 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
                     return Err(fail("agent slots closed".to_owned()));
                 }
                 Err(tokio::sync::TryAcquireError::NoPermits) => {
-                    if let Some(detail) = artisan_cap_detail(
-                        &role.name,
-                        0,
-                        self.settings.subagents.effective_concurrency(),
-                    ) {
+                    if let Some(detail) =
+                        artisan_cap_detail(&role.name, 0, mycode_config::SUBAGENT_CONCURRENCY)
+                    {
                         let _ = progress.progress(agent_progress(&role.name, "capped", &detail));
                     }
                     tokio::select! {
@@ -617,12 +612,12 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
 }
 
 impl BridgeAgentHost {
-    /// Runs the nested agent until it finishes, the parent cancels, or the
-    /// wall-clock budget elapses.
+    /// Runs the nested agent until it answers or is cancelled.
     ///
-    /// The budget starts here, after a concurrency slot is held, so time
-    /// spent queued does not count. A timeout cancels the child token and
-    /// aborts the task.
+    /// There is no wall-clock limit. The run ends when the parent turn is
+    /// cancelled, when the user stops this subagent, or when the
+    /// conversation is deleted; each of those fires `cancel` or
+    /// `child_cancel`, which cancels the child token and aborts the task.
     async fn drive_subagent(
         &self,
         request: &mycode_tools::builtin::SubagentRequest,
@@ -634,9 +629,6 @@ impl BridgeAgentHost {
     ) -> Result<String, mycode_tools::ToolError> {
         let fail = |message: String| mycode_tools::ToolError::Execution(message);
         let cancelled = || fail(format!("subagent {} cancelled", role.name));
-        let started = Instant::now();
-        let budget =
-            Duration::from_secs(u64::from(self.settings.subagents.effective_timeout_secs()));
         let run_dir = worktree.map_or_else(|| self.cwd.clone(), Path::to_path_buf);
         // An OAuth refresh rotates the stored token, so routing always runs
         // to completion; the cancel is checked right after it.
@@ -749,12 +741,6 @@ impl BridgeAgentHost {
         }
         let mut agent = Agent::new(config);
         let prompt = Message::User(mycode_core::UserMessage::text(request.prompt.clone()));
-        let role_name = role.name.clone();
-        let remaining = budget.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            forwarder.abort();
-            return Err(fail(subagent_timeout_message(&role_name, budget.as_secs())));
-        }
         let mut run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
                 .with_cancel(run_cancel)
@@ -790,16 +776,11 @@ impl BridgeAgentHost {
             cancel: child_cancel.clone(),
             task: run.abort_handle(),
         };
-        match finish_subagent_task(&mut run, cancel, child_cancel, remaining).await {
+        match finish_subagent_task(&mut run, cancel, child_cancel).await {
             SubagentFinish::Cancelled => {
                 run.abort();
                 let _ = (&mut run).await;
                 Err(cancelled())
-            }
-            SubagentFinish::TimedOut => {
-                run.abort();
-                let _ = (&mut run).await;
-                Err(fail(subagent_timeout_message(&role_name, budget.as_secs())))
             }
             SubagentFinish::Finished(result) => result,
         }
@@ -860,32 +841,24 @@ fn artisan_cap_detail(role: &str, permits_available: usize, cap: u32) -> Option<
     }
 }
 
-fn subagent_timeout_message(role: &str, secs: u64) -> String {
-    format!("subagent {role} timed out after {secs}s")
-}
-
 /// How one nested agent task stopped.
 #[derive(Debug)]
 enum SubagentFinish {
-    /// The parent turn or `CancelSubagent` fired.
+    /// The parent turn, `CancelSubagent`, or a session delete fired.
     Cancelled,
-    /// The wall-clock budget elapsed. The task was aborted.
-    TimedOut,
     /// The task returned an answer or a tool error.
     Finished(Result<String, mycode_tools::ToolError>),
 }
 
-/// Waits for the nested task, the cancel tokens, or the remaining budget.
+/// Waits for the nested task or a cancel token.
 ///
-/// Parent cancel and an explicit child cancel win over a timeout that
-/// becomes ready in the same poll. A finished task wins over the timeout.
-/// A timeout cancels the child token and aborts the task so the run cannot
-/// keep editing after the tool result has returned.
+/// A cancel wins over an answer that becomes ready in the same poll. The
+/// parent's cancel also cancels the child token, so the run cannot keep
+/// editing after the tool result has returned.
 async fn finish_subagent_task(
     run: &mut tokio::task::JoinHandle<Result<String, mycode_tools::ToolError>>,
     cancel: &CancellationToken,
     child_cancel: &CancellationToken,
-    timeout: Duration,
 ) -> SubagentFinish {
     tokio::select! {
         biased;
@@ -899,10 +872,6 @@ async fn finish_subagent_task(
                 "subagent task failed: {error}"
             )))
         })),
-        _ = tokio::time::sleep(timeout) => {
-            child_cancel.cancel();
-            SubagentFinish::TimedOut
-        }
     }
 }
 
@@ -1175,20 +1144,19 @@ mod tests {
         let text = super::delegation_directive(&builtin_roles(), &SubagentSettings::default());
         assert!(text.contains("`scout`"));
         assert!(text.contains("`artisan`"));
-        assert!(text.contains("independently in parallel"));
-        assert!(text.contains("clear boundaries"));
-        assert!(text.contains("cut cost or improve completion quality"));
+        assert!(text.contains("stands on its own"));
         assert!(text.contains("vague"));
         assert!(text.contains("not a diff"));
-        assert!(text.contains("one `artisan` at a time"));
-        assert!(text.contains("clearly independent"));
-        assert!(text.contains("wall-clock"));
-        assert!(text.contains("the user is warned"));
+        assert!(text.contains("one at a time"));
+        assert!(text.contains("cannot run commands, build, test, or edit"));
+        assert!(text.contains("API references"));
+        assert!(text.contains("warns the user"));
+        assert!(text.contains("deletes the conversation"));
+        assert!(!text.contains("wall-clock"));
         assert!(text.contains(&format!(
-            "at most {} subagents",
-            mycode_config::DEFAULT_SUBAGENT_CONCURRENCY
+            "At most {} subagents",
+            mycode_config::SUBAGENT_CONCURRENCY
         )));
-        assert!(text.contains(&mycode_config::DEFAULT_SUBAGENT_TIMEOUT_SECS.to_string()));
         assert!(!text.contains("steward"));
         assert!(!text.contains("sentinel"));
         assert!(!text.contains("`exec`"));
@@ -1526,26 +1494,15 @@ mod tests {
             &builtin_roles(),
             &mycode_config::SubagentSettings::default(),
         );
-        assert!(directive.contains("your judgment"), "{directive}");
+        assert!(
+            directive.contains("instead of a long chain of searches"),
+            "{directive}"
+        );
         assert!(directive.contains("scout"), "{directive}");
         assert!(
             !directive.contains("Do not do that research inline"),
             "{directive}"
         );
-    }
-
-    #[test]
-    fn zero_max_concurrent_uses_the_default() {
-        let settings = SubagentSettings::default();
-        assert_eq!(settings.max_concurrent, 0);
-        assert_eq!(
-            settings.effective_concurrency(),
-            mycode_config::DEFAULT_SUBAGENT_CONCURRENCY
-        );
-        assert_ne!(settings.effective_concurrency(), 0);
-        let mut explicit = settings;
-        explicit.max_concurrent = 2;
-        assert_eq!(explicit.effective_concurrency(), 2);
     }
 
     #[test]
@@ -1560,36 +1517,34 @@ mod tests {
             super::agent_progress("artisan", "capped", "4"),
             "agent|artisan|capped|4"
         );
-        assert_eq!(
-            super::subagent_timeout_message("scout", 1200),
-            "subagent scout timed out after 1200s"
-        );
     }
 
     #[tokio::test]
-    async fn wall_clock_timeout_aborts_a_run_that_does_not_finish() {
+    async fn a_cancelled_child_stops_a_run_that_never_answers() {
         let cancel = CancellationToken::new();
         let child = CancellationToken::new();
         let mut run = tokio::spawn(async {
             std::future::pending::<()>().await;
             Ok::<String, mycode_tools::ToolError>("never".to_owned())
         });
-        let outcome =
-            super::finish_subagent_task(&mut run, &cancel, &child, Duration::from_millis(40)).await;
-        assert!(matches!(outcome, super::SubagentFinish::TimedOut));
-        assert!(child.is_cancelled());
+        let stopper = child.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            stopper.cancel();
+        });
+        let outcome = super::finish_subagent_task(&mut run, &cancel, &child).await;
+        assert!(matches!(outcome, super::SubagentFinish::Cancelled));
         run.abort();
         let _ = (&mut run).await;
     }
 
     #[tokio::test]
-    async fn a_finished_run_beats_the_wall_clock() {
+    async fn a_finished_run_returns_its_answer() {
         let cancel = CancellationToken::new();
         let child = CancellationToken::new();
         let mut run =
             tokio::spawn(async { Ok::<String, mycode_tools::ToolError>("done".to_owned()) });
-        let outcome =
-            super::finish_subagent_task(&mut run, &cancel, &child, Duration::from_secs(2)).await;
+        let outcome = super::finish_subagent_task(&mut run, &cancel, &child).await;
         match outcome {
             super::SubagentFinish::Finished(Ok(text)) => assert_eq!(text, "done"),
             other => panic!("expected a finished run, got {other:?}"),
@@ -1598,7 +1553,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parent_cancel_stops_the_run_before_the_wall_clock() {
+    async fn parent_cancel_stops_the_run_and_its_child_token() {
         let cancel = CancellationToken::new();
         let child = CancellationToken::new();
         cancel.cancel();
@@ -1606,8 +1561,7 @@ mod tests {
             std::future::pending::<()>().await;
             Ok::<String, mycode_tools::ToolError>("no".to_owned())
         });
-        let outcome =
-            super::finish_subagent_task(&mut run, &cancel, &child, Duration::from_secs(30)).await;
+        let outcome = super::finish_subagent_task(&mut run, &cancel, &child).await;
         assert!(matches!(outcome, super::SubagentFinish::Cancelled));
         assert!(child.is_cancelled());
         run.abort();
