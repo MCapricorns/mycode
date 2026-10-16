@@ -22,7 +22,9 @@ pub(super) fn set_streaming_status(state: &mut WorkspaceState, status: &str) {
         let streaming = conversation
             .streaming
             .get_or_insert_with(StreamingReply::default);
-        streaming.status = status.to_owned();
+        if streaming.status != status {
+            status.clone_into(&mut streaming.status);
+        }
     }
 }
 
@@ -31,28 +33,36 @@ pub(super) fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta
     if delta.is_empty() {
         return;
     }
-    let show_reasoning = super::super::selected_reasoning_level(state) != "off";
-    if let Some(conversation) = state.active.as_mut() {
-        let streaming = conversation
-            .streaming
-            .get_or_insert_with(StreamingReply::default);
-        streaming.status = if thinking && show_reasoning {
-            t("Thinking", "思考中").to_owned()
-        } else {
-            t("Replying", "正在回复").to_owned()
-        };
-        if thinking && !show_reasoning {
-            return;
-        }
-        let buffer = if thinking {
-            &mut streaming.thinking
-        } else {
-            &mut streaming.text
-        };
-        // Take the remaining room once instead of re-counting the buffer per
-        // pushed character. The buffer can grow to `MAX_STREAMING_CHARS`
-        // (256 * 1024 characters), which made the per-char check quadratic
-        // over a long turn.
+    // Only a thinking delta needs the catalog lookup behind the level.
+    let show_reasoning = thinking && super::super::selected_reasoning_level(state) != "off";
+    let status = if show_reasoning {
+        t("Thinking", "思考中")
+    } else {
+        t("Replying", "正在回复")
+    };
+    set_streaming_status(state, status);
+    if thinking && !show_reasoning {
+        return;
+    }
+    let Some(streaming) = state
+        .active
+        .as_mut()
+        .and_then(|conversation| conversation.streaming.as_mut())
+    else {
+        return;
+    };
+    let buffer = if thinking {
+        &mut streaming.thinking
+    } else {
+        &mut streaming.text
+    };
+    // A char is at least one byte, so while the byte length stays under the
+    // cap the whole delta fits without counting. Only a buffer near the cap
+    // pays for the count; counting it on every delta made a long reply
+    // quadratic.
+    if buffer.len() + delta.len() <= MAX_STREAMING_CHARS {
+        buffer.push_str(&delta);
+    } else {
         let room = MAX_STREAMING_CHARS.saturating_sub(buffer.chars().count());
         buffer.extend(delta.chars().take(room));
     }
