@@ -20,12 +20,13 @@
 //! ordinary per-file I/O produces a model-visible incomplete lower-bound
 //! notice. Paths use `/`, and cancellation or future drop is supervised
 //! until the worker is interrupted and joined.
+use parking_lot::Mutex;
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use globset::GlobMatcher;
@@ -253,11 +254,7 @@ impl FileSink<'_> {
         if lines.is_empty() {
             self.release_path_charge();
         } else {
-            let mut heap = self
-                .state
-                .heap
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut heap = self.state.heap.lock();
             for line in lines {
                 if heap.len() < self.cap {
                     heap.push(line);
@@ -778,12 +775,7 @@ fn assemble_report(
     cap: usize,
     limits: &Limits,
 ) -> ToolResult {
-    let heap = std::mem::take(
-        &mut *state
-            .heap
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    );
+    let heap = std::mem::take(&mut *state.heap.lock());
     let matches = heap.into_sorted_vec();
     let entries: Vec<String> = matches
         .iter()

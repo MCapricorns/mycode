@@ -5,8 +5,9 @@
 //! served sorted by tool name so provider requests serialize
 //! deterministically.
 
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Arc;
 
 use mycode_core::tool::ToolSpec;
 
@@ -91,15 +92,11 @@ impl ToolRegistry {
     }
 
     fn read(&self) -> RwLockReadGuard<'_, RegistryInner> {
-        self.inner
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner.read()
     }
 
     fn write(&self) -> RwLockWriteGuard<'_, RegistryInner> {
-        self.inner
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner.write()
     }
 }
 

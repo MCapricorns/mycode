@@ -514,7 +514,7 @@ impl SpawnCleanup for SpawnedProgram {
 }
 
 fn supervise_spawn_cleanup(live: LiveSpawn) {
-    let pending = Arc::new(std::sync::Mutex::new(Some(live)));
+    let pending = Arc::new(parking_lot::Mutex::new(Some(live)));
     let worker_pending = Arc::clone(&pending);
     let thread = std::thread::Builder::new()
         .name("mycode-shell-cleanup".into())
@@ -531,11 +531,8 @@ fn supervise_spawn_cleanup(live: LiveSpawn) {
     }
 }
 
-fn take_pending_cleanup(pending: &std::sync::Mutex<Option<LiveSpawn>>) -> Option<LiveSpawn> {
-    pending
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take()
+fn take_pending_cleanup(pending: &parking_lot::Mutex<Option<LiveSpawn>>) -> Option<LiveSpawn> {
+    pending.lock().take()
 }
 
 fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {

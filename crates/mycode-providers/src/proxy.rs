@@ -17,9 +17,9 @@
 //! Loopback, `.local`, and literal private addresses never use a proxy, so
 //! local models keep working while a proxy is on.
 
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use mycode_config::ProxyPreference;
@@ -41,21 +41,15 @@ static PROBE: Mutex<Option<(Instant, Option<String>)>> = Mutex::new(None);
 
 /// Installs the proxy preference every later request follows.
 pub fn set_proxy_preference(preference: ProxyPreference) {
-    let mut current = PREFERENCE.write().unwrap_or_else(PoisonError::into_inner);
+    let mut current = PREFERENCE.write();
     if *current != preference {
         *current = preference;
-        LEARNED
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        LEARNED.lock().take();
     }
 }
 
 fn preference() -> ProxyPreference {
-    PREFERENCE
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+    PREFERENCE.read().clone()
 }
 
 /// How one hop leaves the machine.
@@ -126,7 +120,7 @@ pub(crate) async fn fallback_for(host: &str) -> Option<String> {
         return None;
     }
     let proxy = local_proxy().await?;
-    let mut learned = LEARNED.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut learned = LEARNED.lock();
     let hosts = learned.get_or_insert_with(HashMap::new);
     if hosts.len() >= MAX_LEARNED_HOSTS {
         hosts.clear();
@@ -138,20 +132,15 @@ pub(crate) async fn fallback_for(host: &str) -> Option<String> {
 /// Drops a remembered proxy for `host` after that proxy stopped answering,
 /// so the next hop tries direct again.
 pub(crate) fn forget(host: &str) {
-    if let Some(hosts) = LEARNED
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_mut()
-    {
+    if let Some(hosts) = LEARNED.lock().as_mut() {
         hosts.remove(&host.to_ascii_lowercase());
     }
-    PROBE.lock().unwrap_or_else(PoisonError::into_inner).take();
+    PROBE.lock().take();
 }
 
 fn learned(host: &str) -> Option<String> {
     LEARNED
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
         .as_ref()?
         .get(&host.to_ascii_lowercase())
         .cloned()
@@ -168,10 +157,7 @@ fn system_proxy(url: &reqwest::Url) -> Option<String> {
 
 /// The first listening local proxy port, cached for [`PROBE_TTL`].
 async fn local_proxy() -> Option<String> {
-    if let Some((at, found)) = PROBE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
+    if let Some((at, found)) = PROBE.lock().as_ref()
         && at.elapsed() < PROBE_TTL
     {
         return found.clone();
@@ -186,7 +172,7 @@ async fn local_proxy() -> Option<String> {
             break;
         }
     }
-    *PROBE.lock().unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), found.clone()));
+    *PROBE.lock() = Some((Instant::now(), found.clone()));
     found
 }
 

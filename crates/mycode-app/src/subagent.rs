@@ -49,7 +49,7 @@ pub(crate) struct BridgeAgentHost {
     slots: Arc<Semaphore>,
     session_id: String,
     /// Child cancel tokens keyed by `session_id:call_id`.
-    cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
+    cancels: Arc<parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
     mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     /// Shared Copilot bearer cache. A role routed at Copilot refreshes
     /// through the same slot as the parent turn.
@@ -65,7 +65,7 @@ impl BridgeAgentHost {
         cwd: PathBuf,
         settings: &AppSettings,
         session_id: String,
-        cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
+        cancels: Arc<parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
         copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
     ) -> Self {
@@ -198,7 +198,7 @@ impl Drop for LeaseGuard {
 /// Publishes one child's cancel token under `session_id:call_id` and
 /// unpublishes it however the run ends, including a dropped call.
 struct ChildCancelRegistration<'a> {
-    cancels: &'a std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
+    cancels: &'a parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
     call_id: &'a str,
     key: String,
     token: Arc<CancellationToken>,
@@ -206,7 +206,7 @@ struct ChildCancelRegistration<'a> {
 
 impl<'a> ChildCancelRegistration<'a> {
     fn new(
-        cancels: &'a std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
+        cancels: &'a parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
         session_id: &str,
         call_id: &'a str,
         token: &CancellationToken,
@@ -214,9 +214,7 @@ impl<'a> ChildCancelRegistration<'a> {
         let key = BridgeAgentHost::cancel_key(session_id, call_id);
         let token = Arc::new(token.clone());
         if !call_id.is_empty() {
-            let mut slots = cancels
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut slots = cancels.lock();
             slots.insert(key.clone(), Arc::clone(&token));
         }
         Self {
@@ -878,15 +876,13 @@ async fn finish_subagent_task(
 }
 
 fn forget_subagent_cancel(
-    cancels: &std::sync::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
+    cancels: &parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>,
     call_id: &str,
     cancel_key: &str,
     token: &Arc<CancellationToken>,
 ) {
     if !call_id.is_empty() {
-        let mut slots = cancels
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slots = cancels.lock();
         if slots
             .get(cancel_key)
             .is_some_and(|live| Arc::ptr_eq(live, token))
@@ -1129,10 +1125,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_dropped_driver_stops_its_child_and_unpublishes_the_cancel() {
-        let cancels = std::sync::Mutex::new(std::collections::HashMap::new());
+        let cancels = parking_lot::Mutex::new(std::collections::HashMap::new());
         let child = CancellationToken::new();
         let registration = super::ChildCancelRegistration::new(&cancels, "ses", "call-1", &child);
-        assert!(cancels.lock().unwrap().contains_key("ses:call-1"));
+        assert!(cancels.lock().contains_key("ses:call-1"));
         let run = tokio::spawn(std::future::pending::<()>());
         let guard = super::AbortOnDrop {
             cancel: child.clone(),
@@ -1145,7 +1141,7 @@ mod tests {
             .await
             .expect("the child run kept going after its driver was dropped");
         assert!(joined.unwrap_err().is_cancelled());
-        assert!(cancels.lock().unwrap().is_empty());
+        assert!(cancels.lock().is_empty());
     }
 
     #[test]
@@ -1668,7 +1664,7 @@ mod tests {
             std::path::PathBuf::from("/tmp"),
             &settings,
             "session".to_owned(),
-            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             Arc::new(tokio::sync::Mutex::new(None)),
             Arc::new(tokio::sync::Mutex::new(None)),
         );
@@ -1698,7 +1694,7 @@ mod tests {
 
     #[test]
     fn child_cancel_registration_preserves_a_successor_token_with_the_same_call_id() {
-        let cancels = std::sync::Mutex::new(std::collections::HashMap::new());
+        let cancels = parking_lot::Mutex::new(std::collections::HashMap::new());
         let first_token = CancellationToken::new();
         let second_token = CancellationToken::new();
         let first = super::ChildCancelRegistration::new(&cancels, "ses", "call_0", &first_token);
@@ -1706,14 +1702,13 @@ mod tests {
         drop(first);
         let kept = cancels
             .lock()
-            .unwrap()
             .get("ses:call_0")
             .cloned()
             .expect("the successor registration must survive the older drop");
         kept.cancel();
         assert!(second_token.is_cancelled());
         drop(second);
-        assert!(cancels.lock().unwrap().is_empty());
+        assert!(cancels.lock().is_empty());
     }
 
     #[test]

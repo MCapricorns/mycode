@@ -20,8 +20,8 @@
 //! endpoints accept and that pins the new prefix; `prompt_cache_key` is not
 //! part of Z.AI's published schema and is not sent.
 
+use parking_lot::Mutex;
 use std::collections::HashSet;
-use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
@@ -139,17 +139,11 @@ fn rejected_prompt_cache_keys() -> &'static Mutex<HashSet<String>> {
 }
 
 fn prompt_cache_key_rejected(host: &str) -> bool {
-    rejected_prompt_cache_keys()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .contains(host)
+    rejected_prompt_cache_keys().lock().contains(host)
 }
 
 fn remember_prompt_cache_key_rejected(host: &str) {
-    rejected_prompt_cache_keys()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(host.to_owned());
+    rejected_prompt_cache_keys().lock().insert(host.to_owned());
 }
 
 /// Hostname used as the per-provider memory key, without the path.

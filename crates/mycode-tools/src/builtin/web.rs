@@ -9,10 +9,11 @@
 //! queries and URLs are cached for a few minutes so a turn
 //! can search, then fetch, without paying the raw page twice.
 
+use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
@@ -563,8 +564,8 @@ fn cache() -> &'static Mutex<WebCache> {
     })
 }
 
-fn cache_lock() -> std::sync::MutexGuard<'static, WebCache> {
-    cache().lock().unwrap_or_else(|error| error.into_inner())
+fn cache_lock() -> parking_lot::MutexGuard<'static, WebCache> {
+    cache().lock()
 }
 
 async fn cached_search(

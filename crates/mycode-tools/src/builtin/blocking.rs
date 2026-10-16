@@ -5,9 +5,10 @@
 //! Cancellation, timeout, or future drop publishes the worker token; Unix
 //! pollable reads wake through a per-worker socket, while `SIGURG` and Windows
 //! `CancelSynchronousIo` cover syscalls already in the kernel.
+use parking_lot::Mutex;
 use std::fs::File;
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
@@ -555,9 +556,7 @@ impl InterruptibleWorker {
                     if supervisor_cancel.is_cancelled()
                         && let Err(error) = authority.interrupt()
                     {
-                        let mut slot = error_slot
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner());
+                        let mut slot = error_slot.lock();
                         if slot.is_none() {
                             *slot = Some(error.to_string());
                         }
@@ -603,10 +602,7 @@ impl InterruptibleWorker {
             let _ = supervisor.join();
         })
         .await;
-        self.supervisor_error
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone()
+        self.supervisor_error.lock().clone()
     }
 }
 

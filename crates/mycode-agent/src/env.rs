@@ -1,8 +1,9 @@
 //! The per-turn environment: everything one turn of the agent loop needs
 //! from its surroundings. See `docs/agent.md`.
 
+use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use mycode_core::Provider;
 use mycode_core::events::AgentEvent;
@@ -35,21 +36,13 @@ impl SteerInbox {
         if text.trim().is_empty() {
             return;
         }
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(text);
+        self.pending.lock().push(text);
     }
 
     /// Takes every queued steer, leaving the inbox empty.
     #[must_use]
     pub fn drain(&self) -> Vec<String> {
-        std::mem::take(
-            &mut *self
-                .pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+        std::mem::take(&mut *self.pending.lock())
     }
 }
 
@@ -155,17 +148,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn steer_inbox_survives_a_poisoned_lock() {
-        let inbox = Arc::new(SteerInbox::new());
+    fn steer_inbox_drains_in_order_and_skips_blank_text() {
+        let inbox = SteerInbox::new();
         inbox.push("before");
-        let poisoner = Arc::clone(&inbox);
-        let _ = std::thread::spawn(move || {
-            let _guard = poisoner.pending.lock().unwrap();
-            panic!("poison the inbox");
-        })
-        .join();
-        assert!(inbox.pending.is_poisoned());
-
         inbox.push("after");
         inbox.push("   ");
         assert_eq!(inbox.drain(), vec!["before".to_owned(), "after".to_owned()]);
