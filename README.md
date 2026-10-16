@@ -47,15 +47,15 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/scouts-detail-v0.11.20.png" alt="三个 scout 并行调研 Tokio、async-std、smol"></td>
-    <td width="50%"><img src="docs/images/tool-steps-v0.11.20.png" alt="工具步骤收成一行，右侧显示结果摘要"></td>
+    <td width="50%"><img src="docs/images/scouts-detail-v0.11.19.png" alt="三个 scout 并行调研 Tokio、async-std、smol"></td>
+    <td width="50%"><img src="docs/images/tool-steps-v0.11.19.png" alt="工具步骤收成一行，右侧显示结果摘要"></td>
   </tr>
   <tr>
     <td align="center"><sub>三个 scout 并行调研，主代理汇总</sub></td>
     <td align="center"><sub>每一步工具调用收成一行，右侧是结果摘要</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/composer-v0.11.20.png" alt="思考强度菜单与输入框、缓存环"></td>
+    <td width="50%"><img src="docs/images/composer-v0.11.19.png" alt="思考强度菜单与输入框、缓存环"></td>
     <td width="50%"><img src="docs/images/subagents-v0.11.11.png" alt="对照表形式的调研结论"></td>
   </tr>
   <tr>
