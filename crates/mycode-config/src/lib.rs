@@ -76,8 +76,8 @@ pub use settings::{
     SETTINGS_PATH, SUBAGENT_CONCURRENCY, ShellSettings, SkillsSettings, SubagentRoleSettings,
     SubagentSettings, ToolsSettings, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES,
     WebBackendSettings, WebSettings, builtin_mcp_servers, builtin_web_backends, default_user_agent,
-    is_mcp_executable, read_app_settings, read_app_settings_with_repair, replace_app_settings,
-    split_command_line,
+    is_mcp_executable, merged_web_backends, read_app_settings, read_app_settings_with_repair,
+    replace_app_settings, split_command_line, web_key_env,
 };
 #[doc(inline)]
 pub use subagents::{

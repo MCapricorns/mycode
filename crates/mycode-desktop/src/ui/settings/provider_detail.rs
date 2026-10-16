@@ -27,27 +27,30 @@ pub(super) fn render_provider_detail(
     let Some(provider_id) = workspace.vm().provider_detail.clone() else {
         return div().into_any_element();
     };
-    let Some(settings) = workspace.vm().settings.clone() else {
-        return div().into_any_element();
+    let (provider, keyed, index) = {
+        let Some(settings) = workspace.vm().settings.as_ref() else {
+            return div().into_any_element();
+        };
+        let Some(index) = settings
+            .providers
+            .iter()
+            .position(|provider| provider.id == provider_id)
+        else {
+            return missing_provider(cx);
+        };
+        let provider = settings.providers[index].clone();
+        let keyed = settings
+            .providers_with_keys
+            .iter()
+            .any(|id| id == &provider.id);
+        (provider, keyed, index)
     };
-    let Some(index) = settings
-        .providers
-        .iter()
-        .position(|provider| provider.id == provider_id)
-    else {
-        return missing_provider(cx);
-    };
-    let provider = settings.providers[index].clone();
     let catalog = workspace
         .vm()
         .catalog
         .as_ref()
         .and_then(|catalog| catalog.provider(&provider.id))
         .cloned();
-    let keyed = settings
-        .providers_with_keys
-        .iter()
-        .any(|id| id == &provider.id);
     let replacing = workspace.provider_key_replacing(&provider.id);
     let oauth = catalog.as_ref().is_some_and(|entry| {
         mycode_providers::catalog::uses_oauth_login(&entry.auth)

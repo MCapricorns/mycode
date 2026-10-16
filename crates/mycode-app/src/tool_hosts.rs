@@ -10,14 +10,6 @@ use tokio_util::sync::CancellationToken;
 use crate::BridgeEvent;
 use crate::settings_io::render_config_error;
 
-/// Environment variable carrying the Querit API key, checked before the vault
-/// (the pi agent's querit plugin resolves this variable before its own config
-/// file, so a machine already set up for pi keeps working).
-const QUERIT_KEY_ENV: &str = "QUERIT_API_KEY";
-/// Environment variable carrying the AnySearch API key. Anonymous traffic is
-/// allowed when this and the vault entry are both absent.
-const ANYSEARCH_KEY_ENV: &str = "ANYSEARCH_API_KEY";
-
 /// Routes user answers from the UI to the pending `ask_user` tool.
 #[derive(Default)]
 struct AskRouter {
@@ -194,9 +186,11 @@ fn web_client(home: &HomeLayout) -> Result<crate::web_client::WebClient, String>
     let kind = crate::web_client::SearchKind::parse(&backend.kind)
         .ok_or_else(|| format!("unknown search backend kind '{}'", backend.kind))?;
     let key = web_backend_key(&backend, secrets.as_ref());
-    if key.is_none() && kind == crate::web_client::SearchKind::Querit {
+    if key.is_none() && kind_requires_key(kind) {
+        let env =
+            mycode_config::web_key_env(&backend.kind).unwrap_or("its API-key environment variable");
         return Err(format!(
-            "no API key for the '{}' search backend — paste one in Settings or set {QUERIT_KEY_ENV}",
+            "no API key for the '{}' search backend — paste one in Settings or set {env}",
             backend.id
         ));
     }
@@ -207,16 +201,20 @@ fn web_client(home: &HomeLayout) -> Result<crate::web_client::WebClient, String>
         .map(|client| client.with_kind(kind))
 }
 
+/// Families that always need a key; AnySearch and custom endpoints may run
+/// anonymously.
+fn kind_requires_key(kind: crate::web_client::SearchKind) -> bool {
+    matches!(
+        kind,
+        crate::web_client::SearchKind::Querit | crate::web_client::SearchKind::Exa
+    )
+}
+
 fn web_backend_key(
     backend: &mycode_config::WebBackendSettings,
     secrets: Option<&mycode_config::ProviderSecrets>,
 ) -> Option<String> {
-    let env_name = match backend.kind.as_str() {
-        "querit" => Some(QUERIT_KEY_ENV),
-        "anysearch" => Some(ANYSEARCH_KEY_ENV),
-        _ => None,
-    };
-    env_name
+    mycode_config::web_key_env(&backend.kind)
         .and_then(|name| std::env::var(name).ok())
         .map(|value| mycode_config::normalize_api_key(&value))
         .filter(|value| !value.is_empty())
@@ -237,21 +235,14 @@ fn resolve_web_backend(
     if let Some(backend) = settings.web.backends.iter().find(|backend| backend.enabled) {
         return Ok(backend.clone());
     }
-    let mut candidates = mycode_config::builtin_web_backends();
-    for backend in &settings.web.backends {
-        if let Some(slot) = candidates.iter_mut().find(|item| item.id == backend.id) {
-            *slot = backend.clone();
-        } else {
-            candidates.push(backend.clone());
-        }
-    }
+    let candidates = mycode_config::merged_web_backends(&settings.web.backends);
     if let Some(backend) = candidates
         .iter()
         .find(|backend| web_backend_key(backend, secrets).is_some())
     {
         return Ok(backend.clone());
     }
-    Err("no search backend is ready — paste a Querit or AnySearch API key in Settings".to_owned())
+    Err("no search backend is ready — paste a search API key in Settings".to_owned())
 }
 
 /// Host channel for the model's web tools: the same bounded client the

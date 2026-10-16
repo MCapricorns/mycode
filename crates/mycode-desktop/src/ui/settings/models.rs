@@ -53,9 +53,6 @@ fn render_models_list_page(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let Some(settings) = workspace.vm().settings.clone() else {
-        return div().into_any_element();
-    };
     let menu_open = workspace.vm().model_menu_open;
     let picker = menu_open.then(|| {
         crate::ui::model_picker::render_model_picker(
@@ -75,31 +72,36 @@ fn render_models_list_page(
         .collect();
     let catalog = workspace.vm().catalog.clone();
     let mut provider_rows: Vec<(usize, String, String, usize, bool, bool)> = Vec::new();
-    for (index, provider) in settings.providers.iter().enumerate() {
-        let name = catalog
-            .as_ref()
-            .map(|catalog| catalog.display_name(&provider.id))
-            .unwrap_or_else(|| provider.id.clone());
-        let host = provider
-            .base_url
-            .strip_prefix("https://")
-            .unwrap_or(&provider.base_url)
-            .split('/')
-            .next()
-            .unwrap_or_default()
-            .to_owned();
-        let keyed = settings
-            .providers_with_keys
-            .iter()
-            .any(|id| id == &provider.id);
-        provider_rows.push((
-            index,
-            name,
-            host,
-            provider.models.len(),
-            keyed,
-            provider.enabled,
-        ));
+    {
+        let Some(settings) = workspace.vm().settings.as_ref() else {
+            return div().into_any_element();
+        };
+        for (index, provider) in settings.providers.iter().enumerate() {
+            let name = catalog
+                .as_ref()
+                .map(|catalog| catalog.display_name(&provider.id))
+                .unwrap_or_else(|| provider.id.clone());
+            let host = provider
+                .base_url
+                .strip_prefix("https://")
+                .unwrap_or(&provider.base_url)
+                .split('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let keyed = settings
+                .providers_with_keys
+                .iter()
+                .any(|id| id == &provider.id);
+            provider_rows.push((
+                index,
+                name,
+                host,
+                provider.models.len(),
+                keyed,
+                provider.enabled,
+            ));
+        }
     }
     let provider_row_elements: Vec<AnyElement> = provider_rows
         .into_iter()

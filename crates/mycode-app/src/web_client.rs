@@ -3,10 +3,13 @@
 //! Querit and custom backends share `POST {endpoint}/v1/search` plus
 //! `POST {endpoint}/v1/contents`. AnySearch uses `POST {endpoint}/v1/search`
 //! with `{query, max_results}` answering `{data.results}` and
-//! `POST {endpoint}/v1/extract` with `{url}` for page text. Everything is
-//! bounded: result count, URL count, response bytes, and aggregate payload
-//! bytes. The transport is injectable so hosts can substitute their own;
-//! the production [`transport::ReqwestWebTransport`] ships with the crate.
+//! `POST {endpoint}/v1/extract` with `{url}` for page text. Exa uses
+//! `POST {endpoint}/search` answering `{results}` (highlights requested for
+//! snippets) and `POST {endpoint}/contents` with `{urls, text}` answering
+//! `{results, statuses}` for page text. Everything is bounded: result count,
+//! URL count, response bytes, and aggregate payload bytes. The transport is
+//! injectable so hosts can substitute their own; the production
+//! [`transport::ReqwestWebTransport`] ships with the crate.
 
 pub mod guard;
 pub mod transport;
@@ -200,6 +203,9 @@ pub enum SearchKind {
     Querit,
     /// AnySearch `POST /v1/search` + `POST /v1/extract`.
     Anysearch,
+    /// Exa `POST /search` + `POST /contents`. Bearer or `x-api-key`; the
+    /// transport already sends Bearer.
+    Exa,
     /// Querit-compatible custom endpoint.
     #[default]
     Custom,
@@ -212,6 +218,7 @@ impl SearchKind {
         match value {
             "querit" => Some(Self::Querit),
             "anysearch" => Some(Self::Anysearch),
+            "exa" => Some(Self::Exa),
             "custom" => Some(Self::Custom),
             _ => None,
         }
@@ -281,6 +288,7 @@ impl WebClient {
         let max_results = max_results.clamp(1, guard::MAX_SEARCH_RESULTS);
         match self.kind {
             SearchKind::Anysearch => self.search_anysearch(query, max_results, cancel).await,
+            SearchKind::Exa => self.search_exa(query, max_results, cancel).await,
             SearchKind::Querit | SearchKind::Custom => {
                 self.search_querit(query, max_results, cancel).await
             }
@@ -344,6 +352,37 @@ impl WebClient {
         })
     }
 
+    /// Exa `POST /search`. `highlights` buys one short excerpt per hit so the
+    /// tool's snippet slot is filled without a second contents call.
+    async fn search_exa(
+        &self,
+        query: &str,
+        max_results: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<SearchResult>, WebError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "query": query,
+            "numResults": max_results,
+            "type": "auto",
+            "contents": {
+                "highlights": { "numSentences": 2, "highlightsPerUrl": 1 },
+            },
+        }))
+        .map_err(|_| WebError::Protocol)?;
+        let raw = self.post("/search", &body, self.timeout, cancel).await?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
+        let hits = payload["results"].as_array().ok_or(WebError::Protocol)?;
+        self.collect_hits(hits, max_results, |hit| {
+            let snippet = hit["highlights"]
+                .as_array()
+                .and_then(|highlights| highlights.iter().find_map(|line| line.as_str()))
+                .or_else(|| hit["text"].as_str())
+                .or_else(|| hit["summary"].as_str());
+            (hit["url"].as_str(), hit["title"].as_str(), snippet)
+        })
+    }
+
     fn collect_hits(
         &self,
         hits: &[serde_json::Value],
@@ -399,6 +438,7 @@ impl WebClient {
         }
         match self.kind {
             SearchKind::Anysearch => self.contents_anysearch(urls, cancel).await,
+            SearchKind::Exa => self.contents_exa(urls, cancel).await,
             SearchKind::Querit | SearchKind::Custom => self.contents_querit(urls, cancel).await,
         }
     }
@@ -492,6 +532,71 @@ impl WebClient {
                 url: url.clone(),
                 content,
                 truncated: false,
+            };
+            let (page, stop) = bound_page(page, &mut total);
+            pages.push(page);
+            if stop {
+                return Ok(pages);
+            }
+        }
+        Ok(pages)
+    }
+
+    /// Exa `POST /contents`. Per-URL failures arrive in `statuses` and get a
+    /// failure page in place, so one bad link does not sink the batch.
+    async fn contents_exa(
+        &self,
+        urls: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<PageContent>, WebError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "urls": urls,
+            // One past the per-page cap so a hit sitting exactly on it is
+            // still reported as truncated.
+            "text": { "maxCharacters": guard::MAX_PAGE_BYTES + 1 },
+        }))
+        .map_err(|_| WebError::Protocol)?;
+        let raw = self
+            .post(
+                "/contents",
+                &body,
+                Duration::from_secs(guard::CONTENTS_TIMEOUT_SECS),
+                cancel,
+            )
+            .await?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
+        let results = payload["results"].as_array().ok_or(WebError::Protocol)?;
+        let statuses = payload["statuses"].as_array();
+        let mut total = 0usize;
+        let mut pages = Vec::new();
+        for url in urls {
+            let wire = results.iter().find(|wire| {
+                wire["id"].as_str() == Some(url.as_str())
+                    || wire["url"].as_str() == Some(url.as_str())
+            });
+            let page = match wire {
+                Some(wire) => PageContent {
+                    url: url.clone(),
+                    content: guard::sanitize_remote_text(wire["text"].as_str().unwrap_or_default()),
+                    truncated: false,
+                },
+                None => {
+                    let tag = statuses
+                        .and_then(|statuses| {
+                            statuses.iter().find(|status| {
+                                status["id"].as_str() == Some(url.as_str())
+                                    && status["status"].as_str() == Some("error")
+                            })
+                        })
+                        .and_then(|status| status["error"]["tag"].as_str())
+                        .unwrap_or("no content returned");
+                    PageContent {
+                        url: url.clone(),
+                        content: format!("fetch failed: {tag}"),
+                        truncated: false,
+                    }
+                }
             };
             let (page, stop) = bound_page(page, &mut total);
             pages.push(page);
@@ -689,6 +794,96 @@ mod tests {
             .unwrap();
         let titles: Vec<_> = hits.iter().map(|hit| hit.title.as_str()).collect();
         assert_eq!(titles, ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn exa_search_maps_highlights_into_snippets() {
+        let body = serde_json::json!({
+            "results": [
+                {
+                    "id": "https://example.com/one",
+                    "url": "https://example.com/one",
+                    "title": "one",
+                    "highlights": ["first excerpt"]
+                },
+                {
+                    "url": "https://example.com/two",
+                    "text": "body text"
+                },
+                {"url": "http://insecure.example/x", "title": "blocked"}
+            ]
+        });
+        let client = WebClient::new(
+            "https://api.exa.ai",
+            Some("key".to_owned()),
+            Arc::new(StaticJson {
+                body: serde_json::to_vec(&body).unwrap(),
+            }),
+        )
+        .unwrap()
+        .with_kind(SearchKind::Exa);
+        let hits = client
+            .search("query", 8, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].url, "https://example.com/one");
+        assert_eq!(hits[0].snippet, "first excerpt");
+        // A missing title falls back to the URL; `text` fills the snippet.
+        assert_eq!(hits[1].title, "https://example.com/two");
+        assert_eq!(hits[1].snippet, "body text");
+    }
+
+    #[tokio::test]
+    async fn exa_contents_report_per_url_failures_in_place() {
+        let body = serde_json::json!({
+            "results": [
+                {"id": "https://example.com/ok", "text": "page body"}
+            ],
+            "statuses": [
+                {"id": "https://example.com/ok", "status": "success"},
+                {
+                    "id": "https://example.com/bad",
+                    "status": "error",
+                    "error": {"tag": "CRAWL_NOT_FOUND", "httpStatusCode": 404}
+                }
+            ]
+        });
+        let client = WebClient::new(
+            "https://api.exa.ai",
+            Some("key".to_owned()),
+            Arc::new(StaticJson {
+                body: serde_json::to_vec(&body).unwrap(),
+            }),
+        )
+        .unwrap()
+        .with_kind(SearchKind::Exa);
+        let pages = client
+            .contents(
+                &[
+                    "https://example.com/ok".to_owned(),
+                    "https://example.com/bad".to_owned(),
+                ],
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].content, "page body");
+        assert!(
+            pages[1].content.contains("CRAWL_NOT_FOUND"),
+            "{}",
+            pages[1].content
+        );
+    }
+
+    #[test]
+    fn search_kind_parses_each_settings_spelling() {
+        assert_eq!(SearchKind::parse("querit"), Some(SearchKind::Querit));
+        assert_eq!(SearchKind::parse("anysearch"), Some(SearchKind::Anysearch));
+        assert_eq!(SearchKind::parse("exa"), Some(SearchKind::Exa));
+        assert_eq!(SearchKind::parse("custom"), Some(SearchKind::Custom));
+        assert_eq!(SearchKind::parse("tavily"), None);
     }
 
     const EXTRACT_FAILED: &[u8] = br#"{"code":-1,"error_code":"extract_failed","message":"Unable to extract content from the URL."}"#;

@@ -28,10 +28,7 @@ use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::composer_placeholder;
 pub(crate) use command_palette::ToggleCommandPalette;
-pub(crate) use settings::{
-    BackendForm, McpForm, ProviderForm, build_custom_backend, build_custom_provider,
-    build_mcp_server,
-};
+pub(crate) use settings::{McpForm, ProviderForm, build_custom_provider, build_mcp_server};
 
 /// How much of the desk chrome fits the current window width.
 ///

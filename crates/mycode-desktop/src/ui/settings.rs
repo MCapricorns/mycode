@@ -17,7 +17,6 @@ mod widgets;
 
 pub(crate) use mcp::{McpForm, build_mcp_server};
 pub(crate) use models::{ProviderForm, build_custom_provider};
-pub(crate) use web::{BackendForm, build_custom_backend};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -227,9 +226,9 @@ fn settings_page_key(workspace: &Workspace) -> String {
             crate::view_model::ModelsSubview::OpenDesign => "models-opendesign".to_owned(),
             crate::view_model::ModelsSubview::Custom => "models-custom".to_owned(),
         },
-        SettingsSection::Web => match vm.web_subview {
-            crate::view_model::WebSubview::List => "web-list".to_owned(),
-            crate::view_model::WebSubview::Custom => "web-custom".to_owned(),
+        SettingsSection::Web => match vm.web_detail.as_deref() {
+            Some(id) => format!("web-detail-{id}"),
+            None => "web-list".to_owned(),
         },
         SettingsSection::Mcp => match vm.mcp_subview {
             crate::view_model::McpSubview::List => "mcp-list".to_owned(),

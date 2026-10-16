@@ -78,7 +78,7 @@ PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bas
 | `agent` | 按角色再跑一个有白名单的子循环。一块工作能独立完成、留在主对话里会塞满搜索和阅读时就委派；小改动、手上已有上下文、或下一步马上要用结果时自己做。scout 只读：只能搜代码（`read`、`grep`、`find`）和查网络资料、文档、API（`web_search`、`fetch_content`），没有 shell 也不能写文件，不跑命令、不构建、不测试；artisan 在自己的 worktree 里做一个边界清楚的改动。工具名是 `agent`，没有 `task` 别名。同一条回复里的多个 `agent` 并行；能写的角色用 worktree，不共用会话目录。同时最多跑 8 个，固定值，不是设置项。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时，一直运行到给出答案；用户取消这一回合、在详情面板里停止它、或删除对话时都会结束它，排队等名额的也一样。 |
 | `web_search` / `fetch_content` | 有界 HTTP：每次最多 8 条结果 / 8 个 URL。搜索结果是标题、URL 和最多 240 字符的摘要，重复 URL 丢掉，相同查询缓存 10 分钟。`fetch_content` 带 `goal` 时只返回匹配摘录（每页约 1200 字符）；不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)` |
 
-网页后端由设置决定：启用的那个优先；都没启用时用第一个有钥匙（环境变量或 `web-<id>`）的后端。Querit 和自定义后端走 `POST {endpoint}/v1/search` 与 `/v1/contents`，AnySearch 走 `/v1/search` 与 `/v1/extract`。Querit 没钥匙时调用失败并提示去设置页粘贴或设 `QUERIT_API_KEY`；已启用的 AnySearch 没钥匙时匿名访问。
+网页后端由设置决定：启用的那个优先；都没启用时用第一个有钥匙（环境变量或 `web-<id>`）的后端。Querit 和旧文件里的自定义后端走 `POST {endpoint}/v1/search` 与 `/v1/contents`，AnySearch 走 `/v1/search` 与 `/v1/extract`，Exa 走 `/search`（带 highlights 当摘要）与 `/contents`。设置页只列 Querit / AnySearch / Exa 三家厂商行，不再新增自定义后端；旧设置里的 `custom` 行仍显示、可停用和删除。Querit、Exa 没钥匙时调用失败并提示去设置页粘贴或设对应环境变量；已启用的 AnySearch 没钥匙时匿名访问。
 
 MCP 工具按原始工具名注册。小服务直接进工具列表；大服务仍走 `search_tool` 和 `use_tool`。调用远端时用原来的工具名。scout 只拿到带 `readOnlyHint: true` 的 MCP 工具，没有这个标注的不给。技能目录在 system prompt 的 `<skills>` 里，正文不进提示；匹配时用 `read` 按目录里的路径读取对应的 `SKILL.md`。子代理（含 scout）用同一份目录。
 
