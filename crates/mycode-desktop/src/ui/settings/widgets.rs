@@ -76,7 +76,7 @@ pub(super) fn settings_card(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .child(title.to_owned()),
                 )
                 .when_some(hint, |this, hint| {
@@ -108,7 +108,9 @@ pub(super) fn settings_row(
     label: &str,
     description: Option<&str>,
     control: AnyElement,
+    theme: &Theme,
 ) -> AnyElement {
+    let muted = theme.muted_foreground;
     div()
         .id(format!("row-{id}"))
         .w_full()
@@ -130,18 +132,25 @@ pub(super) fn settings_row(
                     this.child(
                         div()
                             .text_xs()
-                            .opacity(0.75)
+                            .text_color(muted)
                             .whitespace_normal()
                             .child(description.to_owned()),
                     )
                 }),
         )
-        .child(control)
+        .child(div().flex_none().child(control))
         .into_any_element()
 }
 
-/// Wrapping choice chips. The label stays in the parent column so a long
-/// label cannot collapse beside the chips.
+/// Label over a stacked control (a model route, an input). Same size and
+/// ink as a row label, so every card reads with one label style.
+pub(super) fn field_label(text: &str) -> impl IntoElement {
+    div().text_sm().whitespace_normal().child(text.to_owned())
+}
+
+/// A segmented control: one recessed track with the picked option raised
+/// on it. Every option is visibly part of the control, so an unpicked
+/// choice does not read as plain text. A long list wraps inside the track.
 pub(super) fn choice_chips(
     id_prefix: &str,
     options: &[(String, String)],
@@ -150,53 +159,66 @@ pub(super) fn choice_chips(
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let theme = cx.theme();
+    let thumb = crate::ui::skin::segment_thumb(theme);
+    let hover = crate::ui::skin::frost_hover(theme);
+    let ink = theme.foreground;
     div()
         .id(format!("chips-{id_prefix}"))
-        .w_full()
+        .max_w_full()
         .min_w_0()
         .h_auto()
         .flex_none()
+        .self_start()
         .flex()
         .flex_row()
         .flex_wrap()
-        .items_start()
+        .items_center()
         .content_start()
         .justify_start()
-        .gap_1()
+        .gap(px(2.))
+        .p(px(2.))
+        .rounded(crate::ui::skin::radius_control())
+        .border_1()
+        .border_color(crate::ui::skin::glass_border(theme))
+        .bg(crate::ui::skin::segment_track(theme))
         .children(options.iter().map(|(value, label)| {
             let value = value.clone();
             let selected = value == current;
             let pick = on_pick.clone();
             div()
                 .id(format!("{id_prefix}-{value}"))
-                .h(px(28.))
-                .px_2()
+                .h(px(26.))
+                .min_w(px(40.))
+                .px(crate::ui::skin::space(3))
                 .flex_none()
-                .self_start()
                 .flex()
                 .items_center()
-                .rounded(crate::ui::skin::radius_control())
-                .border_1()
-                .border_color(if selected {
-                    crate::ui::skin::border_strong(theme)
-                } else {
-                    theme.border
-                })
-                .when(selected, |this| this.bg(crate::ui::skin::frost(theme)))
+                .justify_center()
+                .rounded(px(8.))
                 .text_sm()
-                .cursor_pointer()
-                .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    pick(workspace, &value, cx);
-                }))
+                .whitespace_nowrap()
+                .when(selected, |this| {
+                    this.bg(thumb)
+                        .text_color(ink)
+                        .shadow(crate::ui::skin::thumb_shadow(theme))
+                })
+                .when(!selected, |this| {
+                    this.text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(move |this| this.bg(hover).text_color(ink))
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            pick(workspace, &value, cx);
+                        }))
+                })
                 .child(label.clone())
         }))
         .into_any_element()
 }
 
-/// The two-line header column shared by settings rows: a medium title over a
+/// The two-line header column shared by settings rows: a strong title over a
 /// dim subtitle. Returns the bare column so callers can append extra lines.
-pub(super) fn row_header(title: &str, subtitle: String) -> gpui_kit::Div {
+pub(super) fn row_header(title: &str, subtitle: String, theme: &Theme) -> gpui_kit::Div {
+    let muted = theme.muted_foreground;
     div()
         .flex_1()
         .min_w_0()
@@ -206,26 +228,35 @@ pub(super) fn row_header(title: &str, subtitle: String) -> gpui_kit::Div {
         .child(
             div()
                 .text_sm()
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                 .overflow_hidden()
                 .child(title.to_owned()),
         )
         .child(
             div()
                 .text_xs()
-                .opacity(0.75)
+                .text_color(muted)
                 .whitespace_normal()
                 .child(subtitle),
         )
 }
 
-pub(super) fn labeled_field(label: &str, input: Entity<InputState>) -> impl IntoElement {
+pub(super) fn labeled_field(
+    label: &str,
+    input: Entity<InputState>,
+    theme: &Theme,
+) -> impl IntoElement {
     div()
         .id(format!("form-field-{label}"))
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_xs().opacity(0.75).child(label.to_owned()))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(label.to_owned()),
+        )
         .child(div().h(px(30.)).child(Input::new(&input)))
 }
 

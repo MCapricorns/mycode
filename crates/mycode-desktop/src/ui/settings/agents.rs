@@ -13,7 +13,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::widgets::{choice_chips, settings_card};
+use super::widgets::{choice_chips, field_label, settings_card};
 use crate::i18n::t;
 use crate::ui::model_picker::{ModelPickerTarget, model_display_name, render_model_picker};
 use crate::workspace::Workspace;
@@ -44,7 +44,7 @@ pub(super) fn render_agents_section(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .child(t("Additional roles", "其他角色")),
                 )
                 .child(
@@ -130,6 +130,7 @@ fn role_card(
                         .flex_row()
                         .items_center()
                         .gap_2()
+                        .child(field_label(t("Enabled", "启用")))
                         .child(capability_chip(role.isolation.as_str(), theme))
                         .when(role.origin != mycode_config::RoleOrigin::Builtin, |this| {
                             this.child(origin_chip(role.origin, theme))
@@ -149,13 +150,8 @@ fn role_card(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(t("Model", "模型")),
-                )
+                .gap_2()
+                .child(field_label(t("Model", "模型")))
                 .child(
                     div()
                         .id(format!("agent-route-toggle-{name}"))
@@ -200,13 +196,8 @@ fn role_card(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(t("Thinking", "思考")),
-                )
+                .gap_2()
+                .child(field_label(t("Thinking", "思考")))
                 .child(choice_chips(
                     &format!("agent-think-{name}"),
                     &thinking_options,
@@ -260,13 +251,13 @@ fn origin_chip(
         mycode_config::RoleOrigin::Builtin => t("Built-in", "内置"),
     };
     div()
-        .h(px(24.))
+        .h(px(20.))
         .px_2()
         .flex()
         .items_center()
         .rounded_full()
         .border_1()
-        .border_color(theme.border)
+        .border_color(crate::ui::skin::border_strong(theme))
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(label)
@@ -280,13 +271,13 @@ fn capability_chip(isolation: &str, theme: &gpui_kit::component::theme::Theme) -
         t("Read-only", "只读")
     };
     div()
-        .h(px(24.))
+        .h(px(20.))
         .px_2()
         .flex()
         .items_center()
         .rounded_full()
         .border_1()
-        .border_color(theme.border)
+        .border_color(crate::ui::skin::border_strong(theme))
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(label)

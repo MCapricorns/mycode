@@ -47,10 +47,6 @@ pub struct SettingsState {
     pub language: String,
     /// Interface font size: `s`, `m`, `l`, or `xl`.
     pub font_size: String,
-    /// UI font family. Empty or `system` is the OS UI font; otherwise one of
-    /// `mycode_config::VALID_FONT_FAMILIES`. This is the stored value, not the
-    /// concrete family GPUI paints.
-    pub font_family: String,
     /// Live reasoning effort for the open session's thinking chip.
     /// Session picks write this field and the session pin. They do not
     /// change [`Self::saved_reasoning`], so a later settings save cannot
@@ -97,7 +93,6 @@ impl SettingsState {
             theme: settings.effective_theme().to_owned(),
             language: settings.appearance.language.clone(),
             font_size: settings.effective_font_size().to_owned(),
-            font_family: settings.appearance.font_family.clone(),
             reasoning: settings.reasoning_effort.clone(),
             saved_reasoning: settings.reasoning_effort.clone(),
             providers_with_keys,
@@ -128,7 +123,7 @@ impl SettingsState {
                 legacy_palette: None,
                 language: self.language.clone(),
                 font_size: self.font_size.clone(),
-                font_family: self.font_family.clone(),
+                legacy_font_family: None,
             },
             reasoning_effort: self.saved_reasoning.clone(),
             subagents: self.subagents.clone(),
@@ -421,57 +416,6 @@ mod tests {
         let stored = state.to_settings();
         assert_eq!(stored.appearance.font_size, "xl");
         assert!(stored.validate().is_ok());
-    }
-
-    #[test]
-    fn font_family_round_trips_through_the_editor_projection() {
-        let mut document = mycode_config::AppSettings::default();
-        assert_eq!(document.appearance.font_family, "system");
-        document.appearance.font_family = "Inter".to_owned();
-        let state = super::SettingsState::from_settings(&document, 2, Vec::new());
-        assert_eq!(state.font_family, "Inter");
-        let stored = state.to_settings();
-        assert_eq!(stored.appearance.font_family, "Inter");
-        assert_eq!(stored.effective_font_family(), "Inter");
-        assert!(stored.validate().is_ok());
-
-        document.appearance.font_family.clear();
-        let state = super::SettingsState::from_settings(&document, 2, Vec::new());
-        assert_eq!(state.font_family, "");
-        let stored = state.to_settings();
-        assert_eq!(stored.appearance.font_family, "");
-        assert_eq!(stored.effective_font_family(), "system");
-        assert!(stored.validate().is_ok());
-
-        let mut vm = super::super::WorkspaceState {
-            settings: Some(state),
-            ..super::super::WorkspaceState::default()
-        };
-        super::super::reduce(
-            &mut vm,
-            super::super::DesktopAction::SettingsFontFamilySelected("Segoe UI".to_owned()),
-        );
-        let settings = vm.settings.as_ref().expect("settings");
-        assert!(settings.dirty);
-        assert_eq!(settings.font_family, "Segoe UI");
-        assert_eq!(settings.to_settings().appearance.font_family, "Segoe UI");
-
-        super::super::reduce(
-            &mut vm,
-            super::super::DesktopAction::SettingsFontFamilySelected("system".to_owned()),
-        );
-        let settings = vm.settings.as_ref().expect("settings");
-        assert_eq!(settings.font_family, "system");
-        assert_eq!(settings.to_settings().effective_font_family(), "system");
-
-        let epoch = settings.edit_epoch;
-        super::super::reduce(
-            &mut vm,
-            super::super::DesktopAction::SettingsFontFamilySelected("Papyrus".to_owned()),
-        );
-        let settings = vm.settings.as_ref().expect("settings");
-        assert_eq!(settings.font_family, "system");
-        assert_eq!(settings.edit_epoch, epoch);
     }
 
     #[test]

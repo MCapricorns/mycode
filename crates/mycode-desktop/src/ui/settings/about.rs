@@ -97,6 +97,7 @@ pub(super) fn render_about_section(
                 .text_color(cx.theme().muted_foreground)
                 .child(format!("v{current}"))
                 .into_any_element(),
+            cx.theme(),
         ),
         settings_row(
             "author",
@@ -107,6 +108,7 @@ pub(super) fn render_about_section(
                 .text_color(cx.theme().muted_foreground)
                 .child("MaMy")
                 .into_any_element(),
+            cx.theme(),
         ),
         settings_row(
             "thanks",
@@ -117,6 +119,7 @@ pub(super) fn render_about_section(
                 .text_color(cx.theme().muted_foreground)
                 .child("MaMy, YangChengxxyy, iKunCai")
                 .into_any_element(),
+            cx.theme(),
         ),
         settings_row(
             "auto-update",
@@ -131,6 +134,7 @@ pub(super) fn render_about_section(
                     workspace.on_toggle_auto_update(*checked, cx);
                 }))
                 .into_any_element(),
+            cx.theme(),
         ),
         settings_row(
             "update-status",
@@ -165,6 +169,7 @@ pub(super) fn render_about_section(
                         })),
                 )
                 .into_any_element(),
+            cx.theme(),
         ),
     ];
     if let Some(node) = status.1 {
@@ -203,6 +208,7 @@ pub(super) fn render_about_section(
                     })),
             )
             .into_any_element(),
+        cx.theme(),
     ));
     let theme = cx.theme();
     settings_card(

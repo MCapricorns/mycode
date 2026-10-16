@@ -80,23 +80,8 @@ pub const VALID_LANGUAGES: [&str; 3] = ["auto", "en", "zh"];
 
 /// Interface font-size ids, smallest to largest.
 ///
-/// `s` / `m` / `l` / `xl` are about 12 / 13 / 14 / 16 px of body text.
+/// `s` / `m` / `l` / `xl` are 12 / 14 / 16 / 18 px of body text.
 pub const VALID_FONT_SIZES: [&str; 4] = ["s", "m", "l", "xl"];
-
-/// Named UI font families the settings document accepts.
-///
-/// Empty and `"system"` are not in this list: both mean the operating-system
-/// UI font. A stored id is one of these names, not a free-typed family.
-pub const VALID_FONT_FAMILIES: [&str; 5] = [
-    "Inter",
-    "Segoe UI",
-    "PingFang",
-    "Microsoft YaHei",
-    "Noto Sans",
-];
-
-/// Stored id for the operating-system UI font.
-pub const SYSTEM_FONT_FAMILY: &str = "system";
 
 fn default_language() -> String {
     "auto".to_owned()
@@ -104,23 +89,6 @@ fn default_language() -> String {
 
 fn default_font_size() -> String {
     "m".to_owned()
-}
-
-fn default_font_family() -> String {
-    SYSTEM_FONT_FAMILY.to_owned()
-}
-
-/// Canonical `appearance.fontFamily` value.
-///
-/// Empty and `"system"` are the OS UI font. Named values must be one of
-/// [`VALID_FONT_FAMILIES`]. Anything else is rejected.
-#[must_use]
-pub fn canonical_font_family(value: &str) -> Option<&'static str> {
-    if value.is_empty() || value == SYSTEM_FONT_FAMILY {
-        Some(SYSTEM_FONT_FAMILY)
-    } else {
-        VALID_FONT_FAMILIES.into_iter().find(|id| *id == value)
-    }
 }
 
 /// Appearance settings.
@@ -141,10 +109,11 @@ pub struct AppearanceSettings {
     /// `s`, `m`, `l`, or `xl`. Missing values read as medium.
     #[serde(default = "default_font_size")]
     pub font_size: String,
-    /// UI font family. Missing, empty, and `"system"` are the OS UI font.
-    /// Named values are one of [`VALID_FONT_FAMILIES`].
-    #[serde(default = "default_font_family")]
-    pub font_family: String,
+    /// Retired UI font family. The interface always paints the OS UI font;
+    /// a document that still names a family loads, the value is ignored,
+    /// and the next save drops it.
+    #[serde(default, rename = "fontFamily", skip_serializing)]
+    pub legacy_font_family: Option<String>,
 }
 
 impl Default for AppearanceSettings {
@@ -154,7 +123,7 @@ impl Default for AppearanceSettings {
             legacy_palette: None,
             language: default_language(),
             font_size: default_font_size(),
-            font_family: default_font_family(),
+            legacy_font_family: None,
         }
     }
 }
@@ -251,16 +220,6 @@ impl AppSettings {
             .unwrap_or("m")
     }
 
-    /// Returns the effective UI font family.
-    ///
-    /// Missing, empty, and `"system"` are [`SYSTEM_FONT_FAMILY`]. An unknown
-    /// stored value also reads as system here; [`Self::validate`] rejects it
-    /// before a document is published or returned from [`read_app_settings`].
-    #[must_use]
-    pub fn effective_font_family(&self) -> &'static str {
-        canonical_font_family(&self.appearance.font_family).unwrap_or(SYSTEM_FONT_FAMILY)
-    }
-
     /// Validates the complete document.
     ///
     /// Family-specific bounds, grammar, and cross-field rules live in the
@@ -294,12 +253,6 @@ impl AppSettings {
         }
         if !VALID_FONT_SIZES.contains(&self.appearance.font_size.as_str()) {
             return Err(invalid("appearance.fontSize: must be s, m, l, or xl"));
-        }
-        if canonical_font_family(&self.appearance.font_family).is_none() {
-            return Err(invalid(&format!(
-                "appearance.fontFamily: must be empty, system, or one of {}",
-                VALID_FONT_FAMILIES.join(", ")
-            )));
         }
         self.validate_subagent_roles()?;
         self.validate_tools_shell()?;
@@ -597,8 +550,7 @@ mod tests {
         let parsed = decode_settings(bytes).expect("legacy settings");
         assert_eq!(parsed.settings.appearance.font_size, "m");
         assert_eq!(parsed.settings.effective_font_size(), "m");
-        assert_eq!(parsed.settings.appearance.font_family, "system");
-        assert_eq!(parsed.settings.effective_font_family(), "system");
+        assert_eq!(parsed.settings.appearance.legacy_font_family, None);
         assert_eq!(parsed.settings.appearance.language, "zh");
         assert!(!parsed.migrated);
     }
@@ -650,39 +602,34 @@ mod tests {
     }
 
     #[test]
-    fn font_family_empty_or_system_means_the_os_ui_font() {
-        let mut settings = AppSettings::default();
-        assert_eq!(settings.appearance.font_family, "system");
-        assert_eq!(settings.effective_font_family(), "system");
-
-        settings.appearance.font_family.clear();
-        assert!(settings.validate().is_ok());
-        assert_eq!(settings.effective_font_family(), "system");
-
-        let bytes = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 3,
-            "appearance": {
-                "theme": "dark",
-                "palette": "slate",
-                "language": "auto",
-                "fontSize": "m",
-                "fontFamily": ""
-            }
-        }"#;
-        let parsed = decode_settings(bytes).expect("empty family");
-        assert_eq!(parsed.settings.appearance.font_family, "");
-        assert_eq!(parsed.settings.effective_font_family(), "system");
-        assert!(!parsed.migrated);
-
-        settings.appearance.font_family = "Comic Sans".to_owned();
-        let error = settings.validate().expect_err("unknown family");
-        assert!(
-            error.summary().contains("fontFamily"),
-            "{}",
-            error.summary()
-        );
+    fn a_retired_font_family_still_loads_and_is_dropped_on_save() {
+        // Any value, including one no build ever offered: the field is
+        // ignored, so a document that picked a family is not reset.
+        for family in ["", "system", "Microsoft YaHei", "Comic Sans"] {
+            let text = format!(
+                r#"{{
+                    "formatVersion": 1,
+                    "kind": "mycode-app-settings",
+                    "revision": 3,
+                    "appearance": {{
+                        "theme": "dark",
+                        "language": "auto",
+                        "fontSize": "l",
+                        "fontFamily": "{family}"
+                    }}
+                }}"#
+            );
+            let parsed = decode_settings(text.as_bytes()).expect("retired family still loads");
+            assert!(parsed.settings.validate().is_ok(), "{family}");
+            assert_eq!(parsed.settings.appearance.font_size, "l");
+            assert!(!parsed.migrated);
+            let revision = AuthorityRevision::new(3).expect("revision");
+            let rewritten = encode_settings(revision, &parsed.settings).expect("encode");
+            assert!(
+                !String::from_utf8_lossy(&rewritten).contains("fontFamily"),
+                "a save drops the retired field"
+            );
+        }
     }
 
     #[test]
@@ -706,7 +653,6 @@ mod tests {
 
         let mut settings = AppSettings::default();
         settings.appearance.font_size = "l".to_owned();
-        settings.appearance.font_family = "Noto Sans".to_owned();
         let revision =
             super::replace_app_settings(&home, crate::AuthorityRevision::ABSENT, &settings)
                 .expect("publish");
@@ -725,22 +671,17 @@ mod tests {
         );
         settings.appearance.theme = "dark".to_owned();
 
-        assert_eq!(loaded.appearance.font_family, "Noto Sans");
-        assert_eq!(loaded.effective_font_family(), "Noto Sans");
         assert_eq!(loaded.effective_font_size(), "l");
 
         let bytes = std::fs::read(home.root().join("settings.json")).expect("settings.json");
         let text = String::from_utf8(bytes).expect("utf-8");
         assert!(!text.contains("palette"), "{text}");
         assert!(text.contains("\"fontSize\": \"l\""), "{text}");
-        assert!(text.contains("\"fontFamily\": \"Noto Sans\""), "{text}");
+        assert!(!text.contains("fontFamily"), "{text}");
 
-        settings.appearance.font_family = "system".to_owned();
         settings.appearance.font_size = "m".to_owned();
-        super::replace_app_settings(&home, revision, &settings).expect("publish system");
-        let restored = super::read_app_settings(&home).expect("read system");
-        assert_eq!(restored.appearance.font_family, "system");
-        assert_eq!(restored.effective_font_family(), "system");
+        super::replace_app_settings(&home, revision, &settings).expect("publish medium");
+        let restored = super::read_app_settings(&home).expect("read medium");
         assert_eq!(restored.appearance.font_size, "m");
     }
 

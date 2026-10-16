@@ -230,7 +230,7 @@ fn speaker_row(
                 .overflow_hidden()
                 .truncate()
                 .text_xs()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                 .text_color(theme.foreground)
                 .child(name.to_owned())
                 .test_support(),
@@ -519,7 +519,7 @@ pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> 
         .child(
             div()
                 .text_xs()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                 .text_color(theme.primary)
                 .child(t("SUMMARY", "摘要")),
         )

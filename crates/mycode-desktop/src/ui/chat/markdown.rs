@@ -481,7 +481,7 @@ fn column_widths_from_spans(
     let mut widths = vec![88.0_f32; columns];
     for (index, row) in rows.iter().enumerate() {
         let weight = if index == 0 {
-            FontWeight::MEDIUM
+            crate::ui::skin::WEIGHT_STRONG
         } else {
             FontWeight::NORMAL
         };
@@ -642,7 +642,7 @@ fn table_row(
         .when(header, |this| {
             this.bg(theme.table_head)
                 .text_color(theme.table_head_foreground)
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
         })
         .when(!header && zebra, |this| this.bg(theme.table_even))
         .when(!header && !zebra, |this| this.bg(theme.table))

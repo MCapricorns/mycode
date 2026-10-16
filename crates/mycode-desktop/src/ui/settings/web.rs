@@ -224,7 +224,7 @@ fn vendor_backend_row(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .child(title.to_owned()),
                 )
                 .when(keyed && !replacing, |this| {
@@ -349,7 +349,7 @@ fn backend_row(
         .border_1()
         .border_color(skin::glass_border(theme))
         .bg(skin::frost(theme))
-        .child(row_header(&id, format!("{kind} \u{b7} {endpoint}")))
+        .child(row_header(&id, format!("{kind} \u{b7} {endpoint}"), theme))
         .child(
             Switch::new(format!("backend-toggle-{id}"))
                 .checked(enabled)
@@ -462,9 +462,9 @@ fn render_backend_form(
                 .flex_col()
                 .gap_2()
                 .text_sm()
-                .child(labeled_field(t("id", "标识"), id_input))
-                .child(labeled_field(t("kind", "类型"), kind_input))
-                .child(labeled_field(t("endpoint", "端点"), endpoint_input))
+                .child(labeled_field(t("id", "标识"), id_input, theme))
+                .child(labeled_field(t("kind", "类型"), kind_input, theme))
+                .child(labeled_field(t("endpoint", "端点"), endpoint_input, theme))
                 .into_any_element(),
             div()
                 .flex()

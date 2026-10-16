@@ -40,7 +40,7 @@ BridgeCommand → CoreBridge
 | `git_status` | 只读 `git status --porcelain=v1`（带 `--no-optional-locks`，不抢 `index.lock`）和 `git diff HEAD`。最多保留 80 个改动文件，改名行打开新路径的 diff |
 | `i18n` | `auto` 跟系统语言，否则用设置里的 `en` / `zh` |
 
-视觉是 Desk：窗口使用系统模糊（macOS 视觉效果、Windows DWM、Wayland 上的 KDE 模糊）。标题栏、侧栏和详情面板是半透明毛玻璃。思考菜单和模型菜单是不透明实底，分别锚在 Thinking 按钮的右缘和模型按钮的左缘，底边停在输入卡片上方；条目多过窗口时在菜单内部滚动，不把文字裁掉。对话和设置的阅读区更接近实色，保证文字对比。页面是接近实色的中性底，带一点靛蓝强调色的渐变；深色和浅色各一套。色板选择已移除（六块色板差别太小，看不出来），旧 `settings.json` 里的色板字段照常读入并在下次保存时清除。界面字体是 `appearance.fontFamily`：缺省、空字符串或 `system` 用操作系统界面字体，另外可以选本机能够加载的 Inter、Segoe UI、PingFang、Noto Sans。字号是 `appearance.fontSize`。外观、字体和字号改完立刻上屏，并写入 `settings.json`，下次启动再读回来。外观是 `dark` 或 `light`；其它主题值会让整份 `settings.json` 备份后重置（见 config.md）。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块单色渲染（tree-sitter 语法高亮已移除，二进制减半）。
+视觉是 Desk：窗口使用系统模糊（macOS 视觉效果、Windows DWM、Wayland 上的 KDE 模糊）。标题栏、侧栏和详情面板是半透明毛玻璃。思考菜单和模型菜单是不透明实底，分别锚在 Thinking 按钮的右缘和模型按钮的左缘，底边停在输入卡片上方；条目多过窗口时在菜单内部滚动，不把文字裁掉。对话和设置的阅读区更接近实色，保证文字对比。页面是接近实色的中性底，带一点靛蓝强调色的渐变；深色和浅色各一套。色板选择已移除（六块色板差别太小，看不出来），旧 `settings.json` 里的色板字段照常读入并在下次保存时清除。界面字体固定用操作系统界面字体，不再提供字体选择（各字体对同一字重的映射不同，Windows 上同一屏会一处变粗一处不变）；旧 `appearance.fontFamily` 照常读入并在下次保存时清除。界面只用常规和一个强调字重（600），不用 500：Segoe UI 和微软雅黑没有 500 字面，Windows 会把它画成常规。字号是 `appearance.fontSize`。外观和字号改完立刻上屏，并写入 `settings.json`，下次启动再读回来。外观是 `dark` 或 `light`；其它主题值会让整份 `settings.json` 备份后重置（见 config.md）。对话 Markdown 走 gpui-kit 的 `TextView`，围栏代码块单色渲染（tree-sitter 语法高亮已移除，二进制减半）。
 
 ## 窗口里有什么
 
@@ -86,7 +86,7 @@ BridgeCommand → CoreBridge
 
 ![设置的通用页：语言、深浅色、色板、字体](images/settings-v0.11.11.png)
 
-设置的通用页：语言、深色或浅色、界面字体和字号。（截图拍于 0.11.11，当时还有已移除的色板。）
+设置的通用页：深色或浅色、字号和语言。（截图拍于 0.11.11，当时还有已移除的色板。）
 
 ## 不放在这里的东西
 

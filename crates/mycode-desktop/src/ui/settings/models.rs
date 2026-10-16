@@ -164,13 +164,8 @@ fn render_models_list_page(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(t("Thinking", "思考")),
-                        )
+                        .gap_2()
+                        .child(super::widgets::field_label(t("Thinking", "思考")))
                         .child(super::widgets::choice_chips(
                             "session-think",
                             &thinking,
@@ -565,6 +560,7 @@ fn provider_row(
                 .child(row_header(
                     &name,
                     format!("{host} \u{b7} {models} {}", t("model(s)", "个模型")),
+                    theme,
                 ))
                 .child(
                     div()
@@ -644,6 +640,7 @@ fn preset_row(
         .child(row_header(
             &name,
             format!("{id} · {kind} · {models} {}", t("model(s)", "个模型")),
+            theme,
         ))
         .child(
             Button::new(format!("preset-add-{id}"))
@@ -756,7 +753,7 @@ fn render_preset_form(
         .child(
             div()
                 .text_sm()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                 .child(format!("{} {name}", t("Add", "添加"))),
         )
         .child(
@@ -880,7 +877,7 @@ fn render_preset_form(
                                         div()
                                             .text_xl()
                                             .font_family(theme.mono_font_family.clone())
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                             .child(sign_in.user_code),
                                     ),
                             )
@@ -1142,10 +1139,18 @@ fn render_custom_provider_page(
                         .flex_col()
                         .gap_2()
                         .text_sm()
-                        .child(labeled_field(t("id", "标识"), id_input))
+                        .child(labeled_field(t("id", "标识"), id_input, theme))
                         .child(kind_field)
-                        .child(labeled_field(t("base URL", "基础 URL"), base_url_input))
-                        .child(labeled_field(t("default model", "默认模型"), model_input))
+                        .child(labeled_field(
+                            t("base URL", "基础 URL"),
+                            base_url_input,
+                            theme,
+                        ))
+                        .child(labeled_field(
+                            t("default model", "默认模型"),
+                            model_input,
+                            theme,
+                        ))
                         .into_any_element(),
                     div()
                         .flex()
@@ -1155,10 +1160,12 @@ fn render_custom_provider_page(
                         .child(labeled_field(
                             t("context window (optional)", "上下文窗口(可选)"),
                             context_input,
+                            theme,
                         ))
                         .child(labeled_field(
                             t("max output tokens (optional)", "最大输出 token(可选)"),
                             max_output_input,
+                            theme,
                         ))
                         .into_any_element(),
                     div()
@@ -1172,6 +1179,7 @@ fn render_custom_provider_page(
                                 "API 密钥（保存在凭据库中）",
                             ),
                             api_key_input,
+                            theme,
                         ))
                         .into_any_element(),
                     div()

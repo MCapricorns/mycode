@@ -3,8 +3,7 @@
 //! restarting into the install always waits for this dialog's confirm.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
@@ -101,7 +100,7 @@ pub(super) fn render_update_dialog(
                 .id("update-dialog-backdrop")
                 .absolute()
                 .size_full()
-                .bg(theme.background.opacity(0.5))
+                .bg(super::skin::modal_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.apply_action(
                         crate::view_model::DesktopAction::UpdateDialogToggled(false),
@@ -110,18 +109,13 @@ pub(super) fn render_update_dialog(
                 })),
         )
         .child(
-            div()
-                .id("update-dialog")
+            super::skin::dialog_panel("update-dialog", theme)
                 .relative()
-                .w(px(400.))
+                .w(px(420.))
                 .flex()
                 .flex_col()
                 .gap_3()
-                .p_4()
-                .rounded(px(12.))
-                .border_1()
-                .border_color(super::skin::glass_border(theme))
-                .bg(super::skin::popover(theme))
+                .p_5()
                 .child(
                     div()
                         .flex()
@@ -131,7 +125,7 @@ pub(super) fn render_update_dialog(
                         .child(
                             div()
                                 .text_sm()
-                                .font_weight(gpui_kit::FontWeight::BOLD)
+                                .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                 .child(t("Software update", "软件更新")),
                         )
                         .child(
@@ -163,11 +157,9 @@ pub(super) fn render_update_dialog(
                         .flex_row()
                         .justify_end()
                         .gap_2()
+                        .pt_1()
                         .child(
-                            Button::new("update-dialog-later")
-                                .label(t("Later", "稍后"))
-                                .small()
-                                .ghost()
+                            super::skin::glass_button("update-dialog-later", false, theme)
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.apply_action(
                                         crate::view_model::DesktopAction::UpdateDialogToggled(
@@ -175,19 +167,21 @@ pub(super) fn render_update_dialog(
                                         ),
                                         cx,
                                     );
-                                })),
+                                }))
+                                .child(t("Later", "稍后")),
                         )
                         .when_some(primary, |this, (icon, label, action)| {
+                            let busy = checking || downloading;
                             this.child(
-                                Button::new("update-dialog-primary")
-                                    .icon(icon)
-                                    .label(label)
-                                    .small()
-                                    .primary()
-                                    .disabled(checking || downloading)
-                                    .on_click(cx.listener(move |workspace, _, _, cx| {
-                                        action(workspace, cx);
-                                    })),
+                                super::skin::glass_button("update-dialog-primary", true, theme)
+                                    .when(busy, |this| this.opacity(0.5).cursor_default())
+                                    .when(!busy, |this| {
+                                        this.on_click(cx.listener(move |workspace, _, _, cx| {
+                                            action(workspace, cx);
+                                        }))
+                                    })
+                                    .child(Icon::new(icon).with_size(px(14.)))
+                                    .child(label),
                             )
                         }),
                 ),

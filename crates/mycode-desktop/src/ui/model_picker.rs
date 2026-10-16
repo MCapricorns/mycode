@@ -371,9 +371,6 @@ fn render_provider_step(
                     } else {
                         theme.transparent
                     })
-                    .when(selected, |this| {
-                        this.font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    })
                     .on_click(cx.listener(move |workspace, _, _, cx| {
                         workspace.on_browse_model_provider(Some(&provider_id), cx);
                     }))
@@ -385,6 +382,15 @@ fn render_provider_step(
                             .text_sm()
                             .child(name.clone()),
                     )
+                    // The current provider is marked with a check, not a
+                    // heavier face, so the row does not reflow on select.
+                    .when(selected, |this| {
+                        this.child(
+                            Icon::new(IconName::Check)
+                                .xsmall()
+                                .text_color(theme.primary),
+                        )
+                    })
                     .child(
                         Icon::new(IconName::ChevronRight)
                             .xsmall()

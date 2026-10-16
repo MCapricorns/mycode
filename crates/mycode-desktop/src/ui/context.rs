@@ -346,7 +346,7 @@ fn inspector_body(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> imp
 fn section_heading(text: &str, theme: &Theme) -> impl IntoElement {
     div()
         .text_xs()
-        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+        .font_weight(crate::ui::skin::WEIGHT_STRONG)
         .text_color(theme.muted_foreground)
         .child(text.to_uppercase())
 }
@@ -545,7 +545,7 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                     div()
                         .w(px(18.))
                         .text_xs()
-                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .text_color(badge_color)
                         .child(file.status.clone()),
                 )
@@ -720,7 +720,7 @@ pub(super) fn render_changes_drawer(
                                     div()
                                         .w(px(20.))
                                         .flex_shrink_0()
-                                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                         .text_color(badge_color)
                                         .child(file.status.clone()),
                                 )

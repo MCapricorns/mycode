@@ -329,8 +329,10 @@ impl Workspace {
         self.provider_key_inputs
             .entry(id.to_owned())
             .or_insert_with(|| {
-                let input =
-                    cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"));
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(crate::i18n::t("Paste API key", "粘贴 API 密钥"))
+                });
                 cx.subscribe_in(&input, window, |_, _, event, _, cx| {
                     if matches!(event, InputEvent::Change) {
                         cx.notify();
@@ -610,7 +612,10 @@ impl Workspace {
     ) -> Entity<InputState> {
         self.preset_key_input
             .get_or_insert_with(|| {
-                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(crate::i18n::t("Paste API key", "粘贴 API 密钥"))
+                })
             })
             .clone()
     }
@@ -768,7 +773,10 @@ impl Workspace {
             .entry(id.to_owned())
             .or_insert_with(|| {
                 let input = cx.new(|cx| {
-                    InputState::new(window, cx).placeholder("paste API key (Bearer is added)")
+                    InputState::new(window, cx).placeholder(crate::i18n::t(
+                        "Paste API key (Bearer is added)",
+                        "粘贴 API 密钥（自动加 Bearer）",
+                    ))
                 });
                 cx.subscribe_in(&input, window, |_, _, event, _, cx| {
                     if matches!(event, InputEvent::Change) {
@@ -848,7 +856,10 @@ impl Workspace {
     ) -> Entity<InputState> {
         self.mcp_key_input
             .get_or_insert_with(|| {
-                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(crate::i18n::t("Paste API key", "粘贴 API 密钥"))
+                })
             })
             .clone()
     }
@@ -918,7 +929,10 @@ impl Workspace {
             .get_or_insert_with(|| {
                 cx.new(|cx| {
                     TextareaState::new(window, cx)
-                        .placeholder("Paste mcp.json or a Claude Desktop / Cursor config…")
+                        .placeholder(crate::i18n::t(
+                            "Paste mcp.json or a Claude Desktop / Cursor config…",
+                            "粘贴 mcp.json，或 Claude Desktop / Cursor 配置…",
+                        ))
                         .auto_grow(4, 16)
                 })
             })
