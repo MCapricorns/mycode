@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-label="一条消息怎么走完">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#7c8cff"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="520" rx="24" fill="#0d1120"/>
+  <g font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC','Segoe UI',system-ui,sans-serif">
+    <text x="48" y="58" fill="#ffffff" font-size="26" font-weight="700">一条消息怎么走完</text>
+    <text x="48" y="88" fill="#8b95c9" font-size="16">先落账本再请求；流式事件随到随提交；取消只作用于这一回合。</text>
+
+    <g fill="none" stroke="#7c8cff" stroke-width="2.5" marker-end="url(#a)">
+      <path d="M232 186H272"/>
+      <path d="M472 186H512"/>
+      <path d="M712 186H752"/>
+      <path d="M952 186H992"/>
+      <path d="M1084 232V336H952"/>
+      <path d="M752 336H712"/>
+      <path d="M512 336H472"/>
+      <path d="M272 336H232"/>
+    </g>
+
+    <g font-size="15">
+      <rect x="48" y="140" width="184" height="92" rx="14" fill="#1b2238" stroke="#7c8cff" stroke-opacity="0.6"/>
+      <text x="140" y="178" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">① 输入框</text>
+      <text x="140" y="206" fill="#aab3e0" text-anchor="middle">纯 reducer 改界面</text>
+
+      <rect x="272" y="140" width="200" height="92" rx="14" fill="#1b2238" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="372" y="178" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">② 写入账本</text>
+      <text x="372" y="206" fill="#aab3e0" text-anchor="middle">用户消息先提交</text>
+
+      <rect x="512" y="140" width="200" height="92" rx="14" fill="#1b2238" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="612" y="178" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">③ 装配回合</text>
+      <text x="612" y="206" fill="#aab3e0" text-anchor="middle">端点、密钥、工具、提示词</text>
+
+      <rect x="752" y="140" width="200" height="92" rx="14" fill="#1b2238" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="852" y="178" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">④ 需要时压缩</text>
+      <text x="852" y="206" fill="#aab3e0" text-anchor="middle">失败就发完整历史</text>
+
+      <rect x="992" y="140" width="184" height="92" rx="14" fill="#1b2238" stroke="#7c8cff" stroke-opacity="0.6"/>
+      <text x="1084" y="178" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑤ 模型流式</text>
+      <text x="1084" y="206" fill="#aab3e0" text-anchor="middle">带 prompt cache key</text>
+
+      <rect x="752" y="290" width="200" height="92" rx="14" fill="#1b2238" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="852" y="328" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑥ 工具调用</text>
+      <text x="852" y="356" fill="#aab3e0" text-anchor="middle">只读工具并发执行</text>
+
+      <rect x="512" y="290" width="200" height="92" rx="14" fill="#1b2238" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="612" y="328" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑦ 结果入账</text>
+      <text x="612" y="356" fill="#aab3e0" text-anchor="middle">失败也作为结果回给模型</text>
+
+      <rect x="272" y="290" width="200" height="92" rx="14" fill="#1b2238" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="372" y="328" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑧ 继续循环</text>
+      <text x="372" y="356" fill="#aab3e0" text-anchor="middle">直到模型停止</text>
+
+      <rect x="48" y="290" width="184" height="92" rx="14" fill="#13261c" stroke="#3fb950" stroke-opacity="0.7"/>
+      <text x="140" y="328" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑨ ChatDone</text>
+      <text x="140" y="356" fill="#aab3e0" text-anchor="middle">回复与用量入账</text>
+    </g>
+
+    <g font-size="15" fill="#8b95c9">
+      <rect x="48" y="420" width="1128" height="64" rx="14" fill="#ffffff" fill-opacity="0.03" stroke="#ffffff" stroke-opacity="0.08"/>
+      <text x="72" y="458">中途打断：已到达的思考、正文和完成的工具调用照样入账并标记为被打断；回合中另发的文字作为 Steer 注入，不取消子代理。</text>
+    </g>
+  </g>
+</svg>
