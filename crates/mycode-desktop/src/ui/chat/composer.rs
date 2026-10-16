@@ -69,7 +69,8 @@ pub(super) fn render_composer(
         has_draft && crate::view_model::has_open_folder(workspace.vm())
     };
     let queue_panel = if has_queue {
-        Some(render_queued_followups(queued, cx).into_any_element())
+        let paused = workspace.vm().queue_paused;
+        Some(render_queued_followups(queued, sending, paused, cx).into_any_element())
     } else {
         None
     };
@@ -585,9 +586,35 @@ fn render_pending_steers(items: Vec<String>, cx: &mut Context<Workspace>) -> imp
         }))
 }
 
-fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
+/// Queued follow-ups with explicit actions: recall (back into the composer
+/// to edit or drop), interrupt and send, or send a queue a stop is holding.
+fn render_queued_followups(
+    items: Vec<String>,
+    sending: bool,
+    paused: bool,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
     let theme = cx.theme();
     let desk = Desk::of(theme);
+    let hint = if paused {
+        t(
+            "Held after Stop. Send it, or recall to edit.",
+            "已停止，暂不发送。可发送，或撤回到输入框修改。",
+        )
+    } else {
+        t(
+            "Sends when this turn ends. Esc recalls it.",
+            "本轮结束后发送。按 Esc 撤回到输入框。",
+        )
+    };
+    let many = items.len() > 1;
+    let send_label = if !sending {
+        t("Send", "发送")
+    } else if paused {
+        t("Send after this turn", "本轮后发送")
+    } else {
+        t("Interrupt & send", "打断并发送")
+    };
     div()
         .id("composer-queue")
         .flex()
@@ -601,9 +628,14 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(crate::ui::lamp(desk.amber))
+                .child(crate::ui::lamp(if paused {
+                    desk.faint
+                } else {
+                    desk.amber
+                }))
                 .child(
                     div()
+                        .flex_shrink_0()
                         .text_xs()
                         .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .text_color(desk.faint)
@@ -613,27 +645,29 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                     div()
                         .flex_1()
                         .min_w_0()
+                        .truncate()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(t("Sends when this turn ends", "本轮结束后发送")),
+                        .child(hint),
                 )
+                .when(many, |this| {
+                    this.child(
+                        queue_action("queued-recall-all", t("Recall all", "全部撤回"), false, cx)
+                            .on_click(cx.listener(|workspace, _, window, cx| {
+                                workspace.on_recall_queued(None, window, cx);
+                            })),
+                    )
+                })
                 .child(
-                    div()
-                        .id("queued-interrupt")
-                        .flex_shrink_0()
-                        .px_2()
-                        .py(px(2.))
-                        .rounded(skin::radius_control())
-                        .border_1()
-                        .border_color(skin::glass_border(theme))
-                        .text_xs()
-                        .text_color(theme.foreground)
-                        .cursor_pointer()
-                        .hover(|this| this.bg(skin::frost_hover(theme)))
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_interrupt_queued(0, cx);
-                        }))
-                        .child(t("Interrupt & send", "打断并发送")),
+                    queue_action("queued-send", send_label, true, cx).on_click(cx.listener(
+                        move |workspace, _, _, cx| {
+                            if sending && !paused {
+                                workspace.on_interrupt_queued(0, cx);
+                            } else {
+                                workspace.on_resume_queued(cx);
+                            }
+                        },
+                    )),
                 ),
         )
         .children(items.into_iter().enumerate().map(|(index, text)| {
@@ -645,7 +679,8 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                 .items_center()
                 .gap_2()
                 .min_w_0()
-                .h(px(22.))
+                .h(px(24.))
+                .pl(px(15.))
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(
@@ -657,16 +692,68 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .child(preview),
                 )
                 .child(
+                    queue_action(
+                        SharedString::from(format!("queued-recall-{index}")),
+                        t("Recall", "撤回"),
+                        false,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.on_recall_queued(Some(index), window, cx);
+                    })),
+                )
+                .child(
                     div()
                         .id(SharedString::from(format!("queued-remove-{index}")))
-                        .cursor_pointer()
+                        .size(px(20.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
                         .flex_shrink_0()
+                        .rounded(skin::radius_xs())
+                        .cursor_pointer()
+                        .hover(|this| {
+                            this.bg(skin::frost_hover(theme))
+                                .text_color(theme.foreground)
+                        })
                         .on_click(cx.listener(move |workspace, _, _, cx| {
                             workspace.on_remove_queued(index, cx);
                         }))
                         .child(Icon::new(IconName::X).xsmall()),
                 )
         }))
+}
+
+/// A compact text action in the queue strip. `strong` is the send action.
+fn queue_action(
+    id: impl Into<gpui_kit::ElementId>,
+    label: &'static str,
+    strong: bool,
+    cx: &Context<Workspace>,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let theme = cx.theme();
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .h(px(22.))
+        .px_2()
+        .flex()
+        .items_center()
+        .rounded(skin::radius_xs())
+        .border_1()
+        .border_color(if strong {
+            crate::ui::desk::primary_edge(theme.primary)
+        } else {
+            skin::glass_border(theme)
+        })
+        .when(strong, |this| {
+            this.bg(crate::ui::desk::primary_fill(theme.accent, theme.primary))
+        })
+        .text_xs()
+        .text_color(theme.foreground)
+        .cursor_pointer()
+        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .child(label)
 }
 
 fn composer_meter_chip(

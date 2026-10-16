@@ -156,6 +156,10 @@ impl Workspace {
                     return;
                 }
                 self.apply_action(DesktopAction::SteersReturned(texts), cx);
+                // Steers handed back after a user stop join a held queue.
+                if self.queue_hold_on_return {
+                    self.apply_action(DesktopAction::QueuePaused(true), cx);
+                }
                 self.pump_queued_send(cx);
                 return;
             }
@@ -1085,7 +1089,7 @@ impl Workspace {
     /// Does not wipe the composer: the user may already be typing another
     /// message behind the queue.
     pub(super) fn pump_queued_send(&mut self, cx: &mut Context<Self>) {
-        if self.vm.sending || self.vm.queued.is_empty() {
+        if self.vm.sending || self.vm.queued.is_empty() || self.vm.queue_paused {
             return;
         }
         let draft = self.vm.queued[0].clone();
@@ -1137,6 +1141,7 @@ impl Workspace {
             return;
         };
         let expected_head = crate::workspace::parse_head(&conversation.head);
+        self.queue_hold_on_return = false;
         self.apply_action(DesktopAction::TurnArmed, cx);
         if clear_composer {
             self.vm.composer_draft.clear();

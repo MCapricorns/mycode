@@ -136,6 +136,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sending = false;
             state.pending_summary = None;
             state.queued.clear();
+            state.queue_paused = false;
             state.live_jobs.clear();
             state.subagent_window = None;
             state.changes_panel_open = false;
@@ -154,6 +155,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sending = false;
             state.pending_summary = None;
             state.queued.clear();
+            state.queue_paused = false;
             state.live_jobs.clear();
             state.subagent_window = None;
             state.changes_panel_open = false;
@@ -187,6 +189,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if switched {
                 // Queue, tasks, and asks belong to the previous session.
                 state.queued.clear();
+                state.queue_paused = false;
                 state.pending_steers.clear();
                 state.live_jobs.clear();
                 state.subagent_window = None;
@@ -290,11 +293,20 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if index < state.queued.len() {
                 state.queued.remove(index);
             }
+            if state.queued.is_empty() {
+                state.queue_paused = false;
+            }
         }
         DesktopAction::QueuedMessageTaken => {
             if !state.queued.is_empty() {
                 state.queued.remove(0);
             }
+            if state.queued.is_empty() {
+                state.queue_paused = false;
+            }
+        }
+        DesktopAction::QueuePaused(paused) => {
+            state.queue_paused = paused && !state.queued.is_empty();
         }
         DesktopAction::QueuedMessagePromoted(index) => {
             if index < state.queued.len() {
@@ -1601,6 +1613,34 @@ mod tests {
         reduce(&mut state, DesktopAction::SessionDeleted);
         assert_eq!(state.context_used, 0);
         assert_eq!(state.context_cache, 0);
+    }
+
+    #[test]
+    fn a_held_queue_stays_held_until_it_empties_or_a_new_session_opens() {
+        let mut state = open(Vec::new(), None);
+        reduce(&mut state, DesktopAction::QueuePaused(true));
+        assert!(!state.queue_paused, "an empty queue is never held");
+
+        reduce(&mut state, DesktopAction::MessageQueued("one".to_owned()));
+        reduce(&mut state, DesktopAction::MessageQueued("two".to_owned()));
+        reduce(&mut state, DesktopAction::QueuePaused(true));
+        assert!(state.queue_paused);
+        reduce(
+            &mut state,
+            DesktopAction::SteersReturned(vec!["three".to_owned()]),
+        );
+        assert!(state.queue_paused, "returned steers join a held queue");
+        reduce(&mut state, DesktopAction::QueuedMessageRemoved(0));
+        assert!(state.queue_paused);
+        reduce(&mut state, DesktopAction::QueuedMessageTaken);
+        reduce(&mut state, DesktopAction::QueuedMessageRemoved(0));
+        assert!(state.queued.is_empty());
+        assert!(!state.queue_paused, "the hold ends with the queue");
+
+        reduce(&mut state, DesktopAction::MessageQueued("four".to_owned()));
+        reduce(&mut state, DesktopAction::QueuePaused(true));
+        reduce(&mut state, DesktopAction::SessionDeleted);
+        assert!(state.queued.is_empty() && !state.queue_paused);
     }
 
     #[test]

@@ -280,6 +280,9 @@ pub struct Workspace {
     expanded_tool_batches: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
+    /// A user stop is unwinding: steers the turn hands back join a held
+    /// queue instead of starting a new turn. Cleared when a turn starts.
+    queue_hold_on_return: bool,
     /// Language last written into input placeholders. `u8::MAX` until the
     /// first frame, so a settings load that flips the language refreshes them.
     applied_language: u8,
@@ -382,6 +385,7 @@ impl Workspace {
             expanded_tool_batches: HashSet::new(),
             applied_font_size: String::new(),
             applied_language: u8::MAX,
+            queue_hold_on_return: false,
             import_request: None,
             import_confirm: None,
         });
@@ -808,6 +812,9 @@ impl Workspace {
             self.send(draft, window, cx);
             return;
         }
+        // Send with an empty composer is an explicit send of the queue,
+        // so it also releases a queue held by a stop.
+        self.apply_action(DesktopAction::QueuePaused(false), cx);
         self.pump_queued_send(cx);
     }
 
@@ -878,6 +885,52 @@ impl Workspace {
         self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx);
     }
 
+    /// Takes queued follow-ups back into the composer so they can be edited
+    /// or dropped: one item, or the whole queue when `index` is `None`.
+    /// Recalled text goes above any draft already in the composer.
+    pub(crate) fn on_recall_queued(
+        &mut self,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        let recalled: Vec<String> = match index {
+            Some(index) => self.vm.queued.get(index).cloned().into_iter().collect(),
+            None => self.vm.queued.clone(),
+        };
+        if recalled.is_empty() {
+            return;
+        }
+        match index {
+            Some(index) => self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx),
+            None => {
+                for _ in 0..recalled.len() {
+                    self.apply_action(DesktopAction::QueuedMessageRemoved(0), cx);
+                }
+            }
+        }
+        let draft = self.composer.read(cx).value().to_string();
+        let mut text = recalled.join("\n\n");
+        if !draft.trim().is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&draft);
+        }
+        self.composer.update(cx, |state, cx| {
+            state.set_value(text.clone(), window, cx);
+            state.focus(window, cx);
+        });
+        self.apply_action(DesktopAction::ComposerChanged(text), cx);
+    }
+
+    /// Sends a held queue now. While a turn still runs, the queue is only
+    /// released and starts when that turn ends.
+    pub(crate) fn on_resume_queued(&mut self, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.apply_action(DesktopAction::QueuePaused(false), cx);
+        self.pump_queued_send(cx);
+    }
+
     /// Opens or closes the detail card for one running subagent.
     pub(crate) fn on_open_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
         let next = if call_id.is_empty() || self.vm.subagent_window.as_deref() == Some(call_id) {
@@ -897,8 +950,9 @@ impl Workspace {
     pub(crate) fn on_interrupt_queued(&mut self, index: usize, cx: &mut Context<Self>) {
         cx.stop_propagation();
         self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
+        self.apply_action(DesktopAction::QueuePaused(false), cx);
         if self.vm.sending {
-            self.on_cancel_chat(cx);
+            self.cancel_turn(cx);
             return;
         }
         self.pump_queued_send(cx);
@@ -928,7 +982,20 @@ impl Workspace {
     }
 
     /// Aborts the in-flight turn; its terminal event resets the sending state.
+    ///
+    /// A plain stop (Stop or Escape) holds the queue: the follow-ups stay
+    /// listed, and steers the turn hands back join them, but nothing is sent
+    /// until the user sends or recalls them.
     pub(crate) fn on_cancel_chat(&mut self, cx: &mut Context<Self>) {
+        if !self.vm.sending {
+            return;
+        }
+        self.apply_action(DesktopAction::QueuePaused(true), cx);
+        self.queue_hold_on_return = true;
+        self.cancel_turn(cx);
+    }
+
+    fn cancel_turn(&mut self, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.as_ref() else {
             return;
         };
