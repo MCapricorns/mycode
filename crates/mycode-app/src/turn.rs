@@ -872,7 +872,7 @@ async fn run_chat_turn_on(
     // The ledger pump owns the branch head: tool results commit as they
     // complete, the final assistant message commits at turn end.
     let pump_events = events.clone();
-    let pump_session_id = session_id.to_owned();
+    let pump_session_id = session_id.clone();
     let pump_deferred = deferred;
     let pump_cancel = control.cancel.clone();
     let pump = tokio::spawn(async move {

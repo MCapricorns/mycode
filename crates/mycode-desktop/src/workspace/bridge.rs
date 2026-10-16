@@ -571,7 +571,7 @@ impl Workspace {
                 );
             }
             BridgeReply::Recalled(Ok((conversation, edit))) => {
-                let prefill = edit.clone();
+                let prefill = edit;
                 let session_id = conversation.session_id.clone();
                 self.apply_action(
                     DesktopAction::ConversationOpened((*conversation).clone()),

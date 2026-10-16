@@ -1560,7 +1560,7 @@ mod tests {
             responses_body("gpt-5", responses, &published)["max_output_tokens"],
             131_072
         );
-        let mut unpublished_zero = published.clone();
+        let mut unpublished_zero = published;
         unpublished_zero.max_output_tokens = Some(0);
         assert!(
             chat_body("gpt-5", chat, &unpublished_zero)

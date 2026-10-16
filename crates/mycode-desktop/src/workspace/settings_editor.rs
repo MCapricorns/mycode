@@ -610,7 +610,7 @@ impl Workspace {
         } else {
             self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
         }
-        self.apply_action(DesktopAction::ProviderSelected(id.clone()), cx);
+        self.apply_action(DesktopAction::ProviderSelected(id), cx);
         self.apply_action(DesktopAction::ModelSelected(model), cx);
         self.on_save_settings(cx);
         self.persist_ui_state(cx);

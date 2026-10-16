@@ -121,7 +121,7 @@ pub(super) fn render_composer(
             .child(composer_pill_chip(
                 "model",
                 None,
-                model_label.clone(),
+                model_label,
                 workspace.vm().model_menu_open,
                 px(176.),
                 |workspace, window, cx| {

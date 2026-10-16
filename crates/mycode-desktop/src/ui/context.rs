@@ -971,11 +971,10 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         .gap_3()
         .child(section_heading(t("Model", "模型"), theme))
         .child(
-            div().text_sm().whitespace_normal().child(
-                model
-                    .clone()
-                    .unwrap_or_else(|| t("No model selected", "未选择模型").to_owned()),
-            ),
+            div()
+                .text_sm()
+                .whitespace_normal()
+                .child(model.unwrap_or_else(|| t("No model selected", "未选择模型").to_owned())),
         )
         .when(!provider.is_empty(), |this| {
             this.child(

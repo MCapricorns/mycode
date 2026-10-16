@@ -319,7 +319,7 @@ fn role_card(
                     &thinking_options,
                     &thinking,
                     {
-                        let role = name.clone();
+                        let role = name;
                         move |workspace, level, cx| {
                             workspace.on_set_subagent_thinking(&role, Some(level.to_owned()), cx);
                         }

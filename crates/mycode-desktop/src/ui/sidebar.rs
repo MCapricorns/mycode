@@ -539,7 +539,7 @@ fn root_row(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis_start()
-                        .child(path.clone()),
+                        .child(path),
                 ),
         )
 }
@@ -669,12 +669,9 @@ fn session_row(
             format!("session-delete-{}", summary.session_id),
             IconName::Trash,
             "session-row",
-            {
-                let session_id = session_id.clone();
-                cx.listener(move |workspace, _, window, cx| {
-                    workspace.on_delete_session(&session_id, window, cx);
-                })
-            },
+            cx.listener(move |workspace, _, window, cx| {
+                workspace.on_delete_session(&session_id, window, cx);
+            }),
             cx,
         ))
 }
