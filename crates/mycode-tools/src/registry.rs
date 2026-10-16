@@ -91,11 +91,15 @@ impl ToolRegistry {
     }
 
     fn read(&self) -> RwLockReadGuard<'_, RegistryInner> {
-        self.inner.read().expect("tool registry lock poisoned")
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn write(&self) -> RwLockWriteGuard<'_, RegistryInner> {
-        self.inner.write().expect("tool registry lock poisoned")
+        self.inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

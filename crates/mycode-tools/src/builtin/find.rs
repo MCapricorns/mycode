@@ -204,7 +204,10 @@ fn run_find(
                 match root.validate_target() {
                     Ok(()) => {
                         state.total.fetch_add(1, Ordering::Relaxed);
-                        let mut heap = state.heap.lock().expect("find results lock poisoned");
+                        let mut heap = state
+                            .heap
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         offer(
                             &mut heap,
                             &state.limiter,
@@ -258,7 +261,10 @@ fn run_find(
                 // Report only after metadata confirmation. The enumerated
                 // name is never sufficient by itself.
                 state.total.fetch_add(1, Ordering::Relaxed);
-                let mut heap = state.heap.lock().expect("find results lock poisoned");
+                let mut heap = state
+                    .heap
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 offer(
                     &mut heap,
                     &state.limiter,
@@ -296,7 +302,12 @@ fn find_report(
     effective_limit: usize,
     limits: &Limits,
 ) -> ToolResult {
-    let heap = std::mem::take(&mut *state.heap.lock().expect("find results lock poisoned"));
+    let heap = std::mem::take(
+        &mut *state
+            .heap
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
     let paths = heap.into_sorted_vec();
     let entries: Vec<String> = paths
         .iter()
