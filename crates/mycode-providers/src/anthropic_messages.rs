@@ -15,8 +15,8 @@ use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
-    MAX_STREAM_INDEX, append_interruption, assembled_stop_reason, charge_stream, glm_target,
-    merge_usage, provider_error_detail, record_provider_stop, usage_from_value,
+    MAX_STREAM_INDEX, append_interruption, assembled_stop_reason, charge_stream, merge_usage,
+    provider_error_detail, record_provider_stop, usage_from_value,
 };
 
 /// Output ceiling used only when models.dev publishes no `limit.output`.
@@ -71,6 +71,66 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
     body
 }
 
+/// Whether a serialized Messages body replays provider thinking, so the
+/// driver keeps a copy for [`retry_body_without_thinking`].
+#[must_use]
+pub(crate) fn body_replays_thinking(body: &[u8]) -> bool {
+    let has = |needle: &[u8]| body.windows(needle.len()).any(|window| window == needle);
+    has(br#""type":"redacted_thinking""#) || has(br#""type":"thinking""#)
+}
+
+/// Retry body for a 400 that rejects a replayed thinking signature.
+///
+/// Recent Claude models bind each thinking block to the exact prefix that
+/// produced it. A changed system prompt or tool list (an MCP server joined,
+/// AGENTS.md was edited) or a compaction that kept a verbatim tail
+/// invalidates every older block, and the API answers `Invalid signature in
+/// thinking block`. The documented recovery is to drop every thinking block
+/// and send once more; text and tool calls stay. `None` when the error is a
+/// different 400 or the body carries no thinking.
+pub(crate) fn retry_body_without_thinking(
+    error: &mycode_core::ProviderError,
+    body: &[u8],
+) -> Option<Vec<u8>> {
+    if error.kind() != mycode_core::ProviderErrorKind::Rejected {
+        return None;
+    }
+    let message = error.message()?.to_ascii_lowercase();
+    if !(message.contains("signature") && message.contains("thinking")) {
+        return None;
+    }
+    let mut value: Value = serde_json::from_slice(body).ok()?;
+    let messages = value.get_mut("messages")?.as_array_mut()?;
+    let mut stripped = false;
+    for message in messages.iter_mut() {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let before = blocks.len();
+        blocks.retain(|block| {
+            !matches!(
+                block.get("type").and_then(Value::as_str),
+                Some("thinking" | "redacted_thinking")
+            )
+        });
+        stripped |= blocks.len() != before;
+    }
+    if !stripped {
+        return None;
+    }
+    // A turn that was only thinking has nothing left to send.
+    messages.retain(|message| {
+        message
+            .get("content")
+            .and_then(Value::as_array)
+            .is_none_or(|blocks| !blocks.is_empty())
+    });
+    serde_json::to_vec(&value).ok()
+}
+
 fn convert_tool(tool: &ToolSpec) -> Value {
     json!({
         "name": tool.name,
@@ -80,11 +140,9 @@ fn convert_tool(tool: &ToolSpec) -> Value {
 }
 
 fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mut Vec<Value>) {
-    let glm = glm_target(model, endpoint);
+    let glm = crate::family::glm_target(model, endpoint);
     match message {
-        Message::User(user) => {
-            messages.push(json!({"role": "user", "content": block_content(&user.content)}));
-        }
+        Message::User(user) => push_user_turn(messages, block_content(&user.content)),
         Message::Assistant(assistant) => {
             let content: Vec<Value> = assistant
                 .blocks
@@ -134,21 +192,43 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
         }
         Message::ToolResult(result) => {
             let content = crate::wire_common::join_text(&result.content);
-            messages.push(json!({
-                "role": "user",
-                "content": [{
+            push_user_turn(
+                messages,
+                vec![json!({
                     "type": "tool_result",
                     "tool_use_id": result.tool_call_id,
                     "content": content,
                     "is_error": result.is_error,
-                }],
-            }));
+                })],
+            );
         }
     }
 }
 
-fn block_content(content: &[ContentBlock]) -> Value {
-    let parts: Vec<Value> = content
+/// Appends user content, joining it onto a trailing turn of tool results.
+///
+/// The parallel results of one assistant turn go back in a single user
+/// message, followed by any steer typed while they ran. Anthropic documents
+/// one message per batch; a message per result teaches the model to stop
+/// calling tools in parallel. Other user turns stay separate, so plain text
+/// history keeps the shape (and the cached prefix) it always had.
+fn push_user_turn(messages: &mut Vec<Value>, content: Vec<Value>) {
+    if let Some(last) = messages.last_mut()
+        && last.get("role").and_then(Value::as_str) == Some("user")
+        && let Some(blocks) = last.get_mut("content").and_then(Value::as_array_mut)
+        && !blocks.is_empty()
+        && blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+    {
+        blocks.extend(content);
+        return;
+    }
+    messages.push(json!({"role": "user", "content": content}));
+}
+
+fn block_content(content: &[ContentBlock]) -> Vec<Value> {
+    content
         .iter()
         .filter_map(|block| match block {
             ContentBlock::Text(text) => Some(json!({"type": "text", "text": text.text})),
@@ -162,8 +242,7 @@ fn block_content(content: &[ContentBlock]) -> Value {
             })),
             _ => None,
         })
-        .collect();
-    json!(parts)
+        .collect()
 }
 
 /// Replay key for an Anthropic `redacted_thinking` block kept on a
@@ -820,6 +899,131 @@ mod tests {
         };
         assert_eq!(thinking_of(&message), "partial");
         assert!(message.text().contains("overloaded"));
+    }
+
+    #[test]
+    fn parallel_tool_results_and_a_steer_share_one_user_turn() {
+        use mycode_core::{ToolCall, ToolResultMessage, UserMessage};
+        let result = |id: &str| {
+            std::sync::Arc::new(Message::ToolResult(ToolResultMessage {
+                tool_call_id: id.to_owned(),
+                content: vec![ContentBlock::Text(mycode_core::TextBlock::new("ok"))],
+                is_error: false,
+                details: None,
+            }))
+        };
+        let request = Request {
+            messages: vec![
+                std::sync::Arc::new(Message::User(UserMessage::text("go"))),
+                std::sync::Arc::new(Message::Assistant(AssistantMessage {
+                    blocks: vec![
+                        ContentBlock::ToolCall(ToolCall::new("a", "read", serde_json::json!({}))),
+                        ContentBlock::ToolCall(ToolCall::new("b", "grep", serde_json::json!({}))),
+                    ],
+                    usage: None,
+                    stop_reason: StopReason::ToolUse,
+                })),
+                result("a"),
+                result("b"),
+                std::sync::Arc::new(Message::User(UserMessage::text("also check tests"))),
+            ],
+            ..Request::default()
+        };
+        let body = build_body(
+            "kimi-for-coding",
+            "https://api.kimi.com/coding/v1/messages",
+            &request,
+        );
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 3, "{body}");
+        let content = messages[2]["content"].as_array().expect("content");
+        let kinds: Vec<_> = content
+            .iter()
+            .map(|block| block["type"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(kinds, ["tool_result", "tool_result", "text"]);
+        assert_eq!(content[0]["tool_use_id"], "a");
+        assert_eq!(content[1]["tool_use_id"], "b");
+    }
+
+    #[test]
+    fn a_tool_result_never_joins_a_text_turn() {
+        use mycode_core::{ToolResultMessage, UserMessage};
+        let request = Request {
+            messages: vec![
+                std::sync::Arc::new(Message::User(UserMessage::text("summary"))),
+                std::sync::Arc::new(Message::ToolResult(ToolResultMessage {
+                    tool_call_id: "orphan".to_owned(),
+                    content: Vec::new(),
+                    is_error: false,
+                    details: None,
+                })),
+            ],
+            ..Request::default()
+        };
+        let body = build_body(
+            "glm-5.3",
+            "https://api.z.ai/api/anthropic/v1/messages",
+            &request,
+        );
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn a_rejected_signature_retries_without_any_thinking() {
+        use mycode_core::{ProviderError, ProviderErrorKind};
+        let body = serde_json::json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "go"}]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "", "signature": "sig"},
+                    {"type": "tool_use", "id": "a", "name": "read", "input": {}}
+                ]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": "ok"}]},
+                {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]},
+                {"role": "user", "content": [{"type": "text", "text": "next"}]}
+            ]
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        assert!(super::body_replays_thinking(&bytes));
+        let rejected = ProviderError::with_message(
+            ProviderErrorKind::Rejected,
+            "HTTP 400 Bad Request: messages.1.content.0: Invalid `signature` in `thinking` block. \
+             The block is bound to a different conversation.",
+        );
+        let retried = super::retry_body_without_thinking(&rejected, &bytes).expect("retry");
+        let retried: serde_json::Value = serde_json::from_slice(&retried).unwrap();
+        let messages = retried["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 4, "the thinking-only turn is dropped");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_use");
+        assert!(
+            !serde_json::to_string(&retried)
+                .unwrap()
+                .contains("thinking")
+        );
+
+        let other = ProviderError::with_message(ProviderErrorKind::Rejected, "HTTP 400: bad tool");
+        assert!(super::retry_body_without_thinking(&other, &bytes).is_none());
+        let plain = serde_json::to_vec(&serde_json::json!({"messages": []})).unwrap();
+        assert!(!super::body_replays_thinking(&plain));
+        assert!(super::retry_body_without_thinking(&rejected, &plain).is_none());
+    }
+
+    #[test]
+    fn refusal_ends_the_message_as_a_visible_error() {
+        let mut reducer = MessagesReducer::new();
+        reducer.feed(r#"{"type":"message_delta","delta":{"stop_reason":"refusal"}}"#);
+        let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+        assert_eq!(message.stop_reason, StopReason::Error);
+        assert!(message.text().contains("refusal"), "{}", message.text());
+
+        let mut reducer = MessagesReducer::new();
+        reducer.feed(
+            r#"{"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded"}}"#,
+        );
+        let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+        assert_eq!(message.stop_reason, StopReason::Length);
     }
 
     #[test]

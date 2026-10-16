@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 use mycode_config::ProviderSettings;
 use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Request};
 
+pub use family::keeps_thinking_when_off;
 pub use http_pin::{
     PinMode, PinnedBody, PinnedRequest, connection_addresses, is_public_ip, send_pinned,
 };
