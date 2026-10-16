@@ -30,6 +30,9 @@ pub(crate) fn render_ask_overlay(
     let desk = Desk::of(theme);
     div()
         .id("ask-layer")
+        // Without occlusion GPUI still hovers and clicks the session list,
+        // composer, and title bar under the scrim.
+        .occlude()
         .absolute()
         .inset_0()
         .flex()
