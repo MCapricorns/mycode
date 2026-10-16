@@ -24,6 +24,10 @@ use sha2::Digest as _;
 pub const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/MCapricorns/mycode/releases/latest";
 
+/// Every update download lives under this repository's release files. The
+/// API answer names the URL, so it is checked before anything is fetched.
+const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/MCapricorns/mycode/releases/download/";
+
 /// Maximum accepted update asset size: 512 MiB.
 pub const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 /// Maximum accepted checksum sidecar size.
@@ -209,6 +213,9 @@ fn resolve_asset_for(
             "update check failed: release has no mycode-desktop*{suffix} asset"
         ));
     };
+    if !is_release_download(&asset.browser_download_url) {
+        return Err("update check failed: asset is not a MYCode release download".to_owned());
+    }
     let version = tag.trim_start_matches('v').to_owned();
     Ok(Some(UpdateOffer {
         version,
@@ -216,6 +223,19 @@ fn resolve_asset_for(
         asset_url: asset.browser_download_url.clone(),
         checksum_url: format!("{}.sha256", asset.browser_download_url),
     }))
+}
+
+/// A plain file under [`RELEASE_DOWNLOAD_PREFIX`]: no query, fragment, or
+/// dot segment that could point the download somewhere else.
+fn is_release_download(url: &str) -> bool {
+    url.strip_prefix(RELEASE_DOWNLOAD_PREFIX)
+        .is_some_and(|rest| {
+            !rest.is_empty()
+                && !rest.contains(['?', '#', '\\', '%'])
+                && rest
+                    .split('/')
+                    .all(|part| !part.is_empty() && part != "." && part != "..")
+        })
 }
 
 /// Whether `tag` is strictly newer than `current` (both `vX.Y.Z` or `X.Y.Z`).
@@ -404,11 +424,15 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
             continue;
         }
         let mut parts = std::path::Path::new(&name).components();
-        let malicious = name.contains('\\')
+        // A drive prefix (`C:x.exe`) would make the staged path absolute on
+        // Windows, so a colon is refused along with `..` and roots.
+        let malicious = name.contains(['\\', ':'])
             || parts.any(|component| {
                 matches!(
                     component,
-                    std::path::Component::ParentDir | std::path::Component::RootDir
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
                 )
             });
         if malicious {
