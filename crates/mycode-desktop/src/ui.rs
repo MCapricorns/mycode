@@ -207,7 +207,7 @@ pub fn render_root(
         .when(workspace.vm().command_palette_open, |this| {
             this.child(command_palette::render(workspace, window, cx))
         })
-        .child(render_toasts(workspace, window, cx))
+        .child(render_toasts(workspace, window, inspector_span, cx))
 }
 
 /// Chat or settings, faded in when that pane is entered.
@@ -241,25 +241,38 @@ fn main_pane(
     )
 }
 
+/// Gap between the title bar and the first toast. It clears the 44px
+/// settings header and the Details/drawer header rows that start just below
+/// the title bar, so a notice never sits on their buttons.
+const TOAST_TOP_GAP: f32 = 52.;
+/// Gap between the toast stack and the right edge of the chat surface.
+const TOAST_EDGE_GAP: f32 = 16.;
+const TOAST_WIDTH: f32 = 380.;
+
+/// Notices stack in the top-right corner, below the header rows and left of
+/// an open Details panel, so they never cover the composer or a header
+/// button.
 fn render_toasts(
     workspace: &Workspace,
     window: &Window,
+    inspector_span: f32,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
     let toasts = workspace.toasts();
+    let top = title_bar::BAR_HEIGHT + TOAST_TOP_GAP;
     div()
         .id("toasts")
-        .max_h((window.viewport_size().height - px(100.)).max(px(120.)))
+        .max_h((window.viewport_size().height - px(top + TOAST_EDGE_GAP)).max(px(120.)))
         .overflow_y_scroll()
         .absolute()
-        .bottom(px(20.))
+        .top(px(top))
         .left_0()
-        .right_0()
-        .px_4()
+        .right(px(inspector_span))
+        .px(px(TOAST_EDGE_GAP))
         .flex()
         .flex_col()
-        .items_center()
+        .items_end()
         .gap_2()
         .children(toasts.iter().map(|toast| {
             let toast_id = toast.id;
@@ -272,7 +285,7 @@ fn render_toasts(
                 .id(format!("toast-{toast_id}"))
                 .flex_shrink_0()
                 .occlude()
-                .w(px(460.))
+                .w(px(TOAST_WIDTH))
                 .max_w_full()
                 .rounded(skin::radius_card())
                 .border_1()
