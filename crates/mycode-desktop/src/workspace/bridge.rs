@@ -585,7 +585,7 @@ impl Workspace {
                 cx.notify();
             }
             BridgeReply::SessionDeleted(Ok(())) => {
-                // The confirmed delete handler updates only its target session.
+                // The row delete handler updates only its target session.
                 self.dispatch(BridgeCommand::ListSessions, cx);
             }
             BridgeReply::SettingsSaved(Ok(revision)) => {
