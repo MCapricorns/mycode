@@ -282,21 +282,16 @@ impl Workspace {
     }
 
     pub(crate) fn on_dismiss_ask(&mut self, cx: &mut Context<Self>) {
-        let Some(conversation) = self.vm.active.clone() else {
+        let Some(session_id) = self.open_session_id() else {
             return;
         };
         self.ask_inputs.clear();
         self.apply_action(DesktopAction::AskAnswered, cx);
-        self.dispatch(
-            BridgeCommand::AskDismiss {
-                session_id: conversation.session_id,
-            },
-            cx,
-        );
+        self.dispatch(BridgeCommand::AskDismiss { session_id }, cx);
     }
 
     fn on_answer_ask(&mut self, answers: Vec<String>, cx: &mut Context<Self>) {
-        let Some(conversation) = self.vm.active.clone() else {
+        let Some(session_id) = self.open_session_id() else {
             return;
         };
         // Each question owns its text; the next request starts with empty fields.
@@ -304,7 +299,7 @@ impl Workspace {
         self.apply_action(DesktopAction::AskAnswered, cx);
         self.dispatch(
             BridgeCommand::AskAnswer {
-                session_id: conversation.session_id,
+                session_id,
                 answers,
             },
             cx,
