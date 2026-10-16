@@ -5,6 +5,7 @@
 //! distance on the space-joined token form. Only a unique best match whose
 //! margin over the runner-up is large enough is committed.
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use super::MAX_DIFF_SUMMARY_BYTES;
 use super::engine::{Planned, reserve_planned, snippet};
@@ -530,10 +531,10 @@ fn distance_overflow_error(
     if let Some(best) = preview.first() {
         match best.distance {
             PreviewDistance::Exact(distance) => {
-                msg.push_str(&format!(" (nearest distance {distance})"));
+                let _ = write!(msg, " (nearest distance {distance})");
             }
             PreviewDistance::GreaterThan(limit) => {
-                msg.push_str(&format!(" (nearest distance > {limit})"));
+                let _ = write!(msg, " (nearest distance > {limit})");
             }
         }
     }
@@ -569,10 +570,10 @@ fn append_preview(msg: &mut String, ranked: &[PreviewCandidate], body: &str) {
         let excerpt = preview_excerpt(body, line_start, line_end, candidate.start);
         match candidate.distance {
             PreviewDistance::Exact(distance) => {
-                msg.push_str(&format!("\n  line {line} d={distance}: {excerpt}"));
+                let _ = write!(msg, "\n  line {line} d={distance}: {excerpt}");
             }
             PreviewDistance::GreaterThan(limit) => {
-                msg.push_str(&format!("\n  line {line} d>{limit}: {excerpt}"));
+                let _ = write!(msg, "\n  line {line} d>{limit}: {excerpt}");
             }
         }
     }

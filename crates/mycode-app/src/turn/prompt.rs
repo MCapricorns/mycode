@@ -3,6 +3,7 @@
 
 use mycode_config::HomeLayout;
 use mycode_tools::ToolRegistry;
+use std::fmt::Write as _;
 
 /// Workspace folders other than the session cwd, plus the OS temp directory
 /// as an always-writable scratch root. Missing UI state still yields temp.
@@ -57,12 +58,13 @@ pub(crate) fn split_scratch_root(
 /// with or without other workspace folders.
 pub(crate) fn push_scratch_note(system: &mut String, scratch: Option<&std::path::Path>) {
     if let Some(scratch) = scratch {
-        system.push_str(&format!(
+        let _ = write!(
+            system,
             "\n\nScratch directory (OS temp): {}\nPut throwaway files (test pages, \
 recordings, fixtures) there with absolute paths instead of the project tree. It is not \
 project code: do not search it.",
             scratch.display()
-        ));
+        );
     }
 }
 
@@ -158,15 +160,16 @@ response as `agent`.\n</mcp>",
     if !roots.is_empty() {
         system_prompt.push_str("\n\nWorkspace folders besides the session cwd:\n");
         for root in &roots {
-            system_prompt.push_str(&format!("- {}\n", root.display()));
+            let _ = writeln!(system_prompt, "- {}", root.display());
         }
         let shell_tool = mycode_tools::resolved_shell().kind.tool_name();
-        system_prompt.push_str(&format!(
+        let _ = write!(
+            system_prompt,
             "Relative paths stay in the session cwd. For the other folders, pass an \
 absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
 path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in the session \
 cwd.",
-        ));
+        );
     }
     push_scratch_note(&mut system_prompt, scratch);
     system_prompt

@@ -6,6 +6,7 @@
 //! (`.agents/AGENTS.md`). Each file becomes one system prompt contribution.
 //! Nothing enters the prompt unbounded or from arbitrary paths.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::{ConfigError, HomeLayout};
@@ -250,12 +251,13 @@ it before building or answering. Do not wait for the user to name the skill. \
 Do not paste skill bodies into the prompt.",
     );
     for skill in files {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n- /{slug} — {title} (`{path}`)",
             slug = skill.slug,
             title = skill.title,
             path = skill.path.display()
-        ));
+        );
     }
     out.push_str("\n</skills>");
     Some(out)

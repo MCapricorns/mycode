@@ -7,6 +7,7 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
+use std::fmt::Write as _;
 
 use crate::builtin::fs_io::{FileAccess, anchor_file_path, write_file_with_lease};
 use crate::builtin::process::acquire_execution_lease;
@@ -113,7 +114,7 @@ impl Tool for WriteTool {
         if outcome.detached_hardlink {
             text.push_str(" (detached_hardlink=true: this directory entry now names a new inode)");
         }
-        text.push_str(&format!("\n[revision {}]", outcome.revision));
+        let _ = write!(text, "\n[revision {}]", outcome.revision);
         Ok(ToolResult::text(text).with_details(json!({
             "path": outcome.path_key,
             "bytes_written": outcome.bytes_written,

@@ -4,6 +4,7 @@
 //! install or a non-repository is a panel note, not a chat error.
 
 use crate::i18n::t;
+use std::fmt::Write as _;
 
 #[cfg(test)]
 mod git_integration_tests;
@@ -285,15 +286,15 @@ fn added_lines(path: &str, body: &str) -> String {
     }
     let count = lines.len();
     let mut out = String::new();
-    out.push_str(&format!("diff --git a/{path} b/{path}\n"));
+    let _ = writeln!(out, "diff --git a/{path} b/{path}");
     out.push_str("new file mode 100644\n");
     out.push_str("--- /dev/null\n");
-    out.push_str(&format!("+++ b/{path}\n"));
+    let _ = writeln!(out, "+++ b/{path}");
     if count == 0 {
         out.push_str("@@ -0,0 +0,0 @@\n");
         return out;
     }
-    out.push_str(&format!("@@ -0,0 +1,{count} @@\n"));
+    let _ = writeln!(out, "@@ -0,0 +1,{count} @@");
     for line in lines {
         let line = line.strip_suffix('\r').unwrap_or(line);
         out.push('+');
@@ -306,6 +307,7 @@ fn added_lines(path: &str, body: &str) -> String {
 #[cfg(test)]
 mod diff_tests {
     use super::added_lines;
+    use std::fmt::Write as _;
 
     #[test]
     fn an_untracked_file_is_shown_as_added_lines() {
@@ -391,7 +393,7 @@ mod diff_tests {
     fn porcelain_marks_the_list_incomplete_only_past_the_cap() {
         let mut eighty = String::from("## main\0");
         for index in 0..80 {
-            eighty.push_str(&format!(" M file{index}.txt\0"));
+            let _ = write!(eighty, " M file{index}.txt\0");
         }
         let complete = super::parse_porcelain(&eighty);
         assert_eq!(complete.files.len(), 80);

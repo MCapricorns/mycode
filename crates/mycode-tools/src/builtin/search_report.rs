@@ -1,5 +1,6 @@
 //! Shared report assembly and pattern validation for the grep/find tools.
 use globset::GlobMatcher;
+use std::fmt::Write as _;
 
 use serde_json::{Value, json};
 
@@ -93,20 +94,22 @@ pub(crate) fn render_report(
         if !text.is_empty() {
             text.push('\n');
         }
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "[showing first {shown} of {count} {}; {}{reason}]",
             spec.noun, spec.truncated_advice
-        ));
+        );
     }
     for notice in &spec.extra_notices {
         text.push('\n');
         text.push_str(notice);
     }
     if output_truncated {
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n[output truncated at {output_bytes} bytes; {}]",
             spec.output_advice
-        ));
+        );
     }
 
     if let Some(notice) = io_incomplete_notice(io_count) {

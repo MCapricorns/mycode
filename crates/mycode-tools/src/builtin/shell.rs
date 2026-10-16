@@ -19,6 +19,7 @@
 //! not a sandbox. Valid calls run directly with no Core permission prompt.
 //! `write` and `edit` stay available. `read`, `grep`, and `find` stay
 //! in-process. File edits from either path are not undone.
+use std::fmt::Write as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -790,15 +791,18 @@ fn format_result(
     let mut text = text;
     if truncated {
         let total = stdout.total_bytes.saturating_add(stderr.total_bytes);
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n[output truncated: showed first {MAX_OUTPUT_BYTES} of {total} bytes]"
-        ));
+        );
     }
 
     let is_error = forced_error || status.is_some_and(|s| !s.success());
     if is_error {
         match &status {
-            Some(s) => text.push_str(&format!("\n[exit code: {}]", display_exit(s))),
+            Some(s) => {
+                let _ = write!(text, "\n[exit code: {}]", display_exit(s));
+            }
             None => match notice {
                 Some(notice) => {
                     text.push('\n');

@@ -1,4 +1,5 @@
 //! Content reads, revisions, and display windowing.
+use std::fmt::Write as _;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -75,11 +76,12 @@ fn window_text(
     let (mut text, byte_truncated) = crate::builtin::truncate_bytes(&text, MAX_BYTES);
     let truncated = byte_truncated || capped_end < end;
     if truncated {
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n[output truncated: showing lines {}-{} of {total_lines}; re-invoke with offset/limit to read more]",
             start + 1,
             start + selected.len(),
-        ));
+        );
     }
     (text, total_lines, selected.len(), truncated)
 }

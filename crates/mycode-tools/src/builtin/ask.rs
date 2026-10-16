@@ -5,6 +5,7 @@
 //! to the model as the tool result. The channel seam keeps the tool free of
 //! any UI dependency; hosts answer, tests replay.
 
+use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -196,13 +197,13 @@ pub fn render_ask_answers(answers: &[AskAnswer]) -> String {
         }
         let number = index + 1;
         if answer.answer.is_empty() {
-            rendered.push_str(&format!("{number}. (skipped)"));
+            let _ = write!(rendered, "{number}. (skipped)");
             continue;
         }
         let bounded: String = answer.answer.chars().take(MAX_ANSWER_CHARS).collect();
         let mut lines = bounded.lines();
         if let Some(first) = lines.next() {
-            rendered.push_str(&format!("{number}. {first}"));
+            let _ = write!(rendered, "{number}. {first}");
             for line in lines {
                 rendered.push('\n');
                 rendered.push_str(line);
