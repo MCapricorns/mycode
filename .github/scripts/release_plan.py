@@ -874,12 +874,13 @@ def _expect_workflow_contract() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     _expect("才跳过打包" not in readme, "Chinese skip rule remains")
     _expect("四个平台" not in readme, "Chinese docs went back to four release platforms")
-    _expect("三个平台" in readme, "Chinese docs dropped the three release platforms")
+    _expect("Windows x64" in readme, "Chinese docs dropped Windows x64")
     _expect("Windows ARM64" in readme, "Chinese docs dropped Windows ARM64")
+    _expect("macOS Apple Silicon" in readme, "Chinese docs dropped macOS Apple Silicon")
+    _expect("暂无 Intel macOS 和 Linux 包" in readme, "Chinese docs dropped the no-Intel-or-Linux note")
     _expect("skips packaging" not in readme, "English skip rule remains")
     _expect("four platform" not in readme, "English docs went back to four release platforms")
-    _expect("three platform" in readme, "English docs dropped the three release platforms")
-    _expect("Windows ARM64" in readme, "English docs dropped Windows ARM64")
+    _expect("release.yml" not in readme, "README badge points at the removed release.yml workflow")
     _expect(
         "x86_64-unknown-linux-gnu" not in readme,
         "README still ships a Linux release zip",

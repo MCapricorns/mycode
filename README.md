@@ -5,7 +5,7 @@
 <p>
   <a href="https://github.com/MCapricorns/mycode/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/MCapricorns/mycode?style=flat-square&label=%E7%89%88%E6%9C%AC&color=7c8cff"></a>
   <a href="https://github.com/MCapricorns/mycode/releases"><img alt="下载量" src="https://img.shields.io/github/downloads/MCapricorns/mycode/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD"></a>
-  <a href="https://github.com/MCapricorns/mycode/actions"><img alt="构建" src="https://img.shields.io/github/actions/workflow/status/MCapricorns/mycode/release.yml?branch=main&style=flat-square&label=%E6%9E%84%E5%BB%BA"></a>
+  <a href="https://github.com/MCapricorns/mycode/actions"><img alt="构建" src="https://img.shields.io/github/actions/workflow/status/MCapricorns/mycode/ci.yml?branch=main&style=flat-square&label=%E6%9E%84%E5%BB%BA"></a>
   <img alt="平台" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS-555?style=flat-square">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-dea584?style=flat-square&logo=rust">
   <a href="LICENSE"><img alt="许可" src="https://img.shields.io/github/license/MCapricorns/mycode?style=flat-square&label=%E8%AE%B8%E5%8F%AF"></a>
@@ -101,7 +101,7 @@ cargo build --release -p mycode-desktop
 | 操作 | 方式 |
 | --- | --- |
 | 斜杠命令 | 输入 `/`：`/new`、`/compact`、`/settings`、技能、MCP |
-| 切换模型 / 思考强度 | 输入框下方的两个芯片 |
+| 切换模型 / 思考强度 | 输入框旁的两个菜单 |
 | 命令面板 | `Ctrl-K`（Windows）/ `Cmd-K`（macOS），搜索会话、模型、命令和设置页 |
 | 回合中追加指令 | 直接发送，会作为 Steer 注入当前回合 |
 
