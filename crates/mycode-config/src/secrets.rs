@@ -41,20 +41,30 @@ impl ProviderSecrets {
     #[must_use]
     pub fn key(&self, provider_id: &str) -> Option<&str> {
         self.provider_keys
-            .iter()
-            .find(|(id, _)| id == provider_id)
-            .map(|(_, key)| key.as_str())
+            .binary_search_by(|(id, _)| id.as_str().cmp(provider_id))
+            .ok()
+            .map(|index| self.provider_keys[index].1.as_str())
     }
 
     /// Sets or clears one provider key; sorted by provider id.
     #[must_use]
     pub fn with_key(mut self, provider_id: &str, key: Option<&str>) -> Self {
-        self.provider_keys.retain(|(id, _)| id != provider_id);
-        if let Some(key) = key.filter(|key| !key.is_empty()) {
+        let key = key.filter(|key| !key.is_empty());
+        match (
             self.provider_keys
-                .push((provider_id.to_owned(), key.to_owned()));
+                .binary_search_by(|(id, _)| id.as_str().cmp(provider_id)),
+            key,
+        ) {
+            (Ok(index), Some(key)) => self.provider_keys[index].1 = key.to_owned(),
+            (Ok(index), None) => {
+                self.provider_keys.remove(index);
+            }
+            (Err(index), Some(key)) => {
+                self.provider_keys
+                    .insert(index, (provider_id.to_owned(), key.to_owned()));
+            }
+            (Err(_), None) => {}
         }
-        self.provider_keys.sort_by(|a, b| a.0.cmp(&b.0));
         self
     }
 
@@ -219,12 +229,13 @@ fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
             .with_detail("secrets.json: formatVersion or kind does not match this build"));
     }
     let revision = AuthorityRevision::new(document.revision)?;
-    let secrets = document
-        .provider_keys
-        .into_iter()
-        .fold(ProviderSecrets::new(), |secrets, (id, key)| {
-            secrets.with_key(&id, Some(&key))
-        });
+    let secrets = ProviderSecrets {
+        provider_keys: document
+            .provider_keys
+            .into_iter()
+            .filter(|(_, key)| !key.is_empty())
+            .collect(),
+    };
     secrets.validate()?;
     Ok(ParsedSecrets {
         secrets,

@@ -30,7 +30,17 @@ pub use message::{
 };
 #[doc(inline)]
 pub use provider::{
-    EventStream, EventStreamSender, MAX_REQUEST_ENCODED_BYTES, Provider, ProviderError,
-    ProviderErrorKind, ReasoningLevel, Request, StreamEvent,
+    EventStream, EventStreamSender, JsonBoundError, MAX_REQUEST_ENCODED_BYTES, Provider,
+    ProviderError, ProviderErrorKind, ReasoningLevel, Request, StreamEvent,
+    check_encoded_json_bound, encoded_json_len,
 };
 pub use tool::{ToolSpec, inline_schema_refs};
+
+/// Returns the wall-clock duration since the Unix epoch, saturating at zero
+/// when the system clock predates the epoch.
+#[must_use]
+pub fn unix_now() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}

@@ -85,6 +85,80 @@ impl ReasoningLevel {
             Self::Max => Some("max"),
         }
     }
+
+    /// Returns whether `token` is a syntactically valid effort token (`1..=32`
+    /// ASCII alphanumeric, `-`, or `_` bytes).
+    #[must_use]
+    pub fn is_valid_token(token: &str) -> bool {
+        (1..=32).contains(&token.len())
+            && token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    }
+}
+
+/// Failure modes for [`check_encoded_json_bound`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonBoundError {
+    /// Serialization failed before reaching the byte bound.
+    Encode,
+    /// Serialized output exceeded the caller-supplied byte limit.
+    Oversized,
+}
+
+struct BoundedJsonCounter {
+    bytes: usize,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl std::io::Write for BoundedJsonCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self.bytes.checked_add(buf.len()) {
+            Some(next) if next <= self.limit => {
+                self.bytes = next;
+                Ok(buf.len())
+            }
+            _ => {
+                self.exceeded = true;
+                Err(std::io::Error::other("encoded JSON exceeds byte limit"))
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Counts the exact UTF-8 byte length of `value` when serialized as JSON
+/// without allocating a buffer, stopping immediately if `limit` is exceeded.
+///
+/// # Errors
+///
+/// Returns [`JsonBoundError::Oversized`] when the encoded length exceeds
+/// `limit`, or [`JsonBoundError::Encode`] when serialization fails.
+pub fn check_encoded_json_bound<T: Serialize + ?Sized>(
+    value: &T,
+    limit: usize,
+) -> Result<usize, JsonBoundError> {
+    let mut counter = BoundedJsonCounter {
+        bytes: 0,
+        limit,
+        exceeded: false,
+    };
+    match serde_json::to_writer(&mut counter, value) {
+        Ok(()) => Ok(counter.bytes),
+        Err(_) if counter.exceeded => Err(JsonBoundError::Oversized),
+        Err(_) => Err(JsonBoundError::Encode),
+    }
+}
+
+/// Counts the exact UTF-8 byte length of `value` when serialized as JSON
+/// without allocating a buffer.
+#[must_use]
+pub fn encoded_json_len<T: Serialize + ?Sized>(value: &T) -> Option<usize> {
+    check_encoded_json_bound(value, usize::MAX).ok()
 }
 
 /// A provider-neutral completion request.
@@ -174,19 +248,17 @@ impl Request {
     /// Returns a protocol error when JSON encoding fails, or a rejected error
     /// when the encoded request exceeds [`MAX_REQUEST_ENCODED_BYTES`].
     pub fn validate(&self) -> Result<(), ProviderError> {
-        let encoded = serde_json::to_vec(self).map_err(|_| {
-            ProviderError::with_message(
-                ProviderErrorKind::Protocol,
-                "provider request could not be encoded",
-            )
-        })?;
-        if encoded.len() > MAX_REQUEST_ENCODED_BYTES {
-            return Err(ProviderError::with_message(
+        match check_encoded_json_bound(self, MAX_REQUEST_ENCODED_BYTES) {
+            Ok(_) => Ok(()),
+            Err(JsonBoundError::Oversized) => Err(ProviderError::with_message(
                 ProviderErrorKind::Rejected,
                 "provider request exceeds the encoded size limit",
-            ));
+            )),
+            Err(JsonBoundError::Encode) => Err(ProviderError::with_message(
+                ProviderErrorKind::Protocol,
+                "provider request could not be encoded",
+            )),
         }
-        Ok(())
     }
 }
 

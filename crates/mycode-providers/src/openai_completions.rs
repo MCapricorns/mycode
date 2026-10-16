@@ -607,7 +607,8 @@ impl CompletionsReducer {
                     // toward the accumulation ceiling like any other
                     // fragment, so distinct-id frames cannot grow the
                     // array without bound.
-                    if !charge_stream(&mut self.accumulated, item.to_string().len()) {
+                    let item_len = mycode_core::encoded_json_len(&item).unwrap_or(usize::MAX);
+                    if !charge_stream(&mut self.accumulated, item_len) {
                         return Err("stream exceeded the output limit");
                     }
                     self.reasoning_details.push(item);

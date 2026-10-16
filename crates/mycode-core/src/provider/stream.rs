@@ -8,7 +8,9 @@ use std::task::Poll;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::{ProviderError, ProviderErrorKind, StreamEvent};
+use super::{
+    JsonBoundError, ProviderError, ProviderErrorKind, StreamEvent, check_encoded_json_bound,
+};
 
 /// Number of events buffered between a provider and the agent.
 ///
@@ -60,10 +62,14 @@ impl EventStreamSender {
         if state.terminal_claimed || self.tx.is_closed() {
             return false;
         }
-        let event = match serde_json::to_vec(&event) {
-            Ok(encoded) if encoded.len() <= MAX_EVENT_ENCODED_BYTES => event,
-            Ok(_) => protocol_terminal("provider event exceeds the encoded size limit"),
-            Err(_) => protocol_terminal("provider event could not be encoded"),
+        let event = match check_encoded_json_bound(&event, MAX_EVENT_ENCODED_BYTES) {
+            Ok(_) => event,
+            Err(JsonBoundError::Oversized) => {
+                protocol_terminal("provider event exceeds the encoded size limit")
+            }
+            Err(JsonBoundError::Encode) => {
+                protocol_terminal("provider event could not be encoded")
+            }
         };
 
         let Ok(permit) = self.tx.reserve().await else {
