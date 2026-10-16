@@ -13,7 +13,8 @@
 //! link-local, and ULA are still refused, including a mix that contains one.
 //! [`PinMode::CheckRedirect`] allows a first hop that is entirely public or
 //! entirely private (local models and localhost MCP). Later hops must resolve
-//! to public addresses, including a different host.
+//! to public addresses, including a different host. Every hop in either mode
+//! is https: a redirect cannot downgrade a request to plain http.
 
 use parking_lot::Mutex;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -175,6 +176,7 @@ pub fn connection_addresses(
             Err(format!("resolved addresses are not all public: {host}"))
         }
         PinMode::CheckRedirect => {
+            require_https(&parsed)?;
             if hop == 0 {
                 if !matches!(class, AddressClass::AllPublic | AddressClass::AllPrivate) {
                     return Err("resolved addresses must be all public or all private".to_owned());
@@ -369,11 +371,37 @@ fn check_url(mode: PinMode, url: &str) -> Result<(), String> {
     if mode == PinMode::PublicHttps {
         return check_public_https(&parsed);
     }
+    require_https(&parsed)?;
     let host = parsed.host_str().unwrap_or("");
     if !public_host(host) {
         return Err(format!("host is not public: {host}"));
     }
     Ok(())
+}
+
+/// Every hop is https. Settings already refuse an `http://` endpoint; this
+/// also stops a redirect from downgrading one.
+fn require_https(parsed: &reqwest::Url) -> Result<(), String> {
+    if parsed.scheme() == "https" || plain_http_test_server(parsed) {
+        return Ok(());
+    }
+    Err("requests must use https".to_owned())
+}
+
+/// This crate's unit tests drive the transport against plain local servers.
+/// Release code has no such exception.
+#[cfg(test)]
+fn plain_http_test_server(parsed: &reqwest::Url) -> bool {
+    parsed.scheme() == "http"
+        && parsed
+            .host_str()
+            .and_then(|host| host.parse::<Ipv4Addr>().ok())
+            .is_some_and(|ip| ip.is_loopback())
+}
+
+#[cfg(not(test))]
+fn plain_http_test_server(_parsed: &reqwest::Url) -> bool {
+    false
 }
 
 /// https on port 443 to a host name that is not local.
