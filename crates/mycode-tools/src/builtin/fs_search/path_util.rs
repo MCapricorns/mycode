@@ -274,10 +274,39 @@ pub(crate) fn resolve_relative_argument(
         // permissiveness here cannot escape the anchored tree.
         strip_prefix_lexical(root, &normalized)
             .or_else(|| alias_root.and_then(|alias| strip_prefix_lexical(alias, &normalized)))
+            .or_else(|| {
+                long_spelling(&normalized).and_then(|long| strip_prefix_lexical(root, &long))
+            })
             .ok_or(())
     } else {
         normalize_anchored_relative(&argument)
     }
+}
+
+/// `path` with its longest existing ancestor in the file system's long
+/// spelling and the rest appended unchanged.
+///
+/// A path can mix spellings: `TEMP` is often 8.3 (`C:\Users\RUNNER~1\...`)
+/// while a new child keeps its long name, so it matches neither the
+/// handle-proven long root nor the session's all-short spelling.
+#[cfg(windows)]
+fn long_spelling(path: &Path) -> Option<PathBuf> {
+    let mut existing = path;
+    let mut rest: Vec<&OsStr> = Vec::new();
+    loop {
+        if let Ok(resolved) = std::fs::canonicalize(existing) {
+            let mut long = strip_verbatim_prefix(&resolved);
+            long.extend(rest.iter().rev());
+            return (long != path).then_some(long);
+        }
+        rest.push(existing.file_name()?);
+        existing = existing.parent()?;
+    }
+}
+
+#[cfg(not(windows))]
+fn long_spelling(_path: &Path) -> Option<PathBuf> {
+    None
 }
 
 pub(crate) fn normalize_anchored_relative(path: &Path) -> Result<PathBuf, ()> {
