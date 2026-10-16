@@ -432,23 +432,37 @@ async fn turn_credentials(
     Err(last_error)
 }
 
-/// Workspace folders other than the session cwd. Missing UI state is empty.
+/// Workspace folders other than the session cwd, plus the OS temp directory
+/// as an always-writable scratch root. Missing UI state still yields temp.
 pub(crate) fn workspace_extra_roots(
     home: &mycode_config::HomeLayout,
     cwd: &std::path::Path,
 ) -> Vec<std::path::PathBuf> {
-    let Ok(state) = mycode_config::read_ui_state(home) else {
-        return Vec::new();
+    let roots = match mycode_config::read_ui_state(home) {
+        Ok(state) => {
+            let cwd_text = cwd.display().to_string();
+            let mut roots: Vec<std::path::PathBuf> = state
+                .workspace_roots
+                .into_iter()
+                .filter(|root| !same_dir(root, &cwd_text))
+                .map(std::path::PathBuf::from)
+                .collect();
+            roots.sort();
+            roots.truncate(mycode_config::MAX_WORKSPACE_ROOTS);
+            roots
+        }
+        Err(_) => Vec::new(),
     };
-    let cwd_text = cwd.display().to_string();
-    let mut roots: Vec<std::path::PathBuf> = state
-        .workspace_roots
-        .into_iter()
-        .filter(|root| !same_dir(root, &cwd_text))
-        .map(std::path::PathBuf::from)
-        .collect();
-    roots.sort();
-    roots.truncate(mycode_config::MAX_WORKSPACE_ROOTS);
+    temp_extra_root(roots)
+}
+
+/// Appends the OS temp directory so file tools can stage throwaway artifacts
+/// (test fixtures, recordings, scratch pages) outside the project tree.
+pub(crate) fn temp_extra_root(mut roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let temp = std::env::temp_dir();
+    if !roots.iter().any(|root| root == &temp) {
+        roots.push(temp);
+    }
     roots
 }
 

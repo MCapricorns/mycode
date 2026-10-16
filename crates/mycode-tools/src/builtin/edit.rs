@@ -64,7 +64,8 @@ pub struct EditTool;
 #[derive(Deserialize, JsonSchema)]
 pub struct EditArgs {
     /// Path of the file to edit. Relative paths resolve against the
-    /// session cwd.
+    /// session cwd; writable absolute paths stay inside the session cwd,
+    /// an added workspace root, or the OS temp directory.
     pub path: String,
     /// Opaque revision from a prior `read`. When set it must match the
     /// snapshot; the publish always compare-and-swaps the snapshot
