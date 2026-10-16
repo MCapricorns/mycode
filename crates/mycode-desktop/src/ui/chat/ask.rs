@@ -1,4 +1,4 @@
-//! Structured questions, docked above the composer.
+//! Structured questions, floating as a centered modal over the whole window.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::theme::Theme;
@@ -12,7 +12,7 @@ use crate::i18n::t;
 use crate::ui::{desk::Desk, lamp, short_id, skin};
 use crate::workspace::Workspace;
 
-pub(crate) fn render_ask_panel(
+pub(crate) fn render_ask_overlay(
     workspace: &mut Workspace,
     window: &mut Window,
     cx: &mut Context<Workspace>,
@@ -23,30 +23,41 @@ pub(crate) fn render_ask_panel(
     let inputs = (0..rows.len())
         .map(|index| workspace.ask_input(index, window, cx))
         .collect::<Vec<_>>();
-    let max_height = px((f32::from(window.viewport_size().height) * 0.45).clamp(160., 420.));
+    let viewport = window.viewport_size();
+    let max_height = px((f32::from(viewport.height) * 0.6).clamp(240., 560.));
+    let width = px((f32::from(viewport.width) * 0.4).clamp(420., 620.));
     let theme = cx.theme();
     let desk = Desk::of(theme);
     div()
-        .id("ask-inline")
-        .w_full()
-        .px_4()
-        .pt_2()
+        .id("ask-layer")
+        .absolute()
+        .inset_0()
         .flex()
+        .items_center()
         .justify_center()
+        .p_8()
         .child(
+            // The question blocks the turn; the scrim swallows stray clicks
+            // instead of dismissing, so an answer or Decline is the only way
+            // out.
             div()
-                .id("ask-card")
-                .w_full()
+                .id("ask-backdrop")
+                .absolute()
+                .size_full()
+                .bg(theme.background.opacity(0.45))
+                .cursor_default()
+                .on_click(cx.listener(|_, _, _, _| {})),
+        )
+        .child(
+            skin::popover_panel("ask-card", theme)
+                .relative()
+                .w(width)
                 .max_h(max_height)
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .p_3()
-                .rounded(px(14.))
-                .border_1()
-                .border_color(skin::glass_border(theme))
-                .bg(skin::popover(theme))
+                .p_4()
                 .child(
                     div()
                         .flex()
@@ -170,7 +181,8 @@ pub(crate) fn render_ask_panel(
 }
 
 /// One ask-user choice. The label stays on one line; a narrow row wraps
-/// whole chips. Selected uses the same soft accent fill as a primary button.
+/// whole chips. Unselected carries its own muted fill so every option reads
+/// as a button on the translucent card; selected uses the primary fill.
 fn ask_choice_chip(
     id: impl Into<gpui_kit::ElementId>,
     label: String,
@@ -180,7 +192,7 @@ fn ask_choice_chip(
     let fill = if selected {
         crate::ui::desk::primary_fill(theme.accent, theme.primary)
     } else {
-        theme.transparent
+        theme.secondary
     };
     let hover = if selected {
         crate::ui::desk::deepen(fill)
@@ -190,7 +202,7 @@ fn ask_choice_chip(
     let border = if selected {
         crate::ui::desk::primary_edge(theme.primary)
     } else {
-        theme.border
+        skin::border_strong(theme)
     };
     div()
         .id(id)
