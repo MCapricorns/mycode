@@ -457,6 +457,50 @@ fn windows_x86_64_selects_the_published_zip_not_the_checksum() {
 }
 
 #[test]
+fn an_asset_hosted_outside_the_release_is_refused() {
+    for url in [
+        "https://evil.example/mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip",
+        "https://github.com/someone/else/releases/download/v0.9.18/mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip",
+        "https://github.com/MCapricorns/mycode/releases/download/../../x/mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip",
+        "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip?x=1",
+    ] {
+        let assets = vec![super::AssetJson {
+            name: "mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
+            browser_download_url: url.to_owned(),
+        }];
+        let result = super::resolve_asset_for(
+            "windows",
+            "x86_64",
+            "v0.9.18",
+            "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
+            &assets,
+        );
+        assert!(result.is_err(), "{url}");
+    }
+}
+
+#[test]
+fn an_archive_entry_with_a_drive_prefix_is_refused() {
+    use std::io::Write as _;
+
+    let dir = std::env::temp_dir().join(format!("mycode-zip-prefix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["C:evil.exe", "../evil.exe", "/abs/mycode-desktop"] {
+        let asset = dir.join("asset.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&asset).unwrap());
+        writer
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"payload").unwrap();
+        writer.finish().unwrap();
+        let error = super::extract_binary(&asset, &dir).expect_err(name);
+        assert!(error.contains("unsafe"), "{name}: {error}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn unsupported_platforms_have_no_asset() {
     assert_eq!(asset_suffix_for("macos", "x86_64"), "");
     assert_eq!(asset_suffix_for("linux", "x86_64"), "");
