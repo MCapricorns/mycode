@@ -1,5 +1,5 @@
-//! Windows x64 and ARM64 spawn: `CreateProcessW` from a retained executable
-//! handle.
+//! Windows x64 and ARM64 spawn: `CreateProcessW` under a retained executable
+//! pin.
 //!
 //! Both targets use this path. `CreateProcessW` asks the OS loader to accept
 //! a native PE (AMD64 on x64, ARM64 or ARM64X on ARM64) and an emulated image

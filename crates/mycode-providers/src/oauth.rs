@@ -6,9 +6,9 @@
 //! and field names only — never token values. Each request is still sent
 //! through the pinned client (DNS pin, checked addresses, no redirects).
 //! The caller passes the User-Agent and total timeout on [`PinnedCall`];
-//! none of these token endpoints are followed across a redirect. The caller's
-//! HTTP proxy is not applied, because pinning dials only the addresses that
-//! passed the public-address check.
+//! none of these token endpoints are followed across a redirect. The
+//! configured proxy still applies; a hop through it is not pinned, because
+//! the proxy resolves the host itself.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

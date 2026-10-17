@@ -25,7 +25,7 @@ pub const SCRATCH_DIR: &str = "scratch";
 /// # Errors
 ///
 /// Returns [`ConfigErrorKind::AuthorityValidation`] when `session_id` or
-/// `file` is empty or contains a path separator.
+/// `file` is empty, contains a path separator, or contains NUL.
 pub(crate) fn session_relative(session_id: &str, file: &str) -> Result<String, ConfigError> {
     if session_id.is_empty()
         || session_id.contains(['/', '\\', '\0'])

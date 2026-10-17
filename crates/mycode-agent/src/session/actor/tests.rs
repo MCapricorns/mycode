@@ -353,7 +353,7 @@ fn append_cas_still_rejects_after_an_eviction_reload() {
 }
 
 #[test]
-fn recovery_rejects_corrupt_index_offsets_and_digests() {
+fn recovery_rejects_corrupt_index_offsets() {
     let scratch = Scratch::new();
     let mut core = core(&scratch.home);
     let (session, branch) = create(&mut core);

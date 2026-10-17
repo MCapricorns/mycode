@@ -244,10 +244,29 @@ pub(crate) use unix::*;
 #[cfg(windows)]
 pub(crate) use windows::*;
 
-// Blocking-worker runtime lives in `crate::builtin::blocking`; the search
-// entry points below keep their historical `fs_search` paths for the
-// crate-public API.
-pub use crate::builtin::blocking::prepare_search_async_with_access;
+/// Resolves a grep/find target on a cancellable worker thread with an
+/// explicit content/metadata capability.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] when the target cannot be bound, the call is
+/// cancelled, or the preflight deadline expires.
+pub async fn prepare_search_async_with_access(
+    cwd: std::path::PathBuf,
+    path_arg: Option<String>,
+    cancel: CancellationToken,
+    access: SearchAccess,
+) -> Result<PreparedSearch, ToolError> {
+    crate::builtin::blocking::run_blocking(
+        "search dispatch preflight",
+        &cancel,
+        SEARCH_TIME_LIMIT,
+        move |worker_cancel| {
+            prepare_search_with_access(&cwd, path_arg.as_deref(), &worker_cancel, access)
+        },
+    )
+    .await
+}
 
 /// Handle-backed grep/find target bound during dispatch preparation.
 ///

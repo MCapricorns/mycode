@@ -211,8 +211,9 @@ impl WindowsStdioProcess {
     ///
     /// A program without a directory is resolved against `PATH` in `env`, then
     /// the parent process `PATH`. A bare name is tried with each launchable
-    /// `PATHEXT` extension (`.com`, `.exe`, `.bat`, `.cmd`, in that order)
-    /// in each directory before the next, so `npx` resolves to `npx.cmd`.
+    /// `PATHEXT` extension in `PATHEXT` order (default `.com`, `.exe`, `.bat`,
+    /// `.cmd`) in each directory before the next, so `npx` resolves to
+    /// `npx.cmd`.
     /// A hit is passed as `lpApplicationName`. When neither search finds a
     /// file, `lpApplicationName` is null and `CreateProcessW` searches the
     /// parent process `PATH`, not the environment block. A program that

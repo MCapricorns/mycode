@@ -1,6 +1,5 @@
 //! GPUI rendering for the workspace: a frosted sidebar, a conversation that
-//! fills the space up to Details, and an inspector on the right. The window
-//! is dark.
+//! fills the space up to Details, and an inspector on the right.
 mod chat;
 pub(crate) mod command_palette;
 mod context;

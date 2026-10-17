@@ -597,7 +597,7 @@ fn unpublished_messages_max_tokens_follows_output_token_max_without_a_cap() {
     let high_body = anthropic_body("claude-sonnet-4-5", endpoint, &high);
     assert_eq!(high_body["thinking"]["budget_tokens"], 16_384);
     // 32000 is already above the High budget, so it stays 32000
-    // (the old 8192 fallback was raised to 20480).
+    // (the old 8192 fallback was raised to 32000).
     assert_eq!(high_body["max_tokens"], 32_000);
 
     let mut zero = Request::new().with_reasoning(ReasoningLevel::Max);

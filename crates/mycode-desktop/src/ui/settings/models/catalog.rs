@@ -494,7 +494,7 @@ fn render_preset_form(
                 }),
         )
         .when(
-            mycode_providers::catalog::uses_oauth_login(&preset.auth),
+            mycode_providers::catalog::uses_device_code_login(&preset.auth),
             |this| {
                 let theme = cx.theme();
                 let sign_in = workspace.vm().copilot_sign_in.clone();

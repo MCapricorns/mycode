@@ -459,7 +459,7 @@ fn filter_stdio_env(
 
 /// Platform launch flags.
 ///
-/// macOS puts the child in its own process group so shutdown can signal the
+/// Unix puts the child in its own process group so shutdown can signal the
 /// whole group.
 ///
 /// Windows does not use this function. [`launch_stdio_process`] creates the

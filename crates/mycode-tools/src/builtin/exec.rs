@@ -1,7 +1,7 @@
 //! Direct image launch used by `shell` when `mode` is `program`.
 //!
 //! This module is not a tool. The model-facing name is the active shell tool
-//! (`powershell`, `bash`, or `cmd`). The caller supplies `program` plus
+//! (`powershell`, `bash`, `zsh`, `sh`, or `cmd`). The caller supplies `program` plus
 //! `args`; this path never inserts a shell or parses shell syntax. PE, ELF,
 //! and Mach-O images launch directly. A direct shebang wrapper (one
 //! interpreter, at most one argument, no `-c` or `env -S`) is exec'd as that
@@ -59,7 +59,7 @@ use crate::tool::{ToolError, ToolResult};
 use prepare::environment_summary;
 use resolve::encode_hex;
 
-/// Typed pin/resolve failure used by the shell candidate fallback.
+/// Prepared launch snapshot and run outcome shared with the shell tool.
 pub(crate) use prepare::PreparedInvocation;
 pub(crate) use spawn::{ExecutionMetadata, RunOutcome};
 

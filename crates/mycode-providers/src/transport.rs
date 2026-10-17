@@ -69,8 +69,9 @@ pub trait SseTransport: Send + Sync + 'static {
 
 /// reqwest-backed production transport.
 ///
-/// Each request builds a client that does not follow redirects and pins the
-/// resolved addresses. [`ReqwestTransport::new`] checks once per process that
+/// Each request builds a client that does not follow redirects; a direct
+/// hop pins the resolved addresses while a proxied one lets the proxy
+/// resolve the host. [`ReqwestTransport::new`] checks once per process that
 /// TLS can start. The stored value is the idle ceiling between
 /// body chunks, not a total-request deadline.
 #[derive(Clone)]

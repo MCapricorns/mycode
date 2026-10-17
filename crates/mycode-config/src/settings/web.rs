@@ -114,7 +114,7 @@ impl AppSettings {
             let field = format!("web.backends[{index}]");
             if !is_portable_id(&backend.id) {
                 return Err(invalid(&format!(
-                    "{field}.id: must be letters, digits, dash, dot, or underscore"
+                    "{field}.id: must be 1-128 lowercase letters, digits, dash, dot, or underscore"
                 )));
             }
             if !VALID_WEB_KINDS.contains(&backend.kind.as_str()) {

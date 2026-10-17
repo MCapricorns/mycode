@@ -31,7 +31,7 @@ pub struct ResourceFile {
 
 /// Discovers resource files for one session workspace.
 ///
-/// Order is stable: the workspace files first, then the global home file.
+/// Order is stable: the workspace files first, then the global files.
 /// Duplicates (the workspace root equal to the home root) are collapsed.
 #[must_use]
 pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<ResourceFile> {

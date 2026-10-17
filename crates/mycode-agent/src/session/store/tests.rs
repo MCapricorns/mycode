@@ -413,7 +413,7 @@ fn reading_an_evicted_session_reloads_from_the_store() {
     });
 }
 
-/// A livereservation's payload bytes exist nowhere durably yet, so
+/// A live reservation's payload bytes exist nowhere durably yet, so
 /// eviction pressure from other sessions must never drop it.
 #[test]
 fn a_reserved_event_survives_other_sessions_churning() {

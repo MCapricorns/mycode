@@ -2,7 +2,7 @@
 //! See `docs/agent.md`.
 //!
 //! Everything here is a free function over `(&TurnEnv, &mut AgentState)`
-//! so the agent's double loop in [`crate::agent`] can call it with
+//! so the agent loop in [`crate::agent`] can call it with
 //! field-level borrows. Event emission follows the `AgentEvent`
 //! vocabulary of `mycode-core`.
 

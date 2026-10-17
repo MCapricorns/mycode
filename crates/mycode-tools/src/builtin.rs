@@ -37,7 +37,9 @@ use std::sync::Arc;
 use crate::registry::ToolRegistry;
 use crate::tool::ToolDyn;
 
-/// All builtin tools as type-erased, registry-ready handles.
+/// The host-independent builtin tools as type-erased, registry-ready
+/// handles. `ask`, `agent`, and `web` tools need host plumbing and are
+/// registered by their callers.
 pub(crate) fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
     vec![
         Arc::new(ReadTool),
@@ -49,7 +51,7 @@ pub(crate) fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
     ]
 }
 
-/// Register all builtin tools into a registry.
+/// Register the host-independent builtin tools into a registry.
 pub fn register_builtins(registry: &ToolRegistry) {
     for tool in builtin_tools() {
         registry.register(tool);

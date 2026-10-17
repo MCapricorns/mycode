@@ -282,10 +282,10 @@ pub(crate) fn unix_now() -> u64 {
 
 /// Reads the catalog cache and reports a quarantine when the file was damaged.
 ///
-/// A missing file is `(None, None)`. A readable but unusable file is copied
-/// aside, replaced with the bundled snapshot, and returned with that snapshot
-/// so the next launch does not quarantine it again. I/O failures leave the
-/// file alone and report no repair.
+/// A missing file is `(None, None)`. A readable file whose envelope fails
+/// validation is copied aside, replaced with the bundled snapshot, and
+/// returned with that snapshot so the next launch does not quarantine it
+/// again. I/O failures leave the file alone and report no repair.
 #[must_use]
 fn load_cache_with_repair(
     home: &HomeLayout,

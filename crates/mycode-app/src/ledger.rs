@@ -467,8 +467,8 @@ pub(crate) fn decode_text(payload: &[u8]) -> String {
     }
 }
 
-/// Shared branch-head writer: the event pump and host-backed tools commit
-/// through one CAS head.
+/// Shared branch-head writer: the event pump, outbound user messages, and
+/// compaction summary cards commit through one CAS head.
 #[derive(Clone)]
 pub(crate) struct HeadWriter {
     service: SessionService,

@@ -201,10 +201,12 @@ impl ResolvedRoot {
             || walk::relative_is_skipped(&self.ignores, &self.target_relative, !self.is_file()))
     }
 
-    /// Handle-relative path from the allowed root to the selected target.
-    ///
-    /// On Windows this is the on-disk component spelling after alias open.
     /// Returns a mutable reference to the already opened single-file target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the target is not a file, was bound
+    /// metadata-only, or fails handle revalidation.
     pub fn target_file_mut(&mut self) -> io::Result<&mut File> {
         if !self.is_file() {
             return Err(io::Error::other("search target is not a file"));

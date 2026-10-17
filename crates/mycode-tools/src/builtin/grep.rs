@@ -872,7 +872,7 @@ mod tests {
         ));
         std::fs::create_dir_all(root.join("sub")).expect("dir");
         std::fs::write(root.join("sub/a.txt"), "alpha needle\nsecond line\n").expect("file");
-        let prepared = crate::builtin::blocking::prepare_search_async_with_access(
+        let prepared = crate::builtin::fs_search::prepare_search_async_with_access(
             root.clone(),
             None,
             CancellationToken::new(),

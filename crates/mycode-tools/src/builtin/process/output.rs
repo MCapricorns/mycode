@@ -147,7 +147,8 @@ where
 
 /// Decode captured process text.
 ///
-/// Precedence: byte-order marks, strict UTF-8, then Windows legacy pages.
+/// Precedence: byte-order marks, a BOM-less UTF-16LE heuristic, strict UTF-8,
+/// then Windows legacy pages.
 /// A GUI host often has no console, so `GetConsoleOutputCP` is 0 or UTF-8
 /// while `cmd` / `dir` still write the OEM page (GBK on Chinese Windows).
 /// Redirected pipes are bytes, not a console, so the OEM page is tried

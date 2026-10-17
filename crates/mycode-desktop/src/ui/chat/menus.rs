@@ -63,27 +63,27 @@ const JUMP_LATEST_GAP: f32 = 8.;
 /// Clearance that already keeps a menu above the composer card.
 const COMPOSER_CARD_CLEARANCE: f32 = 88.;
 
-/// Pixels from the bottom of the Thinking chip to the bottom of the menu.
+/// Pixels from the composer bottom edge to the bottom of a chip menu.
 ///
-/// The chip sits inside the composer card (input row, gap, and padding above
-/// it). The base clearance puts the menu fully above that card. The jump
+/// The chips sit inside the composer card (input row, gap, and padding above
+/// them). The base clearance puts the menu fully above that card. The jump
 /// button is the next row up, so the menu also clears that button. The menu
 /// paints with the composer, after the jump row; the extra gap is what keeps
 /// their pixels from stacking.
-/// Must stay at or above 84 so the docked menu clears the composer card
-/// instead of sitting on its top edge.
-pub(super) const THINKING_MENU_CLEARANCE: f32 =
+/// Must keep the card clearance plus the jump row so the menu clears both
+/// instead of sitting on the card's top edge.
+pub(super) const COMPOSER_MENU_CLEARANCE: f32 =
     COMPOSER_CARD_CLEARANCE + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + JUMP_LATEST_GAP;
 
 /// Height cap that keeps an upward-opening menu inside the window.
 ///
-/// The layer's bottom edge sits [`THINKING_MENU_CLEARANCE`] above the chip,
+/// The layer's bottom edge sits [`COMPOSER_MENU_CLEARANCE`] above the chip,
 /// and the chip itself rests near the composer's bottom padding. In a short
 /// window that leaves less room than the panel cap, so the panel is cut to
 /// what fits (at least three rows) and scrolls inside instead of losing its
 /// top rows to the window edge.
 pub(super) fn menu_height_cap(window: &Window, cap: f32) -> gpui_kit::Pixels {
-    let below_menu = THINKING_MENU_CLEARANCE + 72.;
+    let below_menu = COMPOSER_MENU_CLEARANCE + 72.;
     let headroom = 32.;
     let available = f32::from(window.viewport_size().height) - below_menu - headroom;
     px(available.clamp(110., cap))
@@ -110,7 +110,7 @@ fn composer_menu_layer(
     anchor: MenuAnchor,
     panel: impl IntoElement,
 ) -> impl IntoElement {
-    let layer = div().id(id).absolute().bottom(px(THINKING_MENU_CLEARANCE));
+    let layer = div().id(id).absolute().bottom(px(COMPOSER_MENU_CLEARANCE));
     let (layer, corner) = match anchor {
         MenuAnchor::ChipStart => (layer.left_0(), gpui_kit::Anchor::BottomLeft),
         MenuAnchor::ChipEnd => (layer.right_0(), gpui_kit::Anchor::BottomRight),
@@ -330,7 +330,7 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MenuAnchor, THINKING_MENU_CLEARANCE,
+        COMPOSER_MENU_CLEARANCE, JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MenuAnchor,
         model_menu_anchor, thinking_menu_anchor,
     };
 
@@ -355,7 +355,7 @@ mod tests {
     fn thinking_menu_clears_the_jump_button() {
         const {
             assert!(
-                THINKING_MENU_CLEARANCE >= 88. + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + 8.
+                COMPOSER_MENU_CLEARANCE >= 88. + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + 8.
             );
         }
         assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);

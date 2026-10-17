@@ -154,10 +154,10 @@ pub(super) fn open_component(
     name: &OsStr,
     flags: OFlags,
 ) -> Result<std::os::fd::OwnedFd, ConfigError> {
-    open_component_with_mounts(parent, name, flags, Mode::empty())
+    open_component_with_mode(parent, name, flags, Mode::empty())
 }
 
-fn open_component_with_mounts(
+fn open_component_with_mode(
     parent: &File,
     name: &OsStr,
     flags: OFlags,

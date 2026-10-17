@@ -37,8 +37,9 @@ const NEW_TASK_H: f32 = 34.;
 const SEARCH_H: f32 = 32.;
 const ACTION_PAD_Y: f32 = 8.;
 const ACTION_GAP: f32 = 6.;
-/// Folders label row. Add folder lives here, not in the session list.
-const FOLDERS_HEAD_H: f32 = 28.;
+/// Label row of the Folders and Sessions sections. Add folder lives in the
+/// Folders one, not in the session list.
+const SECTION_HEAD_H: f32 = 28.;
 /// Cap the folder block so a long list cannot push sessions off screen.
 const FOLDERS_BODY_MAX_H: f32 = 148.;
 
@@ -66,7 +67,7 @@ fn project_menu_top(has_folder: bool, has_search: bool) -> gpui_kit::Pixels {
     px(super::title_bar::BAR_HEIGHT
         + WORKSPACE_HEAD_H
         + action_strip_h(has_folder, has_search)
-        + FOLDERS_HEAD_H
+        + SECTION_HEAD_H
         + 4.)
 }
 
@@ -244,7 +245,7 @@ fn folders_section(
         .child(
             div()
                 .id("sidebar-folders-head")
-                .h(px(FOLDERS_HEAD_H))
+                .h(px(SECTION_HEAD_H))
                 .px_2()
                 .flex()
                 .flex_row()
@@ -335,7 +336,7 @@ fn sessions_section(
         .child(
             div()
                 .id("sidebar-sessions-head")
-                .h(px(FOLDERS_HEAD_H))
+                .h(px(SECTION_HEAD_H))
                 .px_3()
                 .flex_shrink_0()
                 .flex()

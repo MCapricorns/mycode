@@ -877,8 +877,8 @@ pub(super) fn apply_planned(
         acc.saturating_add(item.replacement.len() as isize)
             .saturating_sub((item.end - item.start) as isize)
     });
-    // BOM re-insertion below only restores bytes a replacement removed, so
-    // the final length never exceeds this bound; adding BOM headroom here
+    // BOM re-insertion below can add back bytes a replacement removed and is
+    // bounded by the post-build length check; reserving BOM headroom here
     // would reject content that lands exactly on the write limit.
     let capacity = snapshot.len().saturating_add_signed(extra);
     if capacity > MAX_WRITE_BYTES {

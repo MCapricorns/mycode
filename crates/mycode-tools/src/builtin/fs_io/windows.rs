@@ -216,9 +216,8 @@ pub(super) fn ensure_directory(parent: &File, name: &OsStr) -> io::Result<Opened
 /// Zero or several matches fail closed so a case alias or same-directory
 /// hardlink pair cannot keep an unproven name.
 // NOTE: parallel implementation in fs_search (windows.rs
-// `on_disk_component_name` via `final_path_by_handle`); kept separate because
-// fs_io proves the spelling through its own NT listing while fs_search reads it
-// from the opened handle's final path.
+// `windows_on_disk_component_name`); kept separate because the two kernels
+// scan under independent budgets and per-entry open checks.
 pub(super) fn unique_component_name(
     parent: &File,
     want: FileIdentity,

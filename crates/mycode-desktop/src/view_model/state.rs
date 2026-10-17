@@ -535,7 +535,6 @@ pub enum DesktopAction {
         active_workspace: Option<String>,
         /// Recent model pins, newest first.
         recent_models: Vec<mycode_config::ModelPin>,
-        /// Starred model pins, newest first.
         /// Thinking traces start collapsed.
         thinking_collapsed: bool,
         /// Persisted windowed size.
