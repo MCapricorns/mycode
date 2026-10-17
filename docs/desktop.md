@@ -72,22 +72,6 @@ BridgeCommand → CoreBridge
 
 `SendMessage` 和 `RecallMessage` 带上界面看到的账本头。核心拒绝过期头时，界面保持原对话并提示，不本地假装已经撤回。`RecallMessage` 只截断对话；编辑会把原文填回输入框。工作区里的文件不会被恢复或删除。
 
-## 界面截图
-
-换截图时用新的带版本号的文件名，不要覆盖 `docs/images/` 里已有的 png。旧地址会被缓存，继续指向旧图。
-
-![三个 scout 查完 Tokio、async-std 和 smol，回复里是对照表](images/subagents-v0.11.11.png)
-
-三个只读 scout 查了 Rust 异步运行时。回复把对照表铺开。
-
-![思考菜单打开，锚在思考芯片上方，当前档是 Max](images/thinking-menu-v0.11.11.png)
-
-思考菜单贴在思考芯片上方，底不透明，当前档是 Max。
-
-![设置的通用页：语言、深浅色、色板、字体](images/settings-v0.11.11.png)
-
-设置的通用页：深色或浅色、字号和语言。（截图拍于 0.11.11，当时还有已移除的色板。）
-
 ## 不放在这里的东西
 
 不拼 HTTP，不解析会话日志，不保存密钥。设置页提交的是完整 `AppSettings` 加上读到的 revision；钥匙单独走 `SaveProviderKey`。
