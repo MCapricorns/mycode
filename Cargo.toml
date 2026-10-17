@@ -65,7 +65,6 @@ libc = "0.2.190"
 rustix = "1.1.5"
 windows-sys = "0.61.2"
 sha2 = "0.11.0"
-getrandom = "0.4.3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 zip = { version = "9.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1.0.28", features = ["serde"] }

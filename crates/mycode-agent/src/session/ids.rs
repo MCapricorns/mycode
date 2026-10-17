@@ -7,7 +7,6 @@
 use std::fmt::{self, Display, Formatter};
 
 const RANDOM_BYTES: usize = 16;
-const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 macro_rules! session_id_type {
     ($name:ident, $prefix:literal, $doc:literal) => {
@@ -18,19 +17,16 @@ macro_rules! session_id_type {
         impl $name {
             /// Generates a fresh identifier from the operating-system CSPRNG.
             ///
-            /// Returns `None` when the operating-system random source cannot
-            /// fill the required 16-byte buffer. Callers must treat failure as
-            /// fail-closed and must not fall back to a weaker source.
+            /// `Uuid::new_v4` fills 16 bytes from that source and its simple
+            /// spelling is already the canonical 32 lowercase hex digits.
+            /// `Option` stays in the signature so callers keep their
+            /// fail-closed handling if the random source ever fails.
             pub fn generate() -> Option<Self> {
-                let mut random = [0_u8; RANDOM_BYTES];
-                getrandom::fill(&mut random).ok()?;
-                let mut spelling = String::with_capacity($prefix.len() + RANDOM_BYTES * 2);
-                spelling.push_str($prefix);
-                for byte in random {
-                    spelling.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
-                    spelling.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
-                }
-                Some(Self(spelling))
+                Some(Self(format!(
+                    "{}{}",
+                    $prefix,
+                    uuid::Uuid::new_v4().simple()
+                )))
             }
 
             /// Parses the one canonical persistent spelling.
