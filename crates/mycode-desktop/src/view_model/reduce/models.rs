@@ -312,6 +312,32 @@ pub(super) fn apply_session_model(state: &mut WorkspaceState, session_id: &str) 
     true
 }
 
+/// Re-derives the live effort in `settings.reasoning` for the composer's
+/// current target. The open session's pin wins — including a deliberate
+/// `None` — then the composer's last pick (`default_reasoning`), then the
+/// document default already projected into `settings.reasoning`.
+///
+/// Called where the overlay would otherwise be lost without a pick: the
+/// durable UI state landing on a sessionless composer, a settings document
+/// reload swapping the projection out from under it, and a session leaving
+/// the screen.
+pub(super) fn restore_live_reasoning(state: &mut WorkspaceState) {
+    let pinned = state.active.as_ref().and_then(|active| {
+        mycode_config::session_model(&state.session_models, &active.session_id)
+            .map(|pin| pin.reasoning.clone())
+    });
+    let Some(settings) = state.settings.as_mut() else {
+        return;
+    };
+    settings.reasoning = match pinned {
+        Some(reasoning) => reasoning,
+        None => state
+            .default_reasoning
+            .clone()
+            .or_else(|| settings.reasoning.clone()),
+    };
+}
+
 /// Gives a session that has no pin the first enabled model, then freezes
 /// that choice on the session. It does not copy the previous chat's pick.
 pub(super) fn assign_fresh_session_model(state: &mut WorkspaceState, session_id: &str) {
@@ -713,5 +739,135 @@ mod tests {
             .expect("fallback");
         assert_eq!(row.output, 131_072);
         assert_eq!(row.context, 204_800);
+    }
+
+    /// A `UiStateLoaded` carrying `reasoning` and the given session pins.
+    fn loaded_ui_state(
+        reasoning: Option<&str>,
+        session_models: Vec<mycode_config::SessionModelPin>,
+    ) -> crate::view_model::DesktopAction {
+        crate::view_model::DesktopAction::UiStateLoaded {
+            recents: Vec::new(),
+            last_project: None,
+            auto_update: true,
+            selected_provider: Some("zai".to_owned()),
+            selected_model: Some("glm".to_owned()),
+            selected_reasoning: reasoning.map(str::to_owned),
+            session_projects: Vec::new(),
+            session_models,
+            workspaces: Vec::new(),
+            session_workspaces: Vec::new(),
+            active_workspace: None,
+            recent_models: Vec::new(),
+            thinking_collapsed: false,
+            window_size: None,
+        }
+    }
+
+    fn live_reasoning(state: &WorkspaceState) -> Option<&str> {
+        state
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.reasoning.as_deref())
+    }
+
+    #[test]
+    fn the_remembered_pick_returns_to_a_sessionless_composer_on_load() {
+        // The desk composer had no session, so nothing re-applied
+        // `selected_reasoning`: the chip fell back to "Thinking" after every
+        // restart, and the next session pinned the provider default.
+        let mut state = state_with_low_rung_model(None);
+        state.selected_provider = Some("zai".to_owned());
+        state.selected_model = Some("glm".to_owned());
+        crate::view_model::reduce(&mut state, loaded_ui_state(Some("max"), Vec::new()));
+        assert_eq!(live_reasoning(&state), Some("max"));
+        assert_eq!(state.default_reasoning.as_deref(), Some("max"));
+        assert!(!state.settings.as_ref().expect("settings").dirty);
+
+        // Before the lazy catalog lands the stored rung still shows, so the
+        // chip reads Max instead of resetting to Thinking.
+        state.catalog = None;
+        assert_eq!(crate::view_model::selected_reasoning_level(&state), "max");
+
+        // The first new session pins the remembered effort.
+        super::remember_session_model(&mut state, "ses-after-restart");
+        assert_eq!(
+            mycode_config::session_model(&state.session_models, "ses-after-restart")
+                .and_then(|pin| pin.reasoning.as_deref()),
+            Some("max")
+        );
+    }
+
+    #[test]
+    fn a_session_pin_overrides_the_remembered_default_on_load() {
+        let mut state = state_with_low_rung_model(None);
+        state.active = Some(crate::view_model::ActiveConversation {
+            session_id: "ses".to_owned(),
+            branch_id: "br".to_owned(),
+            head: "empty".to_owned(),
+            entries: Vec::new(),
+            older_before: None,
+            streaming: None,
+            context_used: 0,
+            context_cache: 0,
+        });
+        let pins = vec![mycode_config::SessionModelPin {
+            session_id: "ses".to_owned(),
+            provider: "zai".to_owned(),
+            model: "glm".to_owned(),
+            reasoning: Some("low".to_owned()),
+        }];
+        crate::view_model::reduce(&mut state, loaded_ui_state(Some("max"), pins));
+        assert_eq!(
+            live_reasoning(&state),
+            Some("low"),
+            "the open session's pin wins over the composer's last pick"
+        );
+
+        // Leaving the chat puts the remembered pick back on the composer.
+        crate::view_model::reduce(
+            &mut state,
+            crate::view_model::DesktopAction::ConversationParked,
+        );
+        assert_eq!(live_reasoning(&state), Some("max"));
+    }
+
+    #[test]
+    fn a_settings_reload_keeps_the_live_effort_overlay() {
+        // OAuth sign-in and imports reload the document; the swap must not
+        // drop the pick the chip and the session pin already carry.
+        let mut state = state_with_low_rung_model(Some("max"));
+        state.selected_provider = Some("zai".to_owned());
+        state.selected_model = Some("glm".to_owned());
+        if let Some(settings) = state.settings.as_mut() {
+            settings.reasoning = Some("max".to_owned());
+        }
+        let document = mycode_config::AppSettings {
+            // A pinned English document keeps the process-global UI
+            // language deterministic for sibling tests; `auto` follows the
+            // OS locale.
+            appearance: mycode_config::AppearanceSettings {
+                language: "en".to_owned(),
+                ..mycode_config::AppearanceSettings::default()
+            },
+            providers: vec![mycode_config::ProviderSettings {
+                id: "zai".to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: "https://zai.test".to_owned(),
+                models: vec!["glm".to_owned()],
+                enabled: true,
+                context_limit: None,
+                max_output: None,
+                hidden_models: Vec::new(),
+            }],
+            ..mycode_config::AppSettings::default()
+        };
+        crate::view_model::reduce(
+            &mut state,
+            crate::view_model::DesktopAction::SettingsLoaded(Box::new(
+                SettingsState::from_settings(&document, 2, Vec::new()),
+            )),
+        );
+        assert_eq!(live_reasoning(&state), Some("max"));
     }
 }
