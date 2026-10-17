@@ -20,11 +20,6 @@
 
 ---
 
-<p align="center">
-  <img src="docs/images/hero-v0.11.11.png" alt="一次画完的鹈鹕 SVG：工具调用收成一行，回复里是图层对照表" width="100%">
-</p>
-<p align="center"><sub>一次画完的鹈鹕 SVG。工具调用收成一行，回复里是图层对照表；输入框居中，旁边是缓存环。</sub></p>
-
 ## 为什么是 MYCode
 
 - **本地优先。** 界面不读密钥、不写文件、不发网络请求；模型请求只发往你配置的服务商。
@@ -44,25 +39,6 @@
 | **MCP** | 支持 stdio 与 HTTP，多个服务器并发连接；只读工具可并发调用。 |
 | **网页** | 内置搜索与抓取后端，结果有字节上限。 |
 | **界面** | 中英双语、深浅主题、四档字号；`Ctrl-K` / `Cmd-K` 命令面板。 |
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/scouts-detail-v0.11.19.png" alt="三个 scout 并行调研 Tokio、async-std、smol"></td>
-    <td width="50%"><img src="docs/images/tool-steps-v0.11.19.png" alt="工具步骤收成一行，右侧显示结果摘要"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>三个 scout 并行调研，主代理汇总</sub></td>
-    <td align="center"><sub>每一步工具调用收成一行，右侧是结果摘要</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/images/composer-v0.11.19.png" alt="思考强度菜单与输入框、缓存环"></td>
-    <td width="50%"><img src="docs/images/subagents-v0.11.11.png" alt="对照表形式的调研结论"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>输入框：工作区、模型、思考强度、缓存环</sub></td>
-    <td align="center"><sub>调研结论直接渲染成表格</sub></td>
-  </tr>
-</table>
 
 ## 安装
 
@@ -139,7 +115,7 @@ cargo build --release -p mycode-desktop
 | --- | --- |
 | [docs/README.md](docs/README.md) | 总览与阅读顺序 |
 | [docs/architecture.md](docs/architecture.md) | crate 分层、一条消息怎么走、家目录 |
-| [docs/desktop.md](docs/desktop.md) | 界面与交互，更多截图 |
+| [docs/desktop.md](docs/desktop.md) | 界面与交互 |
 | [docs/tools.md](docs/tools.md) | 内置工具与子代理 |
 | [docs/providers.md](docs/providers.md) | 协议适配与模型目录 |
 | [docs/config.md](docs/config.md) | 设置文档与上限 |
