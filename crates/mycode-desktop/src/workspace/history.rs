@@ -175,13 +175,16 @@ fn near_history_top(offset_y: Pixels, max_offset_y: Pixels) -> bool {
     max_offset_y > px(1.) && offset_y > px(-64.)
 }
 
-/// Slack around the bottom edge. A reader a few pixels short of the tail
-/// still follows the stream; anything further up is history.
+/// Slack past the bottom edge. A reader a few pixels short of the tail still
+/// follows the stream; anything further up is history.
 const TAIL_SLACK: Pixels = px(48.);
 
 fn follows_tail(offset_y: Pixels, max_offset_y: Pixels) -> bool {
+    // The wheel handler adds the delta before the scroller's prepaint clamp,
+    // so a scroll down at the tail reads a negative gap until that pass. Past
+    // the bottom is still the bottom.
     let gap = offset_y + max_offset_y;
-    gap >= -TAIL_SLACK && gap <= TAIL_SLACK
+    gap <= TAIL_SLACK
 }
 
 #[cfg(test)]
@@ -237,6 +240,8 @@ mod tests {
         assert!(follows_tail(px(0.), px(0.)));
         assert!(follows_tail(px(-800.), px(800.)));
         assert!(follows_tail(px(-780.), px(800.)));
+        // Wheel delta past the bottom reads as overscroll before the clamp.
+        assert!(follows_tail(px(-860.), px(800.)));
         assert!(!follows_tail(px(-100.), px(800.)));
         assert!(!follows_tail(px(0.), px(800.)));
     }
