@@ -23,28 +23,25 @@ mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
 mycode-providers = { path = "../mycode-providers" }
 mycode-tools = { path = "../mycode-tools" }
-# Global allocator: mimalloc's page-aligned segments and per-thread free
-# lists cut the steady-state RSS the default Windows allocator grows into
-# for a GUI workload (many small, churned strings and elements per frame).
-mimalloc = "0.1.52"
+# The global allocator (mimalloc) and VC-LTL link live in the leaf crates
+# mycode-core / mycode-config so every target in the workspace shares them;
+# nothing is declared here on purpose.
 
 [features]
 # Headless GPUI layout tests. Off for the normal desktop build.
 test-support = ["gpui-kit/test-support"]
 
 [target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
 windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_Globalization",
+    "Win32_Graphics_Dwm",
     "Win32_System_Console",
     "Win32_System_IO",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# VC-LTL redirects the C runtime onto the OS-builtin msvcrt.dll/ucrtbase.dll,
-# so the release binary drops the VCRUNTIME140/ucrt DLL dependency and
-# shrinks. A normal dependency (not a build one): its build script exports
-# the bundled .lib search path to the final link.
-vc-ltl = "5.3.1"
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1.31"

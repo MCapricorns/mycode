@@ -20,6 +20,16 @@ pub mod message;
 pub mod provider;
 pub mod tool;
 
+/// Global allocator for every binary that links this leaf crate.
+///
+/// Declared once here — the only crate no workspace member conflicts with —
+/// so the desktop binary and every test target share mimalloc's page-aligned
+/// segments and per-thread free lists instead of the default allocator's
+/// retained RSS. A second `#[global_allocator]` anywhere in the graph is a
+/// compile error, which is the intended guard.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub use error::MycodeError;
 pub use events::{AgentEvent, MessageDelta, TurnOutcome};
 pub use ids::CallId;

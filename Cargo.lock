@@ -4485,6 +4485,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+ "vc-ltl",
  "windows-sys 0.61.2",
  "zeroize",
 ]
@@ -4493,11 +4494,13 @@ dependencies = [
 name = "mycode-core"
 version = "0.11.27"
 dependencies = [
+ "mimalloc",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "vc-ltl",
 ]
 
 [[package]]
@@ -4506,15 +4509,14 @@ version = "0.11.27"
 dependencies = [
  "chrono",
  "gpui-kit",
- "mimalloc",
  "mycode-app",
  "mycode-config",
  "mycode-providers",
  "mycode-tools",
  "notify",
  "parking_lot",
+ "raw-window-handle",
  "tokio",
- "vc-ltl",
  "windows-sys 0.61.2",
  "winresource",
 ]

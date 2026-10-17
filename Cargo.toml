@@ -50,6 +50,13 @@ tokio-util = "0.7.20"
 # `join_all` over borrowed futures; already in the graph through reqwest.
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 parking_lot = "0.12.5"
+# Global allocator for every binary in the workspace (declared once, in
+# mycode-core, so test targets get it too).
+mimalloc = "0.1.52"
+# MSVC builds link the OS-builtin ucrt/msvcrt instead of a bundled CRT. A
+# normal dep of the leaf crates: its build script's link search propagates
+# to every test target and the desktop binary.
+vc-ltl = "5.3.1"
 globset = "0.4.20"
 ignore = "0.4.33"
 # ripgrep's search core, linked in-process without an external executable.

@@ -9,11 +9,8 @@ use std::borrow::Cow;
 use mycode_config::{HomeEnv, HomeLayout};
 use mycode_desktop::workspace;
 
-// One allocator for the whole process: a GUI frame churns thousands of
-// small strings and elements, and mimalloc keeps the working set tighter
-// than the platform default heap.
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// The global allocator lives in mycode-core's crate root: a bin target's
+// own `#[global_allocator]` here would collide with it.
 
 /// Kit icons plus the embedded application mark used in the title bar.
 struct BrandAssets;
