@@ -760,6 +760,8 @@ mod tests {
             active_workspace: None,
             recent_models: Vec::new(),
             thinking_collapsed: false,
+            inspector_open: false,
+            inspector_pinned: false,
             window_size: None,
         }
     }
@@ -808,6 +810,7 @@ mod tests {
             entries: Vec::new(),
             older_before: None,
             streaming: None,
+            running: false,
             context_used: 0,
             context_cache: 0,
         });

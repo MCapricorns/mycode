@@ -177,6 +177,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                running: false,
                 context_used: 0,
                 context_cache: 0,
             });
@@ -231,7 +232,25 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             let session_id = conversation.session_id.clone();
             let restored_used = conversation.context_used;
             let restored_cache = conversation.context_cache;
+            // A reopen can land while the session's turn is still in flight:
+            // the live flag keeps running affordances honest, and only then
+            // do turn events keep flowing into this view. Reopening the
+            // session already on screen mid-turn keeps the streaming buffer
+            // the wire copy never carries.
+            let running = conversation.running;
+            let mut conversation = conversation;
+            if !switched
+                && running
+                && conversation.streaming.is_none()
+                && let Some(previous) = state.active.as_mut()
+            {
+                conversation.streaming = previous.streaming.take();
+            }
             state.active = Some(conversation);
+            // For the conversation already on screen, the flag may lag a
+            // just-armed turn by a few async hops; only the fresh-open case
+            // trusts the wire value outright.
+            state.sending = running || (!switched && state.sending);
             for session in &mut state.sessions {
                 session.active = session.session_id == session_id;
             }
@@ -364,18 +383,33 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             );
         }
         DesktopAction::ChatDelta(delta) => {
-            append_streaming(state, false, delta);
+            // Events arriving after the turn's Done/Failed are stragglers
+            // from work the view already closed; applying them would
+            // resurrect a streaming bubble over a finished transcript.
+            if state.sending {
+                append_streaming(state, false, delta);
+            }
         }
         DesktopAction::ToolStarted {
             call_id,
             name,
             target,
-        } => tool_started(state, call_id, name, target),
+        } => {
+            if state.sending {
+                tool_started(state, call_id, name, target);
+            }
+        }
         DesktopAction::ToolProgress {
             call_id,
             name,
             message,
-        } => tool_progress(state, call_id, name, message),
+        } => {
+            // Same guard: a late progress line must not repopulate
+            // `live_jobs` and the status line once the turn has ended.
+            if state.sending {
+                tool_progress(state, call_id, name, message);
+            }
+        }
         DesktopAction::ToolResultAppended(entry) => {
             if let Some(call_id) = entry.call_id.as_deref()
                 && drop_live_job(state, call_id)
@@ -399,6 +433,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             requests,
             elapsed_ms,
         } => {
+            if !state.sending {
+                // A snapshot is per-turn; a straggler must not seed
+                // `live_turn` after the turn already closed.
+                return;
+            }
             state.live_turn = Some(TurnStats {
                 model,
                 input,
@@ -416,6 +455,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             observe_cache_hit(state, context, context_cache);
         }
         DesktopAction::AskRequested(rows) => {
+            // A late ask after the turn closed must not reopen the modal.
+            if !state.sending {
+                return;
+            }
             state.ask_answers = vec![String::new(); rows.len()];
             state.pending_ask = Some(rows);
         }
@@ -451,7 +494,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ChatThinkingDelta(delta) => {
-            append_streaming(state, true, delta);
+            if state.sending {
+                append_streaming(state, true, delta);
+            }
         }
         DesktopAction::SummaryShown(entry) => {
             if summary_waits_for_the_reply(state) {
@@ -468,7 +513,12 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::AssistantStepCommitted(entry) => {
             if let Some(conversation) = state.active.as_mut() {
-                conversation.entries.push(entry);
+                push_entry_once(conversation, entry);
+            }
+            // Status text and buffer clearing are turn-scoped; a straggler
+            // step after the turn closed only contributes its entry.
+            if !state.sending {
+                return;
             }
             set_streaming_status(
                 state,
@@ -703,9 +753,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             active_workspace: active,
             recent_models,
             thinking_collapsed,
+            inspector_open,
+            inspector_pinned,
             window_size,
         } => {
             state.thinking_collapsed = thinking_collapsed;
+            state.inspector_open = inspector_open;
+            state.inspector_pinned = inspector_pinned;
             state.window_size = state.window_size.or(window_size);
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());

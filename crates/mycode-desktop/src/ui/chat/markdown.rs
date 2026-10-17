@@ -6,13 +6,14 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, Pixels, SharedString,
-    StatefulInteractiveElement, Styled, TestSupportExt as _, Window, WindowTextSystem, div, px,
-    rems,
+    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, Pixels, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, TestSupportExt as _, Window,
+    WindowTextSystem, div, px, rems,
 };
 
 use crate::ui::skin;
@@ -42,6 +43,16 @@ struct CachedMarkdownEntry {
     source: SharedString,
     blocks: Vec<MarkdownBlock>,
     tables: Vec<Option<CachedTableLayout>>,
+    scrolls: Vec<Option<TableScroll>>,
+}
+
+/// Per-table scroll handles, kept in the entry cache so pan offsets survive
+/// rerenders. `x` pans the whole frame sideways; `y` pans the row body under
+/// the pinned header.
+#[derive(Clone, Default)]
+struct TableScroll {
+    x: ScrollHandle,
+    y: ScrollHandle,
 }
 
 #[derive(Clone)]
@@ -64,6 +75,7 @@ impl MarkdownCache {
         }
         let blocks = split_markdown(source.as_ref());
         let tables = vec![None; blocks.len()];
+        let scrolls = vec![None; blocks.len()];
         if !store.entries.contains_key(id) {
             if store.order.len() >= MAX_CACHED_MARKDOWN_ENTRIES
                 && let Some(oldest) = store.order.pop_front()
@@ -78,6 +90,7 @@ impl MarkdownCache {
                 source: source.clone(),
                 blocks: blocks.clone(),
                 tables,
+                scrolls,
             },
         );
         blocks
@@ -114,6 +127,14 @@ impl MarkdownCache {
             });
         }
         widths
+    }
+
+    /// Returns the scroll handles for one table block, creating them on first
+    /// use so pan offsets survive rerenders.
+    fn table_scroll_for(&self, id: &SharedString, block_index: usize) -> Option<TableScroll> {
+        let mut store = self.inner.borrow_mut();
+        let slot = store.entries.get_mut(id)?.scrolls.get_mut(block_index)?;
+        Some(slot.get_or_insert_with(TableScroll::default).clone())
     }
 
     #[cfg(test)]
@@ -367,7 +388,8 @@ fn render_blocks(
                         }
                         None => column_widths_from_spans(&table.spans, theme, window.text_system()),
                     };
-                    render_table(format!("{id}-t{index}"), &table, &widths, theme)
+                    let scroll = cache.and_then(|cache| cache.table_scroll_for(&id, index));
+                    render_table(format!("{id}-t{index}"), &table, &widths, theme, scroll)
                         .into_any_element()
                 }
             }
@@ -423,6 +445,7 @@ fn render_table(
     table: &ParsedTableBlock,
     widths: &[f32],
     theme: &Theme,
+    scroll: Option<TableScroll>,
 ) -> impl IntoElement {
     let Some(header_spans) = table.spans.first() else {
         return div().into_any_element();
@@ -430,31 +453,78 @@ fn render_table(
     let min_width: f32 = widths.iter().sum();
     let body_spans = &table.spans[1..];
     let body_id = format!("{id}-body");
+    let scroll = scroll.unwrap_or_default();
+    let body_scroll = scroll.y.clone();
     div()
-        .id(SharedString::from(id))
         .w_full()
         .min_w_0()
-        .overflow_x_scroll()
-        .rounded(px(10.))
-        .border_1()
-        .border_color(theme.border)
+        .flex_none()
+        .relative()
         .child(
             div()
-                .min_w(px(min_width))
-                .flex()
-                .flex_col()
-                .child(table_row(header_spans, widths, true, false, theme))
+                .id(SharedString::from(id.clone()))
+                .w_full()
+                .min_w_0()
+                .overflow_x_scroll()
+                .restrict_scroll_to_axis()
+                .track_scroll(&scroll.x)
+                .on_scroll_wheel(move |event, window, cx| {
+                    let delta = event.delta.pixel_delta(window.line_height());
+                    if delta.x != px(0.) {
+                        // The frame owns horizontal deltas; left to bubble the
+                        // transcript remaps them into a vertical page scroll.
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if delta.y == px(0.)
+                        || body_scroll.max_offset().y <= px(0.)
+                        || !body_scroll.bounds().contains(&event.position)
+                    {
+                        return;
+                    }
+                    // The body's own listener already applied this delta.
+                    // Chain the gesture to the transcript once the body sits
+                    // on its limit instead of scrolling both at once.
+                    let offset_y = body_scroll.offset().y;
+                    let max_y = body_scroll.max_offset().y;
+                    let chained = (delta.y < px(0.) && offset_y <= -max_y)
+                        || (delta.y > px(0.) && offset_y >= px(0.));
+                    if !chained {
+                        cx.stop_propagation();
+                    }
+                })
+                .rounded(px(10.))
+                .border_1()
+                .border_color(theme.border)
                 .child(
                     div()
-                        .id(SharedString::from(body_id))
-                        .max_h(px(280.))
-                        .overflow_y_scroll()
+                        .min_w(px(min_width))
                         .flex()
                         .flex_col()
-                        .children(body_spans.iter().enumerate().map(|(index, row_spans)| {
-                            table_row(row_spans, widths, false, index % 2 == 1, theme)
-                        })),
+                        .child(table_row(header_spans, widths, true, false, theme))
+                        .child(
+                            div()
+                                .id(SharedString::from(body_id))
+                                .max_h(px(280.))
+                                .overflow_y_scroll()
+                                .restrict_scroll_to_axis()
+                                .track_scroll(&scroll.y)
+                                .flex()
+                                .flex_col()
+                                .children(body_spans.iter().enumerate().map(
+                                    |(index, row_spans)| {
+                                        table_row(row_spans, widths, false, index % 2 == 1, theme)
+                                    },
+                                )),
+                        ),
                 ),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .child(Scrollbar::horizontal(&scroll.x).id(format!("{id}-sb-x")))
+                .child(Scrollbar::vertical(&scroll.y).id(format!("{id}-sb-y"))),
         )
         .into_any_element()
 }

@@ -90,9 +90,8 @@ pub(crate) fn windows_os_str_eq_ignore_case(left: &OsStr, right: &OsStr) -> bool
             (Some(left_unit), Some(right_unit)) => {
                 // SAFETY: `RtlUpcaseUnicodeChar` is a pure 1:1 mapping on a
                 // UTF-16 code unit and has no pointer preconditions.
-                let same = unsafe {
-                    RtlUpcaseUnicodeChar(left_unit) == RtlUpcaseUnicodeChar(right_unit)
-                };
+                let same =
+                    unsafe { RtlUpcaseUnicodeChar(left_unit) == RtlUpcaseUnicodeChar(right_unit) };
                 if !same {
                     return false;
                 }

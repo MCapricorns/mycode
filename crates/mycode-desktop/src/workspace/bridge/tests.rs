@@ -10,6 +10,7 @@ fn conversation(session: &str, branch: &str) -> ActiveConversation {
         entries: Vec::new(),
         older_before: None,
         streaming: None,
+        running: false,
         context_used: 0,
         context_cache: 0,
     }

@@ -372,27 +372,25 @@ impl Workspace {
 
     /// Drops one linked folder, including the one the open chat works in.
     ///
-    /// Removing that folder parks the chat: the desk comes back and the
-    /// session keeps its binding, so opening the chat again re-adds the
-    /// folder.
+    /// The folder's chats go with it: sessions bound to the folder that the
+    /// shown workspace owns are deleted. A session bound to the same folder
+    /// from another workspace keeps its copy — that workspace may still list
+    /// the folder.
     pub(crate) fn on_remove_workspace_root(&mut self, project: &str, cx: &mut Context<Self>) {
         let chat_uses_it = self
             .vm
             .project_dir
             .as_deref()
             .is_some_and(|current| crate::view_model::same_project_path(current, project));
+        let removed_sessions = crate::view_model::sessions_removed_with_root(&self.vm, project);
         self.apply_action(DesktopAction::WorkspaceRootRemoved(project.to_owned()), cx);
         if chat_uses_it {
-            if self
-                .focused_project
-                .as_deref()
-                .is_some_and(|focused| crate::view_model::same_project_path(focused, project))
-            {
-                self.focused_project = None;
-            }
             self.park_conversation(cx);
             self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
             self.refresh_skills(cx);
+        }
+        for session_id in removed_sessions {
+            self.delete_session(session_id, cx);
         }
         self.persist_ui_state(cx);
     }
@@ -422,6 +420,9 @@ impl Workspace {
         if crate::view_model::open_session_is_empty(&self.vm) {
             return true;
         }
+        // A newer intent: drop whatever open is still in flight so the
+        // created session opens instead of a reply landing for the old one.
+        self.pending_open = None;
         // New sessions inherit the active project so the sidebar grouping and
         // the tool working directory follow the project switcher.
         if self.vm.project_dir.is_some() {
@@ -433,14 +434,14 @@ impl Workspace {
 
     /// Opens one session and ignores any conversation reply that is not it.
     pub(super) fn request_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        self.suppress_open = false;
+        let Some(parsed) = SessionId::parse(session_id) else {
+            return;
+        };
         self.pending_open = Some(session_id.to_owned());
         // Opening adopts an unbound (pre-workspace) session into the
         // workspace it was opened from; bound sessions are untouched.
         self.bind_session_workspace(session_id, cx);
-        if let Some(session_id) = SessionId::parse(session_id) {
-            self.dispatch(BridgeCommand::OpenSession(session_id), cx);
-        }
+        self.dispatch(BridgeCommand::OpenSession(parsed), cx);
     }
 
     /// Makes the sidebar and tool directory follow one session's project.
@@ -653,10 +654,10 @@ impl Workspace {
         if project.is_empty() {
             return;
         }
-        self.focused_project = Some(project.to_owned());
         self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
         let Some(session_id) = self.open_session_id() else {
+            self.pending_open = None;
             self.pending_project = Some(project.to_owned());
             self.dispatch(BridgeCommand::CreateSession, cx);
             self.refresh_skills(cx);
@@ -690,7 +691,6 @@ impl Workspace {
     /// this folder gets its own session.
     fn open_isolated_project(&mut self, project: &str, cx: &mut Context<Self>) {
         if self.active_is_project(project) {
-            self.focused_project = Some(project.to_owned());
             self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
             self.refresh_skills(cx);
             self.persist_ui_state(cx);
@@ -707,7 +707,6 @@ impl Workspace {
     /// Shows `project` and either opens its newest chat or, when `create`
     /// is set and it has none, starts a fresh chat bound only to it.
     fn focus_project_chat(&mut self, project: &str, create: bool, cx: &mut Context<Self>) {
-        self.focused_project = Some(project.to_owned());
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
         self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
         if let Some(session_id) = crate::view_model::newest_session_in_project(
@@ -765,10 +764,11 @@ impl Workspace {
     }
 
     /// Hides the open chat. The session and any turn already running stay
-    /// on the folder they were bound to.
+    /// on the folder they were bound to. Clearing `pending_open` makes the
+    /// reply scope drop any in-flight open: the parked desk must not be
+    /// replaced by a conversation the user already left.
     fn park_conversation(&mut self, cx: &mut Context<Self>) {
         self.pending_open = None;
-        self.suppress_open = true;
         self.mention_query = None;
         self.pending_composer_prefill = Some(String::new());
         self.apply_action(DesktopAction::ConversationParked, cx);
@@ -781,7 +781,6 @@ impl Workspace {
         project: &str,
         cx: &mut Context<Self>,
     ) {
-        self.focused_project = Some(project.to_owned());
         self.apply_action(
             DesktopAction::SessionProjectBound {
                 session_id: session_id.to_owned(),
@@ -824,6 +823,8 @@ impl Workspace {
             active_workspace: self.vm.active_workspace.clone(),
             recent_models: self.vm.recent_models.clone(),
             thinking_collapsed: self.vm.thinking_collapsed,
+            inspector_open: self.vm.inspector_open,
+            inspector_pinned: self.vm.inspector_pinned,
             window_size: self.vm.window_size,
         };
         self.dispatch(BridgeCommand::SaveUiState { state }, cx);

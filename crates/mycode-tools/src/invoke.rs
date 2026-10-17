@@ -52,8 +52,7 @@ pub async fn prepare_tool_ctx(
             .get("path")
             .and_then(Value::as_str)
             .ok_or_else(|| "file tool is missing a path argument".to_owned())?;
-        let (root, path) =
-            anchor_file_path(cwd, extra_roots, read_roots, tool.reads_only(), path);
+        let (root, path) = anchor_file_path(cwd, extra_roots, read_roots, tool.reads_only(), path);
         let prepared = crate::prepare_file_async(root.clone(), path, cancel, access)
             .await
             .map_err(|error| error.to_string())?;

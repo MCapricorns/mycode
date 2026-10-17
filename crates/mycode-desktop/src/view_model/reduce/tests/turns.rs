@@ -6,6 +6,7 @@ use crate::view_model::{ComposerSubmit, composer_submit};
 #[test]
 fn a_finished_turn_promotes_its_live_meter_to_last_turn() {
     let mut state = open(Vec::new(), None);
+    reduce(&mut state, DesktopAction::TurnArmed);
     reduce(
         &mut state,
         DesktopAction::UsageSnapshot {
@@ -61,6 +62,7 @@ fn a_new_session_inherits_the_open_chat_model() {
             entries: Vec::new(),
             older_before: None,
             streaming: None,
+            running: false,
             context_used: 0,
             context_cache: 0,
         }),
@@ -98,6 +100,7 @@ fn manual_and_auto_compaction_show_the_summary_in_the_chat() {
             entries: Vec::new(),
             older_before: None,
             streaming: None,
+            running: false,
             context_used: 0,
             context_cache: 0,
         }),
@@ -151,6 +154,7 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
                 thinking: "weigh the matches".to_owned(),
                 status: String::new(),
             }),
+            running: false,
             context_used: 0,
             context_cache: 0,
         }),
@@ -249,6 +253,7 @@ fn welcome_enter_holds_the_draft_until_the_new_session_opens() {
             entries: Vec::new(),
             older_before: None,
             streaming: None,
+            running: false,
             context_used: 0,
             context_cache: 0,
         }),
@@ -289,6 +294,7 @@ fn welcome_enter_without_a_folder_does_not_start_a_task() {
             entries: Vec::new(),
             older_before: None,
             streaming: None,
+            running: false,
             context_used: 0,
             context_cache: 0,
         }),
@@ -326,6 +332,7 @@ fn chat_failed_head_updates_conversation_without_clearing_context() {
                 thinking: String::new(),
                 status: "working".to_owned(),
             }),
+            running: false,
             context_used: 0,
             context_cache: 0,
         }),
@@ -401,6 +408,7 @@ fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
 #[test]
 fn streaming_text_stops_at_the_character_cap() {
     let mut state = open(Vec::new(), None);
+    state.sending = true;
     // Three bytes per char: the byte fast path runs out well before the
     // character cap, so both paths are exercised.
     let chunk = "\u{4e2d}".repeat(1024);
@@ -426,6 +434,7 @@ fn steer_committed_appends_the_entry_and_moves_the_head() {
             entries: Vec::new(),
             older_before: None,
             streaming: None,
+            running: false,
             context_used: 0,
             context_cache: 0,
         }),
@@ -521,6 +530,93 @@ fn ending_a_turn_clears_pending_ask_and_subagent_detail_window() {
     assert!(state.pending_ask.is_none());
     assert!(state.ask_answers.is_empty());
     assert!(state.subagent_window.is_none());
+}
+
+#[test]
+fn stragglers_after_the_turn_do_not_resurrect_running_state() {
+    let mut state = open(Vec::new(), None);
+    state.sending = true;
+    reduce(
+        &mut state,
+        DesktopAction::ToolStarted {
+            call_id: "c1".to_owned(),
+            name: "agent".to_owned(),
+            target: "scout map".to_owned(),
+        },
+    );
+    reduce(
+        &mut state,
+        DesktopAction::ChatDone {
+            head: "evt-2".to_owned(),
+            entry: user("evt-2", "reply"),
+        },
+    );
+    assert!(!state.sending);
+    assert!(state.live_jobs.is_empty());
+
+    // A progress line queued behind the turn's Done must not rebuild the
+    // live job, the status line, or a streaming bubble.
+    reduce(
+        &mut state,
+        DesktopAction::ToolProgress {
+            call_id: "c1".to_owned(),
+            name: String::new(),
+            message: "agent|scout|step|still running".to_owned(),
+        },
+    );
+    reduce(&mut state, DesktopAction::ChatDelta("tail".to_owned()));
+    reduce(
+        &mut state,
+        DesktopAction::UsageSnapshot {
+            model: "m".to_owned(),
+            input: 1,
+            context: 1,
+            context_cache: 0,
+            output: 1,
+            cache: None,
+            requests: 1,
+            elapsed_ms: 1,
+        },
+    );
+    assert!(state.live_jobs.is_empty());
+    assert!(state.live_turn.is_none());
+    assert!(
+        state
+            .active
+            .as_ref()
+            .and_then(|active| active.streaming.as_ref())
+            .is_none()
+    );
+}
+
+#[test]
+fn reopening_a_session_with_a_live_turn_restores_sending() {
+    let mut state = open(Vec::new(), None);
+    reduce(
+        &mut state,
+        DesktopAction::ConversationOpened(ActiveConversation {
+            session_id: "other".to_owned(),
+            branch_id: "br".to_owned(),
+            head: "evt-head".to_owned(),
+            entries: Vec::new(),
+            older_before: None,
+            streaming: None,
+            running: true,
+            context_used: 0,
+            context_cache: 0,
+        }),
+    );
+    assert!(state.sending);
+    // Live events for the in-flight turn flow into the view again.
+    reduce(
+        &mut state,
+        DesktopAction::ToolProgress {
+            call_id: "c1".to_owned(),
+            name: String::new(),
+            message: "agent|scout|step|mapping".to_owned(),
+        },
+    );
+    assert_eq!(state.live_jobs.len(), 1);
 }
 
 #[test]

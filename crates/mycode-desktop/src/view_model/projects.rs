@@ -221,6 +221,26 @@ pub fn open_session_is_empty(state: &WorkspaceState) -> bool {
     })
 }
 
+/// The sessions that leave with a removed workspace root: bound to the
+/// folder and owned by the workspace the sidebar shows. A session bound to
+/// the same folder from another workspace keeps its copy — that workspace
+/// may still list the folder.
+#[must_use]
+pub(crate) fn sessions_removed_with_root(state: &WorkspaceState, project: &str) -> Vec<String> {
+    let Some(active) = active_workspace(state).map(|workspace| workspace.id.clone()) else {
+        return Vec::new();
+    };
+    state
+        .session_projects
+        .iter()
+        .filter(|(_, bound)| same_project_path(bound, project))
+        .map(|(session, _)| session.clone())
+        .filter(|session| {
+            workspace_of_session(state, session).is_some_and(|owner| owner.id == active)
+        })
+        .collect()
+}
+
 /// Newest session already bound to `project`. `sessions` is newest-first.
 #[must_use]
 pub(crate) fn newest_session_in_project<'a>(
@@ -238,6 +258,45 @@ pub(crate) fn newest_session_in_project<'a>(
 mod tests {
     use super::{has_open_folder, open_session_is_empty};
     use crate::view_model::WorkspaceState;
+
+    #[test]
+    fn removing_a_root_drops_only_its_sessions_in_the_shown_workspace() {
+        let workspace = |id: &str| mycode_config::WorkspaceDef {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            folders: Vec::new(),
+        };
+        let pair = |left: &str, right: &str| (left.to_owned(), right.to_owned());
+        let state = WorkspaceState {
+            workspaces: vec![workspace("first"), workspace("second")],
+            active_workspace: Some("first".to_owned()),
+            session_workspaces: vec![
+                pair("here", "first"),
+                pair("there", "second"),
+                pair("unbound-owner", "removed"),
+            ],
+            session_projects: vec![
+                pair("here", "/app"),
+                pair("there", "/app"),
+                pair("unbound-owner", "/app"),
+                pair("elsewhere", "/other"),
+            ],
+            ..WorkspaceState::default()
+        };
+        let removed = super::sessions_removed_with_root(&state, "/app");
+        // "unbound-owner" predates named workspaces: it lists under the
+        // first workspace, which is the one being shown.
+        assert_eq!(removed, ["here", "unbound-owner"]);
+    }
+
+    #[test]
+    fn removing_a_root_without_a_workspace_drops_nothing() {
+        let state = WorkspaceState {
+            session_projects: vec![("s".to_owned(), "/app".to_owned())],
+            ..WorkspaceState::default()
+        };
+        assert!(super::sessions_removed_with_root(&state, "/app").is_empty());
+    }
 
     #[test]
     fn fresh_workspace_without_a_folder_stays_closed() {
@@ -344,6 +403,7 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                running: false,
                 context_used: 0,
                 context_cache: 0,
             }),

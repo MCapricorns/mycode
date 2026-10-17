@@ -531,6 +531,10 @@ pub enum DesktopAction {
         recent_models: Vec<mycode_config::ModelPin>,
         /// Thinking traces start collapsed.
         thinking_collapsed: bool,
+        /// The Details panel was open.
+        inspector_open: bool,
+        /// The Details panel was pinned resident.
+        inspector_pinned: bool,
         /// Persisted windowed size.
         window_size: Option<mycode_config::WindowSize>,
     },
