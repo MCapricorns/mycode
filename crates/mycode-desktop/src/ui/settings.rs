@@ -223,9 +223,7 @@ fn settings_page_key(workspace: &Workspace) -> String {
                 vm.provider_detail.as_deref().unwrap_or("all")
             ),
             crate::view_model::ModelsSubview::Catalog => "models-catalog".to_owned(),
-            crate::view_model::ModelsSubview::OpenDesign => "models-opendesign".to_owned(),
-            crate::view_model::ModelsSubview::GitHubCopilot => "models-github-copilot".to_owned(),
-            crate::view_model::ModelsSubview::OpenAiCodex => "models-openai-codex".to_owned(),
+            crate::view_model::ModelsSubview::OAuth => "models-oauth".to_owned(),
             crate::view_model::ModelsSubview::Custom => "models-custom".to_owned(),
         },
         SettingsSection::Web => match vm.web_detail.as_deref() {

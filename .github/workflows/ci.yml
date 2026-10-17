@@ -9,9 +9,9 @@
 # so a pull request does not wait on four LTO links.
 #
 # push to main: the same Windows check, plus plan the release and build the
-# three native release binaries. Each release build first refreshes the
-# vendored provider-catalog snapshot from models.dev (best effort; a failed
-# fetch keeps the committed snapshot). Release builds use `[profile.release]`
+# three native release binaries. The client downloads the models.dev catalog
+# into its runtime cache, so CI does not refresh a vendored snapshot. Release
+# builds use `[profile.release]`
 # (fat LTO, one codegen unit) through cargo_release_build.sh and treat
 # warnings as errors (`RUSTFLAGS=-Dwarnings`). They do not run tests or
 # clippy; the Windows check owns those. A publish waits until the check and all
@@ -255,30 +255,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Refresh provider catalog snapshot (best effort)
-        shell: bash
-        env:
-          CARGO_NET_RETRY: "10"
-          CARGO_HTTP_TIMEOUT: "60"
-        run: |
-          tmp="$(mktemp)"
-          refresh() {
-            curl --fail --silent --show-error --location --max-time 60 \
-              -o "$tmp" https://models.dev/api.json || return 1
-            python_bin="$(command -v python3 || command -v python)" || return 1
-            "$python_bin" scripts/generate_catalog.py "$tmp" \
-              crates/mycode-providers/src/catalog/snapshot.json || return 1
-          }
-          for attempt in 1 2 3; do
-            if refresh; then
-              echo "provider catalog snapshot refreshed from models.dev"
-              exit 0
-            fi
-            echo "catalog refresh attempt ${attempt} failed" >&2
-            sleep 5
-          done
-          echo "models.dev unavailable; building with the committed snapshot" >&2
 
       - name: Build release binary
         shell: bash

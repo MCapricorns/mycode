@@ -1,9 +1,11 @@
-//! The About settings page: version, self-update status, and the provider
-//! catalog snapshot date.
+//! The About settings page: version, self-update controls, and the provider
+//! catalog date. Every transient notice is a toast; nothing status-like is
+//! painted here.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div};
 
 use super::widgets::{settings_card, settings_row};
@@ -18,7 +20,7 @@ pub(super) fn render_about_section(
     let vm = workspace.vm();
     let current = mycode_app::current_version().to_owned();
     let catalog_line = match vm.catalog_fetched_at {
-        0 => t("bundled snapshot", "内置快照").to_owned(),
+        0 => t("built-in providers", "内置服务商").to_owned(),
         seconds => {
             let date = catalog_date(seconds);
             format!(
@@ -30,64 +32,34 @@ pub(super) fn render_about_section(
     };
     let auto_update = vm.auto_update;
     let checking = matches!(vm.update, UpdateState::Checking);
-    let status: (String, Option<AnyElement>) = match &vm.update {
-        UpdateState::Idle => (
-            t("Update checks run at startup.", "启动时会检查更新。").to_owned(),
-            None,
+    // Status text is a toast; this page only carries the action that state
+    // needs (download a staged offer, restart to install, retry a check).
+    let action: Option<AnyElement> = match &vm.update {
+        UpdateState::Available { .. } => Some(
+            Button::new("update-download")
+                .icon(IconName::Download)
+                .label(t("Download & install", "下载并安装"))
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_download_update(cx);
+                }))
+                .into_any_element(),
         ),
-        UpdateState::Checking => (t("Checking for updates…", "正在检查更新…").to_owned(), None),
-        UpdateState::UpToDate => (
-            format!("v{current} {}", t("is the latest version.", "是最新版本。")),
-            Some(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().success)
-                    .child(t("up to date", "已是最新"))
-                    .into_any_element(),
-            ),
+        UpdateState::Ready { .. } => Some(
+            Button::new("update-restart")
+                .icon(IconName::RefreshCw)
+                .label(t("Restart to install", "重启并安装"))
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_install_update(cx);
+                }))
+                .into_any_element(),
         ),
-        UpdateState::Available { version, .. } => (
-            format!("v{version} {}", t("is available.", "可用。")),
-            Some(
-                Button::new("update-download")
-                    .icon(IconName::Download)
-                    .label(t("Download & install", "下载并安装"))
-                    .small()
-                    .outline()
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_download_update(cx);
-                    }))
-                    .into_any_element(),
-            ),
-        ),
-        UpdateState::Downloading { .. } => (
-            t("Downloading and verifying…", "正在下载并校验…").to_owned(),
-            None,
-        ),
-        UpdateState::Ready { version } => (
-            format!("v{version} {}", t("is staged.", "已就绪。")),
-            Some(
-                Button::new("update-restart")
-                    .icon(IconName::RefreshCw)
-                    .label(t("Restart to install", "重启并安装"))
-                    .small()
-                    .outline()
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_install_update(cx);
-                    }))
-                    .into_any_element(),
-            ),
-        ),
-        UpdateState::Failed(_) => {
-            // The failure text is the bottom-right toast. A red dump of the
-            // transport error overflows this row.
-            (
-                t("Last update attempt failed.", "上次更新失败。").to_owned(),
-                None,
-            )
-        }
+        _ => None,
     };
-    let mut rows = vec![
+    let rows = vec![
         settings_row(
             "version",
             t("Current version", "当前版本"),
@@ -137,22 +109,15 @@ pub(super) fn render_about_section(
             cx.theme(),
         ),
         settings_row(
-            "update-status",
-            t("Status", "状态"),
+            "updates",
+            t("Updates", "更新"),
             None,
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .min_w_0()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .whitespace_normal()
-                        .child(status.0),
-                )
+                .when_some(action, |this, action| this.child(action))
                 .child(
                     Button::new("check-update")
                         .icon(IconName::RefreshCw)
@@ -171,45 +136,35 @@ pub(super) fn render_about_section(
                 .into_any_element(),
             cx.theme(),
         ),
-    ];
-    if let Some(node) = status.1 {
-        rows.push(
+        settings_row(
+            "catalog",
+            t("Provider catalog", "服务商目录"),
+            None,
             div()
                 .flex()
                 .flex_row()
-                .justify_end()
-                .child(node)
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(catalog_line),
+                )
+                .child(
+                    Button::new("catalog-refresh")
+                        .icon(IconName::RefreshCw)
+                        .label(t("Refresh", "刷新"))
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_refresh_catalog(cx);
+                        })),
+                )
                 .into_any_element(),
-        );
-    }
-    rows.push(settings_row(
-        "catalog",
-        t("Provider catalog", "服务商目录"),
-        None,
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(catalog_line),
-            )
-            .child(
-                Button::new("catalog-refresh")
-                    .icon(IconName::RefreshCw)
-                    .label(t("Refresh", "刷新"))
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_refresh_catalog(cx);
-                    })),
-            )
-            .into_any_element(),
-        cx.theme(),
-    ));
+            cx.theme(),
+        ),
+    ];
     let theme = cx.theme();
     settings_card(
         "about",

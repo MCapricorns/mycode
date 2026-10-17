@@ -539,7 +539,7 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     // rather than sending `{type:"disabled"}`, which this model 400s.
     // https://platform.kimi.com/docs/guide/use-reasoning-effort.md
     // A published models.dev list still gates the token. An id the active
-    // catalog and the bundled snapshot both omit keeps the id-based token so
+    // catalog and the bundled baseline both omit keeps the id-based token so
     // coding-plan ids such as `k3` and `k3-256k` keep working.
     if is_k3_model(model_id) {
         if let Some(token) = kimi_effort_token(model_id, level, true) {
@@ -564,7 +564,7 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     // `@ai-sdk/openai-compatible` returns `{ reasoningEffort }`, the wire
     // field `reasoning_effort`. The K2 toggle stays; the effort token is
     // sent beside it. The live or cached catalog is consulted first, then
-    // the vendored snapshot.
+    // the bundled baseline.
     if let Some(token) = kimi_effort_token(model_id, level, false) {
         body["reasoning_effort"] = json!(token);
     }

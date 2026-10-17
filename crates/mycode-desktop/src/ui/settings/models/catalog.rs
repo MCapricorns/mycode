@@ -1,5 +1,5 @@
-//! The models.dev catalog picker, the Open Design page, and the preset
-//! form both of them open.
+//! The provider catalog picker, the shared OAuth sign-in page, and the
+//! preset form the catalog rows open.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -39,11 +39,9 @@ pub(super) fn render_models_catalog_page(
     let preset_search_text = workspace.vm().preset_search.to_lowercase();
     let mut preset_rows: Vec<(String, String, String, usize)> = Vec::new();
     for provider in &catalog.providers {
-        // OpenDesign and the device-OAuth vendors have their own buttons and
-        // pages; they are not pasted-key rows of the library.
-        if provider.id == mycode_providers::catalog::opendesign::PROVIDER_ID
-            || mycode_providers::catalog::uses_device_code_login(&provider.auth)
-        {
+        // Device-OAuth vendors sign in on the shared OAuth page; they are
+        // not pasted-key rows of the library.
+        if mycode_providers::catalog::uses_device_code_login(&provider.auth) {
             continue;
         }
         if !preset_search_text.is_empty()
@@ -171,136 +169,73 @@ pub(super) fn render_models_catalog_page(
         .into_any_element()
 }
 
-/// The OpenDesign page: the live `/models` loader above the add form.
-///
-/// The form starts on the curated list. Loading replaces it with the models
-/// the key can use; a blank key field uses the key already stored for the
-/// configured OpenDesign provider.
-pub(super) fn render_opendesign_page(
+/// The shared OAuth sign-in page: one card per device-flow provider
+/// (GitHub Copilot, OpenAI Codex). Signing in binds the catalog row's
+/// models; trimming them happens later on the provider's detail page.
+pub(super) fn render_oauth_page(
     workspace: &mut Workspace,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    use mycode_providers::catalog::opendesign;
-
-    let form = render_preset_form(workspace, opendesign::PROVIDER_ID, window, cx);
-    let loading = workspace.vm().opendesign_loading;
-    let configured = workspace.vm().settings.as_ref().is_some_and(|settings| {
-        settings
-            .providers
-            .iter()
-            .any(|provider| provider.id == opendesign::PROVIDER_ID)
-    });
-    let key_stored = workspace.vm().settings.as_ref().is_some_and(|settings| {
-        settings
-            .providers_with_keys
-            .iter()
-            .any(|id| id == opendesign::PROVIDER_ID)
-    });
     let header = super::super::subview_header(
         t("Providers", "服务商"),
-        "OpenDesign",
+        t("OAuth sign-in", "OAuth 登录"),
         Some(t(
-            "Gateway at amr-link.open-design.ai, separate from the model library.",
-            "amr-link.open-design.ai 网关，独立于模型库。",
+            "A device code signs in instead of a pasted API key.",
+            "通过设备授权码登录，不需要粘贴 API 密钥。",
         )),
         |workspace, cx| {
             workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
         },
         cx,
     );
-    let hint = if key_stored {
-        t(
-            "A key is stored. Load with the field blank to use it, or paste a new one.",
-            "已保存密钥。输入框留空即用已保存的密钥加载，也可以粘贴新的。",
-        )
-    } else {
-        t(
-            "Paste your key in the form below, then load the models it can use.",
-            "先在下方表单粘贴密钥，再加载它可用的模型。",
-        )
-    };
-    let theme = cx.theme();
+    let error = workspace.vm().copilot_error.clone();
+    let theme = cx.theme().clone();
     div()
-        .id("opendesign-page")
+        .id("oauth-page")
         .flex()
         .flex_col()
         .gap_3()
         .child(header)
-        .child(
-            settings_card(
-                "opendesign-live",
-                t("Live models", "实时模型"),
-                Some(t(
-                    "Until you load, the list shows the models measured against the gateway. \
-                     Known models keep their measured limits and thinking levels.",
-                    "加载前列出的是针对该网关实测过的模型。已知模型保留实测的上限和思考档位。",
-                )),
-                theme,
-                vec![
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_3()
-                        .child(
-                            Button::new("opendesign-load")
-                                .icon(IconName::RefreshCw)
-                                .label(if loading {
-                                    t("Loading\u{2026}", "加载中\u{2026}")
-                                } else {
-                                    t("Load models from gateway", "从网关加载模型")
-                                })
-                                .small()
-                                .outline()
-                                .disabled(loading)
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_load_opendesign_models(cx);
-                                })),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(hint),
-                        )
-                        .into_any_element(),
-                ],
+        .when_some(error, |this, message| {
+            this.child(
+                div()
+                    .text_xs()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme.danger.opacity(0.12))
+                    .text_color(theme.danger)
+                    .child(message),
             )
-            .into_any_element(),
-        )
-        .when(configured, |this| {
-            this.child(div().text_xs().text_color(theme.muted_foreground).child(t(
-                "OpenDesign is configured. Adding again replaces its model list.",
-                "OpenDesign 已配置。再次添加会替换它的模型列表。",
-            )))
         })
-        .child(form)
+        .child(oauth_card(
+            workspace,
+            mycode_providers::COPILOT_PROVIDER_ID,
+            cx,
+        ))
+        .child(oauth_card(
+            workspace,
+            mycode_providers::OPENAI_CODEX_PROVIDER_ID,
+            cx,
+        ))
         .into_any_element()
 }
 
-/// One device-OAuth page (GitHub Copilot or OpenAI Codex): the sign-in
-/// copy above the shared preset form, whose device-code section shows the
-/// authorize button, the verification code, and any sign-in failure.
-pub(super) fn render_device_signin_page(
+/// One OAuth provider card on the shared sign-in page: status, model count,
+/// the verification code while its flow runs, and the sign-in button.
+fn oauth_card(
     workspace: &mut Workspace,
     provider_id: &'static str,
-    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let form = render_preset_form(workspace, provider_id, window, cx);
-    let (title, blurb, configured_text) = match provider_id {
+    let (title, blurb, sign_label) = match provider_id {
         mycode_providers::OPENAI_CODEX_PROVIDER_ID => (
             "OpenAI Codex",
             t(
                 "Signs in with your ChatGPT account over the OpenAI device flow.",
                 "通过 OpenAI 设备授权流程使用你的 ChatGPT 账号登录。",
             ),
-            t(
-                "OpenAI Codex is configured. Signing in again refreshes the token and the model list.",
-                "OpenAI Codex 已配置。重新登录会刷新令牌并替换模型列表。",
-            ),
+            t("Sign in with ChatGPT", "使用 ChatGPT 登录"),
         ),
         _ => (
             "GitHub Copilot",
@@ -308,44 +243,129 @@ pub(super) fn render_device_signin_page(
                 "Signs in with your GitHub account over the device flow.",
                 "通过设备授权流程使用你的 GitHub 账号登录。",
             ),
-            t(
-                "GitHub Copilot is configured. Signing in again refreshes the token and the model list.",
-                "GitHub Copilot 已配置。重新登录会刷新令牌并替换模型列表。",
-            ),
+            t("Sign in with GitHub", "使用 GitHub 登录"),
         ),
     };
-    let configured = workspace.vm().settings.as_ref().is_some_and(|settings| {
+    let settings = workspace.vm().settings.clone();
+    let keyed = settings.as_ref().is_some_and(|settings| {
+        settings
+            .providers_with_keys
+            .iter()
+            .any(|id| id == provider_id)
+    });
+    let configured = settings.is_some_and(|settings| {
         settings
             .providers
             .iter()
             .any(|provider| provider.id == provider_id)
     });
-    let header = super::super::subview_header(
-        t("Providers", "服务商"),
+    let status = if keyed {
+        t("Connected", "已连接")
+    } else {
+        t("Not connected", "未连接")
+    };
+    let models = workspace
+        .vm()
+        .catalog
+        .as_ref()
+        .and_then(|catalog| catalog.provider(provider_id))
+        .map(|provider| provider.models.len())
+        .unwrap_or_default();
+    let sign_in = workspace
+        .vm()
+        .copilot_sign_in
+        .clone()
+        .filter(|sign_in| sign_in.provider_id == provider_id);
+    // One device flow at a time: the idle card's button waits for the
+    // running flow to finish or fail.
+    let other_in_flight = workspace.vm().copilot_sign_in.is_some() && sign_in.is_none();
+    let theme = cx.theme();
+    let status_row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .text_color(if keyed {
+                    theme.success
+                } else {
+                    theme.muted_foreground
+                })
+                .child(crate::ui::lamp(if keyed {
+                    theme.success
+                } else {
+                    theme.muted_foreground
+                }))
+                .child(status),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("{models} {}", t("models", "个模型"))),
+        )
+        .when(configured && !keyed, |this| {
+            this.child(div().text_xs().text_color(theme.muted_foreground).child(t(
+                "configured — sign in to refresh",
+                "已配置 — 重新登录以刷新",
+            )))
+        });
+    let code_or_button = if let Some(sign_in) = sign_in {
+        div()
+            .id(format!("oauth-code-{provider_id}"))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(skin::glass_border(theme))
+            .bg(skin::glass(theme))
+            .child(div().text_xs().opacity(0.7).child(format!(
+                "{} {} {}",
+                t("Open", "打开"),
+                sign_in.verification_uri,
+                t("and enter this code:", "并输入此验证码：")
+            )))
+            .child(
+                div()
+                    .text_xl()
+                    .font_family(theme.mono_font_family.clone())
+                    .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                    .child(sign_in.user_code),
+            )
+            .into_any_element()
+    } else {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .child(
+                Button::new(format!("oauth-start-{provider_id}"))
+                    .label(sign_label)
+                    .small()
+                    .outline()
+                    .disabled(other_in_flight)
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_start_oauth_sign_in(provider_id.to_owned(), cx);
+                    })),
+            )
+            .into_any_element()
+    };
+    settings_card(
+        provider_id,
         title,
         Some(blurb),
-        |workspace, cx| {
-            workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
-        },
-        cx,
-    );
-    let theme = cx.theme();
-    div()
-        .id(format!("{provider_id}-page"))
-        .flex()
-        .flex_col()
-        .gap_3()
-        .child(header)
-        .when(configured, |this| {
-            this.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(configured_text),
-            )
-        })
-        .child(form)
-        .into_any_element()
+        theme,
+        vec![status_row.into_any_element(), code_or_button],
+    )
+    .into_any_element()
 }
 
 /// One visible row of the virtualized preset catalog list. Fixed height via
@@ -564,124 +584,42 @@ fn render_preset_form(
                         })
                 }),
         )
-        .when(
-            mycode_providers::catalog::uses_device_code_login(&preset.auth),
-            |this| {
-                let theme = cx.theme();
-                let sign_in = workspace.vm().copilot_sign_in.clone();
-                let error = workspace.vm().copilot_error.clone();
-                let sign_label = match preset.id.as_str() {
-                    "openai-codex" => t("Sign in with ChatGPT", "使用 ChatGPT 登录"),
-                    _ => t("Sign in with GitHub", "使用 GitHub 登录"),
-                };
-                this.child(
-                    div()
-                        .id("preset-sign-in")
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .when_some(error, |this, message| {
-                            this.child(
-                                div()
-                                    .text_xs()
-                                    .p_2()
-                                    .rounded_md()
-                                    .bg(theme.danger.opacity(0.12))
-                                    .text_color(theme.danger)
-                                    .child(message),
-                            )
-                        })
-                        .when_some(sign_in, |this, sign_in| {
-                            this.child(
-                                div()
-                                    .id("preset-sign-in-code")
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .p_2()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(skin::glass_border(theme))
-                                    .bg(skin::glass(theme))
-                                    .child(div().text_xs().opacity(0.7).child(format!(
-                                        "{} {} {}",
-                                        t("Open", "打开"),
-                                        sign_in.verification_uri,
-                                        t("and enter this code:", "并输入此验证码：")
-                                    )))
-                                    .child(
-                                        div()
-                                            .text_xl()
-                                            .font_family(theme.mono_font_family.clone())
-                                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                                            .child(sign_in.user_code),
-                                    ),
-                            )
-                        })
-                        .when(workspace.vm().copilot_sign_in.is_none(), |this| {
-                            this.child(
-                                Button::new("preset-sign-in-start")
-                                    .label(sign_label)
-                                    .small()
-                                    .outline()
-                                    .on_click(cx.listener(|workspace, _, _, cx| {
-                                        workspace.on_start_oauth_sign_in(cx);
-                                    })),
-                            )
-                        })
-                        .child(
-                            Button::new("preset-cancel-oauth")
-                                .label(t("Close", "关闭"))
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_close_preset(cx);
-                                })),
-                        ),
-                )
-            },
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_xs().text_color(theme.muted_foreground).child(t(
+                    "API key (stored in the secret vault)",
+                    "API 密钥（保存在凭据库中）",
+                )))
+                .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
         )
-        .when(
-            preset.auth != mycode_providers::catalog::AUTH_DEVICE_CODE,
-            |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(div().text_xs().text_color(theme.muted_foreground).child(t(
-                            "API key (stored in the secret vault)",
-                            "API 密钥（保存在凭据库中）",
-                        )))
-                        .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_3()
+                .child(
+                    Button::new("preset-confirm")
+                        .icon(IconName::Check)
+                        .label(t("Add provider", "添加服务商"))
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            let provider_id = provider_id_owned.clone();
+                            workspace.on_add_preset(&provider_id, cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_3()
-                        .child(
-                            Button::new("preset-confirm")
-                                .icon(IconName::Check)
-                                .label(t("Add provider", "添加服务商"))
-                                .small()
-                                .outline()
-                                .on_click(cx.listener(move |workspace, _, _, cx| {
-                                    let provider_id = provider_id_owned.clone();
-                                    workspace.on_add_preset(&provider_id, cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("preset-cancel")
-                                .label(t("Cancel", "取消"))
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_close_preset(cx);
-                                })),
-                        ),
-                )
-            },
+                    Button::new("preset-cancel")
+                        .label(t("Cancel", "取消"))
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_close_preset(cx);
+                        })),
+                ),
         )
         .into_any_element()
 }

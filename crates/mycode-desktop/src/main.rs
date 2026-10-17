@@ -143,10 +143,12 @@ fn main() {
         std::process::exit(0);
     }
     install_surface_panic_hook();
-    // Remove staging directories left behind by earlier self-updates.
+    // Remove staging directories and install-directory leftovers
+    // (`.mycode-previous`, `.mycode-incoming`) from earlier self-updates.
     // The apply helper returns before this, so it does not delete the
     // staged binary it is installing.
     mycode_app::cleanup_stale_stages();
+    mycode_app::cleanup_previous_binary();
     let home = match HomeLayout::from_env(HomeEnv::from_process()) {
         Ok(home) => home,
         Err(error) => {

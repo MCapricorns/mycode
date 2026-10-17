@@ -20,9 +20,7 @@ use crate::workspace::Workspace;
 
 mod catalog;
 
-use self::catalog::{
-    render_device_signin_page, render_models_catalog_page, render_opendesign_page,
-};
+use self::catalog::{render_models_catalog_page, render_oauth_page};
 
 pub(super) fn render_models_section(
     workspace: &mut Workspace,
@@ -40,18 +38,7 @@ pub(super) fn render_models_section(
         crate::view_model::ModelsSubview::Catalog => {
             render_models_catalog_page(workspace, window, cx)
         }
-        crate::view_model::ModelsSubview::OpenDesign => {
-            render_opendesign_page(workspace, window, cx)
-        }
-        crate::view_model::ModelsSubview::GitHubCopilot => {
-            render_device_signin_page(workspace, mycode_providers::COPILOT_PROVIDER_ID, window, cx)
-        }
-        crate::view_model::ModelsSubview::OpenAiCodex => render_device_signin_page(
-            workspace,
-            mycode_providers::OPENAI_CODEX_PROVIDER_ID,
-            window,
-            cx,
-        ),
+        crate::view_model::ModelsSubview::OAuth => render_oauth_page(workspace, window, cx),
         crate::view_model::ModelsSubview::Custom => {
             render_custom_provider_page(workspace, window, cx)
         }
@@ -236,40 +223,14 @@ fn render_models_list_page(
                                 })),
                         )
                         .child(
-                            Button::new("add-github-copilot")
-                                .icon(IconName::Github)
-                                .label(t("GitHub Copilot\u{2026}", "GitHub Copilot\u{2026}"))
-                                .small()
-                                .outline()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_show_models_subview(
-                                        crate::view_model::ModelsSubview::GitHubCopilot,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            Button::new("add-openai-codex")
+                            Button::new("oauth-sign-in")
                                 .icon(IconName::KeyRound)
-                                .label(t("OpenAI Codex\u{2026}", "OpenAI Codex\u{2026}"))
+                                .label(t("OAuth sign-in\u{2026}", "OAuth 登录\u{2026}"))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.on_show_models_subview(
-                                        crate::view_model::ModelsSubview::OpenAiCodex,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            Button::new("add-opendesign")
-                                .icon(IconName::Globe)
-                                .label(t("OpenDesign\u{2026}", "OpenDesign\u{2026}"))
-                                .small()
-                                .outline()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_show_models_subview(
-                                        crate::view_model::ModelsSubview::OpenDesign,
+                                        crate::view_model::ModelsSubview::OAuth,
                                         cx,
                                     );
                                 })),

@@ -9,10 +9,10 @@
 //! client. The application fixes the User-Agent on provider requests.
 //!
 //! [`catalog`] carries the vendor data this runtime is configured from: the
-//! vendored models.dev snapshot, its cached cloud refresh, and the provider
-//! and model presets the settings page offers. It lives here rather than in
-//! `mycode-config` because refreshing it is an HTTP call, and the
-//! configuration authority stays free of network dependencies.
+//! models.dev cloud document, its on-disk cache, and the hand-maintained
+//! Codex / OpenDesign rows injected into every resolved document. It lives
+//! here rather than in `mycode-config` because refreshing it is an HTTP
+//! call, and the configuration authority stays free of network dependencies.
 
 mod anthropic_messages;
 mod cache;

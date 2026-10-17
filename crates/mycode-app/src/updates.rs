@@ -644,6 +644,47 @@ fn previous_path(current: &Path) -> PathBuf {
     current.with_file_name(name)
 }
 
+/// The staged file the Windows swap copies next to `target` before it is
+/// renamed into place.
+fn incoming_path(current: &Path) -> PathBuf {
+    let file_name = current.file_name().unwrap_or(current.as_os_str());
+    current.with_file_name(format!(".{}.mycode-incoming", file_name.to_string_lossy()))
+}
+
+/// How old an update leftover must be before startup removes it. A fresh
+/// file may belong to a swap still in flight (the relaunch raced the
+/// helper), and deleting that backup would take the rollback away with it.
+const UPDATE_LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Removes self-update leftovers next to the running executable.
+///
+/// The swap deletes `*.mycode-previous` after a verified replace and the
+/// staged `*.mycode-incoming` before every rename, but an interrupted
+/// helper, an older build, or a transient remove failure can still leave
+/// either file behind. Only files older than [`UPDATE_LEFTOVER_AGE`] are
+/// touched, so a backup a live swap may still need is kept.
+pub fn cleanup_previous_binary() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let stale_before = std::time::SystemTime::now() - UPDATE_LEFTOVER_AGE;
+    for path in [previous_path(&exe), incoming_path(&exe)] {
+        let Ok(meta) = path.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        if meta
+            .modified()
+            .is_ok_and(|modified| modified > stale_before)
+        {
+            continue;
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 /// Single-quote `text` for `/bin/sh`. `$`, backticks, `"`, and `\` stay
 /// literal. An embedded `'` ends and reopens the quote.
 #[cfg(not(windows))]

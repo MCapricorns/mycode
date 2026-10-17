@@ -282,9 +282,8 @@ impl Workspace {
             }
             BridgeEvent::CopilotSignedIn => {
                 // The provider entry and key landed; refresh the settings
-                // projection so the row and keyed badge appear immediately,
-                // and reload the catalog when in use so live Codex models
-                // take effect right away.
+                // projection so the row and keyed badge appear immediately.
+                // The catalog stays a lazy load: model picks read it anyway.
                 self.dispatch(BridgeCommand::LoadSettings, cx);
                 if self.catalog_requested || self.vm.catalog.is_some() || self.catalog_needed() {
                     self.catalog_requested = true;
@@ -490,6 +489,7 @@ impl Workspace {
             BridgeReply::CopilotSignInStarted(Ok(info)) => {
                 self.apply_action(
                     DesktopAction::CopilotSignInStarted(crate::view_model::CopilotSignIn {
+                        provider_id: info.provider_id,
                         user_code: info.user_code,
                         verification_uri: info.verification_uri,
                     }),
@@ -750,37 +750,6 @@ impl Workspace {
                     self.pending_catalog_refresh = false;
                     self.apply_action(DesktopAction::Failed(message), cx);
                 }
-            }
-            BridgeReply::OpenDesignModels(Ok((info, count))) => {
-                self.apply_action(DesktopAction::OpenDesignLoading(false), cx);
-                self.apply_action(
-                    DesktopAction::CatalogLoaded {
-                        document: info.document,
-                        fetched_at: info.fetched_at,
-                    },
-                    cx,
-                );
-                // The open form re-checks the fresh list.
-                if self.vm.models_subview == crate::view_model::ModelsSubview::OpenDesign {
-                    self.apply_action(
-                        DesktopAction::ActivePresetChanged(Some(
-                            mycode_providers::catalog::opendesign::PROVIDER_ID.to_owned(),
-                        )),
-                        cx,
-                    );
-                }
-                self.push_toast(
-                    format!(
-                        "{count} {}",
-                        crate::i18n::t("OpenDesign models loaded", "个 OpenDesign 模型已加载")
-                    ),
-                    crate::workspace::ToastKind::Info,
-                    cx,
-                );
-            }
-            BridgeReply::OpenDesignModels(Err(message)) => {
-                self.apply_action(DesktopAction::OpenDesignLoading(false), cx);
-                self.apply_action(DesktopAction::Failed(message), cx);
             }
             BridgeReply::UiState(Ok((mut ui_state, repairs))) => {
                 self.note_config_repairs(&repairs, cx);

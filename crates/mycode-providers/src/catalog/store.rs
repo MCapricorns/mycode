@@ -2,15 +2,15 @@
 //!
 //! Resolution order: a young cached document wins without network traffic;
 //! otherwise one conditional GET revalidates the cloud document and rewrites
-//! the cache; on any failure the cached or vendored snapshot keeps the
-//! product fully functional offline.
+//! the cache; on any failure the cached document or the hand-maintained
+//! baseline (the Codex and OpenDesign rows) keeps the product usable.
 use std::sync::{Arc, OnceLock, RwLock};
 
 use mycode_config::{HomeLayout, locked_update_owned_file, read_owned_file};
 use serde::{Deserialize, Serialize};
 
+use super::CatalogDocument;
 use super::modelsdev::{MODELS_DEV_API_URL, parse_models_dev};
-use super::{CatalogDocument, parse_snapshot};
 
 /// Cache path below the owned home.
 pub const CATALOG_CACHE_PATH: &str = "catalog-cache.json";
@@ -24,8 +24,8 @@ pub const CACHE_FORMAT_VERSION: u32 = 3;
 pub const CACHE_KIND: &str = "mycode-providers-cache";
 /// Maximum cloud document size accepted.
 pub const MAX_CLOUD_BYTES: usize = 32 * 1024 * 1024;
-/// Default auto-refresh age: the cache is revalidated at most this often.
-pub const DEFAULT_MAX_AGE_SECS: u64 = 6 * 60 * 60;
+/// Default auto-refresh age: the cache is revalidated at most once a day.
+pub const DEFAULT_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 
 /// A catalog document together with its cache metadata.
 ///
@@ -85,15 +85,11 @@ impl CatalogSource {
     }
 }
 
-/// Raw catalog bytes plus the context needed to finish parsing them.
+/// Raw cache bytes plus the materialized document slot.
 struct LazyCatalog {
-    /// The full cache file (`enveloped`) or the vendored snapshot bytes.
+    /// The full cache file; the `document` field is pulled out of the
+    /// envelope at materialize time.
     raw: Arc<[u8]>,
-    /// Whether `raw` is a cache file: the `document` field is pulled out of
-    /// the envelope at materialize time.
-    enveloped: bool,
-    /// Owned home for the stored OpenDesign rows merged over the document.
-    home: Option<HomeLayout>,
     /// The materialized document; parsing happens once, on first access.
     ready: OnceLock<Arc<CatalogDocument>>,
 }
@@ -102,21 +98,7 @@ impl LazyCatalog {
     fn document(&self) -> Arc<CatalogDocument> {
         self.ready
             .get_or_init(|| {
-                let mut document = if self.enveloped {
-                    materialize_cache(&self.raw).unwrap_or_else(|| bundled().clone())
-                } else {
-                    let parsed = parse_snapshot(&self.raw);
-                    if parsed.providers.is_empty() {
-                        bundled().clone()
-                    } else {
-                        parsed
-                    }
-                };
-                if let Some(home) = &self.home {
-                    super::opendesign::attach_stored(home, &mut document);
-                    super::codex::attach_stored(home, &mut document);
-                }
-                Arc::new(document)
+                Arc::new(materialize_cache(&self.raw).unwrap_or_else(|| bundled().clone()))
             })
             .clone()
     }
@@ -154,14 +136,11 @@ impl CachedCatalog {
         }
     }
 
-    /// A cache file kept raw until first use. `home` supplies the stored
-    /// OpenDesign rows merged when the document materializes.
-    fn lazy_file(raw: Vec<u8>, home: &HomeLayout, fetched_at: u64, etag: Option<String>) -> Self {
+    /// A cache file kept raw until first use.
+    fn lazy_file(raw: Vec<u8>, fetched_at: u64, etag: Option<String>) -> Self {
         Self {
             source: CatalogSource::Lazy(Arc::new(LazyCatalog {
                 raw: Arc::from(raw),
-                enveloped: true,
-                home: Some(home.clone()),
                 ready: OnceLock::new(),
             })),
             fetched_at,
@@ -169,24 +148,10 @@ impl CachedCatalog {
         }
     }
 
-    /// The vendored snapshot kept raw until first use.
-    fn lazy_snapshot(home: Option<&HomeLayout>) -> Self {
-        Self {
-            source: CatalogSource::Lazy(Arc::new(LazyCatalog {
-                raw: Arc::from(&include_bytes!("snapshot.json")[..]),
-                enveloped: false,
-                home: home.cloned(),
-                ready: OnceLock::new(),
-            })),
-            fetched_at: 0,
-            etag: None,
-        }
-    }
-
     /// The parsed document, materializing it on the first call.
     ///
-    /// Parse failures fall back to the vendored snapshot so the returned
-    /// document is always usable.
+    /// Parse failures fall back to the baseline rows so the returned
+    /// document is never empty while presets exist.
     #[must_use]
     pub fn document(&self) -> Arc<CatalogDocument> {
         self.source.document()
@@ -234,10 +199,13 @@ struct CacheDocument {
     document: CatalogDocument,
 }
 
-/// The vendored offline baseline, parsed once.
+/// The hand-maintained baseline compiled into the binary: the Codex
+/// subscription and OpenDesign rows that models.dev does not carry.
+/// Copilot and every other provider arrive from the cloud catalog into
+/// the cache, so this is the offline floor, not the full catalog.
 pub fn bundled() -> &'static CatalogDocument {
-    static SNAPSHOT: OnceLock<CatalogDocument> = OnceLock::new();
-    SNAPSHOT.get_or_init(|| parse_snapshot(include_bytes!("snapshot.json")))
+    static BASELINE: OnceLock<CatalogDocument> = OnceLock::new();
+    BASELINE.get_or_init(|| super::attach_subscription_presets(CatalogDocument::default()))
 }
 
 /// Live or cached catalog installed by the process. Empty until startup
@@ -284,8 +252,8 @@ pub(crate) fn unix_now() -> u64 {
 /// Reads the catalog cache and reports a quarantine when the file was damaged.
 ///
 /// A missing file is `(None, None)`. A readable file whose envelope fails
-/// validation is copied aside, replaced with the bundled snapshot, and
-/// returned with that snapshot so the next launch does not quarantine it
+/// validation is copied aside, replaced with the baseline rows, and
+/// returned with those rows so the next launch does not quarantine it
 /// again. I/O failures leave the file alone and report no repair.
 #[must_use]
 fn load_cache_with_repair(
@@ -295,10 +263,10 @@ fn load_cache_with_repair(
         Ok(Some(bytes)) => bytes,
         Ok(None) | Err(_) => return (None, None),
     };
-    match parse_cache(bytes.as_slice(), home) {
+    match parse_cache(bytes.as_slice()) {
         CacheParse::Ready(cache) => (Some(cache), None),
         CacheParse::Migrate => {
-            let migrated = bundled_cache(home);
+            let migrated = bundled_cache();
             let _ = write_cache(home, &migrated);
             (Some(migrated), None)
         }
@@ -307,9 +275,9 @@ fn load_cache_with_repair(
                 mycode_config::quarantine_owned_bytes(home, CATALOG_CACHE_PATH, bytes.as_slice())
                     .ok();
             if repair.is_some() {
-                let _ = write_cache(home, &bundled_cache(home));
+                let _ = write_cache(home, &bundled_cache());
             }
-            (repair.as_ref().map(|_| bundled_cache(home)), repair)
+            (repair.as_ref().map(|_| bundled_cache()), repair)
         }
     }
 }
@@ -320,8 +288,8 @@ enum CacheParse {
     Damaged,
 }
 
-fn bundled_cache(home: &HomeLayout) -> CachedCatalog {
-    CachedCatalog::lazy_snapshot(Some(home))
+fn bundled_cache() -> CachedCatalog {
+    CachedCatalog::from_document(bundled().clone(), 0, None)
 }
 
 /// Validates the cache envelope only: kind, format version, etag grammar,
@@ -329,7 +297,7 @@ fn bundled_cache(home: &HomeLayout) -> CachedCatalog {
 /// well-formedness. The model list itself stays undecoded; a document that
 /// is well-formed but unusable (empty or shapeless providers) is caught by
 /// the lazy materialize, which falls back to the bundled baseline.
-fn parse_cache(bytes: &[u8], home: &HomeLayout) -> CacheParse {
+fn parse_cache(bytes: &[u8]) -> CacheParse {
     let Ok(envelope) = serde_json::from_slice::<CacheEnvelope>(bytes) else {
         return CacheParse::Damaged;
     };
@@ -349,13 +317,12 @@ fn parse_cache(bytes: &[u8], home: &HomeLayout) -> CacheParse {
     }
     CacheParse::Ready(CachedCatalog::lazy_file(
         bytes.to_vec(),
-        home,
         envelope.fetched_at,
         envelope.etag,
     ))
 }
 
-/// Resolves the current catalog: cache when valid, else the vendored snapshot.
+/// Resolves the current catalog: cache when valid, else the baseline rows.
 #[must_use]
 pub fn current(home: &HomeLayout) -> CachedCatalog {
     current_with_repair(home).0
@@ -368,11 +335,9 @@ pub fn current(home: &HomeLayout) -> CachedCatalog {
 pub fn current_with_repair(
     home: &HomeLayout,
 ) -> (CachedCatalog, Option<mycode_config::DocumentRepair>) {
-    // The stored OpenDesign rows join the document inside the lazy
-    // materialize, so resolving the entry costs only the envelope read.
     match load_cache_with_repair(home) {
         (Some(cache), repair) => (cache, repair),
-        (None, repair) => (bundled_cache(home), repair),
+        (None, repair) => (bundled_cache(), repair),
     }
 }
 
@@ -408,10 +373,9 @@ async fn blocking<T: Send + 'static>(
 
 async fn load_current(home: &HomeLayout) -> CachedCatalog {
     let home = home.clone();
-    let fallback = home.clone();
     blocking(move || Ok(current(&home)))
         .await
-        .unwrap_or_else(|_| bundled_cache(&fallback))
+        .unwrap_or_else(|_| bundled_cache())
 }
 
 async fn store_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
@@ -510,17 +474,14 @@ pub async fn refresh(
         }
         bytes.extend_from_slice(&chunk);
     }
-    let parse_home = home.clone();
     let document = match blocking(move || {
-        let mut document = parse_models_dev(&bytes);
+        let document = parse_models_dev(&bytes);
         // Judge the cloud copy before this build's own rows join it: an
         // unparsable body (a captive portal's HTML page, say) must not
         // replace the cache with nothing but the injected presets.
         if !has_cloud_providers(&document) {
             return Err("catalog document had no usable providers".to_owned());
         }
-        super::opendesign::attach_stored(&parse_home, &mut document);
-        super::codex::attach_stored(&parse_home, &mut document);
         Ok(document)
     })
     .await
@@ -570,8 +531,11 @@ mod tests {
             !has_cloud_providers(&empty),
             "the injected presets alone are not a catalog"
         );
-        let snapshot = super::bundled();
-        assert!(has_cloud_providers(snapshot));
+        let baseline = super::bundled();
+        assert!(
+            !has_cloud_providers(baseline),
+            "the baseline is only the injected presets"
+        );
     }
 
     #[test]
@@ -613,10 +577,9 @@ mod tests {
 
     #[test]
     fn parse_cache_reads_the_envelope_and_defers_the_document() {
-        let (_root, home) = test_home();
         let malformed = "{not json";
         assert!(matches!(
-            parse_cache(malformed.as_bytes(), &home),
+            parse_cache(malformed.as_bytes()),
             CacheParse::Damaged
         ));
         let wrong_kind = json!({
@@ -626,7 +589,7 @@ mod tests {
             "document": { "providers": [] }
         });
         assert!(matches!(
-            parse_cache(wrong_kind.to_string().as_bytes(), &home),
+            parse_cache(wrong_kind.to_string().as_bytes()),
             CacheParse::Damaged
         ));
 
@@ -651,7 +614,7 @@ mod tests {
                 "fetchedAt": 123,
                 "document": document
             });
-            let CacheParse::Ready(cached) = parse_cache(file.to_string().as_bytes(), &home) else {
+            let CacheParse::Ready(cached) = parse_cache(file.to_string().as_bytes()) else {
                 panic!("expected envelope-ready cache");
             };
             let CatalogSource::Lazy(lazy) = &cached.source else {
@@ -669,7 +632,6 @@ mod tests {
 
     #[test]
     fn parse_cache_normalizes_valid_providers_on_first_access() {
-        let (_root, home) = test_home();
         let valid = json!({
             "formatVersion": CACHE_FORMAT_VERSION,
             "kind": CACHE_KIND,
@@ -689,7 +651,7 @@ mod tests {
                 }]
             }
         });
-        let CacheParse::Ready(cached) = parse_cache(valid.to_string().as_bytes(), &home) else {
+        let CacheParse::Ready(cached) = parse_cache(valid.to_string().as_bytes()) else {
             panic!("expected valid cache");
         };
         assert_eq!(cached.fetched_at, 123);

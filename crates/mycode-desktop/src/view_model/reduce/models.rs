@@ -85,30 +85,57 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
     remember_active_session_model(state);
 }
 
-/// The `ActivePresetChanged` transition: a preset form opened or closed.
-pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<String>) {
-    state.active_preset = preset.clone();
-    state.preset_model_query.clear();
-    let listed: Vec<String> = preset
+/// The catalog row's model ids in ranked order.
+fn listed_models(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
+    state
+        .catalog
         .as_ref()
-        .and_then(|id| {
-            state
-                .catalog
-                .as_ref()
-                .and_then(|catalog| catalog.provider(id))
-        })
+        .and_then(|catalog| catalog.provider(provider_id))
         .map(|provider| {
             rank_model_ids(provider.models.iter().map(|model| model.id.clone()))
                 .into_iter()
                 .take(mycode_config::MAX_MODELS_PER_PROVIDER)
                 .collect()
         })
+        .unwrap_or_default()
+}
+
+/// The model ids an OAuth sign-in binds for `provider_id`: the configured
+/// picks that still exist in the catalog row, else the whole row.
+#[must_use]
+pub(crate) fn preset_pick(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
+    let listed = listed_models(state, provider_id);
+    let configured: Vec<String> = state
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.providers.iter().find(|p| p.id == provider_id))
+        .map(|provider| {
+            listed
+                .iter()
+                .filter(|model| provider.models.contains(model))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if configured.is_empty() {
+        listed
+    } else {
+        configured
+    }
+}
+
+/// The `ActivePresetChanged` transition: a preset form opened or closed.
+pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<String>) {
+    state.active_preset = preset.clone();
+    state.preset_model_query.clear();
+    let listed: Vec<String> = preset
+        .as_deref()
+        .map(|id| listed_models(state, id))
         .unwrap_or_default();
     // OpenDesign and the device-OAuth providers are updated in place, so
     // their forms start from the models already configured; checking
-    // everything would replace that list on the next Add / sign-in. Every
-    // other preset adds a new row and pre-checks the whole list, strongest
-    // first.
+    // everything would replace that list on the next Add. Every other
+    // preset adds a new row and pre-checks the whole list, strongest first.
     let configured: Vec<String> = preset
         .as_deref()
         .filter(|id| {
@@ -386,11 +413,11 @@ mod tests {
     use crate::view_model::{SettingsState, WorkspaceState};
 
     #[test]
-    fn the_opendesign_page_opens_its_form_on_the_configured_models() {
+    fn the_opendesign_preset_form_opens_on_the_configured_models() {
         use mycode_providers::catalog::opendesign;
 
         let mut document = mycode_providers::catalog::CatalogDocument::default();
-        opendesign::attach(&mut document, None);
+        opendesign::attach(&mut document);
         let settings = mycode_config::AppSettings {
             providers: vec![mycode_config::ProviderSettings {
                 id: opendesign::PROVIDER_ID.to_owned(),
@@ -409,16 +436,7 @@ mod tests {
             settings: Some(SettingsState::from_settings(&settings, 1, Vec::new())),
             ..WorkspaceState::default()
         };
-        crate::view_model::reduce(
-            &mut state,
-            crate::view_model::DesktopAction::ShowModelsSubview(
-                crate::view_model::ModelsSubview::OpenDesign,
-            ),
-        );
-        assert_eq!(
-            state.active_preset.as_deref(),
-            Some(opendesign::PROVIDER_ID)
-        );
+        super::active_preset_changed(&mut state, Some(opendesign::PROVIDER_ID.to_owned()));
         assert_eq!(
             state.preset_models,
             ["glm-5.3-flash"],
@@ -437,7 +455,7 @@ mod tests {
             opendesign::curated_models().len()
         );
 
-        // Opening a dedicated page before the lazy catalog arrives still
+        // Opening the preset before the lazy catalog arrives still
         // populates the checklist once `CatalogLoaded` lands.
         let mut lazy = WorkspaceState {
             catalog: None,
@@ -448,15 +466,10 @@ mod tests {
             )),
             ..WorkspaceState::default()
         };
-        crate::view_model::reduce(
-            &mut lazy,
-            crate::view_model::DesktopAction::ShowModelsSubview(
-                crate::view_model::ModelsSubview::OpenDesign,
-            ),
-        );
+        super::active_preset_changed(&mut lazy, Some(opendesign::PROVIDER_ID.to_owned()));
         assert!(lazy.preset_models.is_empty());
         let mut doc = mycode_providers::catalog::CatalogDocument::default();
-        opendesign::attach(&mut doc, None);
+        opendesign::attach(&mut doc);
         crate::view_model::reduce(
             &mut lazy,
             crate::view_model::DesktopAction::CatalogLoaded {

@@ -409,60 +409,21 @@ impl Workspace {
         );
     }
 
+    /// The preset form's Close returns to the catalog picker for the next
+    /// row.
     pub(crate) fn on_close_preset(&mut self, cx: &mut Context<Self>) {
         self.preset_key_input = None;
-        if matches!(
-            self.vm.models_subview,
-            crate::view_model::ModelsSubview::OpenDesign
-                | crate::view_model::ModelsSubview::GitHubCopilot
-                | crate::view_model::ModelsSubview::OpenAiCodex
-        ) {
-            // The dedicated page is the form itself; closing it leaves the
-            // page.
-            self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
-        } else {
-            self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
-        }
+        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
     }
 
-    /// Lists the models the pasted (or stored) OpenDesign key can use.
-    pub(crate) fn on_load_opendesign_models(&mut self, cx: &mut Context<Self>) {
-        if self.vm.opendesign_loading {
+    /// Starts an OAuth device-flow sign-in from the shared page, binding
+    /// the catalog row's models (or the configured subset when the row is
+    /// already in settings).
+    pub(crate) fn on_start_oauth_sign_in(&mut self, provider_id: String, cx: &mut Context<Self>) {
+        let models = crate::view_model::preset_pick(&self.vm, &provider_id);
+        if models.is_empty() {
             return;
         }
-        // Blank uses the stored key; a Bearer-only paste is refused like on Save.
-        let raw = self
-            .preset_key_input
-            .as_ref()
-            .map(|input| input.read(cx).value().to_string())
-            .unwrap_or_default();
-        let api_key = if raw.trim().is_empty() {
-            String::new()
-        } else {
-            match normalized_key_input(&raw) {
-                Some(key) => key,
-                None => {
-                    self.apply_action(
-                        DesktopAction::Failed(
-                            crate::i18n::t("paste a valid API key", "请粘贴有效的 API 密钥")
-                                .to_owned(),
-                        ),
-                        cx,
-                    );
-                    return;
-                }
-            }
-        };
-        self.apply_action(DesktopAction::OpenDesignLoading(true), cx);
-        self.dispatch(BridgeCommand::RefreshOpenDesignModels { api_key }, cx);
-    }
-
-    /// Starts an OAuth device-flow sign-in with the checked model list.
-    pub(crate) fn on_start_oauth_sign_in(&mut self, cx: &mut Context<Self>) {
-        let Some(provider_id) = self.vm.active_preset.clone() else {
-            return;
-        };
-        let models = self.vm.preset_models.clone();
         self.dispatch(
             BridgeCommand::StartOAuthSignIn {
                 provider_id,
@@ -567,11 +528,7 @@ impl Workspace {
                 cx,
             );
         }
-        if opendesign {
-            self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
-        } else {
-            self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
-        }
+        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
         self.apply_action(DesktopAction::ProviderSelected(id), cx);
         self.apply_action(DesktopAction::ModelSelected(model), cx);
         self.on_save_settings(cx);

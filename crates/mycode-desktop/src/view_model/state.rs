@@ -222,8 +222,6 @@ pub(crate) struct WorkspaceState {
     pub preset_models: Vec<String>,
     /// The Models settings sub-page.
     pub models_subview: ModelsSubview,
-    /// An OpenDesign `/models` listing is in flight.
-    pub opendesign_loading: bool,
     /// Vendor backend open on the Web page, when the user drilled in.
     pub web_detail: Option<String>,
     /// The MCP settings sub-page.
@@ -622,8 +620,6 @@ pub enum DesktopAction {
     PresetModelToggled(String),
     /// The Models settings sub-page changed.
     ShowModelsSubview(ModelsSubview),
-    /// An OpenDesign model listing started (`true`) or finished.
-    OpenDesignLoading(bool),
     /// The Web page opened or closed one vendor's detail.
     WebDetailOpened(Option<String>),
     /// The MCP settings sub-page changed.

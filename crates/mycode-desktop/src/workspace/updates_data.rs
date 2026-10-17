@@ -74,11 +74,9 @@ pub(crate) fn settings_back_target(
         SettingsSection::Models => match models {
             ModelsSubview::List if provider_open => SettingsBack::CloseProviderDetail,
             ModelsSubview::Catalog if preset_open => SettingsBack::ClosePreset,
-            ModelsSubview::Catalog
-            | ModelsSubview::OpenDesign
-            | ModelsSubview::GitHubCopilot
-            | ModelsSubview::OpenAiCodex
-            | ModelsSubview::Custom => SettingsBack::ModelsList,
+            ModelsSubview::Catalog | ModelsSubview::OAuth | ModelsSubview::Custom => {
+                SettingsBack::ModelsList
+            }
             ModelsSubview::List => SettingsBack::Desk,
         },
         SettingsSection::Web if web_detail_open => SettingsBack::WebList,
@@ -189,8 +187,7 @@ impl Workspace {
             self.apply_action(DesktopAction::SettingsMcpToggled(index, false), cx);
             return;
         }
-        if self.pending_mcp_enable.contains(&server.id)
-            || self.vm.mcp_probing.contains(&server.id)
+        if self.pending_mcp_enable.contains(&server.id) || self.vm.mcp_probing.contains(&server.id)
         {
             return;
         }
@@ -712,14 +709,13 @@ mod tests {
             ),
             SettingsBack::ModelsList
         );
-        // The OpenDesign page is its own add form: Escape leaves the page,
-        // it does not just close the form.
+        // The shared OAuth sign-in page has no form: Escape leaves the page.
         assert_eq!(
             settings_back_target(
                 SettingsSection::Models,
-                ModelsSubview::OpenDesign,
+                ModelsSubview::OAuth,
                 false,
-                true,
+                false,
                 false,
                 McpSubview::List,
             ),

@@ -18,8 +18,8 @@ use super::{
 };
 
 pub(crate) use self::models::{
-    reasoning_levels_for, selected_model_supports_reasoning, selected_reasoning_levels,
-    strongest_reasoning_level,
+    preset_pick, reasoning_levels_for, selected_model_supports_reasoning,
+    selected_reasoning_levels, strongest_reasoning_level,
 };
 
 pub(crate) use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
@@ -858,24 +858,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.provider_kind_menu_open = false;
             state.mcp_transport_menu_open = false;
             state.provider_detail = None;
-            // The dedicated pages are each the add/sign-in form for one
-            // provider: OpenDesign, or a device-OAuth vendor.
-            let preset = match view {
-                crate::view_model::ModelsSubview::OpenDesign => {
-                    Some(mycode_providers::catalog::opendesign::PROVIDER_ID)
-                }
-                crate::view_model::ModelsSubview::GitHubCopilot => {
-                    Some(mycode_providers::COPILOT_PROVIDER_ID)
-                }
-                crate::view_model::ModelsSubview::OpenAiCodex => {
-                    Some(mycode_providers::OPENAI_CODEX_PROVIDER_ID)
-                }
-                _ => None,
-            }
-            .map(str::to_owned);
-            active_preset_changed(state, preset);
+            // The OAuth page carries no preset form: signing in binds the
+            // catalog row's models, edited later on the provider detail.
+            active_preset_changed(state, None);
         }
-        DesktopAction::OpenDesignLoading(loading) => state.opendesign_loading = loading,
         DesktopAction::WebDetailOpened(backend) => state.web_detail = backend,
         DesktopAction::ShowMcpSubview(view) => {
             state.mcp_subview = view;

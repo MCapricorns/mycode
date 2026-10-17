@@ -14,8 +14,8 @@ use crate::oauth::oauth_sign_in;
 use crate::search::search_project_files;
 use crate::settings_io::{load_settings, render_config_error, save_provider_key, save_settings};
 use crate::state::{
-    CoreState, UPDATE_USER_AGENT, catalog_info_from, refresh_catalog, refresh_opendesign_models,
-    set_project_dir, spawn_catalog_refresh, spawn_update_check,
+    CoreState, UPDATE_USER_AGENT, catalog_info_from, refresh_catalog, set_project_dir,
+    spawn_catalog_refresh, spawn_update_check,
 };
 use crate::tool_hosts::{deliver_ask_answer, dismiss_ask};
 use crate::turn::{chat_turn, manual_compact};
@@ -207,20 +207,11 @@ pub(crate) fn run_core(
                         let _ = reply.send(outcome);
                     });
                 }
-                BridgeCommand::RefreshOpenDesignModels { api_key } => {
-                    let task_state = state.clone();
-                    let reply = with_reply.reply;
-                    tokio::spawn(async move {
-                        let outcome = refresh_opendesign_models(&task_state, api_key).await;
-                        let _ = reply.send(BridgeReply::OpenDesignModels(outcome));
-                    });
-                }
                 BridgeCommand::UiReady => {
                     if !ui_ready {
                         ui_ready = true;
                         spawn_catalog_refresh(state.clone(), events.clone());
                         spawn_update_check(state.clone(), events.clone());
-                        crate::oauth::spawn_codex_models_refresh(state.clone(), events.clone());
                     }
                     let _ = with_reply.reply.send(BridgeReply::UiReady(Ok(())));
                 }
@@ -234,10 +225,20 @@ pub(crate) fn run_core(
                 }
                 BridgeCommand::DownloadUpdate { offer } => {
                     let reply = with_reply.reply;
+                    let task_state = state.clone();
+                    let task_events = events.clone();
                     tokio::spawn(async move {
                         let outcome =
                             crate::updates::download_update(UPDATE_USER_AGENT, &offer).await;
+                        let staged = outcome.is_ok();
                         let _ = reply.send(BridgeReply::UpdateDownloaded(outcome));
+                        if staged {
+                            // A staged update swaps in newer hand-maintained
+                            // rows next; pull the cloud catalog once so the
+                            // cache the new build reads is already fresh. A
+                            // failure keeps the previous cache silently.
+                            let _ = refresh_catalog(&task_state, &task_events, true).await;
+                        }
                     });
                 }
                 BridgeCommand::ProbeWebBackend { backend } => {
@@ -336,9 +337,6 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         }
         BridgeCommand::GetCatalog | BridgeCommand::RefreshCatalog => {
             BridgeReply::Catalog(Err(message))
-        }
-        BridgeCommand::RefreshOpenDesignModels { .. } => {
-            BridgeReply::OpenDesignModels(Err(message))
         }
         BridgeCommand::LoadUiState => BridgeReply::UiState(Err(message)),
         BridgeCommand::SaveUiState { .. } => BridgeReply::UiStateSaved(Err(message)),
@@ -661,9 +659,6 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::RefreshCatalog => {
             BridgeReply::Catalog(Err("this request runs as a concurrent task".to_owned()))
-        }
-        BridgeCommand::RefreshOpenDesignModels { .. } => {
-            BridgeReply::OpenDesignModels(Err("this request runs as a concurrent task".to_owned()))
         }
         BridgeCommand::UiReady => BridgeReply::UiReady(Err(
             "the UI-ready signal is handled on the command loop".to_owned(),
