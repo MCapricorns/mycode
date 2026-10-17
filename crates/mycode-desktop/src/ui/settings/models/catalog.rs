@@ -250,7 +250,7 @@ pub(super) fn render_opendesign_page(
                                     t("Load models from gateway", "从网关加载模型")
                                 })
                                 .small()
-                                .primary()
+                                .outline()
                                 .disabled(loading)
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.on_load_opendesign_models(cx);
@@ -552,7 +552,7 @@ fn render_preset_form(
                                 Button::new("preset-sign-in-start")
                                     .label(sign_label)
                                     .small()
-                                    .primary()
+                                    .outline()
                                     .on_click(cx.listener(|workspace, _, _, cx| {
                                         workspace.on_start_oauth_sign_in(cx);
                                     })),
@@ -594,7 +594,7 @@ fn render_preset_form(
                                 .icon(IconName::Check)
                                 .label(t("Add provider", "添加服务商"))
                                 .small()
-                                .primary()
+                                .outline()
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
                                     let provider_id = provider_id_owned.clone();
                                     workspace.on_add_preset(&provider_id, cx);

@@ -430,7 +430,7 @@ fn key_block(
                             Button::new(format!("web-key-save-{id}"))
                                 .label(t("Save key", "保存密钥"))
                                 .small()
-                                .primary()
+                                .outline()
                                 .disabled(!can_save)
                                 .on_click(cx.listener(move |workspace, _, window, cx| {
                                     workspace.on_save_web_key(&id, window, cx);

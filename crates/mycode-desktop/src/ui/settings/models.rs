@@ -2,7 +2,7 @@
 //! custom-endpoint form. The catalog picker lives in [`catalog`].
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
@@ -216,7 +216,7 @@ fn render_models_list_page(
                                 .icon(IconName::Plus)
                                 .label(t("Add from model library\u{2026}", "从模型库添加\u{2026}"))
                                 .small()
-                                .primary()
+                                .outline()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.on_show_models_subview(
                                         crate::view_model::ModelsSubview::Catalog,
@@ -599,7 +599,7 @@ fn render_custom_provider_page(
                                 .icon(IconName::Check)
                                 .label(t("Add provider", "添加服务商"))
                                 .small()
-                                .primary()
+                                .outline()
                                 .on_click(cx.listener(|workspace, _, window, cx| {
                                     workspace.on_add_provider(window, cx);
                                 })),
