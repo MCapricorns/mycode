@@ -53,7 +53,7 @@ pub(super) fn render_about_section(
                     .icon(IconName::Download)
                     .label(t("Download & install", "下载并安装"))
                     .small()
-                    .primary()
+                    .outline()
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.on_download_update(cx);
                     }))
@@ -71,7 +71,7 @@ pub(super) fn render_about_section(
                     .icon(IconName::RefreshCw)
                     .label(t("Restart to install", "重启并安装"))
                     .small()
-                    .primary()
+                    .outline()
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.on_install_update(cx);
                     }))

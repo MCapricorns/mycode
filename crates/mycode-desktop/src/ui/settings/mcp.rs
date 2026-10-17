@@ -128,7 +128,7 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                                 .icon(IconName::Plus)
                                 .label(t("Add from catalog\u{2026}", "从目录添加\u{2026}"))
                                 .small()
-                                .primary()
+                                .outline()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.on_show_mcp_subview(
                                         crate::view_model::McpSubview::Catalog,
@@ -288,7 +288,7 @@ fn render_mcp_json_page(
                 Button::new("mcp-import-json")
                     .label(t("Import pasted JSON", "导入粘贴的 JSON"))
                     .small()
-                    .primary()
+                    .outline()
                     .on_click(cx.listener(|workspace, _, window, cx| {
                         workspace.on_import_mcp_json(window, cx);
                     }))
@@ -517,7 +517,7 @@ fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -
             Button::new(format!("mcp-add-{id}"))
                 .label(t("Add", "添加"))
                 .small()
-                .primary()
+                .outline()
                 .on_click({
                     let id = id.to_owned();
                     cx.listener(move |workspace, _, window, cx| {
@@ -751,7 +751,7 @@ fn render_mcp_form(
                         .icon(IconName::Check)
                         .label(t("Add server", "添加服务器"))
                         .small()
-                        .primary()
+                        .outline()
                         .on_click(cx.listener(|workspace, _, window, cx| {
                             workspace.on_add_mcp(window, cx);
                         })),

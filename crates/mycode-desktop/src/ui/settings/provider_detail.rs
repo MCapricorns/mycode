@@ -315,7 +315,7 @@ fn endpoint_block(
             Button::new(format!("provider-endpoint-save-{id}"))
                 .label(t("Save endpoint", "保存端点"))
                 .small()
-                .primary()
+                .outline()
                 .disabled(!pending)
                 .on_click(cx.listener(move |workspace, _, window, cx| {
                     workspace.on_apply_provider_endpoint(&id, window, cx);
@@ -387,7 +387,7 @@ fn key_block(
                             Button::new(format!("provider-key-save-{id}"))
                                 .label(t("Save key", "保存密钥"))
                                 .small()
-                                .primary()
+                                .outline()
                                 .disabled(!can_save)
                                 .on_click(cx.listener(move |workspace, _, window, cx| {
                                     workspace.on_save_provider_key(&id, window, cx);
@@ -474,7 +474,7 @@ fn oauth_block(
                 Button::new(format!("provider-sign-in-{id}"))
                     .label(sign_label)
                     .small()
-                    .primary()
+                    .outline()
                     .on_click(cx.listener(move |workspace, _, _, cx| {
                         workspace.on_start_provider_oauth(&id, cx);
                     })),

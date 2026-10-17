@@ -41,7 +41,7 @@ fn import_confirm_row(bundle: &std::path::Path, cx: &mut Context<Workspace>) -> 
                     Button::new("data-import-confirm-yes")
                         .label(t("Import anyway", "仍然导入"))
                         .small()
-                        .primary()
+                        .outline()
                         .on_click(cx.listener(|workspace, _, _, cx| {
                             workspace.on_confirm_import(cx);
                         })),
