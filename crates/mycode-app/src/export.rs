@@ -22,9 +22,11 @@ const MAX_BUNDLE_BYTES: u64 = 48 * 1024 * 1024;
 /// ledgers and no secrets; its settings and UI state still apply.
 const IMPORTABLE_FORMAT_VERSIONS: [u32; 2] = [1, 2];
 
-/// The full bundle.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The full bundle (the write shape; reads go through `read_bundle`, which
+/// keeps members as JSON until each document's own strict-then-salvage pass
+/// accepts them).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportBundle {
     pub format_version: u32,
     pub kind: String,
@@ -36,14 +38,6 @@ pub struct ExportBundle {
     /// Provider API keys from the local vault, as a sorted `id -> key` map.
     #[serde(default)]
     pub secrets: BTreeMap<String, String>,
-    /// Version 1 bundles carried session directories. Imports ignore them;
-    /// conversations never travel.
-    #[serde(default, rename = "sessions", skip_serializing)]
-    _sessions: Vec<serde_json::Value>,
-    /// Bundles exported before 0.7.0 carried a top-level todo list. Imports
-    /// ignore it so those files still load.
-    #[serde(default, rename = "todos", skip_serializing)]
-    _todos: Vec<serde_json::Value>,
 }
 
 /// What an export wrote.
@@ -118,8 +112,6 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
         settings,
         ui_state,
         secrets: bundle_secrets(&secrets),
-        _sessions: Vec::new(),
-        _todos: Vec::new(),
     })
 }
 
@@ -165,8 +157,7 @@ pub fn import_from_file(
         return Err("bundle exceeds the size limit".to_owned());
     }
     let body = std::fs::read(path).map_err(|error| format!("read: {error}"))?;
-    let bundle: ExportBundle =
-        serde_json::from_slice(&body).map_err(|error| format!("bundle: {error}"))?;
+    let bundle = read_bundle(&body)?;
     if !IMPORTABLE_FORMAT_VERSIONS.contains(&bundle.format_version) || bundle.kind != EXPORT_KIND {
         return Err("not a MYCode export bundle".to_owned());
     }
@@ -211,6 +202,54 @@ pub fn import_from_file(
     Ok(ImportSummary {
         secrets: bundle.secrets.len(),
     })
+}
+
+/// Decodes a bundle. Each member document first tries the strict current
+/// decode; a document a newer schema no longer accepts falls back to its
+/// salvage copy, so an older export's still-valid fields apply instead of
+/// refusing the whole file. Sections a newer build retired (`sessions`,
+/// `todos`) never decode at all.
+fn read_bundle(body: &[u8]) -> Result<ExportBundle, String> {
+    /// Loose bundle shell; the document members stay `Value` here.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Shell {
+        format_version: u32,
+        kind: String,
+        exported_at_unix: u64,
+        settings: serde_json::Value,
+        ui_state: serde_json::Value,
+        #[serde(default)]
+        secrets: BTreeMap<String, String>,
+    }
+    let shell: Shell = serde_json::from_slice(body).map_err(|error| format!("bundle: {error}"))?;
+    Ok(ExportBundle {
+        format_version: shell.format_version,
+        kind: shell.kind,
+        exported_at_unix: shell.exported_at_unix,
+        settings: document_or_salvage(&shell.settings, "settings", |value| {
+            mycode_config::salvage_app_settings(value)
+        })?,
+        ui_state: document_or_salvage(&shell.ui_state, "ui state", |value| {
+            mycode_config::salvage_ui_state(value)
+        })?,
+        secrets: shell.secrets,
+    })
+}
+
+/// Strictly decodes one bundle member, or falls back to its salvage copy.
+fn document_or_salvage<T>(
+    value: &serde_json::Value,
+    label: &str,
+    salvage: impl FnOnce(&serde_json::Value) -> Option<T>,
+) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match serde_json::from_value::<T>(value.clone()) {
+        Ok(document) => Ok(document),
+        Err(_) => salvage(value).ok_or_else(|| format!("bundle: {label} does not decode")),
+    }
 }
 
 /// Reads the current revision of one authority document for the import's CAS
@@ -306,7 +345,7 @@ mod tests {
     fn v2_bundle_carries_secrets_and_never_sessions() {
         let (root, home) = scratch("v2");
         let settings = AppSettings {
-            user_agent: "export-agent".to_owned(),
+            proxy: "direct".to_owned(),
             ..AppSettings::default()
         };
         replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).unwrap();
@@ -354,8 +393,6 @@ mod tests {
             settings: AppSettings::default(),
             ui_state: mycode_config::UiState::default(),
             secrets: BTreeMap::from([("zai".to_owned(), "imported-key".to_owned())]),
-            _sessions: Vec::new(),
-            _todos: Vec::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let summary = import_from_file(&home, &bundle_path, false).unwrap();
@@ -411,10 +448,10 @@ mod tests {
         assert_eq!(summary.secrets, 0);
 
         let settings = mycode_config::read_app_settings(&home).unwrap();
-        assert_eq!(settings.user_agent, "v1-agent");
-        // The bundle still names a retired palette; it imports anyway.
+        // The bundle still names retired fields (`usage`, `palette`,
+        // `fontFamily`, `userAgent`); salvage keeps what still decodes.
         assert_eq!(settings.appearance.theme, "dark");
-        assert_eq!(settings.appearance.legacy_palette, None, "dropped on write");
+        assert_eq!(settings.appearance.font_size, "m");
         // No conversation data is imported, and the vault stays untouched.
         assert!(!root.join("sessions").join("sess").exists());
         assert!(
@@ -446,8 +483,6 @@ mod tests {
             settings: incoming,
             ui_state: mycode_config::UiState::default(),
             secrets: BTreeMap::from([("zai".to_owned(), "refused-key".to_owned())]),
-            _sessions: Vec::new(),
-            _todos: Vec::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
@@ -485,8 +520,6 @@ mod tests {
             settings,
             ui_state: mycode_config::UiState::default(),
             secrets: BTreeMap::new(),
-            _sessions: Vec::new(),
-            _todos: Vec::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         bundle_path
@@ -504,13 +537,13 @@ mod tests {
         let bundle_path = write_bundle(
             &root,
             AppSettings {
-                user_agent: "edited-agent".to_owned(),
+                proxy: "direct".to_owned(),
                 ..current
             },
         );
         import_from_file(&home, &bundle_path, false).expect("unchanged commands need no confirm");
         let imported = mycode_config::read_app_settings(&home).unwrap();
-        assert_eq!(imported.user_agent, "edited-agent");
+        assert_eq!(imported.proxy, "direct");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -568,20 +601,18 @@ mod tests {
             kind: super::EXPORT_KIND.to_owned(),
             exported_at_unix: 0,
             settings: AppSettings {
-                user_agent: "should-not-land".to_owned(),
+                proxy: "direct".to_owned(),
                 ..AppSettings::default()
             },
             ui_state: bad_ui,
             secrets: BTreeMap::from([("zai".to_owned(), "should-not-land-key".to_owned())]),
-            _sessions: Vec::new(),
-            _todos: Vec::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
         assert!(refused.starts_with("ui state:"), "{refused}");
         assert_ne!(
-            mycode_config::read_app_settings(&home).unwrap().user_agent,
-            "should-not-land"
+            mycode_config::read_app_settings(&home).unwrap().proxy,
+            "direct"
         );
         assert!(
             mycode_config::read_provider_secrets(&home)

@@ -7,11 +7,10 @@
 //! There is no alias, layered merge, or fallback for obsolete layouts:
 //! unrelated paths are never inputs.
 //!
-//! Product documents (`settings.json`, `secrets.json`, `ui.json`) recover
-//! trailing commas from earlier writers, fill missing fields, and rewrite the
-//! canonical document. A file that cannot be parsed or validated is copied
-//! aside and replaced with defaults so startup can continue. Session ledgers
-//! are not repaired that way.
+//! Product documents (`settings.json`, `secrets.json`, `ui.json`) are strict:
+//! a file that cannot be parsed or validated is copied aside and republished,
+//! keeping whatever fields still decode so startup can continue. Session
+//! ledgers are not repaired that way.
 
 #![warn(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -21,7 +20,6 @@ mod compaction;
 mod document_repair;
 mod error;
 mod home;
-mod json_recover;
 mod mcp_import;
 mod project_mcp;
 mod resources;
@@ -51,6 +49,7 @@ pub use resources::{
 pub use secrets::{
     MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_PATH,
     read_provider_secrets, read_provider_secrets_with_repair, replace_provider_secrets,
+    salvage_provider_secrets,
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
@@ -70,15 +69,15 @@ pub(crate) fn write_owned_test_bytes(
 }
 #[doc(inline)]
 pub use settings::{
-    AppSettings, AppearanceSettings, LegacyUsageSettings, MAX_AUTHORITY_DOCUMENT_BYTES,
-    MAX_DISABLED_SKILLS, MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS,
-    MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, MAX_WEB_BACKENDS, McpServerSettings, PROXY_AUTO,
-    PROXY_DIRECT, PROXY_SCHEMES, ProviderSettings, ProxyPreference, SETTINGS_FORMAT_VERSION,
-    SETTINGS_PATH, SUBAGENT_CONCURRENCY, ShellSettings, SkillsSettings, SubagentRoleSettings,
-    SubagentSettings, ToolsSettings, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES,
-    WebBackendSettings, WebSettings, builtin_mcp_servers, builtin_web_backends, default_user_agent,
-    is_mcp_executable, merged_web_backends, read_app_settings, read_app_settings_with_repair,
-    replace_app_settings, split_command_line, web_key_env,
+    AppSettings, AppearanceSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_DISABLED_SKILLS,
+    MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
+    MAX_PROVIDERS, MAX_WEB_BACKENDS, McpServerSettings, PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES,
+    ProviderSettings, ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH,
+    SUBAGENT_CONCURRENCY, SkillsSettings, SubagentRoleSettings, SubagentSettings, VALID_FONT_SIZES,
+    VALID_LANGUAGES, VALID_THEMES, WebBackendSettings, WebSettings, builtin_mcp_servers,
+    builtin_web_backends, is_mcp_executable, merged_web_backends, read_app_settings,
+    read_app_settings_with_repair, replace_app_settings, salvage_app_settings, split_command_line,
+    web_key_env,
 };
 #[doc(inline)]
 pub use subagents::{
@@ -90,7 +89,7 @@ pub use ui_state::{
     MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES, MAX_WORKSPACE_NAME_CHARS,
     MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UiState, WindowSize,
     WorkspaceDef, is_valid_effort_token, read_ui_state, read_ui_state_with_repair, remember_model,
-    replace_ui_state, same_project_path, session_model, upsert_session_model,
+    replace_ui_state, salvage_ui_state, same_project_path, session_model, upsert_session_model,
 };
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero

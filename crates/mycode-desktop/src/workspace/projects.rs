@@ -819,9 +819,6 @@ impl Workspace {
             selected_reasoning: self.vm.default_reasoning.clone(),
             session_projects: self.vm.session_projects.clone(),
             session_models: self.vm.session_models.clone(),
-            // The legacy root list mirrors the active workspace so a
-            // downgrade build still shows a sensible folder set.
-            workspace_roots: self.vm.workspace_roots.clone(),
             workspaces: self.vm.workspaces.clone(),
             session_workspaces: self.vm.session_workspaces.clone(),
             active_workspace: self.vm.active_workspace.clone(),

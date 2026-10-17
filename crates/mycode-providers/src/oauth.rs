@@ -16,6 +16,10 @@ use serde_json::Value;
 pub const COPILOT_PROVIDER_ID: &str = "github-copilot";
 /// ChatGPT Plus/Pro Codex subscription.
 pub const OPENAI_CODEX_PROVIDER_ID: &str = "openai-codex";
+/// The client identity sent as `originator` on the Codex backend's
+/// `/models` and `/responses` endpoints; it gates feature rollout, so the
+/// application reports itself rather than mimicking another client.
+pub const ORIGINATOR: &str = "mycode";
 /// Public device-flow client id of the GitHub Copilot CLI app (no secret).
 const DEVICE_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 /// Device authorization endpoint.

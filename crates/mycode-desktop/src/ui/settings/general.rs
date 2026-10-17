@@ -1,8 +1,9 @@
 //! The General settings page: appearance, text size, language, and the
-//! network identity (proxy and User-Agent).
+//! network proxy.
 //!
 //! The interface always paints the operating-system UI font; there is no
-//! typeface picker.
+//! typeface picker. The request identity (User-Agent) is fixed by the
+//! application and is not shown here.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::Input;
 use gpui_kit::{
@@ -10,7 +11,7 @@ use gpui_kit::{
     TestSupportExt as _, Window, div, px,
 };
 
-use super::widgets::{choice_chips, dropdown_field, field_label, settings_card, settings_row};
+use super::widgets::{choice_chips, dropdown_field, settings_card, settings_row};
 use crate::i18n::t;
 use crate::workspace::Workspace;
 
@@ -38,7 +39,6 @@ pub(super) fn render_general_section(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let ua_field = user_agent_field(workspace, window, cx);
     let proxy_row = proxy_field(workspace, window, cx);
     let theme_id = workspace
         .vm()
@@ -107,55 +107,12 @@ pub(super) fn render_general_section(
             "network",
             t("Network", "网络"),
             Some(t(
-                "Proxy and identity for model, search, and update requests. Local models always connect directly.",
-                "模型、搜索与更新请求使用的代理和标识。本地模型始终直连。",
+                "Proxy for model, search, and update requests. Local models always connect directly.",
+                "模型、搜索与更新请求使用的代理。本地模型始终直连。",
             )),
             theme,
-            vec![proxy_row, ua_field],
+            vec![proxy_row],
         ))
-        .into_any_element()
-}
-
-fn user_agent_field(
-    workspace: &mut Workspace,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) -> AnyElement {
-    let ua_input = workspace.settings_ua_input(window, cx);
-    let effective_ua = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.effective_user_agent.clone())
-        .unwrap_or_default();
-    div()
-        .id("row-user-agent")
-        .w_full()
-        .h_auto()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(crate::ui::skin::space(2))
-        .child(field_label("HTTP User-Agent"))
-        .child(
-            // Fixed height. `Input` is `size_full`; without a definite box
-            // its percentage height resolves against the scrollport.
-            div()
-                .w_full()
-                .h(px(32.))
-                .min_h(px(32.))
-                .max_h(px(32.))
-                .flex_none()
-                .text_sm()
-                .child(Input::new(&ua_input)),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .whitespace_normal()
-                .child(format!("{}: {effective_ua}", t("Effective", "生效值"))),
-        )
         .into_any_element()
 }
 
@@ -235,7 +192,8 @@ fn proxy_field(
             theme,
         ))
         .children(input.map(|input| {
-            // Fixed height, as for the User-Agent field.
+            // Fixed height: `Input` is `size_full`; without a definite box
+            // its percentage height resolves against the scrollport.
             div()
                 .w_full()
                 .h(px(32.))
@@ -368,7 +326,6 @@ mod appearance_layout {
                 "Interface language. English and Simplified Chinese are built in.",
                 "English",
             );
-            let agent = probe_user_agent();
             div()
                 .size_full()
                 .flex()
@@ -427,7 +384,7 @@ mod appearance_layout {
                                             "Appearance",
                                             Some("Applies immediately and is saved to settings."),
                                             &theme,
-                                            vec![size_row, language, agent],
+                                            vec![size_row, language],
                                         )),
                                 )
                                 .test_support(),
@@ -596,32 +553,8 @@ mod appearance_layout {
             .into_any_element()
     }
 
-    fn probe_user_agent() -> gpui_kit::AnyElement {
-        div()
-            .id("row-user-agent")
-            .w_full()
-            .h_auto()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_sm().child("HTTP User-Agent"))
-            .child(
-                div()
-                    .w_full()
-                    .h(px(30.))
-                    .min_h(px(30.))
-                    .max_h(px(30.))
-                    .flex_none()
-                    .text_sm()
-                    .child("pi"),
-            )
-            .test_support()
-            .into_any_element()
-    }
-
     #[gpui_kit::test]
-    fn appearance_card_packs_size_language_and_user_agent(cx: &mut TestAppContext) {
+    fn appearance_card_packs_size_and_language(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(|cx| cx.set_reduce_motion(true));
         let handle = cx.open_window(size(px(1280.), px(480.)), |_, _| AppearanceProbe);
@@ -633,7 +566,6 @@ mod appearance_layout {
             let language = window.find("dropdown-language").bounds();
             let language_button = window.find("dropdown-button-language").bounds();
             let language_hint = window.find("dropdown-hint-language").bounds();
-            let agent = window.find("row-user-agent").bounds();
             let chip = window.find("font-size-s").bounds();
             let chip_xl = window.find("font-size-xl").bounds();
             let card = window.find("card-appearance").bounds();
@@ -666,14 +598,9 @@ mod appearance_layout {
             );
 
             let language_gap = language.origin.y - size_row.bottom();
-            let agent_gap = agent.origin.y - language.bottom();
             assert!(
                 language_gap >= px(0.) && language_gap < px(80.),
                 "gap between size and language is {language_gap:?}"
-            );
-            assert!(
-                agent_gap >= px(0.) && agent_gap < px(80.),
-                "gap between language and user-agent is {agent_gap:?}"
             );
 
             // Scrolling the settings pane must not panic, and the rows have
@@ -685,17 +612,13 @@ mod appearance_layout {
             );
             let size_after = window.find("row-font-size").bounds();
             let language_after = window.find("dropdown-language").bounds();
-            let agent_after = window.find("row-user-agent").bounds();
             let scrolled_gap = language_after.origin.y - size_after.bottom();
-            let scrolled_agent = agent_after.origin.y - language_after.bottom();
             assert!(
                 size_after.size.height < px(80.)
                     && language_after.size.height < px(120.)
                     && scrolled_gap >= px(0.)
-                    && scrolled_gap < px(80.)
-                    && scrolled_agent >= px(0.)
-                    && scrolled_agent < px(80.),
-                "scroll should keep size, language, and user-agent packed: size {size_after:?} language {language_after:?} ua {agent_after:?}"
+                    && scrolled_gap < px(80.),
+                "scroll should keep size and language packed: size {size_after:?} language {language_after:?}"
             );
         })
         .unwrap();

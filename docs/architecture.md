@@ -64,7 +64,7 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 
 ```text
 ~/.mycode/
-├─ settings.json          提供商、MCP、网页、用量、外观、子代理、shell、User-Agent。不含密钥
+├─ settings.json          提供商、MCP、网页、外观、子代理。不含密钥
 ├─ secrets.json           API 密钥、OAuth 令牌与网页 / MCP 凭证
 ├─ ui.json                工作区、文件夹、会话归属、最近项目、每个会话的模型与思考档位。可丢弃
 ├─ catalog-cache.json     models.dev 目录缓存
@@ -85,7 +85,7 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 这些是现在代码的真实边界，读模块文档时一起记住。
 
 - 工具在当前用户权限下执行，没有每次调用前的许可弹窗。校验过的调用会直接跑。环境变量白名单不是沙箱。
-- 进程工具会钉住要启动的程序映像，并在取消或超时时回收整棵进程树（含 `setsid` 脱离进程组的子孙）。模型通过 `tools.shell` 使用它，不能直接点名。注册名在整个会话里不变：PowerShell 时叫 `powershell`，bash / zsh / sh 各用自己的名字，Windows 上两种 PowerShell 都没有时才是 `cmd`。`script` 模式走这个解释器，`program` 模式直接启动可加载映像，或按直接 shebang 改执行它的解释器。Windows 优先 PowerShell 7（`pwsh`），其次 Windows PowerShell 5.1，再不济才是 `cmd.exe`。不选择 Git Bash 或 WSL。macOS 用 `$SHELL` 里的 bash、zsh 或 sh，否则用 zsh。shell 退出后工具就返回，不等后台子进程关掉管道。PowerShell 用 UTF-16LE 的 `-EncodedCommand` 启动，用户命令不从别的 shell 翻译过来，标准输出和标准错误里的 CLIXML 与 ANSI 颜色会收成可读文本。环境变量过滤不是隔离。`MYCODE_SHELL` 和设置里的 `tools.shell` 不切换解释器。
+- 进程工具会钉住要启动的程序映像，并在取消或超时时回收整棵进程树（含 `setsid` 脱离进程组的子孙）。模型通过 `tools.shell` 使用它，不能直接点名。注册名在整个会话里不变：PowerShell 时叫 `powershell`，bash / zsh / sh 各用自己的名字，Windows 上两种 PowerShell 都没有时才是 `cmd`。`script` 模式走这个解释器，`program` 模式直接启动可加载映像，或按直接 shebang 改执行它的解释器。Windows 优先 PowerShell 7（`pwsh`），其次 Windows PowerShell 5.1，再不济才是 `cmd.exe`。不选择 Git Bash 或 WSL。macOS 用 `$SHELL` 里的 bash、zsh 或 sh，否则用 zsh。shell 退出后工具就返回，不等后台子进程关掉管道。PowerShell 用 UTF-16LE 的 `-EncodedCommand` 启动，用户命令不从别的 shell 翻译过来，标准输出和标准错误里的 CLIXML 与 ANSI 颜色会收成可读文本。环境变量过滤不是隔离。`MYCODE_SHELL` 不切换解释器；`tools.shell` 已从设置里移除。
 - 持续集成分成两段，都写在 `.github/workflows/ci.yml`。pull request 只跑 `check`：在 `windows-latest` 上执行 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（`--locked`，dev/test profile，覆盖整个 workspace）。这一段没有 fat LTO，不跑 `cargo build --release`，也不打安装包。推到 `main` 时同一份 `check` 再跑一遍，并在 Windows x64、Windows ARM64 和 macOS Apple Silicon 上做发布构建（`[profile.release]` 是 fat LTO、单个 codegen unit）。只有 `check` 和三个发布构建都成功，且版本还没有标签时，才打标签并发布。发布说明是该版本的 `CHANGELOG.md` 条目，加上自上一个标签以来的 pull request 和被关闭的 issue。`github-actions[bot]` 写回版本时不会再开一次发布。没有 fmt 任务。每周的 `models-snapshot.yml` 在目录快照变化时仍在 `macos-latest` 上跑 `cargo test -p mycode-providers`。产品不再支持 Linux，代码里也不再有 Linux 分支。
 - 会话写入是单写者。generation fence 把正在提交和正在删除排开，提交用期望头 CAS。
 - 生产环境的回合钩子只有请求前压缩，子代理连这个也没有。没有工具前观察者，也不再为改文件装快照。

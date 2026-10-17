@@ -1,5 +1,6 @@
 //! Durable settings and secrets I/O: reads with revision tracking, CAS
-//! saves, and key storage. The shell is not taken from this document.
+//! saves, and key storage. A document that fails strict validation is
+//! quarantined and reset by the repair layer rather than edited here.
 
 use mycode_config::{
     AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES,
@@ -67,33 +68,18 @@ fn stored_revision(
 
 pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String> {
     let mut repairs = Vec::new();
-    let (mut settings, settings_repair) =
+    let (settings, settings_repair) =
         read_app_settings_with_repair(home).map_err(|error| render_config_error(&error))?;
     if let Some(repair) = settings_repair {
         repairs.push(repair);
     }
-    let mut revision = stored_revision(
+    let revision = stored_revision(
         home,
         SETTINGS_PATH,
         MAX_AUTHORITY_DOCUMENT_BYTES,
         SETTINGS_FORMAT_VERSION,
         "settings",
     )?;
-    let discarded_shell = discard_stored_shell(&mut settings);
-    let discarded_sandbox = discard_stored_os_sandbox(&mut settings);
-    let discarded_web = discard_custom_web_backends(&mut settings);
-    let filled_agent = settings.user_agent.trim().is_empty();
-    if filled_agent {
-        settings.user_agent = mycode_config::default_user_agent();
-    }
-    // Drop a legacy shell override, a legacy OS-sandbox flag, and retired
-    // `custom` web backends, and fill an empty user-agent, so the next load
-    // does not repeat the same rewrite.
-    if (discarded_shell || discarded_sandbox || discarded_web || filled_agent)
-        && let Ok(next) = replace_app_settings(home, revision, &settings)
-    {
-        revision = next;
-    }
     let (secrets, secrets_repair) =
         read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
     if let Some(repair) = secrets_repair {
@@ -115,12 +101,9 @@ pub(crate) fn save_settings(
     expected_revision: AuthorityRevision,
     settings: &AppSettings,
 ) -> Result<AuthorityRevision, String> {
-    let mut settings = settings.clone();
-    let _ = discard_stored_shell(&mut settings);
-    let _ = discard_custom_web_backends(&mut settings);
-    let revision = replace_app_settings(home, expected_revision, &settings)
+    let revision = replace_app_settings(home, expected_revision, settings)
         .map_err(|error| render_config_error(&error))?;
-    apply_network(&settings);
+    apply_network(settings);
     Ok(revision)
 }
 
@@ -131,41 +114,6 @@ pub(crate) fn apply_network(settings: &AppSettings) {
 
 pub(crate) fn render_config_error(error: &mycode_config::ConfigError) -> String {
     format!("settings error: {}", error.summary())
-}
-
-/// The OS-sandbox feature is gone; a stored flag from an older build is
-/// cleared without a log line because nothing replaces it.
-fn discard_stored_os_sandbox(settings: &mut AppSettings) -> bool {
-    if !settings.tools.os_sandbox {
-        return false;
-    }
-    settings.tools.os_sandbox = false;
-    true
-}
-
-fn discard_stored_shell(settings: &mut AppSettings) -> bool {
-    if settings.tools.shell.is_none() {
-        return false;
-    }
-    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        eprintln!(
-            "mycode: ignoring tools.shell in settings; the shell is chosen automatically for this operating system"
-        );
-    }
-    settings.tools.shell = None;
-    true
-}
-
-/// The `custom` web-backend kind is retired; stored rows are dropped so no
-/// code path can still enable one.
-fn discard_custom_web_backends(settings: &mut AppSettings) -> bool {
-    let before = settings.web.backends.len();
-    settings
-        .web
-        .backends
-        .retain(|backend| backend.kind != "custom");
-    settings.web.backends.len() != before
 }
 
 /// Splits stored secret ids into provider and MCP key markers.
@@ -209,53 +157,4 @@ pub(crate) fn save_provider_key(
     replace_provider_secrets(home, expected, &updated)
         .map_err(|error| render_config_error(&error))?;
     Ok(split_key_ids(&updated))
-}
-
-#[cfg(test)]
-mod tests {
-    use mycode_config::{AppSettings, AuthorityRevision, HomeLayout, ShellSettings, ToolsSettings};
-
-    #[test]
-    fn saving_settings_removes_a_legacy_shell_override() {
-        let parent = std::env::temp_dir().join(format!(
-            "mycode-shell-save-{}-{}",
-            std::process::id(),
-            crate::unix_now().as_nanos()
-        ));
-        std::fs::create_dir_all(&parent).expect("temp parent");
-        let root = parent.join("home");
-        std::fs::create_dir(&root).expect("home");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
-        }
-        let home = HomeLayout::from_root(&root).expect("layout");
-        let settings = AppSettings {
-            tools: ToolsSettings {
-                shell: Some(ShellSettings {
-                    kind: "bash".into(),
-                    program: "/bin/bash".into(),
-                    source: "user".into(),
-                }),
-                os_sandbox: false,
-            },
-            ..AppSettings::default()
-        };
-        let revision =
-            mycode_config::replace_app_settings(&home, AuthorityRevision::ABSENT, &settings)
-                .expect("publish shell");
-        let stored = std::fs::read_to_string(home.root().join("settings.json")).expect("file");
-        assert!(stored.contains("\"shell\""), "{stored}");
-        let next = super::save_settings(&home, revision, &settings).expect("save");
-        let cleared = std::fs::read_to_string(home.root().join("settings.json")).expect("file");
-        assert!(
-            !cleared.contains("\"shell\""),
-            "write-back drops tools.shell:\n{cleared}"
-        );
-        let loaded = super::load_settings(&home).expect("load");
-        assert!(loaded.settings.tools.shell.is_none());
-        assert_eq!(loaded.revision, next);
-        let _ = std::fs::remove_dir_all(parent);
-    }
 }

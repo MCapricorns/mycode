@@ -39,8 +39,11 @@ pub(super) fn render_models_catalog_page(
     let preset_search_text = workspace.vm().preset_search.to_lowercase();
     let mut preset_rows: Vec<(String, String, String, usize)> = Vec::new();
     for provider in &catalog.providers {
-        // OpenDesign has its own button and page; it is not a models.dev row.
-        if provider.id == mycode_providers::catalog::opendesign::PROVIDER_ID {
+        // OpenDesign and the device-OAuth vendors have their own buttons and
+        // pages; they are not pasted-key rows of the library.
+        if provider.id == mycode_providers::catalog::opendesign::PROVIDER_ID
+            || mycode_providers::catalog::uses_device_code_login(&provider.auth)
+        {
             continue;
         }
         if !preset_search_text.is_empty()
@@ -240,7 +243,7 @@ pub(super) fn render_opendesign_page(
                         .flex_row()
                         .flex_wrap()
                         .items_center()
-                        .gap_2()
+                        .gap_3()
                         .child(
                             Button::new("opendesign-load")
                                 .icon(IconName::RefreshCw)
@@ -272,6 +275,74 @@ pub(super) fn render_opendesign_page(
                 "OpenDesign is configured. Adding again replaces its model list.",
                 "OpenDesign 已配置。再次添加会替换它的模型列表。",
             )))
+        })
+        .child(form)
+        .into_any_element()
+}
+
+/// One device-OAuth page (GitHub Copilot or OpenAI Codex): the sign-in
+/// copy above the shared preset form, whose device-code section shows the
+/// authorize button, the verification code, and any sign-in failure.
+pub(super) fn render_device_signin_page(
+    workspace: &mut Workspace,
+    provider_id: &'static str,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let form = render_preset_form(workspace, provider_id, window, cx);
+    let (title, blurb, configured_text) = match provider_id {
+        mycode_providers::OPENAI_CODEX_PROVIDER_ID => (
+            "OpenAI Codex",
+            t(
+                "Signs in with your ChatGPT account over the OpenAI device flow.",
+                "通过 OpenAI 设备授权流程使用你的 ChatGPT 账号登录。",
+            ),
+            t(
+                "OpenAI Codex is configured. Signing in again refreshes the token and the model list.",
+                "OpenAI Codex 已配置。重新登录会刷新令牌并替换模型列表。",
+            ),
+        ),
+        _ => (
+            "GitHub Copilot",
+            t(
+                "Signs in with your GitHub account over the device flow.",
+                "通过设备授权流程使用你的 GitHub 账号登录。",
+            ),
+            t(
+                "GitHub Copilot is configured. Signing in again refreshes the token and the model list.",
+                "GitHub Copilot 已配置。重新登录会刷新令牌并替换模型列表。",
+            ),
+        ),
+    };
+    let configured = workspace.vm().settings.as_ref().is_some_and(|settings| {
+        settings
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider_id)
+    });
+    let header = super::super::subview_header(
+        t("Providers", "服务商"),
+        title,
+        Some(blurb),
+        |workspace, cx| {
+            workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
+        },
+        cx,
+    );
+    let theme = cx.theme();
+    div()
+        .id(format!("{provider_id}-page"))
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(header)
+        .when(configured, |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(configured_text),
+            )
         })
         .child(form)
         .into_any_element()
@@ -508,7 +579,7 @@ fn render_preset_form(
                         .id("preset-sign-in")
                         .flex()
                         .flex_col()
-                        .gap_2()
+                        .gap_3()
                         .when_some(error, |this, message| {
                             this.child(
                                 div()
@@ -588,7 +659,7 @@ fn render_preset_form(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
+                        .gap_3()
                         .child(
                             Button::new("preset-confirm")
                                 .icon(IconName::Check)

@@ -207,15 +207,19 @@ async fn compact_session_now(
 ) -> Result<(String, Option<String>), String> {
     open_branch_head(state, session, branch, expected_head).await?;
     let home = &state.home;
-    let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
+    let (_settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
     let (bearer, extra_headers) =
         resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
     if cancel.is_cancelled() {
         return Err("compaction cancelled".to_owned());
     }
-    let mut resolved =
-        ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
-            .map_err(|error| format!("provider setup failed: {error:?}"))?;
+    let mut resolved = ResolvedProvider::resolve(
+        &provider,
+        model,
+        &bearer,
+        &crate::user_agent::default_user_agent(),
+    )
+    .map_err(|error| format!("provider setup failed: {error:?}"))?;
     resolved.headers.extend(extra_headers);
     let transport: Arc<dyn SseTransport> = Arc::new(
         ReqwestTransport::new().map_err(|error| format!("HTTP transport unavailable: {error}"))?,

@@ -8,7 +8,7 @@
 
 三种协议各有一个「组请求体」和一个「帧归约器」，共用同一个 SSE 驱动。驱动只负责把传输层的字节流变成 `StreamEvent`，取消令牌一响就停。传输是 `SseTransport` trait，生产用 `ReqwestTransport`，测试或替换实现可以注入别的传输。连接超时 10s。模型流的读超时是块与块之间的空闲上限 180s（有字节就重置），不是整次请求的硬截止。
 
-所有请求都带配置的 User-Agent（未设置时用 pi agent 的默认值）。reqwest 只开 `native-tls`（操作系统 TLS）和 `system-proxy`，不启用会再编一套加密库的 rustls 特性。
+所有请求都带调用方传入的 User-Agent，生产环境固定是 `mycode-app` 的 `default_user_agent()`（`MYCode-Agent/<版本> (<平台> <内核>; <架构>; <shell>)`），不是设置项。reqwest 只开 `native-tls`（操作系统 TLS）和 `system-proxy`，不启用会再编一套加密库的 rustls 特性。
 
 出站请求先解析域名，再只连接检查过的地址（`http_pin`），重定向手动跟随、最多 5 跳、每跳重新检查。`PublicHttps`（网页检索、更新下载）要求 https、443 端口，并且解析结果全部是公网地址。GitHub 发布用的 `api.github.com`、`github.com`、`www.github.com`、`codeload.github.com`、`uploads.github.com` 和 `*.githubusercontent.com` 是例外：DNS 里夹了私网、ULA 或链路本地地址时，丢掉这些地址，只连接剩下的公网地址。任何主机的解析结果整段都是 `198.18.0.0/15`（本机 fake-ip，如 Clash TUN）时可以连接这些地址；和回环、RFC1918、链路本地或 ULA 混在一起则拒绝。其他主机的混合解析、字面私网地址、回环和链路本地仍然拒绝。`CheckRedirect`（模型流、目录刷新）的第一跳可以整段是公网或整段是私网（本机模型），之后的跳转必须全是公网；OAuth 用同一钉住模式，但不跟随重定向。
 
@@ -91,7 +91,7 @@ OpenDesign 行挂在目录文档里（id `opendesign`），上下文、输出和
 
 ## 登录
 
-`github-copilot`、`openai-codex` 是设备码登录，其它服务商（包括 `xai`）贴 API key。旧版本缓存里 `xai` 的 `oauth` 标记按普通 API key 服务商处理。缺少 `openai-codex` 时目录补一个内置预设（Responses，`https://chatgpt.com/backend-api/codex`）；models.dev 不含 Codex 行，所以签入完成时会用新令牌从 `{base}/models` 拉一次真实列表缓存进 `codex-models.json`，已签入账户每次启动首帧后也静默刷新，目录层把这份实时列表合并到预设之上（实时成员优先，思考档位取后端给出的 ladder，上下文等限额回落到预设值）。OAuth 请求仍走钉住地址的客户端（`CheckRedirect`），调用方通过 `PinnedCall` 显式传入 User-Agent 和总超时（默认 30s），不跟随重定向；调用方的代理不生效。错误信息只带状态码和字段名，不带令牌。
+`github-copilot`、`openai-codex` 是设备码登录，其它服务商（包括 `xai`）贴 API key。旧版本缓存里 `xai` 的 `oauth` 标记按普通 API key 服务商处理。缺少 `openai-codex` 时目录补一个内置预设（Responses，`https://chatgpt.com/backend-api/codex`）；models.dev 不含 Codex 行，所以签入完成时会用新令牌从 `{base}/models` 拉一次真实列表缓存进 `codex-models.json`，已签入账户每次启动首帧后也静默刷新，目录层把这份实时列表合并到预设之上（实时成员优先，思考档位取后端给出的 ladder，上下文等限额回落到预设值）。预设和实时列表都只保留 `gpt-5.6`、`gpt-6`、`gpt-6.1` 三个系列的模型 id，其它族（`o3`、5.3/5.4/5.5 等）不进目录。OAuth 请求仍走钉住地址的客户端（`CheckRedirect`），调用方通过 `PinnedCall` 显式传入 User-Agent 和总超时（默认 30s），不跟随重定向；调用方的代理不生效。错误信息只带状态码和字段名，不带令牌。
 
 ## 一次解析
 

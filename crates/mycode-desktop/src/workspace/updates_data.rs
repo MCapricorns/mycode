@@ -74,9 +74,11 @@ pub(crate) fn settings_back_target(
         SettingsSection::Models => match models {
             ModelsSubview::List if provider_open => SettingsBack::CloseProviderDetail,
             ModelsSubview::Catalog if preset_open => SettingsBack::ClosePreset,
-            ModelsSubview::Catalog | ModelsSubview::OpenDesign | ModelsSubview::Custom => {
-                SettingsBack::ModelsList
-            }
+            ModelsSubview::Catalog
+            | ModelsSubview::OpenDesign
+            | ModelsSubview::GitHubCopilot
+            | ModelsSubview::OpenAiCodex
+            | ModelsSubview::Custom => SettingsBack::ModelsList,
             ModelsSubview::List => SettingsBack::Desk,
         },
         SettingsSection::Web if web_detail_open => SettingsBack::WebList,

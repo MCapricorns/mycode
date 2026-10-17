@@ -294,8 +294,6 @@ pub enum DesktopAction {
         /// Whether a wide window docks it beside the conversation.
         pinned: bool,
     },
-    /// The settings editor changed the User-Agent.
-    SettingsUserAgentChanged(String),
     /// The settings editor changed the proxy preference. `typed` edits come
     /// from the URL field and save on the text debounce.
     SettingsProxyChanged {

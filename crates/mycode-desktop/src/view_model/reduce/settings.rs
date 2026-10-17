@@ -154,7 +154,6 @@ pub(super) fn settings_saved(state: &mut WorkspaceState, revision: u64, edit_epo
         if settings.edit_epoch == edit_epoch {
             settings.dirty = false;
         }
-        settings.effective_user_agent = settings.to_settings().effective_user_agent();
     }
 }
 

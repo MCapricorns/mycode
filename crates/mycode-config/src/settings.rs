@@ -5,18 +5,16 @@
 //! revision compare-and-swap through the hardened owned-file transaction.
 //! Secrets never live here; credentials stay in the secret store.
 //!
-//! A trailing comma from an earlier writer is repaired and the canonical
-//! document is rewritten. Missing fields take their defaults. A document that
-//! cannot be parsed or validated is copied aside and replaced with defaults
-//! so startup can continue. Session ledgers are not part of this document.
+//! A document that cannot be parsed or validated is copied aside and
+//! replaced: whatever still decodes and validates is kept, the rest is
+//! rebuilt from defaults, so startup can continue without re-entering whole
+//! sections. Session ledgers are not part of this document.
 
 mod mcp;
 mod providers;
 mod proxy;
 mod skills;
 mod subagent_roles;
-mod tools_shell;
-mod user_agent;
 mod web;
 
 pub use mcp::{
@@ -29,8 +27,6 @@ pub use providers::{
 pub use proxy::{PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProxyPreference};
 pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
 pub use subagent_roles::{SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings};
-pub use tools_shell::{ShellSettings, ToolsSettings};
-pub use user_agent::default_user_agent;
 pub use web::{
     MAX_WEB_BACKENDS, WebBackendSettings, WebSettings, builtin_web_backends, merged_web_backends,
     web_key_env,
@@ -40,7 +36,6 @@ use serde::{Deserialize, Serialize};
 
 use skills::skills_are_default;
 use subagent_roles::subagents_are_default;
-use tools_shell::tools_are_default;
 
 use crate::ConfigError;
 use crate::authority::AuthorityRevision;
@@ -62,18 +57,6 @@ const SETTINGS_KIND: &str = "mycode-app-settings";
 pub(crate) const MAX_FIELD_BYTES: usize = 8 * 1024;
 /// Base URL maximum length.
 pub(super) const MAX_URL_BYTES: usize = 2 * 1024;
-
-/// Legacy `usage` accounting document.
-///
-/// Durable usage records were removed. This shape stays deserializable so an
-/// older `settings.json` still loads; the value is ignored and never written.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LegacyUsageSettings {
-    /// Previously toggled durable usage records. Not consulted.
-    #[serde(default)]
-    pub enabled: bool,
-}
 
 /// Painted appearance: dark or light.
 pub const VALID_THEMES: [&str; 2] = ["dark", "light"];
@@ -98,49 +81,31 @@ fn default_font_size() -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceSettings {
-    /// `dark` or `light`. Any other stored value fails validation, and startup
-    /// replaces the whole document with defaults.
+    /// `dark` or `light`. Any other stored value fails validation, and
+    /// startup resets the document (keeping what still decodes).
     pub theme: String,
-    /// Retired color palette. A document written before the palettes were
-    /// removed still names one; it loads, is ignored, and is dropped on the
-    /// next save, so an old file is not reset over it.
-    #[serde(default, rename = "palette", skip_serializing)]
-    pub legacy_palette: Option<String>,
     /// `auto`, `en`, or `zh`.
     #[serde(default = "default_language")]
     pub language: String,
     /// `s`, `m`, `l`, or `xl`. Missing values read as medium.
     #[serde(default = "default_font_size")]
     pub font_size: String,
-    /// Retired UI font family. The interface always paints the OS UI font;
-    /// a document that still names a family loads, the value is ignored,
-    /// and the next save drops it.
-    #[serde(default, rename = "fontFamily", skip_serializing)]
-    pub legacy_font_family: Option<String>,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "dark".to_owned(),
-            legacy_palette: None,
             language: default_language(),
             font_size: default_font_size(),
-            legacy_font_family: None,
         }
     }
 }
 
 /// The complete settings document.
-///
-/// Missing fields take [`Default`] so an older copy can be read and rewritten
-/// with the options this build expects.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct AppSettings {
-    /// Outbound User-Agent. Defaults to the pi agent identity so the
-    /// value is present in `settings.json` and stays configurable.
-    pub user_agent: String,
     /// Outbound proxy: empty or `auto`, `direct`, or a proxy URL. See
     /// [`ProxyPreference`].
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -149,10 +114,6 @@ pub struct AppSettings {
     pub providers: Vec<ProviderSettings>,
     /// Web search settings.
     pub web: WebSettings,
-    /// Legacy `usage` accounting toggle. Ignored when present; this build
-    /// writes no usage settings and drops the field on the next save.
-    #[serde(default, skip_serializing)]
-    pub usage: Option<LegacyUsageSettings>,
     /// MCP servers.
     pub mcp_servers: Vec<McpServerSettings>,
     /// Appearance.
@@ -164,47 +125,12 @@ pub struct AppSettings {
     /// Subagent delegation settings.
     #[serde(default, skip_serializing_if = "subagents_are_default")]
     pub subagents: SubagentSettings,
-    /// Tool-runtime preferences. A legacy `shell` value is ignored.
-    #[serde(default, skip_serializing_if = "tools_are_default")]
-    pub tools: ToolsSettings,
     /// Skills the user switched off.
     #[serde(default, skip_serializing_if = "skills_are_default")]
     pub skills: SkillsSettings,
 }
 
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            user_agent: default_user_agent(),
-            proxy: String::new(),
-            providers: Vec::new(),
-            // Both first-class vendors ship ready; the user pastes an API
-            // key and enables one. At most one backend may be enabled.
-            web: WebSettings::default(),
-            usage: None,
-            mcp_servers: Vec::new(),
-            appearance: AppearanceSettings::default(),
-            reasoning_effort: None,
-            subagents: SubagentSettings::default(),
-            tools: ToolsSettings::default(),
-            skills: SkillsSettings::default(),
-        }
-    }
-}
-
 impl AppSettings {
-    /// Returns the effective User-Agent, falling back to the pi agent
-    /// identity when unset.
-    #[must_use]
-    pub fn effective_user_agent(&self) -> String {
-        let configured = self.user_agent.trim();
-        if configured.is_empty() {
-            default_user_agent()
-        } else {
-            configured.to_owned()
-        }
-    }
-
     /// Returns the effective appearance. Unknown values read as dark.
     #[must_use]
     pub fn effective_theme(&self) -> &'static str {
@@ -235,8 +161,6 @@ impl AppSettings {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let invalid =
             |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
-        bounded_text(&self.user_agent, MAX_FIELD_BYTES)
-            .map_err(|_| invalid("userAgent: too long or contains line breaks or NUL"))?;
         self.validate_proxy().map_err(invalid)?;
         if let Some(level) = self.reasoning_effort.as_deref()
             && (level == "default" || crate::RoleThinking::parse(level).is_none())
@@ -258,7 +182,6 @@ impl AppSettings {
             return Err(invalid("appearance.fontSize: must be s, m, l, or xl"));
         }
         self.validate_subagent_roles()?;
-        self.validate_tools_shell()?;
         self.validate_skills()?;
         Ok(())
     }
@@ -266,10 +189,9 @@ impl AppSettings {
 
 /// Reads and validates `settings.json`.
 ///
-/// A missing document yields the defaults. A trailing comma is accepted and
-/// a canonical rewrite is attempted. A document that cannot be parsed or
-/// validated is backed up and replaced with defaults; see
-/// [`read_app_settings_with_repair`].
+/// A missing document yields the defaults. A document that cannot be parsed
+/// or validated is backed up and replaced, keeping whatever still decodes;
+/// see [`read_app_settings_with_repair`].
 ///
 /// # Errors
 ///
@@ -282,8 +204,8 @@ pub fn read_app_settings(home: &crate::HomeLayout) -> Result<AppSettings, Config
 /// Reads `settings.json`, repairing a damaged document.
 ///
 /// The second value is set when the previous bytes were copied to a
-/// `settings.json.broken-*` file and the original path was replaced with
-/// defaults. A valid document does not report a repair.
+/// `settings.json.broken-*` file and the original path was replaced. A valid
+/// document does not report a repair.
 ///
 /// # Errors
 ///
@@ -296,23 +218,17 @@ pub fn read_app_settings_with_repair(
         home,
         SETTINGS_PATH,
         MAX_AUTHORITY_DOCUMENT_BYTES,
-        |bytes| {
-            let parsed = decode_settings(bytes)?;
-            if parsed.migrated {
-                replace_app_settings(home, parsed.revision, &parsed.settings)?;
-            }
-            Ok(parsed.settings)
-        },
+        |bytes| Ok(decode_settings(bytes)?.settings),
         AppSettings::default,
-        || publish_default_settings(home),
+        salvage_app_settings,
+        |settings| publish_settings(home, settings),
     )?;
     Ok((loaded.value, loaded.repair))
 }
 
-fn publish_default_settings(home: &crate::HomeLayout) -> Result<(), ConfigError> {
-    let settings = AppSettings::default();
+fn publish_settings(home: &crate::HomeLayout, settings: &AppSettings) -> Result<(), ConfigError> {
     settings.validate()?;
-    let bytes = encode_settings(AuthorityRevision::ABSENT.checked_next()?, &settings)?;
+    let bytes = encode_settings(AuthorityRevision::ABSENT.checked_next()?, settings)?;
     locked_update_owned_file(home, SETTINGS_PATH, MAX_AUTHORITY_DOCUMENT_BYTES, |_| {
         Ok(bytes)
     })
@@ -404,7 +320,6 @@ struct DeserializedSettings {
 struct ParsedSettings {
     settings: AppSettings,
     revision: AuthorityRevision,
-    migrated: bool,
 }
 
 fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
@@ -413,13 +328,11 @@ fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError>
 
 fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
     let rejection = || {
-        ConfigError::authority_rejection().with_detail(
-            "settings.json: unknown field, wrong type, or JSON that a comma repair cannot fix",
-        )
+        ConfigError::authority_rejection()
+            .with_detail("settings.json: unknown field, wrong type, or malformed JSON".to_owned())
     };
-    let decoded =
-        crate::json_recover::decode_json::<DeserializedSettings>(bytes).map_err(|_| rejection())?;
-    let document = decoded.value;
+    let document =
+        serde_json::from_slice::<DeserializedSettings>(bytes).map_err(|_| rejection())?;
     if document.format_version != SETTINGS_FORMAT_VERSION || document.kind != SETTINGS_KIND {
         return Err(ConfigError::authority_rejection()
             .with_detail("settings.json: formatVersion or kind does not match this build"));
@@ -429,13 +342,125 @@ fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
         serde_json::from_value::<AppSettings>(serde_json::Value::Object(document.fields))
             .map_err(|_| rejection())?;
     // No in-place upgrade. A document that does not validate is rejected
-    // and the caller replaces the file with defaults.
+    // and the caller resets the file, keeping what still decodes.
     settings.validate()?;
-    Ok(ParsedSettings {
-        settings,
-        revision,
-        migrated: decoded.migrated,
-    })
+    Ok(ParsedSettings { settings, revision })
+}
+
+/// Extracts the still-valid sections of a document the strict read rejected,
+/// so a reset does not make the user re-enter healthy configuration.
+///
+/// Every family decodes and validates on its own: one bad member (a removed
+/// key, a malformed entry) drops only its own section. `None` when the bytes
+/// are not a JSON object or the result still fails validation.
+#[must_use]
+pub fn salvage_app_settings(document: &serde_json::Value) -> Option<AppSettings> {
+    let object = document.as_object()?;
+    let valid = |probe: &AppSettings| probe.validate().is_ok();
+    let mut settings = AppSettings::default();
+    if let Some(proxy) = crate::document_repair::salvage_field::<String>(object, "proxy") {
+        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+            probe.proxy = proxy;
+        });
+    }
+    if let Some(appearance) = object
+        .get("appearance")
+        .and_then(serde_json::Value::as_object)
+    {
+        // Field-level salvage: a bad theme drops only the theme, not a
+        // healthy language or font size sitting beside it.
+        if let Some(theme) = crate::document_repair::salvage_field::<String>(appearance, "theme") {
+            crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+                probe.appearance.theme = theme;
+            });
+        }
+        if let Some(language) =
+            crate::document_repair::salvage_field::<String>(appearance, "language")
+        {
+            crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+                probe.appearance.language = language;
+            });
+        }
+        if let Some(font_size) =
+            crate::document_repair::salvage_field::<String>(appearance, "fontSize")
+        {
+            crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+                probe.appearance.font_size = font_size;
+            });
+        }
+    }
+    if let Some(reasoning) =
+        crate::document_repair::salvage_field::<Option<String>>(object, "reasoningEffort")
+    {
+        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+            probe.reasoning_effort = reasoning;
+        });
+    }
+    for provider in crate::document_repair::salvage_list::<ProviderSettings>(object, "providers") {
+        if settings.providers.len() >= MAX_PROVIDERS {
+            break;
+        }
+        if settings.providers.iter().any(|held| held.id == provider.id) {
+            continue;
+        }
+        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+            probe.providers.push(provider);
+        });
+    }
+    if let Some(web) = object.get("web").and_then(serde_json::Value::as_object) {
+        for backend in crate::document_repair::salvage_list::<WebBackendSettings>(web, "backends") {
+            if settings
+                .web
+                .backends
+                .iter()
+                .any(|held| held.id == backend.id)
+            {
+                // A stored row overlays its vendor slot, so an enabled flag
+                // or key hint the user saved survives the reset.
+                crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+                    if let Some(slot) = probe
+                        .web
+                        .backends
+                        .iter_mut()
+                        .find(|held| held.id == backend.id)
+                    {
+                        *slot = backend;
+                    }
+                });
+            } else if settings.web.backends.len() < MAX_WEB_BACKENDS {
+                crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+                    probe.web.backends.push(backend);
+                });
+            }
+        }
+    }
+    for server in crate::document_repair::salvage_list::<McpServerSettings>(object, "mcpServers") {
+        if settings.mcp_servers.len() >= MAX_MCP_SERVERS {
+            break;
+        }
+        if settings.mcp_servers.iter().any(|held| held.id == server.id) {
+            continue;
+        }
+        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+            probe.mcp_servers.push(server);
+        });
+    }
+    // Role routes name configured provider ids, so subagents salvage only
+    // against the providers already adopted above.
+    if let Some(subagents) =
+        crate::document_repair::salvage_field::<SubagentSettings>(object, "subagents")
+    {
+        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+            probe.subagents = subagents;
+        });
+    }
+    if let Some(skills) = crate::document_repair::salvage_field::<SkillsSettings>(object, "skills")
+    {
+        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+            probe.skills = skills;
+        });
+    }
+    valid(&settings).then_some(settings)
 }
 
 pub(crate) fn bounded_text(value: &str, max: usize) -> Result<(), ConfigError> {
@@ -469,7 +494,7 @@ pub(crate) fn is_https_url(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, decode_settings, encode_settings};
+    use super::{AppSettings, decode_settings, encode_settings, salvage_app_settings};
     use crate::authority::AuthorityRevision;
 
     #[test]
@@ -480,7 +505,7 @@ mod tests {
             "formatVersion": 1,
             "kind": "mycode-app-settings",
             "revision": 1,
-            "appearance": { "theme": "dark", "palette": "slate", "language": "auto" },
+            "appearance": { "theme": "dark", "language": "auto" },
             "appearances": { "theme": "light" }
         }"#;
         let error = decode_settings(bytes)
@@ -497,94 +522,115 @@ mod tests {
             "formatVersion": 1,
             "kind": "mycode-app-settings",
             "revision": 1,
-            "appearance": { "theme": "dark", "palette": "slate", "language": "auto", "humeur": "x" }
+            "appearance": { "theme": "dark", "language": "auto", "humeur": "x" }
         }"#;
         let error = decode_settings(nested)
             .err()
             .expect("nested unknown field is rejected");
         assert_eq!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
 
-        let legacy = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 2,
-            "usage": { "enabled": true },
-            "tools": { "shell": { "kind": "pwsh", "program": "C:\\pwsh.exe" }, "osSandbox": true }
-        }"#;
-        let parsed = decode_settings(legacy).expect("known legacy fields still load");
-        assert!(parsed.settings.validate().is_ok());
+        // Keys from older documents are equally unknown: there is no
+        // per-field compatibility shim anymore.
+        for document in [
+            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"usage":{"enabled":true}}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"tools":{"shell":{"kind":"pwsh","program":"C:\\pwsh.exe"},"osSandbox":true}}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"userAgent":"custom-agent"}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","palette":"ocean"}}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","fontFamily":"Comic Sans"}}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"subagents":{"maxConcurrent":2}}"#[..],
+        ] {
+            let error = decode_settings(document)
+                .err()
+                .expect("a removed field is document damage");
+            assert_eq!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
+        }
     }
 
     #[test]
-    fn legacy_usage_field_is_tolerated_and_dropped() {
-        let bytes = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 5,
-            "appearance": { "theme": "dark", "palette": "ocean", "language": "auto" },
-            "usage": { "enabled": false }
-        }"#;
-        let parsed = decode_settings(bytes).expect("legacy usage field still loads");
-        assert_eq!(
-            parsed.settings.usage,
-            Some(super::LegacyUsageSettings { enabled: false })
-        );
-        let revision = AuthorityRevision::new(5).expect("revision");
-        let rewritten = encode_settings(revision, &parsed.settings).expect("encode");
-        assert!(
-            String::from_utf8_lossy(&rewritten)
-                .find("\"usage\"")
-                .is_none(),
-            "a save drops the legacy field"
-        );
-        let parsed_again = decode_settings(&rewritten).expect("re-decode");
-        assert_eq!(parsed_again.settings.usage, None);
-        assert!(parsed_again.settings.validate().is_ok());
-    }
-
-    #[test]
-    fn legacy_appearance_without_font_size_defaults_to_medium() {
-        let bytes = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 2,
-            "appearance": { "theme": "dark", "palette": "ocean", "language": "zh" }
-        }"#;
-        let parsed = decode_settings(bytes).expect("legacy settings");
-        assert_eq!(parsed.settings.appearance.font_size, "m");
-        assert_eq!(parsed.settings.effective_font_size(), "m");
-        assert_eq!(parsed.settings.appearance.legacy_font_family, None);
-        assert_eq!(parsed.settings.appearance.language, "zh");
-        assert!(!parsed.migrated);
-    }
-
-    #[test]
-    fn a_retired_palette_still_loads_and_is_dropped_on_save() {
-        // Any id, including one no build ever offered: the field is ignored,
-        // so a document from before the palettes were removed is not reset.
-        let bytes = br#"{
+    fn salvage_keeps_the_healthy_sections_of_a_damaged_document() {
+        let document: serde_json::Value = serde_json::from_slice(
+            br#"{
             "formatVersion": 1,
             "kind": "mycode-app-settings",
             "revision": 6,
-            "appearance": { "theme": "light", "palette": "ember", "language": "zh" },
-            "providers": [{
-                "id": "openai",
-                "kind": "openai-completions",
-                "baseUrl": "https://api.openai.com/v1",
-                "models": ["gpt-4o"],
-                "enabled": true
-            }]
-        }"#;
-        let parsed = decode_settings(bytes).expect("retired palette still loads");
-        assert!(parsed.settings.validate().is_ok());
-        assert_eq!(parsed.settings.providers.len(), 1);
-        assert_eq!(parsed.settings.appearance.theme, "light");
-        let revision = AuthorityRevision::new(6).expect("revision");
-        let rewritten = encode_settings(revision, &parsed.settings).expect("encode");
-        assert!(
-            !String::from_utf8_lossy(&rewritten).contains("palette"),
-            "a save drops the retired field"
+            "appearance": { "theme": "nope", "language": "zh" },
+            "userAgent": "custom-agent",
+            "usage": { "enabled": true },
+            "providers": [
+                {
+                    "id": "openai",
+                    "kind": "openai-completions",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "models": ["gpt-4o"],
+                    "enabled": true
+                },
+                { "id": "broken provider without the required fields" },
+                {
+                    "id": "openai",
+                    "kind": "openai-completions",
+                    "baseUrl": "https://duplicate.invalid/v1",
+                    "models": ["dup"],
+                    "enabled": true
+                }
+            ],
+            "web": { "backends": [
+                { "id": "exa", "kind": "exa", "endpoint": "https://api.exa.ai", "enabled": true },
+                { "id": "mine", "kind": "custom", "endpoint": "https://api.mine.ai", "enabled": true }
+            ]}
+        }"#,
+        )
+        .expect("fixture json");
+        let settings = salvage_app_settings(&document).expect("salvage succeeds");
+        // The invalid theme fell back to the default; its language survived.
+        assert_eq!(settings.appearance.theme, "dark");
+        assert_eq!(settings.appearance.language, "zh");
+        // The healthy provider survived; the malformed row and the
+        // duplicate id were dropped.
+        assert_eq!(
+            settings
+                .providers
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            ["openai"]
         );
+        // The enabled vendor overlay survived; the retired `custom` kind
+        // did not, and the single-enabled rule was kept.
+        assert_eq!(
+            settings
+                .web
+                .backends
+                .iter()
+                .map(|backend| (backend.id.as_str(), backend.enabled))
+                .collect::<Vec<_>>(),
+            [("querit", false), ("anysearch", false), ("exa", true)]
+        );
+        // Removed keys are simply not read by the salvage.
+        let encoded = serde_json::to_string(&settings).expect("encode");
+        for removed in ["userAgent", "usage", "tools", "palette", "fontFamily"] {
+            assert!(!encoded.contains(removed), "{encoded}");
+        }
+    }
+
+    #[test]
+    fn salvage_returns_none_for_a_non_object_document() {
+        assert!(salvage_app_settings(&serde_json::json!([1, 2])).is_none());
+        assert!(salvage_app_settings(&serde_json::json!("text")).is_none());
+        assert!(salvage_app_settings(&serde_json::json!({})).is_some());
+    }
+
+    #[test]
+    fn appearance_without_font_size_defaults_to_medium() {
+        let bytes = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 2,
+            "appearance": { "theme": "dark", "language": "zh" }
+        }"#;
+        let parsed = decode_settings(bytes).expect("settings without fontSize");
+        assert_eq!(parsed.settings.appearance.font_size, "m");
+        assert_eq!(parsed.settings.effective_font_size(), "m");
+        assert_eq!(parsed.settings.appearance.language, "zh");
     }
 
     #[test]
@@ -602,37 +648,6 @@ mod tests {
         settings.appearance.font_size = "huge".to_owned();
         let error = settings.validate().expect_err("unknown size");
         assert!(error.summary().contains("fontSize"), "{}", error.summary());
-    }
-
-    #[test]
-    fn a_retired_font_family_still_loads_and_is_dropped_on_save() {
-        // Any value, including one no build ever offered: the field is
-        // ignored, so a document that picked a family is not reset.
-        for family in ["", "system", "Microsoft YaHei", "Comic Sans"] {
-            let text = format!(
-                r#"{{
-                    "formatVersion": 1,
-                    "kind": "mycode-app-settings",
-                    "revision": 3,
-                    "appearance": {{
-                        "theme": "dark",
-                        "language": "auto",
-                        "fontSize": "l",
-                        "fontFamily": "{family}"
-                    }}
-                }}"#
-            );
-            let parsed = decode_settings(text.as_bytes()).expect("retired family still loads");
-            assert!(parsed.settings.validate().is_ok(), "{family}");
-            assert_eq!(parsed.settings.appearance.font_size, "l");
-            assert!(!parsed.migrated);
-            let revision = AuthorityRevision::new(3).expect("revision");
-            let rewritten = encode_settings(revision, &parsed.settings).expect("encode");
-            assert!(
-                !String::from_utf8_lossy(&rewritten).contains("fontFamily"),
-                "a save drops the retired field"
-            );
-        }
     }
 
     #[test]
@@ -689,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn trailing_comma_repair_surfaces_a_rewrite_failure() {
+    fn a_malformed_settings_document_is_reset_and_healthy_fields_survive() {
         let parent = std::env::temp_dir().join(format!(
             "mycode-settings-comma-{}-{}",
             std::process::id(),
@@ -706,33 +721,31 @@ mod tests {
                 .expect("private home");
         }
         let home = crate::HomeLayout::from_root(&root).expect("layout");
-        let body =
-            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":9223372036854775807,}"#;
+        // Valid JSON carrying a removed field: the strict read rejects the
+        // file, the bytes move aside, and the repair keeps what still
+        // decodes and validates.
+        let body = br#"{
+            "formatVersion": 1,
+            "kind": "mycode-app-settings",
+            "revision": 9,
+            "appearance": { "theme": "light", "language": "zh" },
+            "tools": { "shell": { "kind": "pwsh" } }
+        }"#;
         // The fixture goes through the secure transaction: a plain fs::write
         // file inherits the temp directory's DACL and the Windows read path
         // rejects it before the revision check this test exercises.
         crate::write_owned_test_bytes(&home, "settings.json", body).expect("write");
-        let path = root.join("settings.json");
-        let error = super::read_app_settings(&home).expect_err("rewrite must fail");
-        assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionExhausted);
-        let kept = std::fs::read(&path).expect("original remains");
-        assert!(kept.windows(2).any(|window| window == b",}"), "{kept:?}");
-    }
-
-    #[test]
-    fn retired_subagent_limits_still_parse_and_are_dropped_on_save() {
-        let bytes = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 1,
-            "subagents": { "maxConcurrent": 99, "timeoutSecs": 600 }
-        }"#;
-        let parsed = decode_settings(bytes).expect("older subagent settings");
-        assert!(parsed.settings.validate().is_ok());
-        let saved = serde_json::to_string(&parsed.settings.subagents).expect("encode");
-        assert!(!saved.contains("maxConcurrent"), "{saved}");
-        assert!(!saved.contains("timeoutSecs"), "{saved}");
-        assert_eq!(super::SUBAGENT_CONCURRENCY, 8);
+        let (settings, repair) = super::read_app_settings_with_repair(&home).expect("read resets");
+        assert_eq!(settings.appearance.theme, "light");
+        assert_eq!(settings.appearance.language, "zh");
+        let repair = repair.expect("repair reported");
+        let backup = std::fs::read(home.root().join(&repair.backup)).expect("backup");
+        assert!(
+            backup.windows(5).any(|window| window == b"tools"),
+            "{backup:?}"
+        );
+        // The republished document is canonical and parses cleanly.
+        assert!(super::read_app_settings(&home).is_ok());
     }
 
     struct TempDir(std::path::PathBuf);

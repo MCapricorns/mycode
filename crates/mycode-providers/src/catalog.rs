@@ -343,37 +343,10 @@ pub(crate) fn openai_codex_preset() -> CatalogProvider {
         doc: Some("https://developers.openai.com/codex".to_owned()),
         auth: AUTH_DEVICE_CODE.to_owned(),
         models: [
-            ("o3-pro", "o3-pro", &[][..]),
-            ("o3", "o3", &["low", "medium", "high"]),
-            (
-                "gpt-5.3-codex",
-                "GPT-5.3 Codex",
-                &["low", "medium", "high", "xhigh"],
-            ),
-            (
-                "gpt-5.3-codex-spark",
-                "GPT-5.3 Codex Spark",
-                &["none", "low", "medium", "high", "xhigh"],
-            ),
-            (
-                "gpt-5.4",
-                "GPT-5.4",
-                &["none", "low", "medium", "high", "xhigh"],
-            ),
-            (
-                "gpt-5.4-mini",
-                "GPT-5.4 mini",
-                &["none", "low", "medium", "high", "xhigh"],
-            ),
-            (
-                "gpt-5.5",
-                "GPT-5.5",
-                &["none", "low", "medium", "high", "xhigh"],
-            ),
             (
                 "gpt-5.6-luna",
                 "GPT-5.6 Luna",
-                &["none", "low", "medium", "high", "xhigh", "max"],
+                &["none", "low", "medium", "high", "xhigh", "max"][..],
             ),
             (
                 "gpt-5.6-sol",
@@ -418,7 +391,8 @@ pub(crate) fn openai_codex_preset() -> CatalogProvider {
             reasoning: true,
             tool_call: true,
             // Effort ladders mirror the models.dev rows for the same model
-            // ids; `o3-pro` publishes none and stays on the provider default.
+            // ids. Only the GPT-5.6 / GPT-6 / GPT-6.1 families are carried;
+            // the backend still lists older series, which are filtered out.
             reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
             ..CatalogModel::default()
         })
@@ -446,8 +420,20 @@ mod tests {
     }
 
     #[test]
-    fn codex_preset_publishes_the_models_dev_effort_ladders() {
+    fn codex_preset_carries_only_the_current_model_families() {
         let provider = super::openai_codex_preset();
+        assert!(
+            provider
+                .models
+                .iter()
+                .all(|model| super::codex::usable_family(&model.id)),
+            "preset drifted off the GPT-5.6 / GPT-6 / GPT-6.1 families: {:?}",
+            provider
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>()
+        );
         let model = |id: &str| {
             provider
                 .models
@@ -466,16 +452,7 @@ mod tests {
                 "max".to_owned()
             ]
         );
-        assert_eq!(
-            model("o3").reasoning_levels(),
-            vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()]
-        );
-        // models.dev publishes no ladder for `o3-pro`; it stays on the
-        // provider default instead of a guessed one.
-        assert_eq!(
-            model("o3-pro").reasoning_levels(),
-            vec!["default".to_owned()]
-        );
+        assert!(provider.models.iter().all(|model| model.reasoning));
     }
 
     #[test]
