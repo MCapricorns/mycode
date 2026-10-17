@@ -278,12 +278,100 @@ pub(crate) fn validate_args_with_schema(schema: &Value, args: &Value) -> Result<
         .map_err(|err| ToolError::Execution(format!("failed to compile argument schema: {err}")))?;
     let errors: Vec<String> = validator
         .iter_errors(args)
-        .map(|err| format!("{err} (at {})", err.instance_path()))
+        .map(|err| render_schema_error(&err, &normalized))
         .collect();
     if errors.is_empty() {
         Ok(())
     } else {
         Err(ToolError::InvalidArgs(errors.join("; ")))
+    }
+}
+
+/// One validation failure rendered for the model. The stock Display of a
+/// `oneOf`/`anyOf` failure embeds the entire offending value — with edit
+/// operations that is hundreds of bytes of multiline source text — so it
+/// is replaced by the allowed `type` variants, or by "missing field `type`"
+/// when every branch's complaint agrees the tag is absent.
+fn render_schema_error(err: &jsonschema::ValidationError<'_>, schema: &Value) -> String {
+    let path = err.instance_path().to_string();
+    let path = if path.is_empty() { "/" } else { &path };
+    match err.kind() {
+        jsonschema::error::ValidationErrorKind::OneOfNotValid { context }
+        | jsonschema::error::ValidationErrorKind::AnyOf { context } => {
+            let variants = tag_variants(schema, err);
+            let missing_tag = !context.is_empty()
+                && context.iter().all(|arm| {
+                    arm.iter().any(|sub| {
+                        matches!(
+                            sub.kind(),
+                            jsonschema::error::ValidationErrorKind::Required { property }
+                                if property.as_str() == Some("type")
+                        )
+                    })
+                });
+            if missing_tag {
+                if variants.is_empty() {
+                    format!("value at {path} is missing required field `type`")
+                } else {
+                    format!(
+                        "value at {path} is missing required field `type` (expected one of: {})",
+                        variants.join(", ")
+                    )
+                }
+            } else if variants.is_empty() {
+                let detail = context
+                    .iter()
+                    .flatten()
+                    .next()
+                    .map(|sub| format!(": {}", truncate_error(&sub.to_string())))
+                    .unwrap_or_default();
+                format!("value at {path} does not match any allowed shape{detail}")
+            } else {
+                format!(
+                    "value at {path} does not match any allowed shape (expected one of: {})",
+                    variants.join(", ")
+                )
+            }
+        }
+        _ => format!("{} (at {path})", truncate_error(&err.to_string())),
+    }
+}
+
+/// `const`/`enum` tag values of a `oneOf`/`anyOf` arm list, resolved
+/// through `err.schema_path` (which points at the failing keyword).
+fn tag_variants(schema: &Value, err: &jsonschema::ValidationError<'_>) -> Vec<String> {
+    let Some(arms) = schema
+        .pointer(&err.schema_path().to_string())
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    arms.iter()
+        .filter_map(|arm| {
+            arm.pointer("/properties/type/const")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    arm.pointer("/properties/type/enum/0")
+                        .and_then(Value::as_str)
+                })
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// Kinds like `enum`/`const`/`pattern` embed the whole instance in their
+/// Display; cap each rendered error so a multi-kilobyte argument cannot
+/// drown the actual complaint.
+fn truncate_error(message: &str) -> String {
+    const MAX_ERROR_BYTES: usize = 320;
+    if message.len() <= MAX_ERROR_BYTES {
+        message.to_owned()
+    } else {
+        let mut end = MAX_ERROR_BYTES;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &message[..end])
     }
 }
 
@@ -527,5 +615,96 @@ mod tests {
             .await
             .expect("valid count");
         assert!(!ok.is_error);
+    }
+
+    /// The `edit`-style tagged union: an op object without `type` must not
+    /// dump its multiline contents into the error. The message names the
+    /// missing tag and the allowed variants.
+    #[test]
+    fn a_tagged_union_failure_names_the_missing_tag() {
+        use serde_json::json;
+
+        let schema = json!({
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+                "path": { "type": "string" },
+                "operations": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "required": ["type", "pattern", "replacement"],
+                                "properties": {
+                                    "type": { "const": "literal" },
+                                    "pattern": { "type": "string" },
+                                    "replacement": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            },
+                            {
+                                "type": "object",
+                                "required": ["type", "pattern", "replacement"],
+                                "properties": {
+                                    "type": { "const": "regex" },
+                                    "pattern": { "type": "string" },
+                                    "replacement": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+        let args = json!({
+            "path": "a.rs",
+            "operations": [
+                { "pattern": "long\n".repeat(200), "replacement": "x" }
+            ]
+        });
+        let err = super::validate_args_with_schema(&schema, &args)
+            .expect_err("an op without a tag must fail");
+        let text = err.to_string();
+        assert!(text.contains("missing required field `type`"), "{text}");
+        assert!(text.contains("literal, regex"), "{text}");
+        assert!(text.contains("/operations/0"), "{text}");
+        // The multibyte pattern content must not flood the message.
+        assert!(text.len() < 400, "{text}");
+    }
+
+    /// A present-but-wrong tag reports the allowed variants.
+    #[test]
+    fn a_tagged_union_failure_lists_the_allowed_tags() {
+        use serde_json::json;
+
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "ops": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "required": ["type"],
+                                "properties": { "type": { "const": "literal" } }
+                            },
+                            {
+                                "type": "object",
+                                "required": ["type"],
+                                "properties": { "type": { "const": "regex" } }
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+        let args = json!({ "ops": [ { "type": "bogus" } ] });
+        let err =
+            super::validate_args_with_schema(&schema, &args).expect_err("an unknown tag must fail");
+        let text = err.to_string();
+        assert!(text.contains("expected one of: literal, regex"), "{text}");
     }
 }

@@ -121,6 +121,9 @@ struct SearchState {
     /// A text file had callbacks stopped while provisional slots were full.
     count_incomplete: AtomicBool,
     match_limit: u64,
+    /// The pattern looked like a regex (`|` or `.*`) but `is_regex` was not
+    /// set, so it matched literally. Surfaced on a zero-match report.
+    literal_meta: bool,
     files_searched: AtomicU64,
     lines_truncated: AtomicBool,
     io_errors: IoErrors,
@@ -135,6 +138,7 @@ impl SearchState {
             match_slots: AtomicU64::new(0),
             count_incomplete: AtomicBool::new(false),
             match_limit: limits.count_budget,
+            literal_meta: false,
             files_searched: AtomicU64::new(0),
             lines_truncated: AtomicBool::new(false),
             io_errors: IoErrors::new(IO_ERROR_SAMPLES),
@@ -383,12 +387,6 @@ impl Tool for GrepTool {
             reject_pattern_bytes(exclude, "exclude glob")?;
         }
         let cwd = ctx.cwd.clone();
-        let path = args.path;
-        let pattern = args.pattern;
-        let is_regex = args.is_regex;
-        let include_pat = args.include;
-        let exclude_pat = args.exclude;
-        let max_results = args.max_results;
         let deadline = Instant::now() + Limits::default().time_limit;
         let limits = Limits {
             deadline: Some(deadline),
@@ -402,13 +400,13 @@ impl Tool for GrepTool {
                     "search cancelled before completion".to_owned(),
                 ));
             }
-            let matcher = compile_matcher(&pattern, is_regex)?;
-            let include = compile_glob(include_pat.as_deref(), "include")?;
-            let exclude = compile_glob(exclude_pat.as_deref(), "exclude")?;
+            let matcher = compile_matcher(&args.pattern, args.is_regex)?;
+            let include = compile_glob(args.include.as_deref(), "include")?;
+            let exclude = compile_glob(args.exclude.as_deref(), "exclude")?;
             let root = bind_search_root_with_access(
                 prepared.as_deref(),
                 &cwd,
-                path.as_deref(),
+                args.path.as_deref(),
                 &worker_cancel,
                 &limits,
                 SearchAccess::Content,
@@ -416,9 +414,9 @@ impl Tool for GrepTool {
             run_search(
                 matcher,
                 root,
+                &args,
                 include,
                 exclude,
-                max_results,
                 &worker_cancel,
                 &limits,
             )
@@ -430,16 +428,19 @@ impl Tool for GrepTool {
 fn run_search(
     matcher: RegexMatcher,
     mut root: ResolvedRoot,
+    args: &GrepArgs,
     include: Option<GlobMatcher>,
     exclude: Option<GlobMatcher>,
-    max_results: Option<usize>,
     cancel: &CancellationToken,
     limits: &Limits,
 ) -> Result<ToolResult, ToolError> {
-    let cap = max_results
+    let cap = args
+        .max_results
         .unwrap_or(MAX_MATCHES)
         .min(limits.stored_ceiling);
-    let state = Arc::new(SearchState::new(limits, Arc::clone(&root.limiter)));
+    let mut state = SearchState::new(limits, Arc::clone(&root.limiter));
+    state.literal_meta = !args.is_regex && pattern_looks_regex(&args.pattern);
+    let state = Arc::new(state);
     let report_root = root.root.clone();
 
     match root.target_is_skipped() {
@@ -818,18 +819,36 @@ fn assemble_report(
             noun: "matching lines",
             truncated_advice: "narrow the pattern or raise max_results",
             output_advice: "narrow the search or lower max_results",
-            extra_notices: if lines_truncated {
-                vec![format!(
-                    "[some matching lines truncated to {} bytes; use read to see the full line]",
-                    limits.line_bytes
-                )]
-            } else {
-                Vec::new()
+            extra_notices: {
+                let mut notices = Vec::new();
+                if lines_truncated {
+                    notices.push(format!(
+                        "[some matching lines truncated to {} bytes; use read to see the full line]",
+                        limits.line_bytes
+                    ));
+                }
+                if state.literal_meta
+                    && total == 0
+                    && state.files_searched.load(Ordering::Relaxed) > 0
+                {
+                    notices.push(
+                        "[pattern contains `|`/`.*` but is_regex is not set; it matched literally — pass is_regex to use it as a regular expression]"
+                            .to_owned(),
+                    );
+                }
+                notices
             },
             extra_details,
             cap,
         },
     )
+}
+
+/// `a|b` and `foo.*bar` are how a model writes an alternation or a span;
+/// as a literal they almost never exist in real text. Other metacharacters
+/// (`(`, `[`, `^`) appear in ordinary text too often to be a signal.
+fn pattern_looks_regex(pattern: &str) -> bool {
+    pattern.contains('|') || pattern.contains(".*")
 }
 
 fn compile_matcher(pattern: &str, is_regex: bool) -> Result<RegexMatcher, ToolError> {
@@ -907,6 +926,81 @@ mod tests {
             .collect();
         assert!(!result.is_error, "grep failed on LF files: {text}");
         assert!(text.contains("needle"), "expected the LF match, got {text}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A `|`/`.*` pattern sent without `is_regex` matches literally — and
+    /// almost always finds nothing. The report must say so, instead of
+    /// leaving a wrong "the file is empty" conclusion.
+    #[tokio::test]
+    async fn a_regex_looking_literal_pattern_gets_a_hint() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-grep-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("a.txt"), "alpha needle\nsecond line\n").expect("file");
+        // The prepared search handle is consumed per execute, so each call
+        // builds its own.
+        let run = |pattern: &str, is_regex: bool, path: &str| {
+            let root = root.clone();
+            let pattern = pattern.to_owned();
+            let path = path.to_owned();
+            async move {
+                let prepared = crate::builtin::fs_search::prepare_search_async_with_access(
+                    root.clone(),
+                    None,
+                    CancellationToken::new(),
+                    SearchAccess::Content,
+                )
+                .await
+                .expect("prepare");
+                let ctx = ToolCtx::new(&root).with_prepared_search(Arc::new(prepared));
+                let (mut out, _rx) = ToolStream::channel();
+                GrepTool
+                    .execute(
+                        GrepArgs {
+                            pattern,
+                            is_regex,
+                            path: Some(path),
+                            include: None,
+                            exclude: None,
+                            max_results: None,
+                        },
+                        &ctx,
+                        &mut out,
+                    )
+                    .await
+                    .expect("grep")
+            }
+        };
+        let text = |result: &crate::tool::ToolResult| {
+            result
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>()
+        };
+
+        let literal = run("alpha|needle", false, "a.txt").await;
+        let literal_text = text(&literal);
+        assert!(literal_text.contains("is_regex"), "{literal_text}");
+
+        let regex = run("alpha|needle", true, "a.txt").await;
+        let regex_text = text(&regex);
+        assert!(regex_text.contains("alpha needle"), "{regex_text}");
+        assert!(!regex_text.contains("is_regex"), "{regex_text}");
+
+        // A real literal match containing a pipe stays quiet.
+        std::fs::write(root.join("b.txt"), "a|b\n").expect("file b");
+        let hit = run("a|b", false, "b.txt").await;
+        let hit_text = text(&hit);
+        assert!(hit_text.contains("a|b"), "{hit_text}");
+        assert!(!hit_text.contains("is_regex"), "{hit_text}");
         let _ = std::fs::remove_dir_all(root);
     }
 }
