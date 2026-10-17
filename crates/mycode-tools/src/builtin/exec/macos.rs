@@ -79,8 +79,10 @@ pub(super) struct AsyncPipe {
 
 impl AsyncPipe {
     fn new(fd: OwnedFd) -> io::Result<Self> {
+        // SAFETY: `fd` owns the descriptor, so it stays open and `as_raw_fd`
+        // keeps returning it for the `AsyncFd`'s whole lifetime.
         Ok(Self {
-            fd: AsyncFd::new(fd)?,
+            fd: unsafe { AsyncFd::register(fd)? },
         })
     }
 }
