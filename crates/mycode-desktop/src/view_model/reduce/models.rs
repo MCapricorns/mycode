@@ -104,14 +104,21 @@ pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<S
                 .collect()
         })
         .unwrap_or_default();
-    // OpenDesign is added in place, so its form starts from the models
-    // already configured; checking everything would replace that list on
-    // the next Add. Every other preset adds a new row and pre-checks the
-    // whole list, strongest first, so a long catalog does not bury o3 /
-    // gpt-5 under the cap.
+    // OpenDesign and the device-OAuth providers are updated in place, so
+    // their forms start from the models already configured; checking
+    // everything would replace that list on the next Add / sign-in. Every
+    // other preset adds a new row and pre-checks the whole list, strongest
+    // first.
     let configured: Vec<String> = preset
         .as_deref()
-        .filter(|id| *id == mycode_providers::catalog::opendesign::PROVIDER_ID)
+        .filter(|id| {
+            matches!(
+                *id,
+                mycode_providers::catalog::opendesign::PROVIDER_ID
+                    | mycode_providers::COPILOT_PROVIDER_ID
+                    | mycode_providers::OPENAI_CODEX_PROVIDER_ID
+            )
+        })
         .and_then(|id| {
             state
                 .settings
@@ -429,6 +436,35 @@ mod tests {
             state.preset_models.len(),
             opendesign::curated_models().len()
         );
+
+        // Opening a dedicated page before the lazy catalog arrives still
+        // populates the checklist once `CatalogLoaded` lands.
+        let mut lazy = WorkspaceState {
+            catalog: None,
+            settings: Some(SettingsState::from_settings(
+                &mycode_config::AppSettings::default(),
+                1,
+                Vec::new(),
+            )),
+            ..WorkspaceState::default()
+        };
+        crate::view_model::reduce(
+            &mut lazy,
+            crate::view_model::DesktopAction::ShowModelsSubview(
+                crate::view_model::ModelsSubview::OpenDesign,
+            ),
+        );
+        assert!(lazy.preset_models.is_empty());
+        let mut doc = mycode_providers::catalog::CatalogDocument::default();
+        opendesign::attach(&mut doc, None);
+        crate::view_model::reduce(
+            &mut lazy,
+            crate::view_model::DesktopAction::CatalogLoaded {
+                document: std::sync::Arc::new(doc),
+                fetched_at: 1,
+            },
+        );
+        assert_eq!(lazy.preset_models.len(), opendesign::curated_models().len());
     }
 
     /// A catalog provider with one reasoning model advertising only `low`.

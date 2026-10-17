@@ -611,6 +611,16 @@ impl Workspace {
         {
             self.flush_settings_text_save(cx);
         }
+        if let DesktopAction::SettingsMcpRemoved(index) = &action
+            && let Some(id) = self
+                .vm
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.mcp_servers.get(*index))
+                .map(|server| server.id.clone())
+        {
+            self.pending_mcp_enable.remove(&id);
+        }
         reduce(&mut self.vm, action);
         if self.vm.project_dir != previous_project {
             self.agent_roles_stale = true;
@@ -994,7 +1004,12 @@ impl Workspace {
             width: f32::from(bounds.size.width).round().max(0.) as u32,
             height: f32::from(bounds.size.height).round().max(0.) as u32,
         };
-        if size.width == 0 || size.height == 0 || self.vm.window_size == Some(size) {
+        if size.width == 0
+            || size.height == 0
+            || size.width > mycode_config::MAX_WINDOW_EDGE_PX
+            || size.height > mycode_config::MAX_WINDOW_EDGE_PX
+            || self.vm.window_size == Some(size)
+        {
             return;
         }
         self.vm.window_size = Some(size);

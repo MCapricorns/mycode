@@ -223,7 +223,6 @@ async fn finish_oauth_sign_in(
     let catalog = state.catalog.clone();
     tokio::task::spawn_blocking(move || {
         save_provider_key(&home, &provider_id, &encoded)?;
-        upsert_catalog_provider(&home, &catalog, &provider_id, &bound)?;
         if let Some(live) = live {
             // A store failure must not undo the sign-in; the in-memory
             // merge below still puts the live rows to work this run.
@@ -232,7 +231,7 @@ async fn finish_oauth_sign_in(
             }
             install_live_codex_catalog(&catalog, &live)?;
         }
-        Ok(())
+        upsert_catalog_provider(&home, &catalog, &provider_id, &bound)
     })
     .await
     .map_err(|error| format!("sign-in persistence failed: {error}"))?
@@ -243,28 +242,33 @@ async fn finish_oauth_sign_in(
 fn install_live_codex_catalog(
     catalog: &std::sync::RwLock<mycode_providers::catalog::CachedCatalog>,
     live: &[mycode_providers::catalog::codex::LiveModel],
-) -> Result<(), String> {
+) -> Result<(usize, u64), String> {
     let mut guard = catalog
         .write()
         .map_err(|_| "catalog state is unavailable".to_owned())?;
     let mut document = guard.document().as_ref().clone();
     mycode_providers::catalog::codex::attach(&mut document, Some(live));
+    let providers = document.providers.len();
+    let fetched_at = guard.fetched_at;
     let document = Arc::new(document);
     *guard = mycode_providers::catalog::CachedCatalog::from_document(
         document.as_ref().clone(),
-        guard.fetched_at,
+        fetched_at,
         guard.etag.clone(),
     );
     drop(guard);
     mycode_providers::catalog::install_active(document);
-    Ok(())
+    Ok((providers, fetched_at))
 }
 
 /// One background refresh of the stored Codex model list, queued once the
 /// UI reports ready. A signed-in account keeps its backend-served rows
 /// current between sign-ins; every failure stays silent (the preset and
 /// any stored list still stand).
-pub(crate) fn spawn_codex_models_refresh(state: Arc<CoreState>) {
+pub(crate) fn spawn_codex_models_refresh(
+    state: Arc<CoreState>,
+    events: crate::BridgeEventTx,
+) {
     tokio::spawn(async move {
         let home = state.home.clone();
         let stored = tokio::task::spawn_blocking(move || {
@@ -305,11 +309,17 @@ pub(crate) fn spawn_codex_models_refresh(state: Arc<CoreState>) {
         };
         let home = state.home.clone();
         let catalog = state.catalog.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        if let Ok(Ok((providers, fetched_at))) = tokio::task::spawn_blocking(move || {
             let _ = mycode_providers::catalog::codex::write_store(&home, &live);
-            let _ = install_live_codex_catalog(&catalog, &live);
+            install_live_codex_catalog(&catalog, &live)
         })
-        .await;
+        .await
+        {
+            let _ = events.send(BridgeEvent::CatalogUpdated {
+                providers,
+                fetched_at,
+            });
+        }
     });
 }
 

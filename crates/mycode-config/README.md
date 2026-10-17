@@ -18,7 +18,7 @@ MYCode 的 home 布局与严格配置文档。会话与压缩检查点都在 `se
 └─ scratch/
 ```
 
-- `settings.json`：providers、web backends、MCP、subagents、appearance。无密钥。旧版的 `tools.shell`、`tools.osSandbox`、`usage` 字段仍可读取，加载时忽略并在下次保存时清除。`subagents.maxConcurrent` 已退役：任意值都被忽略，并发固定为 `SUBAGENT_CONCURRENCY`（8）。旧版的 `appearance.palette`（色板已移除）同样可读、被忽略并在下次保存时清除。
+- `settings.json`：providers、web backends、MCP、subagents、appearance。无密钥。未知字段或已退役字段（`userAgent`、`usage`、`tools.*`、`subagents.maxConcurrent`/`timeoutSecs`、`appearance.palette`/`fontFamily`、网页 `custom` 后端）均按文档损坏处理，备份后重置并逐项抢救（salvage）仍合法的字段。子代理并发固定为 `SUBAGENT_CONCURRENCY`（8）。
 - `secrets.json`：`provider-id`、`web-<id>`、`mcp-<id>`。
 - `ui.json`：最近项目、会话→项目路径、选中模型、窗口尺寸。last-writer-wins，无 revision CAS。
 - `agents/`：用户级 subagent 角色；项目级角色在 `<project>/.mycode/agents/`。

@@ -47,7 +47,7 @@ const MAX_MODEL_PIN_CHARS: usize = 256;
 const MAX_SESSION_MODELS: usize = 128;
 /// Largest accepted window edge in logical pixels. Well past any sane
 /// multi-monitor span; it only guards the document against absurd values.
-const MAX_WINDOW_EDGE_PX: u32 = 16_384;
+pub const MAX_WINDOW_EDGE_PX: u32 = 16_384;
 
 /// The windowed size restored on the next launch, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -582,13 +582,14 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
     let object = document.as_object()?;
     let valid = |probe: &UiState| probe.validate().is_ok();
     let mut state = UiState::default();
-    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
-        if let Some(value) =
-            crate::document_repair::salvage_field::<Vec<String>>(object, "recentProjects")
-        {
-            probe.recent_projects = value;
+    for project in crate::document_repair::salvage_list::<String>(object, "recentProjects") {
+        if state.recent_projects.len() >= MAX_RECENT_PROJECTS {
+            break;
         }
-    });
+        crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+            probe.recent_projects.push(project);
+        });
+    }
     crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
         if let Some(value) =
             crate::document_repair::salvage_field::<Option<String>>(object, "lastProject")
@@ -615,29 +616,34 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
             probe.selected_model = value;
         }
     });
-    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
-        if let Some(value) = crate::document_repair::salvage_field::<Vec<(String, String)>>(
-            object,
-            "sessionProjects",
-        ) {
-            probe.session_projects = value;
+    for entry in
+        crate::document_repair::salvage_list::<(String, String)>(object, "sessionProjects")
+    {
+        if state.session_projects.len() >= MAX_SESSION_PROJECTS {
+            break;
         }
-    });
-    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
-        if let Some(value) =
-            crate::document_repair::salvage_field::<Vec<WorkspaceDef>>(object, "workspaces")
-        {
-            probe.workspaces = value;
+        crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+            probe.session_projects.push(entry);
+        });
+    }
+    for workspace in crate::document_repair::salvage_list::<WorkspaceDef>(object, "workspaces") {
+        if state.workspaces.len() >= MAX_WORKSPACES {
+            break;
         }
-    });
-    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
-        if let Some(value) = crate::document_repair::salvage_field::<Vec<(String, String)>>(
-            object,
-            "sessionWorkspaces",
-        ) {
-            probe.session_workspaces = value;
+        crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+            probe.workspaces.push(workspace);
+        });
+    }
+    for entry in
+        crate::document_repair::salvage_list::<(String, String)>(object, "sessionWorkspaces")
+    {
+        if state.session_workspaces.len() >= MAX_SESSION_WORKSPACES {
+            break;
         }
-    });
+        crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+            probe.session_workspaces.push(entry);
+        });
+    }
     crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
         if let Some(value) =
             crate::document_repair::salvage_field::<Option<String>>(object, "activeWorkspace")
@@ -645,20 +651,22 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
             probe.active_workspace = value;
         }
     });
-    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
-        if let Some(value) =
-            crate::document_repair::salvage_field::<Vec<ModelPin>>(object, "recentModels")
-        {
-            probe.recent_models = value;
+    for pin in crate::document_repair::salvage_list::<ModelPin>(object, "recentModels") {
+        if state.recent_models.len() >= MAX_RECENT_MODELS {
+            break;
         }
-    });
-    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
-        if let Some(value) =
-            crate::document_repair::salvage_field::<Vec<SessionModelPin>>(object, "sessionModels")
-        {
-            probe.session_models = value;
+        crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+            probe.recent_models.push(pin);
+        });
+    }
+    for pin in crate::document_repair::salvage_list::<SessionModelPin>(object, "sessionModels") {
+        if state.session_models.len() >= MAX_SESSION_MODELS {
+            break;
         }
-    });
+        crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+            probe.session_models.push(pin);
+        });
+    }
     crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
         if let Some(value) =
             crate::document_repair::salvage_field::<Option<String>>(object, "selectedReasoning")
@@ -758,13 +766,19 @@ mod tests {
         let unknown_nested = br#"{
             "formatVersion": 1,
             "kind": "mycode-ui-state",
-            "recentModels": [{ "provider": "openai", "model": "gpt-4o", "extra": 1 }]
+            "recentModels": [
+                { "provider": "openai", "model": "gpt-4o", "extra": 1 },
+                { "provider": "anthropic", "model": "claude-sonnet-4-5" }
+            ]
         }"#;
         assert!(decode_ui_state(unknown_nested).is_err());
         // The salvage drops the corrupt pin row but keeps the good ones.
         let damaged: serde_json::Value = serde_json::from_slice(unknown_nested).expect("fixture");
         let salvaged = salvage_ui_state(&damaged).expect("salvage");
-        assert!(salvaged.recent_models.is_empty());
+        assert_eq!(
+            salvaged.recent_models,
+            [ModelPin::new("anthropic", "claude-sonnet-4-5")]
+        );
 
         let mut state = super::UiState {
             selected_provider: Some("bad\0provider".to_owned()),

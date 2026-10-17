@@ -326,10 +326,7 @@ pub fn parse_snapshot(bytes: &[u8]) -> CatalogDocument {
 /// `opendesign-models.json`) over whatever is here, so a newer sign-in's
 /// fetched values take effect.
 pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> CatalogDocument {
-    if document.provider("openai-codex").is_none() {
-        document.providers.push(openai_codex_preset());
-        document.providers.sort_by(|a, b| a.id.cmp(&b.id));
-    }
+    codex::attach(&mut document, None);
     opendesign::attach(&mut document, None);
     document
 }

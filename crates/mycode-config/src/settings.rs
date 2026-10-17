@@ -447,18 +447,27 @@ pub fn salvage_app_settings(document: &serde_json::Value) -> Option<AppSettings>
     }
     // Role routes name configured provider ids, so subagents salvage only
     // against the providers already adopted above.
-    if let Some(subagents) =
-        crate::document_repair::salvage_field::<SubagentSettings>(object, "subagents")
+    if let Some(subagents) = object
+        .get("subagents")
+        .and_then(serde_json::Value::as_object)
     {
-        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
-            probe.subagents = subagents;
-        });
+        for role in
+            crate::document_repair::salvage_list::<SubagentRoleSettings>(subagents, "roles")
+        {
+            crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+                probe.subagents.roles.push(role);
+            });
+        }
     }
-    if let Some(skills) = crate::document_repair::salvage_field::<SkillsSettings>(object, "skills")
-    {
-        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
-            probe.skills = skills;
-        });
+    if let Some(skills) = object.get("skills").and_then(serde_json::Value::as_object) {
+        for slug in crate::document_repair::salvage_list::<String>(skills, "disabled") {
+            if settings.skills.disabled.len() >= MAX_DISABLED_SKILLS {
+                break;
+            }
+            crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+                probe.skills.disabled.push(slug);
+            });
+        }
     }
     valid(&settings).then_some(settings)
 }
@@ -576,7 +585,18 @@ mod tests {
             "web": { "backends": [
                 { "id": "exa", "kind": "exa", "endpoint": "https://api.exa.ai", "enabled": true },
                 { "id": "mine", "kind": "custom", "endpoint": "https://api.mine.ai", "enabled": true }
-            ]}
+            ]},
+            "subagents": {
+                "maxConcurrent": 4,
+                "roles": [
+                    { "role": "scout", "enabled": true, "provider": "openai", "model": "gpt-4o" },
+                    { "role": "artisan", "enabled": true, "provider": "missing", "model": "x" }
+                ]
+            },
+            "skills": {
+                "extra": true,
+                "disabled": ["review", "", "review"]
+            }
         }"#,
         )
         .expect("fixture json");
@@ -605,6 +625,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("querit", false), ("anysearch", false), ("exa", true)]
         );
+        // Healthy subagent role routes and disabled skills survive retired
+        // sibling keys and bad entries.
+        assert_eq!(settings.subagents.roles.len(), 1);
+        assert_eq!(settings.subagents.roles[0].role, "scout");
+        assert_eq!(settings.skills.disabled, ["review"]);
         // Removed keys are simply not read by the salvage.
         let encoded = serde_json::to_string(&settings).expect("encode");
         for removed in ["userAgent", "usage", "tools", "palette", "fontFamily"] {

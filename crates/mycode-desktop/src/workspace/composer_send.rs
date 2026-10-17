@@ -30,6 +30,7 @@ impl Workspace {
         }
         // Send with an empty composer is an explicit send of the queue,
         // so it also releases a queue held by a stop.
+        self.queue_hold_on_return = false;
         self.apply_action(DesktopAction::QueuePaused(false), cx);
         self.pump_queued_send(cx);
     }
@@ -135,6 +136,7 @@ impl Workspace {
     /// released and starts when that turn ends.
     pub(crate) fn on_resume_queued(&mut self, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        self.queue_hold_on_return = false;
         self.apply_action(DesktopAction::QueuePaused(false), cx);
         self.pump_queued_send(cx);
     }
@@ -157,6 +159,7 @@ impl Workspace {
     /// Stops the in-flight turn and sends one queued follow-up immediately.
     pub(crate) fn on_interrupt_queued(&mut self, index: usize, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        self.queue_hold_on_return = false;
         self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
         self.apply_action(DesktopAction::QueuePaused(false), cx);
         if self.vm.sending {

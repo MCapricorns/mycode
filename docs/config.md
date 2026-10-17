@@ -33,7 +33,7 @@
 | `secure_fs` | 有界读取、不落盘的咨询锁、相对句柄的原子替换和改名隔离。Unix 与 Windows 各有一套不跟随链接的打开方式。本模块不含文档 schema |
 | `authority` | 文档 revision，供比较交换 |
 | `document_repair` | 把内容损坏或文件本身不能用的产品文档挪到 `.broken-*`，抢救通过的字段合并进默认值再发布 |
-| `settings` | `settings.json`。损坏时备份后抢救仍有效的字段，其余回到默认设置（无提供商、两个未启用的内置网页后端） |
+| `settings` | `settings.json`。损坏时备份后抢救仍有效的字段，其余回到默认设置（无提供商、三个未启用的内置网页后端） |
 | `secrets` | `secrets.json`：每个 id 一把密钥，按 id 排序。空字符串表示清除。损坏时备份后抢救仍合法的条目，id 非法或值不可用的条目只留在备份里 |
 | `ui_state` | `ui.json`：命名工作区、文件夹、会话归属、最近项目、上次选的模型、模型选择器的最近使用、每会话模型钉选、自动更新开关、思考是否全部收起（`thinkingCollapsed`，默认展开）。只作界面恢复，不当作产品配置的真相 |
 | `project_mcp` | 读 `<项目>/.mycode/mcp.json`。文件不是合法 MCP JSON 或 stdio 命令是 shell 字符串时返回错误；项目里的服务器与设置里同 id 的服务器冲突时，项目那条覆盖 |

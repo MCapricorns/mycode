@@ -274,13 +274,22 @@ impl Workspace {
                 DesktopAction::ToolResultAppended(entry)
             }
             BridgeEvent::CatalogUpdated { .. } => {
-                self.dispatch(BridgeCommand::GetCatalog, cx);
+                if self.catalog_requested || self.vm.catalog.is_some() || self.catalog_needed() {
+                    self.catalog_requested = true;
+                    self.dispatch(BridgeCommand::GetCatalog, cx);
+                }
                 return;
             }
             BridgeEvent::CopilotSignedIn => {
                 // The provider entry and key landed; refresh the settings
-                // projection so the row and keyed badge appear immediately.
+                // projection so the row and keyed badge appear immediately,
+                // and reload the catalog when in use so live Codex models
+                // take effect right away.
                 self.dispatch(BridgeCommand::LoadSettings, cx);
+                if self.catalog_requested || self.vm.catalog.is_some() || self.catalog_needed() {
+                    self.catalog_requested = true;
+                    self.dispatch(BridgeCommand::GetCatalog, cx);
+                }
                 DesktopAction::CopilotSignInFinished(Ok(()))
             }
             BridgeEvent::CopilotSignInFailed { message } => {
@@ -619,7 +628,9 @@ impl Workspace {
                 );
                 // An enable that waited on this key save may probe now.
                 for server_id in stored {
-                    if self.pending_mcp_enable.contains(&server_id) {
+                    if self.pending_mcp_enable.contains(&server_id)
+                        && !self.vm.mcp_probing.contains(&server_id)
+                    {
                         self.probe_mcp_for_enable(&server_id, cx);
                     }
                 }

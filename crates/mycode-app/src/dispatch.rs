@@ -220,7 +220,7 @@ pub(crate) fn run_core(
                         ui_ready = true;
                         spawn_catalog_refresh(state.clone(), events.clone());
                         spawn_update_check(state.clone(), events.clone());
-                        crate::oauth::spawn_codex_models_refresh(state.clone());
+                        crate::oauth::spawn_codex_models_refresh(state.clone(), events.clone());
                     }
                     let _ = with_reply.reply.send(BridgeReply::UiReady(Ok(())));
                 }

@@ -26,7 +26,7 @@
 - 依赖整体更新到兼容版本（gpui-kit 0.7.3、serde_json、tokio、zip 等）；会话 id 生成复用 uuid，移除 getrandom 依赖；设置页按钮统一为描边样式。
 - 启动路径减负：目录缓存只校验信封、文档保留原始字节，模型选择器等目录界面首次打开才在阻塞池里解析；更新检查与目录刷新推迟到首帧之后；`spawn_blocking` 线程池上限收为 32；全局分配器换为 mimalloc，Windows 目标用 VC-LTL 把 CRT 链到系统自带的 ucrtbase/msvcrt，去掉运行时 DLL 依赖。
 - MCP 与网页搜索后端的启用开关改为先解析密钥、再做真实探测（MCP 走工具探测，网页走一次搜索），成功才落为启用；从内置目录添加的 MCP 服务器默认禁用，不能再绕过探测。
-- 移除自定义（`custom`）网页搜索后端：设置页只保留 querit、anysearch、exa 三个厂商；旧配置文件里的 `custom` 行在加载时直接丢弃（该拼写仍被接受以免旧配置解析报错），此前的自定义行开关也顺带堵上了绕过「密钥+探测」门的口子。
+- 移除自定义（`custom`）网页搜索后端：设置页只保留 querit、anysearch、exa 三个厂商；旧配置文件里的 `custom` 行在抢救时直接丢弃，此前的自定义行开关也顺带堵上了绕过「密钥+探测」门的口子。
 - `openai-codex` 预设与实时列表都只保留 `gpt-5.6` / `gpt-6` / `gpt-6.1` 系列（8 个预设），`o3`、5.3/5.4/5.5 等旧族不再进目录。
 - 出站 User-Agent 改为应用固定的 `MYCode-Agent/<版本> (<平台> <内核>; <架构>; <shell>)`，不再伪装 pi，Codex 请求的 `originator` 同步改为 `mycode`；设置里的自定义 UA 输入框与 `userAgent` 字段一并移除。
 - 配置文档改为严格解码：未知字段、旧字段（`userAgent`、`usage`、`appearance.palette`/`fontFamily`、`tools.*`、`subagents.maxConcurrent`/`timeoutSecs`、网页 `custom` 后端、`ui.json` 的 `workspaceRoots`/`trustedProjects` 等）一律视为文档损坏，备份后重置 + salvage，不再做逐字段兼容合并；`json_recover` 尾逗号修复同步移除。
