@@ -53,16 +53,30 @@ pub struct McpServerSettings {
 /// Users add them with one click and supply their own API keys; keys live in
 /// the secret store, never in settings.
 pub fn builtin_mcp_servers() -> Vec<McpServerSettings> {
-    vec![McpServerSettings {
-        id: "context7".to_owned(),
-        enabled: true,
-        transport: "http".to_owned(),
-        command: None,
-        args: Vec::new(),
-        env: BTreeMap::new(),
-        endpoint: Some("https://mcp.context7.com/mcp".to_owned()),
-        key_header: Some("bearer".to_owned()),
-    }]
+    vec![
+        McpServerSettings {
+            id: "context7".to_owned(),
+            // Added rows start disabled: the settings page probes the server
+            // before the enable switch can land `on`.
+            enabled: false,
+            transport: "http".to_owned(),
+            command: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            endpoint: Some("https://mcp.context7.com/mcp".to_owned()),
+            key_header: Some("bearer".to_owned()),
+        },
+        McpServerSettings {
+            id: "github".to_owned(),
+            enabled: false,
+            transport: "http".to_owned(),
+            command: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            endpoint: Some("https://api.githubcopilot.com/mcp".to_owned()),
+            key_header: Some("bearer".to_owned()),
+        },
+    ]
 }
 
 /// Whether `command` is one executable, not a shell string.

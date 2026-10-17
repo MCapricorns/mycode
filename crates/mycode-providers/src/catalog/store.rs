@@ -28,14 +28,168 @@ pub const MAX_CLOUD_BYTES: usize = 32 * 1024 * 1024;
 pub const DEFAULT_MAX_AGE_SECS: u64 = 6 * 60 * 60;
 
 /// A catalog document together with its cache metadata.
-#[derive(Clone, Debug)]
+///
+/// The document is kept as raw bytes until something actually consults it:
+/// startup reads and validates only the cache envelope, so the
+/// multi-megabyte model parse is paid on the first `document()` call (a
+/// model-menu open or the first turn), not on every launch.
+#[derive(Clone)]
 pub struct CachedCatalog {
-    /// The catalog document.
-    pub document: CatalogDocument,
+    source: CatalogSource,
     /// Unix seconds when the cloud copy was last fetched.
     pub fetched_at: u64,
     /// Opaque ETag validator from the cloud copy.
     pub etag: Option<String>,
+}
+
+impl std::fmt::Debug for CachedCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedCatalog")
+            .field("source", &self.source)
+            .field("fetched_at", &self.fetched_at)
+            .field("etag", &self.etag)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+enum CatalogSource {
+    /// A fully parsed document (a refresh result or a test fixture).
+    Ready(Arc<CatalogDocument>),
+    /// Raw bytes parsed on the first `document()` call.
+    Lazy(Arc<LazyCatalog>),
+}
+
+impl std::fmt::Debug for CatalogSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ready(document) => f
+                .debug_tuple("Ready")
+                .field(&document.providers.len())
+                .finish(),
+            Self::Lazy(lazy) => f
+                .debug_struct("Lazy")
+                .field("raw_bytes", &lazy.raw.len())
+                .field("parsed", &lazy.ready.get().is_some())
+                .finish(),
+        }
+    }
+}
+
+impl CatalogSource {
+    fn document(&self) -> Arc<CatalogDocument> {
+        match self {
+            Self::Ready(document) => Arc::clone(document),
+            Self::Lazy(lazy) => lazy.document(),
+        }
+    }
+}
+
+/// Raw catalog bytes plus the context needed to finish parsing them.
+struct LazyCatalog {
+    /// The full cache file (`enveloped`) or the vendored snapshot bytes.
+    raw: Arc<[u8]>,
+    /// Whether `raw` is a cache file: the `document` field is pulled out of
+    /// the envelope at materialize time.
+    enveloped: bool,
+    /// Owned home for the stored OpenDesign rows merged over the document.
+    home: Option<HomeLayout>,
+    /// The materialized document; parsing happens once, on first access.
+    ready: OnceLock<Arc<CatalogDocument>>,
+}
+
+impl LazyCatalog {
+    fn document(&self) -> Arc<CatalogDocument> {
+        self.ready
+            .get_or_init(|| {
+                let mut document = if self.enveloped {
+                    materialize_cache(&self.raw).unwrap_or_else(|| bundled().clone())
+                } else {
+                    let parsed = parse_snapshot(&self.raw);
+                    if parsed.providers.is_empty() {
+                        bundled().clone()
+                    } else {
+                        parsed
+                    }
+                };
+                if let Some(home) = &self.home {
+                    super::opendesign::attach_stored(home, &mut document);
+                }
+                Arc::new(document)
+            })
+            .clone()
+    }
+}
+
+/// The deferred half of [`parse_cache`]: the document field is decoded,
+/// normalized, and checked for usable providers. Returns `None` when the
+/// document is not a usable catalog; the caller falls back to the bundled
+/// baseline.
+fn materialize_cache(bytes: &[u8]) -> Option<CatalogDocument> {
+    let document = serde_json::from_slice::<CacheDocument>(bytes).ok()?;
+    if document.format_version != CACHE_FORMAT_VERSION || document.kind != CACHE_KIND {
+        return None;
+    }
+    if document.etag.as_deref().is_some_and(|etag| {
+        etag.is_empty() || etag.len() > 256 || etag.chars().any(char::is_control)
+    }) {
+        return None;
+    }
+    let normalized = super::normalize(document.document.providers);
+    if normalized.providers.is_empty() {
+        return None;
+    }
+    Some(super::attach_subscription_presets(normalized))
+}
+
+impl CachedCatalog {
+    /// A parsed document wrapped as a cache entry (refresh results, tests).
+    #[must_use]
+    pub fn from_document(document: CatalogDocument, fetched_at: u64, etag: Option<String>) -> Self {
+        Self {
+            source: CatalogSource::Ready(Arc::new(document)),
+            fetched_at,
+            etag,
+        }
+    }
+
+    /// A cache file kept raw until first use. `home` supplies the stored
+    /// OpenDesign rows merged when the document materializes.
+    fn lazy_file(raw: Vec<u8>, home: &HomeLayout, fetched_at: u64, etag: Option<String>) -> Self {
+        Self {
+            source: CatalogSource::Lazy(Arc::new(LazyCatalog {
+                raw: Arc::from(raw),
+                enveloped: true,
+                home: Some(home.clone()),
+                ready: OnceLock::new(),
+            })),
+            fetched_at,
+            etag,
+        }
+    }
+
+    /// The vendored snapshot kept raw until first use.
+    fn lazy_snapshot(home: Option<&HomeLayout>) -> Self {
+        Self {
+            source: CatalogSource::Lazy(Arc::new(LazyCatalog {
+                raw: Arc::from(&include_bytes!("snapshot.json")[..]),
+                enveloped: false,
+                home: home.cloned(),
+                ready: OnceLock::new(),
+            })),
+            fetched_at: 0,
+            etag: None,
+        }
+    }
+
+    /// The parsed document, materializing it on the first call.
+    ///
+    /// Parse failures fall back to the vendored snapshot so the returned
+    /// document is always usable.
+    #[must_use]
+    pub fn document(&self) -> Arc<CatalogDocument> {
+        self.source.document()
+    }
 }
 
 /// The result of one refresh attempt.
@@ -51,11 +205,22 @@ pub enum RefreshOutcome {
     Unavailable(String),
 }
 
+/// The cache envelope fields read eagerly at startup. `document` borrows the
+/// raw JSON span so the model list itself is not decoded until the lazy
+/// materialize runs. The whole file still has to scan as well-formed JSON,
+/// so a truncated or corrupt cache is still caught here.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CacheHeader {
+struct CacheEnvelope<'a> {
     format_version: u32,
     kind: String,
+    fetched_at: u64,
+    etag: Option<String>,
+    // Never read: the field's only job is to make the scan cover the whole
+    // document span, so malformed JSON inside it still fails the envelope.
+    #[serde(borrow)]
+    #[allow(dead_code)]
+    document: &'a serde_json::value::RawValue,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,20 +240,32 @@ pub fn bundled() -> &'static CatalogDocument {
 }
 
 /// Live or cached catalog installed by the process. Empty until startup
-/// loads the cache or a refresh replaces it.
-static ACTIVE: RwLock<Option<Arc<CatalogDocument>>> = RwLock::new(None);
+/// loads the cache or a refresh replaces it. The slot may still hold raw
+/// bytes: `active()` materializes them on first use.
+static ACTIVE: RwLock<Option<CatalogSource>> = RwLock::new(None);
 
 /// Publishes the catalog turns should consult before [`bundled`].
 pub fn install_active(document: Arc<CatalogDocument>) {
     if let Ok(mut slot) = ACTIVE.write() {
-        *slot = Some(document);
+        *slot = Some(CatalogSource::Ready(document));
+    }
+}
+
+/// Publishes a resolved cache entry without forcing its parse. A lazy
+/// source still materializes on the first `active()` call.
+pub fn install_active_cached(catalog: &CachedCatalog) {
+    if let Ok(mut slot) = ACTIVE.write() {
+        *slot = Some(catalog.source.clone());
     }
 }
 
 /// The installed live or cached catalog, when one has been published.
 #[must_use]
 pub fn active() -> Option<Arc<CatalogDocument>> {
-    ACTIVE.read().ok().and_then(|slot| slot.clone())
+    ACTIVE
+        .read()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(CatalogSource::document))
 }
 
 /// Drops the installed catalog so lookups use [`bundled`] again.
@@ -117,10 +294,10 @@ fn load_cache_with_repair(
         Ok(Some(bytes)) => bytes,
         Ok(None) | Err(_) => return (None, None),
     };
-    match parse_cache(bytes.as_slice()) {
+    match parse_cache(bytes.as_slice(), home) {
         CacheParse::Ready(cache) => (Some(cache), None),
         CacheParse::Migrate => {
-            let migrated = bundled_cache();
+            let migrated = bundled_cache(home);
             let _ = write_cache(home, &migrated);
             (Some(migrated), None)
         }
@@ -129,9 +306,9 @@ fn load_cache_with_repair(
                 mycode_config::quarantine_owned_bytes(home, CATALOG_CACHE_PATH, bytes.as_slice())
                     .ok();
             if repair.is_some() {
-                let _ = write_cache(home, &bundled_cache());
+                let _ = write_cache(home, &bundled_cache(home));
             }
-            (repair.as_ref().map(|_| bundled_cache()), repair)
+            (repair.as_ref().map(|_| bundled_cache(home)), repair)
         }
     }
 }
@@ -142,44 +319,39 @@ enum CacheParse {
     Damaged,
 }
 
-fn bundled_cache() -> CachedCatalog {
-    CachedCatalog {
-        document: bundled().clone(),
-        fetched_at: 0,
-        etag: None,
-    }
+fn bundled_cache(home: &HomeLayout) -> CachedCatalog {
+    CachedCatalog::lazy_snapshot(Some(home))
 }
 
-fn parse_cache(bytes: &[u8]) -> CacheParse {
-    let Ok(header) = serde_json::from_slice::<CacheHeader>(bytes) else {
+/// Validates the cache envelope only: kind, format version, etag grammar,
+/// and — because the `document` field is borrowed as raw JSON — overall
+/// well-formedness. The model list itself stays undecoded; a document that
+/// is well-formed but unusable (empty or shapeless providers) is caught by
+/// the lazy materialize, which falls back to the bundled baseline.
+fn parse_cache(bytes: &[u8], home: &HomeLayout) -> CacheParse {
+    let Ok(envelope) = serde_json::from_slice::<CacheEnvelope>(bytes) else {
         return CacheParse::Damaged;
     };
-    if header.kind != CACHE_KIND {
+    if envelope.kind != CACHE_KIND {
         return CacheParse::Damaged;
     }
-    if header.format_version > 0 && header.format_version < CACHE_FORMAT_VERSION {
+    if envelope.format_version > 0 && envelope.format_version < CACHE_FORMAT_VERSION {
         return CacheParse::Migrate;
     }
-    let Ok(document) = serde_json::from_slice::<CacheDocument>(bytes) else {
-        return CacheParse::Damaged;
-    };
-    if document.format_version != CACHE_FORMAT_VERSION {
+    if envelope.format_version != CACHE_FORMAT_VERSION {
         return CacheParse::Damaged;
     }
-    if document.etag.as_deref().is_some_and(|etag| {
+    if envelope.etag.as_deref().is_some_and(|etag| {
         etag.is_empty() || etag.len() > 256 || etag.chars().any(char::is_control)
     }) {
         return CacheParse::Damaged;
     }
-    let normalized = super::normalize(document.document.providers);
-    if normalized.providers.is_empty() {
-        return CacheParse::Damaged;
-    }
-    CacheParse::Ready(CachedCatalog {
-        document: super::attach_subscription_presets(normalized),
-        fetched_at: document.fetched_at,
-        etag: document.etag,
-    })
+    CacheParse::Ready(CachedCatalog::lazy_file(
+        bytes.to_vec(),
+        home,
+        envelope.fetched_at,
+        envelope.etag,
+    ))
 }
 
 /// Resolves the current catalog: cache when valid, else the vendored snapshot.
@@ -195,12 +367,12 @@ pub fn current(home: &HomeLayout) -> CachedCatalog {
 pub fn current_with_repair(
     home: &HomeLayout,
 ) -> (CachedCatalog, Option<mycode_config::DocumentRepair>) {
-    let (mut cache, repair) = match load_cache_with_repair(home) {
+    // The stored OpenDesign rows join the document inside the lazy
+    // materialize, so resolving the entry costs only the envelope read.
+    match load_cache_with_repair(home) {
         (Some(cache), repair) => (cache, repair),
-        (None, repair) => (bundled_cache(), repair),
-    };
-    super::opendesign::attach_stored(home, &mut cache.document);
-    (cache, repair)
+        (None, repair) => (bundled_cache(home), repair),
+    }
 }
 
 fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
@@ -209,7 +381,7 @@ fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
         kind: CACHE_KIND.to_owned(),
         fetched_at: cache.fetched_at,
         etag: cache.etag.clone(),
-        document: cache.document.clone(),
+        document: cache.document().as_ref().clone(),
     };
     let mut bytes = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
@@ -235,9 +407,10 @@ async fn blocking<T: Send + 'static>(
 
 async fn load_current(home: &HomeLayout) -> CachedCatalog {
     let home = home.clone();
+    let fallback = home.clone();
     blocking(move || Ok(current(&home)))
         .await
-        .unwrap_or_else(|_| bundled_cache())
+        .unwrap_or_else(|_| bundled_cache(&fallback))
 }
 
 async fn store_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
@@ -357,11 +530,7 @@ pub async fn refresh(
         .get("etag")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let refreshed = CachedCatalog {
-        document,
-        fetched_at: unix_now(),
-        etag,
-    };
+    let refreshed = CachedCatalog::from_document(document, unix_now(), etag);
     if let Err(message) = store_cache(home, &refreshed).await {
         return RefreshOutcome::Unavailable(message);
     }
@@ -370,8 +539,25 @@ pub async fn refresh(
 
 #[cfg(test)]
 mod tests {
-    use super::{CACHE_FORMAT_VERSION, CACHE_KIND, CacheParse, has_cloud_providers, parse_cache};
+    use super::{
+        CACHE_FORMAT_VERSION, CACHE_KIND, CacheParse, CatalogSource, has_cloud_providers,
+        parse_cache,
+    };
     use serde_json::json;
+
+    fn test_home() -> (std::path::PathBuf, mycode_config::HomeLayout) {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-catalog-store-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+        (root, home)
+    }
 
     #[test]
     fn a_cloud_body_without_providers_is_not_a_catalog() {
@@ -424,25 +610,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_cache_normalizes_and_rejects_empty_or_invalid_provider_sets() {
-        let empty = json!({
+    fn parse_cache_reads_the_envelope_and_defers_the_document() {
+        let (_root, home) = test_home();
+        let malformed = "{not json";
+        assert!(matches!(
+            parse_cache(malformed.as_bytes(), &home),
+            CacheParse::Damaged
+        ));
+        let wrong_kind = json!({
             "formatVersion": CACHE_FORMAT_VERSION,
-            "kind": CACHE_KIND,
+            "kind": "something-else",
             "fetchedAt": 123,
-            "etag": "\"v1\"",
             "document": { "providers": [] }
         });
         assert!(matches!(
-            parse_cache(empty.to_string().as_bytes()),
+            parse_cache(wrong_kind.to_string().as_bytes(), &home),
             CacheParse::Damaged
         ));
 
-        let invalid_only = json!({
-            "formatVersion": CACHE_FORMAT_VERSION,
-            "kind": CACHE_KIND,
-            "fetchedAt": 123,
-            "etag": "\"v1\"",
-            "document": {
+        // Well-formed but unusable provider sets stay `Ready`: the lazy
+        // materialize — not the envelope read — falls back to the bundled
+        // baseline.
+        for document in [
+            json!({ "providers": [] }),
+            json!({
                 "providers": [{
                     "id": "BAD ID",
                     "name": "Bad",
@@ -450,13 +641,33 @@ mod tests {
                     "baseUrl": "https://example.com/v1",
                     "models": [{ "id": "m1", "name": "m1" }]
                 }]
-            }
-        });
-        assert!(matches!(
-            parse_cache(invalid_only.to_string().as_bytes()),
-            CacheParse::Damaged
-        ));
+            }),
+        ] {
+            let file = json!({
+                "formatVersion": CACHE_FORMAT_VERSION,
+                "kind": CACHE_KIND,
+                "fetchedAt": 123,
+                "document": document
+            });
+            let CacheParse::Ready(cached) = parse_cache(file.to_string().as_bytes(), &home) else {
+                panic!("expected envelope-ready cache");
+            };
+            let CatalogSource::Lazy(lazy) = &cached.source else {
+                panic!("the document must stay unparsed");
+            };
+            assert!(lazy.ready.get().is_none());
+            let document = cached.document();
+            assert!(
+                !document.providers.is_empty(),
+                "an unusable document falls back to the bundled baseline"
+            );
+            assert!(document.provider("acme").is_none());
+        }
+    }
 
+    #[test]
+    fn parse_cache_normalizes_valid_providers_on_first_access() {
+        let (_root, home) = test_home();
         let valid = json!({
             "formatVersion": CACHE_FORMAT_VERSION,
             "kind": CACHE_KIND,
@@ -476,14 +687,65 @@ mod tests {
                 }]
             }
         });
-        let CacheParse::Ready(cached) = parse_cache(valid.to_string().as_bytes()) else {
+        let CacheParse::Ready(cached) = parse_cache(valid.to_string().as_bytes(), &home) else {
             panic!("expected valid cache");
         };
-        let acme = cached.document.provider("acme").expect("acme");
+        assert_eq!(cached.fetched_at, 123);
+        assert_eq!(cached.etag.as_deref(), Some("\"v1\""));
+        let CatalogSource::Lazy(lazy) = &cached.source else {
+            panic!("the document must stay unparsed");
+        };
+        assert!(lazy.ready.get().is_none(), "no document work at read");
+        let document = cached.document();
+        assert!(lazy.ready.get().is_some(), "first access materializes");
+        let acme = document.provider("acme").expect("acme");
         let ids: Vec<_> = acme.models.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["a-model", "b-model"]);
         assert_eq!(acme.models[0].name, "a-model");
         assert_eq!(acme.models[1].reasoning_efforts, ["high"]);
-        assert!(cached.document.provider("openai-codex").is_some());
+        assert!(document.provider("openai-codex").is_some());
+    }
+
+    #[test]
+    fn current_stays_lazy_and_materializes_once() {
+        let (root, home) = test_home();
+        let file = json!({
+            "formatVersion": CACHE_FORMAT_VERSION,
+            "kind": CACHE_KIND,
+            "fetchedAt": 42,
+            "etag": null,
+            "document": {
+                "providers": [{
+                    "id": "acme",
+                    "name": "Acme",
+                    "kind": "openai-completions",
+                    "baseUrl": "https://api.acme.example/v1",
+                    "models": [{ "id": "m1", "name": "M1" }]
+                }]
+            }
+        });
+        let _ = root;
+        let bytes = file.to_string().into_bytes();
+        mycode_config::locked_update_owned_file(
+            &home,
+            super::CATALOG_CACHE_PATH,
+            super::MAX_CACHE_BYTES,
+            |_| Ok(bytes.clone()),
+        )
+        .unwrap();
+        let (cached, repair) = super::current_with_repair(&home);
+        assert!(repair.is_none());
+        let CatalogSource::Lazy(lazy) = &cached.source else {
+            panic!("the cache must resolve without parsing its document");
+        };
+        assert!(lazy.ready.get().is_none());
+        let first = cached.document();
+        let second = cached.document();
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "one parse, one doc"
+        );
+        assert_eq!(cached.fetched_at, 42);
+        assert!(first.provider("acme").is_some());
     }
 }

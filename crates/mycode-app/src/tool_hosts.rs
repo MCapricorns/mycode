@@ -177,15 +177,14 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
     }
 }
 
-/// Builds the web client for the enabled backend, or the first builtin that
-/// already has a key (env or vault).
-fn web_client(home: &HomeLayout) -> Result<crate::web_client::WebClient, String> {
-    let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
-    let secrets = read_provider_secrets(home).ok();
-    let backend = resolve_web_backend(&settings, secrets.as_ref())?;
+/// Builds the web client for one backend row.
+fn web_client_for(
+    backend: &mycode_config::WebBackendSettings,
+    secrets: Option<&mycode_config::ProviderSecrets>,
+) -> Result<crate::web_client::WebClient, String> {
     let kind = crate::web_client::SearchKind::parse(&backend.kind)
         .ok_or_else(|| format!("unknown search backend kind '{}'", backend.kind))?;
-    let key = web_backend_key(&backend, secrets.as_ref());
+    let key = web_backend_key(backend, secrets);
     if key.is_none() && kind_requires_key(kind) {
         let env =
             mycode_config::web_key_env(&backend.kind).unwrap_or("its API-key environment variable");
@@ -199,6 +198,37 @@ fn web_client(home: &HomeLayout) -> Result<crate::web_client::WebClient, String>
     crate::web_client::WebClient::new(&backend.endpoint, key, std::sync::Arc::new(transport))
         .map_err(|_| "the search backend endpoint violates the URL policy".to_owned())
         .map(|client| client.with_kind(kind))
+}
+
+/// Builds the web client for the enabled backend, or the first builtin that
+/// already has a key (env or vault).
+fn web_client(home: &HomeLayout) -> Result<crate::web_client::WebClient, String> {
+    let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
+    let secrets = read_provider_secrets(home).ok();
+    let backend = resolve_web_backend(&settings, secrets.as_ref())?;
+    web_client_for(&backend, secrets.as_ref())
+}
+
+/// Probes one backend row exactly as the settings page shows it: resolves
+/// its key (environment or vault), then runs one bounded search. The enable
+/// switch stays off until this returns `Ok`.
+pub(crate) async fn probe_web_backend(
+    home: &HomeLayout,
+    backend: &mycode_config::WebBackendSettings,
+) -> Result<(), String> {
+    let read_home = home.clone();
+    let backend = backend.clone();
+    let client = tokio::task::spawn_blocking(move || {
+        let secrets = read_provider_secrets(&read_home).ok();
+        web_client_for(&backend, secrets.as_ref())
+    })
+    .await
+    .map_err(|error| format!("web probe task failed: {error}"))??;
+    client
+        .search("mycode", 1, CancellationToken::new())
+        .await
+        .map(|_| ())
+        .map_err(|error| crate::web_client::tool_failure("search", &error))
 }
 
 /// Families that always need a key; AnySearch and custom endpoints may run

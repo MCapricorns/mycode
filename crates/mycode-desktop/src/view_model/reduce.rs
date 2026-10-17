@@ -703,8 +703,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             active_workspace: active,
             recent_models,
             thinking_collapsed,
+            window_size,
         } => {
             state.thinking_collapsed = thinking_collapsed;
+            state.window_size = window_size;
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;

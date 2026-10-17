@@ -94,10 +94,10 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
             t("MCP servers", "MCP 服务器"),
             Some(t(
                 "Stdio or Streamable-HTTP tool servers. A stored key shows as a lock and \
-                 is never written back into a field. Enabled servers connect once and \
-                 their tools join the agent.",
+                 is never written back into a field. Enabling a server probes it first; \
+                 once enabled, its tools join the agent.",
                 "Stdio 或 Streamable-HTTP 工具服务器。已保存的密钥显示为锁形标记,且不会回填到输入框。\
-                 启用的服务器会连接一次,其工具随即加入代理。",
+                 启用前会先探测服务器;启用后其工具随即加入代理。",
             )),
             theme,
             vec![
@@ -451,10 +451,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                     Switch::new(format!("mcp-toggle-{id}"))
                         .checked(enabled)
                         .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
-                            workspace.apply_action(
-                                DesktopAction::SettingsMcpToggled(index, *checked),
-                                cx,
-                            );
+                            workspace.on_mcp_toggled(index, *checked, cx);
                         })),
                 )
                 .child(

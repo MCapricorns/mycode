@@ -45,6 +45,19 @@ const MAX_MODEL_PIN_CHARS: usize = 256;
 /// Per-session model pins. Each chat keeps its own provider, model, and
 /// reasoning effort so one session cannot change the others.
 const MAX_SESSION_MODELS: usize = 128;
+/// Largest accepted window edge in logical pixels. Well past any sane
+/// multi-monitor span; it only guards the document against absurd values.
+const MAX_WINDOW_EDGE_PX: u32 = 16_384;
+
+/// The windowed size restored on the next launch, in logical pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WindowSize {
+    /// Window width.
+    pub width: u32,
+    /// Window height.
+    pub height: u32,
+}
 
 /// One named workspace: a set of folders plus the chats grouped under it.
 ///
@@ -228,6 +241,10 @@ pub struct UiState {
     /// every trace in every session; traces are expanded by default.
     #[serde(default)]
     pub thinking_collapsed: bool,
+    /// Last windowed size; the next launch restores it. `None` keeps the
+    /// computed default bounds.
+    #[serde(default)]
+    pub window_size: Option<WindowSize>,
 }
 
 impl Default for UiState {
@@ -247,6 +264,7 @@ impl Default for UiState {
             session_models: Vec::new(),
             selected_reasoning: None,
             thinking_collapsed: false,
+            window_size: None,
         }
     }
 }
@@ -371,6 +389,14 @@ impl UiState {
         }
         if let Some(reasoning) = &self.selected_reasoning
             && !valid_effort_token(reasoning)
+        {
+            return Err(invalid());
+        }
+        if let Some(size) = self.window_size
+            && (size.width == 0
+                || size.height == 0
+                || size.width > MAX_WINDOW_EDGE_PX
+                || size.height > MAX_WINDOW_EDGE_PX)
         {
             return Err(invalid());
         }

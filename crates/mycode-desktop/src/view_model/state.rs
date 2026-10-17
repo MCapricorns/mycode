@@ -176,6 +176,8 @@ pub(crate) struct WorkspaceState {
     pub auto_update: bool,
     /// Self-update progress.
     pub update: UpdateState,
+    /// Last persisted windowed size; written back on resize.
+    pub window_size: Option<mycode_config::WindowSize>,
     /// Whether the update dialog (download/install prompt) is open.
     pub update_dialog_open: bool,
     /// The staged update waiting for a restart, when any.
@@ -536,6 +538,8 @@ pub enum DesktopAction {
         /// Starred model pins, newest first.
         /// Thinking traces start collapsed.
         thinking_collapsed: bool,
+        /// Persisted windowed size.
+        window_size: Option<mycode_config::WindowSize>,
     },
     /// A thinking header was clicked: every trace expands or collapses.
     ThinkingCollapsedToggled,
