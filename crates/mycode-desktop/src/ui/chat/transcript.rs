@@ -1,6 +1,7 @@
 //! The transcript timeline: streaming bubble, committed entries, tool
-//! blocks, and user rows with their edit/recall hover actions.
+//! blocks, and user rows with their recall hover action.
 use gpui_kit::assets::IconName;
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -523,10 +524,9 @@ pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> 
 pub(super) const USER_BUBBLE_MAX_SHARE: f32 = 0.72;
 
 /// One right-aligned user bubble (capped at 72% width, no speaker header) with
-/// hover actions: edit-and-resend (rewinds to before this message and prefills
-/// the composer) and recall (drops this message and everything after). Neither
-/// action restores or deletes workspace files. Messages without a prior ledger
-/// event hide these actions.
+/// one hover action: recall, which rewinds to before this message and puts its
+/// text back in the composer for resending. Workspace files are not restored
+/// or deleted. Messages without a prior ledger event hide the action.
 pub(super) fn render_user_entry(
     entry: &ConversationEntry,
     can_rewind: bool,
@@ -555,7 +555,10 @@ pub(super) fn render_user_entry(
                 .text_sm()
                 .whitespace_normal()
                 .text_color(theme.foreground)
-                .child(SharedString::from(entry.text.clone()))
+                .child(TextView::markdown(
+                    format!("user-text-{}", entry.event_id),
+                    SharedString::from(entry.text.clone()),
+                ))
                 .test_support(),
         );
     if can_rewind {
@@ -568,26 +571,6 @@ pub(super) fn render_user_entry(
                 .gap_1()
                 .opacity(0.0)
                 .group_hover("user-entry", |this| this.opacity(1.0))
-                .child(
-                    div()
-                        .id(format!("entry-edit-{index}"))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .h(px(22.))
-                        .rounded(skin::radius_control())
-                        .text_xs()
-                        .cursor_pointer()
-                        .text_color(theme.muted_foreground)
-                        .hover(|this| this.bg(skin::frost_hover(theme)))
-                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                            workspace.on_edit_message(index, cx);
-                        }))
-                        .child(Icon::new(IconName::Pen).xsmall())
-                        .child(t("edit", "编辑")),
-                )
                 .child(
                     div()
                         .id(format!("entry-recall-{index}"))

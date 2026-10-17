@@ -51,6 +51,10 @@ pub struct SessionSnapshot {
     pub updated_at_ms: Option<u64>,
     /// Sum of committed events across branches.
     pub event_count: u64,
+    /// The branch the session's writes last went to — the one a reopen
+    /// should show. Older rows only name the original root; it still
+    /// resolves because the pointer self-corrects on the next append.
+    pub current_branch: BranchId,
     /// Every branch, ordered by branch-ID bytes.
     pub branches: Vec<BranchSnapshot>,
 }
@@ -104,6 +108,21 @@ pub fn delete_session_index(
     store::delete_indexed_session(home, session_id).map_err(store_error)
 }
 
+/// Replaces one session's sidebar title. A missing database or row is
+/// success. The title is index metadata, not a ledger event, so the write
+/// goes straight to the index like [`delete_session_index`].
+///
+/// # Errors
+///
+/// Returns [`SessionError::Unavailable`] when the index cannot be updated.
+pub fn rename_session_index(
+    home: &mycode_config::HomeLayout,
+    session_id: &str,
+    title: &str,
+) -> Result<(), SessionError> {
+    store::rename_indexed_session(home, session_id, title).map_err(store_error)
+}
+
 fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, String> {
     let id = row.id.clone();
     let Some(session_id) = SessionId::parse(&row.id) else {
@@ -137,11 +156,18 @@ fn snapshot_from_row(row: store::ListedSession) -> Result<SessionSnapshot, Strin
     if sum_events != row.event_count {
         return Err(id);
     }
+    // The pointer names the branch the session's writes last went to; a
+    // row predating it names the root. Either way fall back to the first
+    // listed branch when it does not resolve — never corruption.
+    let current_branch = BranchId::parse(&row.root_branch)
+        .filter(|root| branches.iter().any(|branch| &branch.branch_id == root))
+        .unwrap_or_else(|| branches[0].branch_id.clone());
     Ok(SessionSnapshot {
         session_id,
         title: row.title,
         updated_at_ms: row.updated_at_ms,
         event_count: row.event_count,
+        current_branch,
         branches,
     })
 }

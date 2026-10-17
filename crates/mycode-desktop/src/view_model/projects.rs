@@ -1,7 +1,5 @@
-//! Project- and workspace-shaped projections: path comparison, session
-//! bindings, and the active-workspace view of the sidebar.
-
-use std::collections::HashMap;
+//! Project-shaped projections: path comparison, session bindings, and the
+//! sidebar's flat view of sessions and folders.
 
 use mycode_app::SessionSummary;
 pub(crate) use mycode_config::same_project_path;
@@ -19,139 +17,32 @@ pub(crate) fn project_label(path: &str) -> String {
         .unwrap_or_else(|| path.to_owned())
 }
 
-/// Pre-indexed session-to-workspace and session-to-project lookup tables so
-/// callers that iterate over all sessions (`workspace_session_rows`,
-/// `workspace_session_counts`, `command_palette`) run in linear time instead
-/// of scanning the binding vectors per session.
-pub(crate) struct SessionBindingsIndex<'a> {
-    first_workspace: Option<&'a mycode_config::WorkspaceDef>,
-    known_workspaces: HashMap<&'a str, &'a mycode_config::WorkspaceDef>,
-    owners: HashMap<&'a str, &'a str>,
-    projects: HashMap<&'a str, &'a str>,
-}
-
-impl<'a> SessionBindingsIndex<'a> {
-    #[must_use]
-    pub(crate) fn new(state: &'a WorkspaceState) -> Self {
-        let first_workspace = state.workspaces.first();
-        let known_workspaces: HashMap<&'a str, &'a mycode_config::WorkspaceDef> = state
-            .workspaces
-            .iter()
-            .map(|workspace| (workspace.id.as_str(), workspace))
-            .collect();
-        let mut owners: HashMap<&'a str, &'a str> =
-            HashMap::with_capacity(state.session_workspaces.len());
-        for (session, workspace) in &state.session_workspaces {
-            owners.entry(session.as_str()).or_insert(workspace.as_str());
-        }
-        let mut projects: HashMap<&'a str, &'a str> =
-            HashMap::with_capacity(state.session_projects.len());
-        for (session, project) in &state.session_projects {
-            projects.entry(session.as_str()).or_insert(project.as_str());
-        }
-        Self {
-            first_workspace,
-            known_workspaces,
-            owners,
-            projects,
-        }
-    }
-
-    /// The workspace `session_id` belongs to, following [`workspace_of_session`].
-    #[must_use]
-    pub(crate) fn workspace_of(&self, session_id: &str) -> Option<&'a mycode_config::WorkspaceDef> {
-        self.owners
-            .get(session_id)
-            .and_then(|id| self.known_workspaces.get(id).copied())
-            .or(self.first_workspace)
-    }
-
-    /// The project path bound to `session_id`, if any.
-    #[must_use]
-    pub(crate) fn project_of(&self, session_id: &str) -> Option<&'a str> {
-        self.projects.get(session_id).copied()
-    }
-}
-
-/// The workspace the sidebar shows. A stale active id falls back to the
-/// first workspace, which is also where unbound sessions live.
+/// The folder bound to one session, if it has one.
 #[must_use]
-pub fn active_workspace(state: &WorkspaceState) -> Option<&mycode_config::WorkspaceDef> {
-    match state.active_workspace.as_deref() {
-        Some(id) => state
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == id)
-            .or_else(|| state.workspaces.first()),
-        None => state.workspaces.first(),
-    }
-}
-
-/// The workspace a session belongs to; a session without a binding predates
-/// named workspaces and belongs to the first one. A binding naming a removed
-/// workspace is treated as unbound — the session stays visible in the first
-/// workspace instead of hiding from every sidebar, and can be rebound there.
-#[must_use]
-pub fn workspace_of_session<'a>(
-    state: &'a WorkspaceState,
+pub(crate) fn project_of_session<'a>(
+    bindings: &'a [(String, String)],
     session_id: &str,
-) -> Option<&'a mycode_config::WorkspaceDef> {
-    let bound = state
-        .session_workspaces
+) -> Option<&'a str> {
+    bindings
         .iter()
-        .find(|(existing, _)| existing == session_id)
-        .map(|(_, workspace)| workspace.as_str());
-    match bound {
-        Some(id) => state
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == id)
-            .or_else(|| state.workspaces.first()),
-        None => state.workspaces.first(),
-    }
+        .find(|(id, _)| id == session_id)
+        .map(|(_, project)| project.as_str())
 }
 
-/// The sessions `workspace_id` lists, in stored order, each with its
-/// project binding. Ownership follows [`workspace_of_session`]; the
-/// membership and binding tables are indexed once instead of scanned per
-/// session, which made the sidebar quadratic in the session count.
+/// Every session with its project binding, in stored order. The binding map
+/// is indexed once instead of scanned per session.
 #[must_use]
-pub(crate) fn workspace_session_rows<'a>(
-    state: &'a WorkspaceState,
-    workspace_id: &str,
-) -> Vec<(&'a SessionSummary, Option<&'a str>)> {
-    if state.workspaces.is_empty() {
-        return Vec::new();
+pub(crate) fn session_rows(state: &WorkspaceState) -> Vec<(&SessionSummary, Option<&str>)> {
+    let mut projects: std::collections::HashMap<&str, &str> =
+        std::collections::HashMap::with_capacity(state.session_projects.len());
+    for (session, project) in &state.session_projects {
+        projects.entry(session.as_str()).or_insert(project.as_str());
     }
-    let index = SessionBindingsIndex::new(state);
     state
         .sessions
         .iter()
-        .filter(|session| {
-            index
-                .workspace_of(&session.session_id)
-                .is_some_and(|owner| owner.id == workspace_id)
-        })
-        .map(|session| (session, index.project_of(&session.session_id)))
+        .map(|session| (session, projects.get(session.session_id.as_str()).copied()))
         .collect()
-}
-
-/// Counts how many sessions belong to each workspace in a single pass.
-/// Ownership follows [`workspace_of_session`], so unbound or stale-bound
-/// sessions are counted under the first workspace.
-#[must_use]
-pub(crate) fn workspace_session_counts(state: &WorkspaceState) -> HashMap<&str, usize> {
-    let mut counts: HashMap<&str, usize> = HashMap::with_capacity(state.workspaces.len());
-    if state.workspaces.is_empty() {
-        return counts;
-    }
-    let index = SessionBindingsIndex::new(state);
-    for session in &state.sessions {
-        if let Some(owner) = index.workspace_of(&session.session_id) {
-            *counts.entry(owner.id.as_str()).or_insert(0) += 1;
-        }
-    }
-    counts
 }
 
 /// Task cards belong to the open session's project. Leaving that project
@@ -174,22 +65,10 @@ pub(crate) fn task_surface_visible(state: &WorkspaceState) -> bool {
         .any(|(id, bound)| id == session_id && same_project_path(bound, project))
 }
 
-/// The folder bound to one session, if it has one.
-#[must_use]
-pub(crate) fn project_of_session<'a>(
-    bindings: &'a [(String, String)],
-    session_id: &str,
-) -> Option<&'a str> {
-    bindings
-        .iter()
-        .find(|(id, _)| id == session_id)
-        .map(|(_, project)| project.as_str())
-}
-
 /// Whether a folder is open, so a new session has a working directory.
 ///
-/// A named workspace with an empty folder list does not count. Fresh launch
-/// always has that workspace and still must not offer a second action.
+/// An empty folder list does not count. Fresh launch still must not offer a
+/// second action.
 #[must_use]
 pub fn has_open_folder(state: &WorkspaceState) -> bool {
     path_open(state.project_dir.as_deref())
@@ -221,23 +100,16 @@ pub fn open_session_is_empty(state: &WorkspaceState) -> bool {
     })
 }
 
-/// The sessions that leave with a removed workspace root: bound to the
-/// folder and owned by the workspace the sidebar shows. A session bound to
-/// the same folder from another workspace keeps its copy — that workspace
-/// may still list the folder.
+/// The sessions that leave with a removed folder: every chat bound to that
+/// directory. A folder only ever takes its own chats — sessions bound to a
+/// different folder are untouched.
 #[must_use]
 pub(crate) fn sessions_removed_with_root(state: &WorkspaceState, project: &str) -> Vec<String> {
-    let Some(active) = active_workspace(state).map(|workspace| workspace.id.clone()) else {
-        return Vec::new();
-    };
     state
         .session_projects
         .iter()
         .filter(|(_, bound)| same_project_path(bound, project))
         .map(|(session, _)| session.clone())
-        .filter(|session| {
-            workspace_of_session(state, session).is_some_and(|owner| owner.id == active)
-        })
         .collect()
 }
 
@@ -260,67 +132,22 @@ mod tests {
     use crate::view_model::WorkspaceState;
 
     #[test]
-    fn removing_a_root_drops_only_its_sessions_in_the_shown_workspace() {
-        let workspace = |id: &str| mycode_config::WorkspaceDef {
-            id: id.to_owned(),
-            name: id.to_owned(),
-            folders: Vec::new(),
-        };
+    fn removing_a_root_drops_only_its_own_sessions() {
         let pair = |left: &str, right: &str| (left.to_owned(), right.to_owned());
         let state = WorkspaceState {
-            workspaces: vec![workspace("first"), workspace("second")],
-            active_workspace: Some("first".to_owned()),
-            session_workspaces: vec![
-                pair("here", "first"),
-                pair("there", "second"),
-                pair("unbound-owner", "removed"),
-            ],
             session_projects: vec![
                 pair("here", "/app"),
-                pair("there", "/app"),
-                pair("unbound-owner", "/app"),
-                pair("elsewhere", "/other"),
+                pair("there", "/other"),
+                pair("also-here", "/app"),
             ],
             ..WorkspaceState::default()
         };
         let removed = super::sessions_removed_with_root(&state, "/app");
-        // "unbound-owner" predates named workspaces: it lists under the
-        // first workspace, which is the one being shown.
-        assert_eq!(removed, ["here", "unbound-owner"]);
+        assert_eq!(removed, ["here", "also-here"]);
     }
 
     #[test]
-    fn removing_a_root_without_a_workspace_drops_nothing() {
-        let state = WorkspaceState {
-            session_projects: vec![("s".to_owned(), "/app".to_owned())],
-            ..WorkspaceState::default()
-        };
-        assert!(super::sessions_removed_with_root(&state, "/app").is_empty());
-    }
-
-    #[test]
-    fn fresh_workspace_without_a_folder_stays_closed() {
-        let state = WorkspaceState {
-            workspaces: vec![mycode_config::WorkspaceDef {
-                id: "ws".to_owned(),
-                name: "Default".to_owned(),
-                folders: Vec::new(),
-            }],
-            active_workspace: Some("ws".to_owned()),
-            project_dir: Some("   ".to_owned()),
-            workspace_roots: vec![" ".to_owned()],
-            ..WorkspaceState::default()
-        };
-        assert!(!has_open_folder(&state));
-    }
-
-    #[test]
-    fn workspace_rows_match_workspace_of_session() {
-        let workspace = |id: &str| mycode_config::WorkspaceDef {
-            id: id.to_owned(),
-            name: id.to_owned(),
-            folders: Vec::new(),
-        };
+    fn session_rows_pair_each_summary_with_its_project() {
         let session = |id: &str| crate::view_model::SessionSummary {
             session_id: id.to_owned(),
             root_branch_id: "br".to_owned(),
@@ -330,63 +157,50 @@ mod tests {
             active: false,
             corrupt: false,
         };
-        let pair = |left: &str, right: &str| (left.to_owned(), right.to_owned());
         let state = WorkspaceState {
-            workspaces: vec![workspace("first"), workspace("second")],
-            sessions: ["unbound", "in-second", "stale", "in-first"]
-                .into_iter()
-                .map(session)
-                .collect(),
-            session_workspaces: vec![
-                pair("in-second", "second"),
-                pair("stale", "removed"),
-                pair("in-first", "first"),
-                pair("in-first", "second"),
+            sessions: ["a", "b", "c"].into_iter().map(session).collect(),
+            session_projects: vec![
+                ("b".to_owned(), "/other".to_owned()),
+                ("b".to_owned(), "/first-wins".to_owned()),
+                ("a".to_owned(), "/app".to_owned()),
             ],
-            session_projects: vec![pair("in-first", "/a"), pair("in-first", "/b")],
             ..WorkspaceState::default()
         };
-        let counts = super::workspace_session_counts(&state);
-        for id in ["first", "second"] {
-            let rows = super::workspace_session_rows(&state, id);
-            let expected: Vec<&str> = state
-                .sessions
-                .iter()
-                .filter(|session| {
-                    super::workspace_of_session(&state, &session.session_id)
-                        .is_some_and(|owner| owner.id == id)
-                })
-                .map(|session| session.session_id.as_str())
-                .collect();
-            let listed: Vec<&str> = rows
-                .iter()
-                .map(|(session, _)| session.session_id.as_str())
-                .collect();
-            assert_eq!(listed, expected, "{id}");
-            assert_eq!(counts.get(id).copied().unwrap_or(0), expected.len(), "{id}");
-        }
-        let first = super::workspace_session_rows(&state, "first");
-        let bound = first
-            .iter()
-            .find(|(session, _)| session.session_id == "in-first")
-            .and_then(|(_, project)| *project);
-        assert_eq!(bound, Some("/a"), "the first binding wins, as before");
-        assert!(super::workspace_session_rows(&WorkspaceState::default(), "first").is_empty());
-    }
-
-    #[test]
-    fn an_open_project_directory_unlocks_a_new_task() {
-        let state = WorkspaceState {
-            project_dir: Some("/tmp/app".to_owned()),
-            ..WorkspaceState::default()
-        };
-        assert!(has_open_folder(&state));
+        let rows = super::session_rows(&state);
+        assert_eq!(rows.len(), 3);
+        // First binding wins: the map keeps the earliest stored path.
+        assert_eq!(
+            rows.iter()
+                .find(|(session, _)| session.session_id == "b")
+                .and_then(|(_, project)| *project),
+            Some("/other"),
+            "the first binding wins, matching bind_session_project"
+        );
     }
 
     #[test]
     fn a_workspace_root_unlocks_a_new_task() {
         let state = WorkspaceState {
             workspace_roots: vec!["/tmp/app".to_owned()],
+            ..WorkspaceState::default()
+        };
+        assert!(has_open_folder(&state));
+    }
+
+    #[test]
+    fn a_blank_folder_list_stays_closed() {
+        let state = WorkspaceState {
+            project_dir: Some("   ".to_owned()),
+            workspace_roots: vec![" ".to_owned()],
+            ..WorkspaceState::default()
+        };
+        assert!(!has_open_folder(&state));
+    }
+
+    #[test]
+    fn an_open_project_directory_unlocks_a_new_task() {
+        let state = WorkspaceState {
+            project_dir: Some("/tmp/app".to_owned()),
             ..WorkspaceState::default()
         };
         assert!(has_open_folder(&state));

@@ -351,11 +351,14 @@ pub struct CreatedResult {
     pub branch_id: BranchId,
 }
 
-/// `open` result: every branch head in branch-ID byte order.
+/// `open` result: every branch head in branch-ID byte order, plus the
+/// branch the session's writes last went to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenedResult {
     /// All branch heads, ordered by branch ID bytes.
     pub heads: Vec<BranchHead>,
+    /// The branch a reopen should show. It is always one of `heads`.
+    pub current: BranchHead,
 }
 
 /// `append` result: exactly `event(reservation.event-id)`.

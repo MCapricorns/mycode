@@ -460,12 +460,15 @@ fn render_model_step(
                         range
                             .map(|index| {
                                 model_row(
-                                    &list_rows[index],
-                                    &provider,
-                                    &row_id_prefix,
-                                    &target,
-                                    index == preferred,
-                                    selected.as_deref() == Some(list_rows[index].id.as_str()),
+                                    ModelRowSpec {
+                                        choice: &list_rows[index],
+                                        provider: &provider,
+                                        id_prefix: &row_id_prefix,
+                                        target: &target,
+                                        preferred: index == preferred,
+                                        selected: selected.as_deref()
+                                            == Some(list_rows[index].id.as_str()),
+                                    },
                                     &weak,
                                     &theme,
                                 )
@@ -519,17 +522,29 @@ fn render_model_step(
         .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn model_row(
-    choice: &ModelChoice,
-    provider: &str,
-    id_prefix: &str,
-    target: &ModelPickerTarget,
+/// Everything one model row needs that varies per row.
+struct ModelRowSpec<'a> {
+    choice: &'a ModelChoice,
+    provider: &'a str,
+    id_prefix: &'a str,
+    target: &'a ModelPickerTarget,
     preferred: bool,
     selected: bool,
+}
+
+fn model_row(
+    spec: ModelRowSpec<'_>,
     weak: &gpui_kit::WeakEntity<Workspace>,
     theme: &gpui_kit::component::theme::Theme,
 ) -> AnyElement {
+    let ModelRowSpec {
+        choice,
+        provider,
+        id_prefix,
+        target,
+        preferred,
+        selected,
+    } = spec;
     let model_id = choice.id.clone();
     let provider_id = provider.to_owned();
     let target = target.clone();

@@ -257,6 +257,75 @@ fn rewind_keeps_the_prefix_and_window_pages_backward() {
     });
 }
 
+/// A rewind forks onto a new branch; reopening the session must land on the
+/// branch writes last went to, never back on the smallest branch id — that
+/// pick used to replay the pre-rewind conversation.
+#[test]
+fn reopening_after_a_rewind_lands_on_the_new_branch() {
+    let scratch = Scratch::new();
+    runtime().block_on(async {
+        let service = SessionService::new(&scratch.home);
+        let created = service.create().await.expect("create");
+        let mut head = HeadStamp::Empty;
+        for text in ["one", "two", "three"] {
+            head = append_text(
+                &service,
+                &created.session_id,
+                &created.branch_id,
+                &head,
+                text,
+            )
+            .await;
+        }
+        let page = service
+            .read(&created.session_id, &created.branch_id, &head, None, 8)
+            .await
+            .expect("read");
+        let first = page.items[0].event_id.clone();
+        let reservation = service
+            .reserve_branch(
+                &created.session_id,
+                BranchMutationKind::Rewind,
+                &created.branch_id,
+                &first,
+            )
+            .await
+            .expect("reserve rewind");
+        let branched = service
+            .rewind(
+                &created.session_id,
+                &created.branch_id,
+                &first,
+                &reservation,
+            )
+            .await
+            .expect("rewind");
+        let branch_head = append_text(
+            &service,
+            &created.session_id,
+            &branched.branch_id,
+            &branched.head,
+            "post-rewind",
+        )
+        .await;
+
+        // The in-memory ledger already tracks the new branch; drop it so the
+        // reopen is answered by the index, the path a relaunch takes.
+        service.forget(&created.session_id).await.expect("forget");
+        let opened = service.open(&created.session_id).await.expect("reopen");
+        assert_eq!(opened.current.branch_id, branched.branch_id);
+        assert_eq!(opened.current.head, branch_head);
+        service.shutdown().await;
+
+        // A fresh service — a real relaunch — lands on the same branch.
+        let service = SessionService::new(&scratch.home);
+        let reopened = service.open(&created.session_id).await.expect("relaunch");
+        assert_eq!(reopened.current.branch_id, branched.branch_id);
+        assert_eq!(reopened.current.head, branch_head);
+        service.shutdown().await;
+    });
+}
+
 #[test]
 fn external_payload_bytes_stay_out_of_sqlite() {
     let scratch = Scratch::new();

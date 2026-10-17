@@ -80,6 +80,10 @@ pub(crate) struct WorkspaceState {
     pub thinking_collapsed: bool,
     /// A send is in flight.
     pub sending: bool,
+    /// A manual `/compact` is running. It is not a turn — no streaming
+    /// bubble — but it locks the composer the same way so a follow-up
+    /// queues instead of racing the compaction's expected-head check.
+    pub compacting: bool,
     /// Compaction card held until the in-flight reply is committed.
     ///
     /// A mid-turn summary arrives after the tool rows and before `ChatDone`
@@ -97,6 +101,9 @@ pub(crate) struct WorkspaceState {
     pub skills: Vec<SkillEntry>,
     /// Live `agent` runs for the inspector panel.
     pub live_jobs: Vec<LiveJob>,
+    /// Final runtimes of finished subagent calls, `(call_id, ms)`. A row
+    /// looks its duration up here once the job left `live_jobs`.
+    pub job_elapsed: Vec<(String, u64)>,
     /// Call id of the subagent detail window, when open.
     pub subagent_window: Option<String>,
     /// Whether the full working-tree changes drawer is open.
@@ -144,11 +151,6 @@ pub(crate) struct WorkspaceState {
     pub settings_section: SettingsSection,
     /// Whether the sidebar project switcher dropdown is open.
     pub project_menu_open: bool,
-    /// Whether the sidebar workspace switcher dropdown is open.
-    pub workspace_menu_open: bool,
-    /// Whether the workspace switcher is in rename mode for the active
-    /// workspace.
-    pub workspace_rename_open: bool,
     /// The resolved provider catalog.
     pub catalog: Option<Arc<mycode_providers::catalog::CatalogDocument>>,
     /// Unix seconds of the catalog's last successful cloud fetch.
@@ -162,15 +164,8 @@ pub(crate) struct WorkspaceState {
     pub session_projects: Vec<(String, String)>,
     /// Per-session provider, model, and reasoning. Newest first.
     pub session_models: Vec<mycode_config::SessionModelPin>,
-    /// Named workspaces; the sidebar shows one at a time.
-    pub workspaces: Vec<mycode_config::WorkspaceDef>,
-    /// Session-to-workspace bindings (session id, workspace id). A session
-    /// missing here belongs to the first workspace (upgrade window only).
-    pub session_workspaces: Vec<(String, String)>,
-    /// The workspace the sidebar currently shows.
-    pub active_workspace: Option<String>,
-    /// Folders in the open workspace, most recently added first. Mirrors the
-    /// active workspace's folders so unrelated UI keeps one source.
+    /// Workspace folders, most recently added first. Sessions bind one of
+    /// them as their working directory; the others stay reachable extras.
     pub workspace_roots: Vec<String>,
     /// Whether update checks run automatically.
     pub auto_update: bool,
@@ -235,6 +230,16 @@ pub(crate) struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// Final runtime of a finished subagent call, in milliseconds. The
+    /// latest entry wins when a call id was reused.
+    pub(crate) fn job_elapsed(&self, call_id: &str) -> Option<u64> {
+        self.job_elapsed
+            .iter()
+            .rev()
+            .find(|(id, _)| id == call_id)
+            .map(|(_, ms)| *ms)
+    }
+
     /// Discovered skills minus the ones switched off on the Skills page.
     /// The composer `/` menu and the command palette list only these.
     pub(crate) fn enabled_skills(&self) -> Vec<SkillEntry> {
@@ -254,6 +259,13 @@ pub enum DesktopAction {
     SessionsLoaded(Vec<SessionSummary>),
     /// A session was created and opened.
     SessionCreated(SessionSummary),
+    /// A generated title replaced one session row's stored title.
+    SessionTitled {
+        /// Session identity spelling.
+        session_id: String,
+        /// The generated title already stored in the index.
+        title: String,
+    },
     /// A session finished recovery and its conversation is ready.
     ConversationOpened(ActiveConversation),
     /// The open session's data was deleted; drop the conversation.
@@ -432,8 +444,6 @@ pub enum DesktopAction {
     },
     /// The user queued a follow-up while a turn is in flight.
     MessageQueued(String),
-    /// A steer went to the running turn; it shows until it commits.
-    SteerSent(String),
     /// Steers the turn did not take: a refused `Steer`, or texts the core
     /// returned after the turn's last request. They join the queue without
     /// touching the draft the user may be typing.
@@ -465,6 +475,12 @@ pub enum DesktopAction {
     AssistantStepCommitted(ConversationEntry),
     /// Manual or automatic compaction wrote a summary the transcript should show.
     SummaryShown(ConversationEntry),
+    /// A manual `/compact` started: the composer locks until the finish.
+    CompactArmed,
+    /// `/compact` reported its outcome. `head` is the durable branch head
+    /// after the attempt — the summary card advances it — so the next
+    /// compact or send does not trip the moved-head check on its own row.
+    CompactFinished { ok: bool, head: String },
     /// The model turn finished and its entry was committed.
     ChatDone {
         head: String,
@@ -521,12 +537,8 @@ pub enum DesktopAction {
         session_projects: Vec<(String, String)>,
         /// Per-session model pins.
         session_models: Vec<mycode_config::SessionModelPin>,
-        /// Named workspaces.
-        workspaces: Vec<mycode_config::WorkspaceDef>,
-        /// Session-to-workspace bindings.
-        session_workspaces: Vec<(String, String)>,
-        /// The workspace the sidebar shows.
-        active_workspace: Option<String>,
+        /// Workspace folders, most recently added first.
+        workspace_roots: Vec<String>,
         /// Recent model pins, newest first.
         recent_models: Vec<mycode_config::ModelPin>,
         /// Thinking traces start collapsed.
@@ -540,32 +552,12 @@ pub enum DesktopAction {
     },
     /// A thinking header was clicked: every trace expands or collapses.
     ThinkingCollapsedToggled,
-    /// The sidebar workspace switcher opened or closed.
-    WorkspaceMenuToggled(bool),
-    /// A workspace was created and became the active one.
-    WorkspaceCreated(mycode_config::WorkspaceDef),
-    /// The sidebar switched to another workspace.
-    WorkspaceSwitched(String),
-    /// The active workspace was renamed.
-    WorkspaceRenamed(String),
-    /// A workspace was removed; its sessions move to the first remaining
-    /// workspace.
-    WorkspaceRemoved(String),
-    /// A session joined a workspace in the durable map.
-    SessionWorkspaceBound {
-        /// Session identity spelling.
-        session_id: String,
-        /// Workspace identity.
-        workspace_id: String,
-    },
     /// Every remembered binding for one session was dropped (its data was
     /// deleted).
     SessionBindingsForgotten(String),
-    /// The workspace rename editor opened or closed.
-    WorkspaceRenameToggled(bool),
-    /// A folder was added to the workspace.
+    /// A folder was added to the workspace list.
     WorkspaceRootAdded(String),
-    /// A folder was removed from the workspace.
+    /// A folder was removed from the workspace list; its chats go with it.
     WorkspaceRootRemoved(String),
     /// A project directory was bound to the open session.
     ProjectOpened(String),
@@ -579,8 +571,8 @@ pub enum DesktopAction {
         /// Project directory path.
         project: String,
     },
-    /// The open chat's working directory moved to another folder in this
-    /// workspace. The other folders stay members of the same workspace.
+    /// The open chat's working directory moved to another workspace folder.
+    /// The other folders stay in the list.
     WorkspaceFolderFocused {
         /// Session identity spelling.
         session_id: String,

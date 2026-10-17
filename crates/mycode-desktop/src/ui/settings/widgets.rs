@@ -260,22 +260,35 @@ pub(super) fn labeled_field(
         .child(div().h(px(30.)).child(Input::new(&input)))
 }
 
+/// The data side of a [`dropdown_field`]: what the row shows and which
+/// option is current.
+pub(super) struct DropdownSpec<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+    pub description: Option<&'a str>,
+    pub current: &'a str,
+    pub options: &'a [String],
+    pub open: bool,
+}
+
 /// A dropdown row: label on the left, a button showing the current value on
 /// the right, and an inline option list that opens below the row. Shared by
 /// the General, Models, and MCP pages; each passes its own toggle and pick
 /// closures.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn dropdown_field(
-    id: &str,
-    label: &str,
-    description: Option<&str>,
-    current: &str,
-    options: &[String],
-    open: bool,
+    spec: DropdownSpec<'_>,
     on_toggle: impl Fn(&mut Workspace, bool, &mut Context<Workspace>) + 'static,
     on_pick: impl Fn(&mut Workspace, &str, &mut Context<Workspace>) + Clone + 'static,
     cx: &Context<Workspace>,
 ) -> AnyElement {
+    let DropdownSpec {
+        id,
+        label,
+        description,
+        current,
+        options,
+        open,
+    } = spec;
     let theme = cx.theme();
     div()
         .id(format!("dropdown-{id}"))

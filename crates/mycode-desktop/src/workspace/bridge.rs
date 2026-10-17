@@ -273,6 +273,9 @@ impl Workspace {
                 }
                 DesktopAction::ToolResultAppended(entry)
             }
+            BridgeEvent::SessionTitle { session_id, title } => {
+                DesktopAction::SessionTitled { session_id, title }
+            }
             BridgeEvent::CatalogUpdated { .. } => {
                 if self.catalog_requested || self.vm.catalog.is_some() || self.catalog_needed() {
                     self.catalog_requested = true;
@@ -331,10 +334,14 @@ impl Workspace {
                 session_id,
                 message,
                 ok,
+                head,
             } => {
                 if !matches_active(&session_id) {
                     return;
                 }
+                self.apply_action(DesktopAction::CompactFinished { ok, head }, cx);
+                // Follow-ups queued while the composer was locked start now.
+                self.pump_queued_send(cx);
                 let text = match message.as_str() {
                     "compacted" => crate::i18n::t(
                         "Context compacted. The next turn uses the summary.",
@@ -396,8 +403,6 @@ impl Workspace {
                 if self.vm.pending_welcome_send.is_some() {
                     self.welcome_send_session = Some(session_id.clone());
                 }
-                // A fresh session belongs to the workspace the sidebar shows.
-                self.bind_session_workspace(&session_id, cx);
                 // An explicit open requested after the create wins: the late
                 // reply must not steal the view from what the user clicked.
                 let opening = self.pending_open.is_none();
@@ -601,6 +606,16 @@ impl Workspace {
                 self.follow_session_project(&session_id, cx);
                 if prefill.is_some() {
                     self.pending_composer_prefill = prefill;
+                    // The rewind wipes the transcript tail; say where the text went.
+                    self.push_toast(
+                        crate::i18n::t(
+                            "Message recalled — its text is back in the composer.",
+                            "消息已撤回，原文已放回输入框。",
+                        )
+                        .to_owned(),
+                        crate::workspace::ToastKind::Info,
+                        cx,
+                    );
                 }
                 cx.notify();
             }
@@ -758,26 +773,8 @@ impl Workspace {
                     self.apply_action(DesktopAction::Failed(message), cx);
                 }
             }
-            BridgeReply::UiState(Ok((mut ui_state, repairs))) => {
+            BridgeReply::UiState(Ok((ui_state, repairs))) => {
                 self.note_config_repairs(&repairs, cx);
-                // First run (or a reset document) has no workspaces yet:
-                // seed the default one from the last-opened project so the
-                // sidebar always has a home for unbound sessions.
-                let migrated = ui_state.workspaces.is_empty();
-                if migrated {
-                    let mut folders = Vec::new();
-                    if let Some(last) = ui_state.last_project.clone()
-                        && !last.trim().is_empty()
-                    {
-                        folders.push(last);
-                    }
-                    let default = mycode_config::WorkspaceDef::generate(
-                        crate::i18n::t("Default", "默认"),
-                        folders,
-                    );
-                    ui_state.active_workspace = Some(default.id.clone());
-                    ui_state.workspaces.push(default);
-                }
                 self.apply_action(
                     DesktopAction::UiStateLoaded {
                         recents: ui_state.recent_projects,
@@ -788,9 +785,7 @@ impl Workspace {
                         selected_reasoning: ui_state.selected_reasoning,
                         session_projects: ui_state.session_projects,
                         session_models: ui_state.session_models,
-                        workspaces: ui_state.workspaces,
-                        session_workspaces: ui_state.session_workspaces,
-                        active_workspace: ui_state.active_workspace,
+                        workspace_roots: ui_state.workspace_roots,
                         recent_models: ui_state.recent_models,
                         thinking_collapsed: ui_state.thinking_collapsed,
                         inspector_open: ui_state.inspector_open,
@@ -799,9 +794,6 @@ impl Workspace {
                     },
                     cx,
                 );
-                if migrated {
-                    self.persist_ui_state(cx);
-                }
                 self.restore_session_projects(cx);
                 self.refresh_skills(cx);
             }
@@ -962,6 +954,9 @@ impl Workspace {
             // The first-frame acknowledgement carries no UI state; a lost
             // reply only means the deferred refresh ran anyway.
             BridgeReply::UiReady(_) => {}
+            // Title generation only acknowledges acceptance; the title
+            // itself arrives as `BridgeEvent::SessionTitle`.
+            BridgeReply::TitleSummarized(_) => {}
         }
     }
 }

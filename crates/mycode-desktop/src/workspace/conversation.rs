@@ -28,7 +28,7 @@ struct RecallRequest {
     session: SessionId,
     branch: BranchId,
     head: String,
-    edit: Option<String>,
+    edit: String,
     generation: u64,
 }
 
@@ -42,17 +42,8 @@ impl Workspace {
                 .is_some_and(|active| can_rewind(active, index))
     }
 
-    /// Rewinds to before this message and restores its text for editing.
-    pub(crate) fn on_edit_message(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.recall_at(index, true, cx);
-    }
-
-    /// Rewinds the conversation only; working-tree files are never restored.
+    /// Rewinds to before this message and restores its text to the composer.
     pub(crate) fn on_recall_message(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.recall_at(index, false, cx);
-    }
-
-    fn recall_at(&mut self, index: usize, edit: bool, cx: &mut Context<Self>) {
         if !self.can_rewind_message(index) {
             return;
         }
@@ -68,7 +59,7 @@ impl Workspace {
             session,
             branch,
             head: active.head.clone(),
-            edit: edit.then(|| active.entries[index].text.to_string()),
+            edit: active.entries[index].text.to_string(),
             generation: self.recall_generation,
         };
         if let Some(target) = previous_event(&active.entries, index).map(str::to_owned) {
@@ -136,7 +127,7 @@ impl Workspace {
                 branch: request.branch,
                 expected_head: super::parse_head(&request.head),
                 to_event,
-                edit: request.edit,
+                edit: Some(request.edit),
             },
             cx,
         );

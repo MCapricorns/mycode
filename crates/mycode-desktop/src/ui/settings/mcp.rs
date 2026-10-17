@@ -13,7 +13,7 @@ use gpui_kit::{
     Styled, Window, div, px,
 };
 
-use super::widgets::{dropdown_field, labeled_field, settings_card};
+use super::widgets::{DropdownSpec, dropdown_field, labeled_field, settings_card};
 use crate::i18n::t;
 use crate::ui::desk::Desk;
 use crate::ui::skin;
@@ -662,15 +662,17 @@ fn render_mcp_form(
     let transport_menu_open = workspace.vm().mcp_transport_menu_open;
     let transport_options = vec!["http".to_owned(), "stdio".to_owned()];
     let transport_field = dropdown_field(
-        "mcp-transport",
-        t("Transport", "传输方式"),
-        Some(t(
-            "HTTP servers speak Streamable-HTTP; stdio servers spawn a command.",
-            "HTTP 服务器使用 Streamable-HTTP;stdio 服务器启动一条命令。",
-        )),
-        &transport,
-        &transport_options,
-        transport_menu_open,
+        DropdownSpec {
+            id: "mcp-transport",
+            label: t("Transport", "传输方式"),
+            description: Some(t(
+                "HTTP servers speak Streamable-HTTP; stdio servers spawn a command.",
+                "HTTP 服务器使用 Streamable-HTTP;stdio 服务器启动一条命令。",
+            )),
+            current: &transport,
+            options: &transport_options,
+            open: transport_menu_open,
+        },
         |workspace, open, cx| workspace.on_toggle_mcp_transport_menu(open, cx),
         |workspace, transport, cx| workspace.on_select_mcp_transport(transport, cx),
         cx,

@@ -1,6 +1,6 @@
 //! Composer submit: send, steer, queue, and cancel the running turn.
 use gpui_kit::{Context, Window};
-use mycode_app::{BridgeCommand, BridgeReply};
+use mycode_app::BridgeCommand;
 
 use super::Workspace;
 use crate::view_model::DesktopAction;
@@ -18,9 +18,11 @@ impl Workspace {
             self.submit_from_welcome(&draft, cx);
             return;
         }
-        if self.vm.sending {
+        if self.vm.sending || self.vm.compacting {
+            // Enter on a busy turn or compact queues the follow-up;
+            // Ctrl+Enter is the interrupt path in `on_interrupt_send`.
             if !draft.trim().is_empty() {
-                self.dispatch_steer(draft, window, cx);
+                self.enqueue_follow_up(draft, window, cx);
             }
             return;
         }
@@ -35,34 +37,31 @@ impl Workspace {
         self.pump_queued_send(cx);
     }
 
-    /// Steers the running turn. The composer clears immediately. If the turn
-    /// ended before the inbox was registered, the text is queued instead.
-    fn dispatch_steer(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session_id) = self.open_session_id() else {
-            self.enqueue_follow_up(draft, window, cx);
-            return;
-        };
-        self.apply_action(DesktopAction::ComposerChanged(String::new()), cx);
-        self.composer
-            .update(cx, |state, cx| state.set_value("", window, cx));
-        // Shown above the composer until the ledger commits it.
-        self.apply_action(DesktopAction::SteerSent(draft.clone()), cx);
-        let request = self.bridge.request(BridgeCommand::Steer {
-            session_id,
-            text: draft.clone(),
-        });
-        cx.spawn(async move |this, cx| {
-            let reply = request.await;
-            if matches!(reply, BridgeReply::Steered(Err(_))) {
-                let _ = this.update(cx, |workspace, cx| {
-                    workspace.apply_action(DesktopAction::SteersReturned(vec![draft]), cx);
-                    // The turn may have finished between the click and the
-                    // reply. Pump so the text does not sit in the queue.
-                    workspace.pump_queued_send(cx);
-                });
+    /// Ctrl+Enter while a turn runs: stop it and send this draft right away.
+    /// With an empty draft it behaves like the queue's interrupt — the held
+    /// queue runs after the cancel lands.
+    pub(crate) fn on_interrupt_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let draft = self.composer.read(cx).value().to_string();
+        if draft.trim().is_empty() {
+            self.queue_hold_on_return = false;
+            self.apply_action(DesktopAction::QueuePaused(false), cx);
+            if self.vm.sending || self.vm.compacting {
+                self.cancel_turn(cx);
+            } else {
+                self.pump_queued_send(cx);
             }
-        })
-        .detach();
+            return;
+        }
+        let before = self.vm.queued.len();
+        self.enqueue_follow_up(draft, window, cx);
+        // A capped queue dropped the draft: interrupt anyway so the held
+        // queue runs instead of leaving the keypress a no-op.
+        let index = if self.vm.queued.len() > before {
+            self.vm.queued.len() - 1
+        } else {
+            0
+        };
+        self.on_interrupt_queued(index, cx);
     }
 
     /// Enter or send on the welcome desk starts a task with that text.
@@ -162,7 +161,7 @@ impl Workspace {
         self.queue_hold_on_return = false;
         self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
         self.apply_action(DesktopAction::QueuePaused(false), cx);
-        if self.vm.sending {
+        if self.vm.sending || self.vm.compacting {
             self.cancel_turn(cx);
             return;
         }
@@ -189,11 +188,11 @@ impl Workspace {
 
     /// Aborts the in-flight turn; its terminal event resets the sending state.
     ///
-    /// A plain stop (Stop or Escape) holds the queue: the follow-ups stay
+    /// A plain stop holds the queue: the follow-ups stay
     /// listed, and steers the turn hands back join them, but nothing is sent
     /// until the user sends or recalls them.
     pub(crate) fn on_cancel_chat(&mut self, cx: &mut Context<Self>) {
-        if !self.vm.sending {
+        if !self.vm.sending && !self.vm.compacting {
             return;
         }
         self.apply_action(DesktopAction::QueuePaused(true), cx);
@@ -205,7 +204,7 @@ impl Workspace {
         let Some(conversation) = self.vm.active.as_ref() else {
             return;
         };
-        if !self.vm.sending {
+        if !self.vm.sending && !self.vm.compacting {
             return;
         }
         self.dispatch(

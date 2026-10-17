@@ -5,7 +5,7 @@ use gpui_kit::{Context, Window};
 use mycode_app::{BranchId, BridgeCommand, SessionId};
 
 use super::failed_start;
-use crate::view_model::DesktopAction;
+use crate::view_model::{DesktopAction, EntryKind};
 use crate::workspace::Workspace;
 
 impl Workspace {
@@ -19,6 +19,20 @@ impl Workspace {
                 crate::i18n::t(
                     "Wait for the current turn to finish, then /compact.",
                     "等当前这一轮结束再 /compact。",
+                )
+                .to_owned(),
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        }
+        // A second `/compact` would cancel the one already running on the
+        // bridge and retry against a stale head — one at a time.
+        if self.vm.compacting {
+            self.push_toast(
+                crate::i18n::t(
+                    "Compaction is already running; wait for it to finish.",
+                    "正在压缩中，等它结束。",
                 )
                 .to_owned(),
                 crate::workspace::ToastKind::Info,
@@ -66,11 +80,9 @@ impl Workspace {
             return;
         };
         let provider_id = provider.id.clone();
-        self.push_toast(
-            crate::i18n::t("Compacting context…", "正在压缩上下文…").to_owned(),
-            crate::workspace::ToastKind::Info,
-            cx,
-        );
+        // Locks the composer and shows the waiting card until
+        // `CompactFinished` lands (success, failure, or a cancelled run).
+        self.apply_action(DesktopAction::CompactArmed, cx);
         self.dispatch(
             BridgeCommand::CompactSession {
                 session,
@@ -148,6 +160,21 @@ impl Workspace {
         let effective =
             crate::view_model::effective_reasoning_level(&advertised, reasoning.as_deref());
         let reasoning = (effective != "default").then_some(effective);
+        // The session's very first send also gets a generated sidebar title:
+        // an out-of-band request summarizes that message while the real turn
+        // proceeds. `older_before` absent means every event is resident, so
+        // one user message truly is the first send.
+        if let Some((first_session, seed)) = self.first_user_message_seed() {
+            self.dispatch(
+                BridgeCommand::SummarizeTitle {
+                    session: first_session,
+                    provider_id: provider.id.clone(),
+                    model: model.clone(),
+                    seed,
+                },
+                cx,
+            );
+        }
         // The bridge rebuilds the turn history from the ledger's typed
         // events, so tool_use/tool_result pairing survives replay.
         self.dispatch(
@@ -160,6 +187,26 @@ impl Workspace {
             },
             cx,
         );
+    }
+
+    /// Session id plus the first user message's text when the open
+    /// conversation holds exactly one committed user message and no older
+    /// history. `None` for every later send.
+    fn first_user_message_seed(&self) -> Option<(SessionId, String)> {
+        let active = self.vm.active.as_ref()?;
+        if active.older_before.is_some() {
+            return None;
+        }
+        let mut users = active
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::UserMessage);
+        let first = users.next()?;
+        if users.next().is_some() {
+            return None;
+        }
+        let session = SessionId::parse(&active.session_id)?;
+        Some((session, first.text.to_string()))
     }
 
     pub(in crate::workspace) fn send(
@@ -193,7 +240,11 @@ impl Workspace {
     /// Does not wipe the composer: the user may already be typing another
     /// message behind the queue.
     pub(in crate::workspace) fn pump_queued_send(&mut self, cx: &mut Context<Self>) {
-        if self.vm.sending || self.vm.queued.is_empty() || self.vm.queue_paused {
+        if self.vm.sending
+            || self.vm.compacting
+            || self.vm.queued.is_empty()
+            || self.vm.queue_paused
+        {
             return;
         }
         let draft = self.vm.queued[0].clone();

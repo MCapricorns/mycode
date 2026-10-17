@@ -12,7 +12,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::widgets::{dropdown_field, labeled_field, row_header, settings_card};
+use super::widgets::{DropdownSpec, dropdown_field, labeled_field, row_header, settings_card};
 use crate::i18n::t;
 use crate::ui::skin;
 use crate::view_model::DesktopAction;
@@ -501,12 +501,14 @@ fn render_custom_provider_page(
     .map(|kind| (*kind).to_owned())
     .collect::<Vec<_>>();
     let kind_field = dropdown_field(
-        "provider-kind",
-        t("Protocol", "协议"),
-        Some(t("Wire protocol the endpoint speaks.", "端点采用的协议。")),
-        &kind,
-        &kind_options,
-        kind_menu_open,
+        DropdownSpec {
+            id: "provider-kind",
+            label: t("Protocol", "协议"),
+            description: Some(t("Wire protocol the endpoint speaks.", "端点采用的协议。")),
+            current: &kind,
+            options: &kind_options,
+            open: kind_menu_open,
+        },
         |workspace, open, cx| workspace.on_toggle_provider_kind_menu(open, cx),
         |workspace, kind, cx| workspace.on_select_provider_kind(kind, cx),
         cx,

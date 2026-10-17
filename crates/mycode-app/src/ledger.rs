@@ -64,15 +64,11 @@ pub(crate) async fn inspect_summaries(
         });
     }
     for snapshot in listing.sessions {
-        let Some(root) = snapshot
-            .branches
-            .iter()
-            .min_by(|left, right| left.branch_id.cmp(&right.branch_id))
-        else {
+        if snapshot.branches.is_empty() {
             continue;
-        };
+        }
         summaries.push(SessionSummary {
-            root_branch_id: root.branch_id.as_str().to_owned(),
+            root_branch_id: snapshot.current_branch.as_str().to_owned(),
             updated_at_ms: snapshot.updated_at_ms,
             event_count: snapshot.event_count,
             session_id: snapshot.session_id.as_str().to_owned(),
@@ -121,12 +117,13 @@ pub(crate) async fn open_conversation(
     session: &SessionId,
 ) -> Result<ActiveConversation, SessionError> {
     let opened = service.open(session).await?;
-    let root = opened
-        .heads
-        .iter()
-        .min_by_key(|head| head.branch_id.as_str())
-        .ok_or(SessionError::NotFound)?;
-    read_branch(service, session, &root.branch_id, &root.head).await
+    read_branch(
+        service,
+        session,
+        &opened.current.branch_id,
+        &opened.current.head,
+    )
+    .await
 }
 
 /// Reads the tail of one branch into display entries.

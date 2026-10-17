@@ -96,6 +96,10 @@ pub(crate) struct ListedSession {
     pub(crate) event_count: u64,
     /// The row was stored but failed validation.
     pub(crate) corrupt: bool,
+    /// The branch the session's writes last went to — the branch a reopen
+    /// should show. Written on every append and branch commit; still the
+    /// original root for sessions that predates the pointer.
+    pub(crate) root_branch: String,
     /// Branches in branch-id order.
     pub(crate) branches: Vec<ListedBranch>,
 }
@@ -119,6 +123,16 @@ pub(crate) struct StoredEvent {
     pub(crate) record_len: u64,
     /// Payload lives in `payloads/` rather than on the line.
     pub(crate) external: bool,
+}
+
+/// One session restored from the index: every branch plus the pointer the
+/// session's durable writes last went to.
+#[derive(Clone, Debug)]
+pub(crate) struct LoadedSession {
+    /// Branches in branch-id order.
+    pub(crate) branches: Vec<StoredBranch>,
+    /// `sessions.root_branch` when it names a loaded branch.
+    pub(crate) current: Option<BranchId>,
 }
 
 /// One branch restored from the index.
@@ -404,13 +418,22 @@ impl SessionStore {
             ],
         )
         .map_err(|_| StoreError::Storage)?;
+        // `root_branch` tracks the branch that received the last durable
+        // write, so a reopen lands where the conversation actually is —
+        // not on the smallest branch id, which a rewind leaves stale.
         tx.execute(
             "UPDATE sessions
              SET event_count = event_count + 1,
                  updated_at = ?1,
-                 title = CASE WHEN title = '' AND ?2 <> '' THEN ?2 ELSE title END
+                 title = CASE WHEN title = '' AND ?2 <> '' THEN ?2 ELSE title END,
+                 root_branch = ?4
              WHERE id = ?3",
-            params![i64_from(now_ms()?)?, title, request.session.as_str()],
+            params![
+                i64_from(now_ms()?)?,
+                title,
+                request.session.as_str(),
+                request.branch.as_str()
+            ],
         )
         .map_err(|_| StoreError::Storage)?;
         tx.commit().map_err(|_| StoreError::Storage)?;
@@ -555,12 +578,14 @@ impl SessionStore {
                 .map_err(|_| StoreError::Storage)?;
             tx.execute(
                 "UPDATE sessions
-                 SET event_count = event_count + ?1, updated_at = ?2
+                 SET event_count = event_count + ?1, updated_at = ?2,
+                     root_branch = ?4
                  WHERE id = ?3",
                 params![
                     i64_from(new_count)?,
                     i64_from(now_ms()?)?,
-                    request.session.as_str()
+                    request.session.as_str(),
+                    request.new_branch.as_str()
                 ],
             )
             .map_err(|_| StoreError::Storage)?;
@@ -574,25 +599,26 @@ impl SessionStore {
     }
 
     /// Loads one session's offset index and drops torn JSONL tails.
-    pub(crate) fn load_session(
-        &self,
-        session: &SessionId,
-    ) -> Result<Vec<StoredBranch>, StoreError> {
+    /// The returned branch pointer names the branch the session's writes
+    /// last went to; `None` when the stored row does not resolve to a
+    /// loaded branch (callers fall back to the smallest id).
+    pub(crate) fn load_session(&self, session: &SessionId) -> Result<LoadedSession, StoreError> {
         let present = self.session_exists(session)?;
         if !present {
             return Err(StoreError::NotFound);
         }
-        let corrupt: i64 = self
+        let (corrupt, root_branch): (i64, String) = self
             .conn
             .query_row(
-                "SELECT corrupt FROM sessions WHERE id = ?1",
+                "SELECT corrupt, root_branch FROM sessions WHERE id = ?1",
                 params![session.as_str()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|_| StoreError::Storage)?;
         if corrupt != 0 {
             return Err(StoreError::Corrupt);
         }
+        let root_branch = BranchId::parse(&root_branch);
         let mut statement = self
             .conn
             .prepare(
@@ -640,7 +666,11 @@ impl SessionStore {
                 events,
             });
         }
-        Ok(branches)
+        // The pointer only counts when it names a loaded branch; a stale
+        // one falls back to the caller's smallest-id pick.
+        let current =
+            root_branch.filter(|root| branches.iter().any(|branch| &branch.branch_id == root));
+        Ok(LoadedSession { branches, current })
     }
 
     /// Reads one digest-checked payload by its index offset.
@@ -826,7 +856,7 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
     }
     let mut sessions = conn
         .prepare(
-            "SELECT id, title, updated_at, event_count, corrupt
+            "SELECT id, title, updated_at, root_branch, event_count, corrupt
              FROM sessions
              ORDER BY updated_at DESC, id ASC",
         )
@@ -837,14 +867,16 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
+                row.get::<_, String>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })
         .map_err(|_| StoreError::Storage)?;
     let mut listed = Vec::new();
     for row in session_rows {
-        let (id, title, updated_at, event_count, corrupt) = row.map_err(|_| StoreError::Storage)?;
+        let (id, title, updated_at, root_branch, event_count, corrupt) =
+            row.map_err(|_| StoreError::Storage)?;
         let updated_at_ms = u64::try_from(updated_at).ok().filter(|&ms| ms > 0);
         let (event_count, corrupt) = match u64::try_from(event_count) {
             Ok(count) => (count, corrupt != 0),
@@ -856,6 +888,7 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
             updated_at_ms,
             event_count,
             corrupt,
+            root_branch,
             branches: Vec::new(),
         });
     }
@@ -903,6 +936,32 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
         }
     }
     Ok(listed)
+}
+
+/// Replaces one session's sidebar title. A missing database or row is
+/// success; the actor never caches titles, so this write cannot desync it.
+pub(crate) fn rename_indexed_session(
+    home: &HomeLayout,
+    session_id: &str,
+    title: &str,
+) -> Result<(), StoreError> {
+    if SessionId::parse(session_id).is_none() {
+        return Ok(());
+    }
+    let path = database_path(home).map_err(|_| StoreError::Unavailable)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let conn = open_connection(&path, false)?;
+    if !table_ready(&conn)? {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE sessions SET title = ?1 WHERE id = ?2",
+        params![title, session_id],
+    )
+    .map_err(|_| StoreError::Storage)?;
+    Ok(())
 }
 
 /// Removes one session's index rows. A missing database is success.

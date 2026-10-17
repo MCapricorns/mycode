@@ -414,7 +414,6 @@ impl BridgeAgentHost {
             let has_worktree = worktree.is_some();
             let home = self.home.clone();
             let cwd = self.cwd.clone();
-            let session_id = self.session_id.clone();
             let role = role.clone();
             let registry = Arc::clone(&registry);
             let run_dir = run_dir.clone();
@@ -424,7 +423,7 @@ impl BridgeAgentHost {
                 let mut extra_roots = if has_worktree {
                     Vec::new()
                 } else {
-                    crate::turn::workspace_extra_roots(&home, &session_id, &cwd)
+                    crate::turn::workspace_extra_roots(&home, &cwd)
                 };
                 extra_roots.sort();
                 let system = subagent_system_prompt(

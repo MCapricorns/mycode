@@ -118,11 +118,15 @@ impl Workspace {
     pub(crate) fn on_check_update(&mut self, manual: bool, cx: &mut Context<Self>) {
         // Checking replaces the update state with `Checking`. Doing that
         // mid-download makes the next offer look idle and starts a second
-        // download of the same package.
+        // download of the same package. A manual click instead opens the
+        // dialog, which already renders the in-flight or staged state.
         if matches!(
             self.vm.update,
             UpdateState::Downloading { .. } | UpdateState::Ready { .. }
         ) {
+            if manual {
+                self.apply_action(DesktopAction::UpdateDialogToggled(true), cx);
+            }
             return;
         }
         if manual {
@@ -285,15 +289,36 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         while self.ask_inputs.len() <= index {
+            let input_index = self.ask_inputs.len();
             let input = cx.new(|cx| {
                 InputState::new(window, cx).placeholder(crate::i18n::t(
                     "Type a free-text answer",
                     "输入自由文本回答",
                 ))
             });
-            cx.subscribe_in(&input, window, |workspace, _, event, _, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    workspace.on_submit_free_ask(cx);
+            cx.subscribe_in(&input, window, move |workspace, input, event, _, cx| {
+                match event {
+                    InputEvent::PressEnter { .. } => workspace.on_ask_next(cx),
+                    // Typing and a picked choice are mutually exclusive;
+                    // the same way a pick clears the text, fresh text
+                    // clears the pick.
+                    InputEvent::Change
+                        if !input.read(cx).value().trim().is_empty()
+                            && workspace
+                                .vm
+                                .ask_answers
+                                .get(input_index)
+                                .is_some_and(|answer| !answer.is_empty()) =>
+                    {
+                        workspace.apply_action(
+                            DesktopAction::AskChoicePicked {
+                                index: input_index,
+                                answer: String::new(),
+                            },
+                            cx,
+                        );
+                    }
+                    _ => {}
                 }
             })
             .detach();
@@ -327,6 +352,47 @@ impl Workspace {
         }
     }
 
+    /// Advances the ask card one question. A required question needs a pick
+    /// or free text before it moves on; the last question submits.
+    pub(crate) fn on_ask_next(&mut self, cx: &mut Context<Self>) {
+        let Some(rows) = self.vm.pending_ask.clone() else {
+            return;
+        };
+        let index = self.ask_index.min(rows.len().saturating_sub(1));
+        let answered = self
+            .vm
+            .ask_answers
+            .get(index)
+            .is_some_and(|answer| !answer.trim().is_empty())
+            || self
+                .ask_inputs
+                .get(index)
+                .is_some_and(|input| !input.read(cx).value().trim().is_empty());
+        if !answered && !rows[index].optional {
+            self.push_toast(
+                crate::i18n::t("Answer this question first", "先回答这一题").to_owned(),
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        }
+        if index + 1 < rows.len() {
+            self.ask_index = index + 1;
+            cx.notify();
+        } else {
+            self.on_submit_free_ask(cx);
+        }
+    }
+
+    /// Steps the ask card back one question; earlier answers stay put.
+    pub(crate) fn on_ask_back(&mut self, cx: &mut Context<Self>) {
+        if self.vm.pending_ask.is_none() {
+            return;
+        }
+        self.ask_index = self.ask_index.saturating_sub(1);
+        cx.notify();
+    }
+
     pub(crate) fn on_submit_free_ask(&mut self, cx: &mut Context<Self>) {
         let Some(rows) = self.vm.pending_ask.as_ref() else {
             return;
@@ -338,16 +404,21 @@ impl Workspace {
             .collect::<Vec<_>>();
         match collect_ask_answers(rows, &self.vm.ask_answers, &free_text) {
             Ok(answers) => self.on_answer_ask(answers, cx),
-            Err(index) => self.push_toast(
-                format!(
-                    "{} {} {}",
-                    crate::i18n::t("Answer question", "请先回答第"),
-                    index + 1,
-                    crate::i18n::t("before submitting.", "题后再提交"),
-                ),
-                crate::workspace::ToastKind::Info,
-                cx,
-            ),
+            Err(index) => {
+                // Jump back to the first required question still missing an
+                // answer instead of losing the whole form's progress.
+                self.ask_index = index;
+                self.push_toast(
+                    format!(
+                        "{} {} {}",
+                        crate::i18n::t("Answer question", "请先回答第"),
+                        index + 1,
+                        crate::i18n::t("before submitting.", "题后再提交"),
+                    ),
+                    crate::workspace::ToastKind::Info,
+                    cx,
+                );
+            }
         }
     }
 
@@ -356,6 +427,7 @@ impl Workspace {
             return;
         };
         self.ask_inputs.clear();
+        self.ask_index = 0;
         self.apply_action(DesktopAction::AskAnswered, cx);
         self.dispatch(BridgeCommand::AskDismiss { session_id }, cx);
     }
@@ -366,6 +438,7 @@ impl Workspace {
         };
         // Each question owns its text; the next request starts with empty fields.
         self.ask_inputs.clear();
+        self.ask_index = 0;
         self.apply_action(DesktopAction::AskAnswered, cx);
         self.dispatch(
             BridgeCommand::AskAnswer {
@@ -381,7 +454,9 @@ impl Workspace {
     /// Escape dismisses the topmost layer: the command palette, then the
     /// folder picker, then other floating UI. In settings it steps back one
     /// page, matching that page's back button, and leaves for the desk only
-    /// from a top-level section.
+    /// from a top-level section. Two things never answer it: the update
+    /// prompt (it waits for an explicit button) and a running turn (Stop is
+    /// the only cancel).
     pub(crate) fn on_escape(&mut self, window: &mut gpui_kit::Window, cx: &mut Context<Self>) {
         if self.vm.command_palette_open {
             self.set_command_palette(false, window, cx);
@@ -420,8 +495,9 @@ impl Workspace {
             }
             return;
         }
+        // The install prompt ignores Escape: a stray keypress must neither
+        // drop the staged update nor reach the turn running behind it.
         if self.vm.update_dialog_open {
-            self.apply_action(DesktopAction::UpdateDialogToggled(false), cx);
             return;
         }
         if self.vm.subagent_window.is_some() {
@@ -464,15 +540,13 @@ impl Workspace {
             self.on_dismiss_ask(cx);
             dismissed = true;
         }
-        // A queue is the nearest layer: Escape takes it back into the
-        // composer for editing. The next Escape stops the turn, and a stop
-        // never sends what is queued.
-        if !dismissed && !self.vm.queued.is_empty() {
+        // While a turn runs, Escape does nothing at all: it neither stops
+        // the turn (the Stop button is the only way out) nor recalls the
+        // queue, so a stray keypress cannot touch running work. A held
+        // queue — after Stop, when nothing is sending — still recalls into
+        // the composer for editing.
+        if !dismissed && !self.vm.sending && !self.vm.compacting && !self.vm.queued.is_empty() {
             self.on_recall_queued(None, window, cx);
-            dismissed = true;
-        }
-        if !dismissed && self.vm.sending {
-            self.on_cancel_chat(cx);
         }
     }
 

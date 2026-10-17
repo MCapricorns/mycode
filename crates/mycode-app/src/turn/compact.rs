@@ -45,7 +45,9 @@ pub(crate) fn manual_compact(
             &control.cancel,
         )
         .await;
-        let (ok, message) = match outcome {
+        // The card write advances the durable head; report it so the UI's
+        // next `expected_head` does not collide with its own summary row.
+        let (ok, message, head) = match outcome {
             Ok((message, Some(summary))) => {
                 match show_compaction_summary(
                     &state,
@@ -58,24 +60,32 @@ pub(crate) fn manual_compact(
                 )
                 .await
                 {
-                    Ok(()) => (true, message),
-                    Err(error) => (false, error),
+                    Ok(head) => (true, message, head),
+                    Err(error) => (false, error, head_spelling(&expected_head)),
                 }
             }
-            Ok((message, None)) if message == "empty" || message == "covered" => (true, message),
-            Ok((_, None)) => (false, "compaction finished without a summary".to_owned()),
-            Err(message) => (false, message),
+            Ok((message, None)) if message == "empty" || message == "covered" => {
+                (true, message, head_spelling(&expected_head))
+            }
+            Ok((_, None)) => (
+                false,
+                "compaction finished without a summary".to_owned(),
+                head_spelling(&expected_head),
+            ),
+            Err(message) => (false, message, head_spelling(&expected_head)),
         };
         let _ = events.send(BridgeEvent::CompactFinished {
             session_id,
             message,
             ok,
+            head,
         });
     }
 }
 
 /// Writes the summary into the ledger as a transcript row and tells the UI.
 /// The model history skips this row; the checkpoint still builds the request.
+/// Returns the head spelling after the card commit.
 async fn show_compaction_summary(
     state: &CoreState,
     events: &crate::BridgeEventTx,
@@ -84,10 +94,11 @@ async fn show_compaction_summary(
     expected_head: &HeadStamp,
     session_id: &str,
     summary: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let head = open_branch_head(state, session, branch, expected_head).await?;
     let writer = HeadWriter::new(state.service.clone(), session.clone(), branch.clone(), head);
-    publish_visible_summary(&writer, events, session_id, summary, true).await
+    publish_visible_summary(&writer, events, session_id, summary, true).await?;
+    Ok(writer.head().await)
 }
 
 /// Summaries produced inside `before_request`. The hook must not append a

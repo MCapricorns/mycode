@@ -96,7 +96,7 @@ pub(crate) fn chat_turn(
 /// Loads the provider row and its stored key for one turn. Saves dispatched
 /// alongside the turn run as concurrent tasks, so a just-added provider may
 /// not have reached the disk yet — the read settles with a short retry.
-async fn turn_credentials(
+pub(crate) async fn turn_credentials(
     home: &HomeLayout,
     provider_id: &str,
 ) -> Result<(AppSettings, ProviderSettings, String), String> {
@@ -256,11 +256,10 @@ async fn run_chat_turn_on(
     let (role_catalog, extra_roots) = {
         let home = home.clone();
         let cwd = cwd.clone();
-        let session_id = session_id.to_owned();
         tokio::task::spawn_blocking(move || {
             (
                 mycode_config::discover_roles(&home, Some(&cwd)),
-                workspace_extra_roots(&home, &session_id, &cwd),
+                workspace_extra_roots(&home, &cwd),
             )
         })
         .await

@@ -76,7 +76,15 @@ pub fn toggle_ask_choice(answer: &str, choice: &str, multiple: bool) -> String {
             .join("\n");
     }
     if !multiple {
-        return choice.to_owned();
+        // A re-click on the picked choice clears the answer — the row is a
+        // checkbox, not a radio button the user cannot un-pick. The answer
+        // only counts as that pick when it IS the choice; a stale multi-line
+        // answer gets replaced like any other.
+        return if answer.trim_end_matches('\r') == choice {
+            String::new()
+        } else {
+            choice.to_owned()
+        };
     }
     let mut items: Vec<&str> = answer
         .split('\n')
@@ -576,6 +584,9 @@ mod tests {
         assert!(!ask_choice_selected(&picked, "green"));
         picked = toggle_ask_choice(&picked, "red", false);
         assert_eq!(picked, "red");
+        // A second click on the same single-select pick un-picks it.
+        picked = toggle_ask_choice(&picked, "red", false);
+        assert_eq!(picked, "");
 
         let rendered = render_ask_answers(&[AskAnswer {
             question: "which".into(),

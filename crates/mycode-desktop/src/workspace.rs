@@ -177,8 +177,8 @@ pub struct Workspace {
     /// no input holds focus.
     focus_handle: gpui_kit::FocusHandle,
     composer: Entity<TextareaState>,
-    /// Whether the composer placeholder is the in-turn steer hint.
-    pub(crate) composer_steer: bool,
+    /// Whether the composer placeholder is the in-turn queue hint.
+    pub(crate) composer_busy: bool,
     proxy_input: Option<Entity<InputState>>,
     /// The proxy field shows the stored URL on its next render.
     proxy_sync_pending: bool,
@@ -225,6 +225,8 @@ pub struct Workspace {
     /// The next model-step render should clear and focus the search box.
     picker_focus_pending: bool,
     ask_inputs: Vec<Entity<InputState>>,
+    /// The question the ask card is showing; answers step one at a time.
+    pub(crate) ask_index: usize,
     /// Keyboard selection and scroll handles for the composer pickers.
     menu_navigation: menus::MenuNavigation,
     /// Invalidates asynchronous recall lookups when their conversation changes.
@@ -232,9 +234,6 @@ pub struct Workspace {
     pending_project: Option<String>,
     /// Session created to carry [`crate::view_model::WorkspaceState::pending_welcome_send`].
     welcome_send_session: Option<String>,
-    /// Rename editor for the active workspace; lives only while the
-    /// workspace menu is in rename mode.
-    pub(crate) workspace_rename_input: Option<Entity<InputState>>,
     /// Session whose conversation-open is in flight. Conversation replies
     /// for anything else are dropped, so a parked desk stays parked.
     pending_open: Option<String>,
@@ -271,6 +270,9 @@ pub struct Workspace {
     repaired_configs: Vec<String>,
     /// A single toast for [`Self::repaired_configs`] is already scheduled.
     repair_toast_armed: bool,
+    /// The once-a-second repaint that keeps live subagent runtimes counting
+    /// between progress events. `true` while that timer loop exists.
+    job_tick_running: bool,
     toasts: Vec<Toast>,
     next_toast_id: u64,
     /// In-app folder browser. `None` while the picker is closed.
@@ -341,7 +343,9 @@ impl Workspace {
             TextareaState::new(window, cx)
                 .placeholder(crate::ui::composer_placeholder(false))
                 .soft_wrap(true)
-                .auto_grow(1, 10)
+                // Three fixed rows: pasting a wall of text scrolls inside
+                // the field instead of growing the composer card.
+                .auto_grow(3, 3)
                 .submit_on_enter(true)
         });
         let focus_handle = cx.focus_handle();
@@ -352,7 +356,7 @@ impl Workspace {
             bridge,
             focus_handle,
             composer,
-            composer_steer: false,
+            composer_busy: false,
             proxy_input: None,
             proxy_sync_pending: false,
             provider_form: None,
@@ -379,11 +383,12 @@ impl Workspace {
             agent_roles_stale: false,
             picker_focus_pending: false,
             ask_inputs: Vec::new(),
+            ask_index: 0,
             menu_navigation: menus::MenuNavigation::default(),
             recall_generation: 0,
             pending_project: None,
             welcome_send_session: None,
-            workspace_rename_input: None,
+
             pending_open: None,
             pending_composer_prefill: None,
             settings_save_epoch: 0,
@@ -399,6 +404,7 @@ impl Workspace {
             manual_update_check: false,
             repaired_configs: Vec::new(),
             repair_toast_armed: false,
+            job_tick_running: false,
             toasts: Vec::new(),
             next_toast_id: 0,
             project_picker: None,
@@ -566,7 +572,10 @@ impl Workspace {
                 self.apply_action(DesktopAction::ComposerChanged(text), cx);
                 self.refresh_mention_search(cx);
             }
-            InputEvent::PressEnter { shift: false, .. } => {
+            InputEvent::PressEnter {
+                shift: false,
+                secondary,
+            } => {
                 let draft = self.composer.read(cx).value().to_string();
                 if draft != self.vm.composer_draft {
                     self.apply_action(DesktopAction::ComposerChanged(draft), cx);
@@ -574,7 +583,13 @@ impl Workspace {
                 if self.accept_open_mention(window, cx) {
                     return;
                 }
-                self.on_send(window, cx);
+                // Ctrl+Enter on a busy turn interrupts and sends right away;
+                // a plain Enter queues the follow-up inside `on_send`.
+                if *secondary && (self.vm.sending || self.vm.compacting) {
+                    self.on_interrupt_send(window, cx);
+                } else {
+                    self.on_send(window, cx);
+                }
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
         }
@@ -614,6 +629,7 @@ impl Workspace {
             )
         {
             self.ask_inputs.clear();
+            self.ask_index = 0;
         }
         let previous_error = self.vm.error.clone();
         let previous_project = self.vm.project_dir.clone();
@@ -685,7 +701,40 @@ impl Workspace {
                 self.on_save_settings(cx);
             }
         }
+        self.ensure_job_tick(cx);
         cx.notify();
+    }
+
+    /// While any subagent runs, repaint once a second so each elapsed-time
+    /// line keeps counting between progress events. The loop retires itself
+    /// as soon as the last job leaves.
+    fn ensure_job_tick(&mut self, cx: &mut Context<Self>) {
+        if self.job_tick_running || self.vm.live_jobs.is_empty() {
+            return;
+        }
+        self.job_tick_running = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                // Clear the flag in the same update that finds an empty
+                // list, so a job starting right after still gets a tick.
+                let running = this
+                    .update(cx, |workspace, cx| {
+                        if workspace.vm.live_jobs.is_empty() {
+                            workspace.job_tick_running = false;
+                            false
+                        } else {
+                            cx.notify();
+                            true
+                        }
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// The sidebar title filter, created with the workspace.

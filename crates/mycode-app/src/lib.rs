@@ -50,6 +50,7 @@ mod search;
 mod settings_io;
 mod state;
 mod subagent;
+mod title;
 mod tool_hosts;
 mod turn;
 mod updates;
@@ -154,6 +155,21 @@ pub enum BridgeCommand {
         provider_id: String,
         /// Model id that writes the summary.
         model: String,
+    },
+    /// Generate the session's sidebar title from its first user message.
+    ///
+    /// Runs as a background task beside the real turn; the finished title is
+    /// stored in the index and arrives as [`BridgeEvent::SessionTitle`]. The
+    /// reply only acknowledges that the task was accepted.
+    SummarizeTitle {
+        /// Target session.
+        session: SessionId,
+        /// Provider identity from settings.
+        provider_id: String,
+        /// Model id offered by that provider.
+        model: String,
+        /// The first user message the title should describe.
+        seed: String,
     },
     /// Inject text into the running turn without cancelling it or its subagents.
     ///
@@ -438,6 +454,14 @@ pub enum BridgeEvent {
         /// Transcript row for the steered user message.
         entry: ConversationEntry,
     },
+    /// A generated session title was stored in the index. Frontend session
+    /// rows patch their `title` field in place.
+    SessionTitle {
+        /// Session identity spelling.
+        session_id: String,
+        /// The stored title.
+        title: String,
+    },
     /// The provider catalog changed after a cloud refresh.
     CatalogUpdated {
         /// Provider count in the refreshed catalog.
@@ -493,6 +517,11 @@ pub enum BridgeEvent {
         message: String,
         /// Whether the command completed without a provider error.
         ok: bool,
+        /// The durable head after the attempt: a written summary card
+        /// advanced it, every other outcome leaves it at the expected
+        /// head. The UI adopts it so the next `/compact` does not trip
+        /// the moved-head check on its own summary row.
+        head: String,
     },
 }
 
@@ -595,6 +624,9 @@ pub enum BridgeReply {
     UpdateDownloaded(Result<PreparedUpdate, String>),
     /// The device flow started; the user code is on screen.
     CopilotSignInStarted(Result<CopilotSignInInfo, String>),
+    /// Title-summarization acceptance; the result rides the event channel as
+    /// [`BridgeEvent::SessionTitle`].
+    TitleSummarized(Result<(), String>),
 }
 
 /// What the user needs to complete a device-flow sign-in.

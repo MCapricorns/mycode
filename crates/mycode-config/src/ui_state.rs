@@ -24,15 +24,15 @@ const UI_STATE_FORMAT_VERSION: u32 = 1;
 const UI_STATE_KIND: &str = "mycode-ui-state";
 /// Maximum remembered recent projects.
 pub const MAX_RECENT_PROJECTS: usize = 16;
-/// Maximum folders in one workspace.
+/// Maximum workspace folders in the flat list.
 pub const MAX_WORKSPACE_ROOTS: usize = 8;
 /// Maximum remembered session-to-project bindings.
 pub const MAX_SESSION_PROJECTS: usize = 256;
-/// Maximum workspaces kept in the UI state.
+/// Maximum legacy workspaces still decoded from old documents. Their
+/// folders migrate into `workspace_roots`; the count only bounds salvage
+/// and the merged-list validation cap.
 pub const MAX_WORKSPACES: usize = 16;
-/// Maximum characters in one workspace name.
-pub const MAX_WORKSPACE_NAME_CHARS: usize = 64;
-/// Maximum remembered session-to-workspace bindings.
+/// Maximum legacy session-to-workspace bindings decoded on repair.
 pub const MAX_SESSION_WORKSPACES: usize = 512;
 /// Maximum length of one remembered session id.
 const MAX_SESSION_ID_BYTES: usize = 64;
@@ -59,10 +59,9 @@ pub struct WindowSize {
     pub height: u32,
 }
 
-/// One named workspace: a set of folders plus the chats grouped under it.
-///
-/// Sessions reference a workspace by `id`; `folders` are absolute paths the
-/// chat tools can use.
+/// One retired named workspace: kept only so documents written before the
+/// flat `workspace_roots` list still decode. `folders` migrate into
+/// `workspace_roots` on read.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct WorkspaceDef {
@@ -72,18 +71,6 @@ pub struct WorkspaceDef {
     pub name: String,
     /// Member folders, most recently added first.
     pub folders: Vec<String>,
-}
-
-impl WorkspaceDef {
-    /// Mints a workspace with a fresh identity around `name` and `folders`.
-    #[must_use]
-    pub fn generate(name: &str, folders: Vec<String>) -> Self {
-        Self {
-            id: format!("ws1-{}", uuid::Uuid::new_v4().simple()),
-            name: name.to_owned(),
-            folders,
-        }
-    }
 }
 
 /// One provider and model the picker can jump to without scrolling.
@@ -210,16 +197,19 @@ pub struct UiState {
     /// Session-to-project bindings (session id, project path), most recent
     /// first. Advisory: restores each chat's tool working directory.
     pub session_projects: Vec<(String, String)>,
-    /// Named workspaces. Sessions are grouped under them by
-    /// `session_workspaces`.
-    #[serde(default)]
+    /// Workspace folders, most recently added first. Sessions bind one of
+    /// them as their working directory; the others stay reachable extras.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<String>,
+    /// Retired named workspaces. Still decoded so older documents load;
+    /// their folders fold into `workspace_roots` on read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<WorkspaceDef>,
-    /// Session-to-workspace bindings (session id, workspace id), most recent
-    /// first. A session missing here belongs to the first workspace.
-    #[serde(default)]
+    /// Retired session-to-workspace bindings; ignored on read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub session_workspaces: Vec<(String, String)>,
-    /// The workspace the sidebar shows.
-    #[serde(default)]
+    /// Retired active-workspace id; ignored on read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_workspace: Option<String>,
     /// Models picked from the composer or the default-model control, newest
     /// first. Advisory: a missing provider is dropped at render time.
@@ -259,6 +249,7 @@ impl Default for UiState {
             selected_provider: None,
             selected_model: None,
             session_projects: Vec::new(),
+            workspace_roots: Vec::new(),
             workspaces: Vec::new(),
             session_workspaces: Vec::new(),
             active_workspace: None,
@@ -296,6 +287,25 @@ impl UiState {
             .retain(|pin| pin.session_id != session_id);
     }
 
+    /// Folds retired workspace folders into `workspace_roots`, then clears
+    /// the retired fields. Sessions no longer group under named workspaces;
+    /// every folder they listed stays reachable.
+    fn merge_legacy_workspaces(&mut self) {
+        let mut roots = std::mem::take(&mut self.workspace_roots);
+        for workspace in std::mem::take(&mut self.workspaces) {
+            for folder in workspace.folders {
+                if valid_project_path(&folder).is_some()
+                    && !roots.iter().any(|root| same_project_path(root, &folder))
+                {
+                    roots.push(folder);
+                }
+            }
+        }
+        self.workspace_roots = roots;
+        self.session_workspaces.clear();
+        self.active_workspace = None;
+    }
+
     /// Validates the document.
     ///
     /// # Errors
@@ -325,51 +335,13 @@ impl UiState {
                 return Err(invalid());
             }
         }
-        if self.workspaces.len() > MAX_WORKSPACES {
+        // A merged legacy file can name more folders than one workspace
+        // used to hold; cap the flat list at the old aggregate bound.
+        if self.workspace_roots.len() > MAX_WORKSPACES * MAX_WORKSPACE_ROOTS {
             return Err(invalid());
         }
-        for (index, workspace) in self.workspaces.iter().enumerate() {
-            if !valid_workspace_id(&workspace.id)
-                || self.workspaces[..index]
-                    .iter()
-                    .any(|earlier| earlier.id == workspace.id)
-            {
-                return Err(invalid());
-            }
-            let name = workspace.name.trim();
-            if name.is_empty()
-                || workspace.name.chars().count() > MAX_WORKSPACE_NAME_CHARS
-                || workspace.name.chars().any(char::is_control)
-            {
-                return Err(invalid());
-            }
-            if workspace.folders.len() > MAX_WORKSPACE_ROOTS {
-                return Err(invalid());
-            }
-            for folder in &workspace.folders {
-                if valid_project_path(folder).is_none() {
-                    return Err(invalid());
-                }
-            }
-        }
-        if let Some(active) = &self.active_workspace
-            && !self
-                .workspaces
-                .iter()
-                .any(|workspace| &workspace.id == active)
-        {
-            return Err(invalid());
-        }
-        if self.session_workspaces.len() > MAX_SESSION_WORKSPACES {
-            return Err(invalid());
-        }
-        for (session_id, workspace_id) in &self.session_workspaces {
-            if !valid_session_id(session_id)
-                || !self
-                    .workspaces
-                    .iter()
-                    .any(|workspace| &workspace.id == workspace_id)
-            {
+        for root in &self.workspace_roots {
+            if valid_project_path(root).is_none() {
                 return Err(invalid());
             }
         }
@@ -435,14 +407,6 @@ fn validate_pins(pins: &[ModelPin], cap: usize) -> Result<(), ConfigError> {
 fn valid_pin_part(value: &str) -> bool {
     let len = value.chars().count();
     (1..=MAX_MODEL_PIN_CHARS).contains(&len) && !value.chars().any(char::is_control)
-}
-
-fn valid_workspace_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_SESSION_ID_BYTES
-        && value.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        })
 }
 
 fn valid_project_path(value: &str) -> Option<String> {
@@ -578,8 +542,9 @@ fn decode_ui_state(bytes: &[u8]) -> Result<UiState, ConfigError> {
         return Err(ConfigError::authority_rejection()
             .with_detail("ui.json: formatVersion or kind does not match this build"));
     }
-    let state = serde_json::from_value::<UiState>(serde_json::Value::Object(envelope.fields))
+    let mut state = serde_json::from_value::<UiState>(serde_json::Value::Object(envelope.fields))
         .map_err(|_| rejection())?;
+    state.merge_legacy_workspaces();
     state.validate()?;
     Ok(state)
 }
@@ -633,6 +598,14 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
         }
         crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
             probe.session_projects.push(entry);
+        });
+    }
+    for root in crate::document_repair::salvage_list::<String>(object, "workspaceRoots") {
+        if state.workspace_roots.len() >= MAX_WORKSPACES * MAX_WORKSPACE_ROOTS {
+            break;
+        }
+        crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+            probe.workspace_roots.push(root);
         });
     }
     for workspace in crate::document_repair::salvage_list::<WorkspaceDef>(object, "workspaces") {
@@ -710,6 +683,7 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
             probe.window_size = value;
         }
     });
+    state.merge_legacy_workspaces();
     valid(&state).then_some(state)
 }
 

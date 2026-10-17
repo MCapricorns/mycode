@@ -29,7 +29,7 @@ impl SessionCore {
         let loaded = store.load_session(session).map_err(plan_error)?;
         let mut total = 0_u64;
         let mut branches = std::collections::BTreeMap::new();
-        for branch in loaded {
+        for branch in loaded.branches {
             let mut open_calls = HashSet::new();
             let mut seen_calls = HashSet::new();
             let mut seen_events = HashSet::new();
@@ -105,6 +105,7 @@ impl SessionCore {
         self.sessions.insert(
             session.clone(),
             SessionLedger {
+                current: loaded.current,
                 branches,
                 total_bytes: total,
                 ..SessionLedger::default()
