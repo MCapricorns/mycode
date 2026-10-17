@@ -1,11 +1,9 @@
-//! Workspace sidebar: a switcher, an action strip, folders, then sessions.
+//! Sidebar: an action strip, folders, then sessions.
 //!
-//! The header switches, creates, renames, and deletes workspaces. New task
-//! and session search stay in the strip under that header. Folders are their
-//! own block; sessions scroll in the block below them. Each workspace holds
-//! several folders, the way projects sit in a solution; sessions belong to
-//! exactly one workspace. The selected folder is the working directory; the
-//! others stay visible to tools as absolute paths.
+//! New task and session search stay in the strip on top. Folders are their
+//! own block; sessions scroll in the block below them. A session binds one
+//! folder as its working directory; the others stay visible to tools as
+//! absolute paths.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::{Input, InputState};
@@ -24,14 +22,13 @@ use crate::workspace::Workspace;
 
 mod menus;
 mod time;
-pub(super) use self::menus::{render_project_menu_layer, render_workspace_menu_layer};
+pub(super) use self::menus::render_project_menu_layer;
 use self::time::{DateGroup, classify_session_group, format_session_relative_time};
 
 /// Sidebar width. Compact rail with room for session titles and folder paths.
 pub(super) const WIDTH_PX: f32 = 248.;
 const WIDTH: gpui_kit::Pixels = px(WIDTH_PX);
-/// Workspace switcher row. The window-level menu sits just under this.
-const WORKSPACE_HEAD_H: f32 = 40.;
+
 /// Matches [`super::skin::glass_button`].
 const NEW_TASK_H: f32 = 34.;
 const SEARCH_H: f32 = 32.;
@@ -64,15 +61,7 @@ fn action_strip_h(has_folder: bool, has_search: bool) -> f32 {
 
 /// Project menu top, measured from the window origin (title bar included).
 fn project_menu_top(has_folder: bool, has_search: bool) -> gpui_kit::Pixels {
-    px(super::title_bar::BAR_HEIGHT
-        + WORKSPACE_HEAD_H
-        + action_strip_h(has_folder, has_search)
-        + SECTION_HEAD_H
-        + 4.)
-}
-
-fn workspace_menu_top() -> gpui_kit::Pixels {
-    px(super::title_bar::BAR_HEIGHT + WORKSPACE_HEAD_H)
+    px(super::title_bar::BAR_HEIGHT + action_strip_h(has_folder, has_search) + SECTION_HEAD_H + 4.)
 }
 
 pub(super) fn render_sidebar(
@@ -82,18 +71,10 @@ pub(super) fn render_sidebar(
     let roots = workspace.vm().workspace_roots.clone();
     let cwd = workspace.vm().project_dir.clone();
     let view = workspace.vm().view;
-    let active = crate::view_model::active_workspace(workspace.vm());
-    let active_id = active.map(|workspace| workspace.id.clone());
-    let active_name = active
-        .map(|workspace| workspace.name.clone())
-        .unwrap_or_else(|| t("Workspace", "工作区").to_owned());
-    // Sessions of the workspace the sidebar shows. A session without a
-    // membership predates named workspaces and belongs to the first one.
+    // Every session lists here; the project binding only decorates the row.
     // Rows are filtered by reference; only the shown ones are cloned.
     let filter = workspace.vm().session_filter.clone();
-    let rows = active_id.as_deref().map_or_else(Vec::new, |id| {
-        crate::view_model::workspace_session_rows(workspace.vm(), id)
-    });
+    let rows = crate::view_model::session_rows(workspace.vm());
     let session_count = rows.len();
     let filtering = !filter.trim().is_empty();
     let visible_sessions: Vec<(SessionSummary, Option<String>)> = rows
@@ -121,7 +102,6 @@ pub(super) fn render_sidebar(
         .flex_col()
         .flex_shrink_0()
         .bg(skin::glass_sidebar(theme))
-        .child(workspace_head(&active_name, cx))
         .child(action_strip(has_folder, filter_input, cx))
         .child(folders_section(cx, &roots, cwd.as_deref()))
         .child(sessions_section(
@@ -133,50 +113,6 @@ pub(super) fn render_sidebar(
             desk.faint,
         ))
         .child(render_sidebar_footer(workspace, view, cx))
-}
-
-/// The sidebar header: the active workspace's name and the switcher toggle.
-/// Session count lives on the sessions section, not in this row.
-fn workspace_head(name: &str, cx: &Context<Workspace>) -> impl IntoElement + use<> {
-    let theme = cx.theme();
-    div()
-        .id("workspace-switcher")
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .h(px(WORKSPACE_HEAD_H))
-        .px_3()
-        .flex_shrink_0()
-        .border_b_1()
-        .border_color(skin::glass_border(theme))
-        .cursor_pointer()
-        .hover(|this| this.bg(skin::frost_hover(theme)))
-        .on_click(cx.listener(|workspace, _, _, cx| {
-            let open = !workspace.vm().workspace_menu_open;
-            workspace.on_toggle_workspace_menu(open, cx);
-        }))
-        .child(
-            Icon::new(IconName::Folder)
-                .xsmall()
-                .flex_shrink_0()
-                .text_color(theme.muted_foreground),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_sm()
-                .truncate()
-                .text_color(theme.foreground)
-                .child(name.to_owned()),
-        )
-        .child(
-            Icon::new(IconName::ChevronDown)
-                .xsmall()
-                .flex_shrink_0()
-                .text_color(theme.muted_foreground),
-        )
 }
 
 /// New task and session search. A strip, not rows in the session list.
@@ -299,8 +235,8 @@ fn folders_section(
                             .whitespace_normal()
                             .text_color(theme.muted_foreground)
                             .child(t(
-                                "Add the folders this workspace should see. Sessions can use all of them.",
-                                "添加工作区要包含的目录。会话可以使用全部目录。",
+                                "Add the folders sessions can work in. Deleting a folder deletes its sessions.",
+                                "添加会话可以工作的目录。删除目录会同时删除其中的会话。",
                             )),
                     )
                 })
@@ -467,7 +403,7 @@ fn root_row(
         .on_click({
             let path = path.clone();
             cx.listener(move |workspace, _, _, cx| {
-                workspace.on_focus_workspace_folder(&path, cx);
+                workspace.on_open_workspace_folder(&path, cx);
             })
         })
         .when(is_cwd, |this| {

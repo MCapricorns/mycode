@@ -92,6 +92,9 @@ impl BranchLedger {
 /// One actor session projection.
 #[derive(Debug, Default)]
 pub(crate) struct SessionLedger {
+    /// The branch the session's writes last went to — the one `open`
+    /// reports as current. `None` until a durable pointer resolves.
+    pub(crate) current: Option<BranchId>,
     /// Branches keyed by identity (byte order).
     pub(crate) branches: BTreeMap<BranchId, BranchLedger>,
     /// Committed bytes across every branch log.

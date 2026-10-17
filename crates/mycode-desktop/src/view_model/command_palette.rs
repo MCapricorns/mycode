@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use super::chat::COMPOSER_COMMANDS;
 use super::models::{model_display_name, provider_display_name};
-use super::projects::{SessionBindingsIndex, project_label};
+use super::projects::{project_label, project_of_session};
 use super::settings::SettingsSection;
 use super::state::{MainView, WorkspaceState};
 use crate::i18n::t;
@@ -127,15 +127,11 @@ fn session_items(state: &WorkspaceState) -> Vec<PaletteItem> {
         keywords: words(&["new", "session", "task", "新建", "会话", "任务"]),
         checked: false,
     }];
-    let bindings = SessionBindingsIndex::new(state);
     for session in &state.sessions {
         if session.corrupt {
             continue;
         }
-        let project = bindings.project_of(&session.session_id);
-        let workspace_name = bindings
-            .workspace_of(&session.session_id)
-            .map(|desk| desk.name.as_str());
+        let project = project_of_session(&state.session_projects, &session.session_id);
         let title = if !session.title.trim().is_empty() {
             one_line(session.title.trim())
         } else if let Some(project) = project {
@@ -147,9 +143,6 @@ fn session_items(state: &WorkspaceState) -> Vec<PaletteItem> {
         keywords.push(session.session_id.clone());
         if let Some(project) = project {
             keywords.push(project_label(project));
-        }
-        if let Some(name) = workspace_name {
-            keywords.push(name.to_owned());
         }
         items.push(PaletteItem {
             command: PaletteCommand::OpenSession(session.session_id.clone()),

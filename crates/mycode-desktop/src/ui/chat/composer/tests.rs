@@ -1,4 +1,4 @@
-use super::{COMPOSER_PLACEHOLDER, STEER_PLACEHOLDER, cache_ring_svg, thinking_chip_label};
+use super::{COMPOSER_PLACEHOLDER, QUEUE_PLACEHOLDER, cache_ring_svg, thinking_chip_label};
 
 #[test]
 fn thinking_chip_labels_fit_the_chip() {
@@ -18,8 +18,8 @@ fn composer_placeholder_asks_the_agent_without_a_product_name() {
     assert!(!COMPOSER_PLACEHOLDER.1.contains("MYCode"));
     assert!(!COMPOSER_PLACEHOLDER.0.to_ascii_lowercase().contains("chat"));
     assert!(!COMPOSER_PLACEHOLDER.1.contains("对话"));
-    assert_eq!(STEER_PLACEHOLDER.0, "Steer without interrupting");
-    assert_eq!(STEER_PLACEHOLDER.1, "追加引导,不打断当前任务");
+    assert_eq!(QUEUE_PLACEHOLDER.0, "Queue; Ctrl+Enter interrupts");
+    assert_eq!(QUEUE_PLACEHOLDER.1, "回车排队 · Ctrl+Enter 打断发送");
 }
 
 #[test]

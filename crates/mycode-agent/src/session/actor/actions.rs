@@ -56,7 +56,10 @@ impl SessionCore {
         let created = self.store_mut()?.create_session(session, branch);
         drop(commit);
         created.map_err(map_store)?;
-        let mut ledger = SessionLedger::default();
+        let mut ledger = SessionLedger {
+            current: Some(branch.clone()),
+            ..SessionLedger::default()
+        };
         ledger.branches.insert(branch.clone(), BranchLedger::root());
         self.sessions.insert(session.clone(), ledger);
         self.touch_resident(session);
@@ -72,8 +75,23 @@ impl SessionCore {
         let Some(ledger) = self.sessions.get(session) else {
             return Err(OpFail::Domain(SessionError::NotFound));
         };
+        let heads = ledger.heads();
+        // `current` names the branch writes last went to; a stale or absent
+        // pointer falls back to the smallest id, the old pick.
+        let current = ledger
+            .current
+            .as_ref()
+            .and_then(|current| {
+                heads
+                    .iter()
+                    .find(|head| &head.branch_id == current)
+                    .cloned()
+            })
+            .or_else(|| heads.first().cloned())
+            .ok_or(OpFail::Domain(SessionError::NotFound))?;
         Ok(SessionPull::Complete(SessionResult::Opened(OpenedResult {
-            heads: ledger.heads(),
+            heads,
+            current,
         })))
     }
 
@@ -463,6 +481,7 @@ impl SessionCore {
         }
         branch_state.head = HeadStamp::Event(prepared.event_id.clone());
         branch_state.committed_bytes = location.offset.saturating_add(location.record_len);
+        ledger.current = Some(branch.clone());
         branch_state.events.push(EventMeta {
             digest: prepared.digest.clone(),
             bytes: prepared.payload.len() as u64,
@@ -592,6 +611,7 @@ impl SessionCore {
             .last()
             .map(|event| HeadStamp::Event(event.event_id.clone()))
             .unwrap_or(HeadStamp::Empty);
+        ledger.current = Some(new_branch.clone());
         ledger.branches.insert(
             new_branch,
             BranchLedger {

@@ -11,7 +11,7 @@ use gpui_kit::{
     TestSupportExt as _, Window, div, px,
 };
 
-use super::widgets::{choice_chips, dropdown_field, settings_card, settings_row};
+use super::widgets::{DropdownSpec, choice_chips, dropdown_field, settings_card, settings_row};
 use crate::i18n::t;
 use crate::workspace::Workspace;
 
@@ -66,15 +66,17 @@ pub(super) fn render_general_section(
     let theme_row = appearance_theme_field(&theme_id, cx);
     let font_row = font_size_field(&font_size, cx);
     let language_row = dropdown_field(
-        "language",
-        t("Language", "语言"),
-        Some(t(
-            "Interface language. English and Simplified Chinese are built in.",
-            "界面语言。内置英文与简体中文。",
-        )),
-        &language_label_now,
-        &language_options,
-        workspace.vm().language_menu_open,
+        DropdownSpec {
+            id: "language",
+            label: t("Language", "语言"),
+            description: Some(t(
+                "Interface language. English and Simplified Chinese are built in.",
+                "界面语言。内置英文与简体中文。",
+            )),
+            current: &language_label_now,
+            options: &language_options,
+            open: workspace.vm().language_menu_open,
+        },
         |workspace, open, cx| workspace.on_toggle_language_menu(open, cx),
         |workspace, label, cx| {
             if let Some(id) = language_id_for_label(label) {

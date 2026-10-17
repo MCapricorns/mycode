@@ -496,9 +496,9 @@ fn a_held_queue_stays_held_until_it_empties_or_a_new_session_opens() {
 fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
     let mut state = open(Vec::new(), None);
     state.composer_draft = "typing the next one".to_owned();
-    reduce(&mut state, DesktopAction::SteerSent("first".to_owned()));
-    reduce(&mut state, DesktopAction::SteerSent("second".to_owned()));
-    assert_eq!(state.pending_steers, ["first", "second"]);
+    // The desktop no longer sends steers; the core may still commit or
+    // return ones sent before an update, so the arms stay tested.
+    state.pending_steers = vec!["first".to_owned(), "second".to_owned()];
     let session_id = state.active.as_ref().expect("active").session_id.clone();
     reduce(
         &mut state,
@@ -519,7 +519,7 @@ fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
         state.composer_draft, "typing the next one",
         "a returned steer must not wipe the draft"
     );
-    reduce(&mut state, DesktopAction::SteerSent("late".to_owned()));
+    state.pending_steers.push("late".to_owned());
     reduce(
         &mut state,
         DesktopAction::ChatFailed {

@@ -24,7 +24,7 @@ pub(crate) use mycode_app::{
 
 pub(crate) use self::chat::{
     LiveJob, MentionGroup, MentionItem, MentionKind, capped_artisan_count, capped_artisan_status,
-    session_title_matches, subagent_cancellable, subagent_wait_status,
+    elapsed_label, session_title_matches, subagent_cancellable, subagent_wait_status,
 };
 pub(crate) use self::command_palette::{
     PaletteCatalog, PaletteCommand, PaletteGroup, PaletteGroupId, PaletteItem, palette_catalog,
@@ -35,9 +35,9 @@ pub(crate) use self::models::{
     rank_model_ids, selected_reasoning_level,
 };
 pub(crate) use self::projects::{
-    active_workspace, has_open_folder, newest_session_in_project, open_session_is_empty,
-    project_label, project_of_session, same_project_path, sessions_removed_with_root,
-    task_surface_visible, workspace_of_session, workspace_session_counts, workspace_session_rows,
+    has_open_folder, newest_session_in_project, open_session_is_empty, project_label,
+    project_of_session, same_project_path, session_rows, sessions_removed_with_root,
+    task_surface_visible,
 };
 pub(crate) use self::reduce::{
     ComposerSubmit, close_floating_menus, composer_submit, preferred_slash_index, preset_pick,

@@ -24,10 +24,16 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
     let rows: Vec<(String, String, String, bool)> = jobs
         .iter()
         .map(|job| {
+            // The step line already owns a row, so the running time rides
+            // on it instead of adding a third line per card.
             (
                 job.call_id.clone(),
                 job.title(),
-                job.step_label(),
+                format!(
+                    "{} · {}",
+                    job.step_label(),
+                    crate::view_model::elapsed_label(job.elapsed_ms())
+                ),
                 job.capped,
             )
         })
@@ -169,6 +175,9 @@ pub(crate) fn render_subagent_window(
         .find(|job| job.call_id == call_id)
         .cloned();
     let title = job.as_ref().map(crate::view_model::LiveJob::title);
+    let elapsed = job
+        .as_ref()
+        .map(|job| crate::view_model::elapsed_label(job.elapsed_ms()));
     let goal = job
         .as_ref()
         .map(|job| job.label.clone())
@@ -224,6 +233,16 @@ pub(crate) fn render_subagent_window(
                         .truncate()
                         .child(title.unwrap_or_else(|| t("Subagent", "子代理").to_owned())),
                 )
+                .when_some(elapsed, |row, elapsed| {
+                    row.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground)
+                            .child(elapsed),
+                    )
+                })
                 .child(
                     div()
                         .id("subagent-window-close")

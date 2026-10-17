@@ -9,6 +9,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -22,14 +23,17 @@ use crate::ui::{desk::Desk, ellipsis, project_label, skin};
 
 /// Resting composer hint. The product name does not belong in the field.
 const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
-const STEER_PLACEHOLDER: (&str, &str) = ("Steer without interrupting", "追加引导,不打断当前任务");
+const QUEUE_PLACEHOLDER: (&str, &str) = (
+    "Queue; Ctrl+Enter interrupts",
+    "回车排队 · Ctrl+Enter 打断发送",
+);
 
-/// Placeholder for the composer. While a turn is running, typed text steers
-/// the current task instead of starting another one.
+/// Placeholder for the composer. While a turn is running, typed text queues
+/// for after the turn; Ctrl+Enter interrupts and sends it right away.
 #[must_use]
 pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
     let (english, chinese) = if sending {
-        STEER_PLACEHOLDER
+        QUEUE_PLACEHOLDER
     } else {
         COMPOSER_PLACEHOLDER
     };
@@ -57,9 +61,22 @@ pub(super) fn render_composer(
     }
     let model_label: SharedString = model_button_label(workspace.vm()).into();
     let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();
+    // The chip truncates a long model name; the tooltip keeps the provider
+    // prefix and the full name visible.
+    let model_tooltip: Option<SharedString> =
+        workspace.vm().selected_provider.as_deref().map(|provider| {
+            format!(
+                "{} · {}",
+                crate::ui::model_picker::provider_display_name(workspace.vm(), provider),
+                model_label
+            )
+            .into()
+        });
     let show_thinking = selected_model_supports_reasoning(workspace.vm());
     let has_session = workspace.vm().active.is_some();
-    let sending = workspace.vm().sending;
+    // A manual compact is not a turn, but it locks the composer the same
+    // way: Enter queues, Ctrl+Enter cancels it and sends the draft.
+    let sending = workspace.vm().sending || workspace.vm().compacting;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
     let has_queue = !workspace.vm().queued.is_empty();
     let can_send = if has_session {
@@ -77,10 +94,10 @@ pub(super) fn render_composer(
     } else {
         None
     };
-    let steer_panel = (!workspace.vm().pending_steers.is_empty())
-        .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
-    if workspace.composer_steer != sending {
-        workspace.composer_steer = sending;
+    let compacting = workspace.vm().compacting;
+    let has_pending_ask = workspace.vm().pending_ask.is_some();
+    if workspace.composer_busy != sending {
+        workspace.composer_busy = sending;
         let placeholder = composer_placeholder(sending);
         composer.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
@@ -94,11 +111,14 @@ pub(super) fn render_composer(
         div()
             .relative()
             .child(composer_pill_chip(
-                "thinking",
-                None,
-                thinking_label.clone(),
-                workspace.vm().reasoning_menu_open,
-                px(116.),
+                ComposerChip {
+                    id: "thinking",
+                    icon: None,
+                    label: thinking_label.clone(),
+                    tooltip: None,
+                    open: workspace.vm().reasoning_menu_open,
+                    max_w: px(116.),
+                },
                 |workspace, _window, cx| {
                     let open = !workspace.vm().reasoning_menu_open;
                     workspace.on_toggle_reasoning_menu(open, cx);
@@ -116,11 +136,14 @@ pub(super) fn render_composer(
         div()
             .relative()
             .child(composer_pill_chip(
-                "model",
-                None,
-                model_label,
-                workspace.vm().model_menu_open,
-                px(176.),
+                ComposerChip {
+                    id: "model",
+                    icon: None,
+                    label: model_label,
+                    tooltip: model_tooltip,
+                    open: workspace.vm().model_menu_open,
+                    max_w: px(176.),
+                },
                 |workspace, window, cx| {
                     let open = !workspace.vm().model_menu_open;
                     workspace.on_toggle_model_menu(open, window, cx);
@@ -130,7 +153,6 @@ pub(super) fn render_composer(
             .children(menu)
             .into_any_element()
     };
-    let theme = cx.theme();
     let session_project = workspace
         .vm()
         .active
@@ -149,6 +171,43 @@ pub(super) fn render_composer(
         .map(project_label)
         .unwrap_or_else(|| t("Set folder", "选择目录").to_owned())
         .into();
+    // The chip shows the folder's basename; the tooltip carries the full path.
+    let project_tooltip: Option<SharedString> = session_project.as_deref().map(SharedString::from);
+    // The ask card docks right above the input like Devin's: a frosted
+    // panel, one question at a time. It is built here — before `theme`
+    // borrows `cx` — so the builder chain below stays borrow-free.
+    let ask_card = if has_pending_ask {
+        Some(super::ask::render_ask_card(workspace, window, cx))
+    } else {
+        None
+    };
+    let theme = cx.theme();
+    // The manual-compact wait lives where the queue and ask cards do: a
+    // frosted row above the composer, gone when `CompactFinished` lands.
+    let compact_card = compacting.then(|| {
+        skin::popover_panel("compact-card", theme)
+            .w_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .child(crate::ui::lamp(crate::ui::desk::Desk::of(theme).violet))
+            .child(
+                div()
+                    .text_sm()
+                    .child(t("Compacting context…", "正在压缩上下文…")),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t("Ctrl+Enter cancels", "Ctrl+Enter 取消")),
+            )
+            .into_any_element()
+    });
 
     div()
         .id("composer")
@@ -167,8 +226,10 @@ pub(super) fn render_composer(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .when_some(steer_panel, |this, steering| this.child(steering))
+                .gap_1()
                 .when_some(queue_panel, |this, queue| this.child(queue))
+                .when_some(compact_card, |this, card| this.child(card))
+                .when_some(ask_card, |this, card| this.child(card))
                 .child(
                     div()
                         .id("composer-card")
@@ -192,10 +253,12 @@ pub(super) fn render_composer(
                                 .flex_col()
                                 .w_full()
                                 .min_w_0()
-                                .h_auto()
-                                .min_h(px(24.))
                                 .text_sm()
                                 .child(
+                                    // The state pins the field at three
+                                    // rows (auto_grow 3..3): long drafts
+                                    // scroll inside instead of growing
+                                    // the composer card.
                                     Textarea::new(&composer)
                                         .appearance(false)
                                         .bordered(false)
@@ -233,11 +296,14 @@ pub(super) fn render_composer(
                                         .child(Icon::new(IconName::Plus).xsmall()),
                                 )
                                 .child(composer_pill_chip(
-                                    "project",
-                                    Some(IconName::Folder),
-                                    project_chip_label,
-                                    false,
-                                    px(148.),
+                                    ComposerChip {
+                                        id: "project",
+                                        icon: Some(IconName::Folder),
+                                        label: project_chip_label,
+                                        tooltip: project_tooltip,
+                                        open: false,
+                                        max_w: px(148.),
+                                    },
                                     |workspace, _window, cx| {
                                         workspace.on_open_chat_folder_picker(cx);
                                     },
@@ -250,8 +316,8 @@ pub(super) fn render_composer(
                                     this.child(composer_meter_chip(meter, theme))
                                 })
                                 .child(composer_palette_hint(cx))
-                                // While a turn runs the arrow stays: it steers
-                                // or queues the draft; the stop sits beside it.
+                                // While a turn runs the arrow stays: it
+                                // queues the draft; the stop sits beside it.
                                 .when(sending && has_draft, |this| {
                                     this.child(composer_send_button(cx))
                                 })
@@ -335,35 +401,42 @@ fn composer_send_button(cx: &Context<Workspace>) -> impl IntoElement {
         .child(Icon::new(IconName::ArrowUp).small())
 }
 
-/// Pill chip for composer controls (folder, model, thinking).
-fn composer_pill_chip(
-    id: &str,
-    leading_icon: Option<IconName>,
+/// One pill chip in the composer row (folder, model, thinking). The label
+/// truncates at `max_w`; when `tooltip` is set, hovering shows the
+/// untruncated text.
+struct ComposerChip {
+    id: &'static str,
+    icon: Option<IconName>,
     label: SharedString,
+    tooltip: Option<SharedString>,
     open: bool,
     max_w: gpui_kit::Pixels,
+}
+
+fn composer_pill_chip(
+    chip: ComposerChip,
     on_click: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let ink = if open {
+    let ink = if chip.open {
         theme.foreground
     } else {
         theme.muted_foreground
     };
     div()
-        .id(format!("composer-{id}-chip"))
+        .id(format!("composer-{}-chip", chip.id))
         .flex()
         .flex_row()
         .items_center()
         .flex_shrink_1()
         .gap(px(5.))
         .min_w_0()
-        .max_w(max_w)
+        .max_w(chip.max_w)
         .px(px(9.))
         .h(px(26.))
         .rounded(px(6.))
-        .when(open, |this| this.bg(theme.secondary_hover))
+        .when(chip.open, |this| this.bg(theme.secondary_hover))
         .text_xs()
         .cursor_pointer()
         .text_color(ink)
@@ -371,10 +444,13 @@ fn composer_pill_chip(
         .on_click(cx.listener(move |workspace, _, window, cx| {
             on_click(workspace, window, cx);
         }))
-        .when_some(leading_icon, |this, icon| {
+        .when_some(chip.tooltip, |this, text| {
+            this.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+        })
+        .when_some(chip.icon, |this, icon| {
             this.child(Icon::new(icon).xsmall().flex_shrink_0())
         })
-        .child(div().min_w_0().truncate().child(label))
+        .child(div().min_w_0().truncate().child(chip.label))
         .child(Icon::new(IconName::ChevronDown).xsmall().flex_shrink_0())
 }
 
@@ -400,60 +476,10 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
         .child(shortcut_label())
 }
 
-/// Steers already sent to the running turn. The model reads them at its next
-/// step; until the ledger commits one, this is the only place it shows.
-fn render_pending_steers(items: &[String], cx: &mut Context<Workspace>) -> impl IntoElement {
-    let theme = cx.theme();
-    let desk = Desk::of(theme);
-    div()
-        .id("composer-steers")
-        .flex()
-        .flex_col()
-        .gap_1()
-        .w_full()
-        .pb_1()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(crate::ui::lamp(theme.cyan))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                        .text_color(desk.faint)
-                        .child(format!("{}  {}", t("STEERING", "追加引导"), items.len())),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(t(
-                            "Sent; the model reads it at its next step",
-                            "已发送，模型在下一步读取",
-                        )),
-                ),
-        )
-        .children(items.iter().enumerate().map(|(index, text)| {
-            let preview: SharedString = ellipsis(text, 72).into();
-            div()
-                .id(SharedString::from(format!("steer-{index}")))
-                .min_w_0()
-                .h(px(22.))
-                .flex()
-                .items_center()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(div().min_w_0().flex_1().truncate().child(preview))
-        }))
-}
-
 /// Queued follow-ups with explicit actions: recall (back into the composer
 /// to edit or drop), interrupt and send, or send a queue a stop is holding.
+/// The strip rides in the same frosted panel as the diff card so it reads
+/// as a surface, not loose text floating above the composer.
 fn render_queued_followups(
     items: &[String],
     sending: bool,
@@ -468,10 +494,7 @@ fn render_queued_followups(
             "已停止，暂不发送。可发送，或撤回到输入框修改。",
         )
     } else {
-        t(
-            "Sends when this turn ends. Esc recalls it.",
-            "本轮结束后发送。按 Esc 撤回到输入框。",
-        )
+        t("Sends when this turn ends.", "本轮结束后依次发送。")
     };
     let many = items.len() > 1;
     let send_label = if !sending {
@@ -481,13 +504,13 @@ fn render_queued_followups(
     } else {
         t("Interrupt & send", "打断并发送")
     };
-    div()
-        .id("composer-queue")
+    skin::popover_panel("composer-queue", theme)
         .flex()
         .flex_col()
         .gap_1()
         .w_full()
-        .pb_1()
+        .px_3()
+        .py_2()
         .child(
             div()
                 .flex()
@@ -644,7 +667,7 @@ fn queue_action(
 }
 
 fn composer_meter_chip(
-    meter: crate::view_model::ContextMeterParts,
+    meter: ComposerMeter,
     theme: &gpui_kit::component::theme::Theme,
 ) -> impl IntoElement {
     div()
@@ -659,24 +682,23 @@ fn composer_meter_chip(
         .h(px(26.))
         .rounded(px(6.))
         .text_xs()
-        .when_some(meter.hit_percent, |row, percent| {
+        // The resting label is the window ratio alone; the cache figures
+        // and the turn's in/out ride the hover tooltip instead of crowding
+        // the chip row.
+        .when(!meter.detail.is_empty(), |this| {
+            let detail: SharedString = meter.detail.clone().into();
+            this.tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
+        })
+        .when_some(meter.parts.hit_percent, |row, percent| {
             row.child(cache_ring(percent, theme))
         })
-        .when(!meter.ratio.is_empty(), |row| {
+        .when(!meter.parts.ratio.is_empty(), |row| {
             row.child(
                 div()
                     .min_w_0()
                     .truncate()
                     .text_color(theme.muted_foreground)
-                    .child(meter.ratio.clone()),
-            )
-        })
-        .when(!meter.cache.is_empty(), |row| {
-            row.child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(theme.muted_foreground)
-                    .child(meter.cache.clone()),
+                    .child(meter.parts.ratio.clone()),
             )
         })
 }
@@ -724,12 +746,20 @@ fn hsla_hex(color: gpui_kit::Hsla) -> String {
     )
 }
 
+/// The chip keeps the prompt/window ratio on screen; `detail` carries the
+/// cache share, the cache-read count, and the turn's in/out for the hover
+/// tooltip.
+struct ComposerMeter {
+    parts: crate::view_model::ContextMeterParts,
+    detail: String,
+}
+
 /// Latest prompt size and cache read, shown on the chip row itself.
 ///
 /// The inspector has the same figures, but it stays closed until the title
-/// bar opens it. The cache piece does not shrink, so a non-zero hit stays
-/// readable when the model chip takes the row.
-fn context_meter(workspace: &Workspace) -> Option<crate::view_model::ContextMeterParts> {
+/// bar opens it. The chip reads `used / window` at rest; hovering fills in
+/// the cache and token detail.
+fn context_meter(workspace: &Workspace) -> Option<ComposerMeter> {
     let vm = workspace.vm();
     let used = vm.context_used;
     let cached = vm.context_cache;
@@ -747,7 +777,38 @@ fn context_meter(workspace: &Workspace) -> Option<crate::view_model::ContextMete
         t("cached", "缓存"),
         t("cache hit", "缓存命中"),
     );
-    (!parts.ratio.is_empty() || !parts.cache.is_empty()).then_some(parts)
+    let selected_model = vm.selected_model.clone();
+    let model_of = |turn: &crate::view_model::TurnStats| {
+        selected_model
+            .as_deref()
+            .is_none_or(|selected| turn.model == selected)
+    };
+    let turn = vm
+        .live_turn
+        .as_ref()
+        .filter(|turn| model_of(turn))
+        .or_else(|| vm.last_turn.as_ref().filter(|turn| model_of(turn)));
+    let mut detail: Vec<String> = Vec::new();
+    if !parts.hit.is_empty() {
+        detail.push(parts.hit.clone());
+    }
+    if !parts.cache.is_empty() {
+        detail.push(parts.cache.clone());
+    }
+    if let Some(turn) = turn {
+        detail.push(format!(
+            "{} {} · {} {}",
+            crate::ui::compact_count(turn.input),
+            t("in", "入"),
+            crate::ui::compact_count(turn.output),
+            t("out", "出")
+        ));
+    }
+    let meter = ComposerMeter {
+        detail: detail.join(" · "),
+        parts,
+    };
+    (!meter.parts.ratio.is_empty() || !meter.parts.cache.is_empty()).then_some(meter)
 }
 
 fn model_button_label(vm: &WorkspaceState) -> String {

@@ -57,6 +57,9 @@ pub(crate) struct LiveJob {
     pub log: Vec<String>,
     /// An artisan is waiting because every concurrency slot is taken.
     pub capped: bool,
+    /// Unix milliseconds when the job was first seen, for its running-time
+    /// line. `0` means unknown (defaulted state), not epoch.
+    pub started_ms: u64,
 }
 
 impl LiveJob {
@@ -86,6 +89,32 @@ impl LiveJob {
             "queued" => crate::i18n::t("queued", "排队中").to_owned(),
             other => other.to_owned(),
         }
+    }
+
+    /// Milliseconds this job has been running. A defaulted job (`started_ms`
+    /// of 0) reports no time rather than a duration since the epoch.
+    #[must_use]
+    pub(crate) fn elapsed_ms(&self) -> u64 {
+        if self.started_ms == 0 {
+            return 0;
+        }
+        crate::unix_now()
+            .as_millis()
+            .saturating_sub(u128::from(self.started_ms)) as u64
+    }
+}
+
+/// `42s`, `3m 05s`, `1h 02m` — compact enough for a status line tail.
+/// Seconds granularity is all a row that repaints once a second can show.
+#[must_use]
+pub(crate) fn elapsed_label(ms: u64) -> String {
+    let total = ms / 1_000;
+    if total < 60 {
+        format!("{total}s")
+    } else if total < 3_600 {
+        format!("{}m {:02}s", total / 60, total % 60)
+    } else {
+        format!("{}h {:02}m", total / 3_600, (total % 3_600) / 60)
     }
 }
 
@@ -196,6 +225,28 @@ mod tests {
             .title(),
             "artisan"
         );
+    }
+
+    #[test]
+    fn the_elapsed_label_stays_compact() {
+        assert_eq!(super::elapsed_label(0), "0s");
+        assert_eq!(super::elapsed_label(42_000), "42s");
+        assert_eq!(super::elapsed_label(59_999), "59s");
+        assert_eq!(super::elapsed_label(60_000), "1m 00s");
+        assert_eq!(super::elapsed_label(185_000), "3m 05s");
+        assert_eq!(super::elapsed_label(3_725_000), "1h 02m");
+    }
+
+    #[test]
+    fn a_defaulted_job_reports_no_elapsed_time() {
+        let job = super::LiveJob::default();
+        assert_eq!(job.elapsed_ms(), 0);
+        let job = super::LiveJob {
+            started_ms: crate::unix_now().as_millis() as u64 - 5_000,
+            ..super::LiveJob::default()
+        };
+        let elapsed = job.elapsed_ms();
+        assert!((4_900..=6_000).contains(&elapsed), "{elapsed}");
     }
 
     #[test]

@@ -8,30 +8,17 @@ use std::fmt::Write as _;
 /// Workspace folders other than the session cwd, plus the OS temp directory
 /// as an always-writable scratch root. Missing UI state still yields temp.
 ///
-/// The session's workspace contributes the folders; an unbound session
-/// resolves to the first workspace, matching the sidebar.
+/// The flat folder list contributes the extras; the session cwd drops out
+/// of it so the prompt never names the directory twice.
 pub(crate) fn workspace_extra_roots(
     home: &mycode_config::HomeLayout,
-    session_id: &str,
     cwd: &std::path::Path,
 ) -> Vec<std::path::PathBuf> {
     let mut roots = match mycode_config::read_ui_state(home) {
         Ok(state) => {
             let cwd_text = cwd.display().to_string();
-            let workspace = state
-                .session_workspaces
-                .iter()
-                .find(|(session, _)| session == session_id)
-                .and_then(|(_, workspace_id)| {
-                    state
-                        .workspaces
-                        .iter()
-                        .find(|workspace| workspace.id == *workspace_id)
-                })
-                .or_else(|| state.workspaces.first());
-            let mut roots: Vec<std::path::PathBuf> = workspace
-                .map(|workspace| workspace.folders.clone())
-                .unwrap_or_default()
+            let mut roots: Vec<std::path::PathBuf> = state
+                .workspace_roots
                 .into_iter()
                 .filter(|root| !mycode_config::same_project_path(root, &cwd_text))
                 .map(std::path::PathBuf::from)

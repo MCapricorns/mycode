@@ -1,6 +1,6 @@
 //! The chat column: conversation transcript and the integrated composer.
-//! The pending-ask question floats as a window-level overlay from `ui.rs`.
-//! Both fill the strip between the sidebar and Details.
+//! The pending-ask card docks inside the composer; both fill the strip
+//! between the sidebar and Details.
 mod ask;
 mod composer;
 mod markdown;
@@ -10,7 +10,6 @@ mod tools;
 mod transcript;
 mod welcome;
 
-pub(crate) use ask::render_ask_overlay;
 pub(crate) use composer::composer_placeholder;
 pub(crate) use menus::reasoning_row_label;
 pub(crate) use tools::parse_diff_hunk_header;
@@ -325,7 +324,7 @@ fn render_tool_run(
             .gap(px(2.))
             .child(tools::render_tool_batch(
                 &id,
-                tools::tool_batch_summary(&labels),
+                &labels,
                 open,
                 has_failed,
                 has_unfinished,
@@ -371,6 +370,17 @@ fn render_one_tool(
 ) -> gpui_kit::AnyElement {
     let expanded = workspace.tool_row_open(&tool.call.event_id);
     let cancellable = tool_cancellable(tool, workspace, turn_running);
+    // The running clock lives on the job; once it leaves `live_jobs` its
+    // final runtime was parked on the state.
+    let elapsed_ms = tool.call.call_id.as_deref().and_then(|call_id| {
+        workspace
+            .vm()
+            .live_jobs
+            .iter()
+            .find(|job| job.call_id == call_id)
+            .map(crate::view_model::LiveJob::elapsed_ms)
+            .or_else(|| workspace.vm().job_elapsed(call_id))
+    });
     div()
         .w_full()
         .min_w_0()
@@ -380,9 +390,12 @@ fn render_one_tool(
             tool.call,
             tool.result,
             turn_running,
-            expanded,
-            cancellable,
-            reduce_motion,
+            tools::ToolRowFlags {
+                expanded,
+                cancellable,
+                reduce_motion,
+                elapsed_ms,
+            },
             cx,
         ))
         .into_any_element()

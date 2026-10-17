@@ -136,9 +136,6 @@ pub fn render_root(
         .when(workspace.vm().project_menu_open, |this| {
             this.child(sidebar::render_project_menu_layer(workspace, cx))
         })
-        .when(workspace.vm().workspace_menu_open, |this| {
-            this.child(sidebar::render_workspace_menu_layer(workspace, cx))
-        })
         .when(
             workspace.vm().subagent_window.is_some()
                 && crate::view_model::task_surface_visible(workspace.vm()),
@@ -173,11 +170,6 @@ pub fn render_root(
                 inspector_span,
                 cx,
             ))
-        })
-        // The pending question is a session modal: it tops every panel so
-        // the answer path is never covered.
-        .when(workspace.vm().pending_ask.is_some(), |this| {
-            this.child(chat::render_ask_overlay(workspace, window, cx))
         })
         .when(workspace.vm().update_dialog_open, |this| {
             this.child(update_dialog::render_update_dialog(workspace, cx))

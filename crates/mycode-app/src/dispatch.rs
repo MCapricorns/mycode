@@ -170,6 +170,25 @@ pub(crate) fn run_core(
                         let _ = reply.send(BridgeReply::SubagentCancelled(outcome));
                     });
                 }
+                BridgeCommand::SummarizeTitle {
+                    session,
+                    provider_id,
+                    model,
+                    seed,
+                } => {
+                    // Title work is a background nicety beside the real turn:
+                    // no turn cancel, no ledger writes, no queue position.
+                    let task = crate::title::summarize_title(
+                        state.clone(),
+                        events.clone(),
+                        session,
+                        provider_id,
+                        model,
+                        seed,
+                    );
+                    tokio::spawn(task);
+                    let _ = with_reply.reply.send(BridgeReply::TitleSummarized(Ok(())));
+                }
                 BridgeCommand::Steer { session_id, text } => {
                     let inboxes = state.steer_inboxes.lock();
                     let outcome = match inboxes.get(&session_id) {
@@ -348,6 +367,7 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         BridgeCommand::CancelChat { .. } => BridgeReply::ChatCancelled(Err(message)),
         BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(message)),
         BridgeCommand::Steer { .. } => BridgeReply::Steered(Err(message)),
+        BridgeCommand::SummarizeTitle { .. } => BridgeReply::TitleSummarized(Err(message)),
     }
 }
 
@@ -498,6 +518,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::Steer { .. } => {
             BridgeReply::Steered(Err("steers are applied on the core thread".to_owned()))
+        }
+        BridgeCommand::SummarizeTitle { .. } => {
+            BridgeReply::TitleSummarized(Err("title summaries run as concurrent tasks".to_owned()))
         }
         BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(
             "subagent cancels run as concurrent tasks".to_owned(),

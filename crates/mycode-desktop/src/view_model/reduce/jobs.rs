@@ -130,6 +130,7 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         log: vec![step.clone()],
         step,
         capped: false,
+        started_ms: crate::unix_now().as_millis() as u64,
     });
 }
 
@@ -242,18 +243,52 @@ fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a 
 }
 
 /// Removes one finished job and any detail window still showing it.
-/// Returns whether a job left the list.
+/// Its clock stops here: the final runtime is stored for the transcript
+/// row that stays behind. Returns whether a job left the list.
 pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) -> bool {
-    let before = state.live_jobs.len();
-    if call_id.is_empty() {
-        state.live_jobs.pop();
+    let index = if call_id.is_empty() {
+        state.live_jobs.len().checked_sub(1)
     } else {
-        state.live_jobs.retain(|job| job.call_id != call_id);
-    }
-    if !call_id.is_empty() && state.subagent_window.as_deref() == Some(call_id) {
+        state
+            .live_jobs
+            .iter()
+            .position(|job| job.call_id == call_id)
+    };
+    let Some(index) = index else {
+        return false;
+    };
+    let job = state.live_jobs.remove(index);
+    record_job_elapsed(state, &job);
+    if state.subagent_window.as_deref() == Some(job.call_id.as_str()) && !job.call_id.is_empty() {
         state.subagent_window = None;
     }
-    state.live_jobs.len() < before
+    true
+}
+
+/// Stops every running clock at once: a turn end or a session switch
+/// retires all jobs, recording each final runtime for its transcript row.
+pub(super) fn retire_live_jobs(state: &mut WorkspaceState) {
+    let jobs = std::mem::take(&mut state.live_jobs);
+    for job in &jobs {
+        record_job_elapsed(state, job);
+    }
+    state.subagent_window = None;
+}
+
+/// Stores one job's final runtime keyed by its call id. Jobs that never
+/// claimed a call id leave nothing a transcript row could look up.
+fn record_job_elapsed(state: &mut WorkspaceState, job: &LiveJob) {
+    if job.call_id.is_empty() || job.started_ms == 0 {
+        return;
+    }
+    state.job_elapsed.retain(|(id, _)| id != &job.call_id);
+    state
+        .job_elapsed
+        .push((job.call_id.clone(), job.elapsed_ms()));
+    const MAX_JOB_ELAPSED: usize = 128;
+    if state.job_elapsed.len() > MAX_JOB_ELAPSED {
+        state.job_elapsed.remove(0);
+    }
 }
 
 #[cfg(test)]
@@ -310,6 +345,8 @@ mod tests {
                 target: "scout map tokio".to_owned(),
             },
         );
+        // The clock started with the call.
+        assert!(state.live_jobs[0].started_ms > 0);
         let waiting = status(&state);
         assert!(!waiting.contains("tokio"), "{waiting}");
         super::super::reduce(
@@ -333,6 +370,57 @@ mod tests {
         );
         assert!(state.live_jobs.is_empty());
         assert_ne!(status(&state), waiting);
+        // Its row keeps the runtime the job accumulated before it left.
+        assert!(state.job_elapsed("c1").is_some());
+    }
+
+    #[test]
+    fn a_finished_turn_parks_every_running_clock() {
+        use crate::view_model::{
+            ActiveConversation, ConversationEntry, DesktopAction, EntryKind, WorkspaceState,
+        };
+
+        let mut state = WorkspaceState {
+            sending: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+                running: false,
+                context_used: 0,
+                context_cache: 0,
+            }),
+            ..WorkspaceState::default()
+        };
+        for call_id in ["c1", "c2"] {
+            super::super::reduce(
+                &mut state,
+                DesktopAction::ToolStarted {
+                    call_id: call_id.to_owned(),
+                    name: "agent".to_owned(),
+                    target: "scout".to_owned(),
+                },
+            );
+        }
+        super::super::reduce(
+            &mut state,
+            DesktopAction::ChatDone {
+                head: "evt-2".to_owned(),
+                entry: ConversationEntry {
+                    event_id: "evt-2".to_owned(),
+                    kind: EntryKind::AssistantMessage,
+                    text: "done".into(),
+                    call_id: None,
+                    thinking: String::new(),
+                },
+            },
+        );
+        assert!(state.live_jobs.is_empty());
+        assert!(state.job_elapsed("c1").is_some());
+        assert!(state.job_elapsed("c2").is_some());
     }
 
     #[test]
@@ -435,5 +523,7 @@ mod tests {
             DesktopAction::SubagentDismissed("c1".to_owned()),
         );
         assert!(state.live_jobs.iter().all(|job| job.call_id != "c1"));
+        // The cancel `x` stops its clock immediately, before the result lands.
+        assert!(state.job_elapsed("c1").is_some());
     }
 }

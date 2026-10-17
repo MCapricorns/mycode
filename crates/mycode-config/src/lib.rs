@@ -87,10 +87,9 @@ pub use subagents::{
 #[doc(inline)]
 pub use ui_state::{
     MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES, MAX_WINDOW_EDGE_PX,
-    MAX_WORKSPACE_NAME_CHARS, MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin,
-    UiState, WindowSize, WorkspaceDef, is_valid_effort_token, read_ui_state,
-    read_ui_state_with_repair, remember_model, replace_ui_state, salvage_ui_state,
-    same_project_path, session_model, upsert_session_model,
+    MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UiState, WindowSize,
+    WorkspaceDef, is_valid_effort_token, read_ui_state, read_ui_state_with_repair, remember_model,
+    replace_ui_state, salvage_ui_state, same_project_path, session_model, upsert_session_model,
 };
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero

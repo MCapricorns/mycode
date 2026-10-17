@@ -157,23 +157,38 @@ fn unfinished_tool_calls_report_in_progress_only_while_a_turn_runs() {
     let mut theme = gpui_kit::component::theme::Theme::default();
     crate::ui::desk::apply(&mut theme);
     assert_eq!(tool_dot_color(false, true, true, &theme), theme.primary);
-    assert_eq!(
-        tool_dot_color(false, true, false, &theme),
-        theme.muted_foreground
-    );
+    // An unfinished call whose turn ended died with it: red, like a failure.
+    assert_eq!(tool_dot_color(false, true, false, &theme), theme.red);
     assert_eq!(tool_dot_color(true, false, false, &theme), theme.red);
     assert_eq!(tool_dot_color(false, false, false, &theme), theme.green);
 
     assert_eq!(
-        tool_call_parts("edit  src/lib.rs", true, false),
+        tool_call_parts("edit  src/lib.rs", true, false, false),
         ("Edited".to_owned(), "src/lib.rs".to_owned())
     );
     assert_eq!(
-        tool_call_parts("edit  src/lib.rs", false, true),
+        tool_call_parts("edit  src/lib.rs", false, true, false),
         ("Editing".to_owned(), "src/lib.rs".to_owned())
     );
     assert_eq!(
-        tool_call_parts("edit  src/lib.rs", false, false),
+        tool_call_parts("edit  src/lib.rs", false, false, false),
         ("Edited".to_owned(), "src/lib.rs".to_owned())
+    );
+
+    assert_eq!(
+        tool_call_parts("agent  scout", false, true, false).0,
+        "Running agent"
+    );
+    assert_eq!(
+        tool_call_parts("agent  scout", true, false, true).0,
+        "Agent failed"
+    );
+    assert_eq!(
+        tool_call_parts("agent  scout", false, false, false).0,
+        "Agent interrupted"
+    );
+    assert_eq!(
+        tool_call_parts("agent  scout", true, false, false).0,
+        "Ran agent"
     );
 }

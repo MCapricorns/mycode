@@ -1,8 +1,6 @@
 //! Project- and session-shaped workspace handlers: the mention/skill
 //! pipeline, message recall, session switching, and the project bindings
 //! that drive the sidebar grouping.
-use gpui_kit::AppContext as _;
-use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{Context, Window};
 use std::fmt::Write as _;
 
@@ -231,128 +229,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens or closes the sidebar workspace switcher.
-    pub(crate) fn on_toggle_workspace_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::WorkspaceMenuToggled(open), cx);
-    }
-
-    /// Creates a fresh named workspace and switches the sidebar to it.
-    pub(crate) fn on_create_workspace(&mut self, cx: &mut Context<Self>) {
-        // The serial skips names already taken so each new workspace is
-        // distinguishable in the switcher.
-        let mut serial = self.vm.workspaces.len() + 1;
-        let name = loop {
-            let candidate = format!("{} {serial}", crate::i18n::t("Workspace", "工作区"));
-            if self
-                .vm
-                .workspaces
-                .iter()
-                .all(|workspace| workspace.name != candidate)
-            {
-                break candidate;
-            }
-            serial += 1;
-        };
-        let workspace = mycode_config::WorkspaceDef::generate(&name, Vec::new());
-        self.apply_action(DesktopAction::WorkspaceCreated(workspace), cx);
-        self.apply_action(DesktopAction::WorkspaceMenuToggled(false), cx);
-        self.persist_ui_state(cx);
-    }
-
-    /// Switches the sidebar to another workspace.
-    pub(crate) fn on_switch_workspace(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::WorkspaceSwitched(id.to_owned()), cx);
-        self.apply_action(DesktopAction::WorkspaceMenuToggled(false), cx);
-        self.refresh_skills(cx);
-        self.persist_ui_state(cx);
-    }
-
-    /// Turns the workspace menu into a rename editor for the active
-    /// workspace.
-    pub(crate) fn on_start_workspace_rename(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(current) =
-            crate::view_model::active_workspace(&self.vm).map(|workspace| workspace.name.clone())
-        else {
-            return;
-        };
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
-        cx.subscribe_in(&input, window, |workspace, _, event, _, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                workspace.on_confirm_workspace_rename(cx);
-            }
-        })
-        .detach();
-        input.update(cx, |state, cx| state.focus(window, cx));
-        self.workspace_rename_input = Some(input);
-        self.apply_action(DesktopAction::WorkspaceRenameToggled(true), cx);
-    }
-
-    /// Commits the rename editor's text as the active workspace's name.
-    pub(crate) fn on_confirm_workspace_rename(&mut self, cx: &mut Context<Self>) {
-        let Some(input) = self.workspace_rename_input.take() else {
-            return;
-        };
-        let name = input.read(cx).value().trim().to_string();
-        if !name.is_empty() {
-            self.apply_action(DesktopAction::WorkspaceRenamed(name), cx);
-        }
-        self.apply_action(DesktopAction::WorkspaceRenameToggled(false), cx);
-        self.persist_ui_state(cx);
-    }
-
-    /// Abandons the rename editor.
-    pub(crate) fn on_cancel_workspace_rename(&mut self, cx: &mut Context<Self>) {
-        self.workspace_rename_input = None;
-        self.apply_action(DesktopAction::WorkspaceRenameToggled(false), cx);
-    }
-
-    /// Removes a workspace. Its sessions move to the first survivor.
-    pub(crate) fn on_delete_workspace(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.vm.workspaces.len() < 2 {
-            self.push_toast(
-                crate::i18n::t("Keep at least one workspace", "至少保留一个工作区"),
-                crate::workspace::ToastKind::Info,
-                cx,
-            );
-            return;
-        }
-        self.apply_action(DesktopAction::WorkspaceRemoved(id.to_owned()), cx);
-        self.apply_action(DesktopAction::WorkspaceMenuToggled(false), cx);
-        self.refresh_skills(cx);
-        self.persist_ui_state(cx);
-    }
-
-    /// Binds one session to the workspace the sidebar shows. New sessions
-    /// call this at creation; opening an unbound legacy session adopts the
-    /// workspace it was opened from.
-    pub(super) fn bind_session_workspace(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        let Some(workspace_id) =
-            crate::view_model::active_workspace(&self.vm).map(|workspace| workspace.id.clone())
-        else {
-            return;
-        };
-        if self
-            .vm
-            .session_workspaces
-            .iter()
-            .any(|(existing, _)| existing == session_id)
-        {
-            return;
-        }
-        self.apply_action(
-            DesktopAction::SessionWorkspaceBound {
-                session_id: session_id.to_owned(),
-                workspace_id,
-            },
-            cx,
-        );
-        self.persist_ui_state(cx);
-    }
-
     /// Adds one folder to the workspace without moving a chat that already
     /// has its own working directory. An unbound chat adopts the folder.
     pub(crate) fn on_add_workspace_root(&mut self, project: &str, cx: &mut Context<Self>) {
@@ -372,10 +248,8 @@ impl Workspace {
 
     /// Drops one linked folder, including the one the open chat works in.
     ///
-    /// The folder's chats go with it: sessions bound to the folder that the
-    /// shown workspace owns are deleted. A session bound to the same folder
-    /// from another workspace keeps its copy — that workspace may still list
-    /// the folder.
+    /// The folder's chats go with it: every session bound to that directory
+    /// is deleted. Sessions bound to other folders are untouched.
     pub(crate) fn on_remove_workspace_root(&mut self, project: &str, cx: &mut Context<Self>) {
         let chat_uses_it = self
             .vm
@@ -438,20 +312,12 @@ impl Workspace {
             return;
         };
         self.pending_open = Some(session_id.to_owned());
-        // Opening adopts an unbound (pre-workspace) session into the
-        // workspace it was opened from; bound sessions are untouched.
-        self.bind_session_workspace(session_id, cx);
         self.dispatch(BridgeCommand::OpenSession(parsed), cx);
     }
 
     /// Makes the sidebar and tool directory follow one session's project.
     /// Other chats keep their own bindings, so several projects can stay open.
     pub(super) fn follow_session_project(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        // The sidebar shows the workspace this chat belongs to.
-        if let Some(owner) = crate::view_model::workspace_of_session(&self.vm, session_id) {
-            let id = owner.id.clone();
-            self.apply_action(DesktopAction::WorkspaceSwitched(id), cx);
-        }
         let Some(project) = self
             .vm
             .session_projects
@@ -645,10 +511,16 @@ impl Workspace {
         self.open_isolated_project(project, cx);
     }
 
+    /// Opens the folder's newest chat, or starts a fresh one bound to it
+    /// when the folder has none. Clicking a folder never rebinds the open
+    /// chat — moving a chat's folder goes through the folder picker.
+    pub(crate) fn on_open_workspace_folder(&mut self, project: &str, cx: &mut Context<Self>) {
+        self.focus_project_chat(project, true, cx);
+    }
+
     /// Makes one workspace folder the open chat's working directory.
     ///
-    /// The folder stays a member of this workspace. The chat is not parked
-    /// and no second session is started.
+    /// The chat is not parked and no second session is started.
     pub(crate) fn on_focus_workspace_folder(&mut self, project: &str, cx: &mut Context<Self>) {
         let project = project.trim();
         if project.is_empty() {
@@ -818,9 +690,10 @@ impl Workspace {
             selected_reasoning: self.vm.default_reasoning.clone(),
             session_projects: self.vm.session_projects.clone(),
             session_models: self.vm.session_models.clone(),
-            workspaces: self.vm.workspaces.clone(),
-            session_workspaces: self.vm.session_workspaces.clone(),
-            active_workspace: self.vm.active_workspace.clone(),
+            workspace_roots: self.vm.workspace_roots.clone(),
+            workspaces: Vec::new(),
+            session_workspaces: Vec::new(),
+            active_workspace: None,
             recent_models: self.vm.recent_models.clone(),
             thinking_collapsed: self.vm.thinking_collapsed,
             inspector_open: self.vm.inspector_open,

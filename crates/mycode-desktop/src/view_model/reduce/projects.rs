@@ -1,15 +1,6 @@
-//! Project- and workspace-shaped transitions: session bindings, named
-//! workspaces, and the folder list of the workspace the sidebar shows.
+//! Project-shaped transitions: session bindings and the flat folder list.
 
 use crate::view_model::{WorkspaceState, same_project_path};
-
-/// Mirrors the active workspace's folders into `workspace_roots` so UI that
-/// predates named workspaces keeps one source of truth.
-pub(super) fn sync_workspace_roots(state: &mut WorkspaceState) {
-    state.workspace_roots = active_folders(state)
-        .map(|folders| folders.to_vec())
-        .unwrap_or_default();
-}
 
 pub(super) fn bind_session_project(
     state: &mut WorkspaceState,
@@ -25,22 +16,23 @@ pub(super) fn bind_session_project(
         .truncate(mycode_config::MAX_SESSION_PROJECTS);
 }
 
-/// The `WorkspaceRootAdded` transition: a folder was added to the workspace
-/// the sidebar shows.
+/// The `WorkspaceRootAdded` transition: a folder joined the list.
 pub(super) fn workspace_root_added(state: &mut WorkspaceState, project: String) {
     if project.trim().is_empty() {
         return;
     }
-    if let Some(workspace) = mutable_active_workspace(state) {
-        workspace
-            .folders
-            .retain(|existing| !same_project_path(existing, &project));
-        workspace.folders.insert(0, project.clone());
-        workspace
-            .folders
-            .truncate(mycode_config::MAX_WORKSPACE_ROOTS);
-    }
-    // Same spelling-fold comparison as the folders list above, so a dropped
+    state
+        .workspace_roots
+        .retain(|existing| !same_project_path(existing, &project));
+    // A list merged from legacy named workspaces may already exceed the
+    // cap; a full list only ever drops its oldest folder, never the merge.
+    let cap = state
+        .workspace_roots
+        .len()
+        .max(mycode_config::MAX_WORKSPACE_ROOTS);
+    state.workspace_roots.insert(0, project.clone());
+    state.workspace_roots.truncate(cap);
+    // Same spelling-fold comparison as the roots list above, so a dropped
     // path and a picked path do not leave two recents rows for one folder.
     state
         .recents
@@ -50,18 +42,13 @@ pub(super) fn workspace_root_added(state: &mut WorkspaceState, project: String) 
     if state.project_dir.is_none() {
         state.project_dir = Some(project);
     }
-    sync_workspace_roots(state);
 }
 
-/// The `WorkspaceRootRemoved` transition: a folder left the active
-/// workspace.
+/// The `WorkspaceRootRemoved` transition: a folder left the list.
 pub(super) fn workspace_root_removed(state: &mut WorkspaceState, project: String) {
-    if let Some(workspace) = mutable_active_workspace(state) {
-        workspace
-            .folders
-            .retain(|existing| !same_project_path(existing, &project));
-    }
-    sync_workspace_roots(state);
+    state
+        .workspace_roots
+        .retain(|existing| !same_project_path(existing, &project));
 }
 
 /// The `SessionProjectBound` transition: a session was bound to a project in
@@ -84,126 +71,11 @@ pub(super) fn session_project_bound(
     }
 }
 
-/// Sanitizes a workspace display name to fit `ui.json` validation.
-///
-/// Control characters are replaced with spaces before trimming so a pasted
-/// multiline name cannot brick later `ui.json` saves.
-pub(super) fn sanitize_workspace_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .collect();
-    cleaned
-        .trim()
-        .chars()
-        .take(mycode_config::MAX_WORKSPACE_NAME_CHARS)
-        .collect()
-}
-
-/// The `WorkspaceCreated` transition: a new workspace joined the list and
-/// becomes the one the sidebar shows.
-pub(super) fn workspace_created(
-    state: &mut WorkspaceState,
-    mut workspace: mycode_config::WorkspaceDef,
-) {
-    workspace.name = sanitize_workspace_name(&workspace.name);
-    if workspace.name.is_empty() {
-        return;
-    }
-    let id = workspace.id.clone();
-    // Only the identity is unique: display names may repeat, and replacing
-    // an existing workspace on a name collision would drop its folders.
-    state.workspaces.retain(|existing| existing.id != id);
-    state.workspaces.insert(0, workspace);
-    state.workspaces.truncate(mycode_config::MAX_WORKSPACES);
-    state.active_workspace = Some(id);
-    sync_workspace_roots(state);
-}
-
-/// The `WorkspaceSwitched` transition: the sidebar shows another workspace.
-pub(super) fn workspace_switched(state: &mut WorkspaceState, id: String) {
-    if state.workspaces.iter().any(|workspace| workspace.id == id) {
-        state.active_workspace = Some(id);
-    }
-    sync_workspace_roots(state);
-}
-
-/// The `WorkspaceRenamed` transition: the active workspace got a new name.
-pub(super) fn workspace_renamed(state: &mut WorkspaceState, name: String) {
-    let name = sanitize_workspace_name(&name);
-    if name.is_empty() {
-        return;
-    }
-    if let Some(workspace) = mutable_active_workspace(state) {
-        workspace.name = name;
-    }
-}
-
-/// The `WorkspaceRemoved` transition: a workspace is gone; its sessions move
-/// to the first survivor, which also becomes active. Removing the last
-/// workspace is a no-op — the sidebar always needs one.
-pub(super) fn workspace_removed(state: &mut WorkspaceState, id: String) {
-    if state.workspaces.len() < 2 {
-        return;
-    }
-    let Some(position) = state.workspaces.iter().position(|w| w.id == id) else {
-        return;
-    };
-    state.workspaces.remove(position);
-    let survivor = state
-        .workspaces
-        .first()
-        .map(|workspace| workspace.id.clone())
-        .expect("at least one workspace remains");
-    for (_, bound) in &mut state.session_workspaces {
-        if *bound == id {
-            *bound = survivor.clone();
-        }
-    }
-    if state.active_workspace.as_deref() == Some(id.as_str()) {
-        state.active_workspace = Some(survivor);
-    }
-    sync_workspace_roots(state);
-}
-
-/// The `SessionWorkspaceBound` transition: a session joined a workspace.
-pub(super) fn session_workspace_bound(
-    state: &mut WorkspaceState,
-    session_id: String,
-    workspace_id: String,
-) {
-    if !state
-        .workspaces
-        .iter()
-        .any(|workspace| workspace.id == workspace_id)
-    {
-        return;
-    }
-    state
-        .session_workspaces
-        .retain(|(existing, _)| existing != &session_id);
-    state
-        .session_workspaces
-        .insert(0, (session_id, workspace_id));
-    state
-        .session_workspaces
-        .truncate(mycode_config::MAX_SESSION_WORKSPACES);
-}
-
 /// The `SessionBindingsForgotten` transition: a session's durable data was
 /// deleted, so no map should remember it.
 pub(super) fn session_bindings_forgotten(state: &mut WorkspaceState, session_id: String) {
     state
         .session_projects
-        .retain(|(existing, _)| existing != &session_id);
-    state
-        .session_workspaces
         .retain(|(existing, _)| existing != &session_id);
     state
         .session_models
@@ -213,22 +85,29 @@ pub(super) fn session_bindings_forgotten(state: &mut WorkspaceState, session_id:
         .retain(|session| session.session_id != session_id);
 }
 
-/// The active workspace's folder list, shared by the mirror and the
-/// mutating transitions.
-fn active_folders(state: &WorkspaceState) -> Option<&[String]> {
-    crate::view_model::active_workspace(state).map(|workspace| workspace.folders.as_slice())
-}
+#[cfg(test)]
+mod tests {
+    use crate::view_model::WorkspaceState;
 
-/// The active workspace, mutably. `sync_workspace_roots` callers keep the
-/// mirror in step with whatever this hands out.
-fn mutable_active_workspace(
-    state: &mut WorkspaceState,
-) -> Option<&mut mycode_config::WorkspaceDef> {
-    let active = state.active_workspace.clone();
-    let index = state
-        .workspaces
-        .iter()
-        .position(|workspace| Some(workspace.id.as_str()) == active.as_deref())
-        .unwrap_or(0);
-    state.workspaces.get_mut(index)
+    #[test]
+    fn adding_a_folder_keeps_a_merged_legacy_list() {
+        let legacy: Vec<String> = (0..12).map(|index| format!("/legacy/{index}")).collect();
+        let mut state = WorkspaceState {
+            workspace_roots: legacy.clone(),
+            ..WorkspaceState::default()
+        };
+        super::workspace_root_added(&mut state, "/new".to_owned());
+        assert_eq!(state.workspace_roots.len(), legacy.len());
+        assert_eq!(state.workspace_roots[0], "/new");
+        assert_eq!(state.workspace_roots[1..], legacy[..legacy.len() - 1]);
+
+        let mut fresh = WorkspaceState::default();
+        for index in 0..mycode_config::MAX_WORKSPACE_ROOTS + 2 {
+            super::workspace_root_added(&mut fresh, format!("/f/{index}"));
+        }
+        assert_eq!(
+            fresh.workspace_roots.len(),
+            mycode_config::MAX_WORKSPACE_ROOTS
+        );
+    }
 }

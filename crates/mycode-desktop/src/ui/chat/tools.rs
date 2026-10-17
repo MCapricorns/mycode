@@ -16,6 +16,21 @@ use crate::ui::{desk::Desk, ellipsis};
 use crate::view_model::ConversationEntry;
 use crate::workspace::Workspace;
 
+/// Display-only flags for one tool row, kept separate from the call and
+/// result entries the row renders.
+pub(super) struct ToolRowFlags {
+    /// The result body is shown under the summary line.
+    pub expanded: bool,
+    /// The subagent behind an `agent` call is still running and can be
+    /// stopped from the row's `x`.
+    pub cancellable: bool,
+    /// The expanded body does not animate in.
+    pub reduce_motion: bool,
+    /// Runtime of an `agent` call, in milliseconds. `Some` while it runs
+    /// and after it finishes — the line ticks on the once-a-second repaint.
+    pub elapsed_ms: Option<u64>,
+}
+
 /// One tool row. Clicking it reveals the result without changing the call.
 ///
 /// A `cancellable` row is an `agent` call whose subagent still runs: it ends
@@ -25,24 +40,30 @@ pub(super) fn render_tool_block(
     call: &ConversationEntry,
     result: Option<&ConversationEntry>,
     turn_running: bool,
-    expanded: bool,
-    cancellable: bool,
-    reduce_motion: bool,
+    flags: ToolRowFlags,
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
     let desk = Desk::of(theme);
     let failed = result.is_some_and(|entry| entry.text.starts_with("failed:"));
     let unfinished = result.is_none();
+    // A call that failed or died with its turn paints red, the same alert
+    // an `agent` failure gets.
+    let alert = failed || (unfinished && !turn_running);
     let tool = tool_name(call.text.as_ref());
-    let (verb, target) = tool_call_parts(call.text.as_ref(), result.is_some(), turn_running);
+    let (verb, target) =
+        tool_call_parts(call.text.as_ref(), result.is_some(), turn_running, failed);
     let status = tool_status(tool, result, turn_running);
     let event_id = call.event_id.clone();
-    let live_call = cancellable
+    let elapsed = flags.elapsed_ms.map(crate::view_model::elapsed_label);
+    let live_call = flags
+        .cancellable
         .then(|| call.call_id.clone())
         .flatten()
         .unwrap_or_default();
-    let cancel = cancellable.then(|| subagent_cancel_button(&call.event_id, live_call.clone(), cx));
+    let cancel = flags
+        .cancellable
+        .then(|| subagent_cancel_button(&call.event_id, live_call.clone(), cx));
     let mut row = div()
         .id(format!("tool-{}", call.event_id))
         .flex()
@@ -95,11 +116,15 @@ pub(super) fn render_tool_block(
                                 .flex_shrink_0()
                                 .text_xs()
                                 .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                                .text_color(theme.foreground)
+                                .text_color(if alert {
+                                    theme.danger
+                                } else {
+                                    theme.foreground
+                                })
                                 .child(verb),
                         )
                         .when(!status.is_empty(), |label| {
-                            label.child(tool_status_node(&status, failed, theme))
+                            label.child(tool_status_node(&status, alert, theme))
                         })
                         .when(!target.is_empty(), |label| {
                             label.child(
@@ -117,7 +142,24 @@ pub(super) fn render_tool_block(
                 )
                 .children(cancel),
         );
-    if expanded && let Some(result) = result {
+    // A running time gets its own line under an `agent` row, so a ticking
+    // value never squeezes the target text.
+    if let Some(elapsed) = elapsed {
+        row = row.child(
+            div()
+                .w_full()
+                .px(skin::space(2))
+                .pb(px(3.))
+                .pl(px(46.))
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.muted_foreground)
+                .child(format!("{} {elapsed}", t("for", "耗时"))),
+        );
+    }
+    if flags.expanded
+        && let Some(result) = result
+    {
         let body = div()
             .w_full()
             .min_w_0()
@@ -126,7 +168,7 @@ pub(super) fn render_tool_block(
             .child(result_body(tool, result, theme, &desk));
         row = row.child(crate::ui::motion::fade_in(
             format!("tool-body-{}", call.event_id),
-            reduce_motion,
+            flags.reduce_motion,
             body,
         ));
     }
@@ -160,9 +202,13 @@ fn subagent_cancel_button(
 }
 
 /// One line for a run of tool calls. Clicking it reveals the cards.
+///
+/// The collapsed row carries the per-kind counts plus every call's target —
+/// "edited 3 · a.rs, b.rs, c.rs" — so a folded batch still names the files
+/// it touched. The target list truncates at the row edge.
 pub(super) fn render_tool_batch(
     id: &str,
-    summary: String,
+    labels: &[&str],
     open: bool,
     has_failed: bool,
     has_unfinished: bool,
@@ -172,6 +218,7 @@ pub(super) fn render_tool_batch(
     let theme = cx.theme();
     let batch_id = id.to_owned();
     let marker = if open { "▾" } else { "▸" };
+    let targets = tool_batch_targets(labels);
     div()
         .id(format!("tool-batch-{id}"))
         .flex()
@@ -189,16 +236,28 @@ pub(super) fn render_tool_batch(
             workspace.on_toggle_tool_batch(&batch_id, cx);
         }))
         .child(status_dot(has_failed, has_unfinished, turn_running, theme))
-        // Content-sized, so the disclosure marker sits beside the summary
-        // instead of at the far edge of the row.
+        // The count phrase is content-sized so the target list takes the
+        // remaining width and truncates instead of the other way around.
         .child(
             div()
-                .min_w_0()
-                .truncate()
+                .flex_shrink_0()
                 .text_xs()
                 .text_color(theme.foreground)
-                .child(summary),
+                .child(tool_batch_summary(labels)),
         )
+        .when(!targets.is_empty(), |row| {
+            row.child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .overflow_hidden()
+                    .truncate()
+                    .text_xs()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(theme.muted_foreground)
+                    .child(targets),
+            )
+        })
         .child(
             div()
                 .text_xs()
@@ -229,33 +288,29 @@ pub(super) fn tool_dot_color(
     turn_running: bool,
     theme: &Theme,
 ) -> gpui_kit::Hsla {
-    if failed {
+    if failed || (unfinished && !turn_running) {
+        // A call that died unfinished — failed outright or interrupted with
+        // its turn — gets the same red an error deserves.
         theme.red
     } else if unfinished {
-        if turn_running {
-            theme.primary
-        } else {
-            theme.muted_foreground
-        }
+        theme.primary
     } else {
         theme.green
     }
 }
 
 /// Splits a raw tool call label (`edit  src/lib.rs`) into a verb-first UI
-/// label and a monospace target argument.
+/// label and a monospace target argument. `failed` marks a call whose
+/// result carries the `failed:` marker.
 pub(super) fn tool_call_parts(
     label: &str,
     completed: bool,
     turn_running: bool,
+    failed: bool,
 ) -> (String, String) {
     let trimmed = label.trim();
     let tool = tool_name(trimmed);
-    let target = trimmed
-        .strip_prefix(tool)
-        .map(str::trim)
-        .unwrap_or("")
-        .to_owned();
+    let target = tool_label_target(trimmed).to_owned();
     let active = !completed && turn_running;
     let verb = match tool {
         "read" => {
@@ -317,6 +372,10 @@ pub(super) fn tool_call_parts(
         "agent" => {
             if active {
                 t("Running agent", "正在运行子代理")
+            } else if failed {
+                t("Agent failed", "子代理失败")
+            } else if !completed {
+                t("Agent interrupted", "子代理中断")
             } else {
                 t("Ran agent", "已运行子代理")
             }
@@ -486,6 +545,29 @@ pub(super) fn tool_name(label: &str) -> &str {
     label.split_whitespace().next().unwrap_or(label)
 }
 
+/// Everything after the tool name: the path, query, or command.
+fn tool_label_target(label: &str) -> &str {
+    label
+        .trim()
+        .strip_prefix(tool_name(label.trim()))
+        .map(str::trim)
+        .unwrap_or("")
+}
+
+/// Distinct call targets of one batch in first-seen order, joined for the
+/// collapsed row. Empty targets (a bare tool name) are skipped.
+#[must_use]
+pub(super) fn tool_batch_targets(labels: &[&str]) -> String {
+    let mut targets: Vec<&str> = Vec::new();
+    for label in labels {
+        let target = tool_label_target(label);
+        if !target.is_empty() && !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    targets.join(" · ")
+}
+
 fn diff_added_line(line: &str) -> bool {
     (line.starts_with("++ ") || line.starts_with("+ ")) && !line.starts_with("+++")
 }
@@ -533,7 +615,7 @@ fn diff_line_text(line: &str) -> String {
     }
 }
 
-fn tool_status_node(status: &str, failed: bool, theme: &Theme) -> gpui_kit::AnyElement {
+fn tool_status_node(status: &str, alert: bool, theme: &Theme) -> gpui_kit::AnyElement {
     if let Some((added, removed)) = diff_counts(status) {
         return div()
             .flex()
@@ -560,7 +642,7 @@ fn tool_status_node(status: &str, failed: bool, theme: &Theme) -> gpui_kit::AnyE
         .max_w(px(220.))
         .truncate()
         .text_xs()
-        .text_color(if failed {
+        .text_color(if alert {
             crate::ui::desk::diff_ink(theme, false)
         } else {
             theme.muted_foreground

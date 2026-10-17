@@ -24,16 +24,17 @@ pub(crate) use self::models::{
 
 pub(crate) use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
 use self::composer::{parse_mention, slash_items};
-use self::jobs::{drop_live_job, refresh_subagent_status, tool_progress, tool_started};
+use self::jobs::{
+    drop_live_job, refresh_subagent_status, retire_live_jobs, tool_progress, tool_started,
+};
 use self::models::{
     active_preset_changed, apply_session_model, assign_fresh_session_model, ensure_model_selection,
     model_selected, provider_selected, remember_active_session_model, remember_session_model,
     restore_live_reasoning,
 };
 use self::projects::{
-    bind_session_project, session_bindings_forgotten, session_project_bound,
-    session_workspace_bound, sync_workspace_roots, workspace_created, workspace_removed,
-    workspace_renamed, workspace_root_added, workspace_root_removed, workspace_switched,
+    bind_session_project, session_bindings_forgotten, session_project_bound, workspace_root_added,
+    workspace_root_removed,
 };
 use self::settings::{edit_settings, mark_settings_dirty};
 use self::streaming::{append_streaming, set_streaming_status};
@@ -75,12 +76,15 @@ fn queue_message(state: &mut WorkspaceState, text: String) {
 /// ever be cleared once another conversation takes the screen.
 fn reset_turn_view(state: &mut WorkspaceState) {
     state.sending = false;
+    state.compacting = false;
     state.pending_summary = None;
     state.queued.clear();
     state.queue_paused = false;
     state.pending_steers.clear();
-    state.live_jobs.clear();
-    state.subagent_window = None;
+    retire_live_jobs(state);
+    // The conversation leaving the screen takes its runtime bookkeeping
+    // with it; the restored transcript has no clocks to show.
+    state.job_elapsed.clear();
     state.changes_panel_open = false;
     state.pending_ask = None;
     state.ask_answers.clear();
@@ -89,8 +93,8 @@ fn reset_turn_view(state: &mut WorkspaceState) {
 
 /// Closes the turn on screen after it committed or failed.
 fn end_turn(state: &mut WorkspaceState) {
-    state.live_jobs.clear();
-    state.subagent_window = None;
+    // Retire, not drop: each agent row keeps its final runtime.
+    retire_live_jobs(state);
     state.pending_ask = None;
     state.ask_answers.clear();
     state.sending = false;
@@ -148,6 +152,15 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 session.active = active_id == Some(session.session_id.as_str());
             }
             state.sessions = sessions;
+        }
+        DesktopAction::SessionTitled { session_id, title } => {
+            if let Some(row) = state
+                .sessions
+                .iter_mut()
+                .find(|row| row.session_id == session_id)
+            {
+                row.title = title;
+            }
         }
         DesktopAction::SessionCreated(mut summary) => {
             // A new chat keeps the model already on the picker and pins it,
@@ -321,7 +334,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.composer_draft.clear();
             state.mention = None;
         }
-        DesktopAction::SteerSent(text) => state.pending_steers.push(text),
         DesktopAction::SteersReturned(texts) => {
             for text in texts {
                 if let Some(position) = state.pending_steers.iter().position(|sent| *sent == text) {
@@ -509,6 +521,18 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 }
             } else if let Some(conversation) = state.active.as_mut() {
                 push_entry_once(conversation, entry);
+            }
+        }
+        DesktopAction::CompactArmed => {
+            state.compacting = true;
+            state.error = None;
+        }
+        DesktopAction::CompactFinished { ok: _, head } => {
+            state.compacting = false;
+            if !head.is_empty()
+                && let Some(conversation) = state.active.as_mut()
+            {
+                conversation.head = head;
             }
         }
         DesktopAction::AssistantStepCommitted(entry) => {
@@ -748,9 +772,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             selected_reasoning,
             session_projects,
             session_models,
-            workspaces,
-            session_workspaces,
-            active_workspace: active,
+            workspace_roots,
             recent_models,
             thinking_collapsed,
             inspector_open,
@@ -765,12 +787,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;
             state.session_models = session_models;
-            state.workspaces = workspaces;
-            state.session_workspaces = session_workspaces;
-            state.active_workspace = active;
+            state.workspace_roots = workspace_roots;
             state.recent_models = recent_models;
             state.default_reasoning = selected_reasoning;
-            sync_workspace_roots(state);
             state.auto_update = auto_update;
             if selected_provider.is_some() {
                 state.selected_provider = selected_provider;
@@ -794,21 +813,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ThinkingCollapsedToggled => {
             state.thinking_collapsed = !state.thinking_collapsed;
         }
-        DesktopAction::WorkspaceMenuToggled(open) => {
-            state.workspace_menu_open = open;
-            if !open {
-                state.workspace_rename_open = false;
-            }
-        }
-        DesktopAction::WorkspaceRenameToggled(open) => state.workspace_rename_open = open,
-        DesktopAction::WorkspaceCreated(workspace) => workspace_created(state, workspace),
-        DesktopAction::WorkspaceSwitched(id) => workspace_switched(state, id),
-        DesktopAction::WorkspaceRenamed(name) => workspace_renamed(state, name),
-        DesktopAction::WorkspaceRemoved(id) => workspace_removed(state, id),
-        DesktopAction::SessionWorkspaceBound {
-            session_id,
-            workspace_id,
-        } => session_workspace_bound(state, session_id, workspace_id),
         DesktopAction::SessionBindingsForgotten(session_id) => {
             session_bindings_forgotten(state, session_id)
         }
@@ -1017,7 +1021,6 @@ fn fill_open_slash(state: &mut WorkspaceState) {
 /// whether anything was open, so Escape can tell a dismissal from a no-op.
 pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     let was_open = state.project_menu_open
-        || state.workspace_menu_open
         || state.model_menu_open
         || state.reasoning_menu_open
         || state.subagent_menu.is_some()
@@ -1026,8 +1029,6 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.language_menu_open
         || state.mention.is_some();
     state.project_menu_open = false;
-    state.workspace_menu_open = false;
-    state.workspace_rename_open = false;
     state.model_menu_open = false;
     state.model_menu_browse = None;
     state.picker_query.clear();

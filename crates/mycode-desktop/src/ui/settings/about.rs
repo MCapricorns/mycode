@@ -32,6 +32,7 @@ pub(super) fn render_about_section(
     };
     let auto_update = vm.auto_update;
     let checking = matches!(vm.update, UpdateState::Checking);
+    let downloading = matches!(vm.update, UpdateState::Downloading { .. });
     // Status text is a toast; this page only carries the action that state
     // needs (download a staged offer, restart to install, retry a check).
     let action: Option<AnyElement> = match &vm.update {
@@ -123,6 +124,8 @@ pub(super) fn render_about_section(
                         .icon(IconName::RefreshCw)
                         .label(if checking {
                             t("Checking…", "检查中…")
+                        } else if downloading {
+                            t("Downloading…", "下载中…")
                         } else {
                             t("Check for updates", "检查更新")
                         })

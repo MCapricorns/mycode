@@ -376,7 +376,7 @@ fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
         &mut state,
         DesktopAction::MessageQueued("follow up".to_owned()),
     );
-    reduce(&mut state, DesktopAction::SteerSent("steer".to_owned()));
+    state.pending_steers.push("steer".to_owned());
     assert!(state.sending);
     reduce(
         &mut state,
@@ -620,22 +620,64 @@ fn reopening_a_session_with_a_live_turn_restores_sending() {
 }
 
 #[test]
-fn workspace_rename_strips_control_characters_for_durable_ui_state() {
-    let ws = mycode_config::WorkspaceDef::generate("Default", Vec::new());
+fn compacting_locks_the_composer_and_finish_advances_the_head() {
     let mut state = WorkspaceState {
-        active_workspace: Some(ws.id.clone()),
-        workspaces: vec![ws],
+        active: Some(ActiveConversation {
+            session_id: "ses".to_owned(),
+            branch_id: "br".to_owned(),
+            head: "e1".to_owned(),
+            entries: Vec::new(),
+            older_before: None,
+            streaming: None,
+            running: false,
+            context_used: 0,
+            context_cache: 0,
+        }),
+        ..WorkspaceState::default()
+    };
+    reduce(&mut state, DesktopAction::CompactArmed);
+    assert!(state.compacting);
+    // A draft typed while the card is up is still in the composer, and a
+    // queued message waits — nothing is dropped mid-compact.
+    state.composer_draft = "follow up".to_owned();
+    state.queued.push("queued".to_owned());
+    reduce(
+        &mut state,
+        DesktopAction::CompactFinished {
+            ok: true,
+            head: "evt-sum".to_owned(),
+        },
+    );
+    assert!(!state.compacting);
+    assert_eq!(state.active.as_ref().expect("open").head, "evt-sum");
+    assert_eq!(state.composer_draft, "follow up");
+    assert_eq!(state.queued.len(), 1);
+}
+
+#[test]
+fn a_failed_compact_clears_the_lock_without_moving_the_head() {
+    let mut state = WorkspaceState {
+        compacting: true,
+        active: Some(ActiveConversation {
+            session_id: "ses".to_owned(),
+            branch_id: "br".to_owned(),
+            head: "e1".to_owned(),
+            entries: Vec::new(),
+            older_before: None,
+            streaming: None,
+            running: false,
+            context_used: 0,
+            context_cache: 0,
+        }),
         ..WorkspaceState::default()
     };
     reduce(
         &mut state,
-        DesktopAction::WorkspaceRenamed("  Line 1\nLine 2\t ".to_owned()),
+        DesktopAction::CompactFinished {
+            ok: false,
+            head: "e1".to_owned(),
+        },
     );
-    assert_eq!(state.workspaces[0].name, "Line 1 Line 2");
-    let ui_state = mycode_config::UiState {
-        workspaces: state.workspaces.clone(),
-        active_workspace: state.active_workspace.clone(),
-        ..mycode_config::UiState::default()
-    };
-    assert!(ui_state.validate().is_ok());
+    assert!(!state.compacting);
+    assert_eq!(state.active.as_ref().expect("open").head, "e1");
 }
