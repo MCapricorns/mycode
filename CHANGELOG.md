@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.11.27] - 2026-10-17
+
 ### Added
 
 - 模型库列表新增 OpenDesign 行：和其它服务商一样点「添加」打开预设表单、粘贴 API key 即可，不再走单独的二级页。
@@ -108,6 +110,7 @@
 - 更新只从本仓库的 GitHub Release 下载；压缩包里带盘符前缀的条目（如 `C:x.exe`）会被拒绝，不能写出暂存目录。
 - OAuth 登录打开浏览器不再经过 `cmd /c start`（服务器返回的地址里的 `&`、`|` 会被当成命令解析），且只打开 https 地址。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.26...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.27...HEAD
+[0.11.27]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.27
 [0.11.26]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.26
 [0.11.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.24
