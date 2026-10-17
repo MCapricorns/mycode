@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.11.29] - 2026-10-17
+
+### Changed
+
+- 三个平台构建通过的 `main` 推送自动发布。
+
 ## [0.11.28] - 2026-10-17
 
 ### Fixed
@@ -116,7 +122,8 @@
 - 更新只从本仓库的 GitHub Release 下载；压缩包里带盘符前缀的条目（如 `C:x.exe`）会被拒绝，不能写出暂存目录。
 - OAuth 登录打开浏览器不再经过 `cmd /c start`（服务器返回的地址里的 `&`、`|` 会被当成命令解析），且只打开 https 地址。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.28...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.29...HEAD
+[0.11.29]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.29
 [0.11.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.28
 [0.11.27]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.27
 [0.11.26]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.26
