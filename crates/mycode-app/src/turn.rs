@@ -161,9 +161,13 @@ async fn run_chat_turn(
     let (bearer, extra_headers) =
         resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
     control.check()?;
-    let mut resolved =
-        ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
-            .map_err(|error| format!("provider setup failed: {error:?}"))?;
+    let mut resolved = ResolvedProvider::resolve(
+        &provider,
+        model,
+        &bearer,
+        &crate::user_agent::default_user_agent(),
+    )
+    .map_err(|error| format!("provider setup failed: {error:?}"))?;
     resolved.headers.extend(extra_headers);
     let transport: Arc<dyn SseTransport> = Arc::new(
         ReqwestTransport::new().map_err(|error| format!("HTTP transport unavailable: {error}"))?,
@@ -252,10 +256,11 @@ async fn run_chat_turn_on(
     let (role_catalog, extra_roots) = {
         let home = home.clone();
         let cwd = cwd.clone();
+        let session_id = session_id.to_owned();
         tokio::task::spawn_blocking(move || {
             (
                 mycode_config::discover_roles(&home, Some(&cwd)),
-                workspace_extra_roots(&home, &cwd),
+                workspace_extra_roots(&home, &session_id, &cwd),
             )
         })
         .await

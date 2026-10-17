@@ -51,7 +51,7 @@ const MAX_WINDOW_EDGE_PX: u32 = 16_384;
 
 /// The windowed size restored on the next launch, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct WindowSize {
     /// Window width.
     pub width: u32,
@@ -62,9 +62,9 @@ pub struct WindowSize {
 /// One named workspace: a set of folders plus the chats grouped under it.
 ///
 /// Sessions reference a workspace by `id`; `folders` are absolute paths the
-/// chat tools can use, exactly like the legacy single-workspace roots.
+/// chat tools can use.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct WorkspaceDef {
     /// Stable workspace identity (`ws1-…`).
     pub id: String,
@@ -88,7 +88,7 @@ impl WorkspaceDef {
 
 /// One provider and model the picker can jump to without scrolling.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelPin {
     /// Provider id.
     pub provider: String,
@@ -129,7 +129,7 @@ pub fn remember_model(recent: &mut Vec<ModelPin>, provider: &str, model: &str) {
 /// The picker shows this pin while the session is open. Other sessions keep
 /// their own pins, so a model that one chat cannot use does not leak.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionModelPin {
     /// Session identity spelling.
     pub session_id: String,
@@ -195,7 +195,7 @@ fn valid_effort_token(value: &str) -> bool {
 
 /// Durable desktop UI state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct UiState {
     /// Recent project directories, most recent first.
     pub recent_projects: Vec<String>,
@@ -210,13 +210,8 @@ pub struct UiState {
     /// Session-to-project bindings (session id, project path), most recent
     /// first. Advisory: restores each chat's tool working directory.
     pub session_projects: Vec<(String, String)>,
-    /// Folders currently in the workspace, most recently added first.
-    /// The open chat still has one cwd; the other roots are extra tool roots.
-    #[serde(default)]
-    pub workspace_roots: Vec<String>,
     /// Named workspaces. Sessions are grouped under them by
-    /// `session_workspaces`; the legacy `workspace_roots` list seeds the
-    /// first workspace on upgrade and mirrors the active one's folders.
+    /// `session_workspaces`.
     #[serde(default)]
     pub workspaces: Vec<WorkspaceDef>,
     /// Session-to-workspace bindings (session id, workspace id), most recent
@@ -256,7 +251,6 @@ impl Default for UiState {
             selected_provider: None,
             selected_model: None,
             session_projects: Vec::new(),
-            workspace_roots: Vec::new(),
             workspaces: Vec::new(),
             session_workspaces: Vec::new(),
             active_workspace: None,
@@ -318,14 +312,6 @@ impl UiState {
         }
         for (session_id, project) in &self.session_projects {
             if !valid_session_id(session_id) || valid_project_path(project).is_none() {
-                return Err(invalid());
-            }
-        }
-        if self.workspace_roots.len() > MAX_WORKSPACE_ROOTS {
-            return Err(invalid());
-        }
-        for project in &self.workspace_roots {
-            if valid_project_path(project).is_none() {
                 return Err(invalid());
             }
         }
@@ -492,9 +478,8 @@ fn valid_session_id(value: &str) -> bool {
 
 /// Reads the UI state.
 ///
-/// A missing document yields the defaults. A trailing comma is accepted and
-/// a canonical rewrite is attempted. A document that cannot be parsed or
-/// validated is backed up and replaced with defaults.
+/// A missing document yields the defaults. A document that cannot be parsed
+/// or validated is backed up and replaced, keeping whatever still decodes.
 ///
 /// # Errors
 ///
@@ -507,8 +492,8 @@ pub fn read_ui_state(home: &crate::HomeLayout) -> Result<UiState, ConfigError> {
 /// Reads `ui.json`, repairing a damaged document.
 ///
 /// The second value is set when the previous bytes were copied aside and the
-/// file was replaced with defaults. Workspaces and recent folders in that
-/// backup are not deleted from disk elsewhere; session ledgers stay put.
+/// file was republished. Workspaces and recent folders in that backup are
+/// not deleted from disk elsewhere; session ledgers stay put.
 ///
 /// # Errors
 ///
@@ -521,15 +506,10 @@ pub fn read_ui_state_with_repair(
         home,
         UI_STATE_PATH,
         MAX_UI_STATE_BYTES,
-        |bytes| {
-            let (state, migrated) = decode_ui_state(bytes)?;
-            if migrated {
-                replace_ui_state(home, &state)?;
-            }
-            Ok(state)
-        },
+        decode_ui_state,
         UiState::default,
-        || replace_ui_state(home, &UiState::default()),
+        salvage_ui_state,
+        |state| replace_ui_state(home, state),
     )?;
     Ok((loaded.value, loaded.repair))
 }
@@ -567,42 +547,174 @@ fn replace_bytes(state: &UiState) -> Result<Vec<u8>, ConfigError> {
     Ok(bytes)
 }
 
-fn decode_ui_state(bytes: &[u8]) -> Result<(UiState, bool), ConfigError> {
+fn decode_ui_state(bytes: &[u8]) -> Result<UiState, ConfigError> {
+    // `deny_unknown_fields` on `UiState` is inert under `#[serde(flatten)]`,
+    // so the envelope captures the state keys in a map and the state decodes
+    // from that value, where an unknown key is rejected again.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Envelope {
         format_version: u32,
         kind: String,
         #[serde(flatten)]
-        state: UiState,
+        fields: serde_json::Map<String, serde_json::Value>,
     }
-    let decoded = crate::json_recover::decode_json::<Envelope>(bytes)?;
-    let envelope = decoded.value;
+    let rejection = || {
+        ConfigError::authority_rejection()
+            .with_detail("ui.json: unknown field, wrong type, or malformed JSON".to_owned())
+    };
+    let envelope = serde_json::from_slice::<Envelope>(bytes).map_err(|_| rejection())?;
     if envelope.format_version != UI_STATE_FORMAT_VERSION || envelope.kind != UI_STATE_KIND {
         return Err(ConfigError::authority_rejection()
             .with_detail("ui.json: formatVersion or kind does not match this build"));
     }
-    envelope.state.validate()?;
-    Ok((envelope.state, decoded.migrated))
+    let state = serde_json::from_value::<UiState>(serde_json::Value::Object(envelope.fields))
+        .map_err(|_| rejection())?;
+    state.validate()?;
+    Ok(state)
+}
+
+/// Extracts the still-valid fields of a document the strict read rejected,
+/// so a reset keeps whatever still decodes. `None` when the bytes are not a
+/// JSON object or the result still fails validation.
+#[must_use]
+pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
+    let object = document.as_object()?;
+    let valid = |probe: &UiState| probe.validate().is_ok();
+    let mut state = UiState::default();
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Vec<String>>(object, "recentProjects")
+        {
+            probe.recent_projects = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Option<String>>(object, "lastProject")
+        {
+            probe.last_project = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) = crate::document_repair::salvage_field::<bool>(object, "autoUpdate") {
+            probe.auto_update = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Option<String>>(object, "selectedProvider")
+        {
+            probe.selected_provider = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Option<String>>(object, "selectedModel")
+        {
+            probe.selected_model = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) = crate::document_repair::salvage_field::<Vec<(String, String)>>(
+            object,
+            "sessionProjects",
+        ) {
+            probe.session_projects = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Vec<WorkspaceDef>>(object, "workspaces")
+        {
+            probe.workspaces = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) = crate::document_repair::salvage_field::<Vec<(String, String)>>(
+            object,
+            "sessionWorkspaces",
+        ) {
+            probe.session_workspaces = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Option<String>>(object, "activeWorkspace")
+        {
+            probe.active_workspace = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Vec<ModelPin>>(object, "recentModels")
+        {
+            probe.recent_models = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Vec<SessionModelPin>>(object, "sessionModels")
+        {
+            probe.session_models = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Option<String>>(object, "selectedReasoning")
+        {
+            probe.selected_reasoning = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<bool>(object, "thinkingCollapsed")
+        {
+            probe.thinking_collapsed = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<Option<WindowSize>>(object, "windowSize")
+        {
+            probe.window_size = value;
+        }
+    });
+    valid(&state).then_some(state)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_RECENT_MODELS, ModelPin, decode_ui_state, remember_model};
+    use super::{MAX_RECENT_MODELS, ModelPin, decode_ui_state, remember_model, salvage_ui_state};
 
     #[test]
     fn missing_pin_fields_decode_empty() {
         let bytes = br#"{"formatVersion":1,"kind":"mycode-ui-state"}"#;
-        let (state, _) = decode_ui_state(bytes).expect("legacy ui.json");
+        let state = decode_ui_state(bytes).expect("ui.json");
         assert!(state.recent_models.is_empty());
         assert!(state.auto_update);
     }
 
     #[test]
-    fn retired_starred_pins_still_decode() {
-        let bytes = br#"{"formatVersion":1,"kind":"mycode-ui-state","state":{"starredModels":[{"provider":"openai","model":"gpt"}]}}"#;
-        let (state, _) = decode_ui_state(bytes).expect("ui.json with stars");
-        assert!(state.recent_models.is_empty());
+    fn retired_fields_are_document_damage_now() {
+        for document in [
+            &br#"{"formatVersion":1,"kind":"mycode-ui-state","state":{"starredModels":[{"provider":"openai","model":"gpt"}]}}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-ui-state","trustedProjects":["/legacy/project"],"autoUpdate":false}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-ui-state","workspaceRoots":["/legacy/root"]}"#[..],
+        ] {
+            assert!(
+                decode_ui_state(document).is_err(),
+                "a removed key is rejected, not silently ignored"
+            );
+        }
+        // The salvage still keeps the fields that are still known.
+        let damaged: serde_json::Value = serde_json::from_slice(
+            br#"{"formatVersion":1,"kind":"mycode-ui-state","trustedProjects":["/x"],"autoUpdate":false,"workspaceRoots":["/legacy/root"],"selectedModel":"gpt-4o"}"#,
+        )
+        .expect("fixture");
+        let state = salvage_ui_state(&damaged).expect("salvage");
+        assert!(!state.auto_update);
+        assert_eq!(state.selected_model.as_deref(), Some("gpt-4o"));
     }
 
     #[test]
@@ -635,32 +747,24 @@ mod tests {
     }
 
     #[test]
-    fn retired_project_trust_is_ignored_without_resetting_ui_preferences() {
-        let bytes = br#"{
-            "formatVersion": 1, "kind": "mycode-ui-state",
-            "trustedProjects": ["/legacy/project"], "autoUpdate": false,
-            "selectedProvider": "openai", "selectedModel": "gpt-4o"
-        }"#;
-        let (state, _) = decode_ui_state(bytes).expect("legacy preference remains readable");
-        assert!(!state.auto_update);
-        assert_eq!(state.selected_model.as_deref(), Some("gpt-4o"));
-    }
-
-    #[test]
-    fn advisory_extensions_are_compatible_but_selected_pins_are_validated() {
+    fn unknown_and_nested_fields_are_damage_but_pins_stay_validated() {
         let unknown_top = br#"{
             "formatVersion": 1,
             "kind": "mycode-ui-state",
             "autoUpdates": false
         }"#;
-        assert!(decode_ui_state(unknown_top).is_ok());
+        assert!(decode_ui_state(unknown_top).is_err());
 
         let unknown_nested = br#"{
             "formatVersion": 1,
             "kind": "mycode-ui-state",
             "recentModels": [{ "provider": "openai", "model": "gpt-4o", "extra": 1 }]
         }"#;
-        assert!(decode_ui_state(unknown_nested).is_ok());
+        assert!(decode_ui_state(unknown_nested).is_err());
+        // The salvage drops the corrupt pin row but keeps the good ones.
+        let damaged: serde_json::Value = serde_json::from_slice(unknown_nested).expect("fixture");
+        let salvaged = salvage_ui_state(&damaged).expect("salvage");
+        assert!(salvaged.recent_models.is_empty());
 
         let mut state = super::UiState {
             selected_provider: Some("bad\0provider".to_owned()),

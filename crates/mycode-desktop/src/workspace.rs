@@ -148,8 +148,6 @@ pub struct Workspace {
     composer: Entity<TextareaState>,
     /// Whether the composer placeholder is the in-turn steer hint.
     pub(crate) composer_steer: bool,
-    ua_input: Option<Entity<InputState>>,
-    ua_sync_pending: bool,
     proxy_input: Option<Entity<InputState>>,
     /// The proxy field shows the stored URL on its next render.
     proxy_sync_pending: bool,
@@ -328,8 +326,6 @@ impl Workspace {
             focus_handle,
             composer,
             composer_steer: false,
-            ua_input: None,
-            ua_sync_pending: false,
             proxy_input: None,
             proxy_sync_pending: false,
             provider_form: None,
@@ -603,8 +599,7 @@ impl Workspace {
         let subagent_before = self.subagent_window_mark();
         let text_edit = matches!(
             action,
-            DesktopAction::SettingsUserAgentChanged(_)
-                | DesktopAction::SettingsProxyChanged { typed: true, .. }
+            DesktopAction::SettingsProxyChanged { typed: true, .. }
         );
         let epoch_before = self
             .vm

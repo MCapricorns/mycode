@@ -6,8 +6,7 @@
 //! `settings.json`; credentials never enter settings — the caller supplies a
 //! key when resolving. Streaming completions egress through the injectable
 //! [`SseTransport`] seam. Catalog refresh and OAuth use the pinned HTTP
-//! client. The configured User-Agent rides provider requests (the pi agent
-//! default when unset).
+//! client. The application fixes the User-Agent on provider requests.
 //!
 //! [`catalog`] carries the vendor data this runtime is configured from: the
 //! vendored models.dev snapshot, its cached cloud refresh, and the provider
@@ -46,9 +45,9 @@ pub use http_pin::{
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
     CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,
-    PinnedCall, chatgpt_account_id, copilot_bearer, exchange_codex_code, parse_oauth_secret,
-    poll_codex_device_token, poll_device_token, refresh_codex_token, start_codex_device_flow,
-    start_device_flow,
+    ORIGINATOR, PinnedCall, chatgpt_account_id, copilot_bearer, exchange_codex_code,
+    parse_oauth_secret, poll_codex_device_token, poll_device_token, refresh_codex_token,
+    start_codex_device_flow, start_device_flow,
 };
 pub use proxy::set_proxy_preference;
 pub use transport::{ReqwestTransport, SseTransport, TransportCall};
@@ -92,8 +91,8 @@ fn endpoint_with(base: &str, prefix: &str, suffix: &str) -> String {
 impl ResolvedProvider {
     /// Resolves settings plus a vault-supplied key into one endpoint.
     ///
-    /// `user_agent` should be the effective UA (settings value or the pi
-    /// agent default from `mycode_config::default_user_agent`).
+    /// `user_agent` is the application's fixed agent string
+    /// (`mycode_app::default_user_agent`).
     ///
     /// # Errors
     ///

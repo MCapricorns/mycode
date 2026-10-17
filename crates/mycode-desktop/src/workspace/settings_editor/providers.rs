@@ -411,8 +411,14 @@ impl Workspace {
 
     pub(crate) fn on_close_preset(&mut self, cx: &mut Context<Self>) {
         self.preset_key_input = None;
-        if self.vm.models_subview == crate::view_model::ModelsSubview::OpenDesign {
-            // The OpenDesign page is the form itself; closing it leaves the page.
+        if matches!(
+            self.vm.models_subview,
+            crate::view_model::ModelsSubview::OpenDesign
+                | crate::view_model::ModelsSubview::GitHubCopilot
+                | crate::view_model::ModelsSubview::OpenAiCodex
+        ) {
+            // The dedicated page is the form itself; closing it leaves the
+            // page.
             self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
         } else {
             self.apply_action(DesktopAction::ActivePresetChanged(None), cx);

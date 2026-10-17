@@ -43,27 +43,6 @@ pub struct SubagentSettings {
     /// and fully inherited, so a fresh install has a working team.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<SubagentRoleSettings>,
-    /// Retired `maxConcurrent`. Older files still parse; the value is
-    /// ignored and dropped on the next save. See [`SUBAGENT_CONCURRENCY`].
-    #[serde(default, rename = "maxConcurrent", skip_serializing)]
-    retired_max_concurrent: Retired,
-    /// Retired `timeoutSecs`. Subagents have no wall-clock limit; they end
-    /// when they answer, or when the user stops them, cancels the turn, or
-    /// deletes the conversation.
-    #[serde(default, rename = "timeoutSecs", skip_serializing)]
-    retired_timeout_secs: Retired,
-}
-
-/// A settings key older files may still carry. Any value is accepted and
-/// discarded, so a file written by an earlier version still loads.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Retired;
-
-impl<'de> Deserialize<'de> for Retired {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        serde::de::IgnoredAny::deserialize(deserializer)?;
-        Ok(Self)
-    }
 }
 
 impl SubagentSettings {
@@ -169,12 +148,13 @@ mod tests {
     use super::SubagentSettings;
 
     #[test]
-    fn retired_limits_are_read_and_not_written_back() {
-        let parsed: SubagentSettings =
-            serde_json::from_str(r#"{"maxConcurrent":2,"timeoutSecs":30}"#)
-                .expect("older settings");
-        assert!(super::subagents_are_default(&parsed));
-        let saved = serde_json::to_string(&parsed).expect("encode");
+    fn retired_limits_are_document_damage_now() {
+        assert!(
+            serde_json::from_str::<SubagentSettings>(r#"{"maxConcurrent":2,"timeoutSecs":30}"#)
+                .is_err(),
+            "a removed key is rejected, not silently ignored"
+        );
+        let saved = serde_json::to_string(&SubagentSettings::default()).expect("encode");
         assert_eq!(saved, "{}");
     }
 }

@@ -102,11 +102,10 @@ impl std::fmt::Debug for ProviderSecrets {
 
 /// Reads `secrets.json`; a missing document yields an empty store.
 ///
-/// A recoverable older copy (trailing commas) is accepted and a canonical
-/// rewrite is attempted.
-/// A document that cannot be parsed or validated is backed up and replaced
-/// with an empty store so startup can continue. The backup keeps the old
-/// bytes; this function never logs them.
+/// A document that cannot be parsed or validated is backed up and replaced:
+/// whatever keys still decode and validate are kept so a corrupt entry does
+/// not force every provider to be re-keyed. The backup keeps the old bytes;
+/// this function never logs them.
 ///
 /// # Errors
 ///
@@ -119,7 +118,7 @@ pub fn read_provider_secrets(home: &HomeLayout) -> Result<ProviderSecrets, Confi
 /// Reads `secrets.json`, repairing a damaged document.
 ///
 /// The second value is set when the previous bytes were copied aside and the
-/// store was reset to empty.
+/// store was republished.
 ///
 /// # Errors
 ///
@@ -132,30 +131,50 @@ pub fn read_provider_secrets_with_repair(
         home,
         SECRETS_PATH,
         MAX_SECRETS_BYTES,
-        |bytes| {
-            let parsed = decode_secrets(bytes)?;
-            if parsed.migrated {
-                replace_provider_secrets(home, parsed.revision, &parsed.secrets)?;
-            }
-            Ok(parsed.secrets)
-        },
+        |bytes| Ok(decode_secrets(bytes)?.secrets),
         ProviderSecrets::new,
-        || publish_default_secrets(home),
+        salvage_provider_secrets,
+        |secrets| publish_secrets(home, secrets),
     )?;
     Ok((loaded.value, loaded.repair))
 }
 
-fn publish_default_secrets(home: &HomeLayout) -> Result<(), ConfigError> {
+fn publish_secrets(home: &HomeLayout, secrets: &ProviderSecrets) -> Result<(), ConfigError> {
+    secrets.validate()?;
     let revision = AuthorityRevision::ABSENT.checked_next()?;
     let mut document = serde_json::Map::new();
     document.insert("formatVersion".into(), SECRETS_FORMAT_VERSION.into());
     document.insert("kind".into(), SECRETS_KIND.into());
     document.insert("revision".into(), revision.get().into());
-    document.insert("providerKeys".into(), serde_json::Map::new().into());
+    let mut keys = serde_json::Map::new();
+    for id in secrets.provider_ids() {
+        if let Some(key) = secrets.key(id) {
+            keys.insert(id.to_owned(), key.to_owned().into());
+        }
+    }
+    document.insert("providerKeys".into(), keys.into());
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
     bytes.push(b'\n');
     locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |_| Ok(bytes))
+}
+
+/// Extracts the still-valid keys of a document the strict read rejected, so
+/// a reset keeps every credential that is intact. Entries with an invalid
+/// provider id or an unusable key are dropped. `None` when there is no
+/// `providerKeys` object to read.
+pub fn salvage_provider_secrets(document: &serde_json::Value) -> Option<ProviderSecrets> {
+    let keys = document.as_object()?.get("providerKeys")?.as_object()?;
+    let mut secrets = ProviderSecrets::new();
+    for (id, key) in keys {
+        let Some(key) = key.as_str() else { continue };
+        if !crate::home::is_valid_portable_id(id) {
+            continue;
+        }
+        secrets = secrets.with_key(id, Some(key));
+    }
+    secrets.validate().ok()?;
+    Some(secrets)
 }
 
 /// Replaces `secrets.json` under revision compare-and-swap.
@@ -214,7 +233,6 @@ struct DeserializedSecrets {
 struct ParsedSecrets {
     secrets: ProviderSecrets,
     revision: AuthorityRevision,
-    migrated: bool,
 }
 
 fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
@@ -222,8 +240,8 @@ fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError>
 }
 
 fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
-    let decoded = crate::json_recover::decode_json::<DeserializedSecrets>(bytes)?;
-    let document = decoded.value;
+    let document = serde_json::from_slice::<DeserializedSecrets>(bytes)
+        .map_err(|_| ConfigError::authority_rejection())?;
     if document.format_version != SECRETS_FORMAT_VERSION || document.kind != SECRETS_KIND {
         return Err(ConfigError::authority_rejection()
             .with_detail("secrets.json: formatVersion or kind does not match this build"));
@@ -237,11 +255,7 @@ fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
             .collect(),
     };
     secrets.validate()?;
-    Ok(ParsedSecrets {
-        secrets,
-        revision,
-        migrated: decoded.migrated,
-    })
+    Ok(ParsedSecrets { secrets, revision })
 }
 
 #[cfg(test)]
@@ -262,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn trailing_comma_repair_surfaces_a_rewrite_failure() {
+    fn a_malformed_secrets_document_resets_and_salvages_intact_keys() {
         let parent = std::env::temp_dir().join(format!(
             "mycode-secrets-comma-{}-{}",
             std::process::id(),
@@ -278,16 +292,24 @@ mod tests {
                 .expect("private home");
         }
         let home = crate::HomeLayout::from_root(&root).expect("layout");
-        let body = br#"{"formatVersion":1,"kind":"mycode-provider-secrets","revision":9223372036854775807,}"#;
+        // Valid JSON that the strict decode rejects (a non-string key and a
+        // retired field) plus two healthy entries: the read resets the file
+        // but keeps the keys that still decode and validate.
+        let body = br#"{"formatVersion":1,"kind":"mycode-provider-secrets","revision":3,"providers":{},"providerKeys":{"openai":"sk-ok","bad id!":"sk-drop","zai":7}}"#;
         // The fixture goes through the secure transaction: a plain fs::write
         // file inherits the temp directory's DACL and the Windows read path
         // rejects it before the revision check this test exercises.
         crate::write_owned_test_bytes(&home, "secrets.json", body).expect("write");
-        let path = root.join("secrets.json");
-        let error = super::read_provider_secrets(&home).expect_err("rewrite must fail");
-        assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionExhausted);
-        let kept = std::fs::read(&path).expect("original remains");
-        assert!(kept.windows(2).any(|window| window == b",}"), "{kept:?}");
+        let (secrets, repair) =
+            super::read_provider_secrets_with_repair(&home).expect("read resets");
+        assert!(repair.is_some(), "the malformed file was reported");
+        assert_eq!(secrets.provider_ids(), ["openai"]);
+        assert_eq!(secrets.key("openai"), Some("sk-ok"));
+        let republished = std::fs::read(root.join("secrets.json")).expect("republished");
+        let text = String::from_utf8(republished).expect("utf-8");
+        assert!(!text.contains("zai"), "canonical document: {text}");
+        assert!(text.contains("\"openai\""), "{text}");
+        assert!(super::read_provider_secrets(&home).is_ok());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

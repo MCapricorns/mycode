@@ -515,10 +515,9 @@ impl Workspace {
                 let mut state =
                     SettingsState::from_settings(&loaded.settings, revision, loaded.provider_keys);
                 state.mcp_with_keys = loaded.mcp_keys;
-                // A dirty or in-flight editor keeps its appearance and
-                // user-agent field. Applying the disk copy here would undo
-                // unsaved appearance edits before the reducer can refuse the
-                // document swap.
+                // A dirty or in-flight editor keeps its appearance. Applying
+                // the disk copy here would undo unsaved appearance edits
+                // before the reducer can refuse the document swap.
                 let preserve_editor = self
                     .vm
                     .settings
@@ -526,7 +525,6 @@ impl Workspace {
                     .is_some_and(|settings| settings.dirty || settings.saving);
                 if !preserve_editor {
                     self.paint_appearance(&state.theme, cx);
-                    self.ua_sync_pending = true;
                     self.proxy_sync_pending = true;
                 }
                 self.apply_action(DesktopAction::SettingsLoaded(Box::new(state)), cx);
@@ -775,15 +773,13 @@ impl Workspace {
             }
             BridgeReply::UiState(Ok((mut ui_state, repairs))) => {
                 self.note_config_repairs(&repairs, cx);
-                // One-time upgrade: the legacy anonymous folder list becomes
-                // the first named workspace, and every session that predates
-                // workspaces belongs to it (unbound sessions resolve to the
-                // first workspace on read).
+                // First run (or a reset document) has no workspaces yet:
+                // seed the default one from the last-opened project so the
+                // sidebar always has a home for unbound sessions.
                 let migrated = ui_state.workspaces.is_empty();
                 if migrated {
-                    let mut folders = ui_state.workspace_roots.clone();
-                    if folders.is_empty()
-                        && let Some(last) = ui_state.last_project.clone()
+                    let mut folders = Vec::new();
+                    if let Some(last) = ui_state.last_project.clone()
                         && !last.trim().is_empty()
                     {
                         folders.push(last);

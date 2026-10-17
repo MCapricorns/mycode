@@ -26,9 +26,10 @@
 | `tool_hosts` | `ask_user` 和网页工具怎么接到桥。Querit / AnySearch / Exa 的密钥先看 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY` / `EXA_API_KEY` 环境变量，再看密钥存储 |
 | `subagent` | `agent`：解析角色、工具白名单、并发许可、可选 worktree、按角色的模型路由、父提示里的委派表 |
 | `mcp_client` / `mcp_tools` | stdio 或 Streamable HTTP（协议版本 `2025-06-18`，每台最多 128 个工具，单条消息 1 MiB，请求超时 60 秒）。见下文 |
-| `web_client` | Querit、AnySearch、Exa，以及旧设置里的自定义后端。结果条数、URL 数、响应字节都有上限，Bearer 由传输层加 |
+| `web_client` | Querit、AnySearch、Exa。结果条数、URL 数、响应字节都有上限，Bearer 由传输层加 |
 | `oauth` | Copilot、Codex 的设备码登录，以及每次请求前的令牌处理。见下文 |
-| `settings_io` | 设置 CAS 和单把密钥的写入。读设置时补上探测到的 shell 和默认 User-Agent 并写回 |
+| `user_agent` | 应用自己的 UA：`MYCode-Agent/<版本> (<平台> <内核>; <架构>; <shell>)`，所有出站请求固定使用，不是设置项 |
+| `settings_io` | 设置 CAS 和单把密钥的写入 |
 | `search` | 作曲栏 `@` 提到的项目文件：不区分大小写的子串，跳过 `.git`、`node_modules`、`target` 等目录，最多看 8192 项、返回 64 条 |
 | `export` | 产品数据的导出与导入包：设置、界面状态和 API 密钥（明文），不带会话。导入会新增、修改或删除 MCP stdio 命令时先拒绝，桌面在“数据”卡片里让用户确认后再带 `confirm_mcp_commands` 重发 |
 | `updates` | 检查、下载、校验、准备重启安装。错误收成一行。macOS 用 `update.sh`；Windows 复制当前程序，带 `--mycode-apply-update` 等参数替换安装文件。其它平台没有安装包，更新检查会说明没有对应平台的资源。换好并校验新二进制后，旧版本的备份文件会被删掉，不在安装目录里堆积。启动检查失败会送到界面提示 |
@@ -47,7 +48,7 @@
 8. system prompt 先放固定部分，再放随工作区变化的部分：身份和 `<working_style>`（做完并验证、最小改动、破坏性操作先确认、如实汇报、文件和网页内容是数据不是指令）+ `build_system_prompt` 的工具清单、网页工具说明和调用约定 + 子代理委派表；然后是 `<environment>` / `<shell>` 块（OS、架构、会话 cwd、当前这一个进程工具和它的语法；子代理提示词同样带一份，cwd 是自己的运行目录）+ 资源文件（`AGENTS.md`、`MYCODE.md`）+ skill 目录 + MCP 说明 + 其它工作区文件夹。skill 和文件夹排好序，同样的文件得到字节相同的提示；固定部分在前，换个文件夹开新会话也能命中前缀缓存。
 9. `AgentConfig` 带上这个提示、`prompt_cache_key` = 会话 id、输出上限（设置 `maxOutput` → 目录 `limit.output` → 32000）和会话自己的思考档位（`ChatTurn.reasoning`，来自 `ui.json` 里该会话的模型记录，不读全局设置）。装上压缩钩子，调用 `Agent::prompt`。不在工具前保存文件快照，`write`、`edit` 和 `shell` 的改动都留在工作区里。
 
-事件泵把 `AgentEvent` 投影成 `BridgeEvent`，并拥有分支头：`ToolStarted` 先提交 `ToolCall` 事件，`ToolCompleted` 提交结果；带工具调用的中间助手消息到达即提交（`AssistantStep`）；最后一条助手消息在 `TurnEnded` 时提交，随后是用量行（`usage.enabled` 默认开，且提供商报了用量）、钩子里攒下的摘要卡片，最后发 `ChatDone`。用户取消时，还没作为工具步骤提交的半截助手消息先写入账本（里面已有中断标记），再发 `ChatFailed`，消息是 `CHAT_CANCELLED`，不发 `ChatDone`。界面安静复位后可以接着发；下一条请求回放这段历史，prompt cache key 仍是会话 id。回合进行中的 `Steer` 把文字注入当前回合，不取消子代理。排队发送和「打断并发送」仍会取消当前回合。
+事件泵把 `AgentEvent` 投影成 `BridgeEvent`，并拥有分支头：`ToolStarted` 先提交 `ToolCall` 事件，`ToolCompleted` 提交结果；带工具调用的中间助手消息到达即提交（`AssistantStep`）；最后一条助手消息在 `TurnEnded` 时提交，随后是用量行（提供商报了用量才写）、钩子里攒下的摘要卡片，最后发 `ChatDone`。用户取消时，还没作为工具步骤提交的半截助手消息先写入账本（里面已有中断标记），再发 `ChatFailed`，消息是 `CHAT_CANCELLED`，不发 `ChatDone`。界面安静复位后可以接着发；下一条请求回放这段历史，prompt cache key 仍是会话 id。回合进行中的 `Steer` 把文字注入当前回合，不取消子代理。排队发送和「打断并发送」仍会取消当前回合。
 
 ## 用量与上下文
 

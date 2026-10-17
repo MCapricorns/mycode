@@ -144,7 +144,7 @@ pub(crate) async fn refresh_catalog(
     crate::settings_io::apply_network(&settings);
     let outcome = mycode_providers::catalog::refresh(
         &state.home,
-        &settings.effective_user_agent(),
+        &crate::user_agent::default_user_agent(),
         force,
         mycode_providers::catalog::DEFAULT_MAX_AGE_SECS,
     )
@@ -222,7 +222,7 @@ pub(crate) async fn refresh_opendesign_models(
         } else {
             pasted
         };
-        Ok::<_, String>((settings.effective_user_agent(), base_url, key))
+        Ok::<_, String>((crate::user_agent::default_user_agent(), base_url, key))
     })
     .await
     .map_err(|error| format!("OpenDesign task failed: {error}"))??;

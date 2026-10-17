@@ -557,15 +557,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.inspector_open = open;
             state.inspector_pinned = pinned;
         }
-        DesktopAction::SettingsUserAgentChanged(user_agent) => {
-            edit_settings(state, |settings| {
-                if settings.user_agent == user_agent {
-                    return false;
-                }
-                settings.user_agent = user_agent;
-                true
-            });
-        }
         DesktopAction::SettingsProxyChanged { value, .. } => {
             edit_settings(state, |settings| {
                 if settings.proxy == value {
@@ -860,9 +851,21 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.provider_kind_menu_open = false;
             state.mcp_transport_menu_open = false;
             state.provider_detail = None;
-            // The OpenDesign page is the add form for that one provider.
-            let preset = (view == crate::view_model::ModelsSubview::OpenDesign)
-                .then(|| mycode_providers::catalog::opendesign::PROVIDER_ID.to_owned());
+            // The dedicated pages are each the add/sign-in form for one
+            // provider: OpenDesign, or a device-OAuth vendor.
+            let preset = match view {
+                crate::view_model::ModelsSubview::OpenDesign => {
+                    Some(mycode_providers::catalog::opendesign::PROVIDER_ID)
+                }
+                crate::view_model::ModelsSubview::GitHubCopilot => {
+                    Some(mycode_providers::COPILOT_PROVIDER_ID)
+                }
+                crate::view_model::ModelsSubview::OpenAiCodex => {
+                    Some(mycode_providers::OPENAI_CODEX_PROVIDER_ID)
+                }
+                _ => None,
+            }
+            .map(str::to_owned);
             active_preset_changed(state, preset);
         }
         DesktopAction::OpenDesignLoading(loading) => state.opendesign_loading = loading,

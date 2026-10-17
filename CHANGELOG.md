@@ -12,6 +12,8 @@
 - 内置 MCP 目录新增 GitHub 服务器（`https://api.githubcopilot.com/mcp`，Bearer 密钥）。
 - 窗口尺寸持久化：启动恢复上次窗口大小（最大化记还原尺寸），拖动边缘调整后防抖动写回 `ui.json`。
 - Codex 模型列表改由后端实时提供：签入完成时从 `chatgpt.com/backend-api/codex/models` 拉取并缓存到 `codex-models.json`（models.dev 不含 Codex 行），已签入的账户每次启动在首帧后静默刷新；拉取失败或过期令牌刷新失败都回退到预设列表。
+- GitHub Copilot 与 OpenAI Codex 设备码登录在设置页各有独立入口页（与 OpenDesign 相同层级），不再混在 models.dev 目录列表里；目录列表不再显示 `device-code` 服务商。
+- 损坏的 `settings.json` / `secrets.json` / `ui.json` 重置时逐字段抢救（salvage）：能解析成 JSON 的文档里每个成员单独解码校验，通过的保留，只有通不过的成员被丢弃，避免一次重置让用户全部重配。
 
 ### Fixed
 
@@ -25,7 +27,10 @@
 - 启动路径减负：目录缓存只校验信封、文档保留原始字节，模型选择器等目录界面首次打开才在阻塞池里解析；更新检查与目录刷新推迟到首帧之后；`spawn_blocking` 线程池上限收为 32；全局分配器换为 mimalloc，Windows 目标用 VC-LTL 把 CRT 链到系统自带的 ucrtbase/msvcrt，去掉运行时 DLL 依赖。
 - MCP 与网页搜索后端的启用开关改为先解析密钥、再做真实探测（MCP 走工具探测，网页走一次搜索），成功才落为启用；从内置目录添加的 MCP 服务器默认禁用，不能再绕过探测。
 - 移除自定义（`custom`）网页搜索后端：设置页只保留 querit、anysearch、exa 三个厂商；旧配置文件里的 `custom` 行在加载时直接丢弃（该拼写仍被接受以免旧配置解析报错），此前的自定义行开关也顺带堵上了绕过「密钥+探测」门的口子。
-- `openai-codex` 预设模型更新到 15 个：新增 gpt-6.1-sol、gpt-6-sol、gpt-6-luna、gpt-5.6-sol-pro、gpt-5.4、gpt-5.4-mini、gpt-5.3-codex，作为签入前和实时拉取失败时的兜底。
+- `openai-codex` 预设与实时列表都只保留 `gpt-5.6` / `gpt-6` / `gpt-6.1` 系列（8 个预设），`o3`、5.3/5.4/5.5 等旧族不再进目录。
+- 出站 User-Agent 改为应用固定的 `MYCode-Agent/<版本> (<平台> <内核>; <架构>; <shell>)`，不再伪装 pi，Codex 请求的 `originator` 同步改为 `mycode`；设置里的自定义 UA 输入框与 `userAgent` 字段一并移除。
+- 配置文档改为严格解码：未知字段、旧字段（`userAgent`、`usage`、`appearance.palette`/`fontFamily`、`tools.*`、`subagents.maxConcurrent`/`timeoutSecs`、网页 `custom` 后端、`ui.json` 的 `workspaceRoots`/`trustedProjects` 等）一律视为文档损坏，备份后重置 + salvage，不再做逐字段兼容合并；`json_recover` 尾逗号修复同步移除。
+- 设置页模型区的按钮行拉开间距，不再挤在一起。
 
 ## [0.11.25] - 2026-10-17
 

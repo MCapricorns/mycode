@@ -12,7 +12,7 @@ use mycode_providers::{
 };
 
 use crate::settings_io::{load_settings, render_config_error, save_provider_key};
-use crate::state::{CoreState, UPDATE_USER_AGENT};
+use crate::state::CoreState;
 use crate::{BridgeEvent, BridgeReply, CopilotSignInInfo};
 
 /// OpenAI device codes live fifteen minutes. `CodexDeviceStart` carries no
@@ -21,7 +21,10 @@ use crate::{BridgeEvent, BridgeReply, CopilotSignInInfo};
 const CODEX_FLOW_LIFETIME_SECS: u64 = 15 * 60;
 
 fn oauth_call() -> PinnedCall {
-    PinnedCall::new(UPDATE_USER_AGENT, std::time::Duration::from_secs(30))
+    PinnedCall::new(
+        crate::user_agent::default_user_agent(),
+        std::time::Duration::from_secs(30),
+    )
 }
 
 // Device flows for Copilot and Codex.
@@ -436,7 +439,10 @@ pub(crate) async fn resolve_request_auth(
         }
         let mut extra = Vec::new();
         if provider.id == OPENAI_CODEX_PROVIDER_ID {
-            extra.push(("originator".to_owned(), "pi".to_owned()));
+            extra.push((
+                "originator".to_owned(),
+                mycode_providers::ORIGINATOR.to_owned(),
+            ));
             extra.push((
                 "openai-beta".to_owned(),
                 "responses=experimental".to_owned(),
@@ -646,10 +652,9 @@ mod tests {
         );
         // This turn read the old token before the race; it must not spend
         // the already rotated refresh grant.
-        let adopted =
-            super::refresh_oauth_secret(&home, &codex.id, secret("stale", now), now)
-                .await
-                .expect("no network refresh");
+        let adopted = super::refresh_oauth_secret(&home, &codex.id, secret("stale", now), now)
+            .await
+            .expect("no network refresh");
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(adopted.access, "rotated");
     }

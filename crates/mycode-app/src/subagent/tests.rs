@@ -692,7 +692,7 @@ async fn a_routed_role_sends_the_oauth_access_token_not_the_vault_blob() {
         routed
             .headers
             .iter()
-            .any(|(name, value)| name == "originator" && value == "pi")
+            .any(|(name, value)| name == "originator" && value == mycode_providers::ORIGINATOR)
     );
     assert!(
         routed

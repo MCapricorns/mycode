@@ -26,8 +26,9 @@
 //! provider device flows, `settings_io` persists settings and secrets,
 //! `projection` renders display entries, `search` backs the composer's
 //! `@` mention, `mcp_tools` bridges MCP servers, `subagent` hosts the `agent`
-//! tool, and `compaction`, `export`, `updates`, `web_client`, and
-//! `mcp_client` round out the housekeeping and I/O seams.
+//! tool, `user_agent` fixes the outbound identity, and `compaction`,
+//! `export`, `updates`, `web_client`, and `mcp_client` round out the
+//! housekeeping and I/O seams.
 
 #[cfg(test)]
 mod bridge_tests;
@@ -52,6 +53,7 @@ mod subagent;
 mod tool_hosts;
 mod turn;
 mod updates;
+mod user_agent;
 mod web_client;
 
 pub use protocol::{
@@ -62,6 +64,7 @@ pub use protocol::{
 pub use updates::apply::{parse_apply_update_args, run_apply_update_helper};
 pub use updates::{PreparedUpdate, UpdateOffer};
 pub use updates::{apply_and_restart, brief_error, cleanup_stale_stages, current_version};
+pub use user_agent::default_user_agent;
 
 use std::path::PathBuf;
 use std::sync::Arc;

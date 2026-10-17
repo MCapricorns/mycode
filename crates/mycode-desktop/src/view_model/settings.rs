@@ -29,10 +29,6 @@ pub struct CopilotSignIn {
 pub struct SettingsState {
     /// Revision the editor loaded; `0` when absent.
     pub revision: u64,
-    /// Raw configured User-Agent (empty string means the pi default).
-    pub user_agent: String,
-    /// Effective User-Agent preview.
-    pub effective_user_agent: String,
     /// Stored proxy preference: empty or `auto`, `direct`, or a proxy URL.
     pub proxy: String,
     /// Configured providers.
@@ -60,8 +56,6 @@ pub struct SettingsState {
     pub mcp_with_keys: Vec<String>,
     /// Subagent role enablement, model routes, and thinking overrides.
     pub subagents: mycode_config::SubagentSettings,
-    /// Tool-runtime preferences, including the platform shell.
-    pub tools: mycode_config::ToolsSettings,
     /// Skills switched off on the Skills page.
     pub skills: mycode_config::SkillsSettings,
     /// A save is in flight.
@@ -84,8 +78,6 @@ impl SettingsState {
     ) -> Self {
         Self {
             revision,
-            user_agent: settings.user_agent.clone(),
-            effective_user_agent: settings.effective_user_agent(),
             proxy: settings.proxy.clone(),
             providers: settings.providers.clone(),
             web_backends: mycode_config::merged_web_backends(&settings.web.backends),
@@ -98,7 +90,6 @@ impl SettingsState {
             providers_with_keys,
             mcp_with_keys: Vec::new(),
             subagents: settings.subagents.clone(),
-            tools: settings.tools.clone(),
             skills: settings.skills.clone(),
             saving: false,
             dirty: false,
@@ -110,24 +101,19 @@ impl SettingsState {
     #[must_use]
     pub fn to_settings(&self) -> mycode_config::AppSettings {
         mycode_config::AppSettings {
-            user_agent: self.user_agent.clone(),
             proxy: self.proxy.clone(),
             providers: self.providers.clone(),
             web: mycode_config::WebSettings {
                 backends: self.web_backends.clone(),
             },
-            usage: None,
             mcp_servers: self.mcp_servers.clone(),
             appearance: mycode_config::AppearanceSettings {
                 theme: self.theme.clone(),
-                legacy_palette: None,
                 language: self.language.clone(),
                 font_size: self.font_size.clone(),
-                legacy_font_family: None,
             },
             reasoning_effort: self.saved_reasoning.clone(),
             subagents: self.subagents.clone(),
-            tools: self.tools.clone(),
             skills: self.skills.clone(),
         }
     }
@@ -165,7 +151,7 @@ impl SettingsState {
 }
 
 /// The Models settings sub-page: provider list, catalog picker, the
-/// OpenDesign gateway, or the custom-endpoint form.
+/// OpenDesign gateway, the device-OAuth pages, or the custom-endpoint form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelsSubview {
     /// Configured providers plus the add buttons.
@@ -176,6 +162,10 @@ pub enum ModelsSubview {
     /// The OpenDesign gateway: live model listing plus the add form. Kept
     /// apart from the models.dev catalog.
     OpenDesign,
+    /// The GitHub Copilot device sign-in plus its model checklist.
+    GitHubCopilot,
+    /// The OpenAI Codex (ChatGPT) device sign-in plus its model checklist.
+    OpenAiCodex,
     /// The custom endpoint form.
     Custom,
 }
@@ -353,33 +343,6 @@ mod tests {
         assert_eq!(settings.providers[0].models, vec!["m".to_owned()]);
         assert_eq!(settings.providers_with_keys, vec!["gateway".to_owned()]);
         assert!(settings.to_settings().validate().is_ok());
-    }
-
-    #[test]
-    fn unchanged_user_agent_does_not_mark_settings_dirty() {
-        let document = mycode_config::AppSettings::default();
-        let state = super::SettingsState::from_settings(&document, 1, Vec::new());
-        let mut vm = super::super::WorkspaceState {
-            settings: Some(state),
-            ..super::super::WorkspaceState::default()
-        };
-        let current = vm.settings.as_ref().expect("settings").user_agent.clone();
-        let epoch = vm.settings.as_ref().expect("settings").edit_epoch;
-        super::super::reduce(
-            &mut vm,
-            super::super::DesktopAction::SettingsUserAgentChanged(current.clone()),
-        );
-        let settings = vm.settings.as_ref().expect("settings");
-        assert!(!settings.dirty);
-        assert_eq!(settings.edit_epoch, epoch);
-        super::super::reduce(
-            &mut vm,
-            super::super::DesktopAction::SettingsUserAgentChanged(format!("{current} extra")),
-        );
-        let settings = vm.settings.as_ref().expect("settings");
-        assert!(settings.dirty);
-        assert_ne!(settings.edit_epoch, epoch);
-        assert!(settings.user_agent.ends_with(" extra"));
     }
 
     #[test]

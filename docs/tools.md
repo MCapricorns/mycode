@@ -49,7 +49,7 @@ Windows 上脚本模式按层侦查，命中一层就停：PowerShell 7（`pwsh`
 
 macOS 先看 `$SHELL`。它是绝对路径且文件名是 bash、zsh 或 sh 时就用它。否则依次试 `/bin/zsh`、`/bin/bash`、PATH 里的 zsh 和 bash，再试 `sh`。`$SHELL` 若是 pwsh、fish 或其他家族，就跳过。macOS 上不选择 pwsh 或 cmd。工具名跟实际解释器走。
 
-`MYCODE_SHELL` 和设置里的 `tools.shell` 都不再切换解释器。环境变量有具体取值时提示一次并忽略；设置里的旧字段仍能读入，启动时清掉，下次保存就不再写出。
+`MYCODE_SHELL` 和设置里的 `tools.shell` 都不再切换解释器。`MYCODE_SHELL` 有具体取值时提示一次并忽略；旧 `settings.json` 里的 `tools` 字段是未知字段，会让整份文档备份后重置（见 config.md），抢救时丢弃。
 
 PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bash 改写成 cmdlet。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免空的 `-EncodedCommand` 被拒绝。命令行按 UTF-16 码元计，上限 32767。bash、zsh 和 sh 用 `-c`。用户命令原样执行。
 

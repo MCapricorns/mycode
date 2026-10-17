@@ -8,10 +8,8 @@ use crate::ConfigError;
 /// Maximum web search backends.
 pub const MAX_WEB_BACKENDS: usize = 16;
 
-/// Wire families accepted by [`WebBackendSettings::kind`]. `custom` stays
-/// valid so a settings file written before the vendor-only settings page
-/// still parses; the app drops such rows when it loads settings.
-const VALID_WEB_KINDS: [&str; 4] = ["querit", "anysearch", "exa", "custom"];
+/// Wire families accepted by [`WebBackendSettings::kind`].
+const VALID_WEB_KINDS: [&str; 3] = ["querit", "anysearch", "exa"];
 
 /// One configured search backend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,8 +17,7 @@ const VALID_WEB_KINDS: [&str; 4] = ["querit", "anysearch", "exa", "custom"];
 pub struct WebBackendSettings {
     /// Unique backend identity (lowercase portable).
     pub id: String,
-    /// Backend family: `querit`, `anysearch`, `exa`, or the retired
-    /// `custom` (dropped at load).
+    /// Backend family: `querit`, `anysearch`, or `exa`.
     pub kind: String,
     /// HTTPS API endpoint.
     pub endpoint: String,
@@ -30,9 +27,8 @@ pub struct WebBackendSettings {
 
 /// The environment variable that can hold a builtin backend's API key.
 ///
-/// `None` for a retired `custom` row. Callers check the variable before the
-/// vault so a machine already exporting it (the pi agent's querit plugin
-/// reads `QUERIT_API_KEY` the same way) keeps working.
+/// Callers check the variable before the vault so a machine already
+/// exporting it keeps working.
 #[must_use]
 pub fn web_key_env(kind: &str) -> Option<&'static str> {
     match kind {
@@ -120,7 +116,7 @@ impl AppSettings {
             }
             if !VALID_WEB_KINDS.contains(&backend.kind.as_str()) {
                 return Err(invalid(&format!(
-                    "{field}.kind: must be querit, anysearch, exa, or custom"
+                    "{field}.kind: must be querit, anysearch, or exa"
                 )));
             }
             if !is_https_url(&backend.endpoint) {
@@ -185,14 +181,14 @@ mod tests {
     }
 
     #[test]
-    fn validation_accepts_exa_and_legacy_custom_but_not_new_kinds() {
+    fn validation_accepts_vendors_and_rejects_retired_or_new_kinds() {
         assert!(settings(vec![backend("exa", "exa")]).validate_web().is_ok());
-        // A file written before the vendor-only page still loads.
-        assert!(
-            settings(vec![backend("mine", "custom")])
-                .validate_web()
-                .is_ok()
-        );
+        // A file written before the vendor-only page does not load anymore:
+        // the `custom` kind is invalid like any other unknown family.
+        let custom = settings(vec![backend("mine", "custom")])
+            .validate_web()
+            .expect_err("the retired custom kind is rejected");
+        assert!(custom.summary().contains("kind"), "{}", custom.summary());
         let error = settings(vec![backend("mine", "tavily")])
             .validate_web()
             .expect_err("an unknown kind is rejected");
@@ -203,12 +199,12 @@ mod tests {
     fn merged_list_overlays_configured_and_keeps_leftovers() {
         let mut stored_exa = backend("exa", "exa");
         stored_exa.enabled = true;
-        let merged = super::merged_web_backends(&[stored_exa, backend("mine", "custom")]);
+        let merged = super::merged_web_backends(&[stored_exa, backend("mine", "querit")]);
         let ids: Vec<_> = merged.iter().map(|b| b.id.as_str()).collect();
         assert_eq!(ids, ["querit", "anysearch", "exa", "mine"]);
         // The stored row replaced the builtin slot instead of appending.
         assert!(merged[2].enabled);
-        assert_eq!(merged[3].kind, "custom");
+        assert_eq!(merged[3].kind, "querit");
     }
 
     #[test]

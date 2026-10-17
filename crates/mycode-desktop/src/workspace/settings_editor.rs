@@ -25,47 +25,6 @@ pub(crate) fn normalized_key_input(raw: &str) -> Option<String> {
 pub(crate) const DEFAULT_PROXY_URL: &str = "http://127.0.0.1:7890";
 
 impl Workspace {
-    pub(crate) fn settings_ua_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        if self.ua_input.is_none() {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx).placeholder(mycode_config::default_user_agent())
-            });
-            cx.subscribe_in(
-                &input,
-                window,
-                |workspace, entity, event, _, cx| match event {
-                    InputEvent::Change => {
-                        let text = entity.read(cx).value().to_string();
-                        workspace.apply_action(DesktopAction::SettingsUserAgentChanged(text), cx);
-                    }
-                    InputEvent::Blur => workspace.flush_settings_text_save(cx),
-                    InputEvent::Focus | InputEvent::PressEnter { .. } => {}
-                },
-            )
-            .detach();
-            self.ua_input = Some(input);
-        }
-        let input = self.ua_input.clone().expect("ua input");
-        if self.ua_sync_pending {
-            let target = self
-                .vm
-                .settings
-                .as_ref()
-                .map(|settings| settings.user_agent.clone())
-                .unwrap_or_default();
-            let current = input.read(cx).value().to_string();
-            if current != target {
-                input.update(cx, |state, cx| state.set_value(target, window, cx));
-            }
-            self.ua_sync_pending = false;
-        }
-        input
-    }
-
     /// The proxy URL field. Only a value that parses as a proxy reaches the
     /// settings document, so a half-typed URL never fails a save.
     pub(crate) fn settings_proxy_input(

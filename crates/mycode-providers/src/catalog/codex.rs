@@ -55,10 +55,20 @@ struct StoreDocument {
     models: Vec<LiveModel>,
 }
 
+/// The GPT-5.6, GPT-6, and GPT-6.1 series are the only families the
+/// subscription backend still serves usefully; older series are retired
+/// from every listing path (preset and live).
+pub(crate) fn usable_family(id: &str) -> bool {
+    ["gpt-5.6-", "gpt-6-", "gpt-6.1-"]
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+        || matches!(id, "gpt-5.6" | "gpt-6")
+}
+
 /// Parses a Codex `/models` body into served rows.
 ///
-/// `visibility: "hide"` rows (the auto-review slot) and invalid or
-/// duplicated slugs are dropped.
+/// `visibility: "hide"` rows (the auto-review slot), retired series, and
+/// invalid or duplicated slugs are dropped.
 ///
 /// # Errors
 ///
@@ -82,6 +92,9 @@ pub fn parse_listing(bytes: &[u8]) -> Result<Vec<LiveModel>, String> {
         let Some(id) = entry.get("slug").and_then(serde_json::Value::as_str) else {
             continue;
         };
+        if !usable_family(id) {
+            continue;
+        }
         if !super::valid_model_id(id) || models.iter().any(|model| model.id == id) {
             continue;
         }
@@ -240,7 +253,7 @@ pub async fn fetch_live_models(
     let mut headers = vec![
         ("accept".to_owned(), "application/json".to_owned()),
         ("authorization".to_owned(), format!("Bearer {access}")),
-        ("originator".to_owned(), "pi".to_owned()),
+        ("originator".to_owned(), crate::ORIGINATOR.to_owned()),
         (
             "openai-beta".to_owned(),
             "responses=experimental".to_owned(),
@@ -295,7 +308,7 @@ pub async fn fetch_live_models(
 
 #[cfg(test)]
 mod tests {
-    use super::{LiveModel, attach, merge, parse_listing};
+    use super::{LiveModel, attach, merge, parse_listing, usable_family};
     use crate::catalog::{CatalogDocument, CatalogProvider};
 
     const LISTING: &[u8] = br#"{"models":[
@@ -303,13 +316,14 @@ mod tests {
          "supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],
          "context_window":1050000},
         {"slug":"codex-auto-review","display_name":"Codex Auto Review","visibility":"hide"},
+        {"slug":"gpt-5.3-codex","display_name":"GPT-5.3 Codex","visibility":"list"},
         {"slug":"gpt-5.6-sol","display_name":"GPT-5.6 Sol","visibility":"list",
          "supported_reasoning_levels":[{"effort":"none"},{"effort":"low"},{"effort":"max"}]},
         {"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","visibility":"list"}
     ]}"#;
 
     #[test]
-    fn listing_keeps_visible_rows_and_drops_hidden_and_duplicates() {
+    fn listing_keeps_visible_rows_and_drops_hidden_retired_and_duplicates() {
         let models = parse_listing(LISTING).expect("listing parses");
         let ids: Vec<_> = models.iter().map(|model| model.id.as_str()).collect();
         assert_eq!(ids, ["gpt-6.1-sol", "gpt-5.6-sol"]);
@@ -333,6 +347,30 @@ mod tests {
             .expect("merged row");
         assert_eq!(row.reasoning_efforts, ["low", "high"]);
         assert_eq!(row.context, 999_000);
+    }
+
+    #[test]
+    fn usable_family_covers_the_current_series_only() {
+        for id in [
+            "gpt-5.6-sol",
+            "gpt-5.6-luna",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6.1-sol",
+            "gpt-6",
+        ] {
+            assert!(usable_family(id), "{id}");
+        }
+        for id in [
+            "gpt-5.3-codex",
+            "gpt-5.4",
+            "gpt-5.5",
+            "o3",
+            "o3-pro",
+            "gpt-60-x",
+        ] {
+            assert!(!usable_family(id), "{id}");
+        }
     }
 
     #[test]

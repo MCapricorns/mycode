@@ -20,7 +20,9 @@ use crate::workspace::Workspace;
 
 mod catalog;
 
-use self::catalog::{render_models_catalog_page, render_opendesign_page};
+use self::catalog::{
+    render_device_signin_page, render_models_catalog_page, render_opendesign_page,
+};
 
 pub(super) fn render_models_section(
     workspace: &mut Workspace,
@@ -41,6 +43,15 @@ pub(super) fn render_models_section(
         crate::view_model::ModelsSubview::OpenDesign => {
             render_opendesign_page(workspace, window, cx)
         }
+        crate::view_model::ModelsSubview::GitHubCopilot => {
+            render_device_signin_page(workspace, mycode_providers::COPILOT_PROVIDER_ID, window, cx)
+        }
+        crate::view_model::ModelsSubview::OpenAiCodex => render_device_signin_page(
+            workspace,
+            mycode_providers::OPENAI_CODEX_PROVIDER_ID,
+            window,
+            cx,
+        ),
         crate::view_model::ModelsSubview::Custom => {
             render_custom_provider_page(workspace, window, cx)
         }
@@ -210,7 +221,7 @@ fn render_models_list_page(
                         .flex()
                         .flex_row()
                         .flex_wrap()
-                        .gap_2()
+                        .gap_3()
                         .child(
                             Button::new("add-from-catalog")
                                 .icon(IconName::Plus)
@@ -220,6 +231,32 @@ fn render_models_list_page(
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.on_show_models_subview(
                                         crate::view_model::ModelsSubview::Catalog,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("add-github-copilot")
+                                .icon(IconName::Github)
+                                .label(t("GitHub Copilot\u{2026}", "GitHub Copilot\u{2026}"))
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_models_subview(
+                                        crate::view_model::ModelsSubview::GitHubCopilot,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("add-openai-codex")
+                                .icon(IconName::KeyRound)
+                                .label(t("OpenAI Codex\u{2026}", "OpenAI Codex\u{2026}"))
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_models_subview(
+                                        crate::view_model::ModelsSubview::OpenAiCodex,
                                         cx,
                                     );
                                 })),

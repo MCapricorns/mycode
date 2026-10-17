@@ -1,11 +1,13 @@
-//! Backs up an unreadable owned document and publishes a canonical default.
+//! Backs up an unreadable owned document and republishes it canonical.
 //!
 //! Startup reads of `settings.json`, `secrets.json`, and `ui.json` use this
 //! so a broken file cannot blank the window: damaged content, and a file the
 //! strict checks reject for its own permissions, owner, or type, are both
-//! moved aside and replaced with defaults. The previous file stays beside the
-//! original as `{name}.broken-<nanos>`. Session ledgers are not documents this
-//! module handles.
+//! moved aside and replaced. The replacement keeps every field that still
+//! decodes and validates (`salvage`), so one bad section does not force the
+//! user to re-enter the rest. The previous file stays beside the original as
+//! `{name}.broken-<nanos>`. Session ledgers are not documents this module
+//! handles.
 
 use std::io;
 
@@ -129,13 +131,18 @@ fn backup_name_with_stamp(relative: &str, stamp: u128) -> Result<String, ConfigE
     Ok(backup)
 }
 
+/// Reads one owned document through `decode`. A damaged or unusable file is
+/// quarantined and replaced: `salvage` extracts whatever still validates from
+/// the stored bytes, and the remainder comes from `fallback`. The published
+/// value is the one returned.
 pub(crate) fn load_or_reset<T>(
     home: &HomeLayout,
     relative: &'static str,
     max_bytes: usize,
     decode: impl FnOnce(&[u8]) -> Result<T, ConfigError>,
     fallback: impl FnOnce() -> T,
-    publish: impl FnOnce() -> Result<(), ConfigError>,
+    salvage: impl FnOnce(&serde_json::Value) -> Option<T>,
+    publish: impl FnOnce(&T) -> Result<(), ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
     match read_owned_file(home, relative, max_bytes) {
         Ok(None) => Ok(Loaded {
@@ -148,14 +155,14 @@ pub(crate) fn load_or_reset<T>(
                 repair: None,
             }),
             Err(error) if is_document_damage(&error) => {
-                reset_from_bytes(home, relative, bytes.as_slice(), fallback, publish)
+                reset_from_bytes(home, relative, bytes.as_slice(), fallback, salvage, publish)
             }
             Err(error) => Err(error),
         },
         Err(error) if error.kind() == ConfigErrorKind::Oversized => {
             match read_owned_file(home, relative, QUARANTINE_MAX_BYTES.max(max_bytes)) {
                 Ok(Some(bytes)) => {
-                    reset_from_bytes(home, relative, bytes.as_slice(), fallback, publish)
+                    reset_from_bytes(home, relative, bytes.as_slice(), fallback, salvage, publish)
                 }
                 Ok(None) => Ok(Loaded {
                     value: fallback(),
@@ -172,14 +179,14 @@ pub(crate) fn load_or_reset<T>(
 }
 
 /// Moves a document the strict read rejected aside, unread, and publishes
-/// the default. When nothing can be moved (the failure was the home, not the
+/// the fallback. When nothing can be moved (the failure was the home, not the
 /// file) the original error is returned unchanged.
 fn reset_unreadable<T>(
     home: &HomeLayout,
     relative: &'static str,
     error: ConfigError,
     fallback: impl FnOnce() -> T,
-    publish: impl FnOnce() -> Result<(), ConfigError>,
+    publish: impl FnOnce(&T) -> Result<(), ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
     let mut moved_backup = None;
     let stamp = crate::unix_now().as_nanos();
@@ -199,9 +206,10 @@ fn reset_unreadable<T>(
     let Some(backup) = moved_backup else {
         return Err(error);
     };
-    publish()?;
+    let value = fallback();
+    publish(&value)?;
     Ok(Loaded {
-        value: fallback(),
+        value,
         repair: Some(DocumentRepair {
             path: relative,
             backup,
@@ -214,14 +222,63 @@ fn reset_from_bytes<T>(
     relative: &'static str,
     bytes: &[u8],
     fallback: impl FnOnce() -> T,
-    publish: impl FnOnce() -> Result<(), ConfigError>,
+    salvage: impl FnOnce(&serde_json::Value) -> Option<T>,
+    publish: impl FnOnce(&T) -> Result<(), ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
     let repair = quarantine_owned_bytes(home, relative, bytes)?;
-    publish()?;
+    let value = serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|document| salvage(&document))
+        .unwrap_or_else(fallback);
+    publish(&value)?;
     Ok(Loaded {
-        value: fallback(),
+        value,
         repair: Some(repair),
     })
+}
+
+/// Decodes `object[name]` as `T`, tolerating a missing member or a wrong
+/// type. The document families' salvage paths use it so one bad member drops
+/// only itself instead of resetting the whole file.
+pub(crate) fn salvage_field<T: serde::de::DeserializeOwned>(
+    object: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Option<T> {
+    object
+        .get(name)
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
+/// Decodes every element of `object[name]` that is a valid `T`. A list with
+/// one corrupt entry keeps its readable rows.
+pub(crate) fn salvage_list<T: serde::de::DeserializeOwned>(
+    object: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Vec<T> {
+    object
+        .get(name)
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| serde_json::from_value(row.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Applies `apply` on a clone of `state` and adopts the clone only when the
+/// validation passes. Salvage walks keep every member that checks out
+/// instead of resetting the whole document over one bad value.
+pub(crate) fn salvage_adopt<D: Clone>(
+    state: &mut D,
+    ok: impl Fn(&D) -> bool,
+    apply: impl FnOnce(&mut D),
+) {
+    let mut probe = state.clone();
+    apply(&mut probe);
+    if ok(&probe) {
+        *state = probe;
+    }
 }
 
 #[cfg(test)]
@@ -308,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_appearance_resets_settings_and_keeps_the_old_bytes() {
+    fn invalid_appearance_resets_settings_and_salvages_the_rest() {
         let (_guard, home) = home("appearance");
         let bytes = br#"{
             "formatVersion": 1,
@@ -325,8 +382,12 @@ mod tests {
         }"#;
         write_private(&home, "settings.json", bytes);
         let (settings, repair) = read_app_settings_with_repair(&home).unwrap();
-        assert!(settings.providers.is_empty());
+        // The broken theme fell back to the default; the healthy provider
+        // row survived the reset.
         assert_eq!(settings.appearance.theme, "dark");
+        assert_eq!(settings.appearance.language, "zh");
+        assert_eq!(settings.providers.len(), 1);
+        assert_eq!(settings.providers[0].id, "openai");
         let repair = repair.expect("validation repair");
         let backup = std::fs::read(home.root().join(&repair.backup)).unwrap();
         assert!(
@@ -334,10 +395,14 @@ mod tests {
             "backup lost"
         );
         assert!(backup.windows(6).any(|window| window == b"openai"));
+        let rewritten = std::fs::read(home.root().join("settings.json")).unwrap();
+        let text = String::from_utf8(rewritten).unwrap();
+        assert!(text.contains("\"openai\""), "salvage published: {text}");
+        assert!(!text.contains("nope"), "{text}");
     }
 
     #[test]
-    fn valid_settings_and_trailing_commas_are_not_quarantined() {
+    fn valid_settings_load_clean_and_a_malformed_document_is_quarantined() {
         let (_guard, home) = home("valid");
         let mut settings = crate::AppSettings::default();
         settings.appearance.font_size = "l".to_owned();
@@ -346,22 +411,20 @@ mod tests {
         assert!(repair.is_none());
         assert_eq!(loaded.appearance.font_size, "l");
 
+        // A retired field is document damage: the file is quarantined and
+        // republished, with the still-valid `autoUpdate` kept.
         write_private(
             &home,
             "ui.json",
-            br#"{"formatVersion":1,"kind":"mycode-ui-state","autoUpdate":false,}"#,
+            br#"{"formatVersion":1,"kind":"mycode-ui-state","autoUpdate":false,"workspaceRoots":["/legacy/root"]}"#,
         );
         let (ui, repair) = read_ui_state_with_repair(&home).unwrap();
-        assert!(repair.is_none(), "trailing comma is an in-place repair");
-        assert!(!ui.auto_update);
-        assert!(
-            !home
-                .root()
-                .read_dir()
-                .unwrap()
-                .flatten()
-                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-"))
-        );
+        assert!(!ui.auto_update, "the valid field survived the reset");
+        let repair = repair.expect("a rejected document is quarantined");
+        let backup = std::fs::read(home.root().join(&repair.backup)).unwrap();
+        assert!(backup.windows(7).any(|window| window == b"/legacy"));
+        // The republished file parses, so the next launch is quiet.
+        assert!(read_ui_state_with_repair(&home).unwrap().1.is_none());
     }
 
     fn names_in(home: &HomeLayout) -> Vec<String> {
@@ -431,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_migration_rewrite_is_reported_not_treated_as_damage() {
+    fn a_decode_error_that_is_not_damage_is_reported_not_reset() {
         let (_guard, home) = home("rewrite");
         write_private(&home, "ui.json", b"{}");
         let error = super::load_or_reset(
@@ -442,10 +505,11 @@ mod tests {
                 Err(crate::ConfigError::new(crate::ConfigErrorKind::Io))
             },
             || (),
-            || panic!("a rewrite failure must not publish defaults"),
+            |_| -> Option<()> { None },
+            |_| panic!("a read failure must not publish a replacement"),
         )
         .err()
-        .expect("the rewrite failure surfaces");
+        .expect("the decode failure surfaces");
         assert_eq!(error.kind(), crate::ConfigErrorKind::Io);
         assert!(
             names_in(&home)
