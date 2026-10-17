@@ -154,12 +154,6 @@ impl Workspace {
 
     // ---- web search backends ----
 
-    /// Removes a stored backend row. Only legacy `custom` rows are
-    /// removable; vendor rows never show the control.
-    pub(crate) fn on_remove_backend(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::SettingsBackendRemoved(index), cx);
-    }
-
     /// The row's enable switch. Disabling is immediate; enabling first runs
     /// a key-resolving search probe against the row, landing `on` only when
     /// the probe returns `Ok`. A missing key or dead endpoint can therefore

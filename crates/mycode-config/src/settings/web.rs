@@ -10,7 +10,7 @@ pub const MAX_WEB_BACKENDS: usize = 16;
 
 /// Wire families accepted by [`WebBackendSettings::kind`]. `custom` stays
 /// valid so a settings file written before the vendor-only settings page
-/// still loads; the UI no longer adds or edits one.
+/// still parses; the app drops such rows when it loads settings.
 const VALID_WEB_KINDS: [&str; 4] = ["querit", "anysearch", "exa", "custom"];
 
 /// One configured search backend.
@@ -19,7 +19,8 @@ const VALID_WEB_KINDS: [&str; 4] = ["querit", "anysearch", "exa", "custom"];
 pub struct WebBackendSettings {
     /// Unique backend identity (lowercase portable).
     pub id: String,
-    /// Backend family: `querit`, `anysearch`, `exa`, or `custom`.
+    /// Backend family: `querit`, `anysearch`, `exa`, or the retired
+    /// `custom` (dropped at load).
     pub kind: String,
     /// HTTPS API endpoint.
     pub endpoint: String,
@@ -29,9 +30,9 @@ pub struct WebBackendSettings {
 
 /// The environment variable that can hold a builtin backend's API key.
 ///
-/// `None` for a `custom` row, which only takes a vault key. Callers check
-/// the variable before the vault so a machine already exporting it (the pi
-/// agent's querit plugin reads `QUERIT_API_KEY` the same way) keeps working.
+/// `None` for a retired `custom` row. Callers check the variable before the
+/// vault so a machine already exporting it (the pi agent's querit plugin
+/// reads `QUERIT_API_KEY` the same way) keeps working.
 #[must_use]
 pub fn web_key_env(kind: &str) -> Option<&'static str> {
     match kind {
@@ -70,8 +71,8 @@ pub fn builtin_web_backends() -> Vec<WebBackendSettings> {
 }
 
 /// The vendor rows overlaid with configured backends: a stored row replaces
-/// its builtin slot by id, and an id the vendor list no longer offers (a
-/// `custom` row from an older file) is kept so nothing is silently dropped.
+/// its builtin slot by id, and an id the vendor list no longer offers (one
+/// a newer or older build wrote) is kept so nothing is silently dropped.
 #[must_use]
 pub fn merged_web_backends(configured: &[WebBackendSettings]) -> Vec<WebBackendSettings> {
     let mut backends = builtin_web_backends();

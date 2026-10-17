@@ -130,7 +130,9 @@ pub(crate) async fn fallback_for(host: &str) -> Option<String> {
 }
 
 /// Drops a remembered proxy for `host` after that proxy stopped answering,
-/// so the next hop tries direct again.
+/// so the next hop tries direct again. The whole probe cache goes too: a
+/// dead proxy endpoint invalidates the cached port answer for every host,
+/// not just this one.
 pub(crate) fn forget(host: &str) {
     if let Some(hosts) = LEARNED.lock().as_mut() {
         hosts.remove(&host.to_ascii_lowercase());

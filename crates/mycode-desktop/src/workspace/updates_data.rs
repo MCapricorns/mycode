@@ -334,7 +334,12 @@ impl Workspace {
         match collect_ask_answers(rows, &self.vm.ask_answers, &free_text) {
             Ok(answers) => self.on_answer_ask(answers, cx),
             Err(index) => self.push_toast(
-                format!("Answer question {} before submitting.", index + 1),
+                format!(
+                    "{} {} {}",
+                    crate::i18n::t("Answer question", "请先回答第"),
+                    index + 1,
+                    crate::i18n::t("before submitting.", "题后再提交"),
+                ),
                 crate::workspace::ToastKind::Info,
                 cx,
             ),

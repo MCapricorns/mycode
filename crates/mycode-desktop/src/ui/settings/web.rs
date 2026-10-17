@@ -1,6 +1,7 @@
 //! The Web settings page: one row per vendor backend that opens its detail
-//! page, plus read-only rows for backends an older settings file stored.
-//! Vendor endpoints are fixed; a key lives in the vault, never in settings.
+//! page. Vendor endpoints are fixed; a key lives in the vault, never in
+//! settings. Retired `custom` rows are dropped when settings load, so every
+//! row here is a vendor row.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -17,7 +18,6 @@ use gpui_kit::{
 use super::widgets::{row_header, settings_card};
 use crate::i18n::t;
 use crate::ui::skin;
-use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
 pub(super) fn render_web_section(
@@ -31,8 +31,7 @@ pub(super) fn render_web_section(
     }
 }
 
-/// Display name for a vendor kind; anything else (a stored `custom` row)
-/// shows its own id.
+/// Display name for a vendor kind; anything else shows its own id.
 fn vendor_title(backend: &mycode_config::WebBackendSettings) -> String {
     match backend.kind.as_str() {
         "querit" => "Querit".to_owned(),
@@ -65,8 +64,6 @@ fn render_web_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                 &theme,
                 cx,
             ));
-        } else {
-            rows.push(stored_backend_row(index, backend, &theme, cx));
         }
     }
     div()
@@ -184,51 +181,6 @@ fn vendor_row(
                     workspace.on_backend_toggled(index, *checked, cx);
                 })),
         )
-        .into_any_element()
-}
-
-/// A backend stored by an older settings file (a `custom` row): still
-/// toggleable and removable, but there is no detail page for it.
-fn stored_backend_row(
-    index: usize,
-    backend: &mycode_config::WebBackendSettings,
-    theme: &Theme,
-    cx: &Context<Workspace>,
-) -> AnyElement {
-    let enabled = backend.enabled;
-    div()
-        .id(format!("backend-row-{}", backend.id))
-        .w_full()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .p_2()
-        .rounded(skin::radius_control())
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .bg(skin::frost(theme))
-        .child(row_header(
-            &backend.id,
-            format!("{} \u{b7} {}", backend.kind, backend.endpoint),
-            theme,
-        ))
-        .child(
-            Switch::new(format!("backend-toggle-{index}"))
-                .checked(enabled)
-                .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
-                    workspace
-                        .apply_action(DesktopAction::SettingsBackendToggled(index, *checked), cx);
-                })),
-        )
-        .child(crate::ui::icon_button(
-            format!("backend-remove-{index}"),
-            IconName::Trash,
-            cx.listener(move |workspace, _, _, cx| {
-                workspace.on_remove_backend(index, cx);
-            }),
-            cx,
-        ))
         .into_any_element()
 }
 

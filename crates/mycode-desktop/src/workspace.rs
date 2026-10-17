@@ -917,7 +917,7 @@ pub(crate) fn parse_env_line(
     line: &str,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
     let mut env = std::collections::BTreeMap::new();
-    for word in mycode_config::split_command_line(&line.replace(',', " ")) {
+    for word in mycode_config::split_command_line(&space_separate_env(line)) {
         let Some((key, value)) = word.split_once('=') else {
             return Err(format!("env entry '{word}' must look like KEY=VALUE"));
         };
@@ -934,6 +934,38 @@ pub(crate) fn parse_env_line(
         ));
     }
     Ok(env)
+}
+
+/// Maps commas to spaces outside quotes so [`mycode_config::split_command_line`]
+/// sees one word per `KEY=VALUE` while a quoted value keeps its commas.
+fn space_separate_env(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(open) if ch == open => {
+                quote = None;
+                out.push(ch);
+            }
+            // Mirror split_command_line: a backslash escapes `"` and `\`
+            // inside double quotes, so `\",` is not a comma outside quotes.
+            Some('"') if ch == '\\' && matches!(chars.peek(), Some('"' | '\\')) => {
+                out.push(ch);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            Some(_) => out.push(ch),
+            None if ch == '"' || ch == '\'' => {
+                quote = Some(ch);
+                out.push(ch);
+            }
+            None if ch == ',' => out.push(' '),
+            None => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Renders the whole window; split across the `ui` submodule.
@@ -1034,5 +1066,20 @@ mod tests {
         assert_eq!(titlebar.traffic_light_position, Some(TRAFFIC_LIGHTS));
         assert!(f32::from(TRAFFIC_LIGHTS.x) >= 0.);
         assert!(f32::from(TRAFFIC_LIGHTS.y) >= 0.);
+    }
+
+    #[test]
+    fn env_line_keeps_commas_inside_quoted_values() {
+        let env = parse_env_line(r#"A=1, B="x,y", C='p,q' D=2"#).unwrap();
+        assert_eq!(env.get("A").map(String::as_str), Some("1"));
+        assert_eq!(env.get("B").map(String::as_str), Some("x,y"));
+        assert_eq!(env.get("C").map(String::as_str), Some("p,q"));
+        assert_eq!(env.get("D").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn env_line_rejects_a_bare_word() {
+        assert!(parse_env_line("A=1 stray").is_err());
+        assert!(parse_env_line("=value").is_err());
     }
 }
