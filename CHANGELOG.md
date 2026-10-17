@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.11.28] - 2026-10-17
+
 ### Fixed
 
 - 思考档位重启后丢失：`ui.json` 的 `selectedReasoning` 只在新会话建立时播种，桌面输入框（无会话）重启后芯片一直显示「Thinking」，且首个新会话会把服务商默认档位写进 pin。现在加载 `ui.json`、重载设置文档（OAuth 登录完成、导入配置）、会话离开屏幕时按「会话 pin > 作曲栏上次所选 > 文档默认」重敷实时档位，目录未加载时芯片也能显示记住的档位。
@@ -114,7 +116,8 @@
 - 更新只从本仓库的 GitHub Release 下载；压缩包里带盘符前缀的条目（如 `C:x.exe`）会被拒绝，不能写出暂存目录。
 - OAuth 登录打开浏览器不再经过 `cmd /c start`（服务器返回的地址里的 `&`、`|` 会被当成命令解析），且只打开 https 地址。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.27...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.28...HEAD
+[0.11.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.28
 [0.11.27]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.27
 [0.11.26]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.26
 [0.11.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.24
