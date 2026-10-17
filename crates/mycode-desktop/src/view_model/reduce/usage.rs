@@ -82,6 +82,7 @@ mod tests {
 
     fn warm() -> WorkspaceState {
         WorkspaceState {
+            sending: true,
             active: Some(ActiveConversation {
                 session_id: "ses".to_owned(),
                 branch_id: "br".to_owned(),
@@ -89,6 +90,7 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                running: false,
                 context_used: 10_000,
                 context_cache: 9_200,
             }),
@@ -250,6 +252,7 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                running: false,
                 context_used: 100,
                 context_cache: 0,
             }),

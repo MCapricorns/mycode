@@ -73,10 +73,7 @@ pub(crate) fn anchor_file_path(
     let (root, relative) = if reads_only {
         anchor_tool_path_iter(
             cwd,
-            extra_roots
-                .iter()
-                .chain(read_roots)
-                .map(PathBuf::as_path),
+            extra_roots.iter().chain(read_roots).map(PathBuf::as_path),
             raw,
         )
     } else {

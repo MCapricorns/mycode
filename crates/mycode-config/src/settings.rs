@@ -451,8 +451,7 @@ pub fn salvage_app_settings(document: &serde_json::Value) -> Option<AppSettings>
         .get("subagents")
         .and_then(serde_json::Value::as_object)
     {
-        for role in
-            crate::document_repair::salvage_list::<SubagentRoleSettings>(subagents, "roles")
+        for role in crate::document_repair::salvage_list::<SubagentRoleSettings>(subagents, "roles")
         {
             crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
                 probe.subagents.roles.push(role);

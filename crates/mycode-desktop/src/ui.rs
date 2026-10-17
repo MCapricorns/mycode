@@ -29,33 +29,6 @@ pub(crate) use chat::composer_placeholder;
 pub(crate) use command_palette::ToggleCommandPalette;
 pub(crate) use settings::{McpForm, ProviderForm, build_custom_provider, build_mcp_server};
 
-/// How much of the desk chrome fits the current window width.
-///
-/// The inspector starts closed. On a wide window it can be pinned beside the
-/// conversation; otherwise it opens as a drawer over the chat.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) struct DeskLayout {
-    /// Whether pinning the inspector still leaves a readable transcript.
-    wide: bool,
-}
-
-impl DeskLayout {
-    /// Width at which a pinned inspector can sit beside the conversation.
-    const PIN_MIN: f32 = 1280.;
-
-    fn of(window: &Window) -> Self {
-        let width = f32::from(window.viewport_size().width);
-        Self {
-            wide: width >= Self::PIN_MIN,
-        }
-    }
-
-    /// Wide enough that a pinned Details column can sit beside the chat.
-    pub(super) fn docks_inspector(window: &Window) -> bool {
-        Self::of(window).wide
-    }
-}
-
 /// Renders the whole window chrome and content.
 pub fn render_root(
     workspace: &mut Workspace,
@@ -67,9 +40,9 @@ pub fn render_root(
     }
     workspace.sync_interface_font(window, cx);
     workspace.sync_localized_placeholders(window, cx);
-    let layout = DeskLayout::of(window);
-    let inspector_docked = layout.wide
-        && workspace.vm().inspector_open
+    // Pin means resident: a pinned Details column docks beside the chat at
+    // any width instead of floating as a drawer a click can dismiss.
+    let inspector_docked = workspace.vm().inspector_open
         && workspace.vm().inspector_pinned
         && workspace.vm().view == MainView::Chat;
     let inspector_overlay =

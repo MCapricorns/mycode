@@ -153,12 +153,10 @@ pub(super) fn render_chat(
     );
     let probe = anchor.probe();
     let theme = cx.theme();
-    // Details docks into the row on a wide window, so this pane is already
-    // the strip between the sidebar and that column. When the card floats,
+    // Details docks into the row while pinned, so this pane is already the
+    // strip between the sidebar and that column. When the card floats,
     // reserve its width or the transcript and composer slide underneath it.
-    let details_docked = super::DeskLayout::docks_inspector(window)
-        && workspace.vm().inspector_open
-        && workspace.vm().inspector_pinned;
+    let details_docked = workspace.vm().inspector_open && workspace.vm().inspector_pinned;
     let chat_width = f32::from(window.viewport_size().width) - super::sidebar::WIDTH_PX;
     let details_reserve = super::context::chat_right_reserve(
         workspace.vm().inspector_open,

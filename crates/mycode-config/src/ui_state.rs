@@ -236,6 +236,14 @@ pub struct UiState {
     /// every trace in every session; traces are expanded by default.
     #[serde(default)]
     pub thinking_collapsed: bool,
+    /// The Details panel is open. Restored so a resident panel survives a
+    /// restart instead of silently closing.
+    #[serde(default)]
+    pub inspector_open: bool,
+    /// The Details panel is pinned beside the chat. A pinned panel ignores
+    /// the floating drawer's dismiss gestures.
+    #[serde(default)]
+    pub inspector_pinned: bool,
     /// Last windowed size; the next launch restores it. `None` keeps the
     /// computed default bounds.
     #[serde(default)]
@@ -258,6 +266,8 @@ impl Default for UiState {
             session_models: Vec::new(),
             selected_reasoning: None,
             thinking_collapsed: false,
+            inspector_open: false,
+            inspector_pinned: false,
             window_size: None,
         }
     }
@@ -616,8 +626,7 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
             probe.selected_model = value;
         }
     });
-    for entry in
-        crate::document_repair::salvage_list::<(String, String)>(object, "sessionProjects")
+    for entry in crate::document_repair::salvage_list::<(String, String)>(object, "sessionProjects")
     {
         if state.session_projects.len() >= MAX_SESSION_PROJECTS {
             break;
@@ -679,6 +688,19 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
             crate::document_repair::salvage_field::<bool>(object, "thinkingCollapsed")
         {
             probe.thinking_collapsed = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) = crate::document_repair::salvage_field::<bool>(object, "inspectorOpen")
+        {
+            probe.inspector_open = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) =
+            crate::document_repair::salvage_field::<bool>(object, "inspectorPinned")
+        {
+            probe.inspector_pinned = value;
         }
     });
     crate::document_repair::salvage_adopt(&mut state, valid, |probe| {

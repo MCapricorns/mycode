@@ -148,7 +148,7 @@ impl Workspace {
         self.delete_session(session_id.to_owned(), cx);
     }
 
-    fn delete_session(&mut self, session_id: String, cx: &mut Context<Self>) {
+    pub(super) fn delete_session(&mut self, session_id: String, cx: &mut Context<Self>) {
         let request = self.bridge.request(BridgeCommand::DeleteSession {
             session_id: session_id.clone(),
         });
@@ -169,6 +169,7 @@ impl Workspace {
                         // failure must leave both the transcript and routing intact.
                         workspace
                             .apply_action(DesktopAction::SessionBindingsForgotten(session_id), cx);
+                        workspace.persist_ui_state(cx);
                         workspace.dispatch(BridgeCommand::ListSessions, cx);
                     }
                     BridgeReply::SessionDeleted(Err(message)) => {
@@ -229,6 +230,7 @@ mod tests {
             )],
             older_before: Some("evt1-00000000000000000000000000000002".to_owned()),
             streaming: None,
+            running: false,
             context_used: 0,
             context_cache: 0,
         };

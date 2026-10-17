@@ -418,6 +418,12 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::OpenSession(session) => BridgeReply::Conversation(
             open_conversation(&state.service, session)
                 .await
+                .map(|mut conversation| {
+                    // A reopen can land while the session's turn is still in
+                    // flight; the registry only holds live turn tokens.
+                    conversation.running = state.turn_cancels.lock().contains_key(session.as_str());
+                    conversation
+                })
                 .map_err(render_error),
         ),
         BridgeCommand::LoadOlder {

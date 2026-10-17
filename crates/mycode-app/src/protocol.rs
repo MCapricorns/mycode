@@ -81,6 +81,10 @@ pub struct ActiveConversation {
     pub older_before: Option<String>,
     /// Live assistant reply while a model turn streams.
     pub streaming: Option<StreamingReply>,
+    /// Whether a turn is still in flight for this session. A reopen during
+    /// live work reports `true` so the frontend keeps its running affordances
+    /// instead of painting the tail as interrupted.
+    pub running: bool,
     /// Latest prompt size recovered from the opened tail. Zero when that
     /// window has no usage snapshot.
     pub context_used: u64,

@@ -65,7 +65,9 @@ pub(super) fn render_composer(
     let can_send = if has_session {
         has_draft || has_queue
     } else {
-        has_draft && crate::view_model::has_open_folder(workspace.vm())
+        // A draft alone enables the arrow: `submit_from_welcome` answers a
+        // missing folder with a toast instead of leaving a dead button.
+        has_draft
     };
     let queue_panel = if has_queue {
         let paused = workspace.vm().queue_paused;
@@ -248,6 +250,11 @@ pub(super) fn render_composer(
                                     this.child(composer_meter_chip(meter, theme))
                                 })
                                 .child(composer_palette_hint(cx))
+                                // While a turn runs the arrow stays: it steers
+                                // or queues the draft; the stop sits beside it.
+                                .when(sending && has_draft, |this| {
+                                    this.child(composer_send_button(cx))
+                                })
                                 .child(composer_round_button(sending, can_send, cx)),
                         ),
                 ),
@@ -305,6 +312,27 @@ fn composer_round_button(
         .when(!sending, |this| {
             this.child(Icon::new(IconName::ArrowUp).small())
         })
+}
+
+/// The send arrow shown next to the stop square while a turn runs: click
+/// steers the turn or queues the draft, same as Enter.
+fn composer_send_button(cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id("composer-send-running")
+        .size(px(30.))
+        .flex_shrink_0()
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(theme.foreground)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.secondary_hover))
+        .on_click(cx.listener(move |workspace, _, window, cx| {
+            workspace.on_send(window, cx);
+        }))
+        .child(Icon::new(IconName::ArrowUp).small())
 }
 
 /// Pill chip for composer controls (folder, model, thinking).

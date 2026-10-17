@@ -288,6 +288,7 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                running: false,
                 context_used: 0,
                 context_cache: 0,
             }),
@@ -342,6 +343,7 @@ mod tests {
         };
 
         let mut state = WorkspaceState {
+            sending: true,
             active: Some(ActiveConversation {
                 session_id: "ses".to_owned(),
                 branch_id: "br".to_owned(),
@@ -349,6 +351,7 @@ mod tests {
                 entries: Vec::new(),
                 older_before: None,
                 streaming: None,
+                running: false,
                 context_used: 0,
                 context_cache: 0,
             }),

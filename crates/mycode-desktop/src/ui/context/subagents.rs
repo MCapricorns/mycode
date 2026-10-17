@@ -23,7 +23,14 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
     };
     let rows: Vec<(String, String, String, bool)> = jobs
         .iter()
-        .map(|job| (job.call_id.clone(), job.title(), job.step_label(), job.capped))
+        .map(|job| {
+            (
+                job.call_id.clone(),
+                job.title(),
+                job.step_label(),
+                job.capped,
+            )
+        })
         .collect();
     div()
         .id("subagents")

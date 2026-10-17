@@ -148,6 +148,7 @@ pub(crate) async fn read_branch(
         entries,
         older_before,
         streaming: None,
+        running: false,
         context_used,
         context_cache,
     })

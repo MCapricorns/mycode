@@ -87,6 +87,36 @@ fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
     options
 }
 
+/// Removes the 1px DWM border Windows 11 draws around borderless windows.
+///
+/// `appears_transparent` already drops the caption; without this call DWM
+/// still strokes a system-colored edge. `DWMWA_COLOR_NONE` suppresses it.
+/// Older Windows versions lack the attribute and simply return an error.
+#[cfg(windows)]
+fn strip_dwm_border(window: &gpui_kit::Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    const DWMWA_BORDER_COLOR: u32 = 34;
+    const DWMWA_COLOR_NONE: u32 = 0xFF_FF_FF_FE;
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = handle.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+    unsafe {
+        windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as _,
+            &DWMWA_COLOR_NONE as *const u32 as *const core::ffi::c_void,
+            size_of::<u32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_dwm_border(_: &gpui_kit::Window) {}
+
 /// Opens the main window over one owned home.
 ///
 /// # Panics
@@ -113,6 +143,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         // backdrop filter; macOS and Windows implement this appearance, and a
         // system without blur simply composites the translucent fills.
         window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Blurred);
+        strip_dwm_border(window);
         // Start in dark mode until the saved appearance arrives, then sync
         // the Desk colors into Base.
         Theme::change(ThemeMode::Dark, Some(window), cx);
@@ -201,16 +232,12 @@ pub struct Workspace {
     pending_project: Option<String>,
     /// Session created to carry [`crate::view_model::WorkspaceState::pending_welcome_send`].
     welcome_send_session: Option<String>,
-    /// Folder the user last chose. Opens for other folders are ignored.
-    focused_project: Option<String>,
     /// Rename editor for the active workspace; lives only while the
     /// workspace menu is in rename mode.
     pub(crate) workspace_rename_input: Option<Entity<InputState>>,
-    /// Session whose conversation-open is in flight.
+    /// Session whose conversation-open is in flight. Conversation replies
+    /// for anything else are dropped, so a parked desk stays parked.
     pending_open: Option<String>,
-    /// Drop conversation replies until the next explicit open. Set when the
-    /// user leaves a folder's chat without asking for another one.
-    suppress_open: bool,
     /// Draft restored by edit-and-resend, applied on the next render (needs a window).
     pending_composer_prefill: Option<String>,
     /// Settings edit epoch captured when the in-flight save was dispatched.
@@ -356,10 +383,8 @@ impl Workspace {
             recall_generation: 0,
             pending_project: None,
             welcome_send_session: None,
-            focused_project: None,
             workspace_rename_input: None,
             pending_open: None,
-            suppress_open: false,
             pending_composer_prefill: None,
             settings_save_epoch: 0,
             settings_text_save_generation: 0,
@@ -777,10 +802,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        let project = crate::view_model::project_of_session(&self.vm.session_projects, session_id)
-            .map(str::to_owned);
-        self.focused_project = project.clone();
-        if project.is_none() {
+        if crate::view_model::project_of_session(&self.vm.session_projects, session_id).is_none() {
             self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
         }
         self.follow_session_project(session_id, cx);
@@ -808,8 +830,10 @@ impl Workspace {
     }
 
     /// Opens, closes, or pins the inspector. Does not touch the session.
+    /// The pair is persisted so a resident panel survives a restart.
     pub(crate) fn on_set_inspector(&mut self, open: bool, pinned: bool, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::InspectorChanged { open, pinned }, cx);
+        self.persist_ui_state(cx);
     }
 
     /// Whether a tool row is showing its result body.

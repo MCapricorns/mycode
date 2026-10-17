@@ -18,8 +18,8 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::skin::{self, menu_panel};
-pub(crate) use crate::view_model::{model_display_name, provider_display_name};
 use crate::view_model::{DesktopAction, WorkspaceState};
+pub(crate) use crate::view_model::{model_display_name, provider_display_name};
 use crate::workspace::Workspace;
 
 /// One model the picker can show.

@@ -398,38 +398,45 @@ impl Workspace {
                 }
                 // A fresh session belongs to the workspace the sidebar shows.
                 self.bind_session_workspace(&session_id, cx);
-                self.request_open_session(&session_id, cx);
+                // An explicit open requested after the create wins: the late
+                // reply must not steal the view from what the user clicked.
+                let opening = self.pending_open.is_none();
+                if opening {
+                    self.request_open_session(&session_id, cx);
+                } else if self.welcome_send_session.as_deref() == Some(session_id.as_str()) {
+                    self.welcome_send_session = None;
+                    // Keep the held text as a draft instead of dropping it.
+                    if let Some(text) = self.vm.pending_welcome_send.clone() {
+                        self.pending_composer_prefill = Some(text);
+                    }
+                    self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                }
                 if let Some(project) = self.pending_project.take() {
-                    self.attach_project(&session_id, &project, cx);
+                    if opening {
+                        self.attach_project(&session_id, &project, cx);
+                    } else {
+                        // The session was still created for this folder; bind
+                        // it without moving the view's project back.
+                        self.apply_action(
+                            DesktopAction::SessionProjectBound {
+                                session_id: session_id.clone(),
+                                project,
+                            },
+                            cx,
+                        );
+                        self.persist_ui_state(cx);
+                    }
                 }
                 self.dispatch(BridgeCommand::ListSessions, cx);
             }
             BridgeReply::Conversation(Ok(conversation)) => {
                 let session_id = conversation.session_id.clone();
-                if self.suppress_open {
-                    if self.welcome_send_session.as_deref() == Some(session_id.as_str()) {
-                        self.welcome_send_session = None;
-                        self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
-                    }
-                    return;
-                }
                 if self
                     .pending_open
                     .as_ref()
                     .is_some_and(|pending| pending != &session_id)
                 {
                     return;
-                }
-                if let Some(focus) = self.focused_project.clone() {
-                    let belongs = crate::view_model::project_of_session(
-                        &self.vm.session_projects,
-                        &session_id,
-                    )
-                    .is_some_and(|bound| crate::view_model::same_project_path(bound, &focus));
-                    if !belongs {
-                        self.flush_welcome_send(&session_id, cx);
-                        return;
-                    }
                 }
                 self.pending_open = None;
                 let switching = self
@@ -786,6 +793,8 @@ impl Workspace {
                         active_workspace: ui_state.active_workspace,
                         recent_models: ui_state.recent_models,
                         thinking_collapsed: ui_state.thinking_collapsed,
+                        inspector_open: ui_state.inspector_open,
+                        inspector_pinned: ui_state.inspector_pinned,
                         window_size: ui_state.window_size,
                     },
                     cx,
@@ -911,6 +920,9 @@ impl Workspace {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
             BridgeReply::Conversation(Err(message)) => {
+                // A failed open still ends the wait: a stale pending_open
+                // would scope-drop the next explicit open's reply.
+                self.pending_open = None;
                 if self.welcome_send_session.is_some() {
                     self.welcome_send_session = None;
                     self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
