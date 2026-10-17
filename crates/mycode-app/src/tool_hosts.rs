@@ -231,8 +231,7 @@ pub(crate) async fn probe_web_backend(
         .map_err(|error| crate::web_client::tool_failure("search", &error))
 }
 
-/// Families that always need a key; AnySearch and custom endpoints may run
-/// anonymously.
+/// Families that always need a key; AnySearch may run anonymously.
 fn kind_requires_key(kind: crate::web_client::SearchKind) -> bool {
     matches!(
         kind,

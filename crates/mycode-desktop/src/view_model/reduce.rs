@@ -593,7 +593,6 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsProviderAdded(provider) => settings::provider_added(state, provider),
         DesktopAction::SettingsProviderRemoved(index) => settings::provider_removed(state, index),
-        DesktopAction::SettingsBackendRemoved(index) => settings::backend_removed(state, index),
         DesktopAction::SettingsBackendToggled(index, enabled) => {
             settings::backend_toggled(state, index, enabled);
         }

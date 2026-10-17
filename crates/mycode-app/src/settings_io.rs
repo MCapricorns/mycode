@@ -81,13 +81,15 @@ pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String>
     )?;
     let discarded_shell = discard_stored_shell(&mut settings);
     let discarded_sandbox = discard_stored_os_sandbox(&mut settings);
+    let discarded_web = discard_custom_web_backends(&mut settings);
     let filled_agent = settings.user_agent.trim().is_empty();
     if filled_agent {
         settings.user_agent = mycode_config::default_user_agent();
     }
-    // Drop a legacy shell override and a legacy OS-sandbox flag, and fill an
-    // empty user-agent, so the next load does not repeat the same rewrite.
-    if (discarded_shell || discarded_sandbox || filled_agent)
+    // Drop a legacy shell override, a legacy OS-sandbox flag, and retired
+    // `custom` web backends, and fill an empty user-agent, so the next load
+    // does not repeat the same rewrite.
+    if (discarded_shell || discarded_sandbox || discarded_web || filled_agent)
         && let Ok(next) = replace_app_settings(home, revision, &settings)
     {
         revision = next;
@@ -115,6 +117,7 @@ pub(crate) fn save_settings(
 ) -> Result<AuthorityRevision, String> {
     let mut settings = settings.clone();
     let _ = discard_stored_shell(&mut settings);
+    let _ = discard_custom_web_backends(&mut settings);
     let revision = replace_app_settings(home, expected_revision, &settings)
         .map_err(|error| render_config_error(&error))?;
     apply_network(&settings);
@@ -152,6 +155,17 @@ fn discard_stored_shell(settings: &mut AppSettings) -> bool {
     }
     settings.tools.shell = None;
     true
+}
+
+/// The `custom` web-backend kind is retired; stored rows are dropped so no
+/// code path can still enable one.
+fn discard_custom_web_backends(settings: &mut AppSettings) -> bool {
+    let before = settings.web.backends.len();
+    settings
+        .web
+        .backends
+        .retain(|backend| backend.kind != "custom");
+    settings.web.backends.len() != before
 }
 
 /// Splits stored secret ids into provider and MCP key markers.

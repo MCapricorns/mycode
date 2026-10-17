@@ -1,6 +1,6 @@
 //! First-party bounded web search over a configured backend family.
 //!
-//! Querit and custom backends share `POST {endpoint}/v1/search` plus
+//! Querit uses `POST {endpoint}/v1/search` plus
 //! `POST {endpoint}/v1/contents`. AnySearch uses `POST {endpoint}/v1/search`
 //! with `{query, max_results}` answering `{data.results}` and
 //! `POST {endpoint}/v1/extract` with `{url}` for page text. Exa uses
@@ -197,7 +197,7 @@ pub trait WebTransport: Send + Sync + 'static {
 }
 
 /// Backend family that selects the request and response wire mapping.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchKind {
     /// Querit `POST /v1/search` + `POST /v1/contents`.
     Querit,
@@ -206,9 +206,6 @@ pub enum SearchKind {
     /// Exa `POST /search` + `POST /contents`. Bearer or `x-api-key`; the
     /// transport already sends Bearer.
     Exa,
-    /// Querit-compatible custom endpoint.
-    #[default]
-    Custom,
 }
 
 impl SearchKind {
@@ -219,7 +216,6 @@ impl SearchKind {
             "querit" => Some(Self::Querit),
             "anysearch" => Some(Self::Anysearch),
             "exa" => Some(Self::Exa),
-            "custom" => Some(Self::Custom),
             _ => None,
         }
     }
@@ -256,7 +252,7 @@ impl WebClient {
             bearer: bearer.filter(|key| !key.trim().is_empty()),
             transport,
             timeout: Duration::from_secs(guard::DEFAULT_TIMEOUT_SECS),
-            kind: SearchKind::Custom,
+            kind: SearchKind::Querit,
         })
     }
 
@@ -270,8 +266,7 @@ impl WebClient {
     /// Runs one bounded search.
     ///
     /// Wire contract (Querit): `POST /v1/search` with `{"query", "count"}`
-    /// answering `{"results": {"result": [...]}}`; the flat
-    /// `{"results": [...]}` shape is accepted for custom backends.
+    /// answering `{"results": {"result": [...]}}`.
     ///
     /// # Errors
     ///
@@ -289,9 +284,7 @@ impl WebClient {
         match self.kind {
             SearchKind::Anysearch => self.search_anysearch(query, max_results, cancel).await,
             SearchKind::Exa => self.search_exa(query, max_results, cancel).await,
-            SearchKind::Querit | SearchKind::Custom => {
-                self.search_querit(query, max_results, cancel).await
-            }
+            SearchKind::Querit => self.search_querit(query, max_results, cancel).await,
         }
     }
 
@@ -309,11 +302,9 @@ impl WebClient {
         let raw = self.post("/v1/search", &body, self.timeout, cancel).await?;
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
-        let hits = payload["results"]["result"].as_array().or_else(|| {
-            // Custom backends answer with a flat array under `results`.
-            payload["results"].as_array()
-        });
-        let hits = hits.ok_or(WebError::Protocol)?;
+        let hits = payload["results"]["result"]
+            .as_array()
+            .ok_or(WebError::Protocol)?;
         self.collect_hits(hits, max_results, |hit| {
             (
                 hit["url"].as_str(),
@@ -417,8 +408,8 @@ impl WebClient {
     ///
     /// Wire contract (Querit): `POST /v1/contents` with
     /// `{"urls", "format": "text", "crawlTimeout", "extrasMeta"}` answering
-    /// `{"results": [{url, content}]}`; the `pages` shape is accepted for
-    /// custom backends. `crawlTimeout` is seconds in `1..=60`.
+    /// `{"results": [{url, content}]}`. `crawlTimeout` is seconds in
+    /// `1..=60`.
     ///
     /// # Errors
     ///
@@ -439,7 +430,7 @@ impl WebClient {
         match self.kind {
             SearchKind::Anysearch => self.contents_anysearch(urls, cancel).await,
             SearchKind::Exa => self.contents_exa(urls, cancel).await,
-            SearchKind::Querit | SearchKind::Custom => self.contents_querit(urls, cancel).await,
+            SearchKind::Querit => self.contents_querit(urls, cancel).await,
         }
     }
 
@@ -478,10 +469,7 @@ impl WebClient {
         };
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
-        let pages_wire = payload["results"]
-            .as_array()
-            .or_else(|| payload["pages"].as_array())
-            .ok_or(WebError::Protocol)?;
+        let pages_wire = payload["results"].as_array().ok_or(WebError::Protocol)?;
         self.collect_pages(urls, pages_wire)
     }
 
@@ -781,13 +769,14 @@ mod tests {
             ]
         });
         let client = WebClient::new(
-            "https://search.example.com",
+            "https://api.exa.ai",
             None,
             Arc::new(StaticJson {
                 body: serde_json::to_vec(&body).unwrap(),
             }),
         )
-        .unwrap();
+        .unwrap()
+        .with_kind(SearchKind::Exa);
         let hits = client
             .search("query", 2, CancellationToken::new())
             .await
@@ -882,7 +871,7 @@ mod tests {
         assert_eq!(SearchKind::parse("querit"), Some(SearchKind::Querit));
         assert_eq!(SearchKind::parse("anysearch"), Some(SearchKind::Anysearch));
         assert_eq!(SearchKind::parse("exa"), Some(SearchKind::Exa));
-        assert_eq!(SearchKind::parse("custom"), Some(SearchKind::Custom));
+        assert_eq!(SearchKind::parse("custom"), None);
         assert_eq!(SearchKind::parse("tavily"), None);
     }
 

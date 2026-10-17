@@ -53,7 +53,7 @@
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`），可选 `hiddenModels`（不出现在对话模型切换、最近使用推荐和命令面板里的模型 id，设置页仍列出以便重新显示）。密钥不在此列
 - **思考强度**：`reasoningEffort` 是保存的默认值，必须是 models.dev 档位（`off`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）。会话里选的模型和强度不写这里，见下文 `ui.json`
 - **Shell**：没有可切换的 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。旧的 `tools.shell` 还能被读入，任何 `kind` 都不会让整份文档校验失败；启动时忽略它，并在写回时去掉。`MYCODE_SHELL` 不再覆盖选择，有具体取值时只提示一次。旧的 `tools.osSandbox` 同样只被读入并在启动时清掉：OS 沙箱已随功能移除，进程以当前用户权限运行
-- **网页**：后端 `kind` 为 `querit`、`anysearch`、`exa` 或 `custom`（旧文件兼容，界面不再新增），端点必须是 https，最多启用一个。默认带 Querit、AnySearch、Exa 三行，均未启用。密钥先看环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY` / `EXA_API_KEY`，再看 `secrets.json` 的 `web-<id>`。设置页的启用开关先解析密钥并对该行做一次真实搜索探测，成功才落为启用，坏密钥或死端点不会悄悄启用
+- **网页**：后端 `kind` 为 `querit`、`anysearch`、`exa`（旧文件里的 `custom` 拼写仍被接受，加载时整行丢弃），端点必须是 https，最多启用一个。默认带 Querit、AnySearch、Exa 三行，均未启用。密钥先看环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY` / `EXA_API_KEY`，再看 `secrets.json` 的 `web-<id>`。设置页的启用开关先解析密钥并对该行做一次真实搜索探测，成功才落为启用，坏密钥或死端点不会悄悄启用
 - **MCP**：`transport` 为 `stdio`（单个可执行文件加 `args`，不接受 shell 字符串）或 `http`（https 端点，`keyHeader` 为 `bearer` 或 `x-api-key`）。每服务器最多 32 个额外环境变量。密钥用 `mcp-<id>`。内置目录有 context7 与 GitHub（`https://api.githubcopilot.com/mcp`，bearer）；添加的行默认禁用，设置页的启用开关要求声明了 `keyHeader` 的行已存密钥，再做一次 tools 探测，成功才落为启用
 - **子代理**：哪些角色启用（没写的角色默认启用）、模型路由、思考强度。并发固定为 8 个，不是设置项。子代理没有超时，取消回合、停止子代理或删除对话时结束。旧文件里的 `maxConcurrent`、`timeoutSecs` 仍可读入，但会被忽略，下次保存时去掉。
 - **用量**：`usage.enabled`，默认开

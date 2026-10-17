@@ -130,18 +130,6 @@ pub(super) fn provider_removed(state: &mut WorkspaceState, index: usize) {
     });
 }
 
-/// Removes a stored backend row (a `custom` leftover the UI still lists).
-/// `web_detail` cannot point at a removed row: only vendor rows open one,
-/// and vendors cannot be removed.
-pub(super) fn backend_removed(state: &mut WorkspaceState, index: usize) {
-    if let Some(settings) = state.settings.as_mut()
-        && index < settings.web_backends.len()
-    {
-        settings.web_backends.remove(index);
-        mark_settings_dirty(settings);
-    }
-}
-
 /// Enabling one web backend disables the others; at most one is active.
 pub(super) fn backend_toggled(state: &mut WorkspaceState, index: usize, enabled: bool) {
     edit_settings(state, |settings| {

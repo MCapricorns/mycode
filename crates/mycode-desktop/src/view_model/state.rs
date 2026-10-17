@@ -329,8 +329,6 @@ pub enum DesktopAction {
     SettingsProviderAdded(mycode_config::ProviderSettings),
     /// The settings editor removed a provider row.
     SettingsProviderRemoved(usize),
-    /// The settings editor removed a stored web backend row.
-    SettingsBackendRemoved(usize),
     /// The settings editor toggled a web backend.
     SettingsBackendToggled(usize, bool),
     /// The settings editor changed subagent role routes.

@@ -449,13 +449,16 @@ impl SessionStore {
             Err(_) => return Err(StoreError::Storage),
         }
         if request.prefix_end > 0 {
-            fs::copy_prefix(&source_log, &new_log, request.prefix_end).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            // A failed copy can leave a truncated `new_log`; drop it like a
+            // failed index commit does so no orphan file survives.
+            if let Err(error) = fs::copy_prefix(&source_log, &new_log, request.prefix_end) {
+                fs::remove(&new_log);
+                return Err(if error.kind() == std::io::ErrorKind::UnexpectedEof {
                     StoreError::Corrupt
                 } else {
                     StoreError::Storage
-                }
-            })?;
+                });
+            }
         }
         let committed = (|| {
             let (parent_kind, at_event, to_event) = match request.kind {
