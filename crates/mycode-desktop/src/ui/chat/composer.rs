@@ -530,36 +530,59 @@ fn render_queued_followups(
                         .child(preview),
                 )
                 .child(
-                    queue_action(
+                    queue_icon(
                         SharedString::from(format!("queued-recall-{index}")),
-                        t("Recall", "撤回"),
-                        false,
-                        cx,
+                        IconName::Pencil,
+                        theme,
                     )
                     .on_click(cx.listener(move |workspace, _, window, cx| {
                         workspace.on_recall_queued(Some(index), window, cx);
                     })),
                 )
                 .child(
-                    div()
-                        .id(SharedString::from(format!("queued-remove-{index}")))
-                        .size(px(20.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_shrink_0()
-                        .rounded(skin::radius_xs())
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(skin::frost_hover(theme))
-                                .text_color(theme.foreground)
-                        })
-                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                            workspace.on_remove_queued(index, cx);
-                        }))
-                        .child(Icon::new(IconName::X).xsmall()),
+                    queue_icon(
+                        SharedString::from(format!("queued-remove-{index}")),
+                        IconName::X,
+                        theme,
+                    )
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_remove_queued(index, cx);
+                    })),
+                )
+                .child(
+                    queue_icon(
+                        SharedString::from(format!("queued-send-{index}")),
+                        IconName::CornerDownLeft,
+                        theme,
+                    )
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_interrupt_queued(index, cx);
+                    })),
                 )
         }))
+}
+
+/// One 20px icon button on a queued-message row: edit back into the composer,
+/// drop the item, or send it now (interrupting a running turn).
+fn queue_icon(
+    id: impl Into<gpui_kit::ElementId>,
+    icon: IconName,
+    theme: &gpui_kit::component::theme::Theme,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .size(px(20.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .rounded(skin::radius_xs())
+        .cursor_pointer()
+        .hover(|this| {
+            this.bg(skin::frost_hover(theme))
+                .text_color(theme.foreground)
+        })
+        .child(Icon::new(icon).xsmall())
 }
 
 /// A compact text action in the queue strip. `strong` is the send action.
