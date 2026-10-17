@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.11.30] - 2026-10-17
+
 ### Added
 
 - 会话标题自动生成：会话首条消息发出时，用当前模型另发一次不带系统提示和工具的旁路请求，把首条消息概括成短标题写入索引并刷新侧边栏；失败时保留首条消息作标题。
@@ -146,7 +148,8 @@
 - 更新只从本仓库的 GitHub Release 下载；压缩包里带盘符前缀的条目（如 `C:x.exe`）会被拒绝，不能写出暂存目录。
 - OAuth 登录打开浏览器不再经过 `cmd /c start`（服务器返回的地址里的 `&`、`|` 会被当成命令解析），且只打开 https 地址。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.29...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.11.30...HEAD
+[0.11.30]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.30
 [0.11.29]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.29
 [0.11.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.28
 [0.11.27]: https://github.com/MCapricorns/mycode/releases/tag/v0.11.27
