@@ -1,6 +1,6 @@
 [package]
 name = "mycode-agent"
-description = "MYCode agent runtime: the double loop and the durable session ledger"
+description = "MYCode agent runtime: the agent loop and the durable session ledger"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -259,9 +259,10 @@ fn finish_owned_spawn_cleanup<T>(
 
 /// Retries pending-process cleanup until ownership can be released safely.
 ///
-/// This runs only from a platform pending owner's `Drop` path after its first
-/// synchronous teardown attempt failed. Blocking preserves the surrounding
-/// executable pin and execution lease until the child is confirmed reaped.
+/// This runs only from a platform pending owner's `Drop` path — usually to
+/// retry a synchronous teardown that just failed. Blocking preserves the
+/// surrounding executable pin and execution lease until the child is
+/// confirmed reaped.
 pub(super) fn finish_pending_spawn_cleanup(
     mut cleanup: impl FnMut() -> Result<(), std::io::Error>,
 ) {
@@ -278,7 +279,8 @@ const SPAWN_PENDING: u8 = 0;
 const SPAWN_CANCELLED: u8 = 1;
 const SPAWN_STARTED: u8 = 2;
 
-/// Coordinates the deadline with the platform's irreversible spawn call.
+/// Coordinates cancellation, the deadline, and future drop with the
+/// platform's irreversible spawn call.
 #[derive(Clone)]
 pub(super) struct SpawnGate {
     state: Arc<AtomicU8>,

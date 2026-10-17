@@ -51,7 +51,7 @@ impl Drop for ServiceInner {
 }
 
 impl SessionService {
-    /// Starts the service over one owned home without creating any object.
+    /// Starts the service over one owned home.
     ///
     /// Must run on a Tokio runtime: the session actor is a task on that
     /// runtime, and its storage work uses `spawn_blocking`.

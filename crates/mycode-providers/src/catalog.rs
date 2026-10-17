@@ -33,7 +33,7 @@ pub const AUTH_DEVICE_CODE: &str = "device-code";
 /// provider, xAI included, takes a pasted API key; an `oauth` value left in
 /// a catalog cache by an older build is just another API-key provider.
 #[must_use]
-pub fn uses_oauth_login(auth: &str) -> bool {
+pub fn uses_device_code_login(auth: &str) -> bool {
     auth == AUTH_DEVICE_CODE
 }
 

@@ -349,7 +349,7 @@ async fn dispatch_response_calls(
     token: &CancellationToken,
     calls: &[ToolCall],
 ) -> Vec<ToolResultMessage> {
-    let task_indexes: Vec<usize> = calls
+    let agent_indexes: Vec<usize> = calls
         .iter()
         .enumerate()
         .filter(|(_, call)| is_agent_call(call))
@@ -365,7 +365,7 @@ async fn dispatch_response_calls(
     // before its first await, so a polled batch must not emit ToolStarted again.
     let agent_polled = Arc::new(AtomicBool::new(false));
     let polled = Arc::clone(&agent_polled);
-    let agent_ids = task_indexes.clone();
+    let agent_ids = agent_indexes.clone();
     let other_ids = other_indexes.clone();
     let agents = async move {
         polled.store(true, Ordering::SeqCst);
@@ -438,7 +438,7 @@ async fn dispatch_response_calls(
     slots.resize_with(calls.len(), || None);
     if abandoned {
         let discard = agent_polled.load(Ordering::SeqCst);
-        for index in task_indexes {
+        for index in agent_indexes {
             slots[index] = Some(if discard {
                 turn::discard_running_call(env, &calls[index])
             } else {
@@ -446,7 +446,7 @@ async fn dispatch_response_calls(
             });
         }
     } else {
-        for (index, message) in task_indexes
+        for (index, message) in agent_indexes
             .into_iter()
             .zip(agent_messages.unwrap_or_default())
         {

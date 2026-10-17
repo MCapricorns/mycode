@@ -411,8 +411,8 @@ fn write_missing(
         let new_file_mode = attach_mode_probe(&parent, &mut temp, cancel)?;
         #[cfg(windows)]
         attach_security_probe(&parent, &mut temp, cancel)?;
-        // The deterministic test observer opens every inode visible to a
-        // foreign reader before the payload receives any content.
+        // Before the payload receives content, the only temp name a foreign
+        // reader can open is the empty, never-written probe.
         let temp_file = write_temp(created.file, content, cancel)?;
         // All pre-publish work is complete; the final cancel gate runs
         // immediately before the irreversible publish rename.

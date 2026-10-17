@@ -75,7 +75,7 @@ pub(crate) fn unix_reopen_dir_for_listing(parent: &File) -> io::Result<File> {
 // NOTE: parallel implementation in fs_io (unix.rs/windows.rs
 // `unique_component_name`); kept separate because fs_search proves the
 // spelling through raw fdopendir/readdir with its own entry budget, while
-// fs_io walks rustix/NT listings under the file-kernel limiter.
+// fs_io walks rustix/NT listings with its own cancel check and width cap.
 #[cfg(unix)]
 pub(crate) fn unix_on_disk_component_name(
     parent: &File,
@@ -484,10 +484,9 @@ fn enforce_unix_child_containment(
 ) -> io::Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    // Same mount id is one mount even when overlay `st_dev` differs (directory
-    // on the overlay device, file on the upper/lower device). Same `st_dev`
-    // is one mount when mount ids are unavailable. A different mount id is a
-    // real cross, including a bind mount that keeps `st_dev`.
+    // `st_dev` is the only mount identity available here: a different device
+    // is a mount cross and fails closed; a bind mount that keeps `st_dev`
+    // cannot be detected.
     if unix_mounts_differ(parent, child)? {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

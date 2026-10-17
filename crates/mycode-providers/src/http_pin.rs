@@ -292,8 +292,6 @@ pub async fn send_pinned(request: PinnedRequest) -> Result<reqwest::Response, St
 /// hold the request.
 const ADVISORY_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Sends one hop on its route. In auto mode, a direct hop that cannot reach
-/// a public host is retried once through a listening local proxy.
 /// Scheme, host, and port of `url`; `None` when it does not parse.
 fn origin_of(url: &str) -> Option<(String, String, Option<u16>)> {
     let parsed = reqwest::Url::parse(url).ok()?;
@@ -321,6 +319,8 @@ fn cross_origin_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Sends one hop on its route. In auto mode, a direct hop that cannot reach
+/// a public host is retried once through a listening local proxy.
 async fn send_hop(
     request: &PinnedRequest,
     hop: u32,

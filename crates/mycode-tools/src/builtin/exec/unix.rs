@@ -1,4 +1,4 @@
-//! Shared C-string assembly for the Unix launch paths.
+//! Shared C-string assembly for the macOS launch path.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
 use std::ffi::{CString, OsString};

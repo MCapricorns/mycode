@@ -156,7 +156,7 @@ impl Tool for AskTool {
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
             "ask_user: batch every clarification into one call; the program waits \
-             until the user answers. Dismissing the question raises ToolCallError \
+             until the user answers. Dismissing the question fails the tool call \
              and the program continues. Stopping the turn aborts the program. Set \
              multiple on a question when more than one choice may be selected.",
         )

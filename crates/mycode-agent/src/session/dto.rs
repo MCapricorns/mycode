@@ -172,7 +172,7 @@ pub enum SessionRequest {
         /// The session to forget.
         session: SessionId,
     },
-    /// Validates, durably stages a payload, and issues an event reservation.
+    /// Validates, stages a payload in the actor, and issues an event reservation.
     ReserveEvent {
         /// The session to append into.
         session: SessionId,

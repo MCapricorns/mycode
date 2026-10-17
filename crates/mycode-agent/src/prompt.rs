@@ -7,7 +7,7 @@ use mycode_tools::ToolRegistry;
 /// Tool-list header. Deliberately not an identity sentence: every caller
 /// (session, subagent, compaction) opens its prompt with its own identity,
 /// so a second one here would read as a duplication.
-const IDENTITY: &str = "\
+const HEADER: &str = "\
 Complete the task with the tools listed below. Do not invent tools. \
 Tool results are the source of truth; do not claim a command ran unless its result is in the conversation.";
 
@@ -63,7 +63,7 @@ fn web_section(tools: &ToolRegistry) -> Option<&'static str> {
 
 /// Builds the compact default prompt from the currently registered tools.
 pub fn build_system_prompt(tools: &ToolRegistry) -> String {
-    let mut prompt = String::from(IDENTITY);
+    let mut prompt = String::from(HEADER);
     prompt.push_str("\n\nAvailable tools:");
 
     let entries = tools.prompt_entries();

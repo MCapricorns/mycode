@@ -99,7 +99,9 @@ impl RoleThinking {
         }
     }
 
-    /// Returns the wire reasoning token, or `None` for the provider default.
+    /// Returns the models.dev spelling for this level, or `None` for the
+    /// provider default. Callers pass the token through a reasoning-level
+    /// parse before it reaches a request.
     #[must_use]
     pub fn effort(self) -> Option<&'static str> {
         match self {
@@ -608,7 +610,12 @@ mod tests {
         assert!(
             !role(
                 "coordinator",
-                Some(vec!["read".into(), "agent".into(), "ask_user".into(), "unknown".into()])
+                Some(vec![
+                    "read".into(),
+                    "agent".into(),
+                    "ask_user".into(),
+                    "unknown".into()
+                ])
             )
             .is_write_capable()
         );

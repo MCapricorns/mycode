@@ -47,8 +47,9 @@ pub(super) struct OpenedChild {
     pub(super) file: File,
     pub(super) meta: FileMeta,
     /// Windows temp creation only: duplicate handle that already holds
-    /// `DELETE`, moved into the [`TempName`] guard so fail-safe cleanup
-    /// survives a later restrictive DACL copied from the source.
+    /// `DELETE`, moved into the [`TempName`](super::write::TempName) guard so
+    /// fail-safe cleanup survives a later restrictive DACL copied from the
+    /// source.
     #[cfg(windows)]
     pub(super) delete_handle: Option<File>,
 }

@@ -2,9 +2,10 @@
 //!
 //! [`HomeLayout`] resolves the relocatable owned home root lexically, without
 //! filesystem I/O. Authority files are lazy, bounded, strict JSON documents
-//! published through the locked owned-file machinery with revision
-//! compare-and-swap. There is no alias, layered merge, or fallback for
-//! obsolete layouts: unrelated paths are never inputs.
+//! published through the locked owned-file machinery. Settings and secrets
+//! carry a revision compare-and-swap; advisory state is last-writer-wins.
+//! There is no alias, layered merge, or fallback for obsolete layouts:
+//! unrelated paths are never inputs.
 //!
 //! Product documents (`settings.json`, `secrets.json`, `ui.json`) recover
 //! trailing commas from earlier writers, fill missing fields, and rewrite the

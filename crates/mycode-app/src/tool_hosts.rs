@@ -200,7 +200,7 @@ fn web_client_for(
         .map(|client| client.with_kind(kind))
 }
 
-/// Builds the web client for the enabled backend, or the first builtin that
+/// Builds the web client for the enabled backend, or the first backend that
 /// already has a key (env or vault).
 fn web_client(home: &HomeLayout) -> Result<crate::web_client::WebClient, String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;

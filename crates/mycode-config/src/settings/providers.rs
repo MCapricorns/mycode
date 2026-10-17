@@ -73,7 +73,7 @@ impl AppSettings {
             let field = format!("providers[{index}]");
             if !is_portable_id(&provider.id) {
                 return Err(invalid(&format!(
-                    "{field}.id: must be letters, digits, dash, dot, or underscore"
+                    "{field}.id: must be 1-128 lowercase letters, digits, dash, dot, or underscore"
                 )));
             }
             if !VALID_PROVIDER_KINDS.contains(&provider.kind.as_str()) {

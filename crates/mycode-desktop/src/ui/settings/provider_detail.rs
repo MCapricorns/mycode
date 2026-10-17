@@ -53,7 +53,7 @@ pub(super) fn render_provider_detail(
         .cloned();
     let replacing = workspace.provider_key_replacing(&provider.id);
     let oauth = catalog.as_ref().is_some_and(|entry| {
-        mycode_providers::catalog::uses_oauth_login(&entry.auth)
+        mycode_providers::catalog::uses_device_code_login(&entry.auth)
             && matches!(entry.id.as_str(), "github-copilot" | "openai-codex")
     });
     let show_key = catalog

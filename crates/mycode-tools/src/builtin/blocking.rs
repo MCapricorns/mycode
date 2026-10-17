@@ -13,9 +13,6 @@ use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::builtin::fs_search::{
-    PreparedSearch, SEARCH_TIME_LIMIT, SearchAccess, prepare_search_with_access,
-};
 use crate::tool::ToolError;
 
 #[cfg(unix)]
@@ -33,7 +30,7 @@ use signal::{current_sigurg_handler, our_sigurg_handler, unblock_interrupt_signa
 /// state (some NFS waits) can still outlive this loop.
 const INTERRUPT_RETRY: Duration = Duration::from_millis(10);
 
-/// Runs deadline-bounded search work on a dedicated OS thread.
+/// Runs deadline-bounded blocking work on a dedicated OS thread.
 ///
 /// Startup first proves a usable interrupt authority. A supervisor owns the
 /// actual worker join and platform authority for the complete lifetime.
@@ -201,30 +198,6 @@ where
     }
 }
 
-/// Resolves a grep/find target on a cancellable worker thread with an
-/// explicit content/metadata capability.
-///
-/// # Errors
-///
-/// Returns [`ToolError`] when the target cannot be bound, the call is
-/// cancelled, or the preflight deadline expires.
-pub async fn prepare_search_async_with_access(
-    cwd: std::path::PathBuf,
-    path_arg: Option<String>,
-    cancel: CancellationToken,
-    access: SearchAccess,
-) -> Result<PreparedSearch, ToolError> {
-    run_blocking(
-        "search dispatch preflight",
-        &cancel,
-        SEARCH_TIME_LIMIT,
-        move |worker_cancel| {
-            prepare_search_with_access(&cwd, path_arg.as_deref(), &worker_cancel, access)
-        },
-    )
-    .await
-}
-
 #[cfg(windows)]
 struct SendHandle {
     handle: windows_sys::Win32::Foundation::HANDLE,
@@ -333,14 +306,14 @@ pub(crate) fn wait_for_worker_readable(file: &File) -> io::Result<()> {
             if wake_events != 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::Interrupted,
-                    "search worker was cancelled",
+                    "worker was cancelled",
                 ));
             }
             let file_events = descriptors[0].revents;
             if file_events & libc::POLLNVAL != 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "search file descriptor became invalid",
+                    "worker file descriptor became invalid",
                 ));
             }
             if file_events != 0 {
@@ -400,7 +373,7 @@ impl InterruptAuthority {
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "search workers require an interrupt authority",
+                "blocking workers require an interrupt authority",
             ))
         }
     }
@@ -429,7 +402,7 @@ impl InterruptAuthority {
             // above remains authoritative for pollable read waits.
             if replaced {
                 return Err(io::Error::other(
-                    "SIGURG handler was replaced during an active search",
+                    "SIGURG handler was replaced during an active call",
                 ));
             }
             // SIGURG remains a best-effort wakeup for non-pollable filesystem
@@ -463,7 +436,7 @@ impl InterruptAuthority {
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "search workers require an interrupt authority",
+                "blocking workers require an interrupt authority",
             ))
         }
     }
@@ -493,7 +466,7 @@ impl InterruptibleWorker {
         let supervisor_error = Arc::new(Mutex::new(None));
         let error_slot = Arc::clone(&supervisor_error);
         let supervisor = std::thread::Builder::new()
-            .name("mycode-search-supervisor".to_owned())
+            .name("mycode-blocking-supervisor".to_owned())
             .spawn(move || {
                 #[cfg(unix)]
                 let _signal = match acquire_interrupt_signal() {
@@ -506,7 +479,7 @@ impl InterruptibleWorker {
 
                 let (authority_tx, authority_rx) = std::sync::mpsc::sync_channel(1);
                 let worker = std::thread::Builder::new()
-                    .name("mycode-search-worker".to_owned())
+                    .name("mycode-blocking-worker".to_owned())
                     .spawn(move || {
                         let (authority, wake) = match InterruptAuthority::establish() {
                             Ok(established) => established,

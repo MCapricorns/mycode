@@ -43,8 +43,7 @@ pub(crate) fn append(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     Ok(created)
 }
 
-/// Reads one exact byte range from one owned file, rejecting trailing bytes
-/// when `exact_end` requires the range to end at EOF.
+/// Reads one exact byte range from one owned file.
 pub(crate) fn read_range(path: &Path, offset: u64, length: u64) -> io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(offset))?;
@@ -118,7 +117,7 @@ pub(crate) fn copy_prefix(source: &Path, destination: &Path, length: u64) -> io:
     sync_parent(destination)
 }
 
-/// Best-effort removal of one owned file; recovery also removes orphans.
+/// Best-effort removal of one owned file (failed-commit cleanup).
 pub(crate) fn remove(path: &Path) {
     let _ = std::fs::remove_file(path);
 }

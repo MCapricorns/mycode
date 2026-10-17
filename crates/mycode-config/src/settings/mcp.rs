@@ -167,7 +167,7 @@ impl AppSettings {
             let field = format!("mcpServers[{index}]");
             if !is_portable_id(&server.id) {
                 return Err(invalid(&format!(
-                    "{field}.id: must be letters, digits, dash, dot, or underscore"
+                    "{field}.id: must be 1-128 lowercase letters, digits, dash, dot, or underscore"
                 )));
             }
             if server.args.len() > 64 {

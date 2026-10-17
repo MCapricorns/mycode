@@ -222,16 +222,17 @@ pub struct Workspace {
     settings_text_save_generation: u64,
     /// A User-Agent (or similar) debounce is waiting to write `settings.json`.
     settings_text_save_pending: bool,
-    /// Bumped on each window-bounds event so only the settled size persists.
+    /// Bumped on each window-size change so only the settled size persists.
     window_size_generation: u64,
-    /// Last `@` fragment already searched, to dedupe bridge dispatches.
+    /// Last mention fragment already searched, to dedupe repeat lookups.
     mention_query: Option<(crate::view_model::MentionKind, String)>,
     /// Bumped on each composer edit so a stale mention timer does not search.
     mention_generation: u64,
     pending_catalog_refresh: bool,
-    /// A `GetCatalog` request is in flight. The catalog is loaded lazily:
-    /// nothing asks for it until a surface that needs the document (the
-    /// model picker, a reasoning menu, the Models settings page) opens.
+    /// `GetCatalog` was already sent this session. The catalog is loaded
+    /// lazily: nothing asks for it until a surface that needs the document
+    /// (a model or reasoning picker, the command palette, the Models or
+    /// About settings page) opens.
     catalog_requested: bool,
     /// MCP server ids whose enable switch waits on a successful tools
     /// probe; the switch only lands `on` when the probe returns tools.

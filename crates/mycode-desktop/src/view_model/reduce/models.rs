@@ -168,7 +168,7 @@ pub(super) fn ensure_model_selection(state: &mut WorkspaceState) {
 /// Whether the selected catalog model advertises reasoning.
 ///
 /// Unknown catalog rows keep the control visible so custom providers are
-/// not locked out; the menu itself is built from `reasoning_options`.
+/// not locked out; the menu itself is built from `reasoning_levels_for`.
 #[must_use]
 pub(crate) fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool {
     let Some(provider_id) = state.selected_provider.as_deref() else {

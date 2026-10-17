@@ -39,7 +39,7 @@ pub fn is_fetchable_url(value: &str) -> bool {
     let host_port = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    // Split host and port; bracketed IPv6 literals may carry "]":port".
+    // Split host and port; bracketed IPv6 literals may carry a "]:port" suffix.
     let (host, port) = if host_port.ends_with(']') {
         (host_port, None)
     } else if let Some((prefix, port)) = host_port.rsplit_once("]:") {
@@ -56,8 +56,8 @@ pub fn is_fetchable_url(value: &str) -> bool {
     {
         return false;
     }
-    // The bracket trim above removes every leading `[` and trailing `]`,
-    // so no further strip can change the value.
+    // Strip the brackets an IPv6 literal still carries; a plain hostname
+    // has none, so this cannot change the value it validates.
     let host = host.trim_start_matches('[').trim_end_matches(']');
     if host.is_empty() || host.len() > 253 {
         return false;

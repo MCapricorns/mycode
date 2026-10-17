@@ -21,7 +21,8 @@ pub struct ImportedMcpServer {
 }
 
 /// Strips a leading `Authorization:` / `Bearer ` so the user can paste a
-/// raw key or a header value. The wire layer always prefixes `Bearer `.
+/// raw key or a header value. The stored key stays scheme-free; the wire
+/// layer adds the configured header spelling (`Bearer` or `x-api-key`).
 #[must_use]
 pub fn normalize_api_key(raw: &str) -> String {
     let mut text = raw.trim();

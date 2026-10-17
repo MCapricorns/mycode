@@ -108,10 +108,10 @@ async fn provider_error_keeps_streamed_thinking() {
 }
 
 #[tokio::test]
-async fn cancel_still_drops_the_partial() {
-    // The name is historical. A user cancel keeps the partial and the
-    // interruption line; the turn outcome stays aborted. An unnamed
-    // tool-call delta is not executed and does not enter history.
+async fn cancel_keeps_the_partial_and_marks_it_interrupted() {
+    // A user cancel keeps the partial and the interruption line; the turn
+    // outcome stays aborted. An unnamed tool-call delta is not executed and
+    // does not enter history.
     let provider = Scripted {
         events: vec![
             StreamEvent::ThinkingDelta("discard me".into()),

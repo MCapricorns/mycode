@@ -88,7 +88,7 @@ impl WalkLimiter {
     }
 
     /// Maximum nesting depth, counted in path components relative to the
-    /// allowed root and including the selected target itself.
+    /// selected target.
     pub fn max_walk_depth(&self) -> usize {
         self.max_walk_depth
     }

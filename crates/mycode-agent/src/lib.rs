@@ -1,4 +1,4 @@
-//! `mycode-agent` — the UI-free agent runtime: the double loop plus the
+//! `mycode-agent` — the UI-free agent runtime: the agent loop plus the
 //! durable session ledger a conversation is recorded in.
 //!
 //! The two layers do not depend on each other. The loop below runs happily

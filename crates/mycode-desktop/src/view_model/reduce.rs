@@ -1,5 +1,5 @@
 //! Reducer internals: the pure transition functions behind
-//! [`super::reduce`]. Only this tree mutates [`WorkspaceState`]; the parent
+//! [`super::reduce`]. The `DesktopAction` mutations live here; the parent
 //! module declares the state, action, and projection types. The dispatch
 //! match lives here; arm bodies with their own logic live in the topical
 //! submodules.
