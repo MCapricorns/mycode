@@ -101,7 +101,8 @@ fn listed_models(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
 }
 
 /// The model ids an OAuth sign-in binds for `provider_id`: the configured
-/// picks that still exist in the catalog row, else the whole row.
+/// picks that still exist in the catalog row, else the whole row (or the
+/// configured list when the catalog row is not loaded yet).
 #[must_use]
 pub(crate) fn preset_pick(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
     let listed = listed_models(state, provider_id);
@@ -110,11 +111,15 @@ pub(crate) fn preset_pick(state: &WorkspaceState, provider_id: &str) -> Vec<Stri
         .as_ref()
         .and_then(|settings| settings.providers.iter().find(|p| p.id == provider_id))
         .map(|provider| {
-            listed
-                .iter()
-                .filter(|model| provider.models.contains(model))
-                .cloned()
-                .collect()
+            if listed.is_empty() {
+                provider.models.clone()
+            } else {
+                listed
+                    .iter()
+                    .filter(|model| provider.models.contains(model))
+                    .cloned()
+                    .collect()
+            }
         })
         .unwrap_or_default();
     if configured.is_empty() {
@@ -128,42 +133,18 @@ pub(crate) fn preset_pick(state: &WorkspaceState, provider_id: &str) -> Vec<Stri
 pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<String>) {
     state.active_preset = preset.clone();
     state.preset_model_query.clear();
-    let listed: Vec<String> = preset
-        .as_deref()
-        .map(|id| listed_models(state, id))
-        .unwrap_or_default();
     // OpenDesign and the device-OAuth providers are updated in place, so
     // their forms start from the models already configured; checking
     // everything would replace that list on the next Add. Every other
     // preset adds a new row and pre-checks the whole list, strongest first.
-    let configured: Vec<String> = preset
-        .as_deref()
-        .filter(|id| {
-            matches!(
-                *id,
-                mycode_providers::catalog::opendesign::PROVIDER_ID
-                    | mycode_providers::COPILOT_PROVIDER_ID
-                    | mycode_providers::OPENAI_CODEX_PROVIDER_ID
-            )
-        })
-        .and_then(|id| {
-            state
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.providers.iter().find(|p| p.id == id))
-        })
-        .map(|provider| {
-            listed
-                .iter()
-                .filter(|model| provider.models.contains(model))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    state.preset_models = if configured.is_empty() {
-        listed
-    } else {
-        configured
+    state.preset_models = match preset.as_deref() {
+        Some(
+            id @ (mycode_providers::catalog::opendesign::PROVIDER_ID
+            | mycode_providers::COPILOT_PROVIDER_ID
+            | mycode_providers::OPENAI_CODEX_PROVIDER_ID),
+        ) => preset_pick(state, id),
+        Some(id) => listed_models(state, id),
+        None => Vec::new(),
     };
 }
 

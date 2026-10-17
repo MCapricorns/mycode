@@ -82,6 +82,7 @@ pub(super) fn render_provider_detail(
         .copilot_sign_in
         .clone()
         .filter(|sign_in| sign_in.provider_id == provider.id);
+    let other_in_flight = workspace.vm().copilot_sign_in.is_some() && sign_in.is_none();
     let error = workspace.vm().copilot_error.clone();
     let enabled = provider.enabled;
     let header = super::subview_header(
@@ -127,7 +128,15 @@ pub(super) fn render_provider_detail(
                     endpoint_block(&id, endpoint_input, endpoint_pending, &theme, cx),
                     key_block(&id, keyed, replacing, show_key, key_input, &theme, cx),
                     if oauth {
-                        oauth_block(&id, &provider.id, sign_in, error, &theme, cx)
+                        oauth_block(
+                            &id,
+                            &provider.id,
+                            sign_in,
+                            other_in_flight,
+                            error,
+                            &theme,
+                            cx,
+                        )
                     } else {
                         div().into_any_element()
                     },
@@ -419,6 +428,7 @@ fn oauth_block(
     id: &str,
     catalog_id: &str,
     sign_in: Option<crate::view_model::CopilotSignIn>,
+    other_in_flight: bool,
     error: Option<String>,
     theme: &gpui_kit::component::theme::Theme,
     cx: &mut Context<Workspace>,
@@ -481,6 +491,7 @@ fn oauth_block(
                     .label(sign_label)
                     .small()
                     .outline()
+                    .disabled(other_in_flight)
                     .on_click(cx.listener(move |workspace, _, _, cx| {
                         workspace.on_start_provider_oauth(&id, cx);
                     })),

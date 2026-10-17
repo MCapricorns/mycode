@@ -243,10 +243,7 @@ fn kimi_effort_prefers_the_active_catalog_and_falls_back_when_absent() {
         ),
         Some("low")
     );
-    crate::catalog::store::install_active(std::sync::Arc::new(catalog_with(
-        "kimi-installed-probe",
-        &["max"],
-    )));
+    crate::catalog::install_kimi_fixture();
     let mut body = json!({});
     super::apply_chat_thinking(
         &mut body,
@@ -256,5 +253,4 @@ fn kimi_effort_prefers_the_active_catalog_and_falls_back_when_absent() {
         ThinkingWire::Completions,
     );
     assert_eq!(body["reasoning_effort"], "max");
-    crate::catalog::store::clear_active();
 }

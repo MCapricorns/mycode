@@ -323,7 +323,8 @@ pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> Cata
 /// The bundled baseline is only the Codex and OpenDesign presets now, so the
 /// family tests that exercise published effort lists install this instead of
 /// leaning on a vendored snapshot. The fixture is additive and deterministic;
-/// every caller installs the same document.
+/// every caller installs the same document so parallel tests never clear or
+/// overwrite each other's rows.
 #[cfg(test)]
 pub(crate) fn install_kimi_fixture() {
     store::install_active(std::sync::Arc::new(CatalogDocument {
@@ -346,6 +347,14 @@ pub(crate) fn install_kimi_fixture() {
                     name: "Kimi for Coding Highspeed".to_owned(),
                     reasoning: true,
                     reasoning_toggle: true,
+                    ..CatalogModel::default()
+                },
+                CatalogModel {
+                    id: "kimi-installed-probe".to_owned(),
+                    name: "Kimi Installed Probe".to_owned(),
+                    reasoning: true,
+                    reasoning_toggle: true,
+                    reasoning_efforts: vec!["max".to_owned()],
                     ..CatalogModel::default()
                 },
             ],
