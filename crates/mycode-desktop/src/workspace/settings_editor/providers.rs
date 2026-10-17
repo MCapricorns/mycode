@@ -422,6 +422,16 @@ impl Workspace {
     pub(crate) fn on_start_oauth_sign_in(&mut self, provider_id: String, cx: &mut Context<Self>) {
         let models = crate::view_model::preset_pick(&self.vm, &provider_id);
         if models.is_empty() {
+            self.apply_action(
+                DesktopAction::Failed(
+                    crate::i18n::t(
+                        "Provider catalog is not loaded yet; refresh it in About and try again.",
+                        "服务商目录尚未就绪，可在「关于」页刷新目录后重试。",
+                    )
+                    .to_owned(),
+                ),
+                cx,
+            );
             return;
         }
         self.dispatch(

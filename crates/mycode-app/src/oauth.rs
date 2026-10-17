@@ -229,6 +229,13 @@ fn upsert_catalog_provider(
     provider_id: &str,
     models: &[String],
 ) -> Result<(), String> {
+    let loaded = load_settings(home)?;
+    let mut settings = loaded.settings;
+    let revision = loaded.revision;
+    let existing = settings
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id);
     let catalog = catalog.read().ok().and_then(|guard| {
         guard.document().provider(provider_id).map(|preset| {
             (
@@ -238,13 +245,17 @@ fn upsert_catalog_provider(
             )
         })
     });
-    let (kind, base_url, catalog_models) = catalog.unwrap_or_else(|| {
-        (
-            mycode_providers::catalog::KIND_OPENAI_COMPLETIONS.to_owned(),
-            String::new(),
-            Vec::new(),
-        )
-    });
+    let (kind, base_url, catalog_models) = catalog
+        .or_else(|| {
+            existing.map(|provider| (provider.kind.clone(), provider.base_url.clone(), Vec::new()))
+        })
+        .unwrap_or_else(|| {
+            (
+                mycode_providers::catalog::KIND_OPENAI_COMPLETIONS.to_owned(),
+                String::new(),
+                Vec::new(),
+            )
+        });
     if base_url.is_empty() {
         return Err(format!("{provider_id} is not in the model catalog"));
     }
@@ -261,9 +272,6 @@ fn upsert_catalog_provider(
     if bound.is_empty() {
         return Err(format!("no {provider_id} models were selected"));
     }
-    let loaded = load_settings(home)?;
-    let mut settings = loaded.settings;
-    let revision = loaded.revision;
     match settings
         .providers
         .iter_mut()

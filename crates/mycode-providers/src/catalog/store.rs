@@ -237,14 +237,6 @@ pub fn active() -> Option<Arc<CatalogDocument>> {
         .and_then(|slot| slot.as_ref().map(CatalogSource::document))
 }
 
-/// Drops the installed catalog so lookups use [`bundled`] again.
-#[cfg(test)]
-pub(crate) fn clear_active() {
-    if let Ok(mut slot) = ACTIVE.write() {
-        *slot = None;
-    }
-}
-
 pub(crate) fn unix_now() -> u64 {
     mycode_core::unix_now().as_secs()
 }

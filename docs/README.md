@@ -14,5 +14,6 @@
 | [mycode-agent](agent.md) | 回合循环，以及可崩溃恢复的会话账本 |
 | [mycode-app](app.md) | 无界面的应用核：桥接、回合装配、压缩、用量、子代理、MCP、OAuth、网页、更新 |
 | [mycode-desktop](desktop.md) | GPUI 窗口：纯状态机、渲染、和工作区 |
+| [模型目录更新指南](model-catalog-updates.md) | Codex / OpenDesign 手工维护与云端目录缓存更新流程 |
 
 `mycode-core`、`mycode-tools`、`mycode-agent` 的模块注释直接指向对应文档。改行为时先改代码，再改这里。`docs/images/` 只放随文档维护的 SVG 图（banner、架构、流程），不存界面截图。
