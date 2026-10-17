@@ -266,8 +266,16 @@ fn replace_verified_executable(
         }));
     }
     // The verified replace is final: the old-version backup is only for an
-    // in-flight restore, so it must not pile up next to the install.
-    let _ = std::fs::remove_file(&backup);
+    // in-flight restore, so it must not pile up next to the install. A
+    // transient lock (an antivirus scan of the freshly renamed file, say)
+    // fails a single attempt, so the delete is retried a few times before
+    // being left for the next launch's `cleanup_previous_binary` sweep.
+    for _ in 0..10 {
+        if std::fs::remove_file(&backup).is_ok() || !backup.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
     Ok(())
 }
 

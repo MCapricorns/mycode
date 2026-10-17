@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- 模型库列表新增 OpenDesign 行：和其它服务商一样点「添加」打开预设表单、粘贴 API key 即可，不再走单独的二级页。
+- 新增 `docs/model-catalog-updates.md`：手工更新 Codex / OpenDesign 模型与思考档位的维护指南。
+
+### Changed
+
+- 模型目录改为缓存优先：启动后读家目录 `catalog-cache.json`，缓存超过 24 小时或不存在才下载 models.dev（带 `If-None-Match` 条件请求），失败退回上次缓存；不再把整份 models.dev 快照编进二进制。GitHub Copilot 的模型行完全来自 models.dev，不再硬编码。
+- 离线保底只剩两行手工维护数据：OpenAI Codex 预设（`openai_codex_preset`）与 OpenDesign 实测表（`CURATED`），每份目录文档解析后都会注入这两行。
+- 目录刷新时机：启动首帧后静默刷一次（24 小时内不发请求，失败静默）；应用更新下载成功后强制刷一次，让新版本读到的缓存是新的；关于页手动「刷新」照旧。
+- 设置页添加服务商收敛为三个按钮：「从模型库添加」、「OAuth 登录」、「添加自定义端点」。GitHub Copilot 与 OpenAI Codex 共用一页 OAuth 登录，两张卡片各自发码；签入绑定目录行模型，之后在服务商详情里裁剪。
+- 更新检查和目录刷新的所有结果都只弹右上角气泡（已是最新、有新版本、下载中、失败、目录刷新成功或失败），关于页不再重复铺状态行和大段错误文字。
+
+### Removed
+
+- 去掉 Codex / OpenDesign 的实时模型拉取：签入后不再从 `chatgpt.com/backend-api/codex/models` 拉列表缓存到 `codex-models.json`，OpenDesign 不再有「从网关加载模型」按钮和 `opendesign-models.json`——实时列表拿不到思考档位，模型与档位改在代码里手工维护随版本发布。
+- 删掉每周 models.dev 快照流水线：`models-snapshot.yml`、`scripts/generate_catalog.py`、`catalog_snapshot_diff.py` 与编进二进制的 `catalog/snapshot.json` 一并移除，发布构建不再拉取云端目录。
+
+### Fixed
+
+- 更新安装成功后清理 `mycode-desktop.exe.mycode-previous` 备份与暂存目录残留，不再在更新后遗留旧二进制。
+
 ## [0.11.26] - 2026-10-17
 
 ### Added

@@ -47,6 +47,7 @@ pub(crate) async fn oauth_sign_in(
             open_browser(CODEX_VERIFICATION_URI);
             spawn_codex_poll(state, events, call, start.clone(), models);
             BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
+                provider_id: provider_id.clone(),
                 user_code: start.user_code,
                 verification_uri: CODEX_VERIFICATION_URI.to_owned(),
             }))
@@ -59,6 +60,7 @@ pub(crate) async fn oauth_sign_in(
             open_browser(&start.verification_uri);
             spawn_copilot_poll(state, events, call, start.clone(), models);
             BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
+                provider_id: provider_id.clone(),
                 user_code: start.user_code,
                 verification_uri: start.verification_uri,
             }))
@@ -185,142 +187,17 @@ async fn finish_oauth_sign_in(
     secret: &OAuthSecret,
     models: &[String],
 ) -> Result<(), String> {
-    // The Codex backend serves its own catalog at `/models` (models.dev does
-    // not carry it), so fetch the live list with the fresh token before
-    // binding. A fetch failure keeps the preset-based flow intact.
-    let live = if provider_id == OPENAI_CODEX_PROVIDER_ID {
-        let account = secret
-            .account_id
-            .clone()
-            .or_else(|| mycode_providers::chatgpt_account_id(&secret.access));
-        mycode_providers::catalog::codex::fetch_live_models(
-            &oauth_call(),
-            &secret.access,
-            account.as_deref(),
-        )
-        .await
-        .ok()
-    } else {
-        None
-    };
-    let bound: Vec<String> = match live.as_ref() {
-        Some(live) if !live.is_empty() => {
-            let served: Vec<String> = live.iter().map(|model| model.id.clone()).collect();
-            let kept: Vec<String> = models
-                .iter()
-                .filter(|id| served.iter().any(|served| served == *id))
-                .cloned()
-                .collect();
-            // Picks the preset offered but the account does not serve are
-            // dropped; none surviving means the whole live list is bound.
-            if kept.is_empty() { served } else { kept }
-        }
-        _ => models.to_vec(),
-    };
     let home = state.home.clone();
     let provider_id = provider_id.to_owned();
     let encoded = secret.encode();
     let catalog = state.catalog.clone();
+    let bound = models.to_vec();
     tokio::task::spawn_blocking(move || {
         save_provider_key(&home, &provider_id, &encoded)?;
-        if let Some(live) = live {
-            // A store failure must not undo the sign-in; the in-memory
-            // merge below still puts the live rows to work this run.
-            if let Err(message) = mycode_providers::catalog::codex::write_store(&home, &live) {
-                eprintln!("mycode: could not store the Codex model list: {message}");
-            }
-            install_live_codex_catalog(&catalog, &live)?;
-        }
         upsert_catalog_provider(&home, &catalog, &provider_id, &bound)
     })
     .await
     .map_err(|error| format!("sign-in persistence failed: {error}"))?
-}
-
-/// Merges a freshly fetched Codex listing into the live catalog row so the
-/// model picker shows it without a restart.
-fn install_live_codex_catalog(
-    catalog: &std::sync::RwLock<mycode_providers::catalog::CachedCatalog>,
-    live: &[mycode_providers::catalog::codex::LiveModel],
-) -> Result<(usize, u64), String> {
-    let mut guard = catalog
-        .write()
-        .map_err(|_| "catalog state is unavailable".to_owned())?;
-    let mut document = guard.document().as_ref().clone();
-    mycode_providers::catalog::codex::attach(&mut document, Some(live));
-    let providers = document.providers.len();
-    let fetched_at = guard.fetched_at;
-    let document = Arc::new(document);
-    *guard = mycode_providers::catalog::CachedCatalog::from_document(
-        document.as_ref().clone(),
-        fetched_at,
-        guard.etag.clone(),
-    );
-    drop(guard);
-    mycode_providers::catalog::install_active(document);
-    Ok((providers, fetched_at))
-}
-
-/// One background refresh of the stored Codex model list, queued once the
-/// UI reports ready. A signed-in account keeps its backend-served rows
-/// current between sign-ins; every failure stays silent (the preset and
-/// any stored list still stand).
-pub(crate) fn spawn_codex_models_refresh(
-    state: Arc<CoreState>,
-    events: crate::BridgeEventTx,
-) {
-    tokio::spawn(async move {
-        let home = state.home.clone();
-        let stored = tokio::task::spawn_blocking(move || {
-            mycode_config::read_provider_secrets(&home)
-                .ok()
-                .and_then(|secrets| {
-                    secrets
-                        .key(OPENAI_CODEX_PROVIDER_ID)
-                        .and_then(parse_oauth_secret)
-                })
-        })
-        .await
-        .ok()
-        .flatten();
-        let Some(mut secret) = stored else {
-            return;
-        };
-        let now = crate::unix_now().as_secs();
-        if secret.expired(now)
-            && let Ok(fresh) =
-                refresh_oauth_secret(&state.home, OPENAI_CODEX_PROVIDER_ID, secret.clone(), now)
-                    .await
-        {
-            secret = fresh;
-        }
-        let account = secret
-            .account_id
-            .clone()
-            .or_else(|| mycode_providers::chatgpt_account_id(&secret.access));
-        let Ok(live) = mycode_providers::catalog::codex::fetch_live_models(
-            &oauth_call(),
-            &secret.access,
-            account.as_deref(),
-        )
-        .await
-        else {
-            return;
-        };
-        let home = state.home.clone();
-        let catalog = state.catalog.clone();
-        if let Ok(Ok((providers, fetched_at))) = tokio::task::spawn_blocking(move || {
-            let _ = mycode_providers::catalog::codex::write_store(&home, &live);
-            install_live_codex_catalog(&catalog, &live)
-        })
-        .await
-        {
-            let _ = events.send(BridgeEvent::CatalogUpdated {
-                providers,
-                fetched_at,
-            });
-        }
-    });
 }
 
 /// Verifies the grant works, stores the OAuth token, and configures the

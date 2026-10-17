@@ -75,7 +75,13 @@ pub(super) fn render_provider_detail(
     } else {
         t("Not connected", "未连接")
     };
-    let sign_in = workspace.vm().copilot_sign_in.clone();
+    // Only this provider's flow shows its code here; a code for the other
+    // OAuth provider belongs on its own card.
+    let sign_in = workspace
+        .vm()
+        .copilot_sign_in
+        .clone()
+        .filter(|sign_in| sign_in.provider_id == provider.id);
     let error = workspace.vm().copilot_error.clone();
     let enabled = provider.enabled;
     let header = super::subview_header(

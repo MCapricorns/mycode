@@ -18,6 +18,9 @@ pub struct SkillEntry {
 /// An in-flight OAuth device-flow sign-in shown in the settings UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopilotSignIn {
+    /// The provider this flow signs in (`github-copilot` or `openai-codex`),
+    /// so the shared OAuth page can hang the code on the right card.
+    pub provider_id: String,
     /// Code the user types at the verification page.
     pub user_code: String,
     /// Verification page opened in the browser.
@@ -150,22 +153,17 @@ impl SettingsState {
     }
 }
 
-/// The Models settings sub-page: provider list, catalog picker, the
-/// OpenDesign gateway, the device-OAuth pages, or the custom-endpoint form.
+/// The Models settings sub-page: provider list, catalog picker, the shared
+/// OAuth sign-in page, or the custom-endpoint form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelsSubview {
     /// Configured providers plus the add buttons.
     #[default]
     List,
-    /// The models.dev catalog picker (search + provider rows).
+    /// The catalog picker (search + provider rows, OpenDesign included).
     Catalog,
-    /// The OpenDesign gateway: live model listing plus the add form. Kept
-    /// apart from the models.dev catalog.
-    OpenDesign,
-    /// The GitHub Copilot device sign-in plus its model checklist.
-    GitHubCopilot,
-    /// The OpenAI Codex (ChatGPT) device sign-in plus its model checklist.
-    OpenAiCodex,
+    /// The shared device-OAuth page: GitHub Copilot and OpenAI Codex cards.
+    OAuth,
     /// The custom endpoint form.
     Custom,
 }

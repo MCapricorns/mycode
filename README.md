@@ -32,7 +32,7 @@
 | | |
 | --- | --- |
 | **工作区** | 一个工作区挂多个文件夹，会话属于工作区。改动面板跟随文件系统事件读 `git status`。 |
-| **模型** | 内置 [models.dev](https://models.dev) 目录（200+ 服务商）。Copilot、Codex 用设备码登录；其它服务商（含 xAI）粘贴 API key。OpenDesign 网关按密钥实时列模型。 |
+| **模型** | [models.dev](https://models.dev) 云端目录（200+ 服务商，缓存一天一刷）。Copilot、Codex 用设备码登录；其它服务商（含 xAI、OpenDesign 网关）粘贴 API key。 |
 | **思考强度** | 按模型给出可选档位：关、低、高、Max……每个会话单独记住。 |
 | **子代理** | 只读的 `scout` 做代码搜索、网页调研、查 API 文档；`artisan` 在独立 worktree 里改代码。同时最多 8 个，不设超时；取消、停止或删除对话时一起结束。也可以在 `agents/` 里加自定义角色。 |
 | **技能** | 读取 `.agents/skills` 下的 `SKILL.md`，`/` 一键插入；设置里每个技能可以单独开关。 |

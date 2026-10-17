@@ -63,7 +63,9 @@ pub use protocol::{
 };
 pub use updates::apply::{parse_apply_update_args, run_apply_update_helper};
 pub use updates::{PreparedUpdate, UpdateOffer};
-pub use updates::{apply_and_restart, brief_error, cleanup_stale_stages, current_version};
+pub use updates::{
+    apply_and_restart, brief_error, cleanup_previous_binary, cleanup_stale_stages, current_version,
+};
 pub use user_agent::default_user_agent;
 
 use std::path::PathBuf;
@@ -270,17 +272,10 @@ pub enum BridgeCommand {
         /// Session identity spelling.
         session_id: String,
     },
-    /// Resolve the current provider catalog (cache, else bundled snapshot).
+    /// Resolve the current provider catalog (cache, else baseline rows).
     GetCatalog,
     /// Re-download the cloud provider catalog.
     RefreshCatalog,
-    /// List the models one OpenDesign key can use and install them in the
-    /// catalog. An empty key uses the key stored for the configured
-    /// OpenDesign provider.
-    RefreshOpenDesignModels {
-        /// Pasted key; empty uses the stored one.
-        api_key: String,
-    },
     /// Load the durable UI state document.
     LoadUiState,
     /// Persist the durable UI state document.
@@ -584,11 +579,8 @@ pub enum BridgeReply {
     Resources(Result<Vec<(String, String)>, String>),
     /// The user's answers were delivered to the waiting tool.
     AskAnswered(Result<(), String>),
-    /// Provider catalog snapshot with its freshness metadata.
+    /// Provider catalog document with its freshness metadata.
     Catalog(Result<CatalogInfo, String>),
-    /// The catalog with the live OpenDesign listing installed, and how many
-    /// chat models the key can use.
-    OpenDesignModels(Result<(CatalogInfo, usize), String>),
     /// Durable UI state load result, plus documents reset earlier in startup.
     UiState(Result<(UiState, Vec<mycode_config::DocumentRepair>), String>),
     /// UI state persist result.
@@ -608,6 +600,9 @@ pub enum BridgeReply {
 /// What the user needs to complete a device-flow sign-in.
 #[derive(Clone, Debug)]
 pub struct CopilotSignInInfo {
+    /// The provider this flow signs in (`github-copilot` or `openai-codex`),
+    /// so a shared OAuth panel can attribute the code.
+    pub provider_id: String,
     /// Code the user types at the verification page.
     pub user_code: String,
     /// Verification page opened in the browser.

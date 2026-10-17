@@ -859,12 +859,9 @@ def _expect_workflow_contract() -> None:
         "crates.io network retry is missing from the build",
     )
     _expect(
-        "generate_catalog.py" in release_build_job,
-        "release builds do not refresh the provider catalog snapshot",
-    )
-    _expect(
-        "models.dev/api.json" in release_build_job,
-        "release builds lost the models.dev catalog source",
+        "generate_catalog.py" not in release_build_job
+        and "models.dev/api.json" not in release_build_job,
+        "release builds refresh a vendored provider catalog snapshot",
     )
     _expect(
         "needs.check.result == 'success'" in _yaml_job(workflow, "release-publish"),
@@ -939,17 +936,15 @@ def _expect_single_workflow(workflow: str) -> None:
     """One file checks every pull request and publishes a new main version."""
 
     names = sorted(path.name for path in (ROOT / ".github/workflows").glob("*.y*ml"))
-    _expect(
-        names == ["ci.yml", "models-snapshot.yml"],
-        f"workflow files are {names}",
-    )
+    _expect(names == ["ci.yml"], f"workflow files are {names}")
     _expect(not (ROOT / ".github/workflows/release.yml").exists(), "release.yml is still present")
     _expect(not (ROOT / ".github/workflows/pr.yml").exists(), "pr.yml is still present")
-
-    snapshot_path = ROOT / ".github/workflows/models-snapshot.yml"
-    _expect(snapshot_path.is_file(), "models-snapshot.yml is missing")
-    snapshot_trigger = _trigger_block(snapshot_path.read_text(encoding="utf-8"))
-    _expect("schedule:" in snapshot_trigger, "models-snapshot.yml has no schedule")
+    # The client downloads the models.dev catalog into its runtime cache, so
+    # the weekly vendored-snapshot workflow is gone for good.
+    _expect(
+        not (ROOT / ".github/workflows/models-snapshot.yml").exists(),
+        "models-snapshot.yml is still present",
+    )
 
     trigger = _trigger_block(workflow)
     _expect("pull_request:" in trigger, "ci.yml does not trigger on pull_request")

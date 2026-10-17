@@ -643,6 +643,7 @@ fn unpublished_messages_max_tokens_follows_output_token_max_without_a_cap() {
 
 #[test]
 fn kimi_coding_plan_models_match_from_the_id_on_a_proxy() {
+    crate::catalog::install_kimi_fixture();
     let mut request = Request::new()
         .with_system_prompt("stable")
         .with_reasoning(ReasoningLevel::Max)
@@ -704,6 +705,7 @@ fn kimi_coding_plan_models_match_from_the_id_on_a_proxy() {
 /// publishes no effort list.
 #[test]
 fn kimi_for_coding_sends_published_effort_beside_thinking() {
+    crate::catalog::install_kimi_fixture();
     let hosts = [
         "https://api.kimi.com/coding/v1/chat/completions",
         "http://127.0.0.1:18080/kimi/v1/chat/completions",

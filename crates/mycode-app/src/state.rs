@@ -10,8 +10,8 @@ use std::sync::RwLock;
 use mycode_agent::session::SessionId;
 use mycode_agent::session::SessionService;
 use mycode_config::{
-    DocumentRepair, HomeLayout, ProviderSettings, read_app_settings, read_provider_secrets,
-    read_ui_state, read_ui_state_with_repair,
+    DocumentRepair, HomeLayout, ProviderSettings, read_app_settings, read_ui_state,
+    read_ui_state_with_repair,
 };
 use mycode_providers::catalog::{CachedCatalog, RefreshOutcome};
 use tokio_util::sync::CancellationToken;
@@ -182,76 +182,11 @@ pub(crate) async fn refresh_catalog(
     }
 }
 
-/// Lists the models one OpenDesign key can use, stores the listing, and
-/// installs it in the live catalog.
-///
-/// An empty `api_key` uses the key stored for the configured OpenDesign
-/// provider (the `opendesign` row, else the first row on the gateway host).
-/// That row's base URL is used when one is configured.
-pub(crate) async fn refresh_opendesign_models(
-    state: &CoreState,
-    api_key: String,
-) -> Result<(CatalogInfo, usize), String> {
-    use mycode_providers::catalog::opendesign;
-
-    let read_home = state.home.clone();
-    let pasted = mycode_config::normalize_api_key(&api_key);
-    let (user_agent, base_url, key) = tokio::task::spawn_blocking(move || {
-        let settings =
-            read_app_settings(&read_home).map_err(|error| render_config_error(&error))?;
-        let row = settings
-            .providers
-            .iter()
-            .find(|provider| provider.id == opendesign::PROVIDER_ID)
-            .or_else(|| {
-                settings
-                    .providers
-                    .iter()
-                    .find(|provider| provider.base_url.contains("open-design.ai"))
-            });
-        let base_url = row.map_or_else(
-            || opendesign::BASE_URL.to_owned(),
-            |provider| provider.base_url.clone(),
-        );
-        let key = if pasted.is_empty() {
-            let secrets =
-                read_provider_secrets(&read_home).map_err(|error| render_config_error(&error))?;
-            row.and_then(|provider| secrets.key(&provider.id))
-                .map(str::to_owned)
-                .ok_or_else(|| "paste an OpenDesign API key first".to_owned())?
-        } else {
-            pasted
-        };
-        Ok::<_, String>((crate::user_agent::default_user_agent(), base_url, key))
-    })
-    .await
-    .map_err(|error| format!("OpenDesign task failed: {error}"))??;
-    let models = opendesign::fetch_live_models(&base_url, &key, &user_agent).await?;
-    let count = models.len();
-    let home = state.home.clone();
-    let catalog = Arc::clone(&state.catalog);
-    // The store write and the multi-megabyte document copy stay off the
-    // single-threaded core runtime. The swap happens under the write lock, so
-    // a catalog refresh that lands meanwhile is not overwritten by a copy
-    // taken before it.
-    let info = tokio::task::spawn_blocking(move || {
-        opendesign::write_store(&home, &models)?;
-        let mut guard = catalog
-            .write()
-            .map_err(|_| "catalog state is unavailable".to_owned())?;
-        let mut document = guard.document().as_ref().clone();
-        opendesign::attach(&mut document, Some(&models));
-        *guard = CachedCatalog::from_document(document, guard.fetched_at, guard.etag.clone());
-        Ok::<_, String>(catalog_info_from(guard.clone()))
-    })
-    .await
-    .map_err(|error| format!("OpenDesign task failed: {error}"))??;
-    mycode_providers::catalog::install_active(Arc::clone(&info.document));
-    // The reply carries the new catalog; no CatalogUpdated round trip.
-    Ok((info, count))
-}
-
-/// One background catalog refresh, queued once the UI reports ready.
+/// One background catalog refresh, queued once the UI reports ready. The
+/// cached document is the offline source: a cache younger than a day is
+/// reused without traffic, an older or missing one is revalidated or
+/// downloaded once. Every failure stays silent — the cache or the
+/// hand-maintained baseline rows still stand.
 pub(crate) fn spawn_catalog_refresh(state: Arc<CoreState>, events: crate::BridgeEventTx) {
     tokio::spawn(async move {
         refresh_catalog(&state, &events, false).await;

@@ -1,11 +1,11 @@
 //! Parser for the raw models.dev `api.json` cloud document.
 //!
-//! The cloud document is normalized into the same compact schema as the
-//! vendored snapshot: only providers MYCode can serve (anthropic-messages or
-//! OpenAI-compatible endpoints) are kept, first-party labs without a
-//! published `api` field are filled from a pinned endpoint table, and cloud
-//! SDK consoles (bedrock/vertex/azure/google) are excluded. OAuth device-code
-//! vendors such as `github-copilot` are kept with an `auth` marker.
+//! The cloud document is normalized into the compact cache schema: only
+//! providers MYCode can serve (anthropic-messages or OpenAI-compatible
+//! endpoints) are kept, first-party labs without a published `api` field are
+//! filled from a pinned endpoint table, and cloud SDK consoles
+//! (bedrock/vertex/azure/google) are excluded. OAuth device-code vendors
+//! such as `github-copilot` are kept with an `auth` marker.
 use serde::Deserialize;
 
 use super::{
@@ -241,8 +241,6 @@ fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
 }
 
 /// Published effort tokens kept per model.
-///
-/// `scripts/generate_catalog.py` uses this same cap (`MAX_EFFORTS`).
 pub(crate) const MAX_EFFORTS: usize = 16;
 
 /// Keeps one published effort token. Unknown spellings stay; nothing is
@@ -252,10 +250,7 @@ pub(crate) fn push_effort(efforts: &mut Vec<String>, value: &str, cap: usize) {
         return;
     };
     let token = token.to_ascii_lowercase();
-    if token == "default"
-        || !mycode_config::is_valid_effort_token(&token)
-        || efforts.len() >= cap
-    {
+    if token == "default" || !mycode_config::is_valid_effort_token(&token) || efforts.len() >= cap {
         return;
     }
     if !efforts.iter().any(|existing| existing == &token) {
