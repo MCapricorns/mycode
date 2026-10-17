@@ -11,6 +11,16 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util.workspace = true
+# Global allocator: mimalloc's page-aligned segments and per-thread free
+# lists cut the steady-state RSS the default allocator grows into for this
+# workload (many small, churned strings). Declared in this leaf crate so
+# every test target and the desktop binary share one allocator.
+mimalloc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# VC-LTL redirects the CRT onto the OS-builtin ucrt/msvcrt, so test targets
+# and the desktop binary drop the VCRUNTIME140/ucrt DLL dependency.
+vc-ltl.workspace = true
 
 [lints]
 workspace = true
