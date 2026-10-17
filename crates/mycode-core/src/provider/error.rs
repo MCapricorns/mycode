@@ -51,6 +51,9 @@ pub struct ProviderError {
     kind: ProviderErrorKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    /// The HTTP status the server answered with, when the failure has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
 }
 
 impl ProviderError {
@@ -60,6 +63,7 @@ impl ProviderError {
         Self {
             kind,
             message: None,
+            status: None,
         }
     }
 
@@ -70,7 +74,21 @@ impl ProviderError {
         Self {
             kind,
             message: (!message.is_empty()).then_some(message),
+            status: None,
         }
+    }
+
+    /// Attaches the HTTP status the failure came back with.
+    #[must_use]
+    pub fn with_status(mut self, status: u16) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    /// The HTTP status that produced the failure, when there was one.
+    #[must_use]
+    pub const fn status(&self) -> Option<u16> {
+        self.status
     }
 
     /// Returns the stable failure category.
@@ -103,13 +121,19 @@ impl<'de> Deserialize<'de> for ProviderError {
             kind: ProviderErrorKind,
             #[serde(default)]
             message: Option<String>,
+            #[serde(default)]
+            status: Option<u16>,
         }
 
         let representation = Representation::deserialize(deserializer)?;
-        Ok(match representation.message {
+        let mut error = match representation.message {
             Some(message) => Self::with_message(representation.kind, message),
             None => Self::new(representation.kind),
-        })
+        };
+        if let Some(status) = representation.status {
+            error = error.with_status(status);
+        }
+        Ok(error)
     }
 }
 

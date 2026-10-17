@@ -184,7 +184,8 @@ impl SseTransport for ReqwestTransport {
                 return Err(ProviderError::with_message(
                     status_error_kind(status),
                     format!("HTTP {status}: {}", body.as_str()),
-                ));
+                )
+                .with_status(status.as_u16()));
             }
             let cancel_for_body = cancel;
             let (chunk_tx, chunk_rx) =
