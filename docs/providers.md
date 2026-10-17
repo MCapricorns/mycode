@@ -91,7 +91,7 @@ OpenDesign 行挂在目录文档里（id `opendesign`），上下文、输出和
 
 ## 登录
 
-`github-copilot`、`openai-codex` 是设备码登录，其它服务商（包括 `xai`）贴 API key。旧版本缓存里 `xai` 的 `oauth` 标记按普通 API key 服务商处理。缺少 `openai-codex` 时目录补一个内置预设（Responses，`https://chatgpt.com/backend-api/codex`）。OAuth 请求仍走钉住地址的客户端（`CheckRedirect`），调用方通过 `PinnedCall` 显式传入 User-Agent 和总超时（默认 30s），不跟随重定向；调用方的代理不生效。错误信息只带状态码和字段名，不带令牌。
+`github-copilot`、`openai-codex` 是设备码登录，其它服务商（包括 `xai`）贴 API key。旧版本缓存里 `xai` 的 `oauth` 标记按普通 API key 服务商处理。缺少 `openai-codex` 时目录补一个内置预设（Responses，`https://chatgpt.com/backend-api/codex`）；models.dev 不含 Codex 行，所以签入完成时会用新令牌从 `{base}/models` 拉一次真实列表缓存进 `codex-models.json`，已签入账户每次启动首帧后也静默刷新，目录层把这份实时列表合并到预设之上（实时成员优先，思考档位取后端给出的 ladder，上下文等限额回落到预设值）。OAuth 请求仍走钉住地址的客户端（`CheckRedirect`），调用方通过 `PinnedCall` 显式传入 User-Agent 和总超时（默认 30s），不跟随重定向；调用方的代理不生效。错误信息只带状态码和字段名，不带令牌。
 
 ## 一次解析
 
