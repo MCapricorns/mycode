@@ -33,6 +33,9 @@ pub(super) fn settings_loaded(state: &mut WorkspaceState, settings: SettingsStat
         _ => {
             crate::i18n::apply_language(&settings.language);
             state.settings = Some(settings);
+            // The swap dropped the live effort overlay (a session pin or
+            // the composer's pick) along with the stale projection.
+            super::models::restore_live_reasoning(state);
         }
     }
 }

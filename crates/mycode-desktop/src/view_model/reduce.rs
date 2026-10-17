@@ -28,6 +28,7 @@ use self::jobs::{drop_live_job, refresh_subagent_status, tool_progress, tool_sta
 use self::models::{
     active_preset_changed, apply_session_model, assign_fresh_session_model, ensure_model_selection,
     model_selected, provider_selected, remember_active_session_model, remember_session_model,
+    restore_live_reasoning,
 };
 use self::projects::{
     bind_session_project, session_bindings_forgotten, session_project_bound,
@@ -190,6 +191,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.error = None;
             state.pending_welcome_send = None;
             clear_session_usage(state);
+            restore_live_reasoning(state);
         }
         DesktopAction::ConversationParked => {
             state.active = None;
@@ -197,6 +199,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 session.active = false;
             }
             reset_turn_view(state);
+            restore_live_reasoning(state);
             state.composer_draft.clear();
             state.mention = None;
             state.pending_welcome_send = None;
@@ -720,6 +723,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.selected_model = selected_model;
             }
             ensure_model_selection(state);
+            // The live effort is an overlay on the document: re-apply the
+            // open session's pin, else the composer's last pick. Without
+            // it a remembered pick stays in ui.json while the chip and the
+            // next session's pin fall back to the provider default.
+            restore_live_reasoning(state);
             if let Some(session_id) = state
                 .active
                 .as_ref()
