@@ -6,8 +6,9 @@
 //! transport failure. The consumer synthesizes the cancellation terminal.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use mycode_core::{EventStreamSender, ProviderError, StreamEvent};
+use mycode_core::{EventStreamSender, ProviderError, ProviderErrorKind, StreamEvent};
 
 use crate::sse::FrameParser;
 use crate::transport::TransportCall;
@@ -29,15 +30,57 @@ pub(crate) trait FrameReducer: Send + 'static {
     fn interrupt(&mut self, detail: &str) -> StreamEvent;
 }
 
+/// Same-body POSTs per request, counting the first try.
+const MAX_ATTEMPTS: usize = 4;
+
+/// Backoff for a dropped connection, connect timeout, or generic 5xx.
+#[cfg(not(test))]
+const TRANSIENT_DELAYS_MS: [u64; 3] = [400, 1_200, 3_500];
+#[cfg(test)]
+const TRANSIENT_DELAYS_MS: [u64; 3] = [5, 5, 5];
+/// Rate limits need a longer pause than a network blip.
+#[cfg(not(test))]
+const RATE_LIMIT_DELAYS_MS: [u64; 3] = [1_000, 4_000, 10_000];
+#[cfg(test)]
+const RATE_LIMIT_DELAYS_MS: [u64; 3] = [5, 5, 5];
+
+/// The pause before retrying one failed `post` with the same body, or `None`
+/// when the failure is final.
+///
+/// Network interruptions, connect timeouts, 408, 429, and the usual
+/// transient 5xx answers are worth a bounded retry. A 404 (wrong route or
+/// model) and the Cloudflare origin faults (520, 524, and family) describe
+/// failures a retry cannot fix: the turn must stop and report them.
+/// Mid-stream failures never reach this — by then partial output is already
+/// reduced, so replaying the request would duplicate it.
+fn retry_delay_for(error: &ProviderError, attempt: usize) -> Option<Duration> {
+    if error.is_cancelled() {
+        return None;
+    }
+    let delays = match error.status() {
+        Some(429) => &RATE_LIMIT_DELAYS_MS,
+        Some(404) | Some(520..=526) => return None,
+        Some(408) | Some(500..=503) | Some(507) | Some(529) => &TRANSIENT_DELAYS_MS,
+        Some(_) => return None,
+        None => match error.kind() {
+            ProviderErrorKind::Unavailable | ProviderErrorKind::Timeout => &TRANSIENT_DELAYS_MS,
+            _ => return None,
+        },
+    };
+    delays.get(attempt).copied().map(Duration::from_millis)
+}
+
 /// Drives one provider request to exactly one terminal.
 ///
 /// `retryable` says the body carries a field one of the retry rules can
 /// strip (a prompt cache key or replayed thinking); only then is a copy kept.
+/// `make_reducer` rebuilds the reducer for each attempt, so a retry starts
+/// from a clean protocol state.
 pub(crate) async fn drive(
     transport: Arc<dyn crate::transport::SseTransport>,
     call: TransportCall,
     retryable: bool,
-    mut reducer: Box<dyn FrameReducer + Send>,
+    mut make_reducer: impl FnMut() -> Box<dyn FrameReducer + Send>,
     sender: EventStreamSender,
     cancel: tokio_util::sync::CancellationToken,
 ) {
@@ -48,90 +91,144 @@ pub(crate) async fn drive(
             call.body.clone(),
         )
     });
-    let body = match transport.post(call, cancel.clone()).await {
-        Ok(body) => body,
-        Err(error) => {
-            let Some((endpoint, headers, original)) = prepared else {
-                let _ = sender.send(StreamEvent::Error(error)).await;
-                return;
-            };
-            let Some(stripped) =
-                crate::cache::retry_body_without_prompt_cache_key(&endpoint, &error, &original)
-                    .or_else(|| {
-                        crate::anthropic_messages::retry_body_without_thinking(&error, &original)
-                    })
-            else {
-                let _ = sender.send(StreamEvent::Error(error)).await;
-                return;
-            };
-            if cancel.is_cancelled() {
-                let _ = sender.send(StreamEvent::Error(error)).await;
-                return;
-            }
-            match transport
-                .post(
-                    TransportCall {
-                        endpoint,
-                        headers,
-                        body: stripped,
-                    },
-                    cancel.clone(),
-                )
-                .await
-            {
-                Ok(body) => body,
+    let mut attempts = 0;
+    'attempt: loop {
+        let body = loop {
+            match transport.post(call.clone(), cancel.clone()).await {
+                Ok(body) => break body,
                 Err(error) => {
-                    let _ = sender.send(StreamEvent::Error(error)).await;
+                    if let Some(delay) = retry_delay_for(&error, attempts)
+                        && attempts + 1 < MAX_ATTEMPTS
+                    {
+                        if cancel_sleep(&cancel, delay).await {
+                            let _ = sender
+                                .send(StreamEvent::Error(ProviderError::new(
+                                    ProviderErrorKind::Cancelled,
+                                )))
+                                .await;
+                            return;
+                        }
+                        attempts += 1;
+                        continue;
+                    }
+                    // Transient retries are spent; the body-rewrite rules
+                    // still get their one shot at a final rejection they
+                    // recognize.
+                    let stripped = prepared.as_ref().and_then(|(endpoint, _, original)| {
+                        crate::cache::retry_body_without_prompt_cache_key(
+                            endpoint, &error, original,
+                        )
+                        .or_else(|| {
+                            crate::anthropic_messages::retry_body_without_thinking(&error, original)
+                        })
+                    });
+                    let Some(stripped) = stripped else {
+                        let _ = sender.send(StreamEvent::Error(error)).await;
+                        return;
+                    };
+                    if cancel.is_cancelled() {
+                        let _ = sender.send(StreamEvent::Error(error)).await;
+                        return;
+                    }
+                    match transport
+                        .post(
+                            TransportCall {
+                                endpoint: call.endpoint.clone(),
+                                headers: call.headers.clone(),
+                                body: stripped,
+                            },
+                            cancel.clone(),
+                        )
+                        .await
+                    {
+                        Ok(body) => break body,
+                        Err(error) => {
+                            let _ = sender.send(StreamEvent::Error(error)).await;
+                            return;
+                        }
+                    }
+                }
+            }
+        };
+
+        let mut parser = FrameParser::new();
+        let mut reducer = make_reducer();
+        let mut body = body;
+        // Nothing user-visible yet: an early stream drop is as retryable as
+        // a refused POST. Once one event is out, replaying could duplicate
+        // committed output, so later failures are terminal.
+        let mut emitted_any = false;
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                chunk = body.recv() => chunk,
+            };
+            let chunk = match chunk {
+                Some(Ok(chunk)) => chunk,
+                Some(Err(error)) => {
+                    if !emitted_any
+                        && attempts + 1 < MAX_ATTEMPTS
+                        && let Some(delay) = retry_delay_for(&error, attempts)
+                    {
+                        if cancel_sleep(&cancel, delay).await {
+                            let _ = sender
+                                .send(StreamEvent::Error(ProviderError::new(
+                                    ProviderErrorKind::Cancelled,
+                                )))
+                                .await;
+                            return;
+                        }
+                        attempts += 1;
+                        continue 'attempt;
+                    }
+                    let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
+                    return;
+                }
+                None => break,
+            };
+            let frames = match parser.feed(&chunk) {
+                Ok(frames) => frames,
+                Err(error) => {
+                    let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
+                    return;
+                }
+            };
+            for frame in frames {
+                let events = reducer.feed(&frame);
+                emitted_any |= !events.is_empty();
+                let terminal = send_all(&sender, events).await;
+                if terminal {
                     return;
                 }
             }
         }
-    };
 
-    let mut parser = FrameParser::new();
-    let mut body = body;
-    loop {
-        let chunk = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return,
-            chunk = body.recv() => chunk,
-        };
-        let chunk = match chunk {
-            Some(Ok(chunk)) => chunk,
-            Some(Err(error)) => {
-                let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
-                return;
+        match parser.finish() {
+            Ok(Some(trailing)) => {
+                let events = reducer.feed(&trailing);
+                if send_all(&sender, events).await {
+                    return;
+                }
             }
-            None => break,
-        };
-        let frames = match parser.feed(&chunk) {
-            Ok(frames) => frames,
+            Ok(None) => {}
             Err(error) => {
                 let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
                 return;
             }
-        };
-        for frame in frames {
-            let terminal = send_all(&sender, reducer.feed(&frame)).await;
-            if terminal {
-                return;
-            }
         }
+        let _ = emit(&sender, reducer.finish()).await;
+        return;
     }
+}
 
-    match parser.finish() {
-        Ok(Some(trailing)) => {
-            if send_all(&sender, reducer.feed(&trailing)).await {
-                return;
-            }
-        }
-        Ok(None) => {}
-        Err(error) => {
-            let _ = emit(&sender, reducer.interrupt(&error.to_string())).await;
-            return;
-        }
+/// Sleeps for `delay`, returning `true` when cancellation wins the race.
+async fn cancel_sleep(cancel: &tokio_util::sync::CancellationToken, delay: Duration) -> bool {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => true,
+        () = tokio::time::sleep(delay) => false,
     }
-    let _ = emit(&sender, reducer.finish()).await;
 }
 
 /// Sends events in order.
@@ -182,7 +279,7 @@ mod tests {
 
     struct Scripted {
         bodies: Mutex<Vec<Vec<u8>>>,
-        steps: Mutex<Vec<Result<&'static [u8], &'static str>>>,
+        steps: Mutex<Vec<Result<ByteStream, ProviderError>>>,
     }
 
     impl SseTransport for Scripted {
@@ -193,25 +290,29 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = Result<ByteStream, ProviderError>> + Send + 'a>> {
             Box::pin(async move {
                 self.bodies.lock().expect("bodies").push(call.body);
-                let step = self.steps.lock().expect("steps").remove(0);
-                match step {
-                    Ok(bytes) => {
-                        // One queued chunk, then the dropped sender ends the
-                        // stream — the channel form of `stream::iter([chunk])`.
-                        let (sender, stream) = tokio::sync::mpsc::channel(1);
-                        sender
-                            .send(Ok(Bytes::from(bytes.to_vec())))
-                            .await
-                            .expect("channel accepts one scripted chunk");
-                        Ok(stream)
-                    }
-                    Err(message) => Err(ProviderError::with_message(
-                        ProviderErrorKind::Rejected,
-                        message,
-                    )),
-                }
+                self.steps.lock().expect("steps").remove(0)
             })
         }
+    }
+
+    fn scripted(steps: Vec<Result<&'static [u8], ProviderError>>) -> Arc<Scripted> {
+        let steps: Vec<Result<ByteStream, ProviderError>> = steps
+            .into_iter()
+            .map(|step| {
+                step.map(|bytes| {
+                    let (sender, stream) = tokio::sync::mpsc::channel(1);
+                    sender
+                        .try_send(Ok(Bytes::from(bytes.to_vec())))
+                        .expect("channel accepts one scripted chunk");
+                    let _ = sender;
+                    stream
+                })
+            })
+            .collect();
+        Arc::new(Scripted {
+            bodies: Mutex::new(Vec::new()),
+            steps: Mutex::new(steps),
+        })
     }
 
     fn call(endpoint: &str) -> TransportCall {
@@ -225,20 +326,20 @@ mod tests {
     #[tokio::test]
     async fn a_named_prompt_cache_key_400_is_retried_once() {
         let endpoint = "https://retry.example.test/v1/chat/completions";
-        let transport = Arc::new(Scripted {
-            bodies: Mutex::new(Vec::new()),
-            steps: Mutex::new(vec![
-                Err("HTTP 400: unknown parameter prompt_cache_key"),
-                Ok(b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),
-            ]),
-        });
+        let transport = scripted(vec![
+            Err(ProviderError::with_message(
+                ProviderErrorKind::Rejected,
+                "HTTP 400: unknown parameter prompt_cache_key",
+            )),
+            Ok(b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),
+        ]);
         let cancel = CancellationToken::new();
         let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
         drive(
             transport.clone(),
             call(endpoint),
             true,
-            Box::new(CompletionsReducer::new()),
+            || Box::new(CompletionsReducer::new()),
             sender,
             cancel,
         )
@@ -267,13 +368,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_rejected_thinking_signature_is_retried_without_thinking() {
-        let transport = Arc::new(Scripted {
-            bodies: Mutex::new(Vec::new()),
-            steps: Mutex::new(vec![
-                Err("HTTP 400: Invalid `signature` in `thinking` block"),
-                Ok(b"data: {\"type\":\"message_stop\"}\n\n"),
-            ]),
-        });
+        let transport = scripted(vec![
+            Err(ProviderError::with_message(
+                ProviderErrorKind::Rejected,
+                "HTTP 400: Invalid `signature` in `thinking` block",
+            )),
+            Ok(b"data: {\"type\":\"message_stop\"}\n\n"),
+        ]);
         let cancel = CancellationToken::new();
         let (sender, _stream) = mycode_core::EventStream::channel(cancel.clone());
         let body = serde_json::json!({
@@ -290,7 +391,7 @@ mod tests {
                 body: serde_json::to_vec(&body).unwrap(),
             },
             crate::anthropic_messages::replays_thinking(&body),
-            Box::new(crate::anthropic_messages::MessagesReducer::new()),
+            || Box::new(crate::anthropic_messages::MessagesReducer::new()),
             sender,
             cancel,
         )
@@ -305,17 +406,17 @@ mod tests {
     #[tokio::test]
     async fn an_unnamed_400_is_not_retried() {
         let endpoint = "https://noretry.example.test/v1/chat/completions";
-        let transport = Arc::new(Scripted {
-            bodies: Mutex::new(Vec::new()),
-            steps: Mutex::new(vec![Err("HTTP 400: invalid request")]),
-        });
+        let transport = scripted(vec![Err(ProviderError::with_message(
+            ProviderErrorKind::Rejected,
+            "HTTP 400: invalid request",
+        ))]);
         let cancel = CancellationToken::new();
         let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
         drive(
             transport.clone(),
             call(endpoint),
             true,
-            Box::new(CompletionsReducer::new()),
+            || Box::new(CompletionsReducer::new()),
             sender,
             cancel,
         )
@@ -324,5 +425,141 @@ mod tests {
         let event = stream.next().await.expect("terminal");
         assert!(matches!(event, StreamEvent::Error(_)));
         assert!(crate::cache::wants_prompt_cache_key(endpoint));
+    }
+
+    const OK_CHUNK: &[u8] = b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+
+    async fn driven(transport: &Arc<Scripted>) -> Vec<StreamEvent> {
+        let cancel = CancellationToken::new();
+        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        drive(
+            transport.clone(),
+            call("https://retryable.example.test/v1/chat/completions"),
+            false,
+            || Box::new(CompletionsReducer::new()),
+            sender,
+            cancel,
+        )
+        .await;
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn a_network_drop_is_retried_until_the_stream_opens() {
+        let transport = scripted(vec![
+            Err(ProviderError::new(ProviderErrorKind::Unavailable)),
+            Err(ProviderError::with_message(
+                ProviderErrorKind::Timeout,
+                "timed out",
+            )),
+            Ok(OK_CHUNK),
+        ]);
+        let events = driven(&transport).await;
+        assert_eq!(transport.bodies.lock().expect("bodies").len(), 3);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Done { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_429_is_retried_then_succeeds() {
+        let transport = scripted(vec![
+            Err(ProviderError::new(ProviderErrorKind::Unavailable).with_status(429)),
+            Ok(OK_CHUNK),
+        ]);
+        let events = driven(&transport).await;
+        assert_eq!(transport.bodies.lock().expect("bodies").len(), 2);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Done { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_failures_give_up_after_the_attempt_cap() {
+        let transport = scripted(vec![
+            Err(ProviderError::new(ProviderErrorKind::Unavailable)),
+            Err(ProviderError::new(ProviderErrorKind::Unavailable)),
+            Err(ProviderError::new(ProviderErrorKind::Unavailable)),
+            Err(ProviderError::new(ProviderErrorKind::Unavailable)),
+            Ok(OK_CHUNK), // beyond the cap: never sent
+        ]);
+        let events = driven(&transport).await;
+        assert_eq!(
+            transport.bodies.lock().expect("bodies").len(),
+            super::MAX_ATTEMPTS
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Error(_)))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Done { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_520_origin_fault_stops_without_retry() {
+        let transport = scripted(vec![
+            Err(ProviderError::with_message(
+                ProviderErrorKind::Unavailable,
+                "HTTP 520: web server returned an unknown error",
+            )
+            .with_status(520)),
+            Ok(OK_CHUNK),
+        ]);
+        let events = driven(&transport).await;
+        assert_eq!(transport.bodies.lock().expect("bodies").len(), 1);
+        let terminal = events.last().expect("terminal event");
+        match terminal {
+            StreamEvent::Error(error) => {
+                assert_eq!(error.status(), Some(520));
+            }
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_404_stops_without_retry() {
+        let transport = scripted(vec![
+            Err(ProviderError::new(ProviderErrorKind::Rejected).with_status(404)),
+            Ok(OK_CHUNK),
+        ]);
+        let events = driven(&transport).await;
+        assert_eq!(transport.bodies.lock().expect("bodies").len(), 1);
+        assert!(matches!(events.last(), Some(StreamEvent::Error(_))));
+    }
+
+    #[test]
+    fn retry_classification() {
+        let unavailable = ProviderError::new(ProviderErrorKind::Unavailable);
+        let timeout = ProviderError::new(ProviderErrorKind::Timeout);
+        let rejected = ProviderError::new(ProviderErrorKind::Rejected);
+        let rate_limited = ProviderError::new(ProviderErrorKind::Unavailable).with_status(429);
+        let gone = ProviderError::new(ProviderErrorKind::Rejected).with_status(404);
+        let origin_down = ProviderError::new(ProviderErrorKind::Unavailable).with_status(524);
+        let server = ProviderError::new(ProviderErrorKind::Unavailable).with_status(503);
+        let cancelled = ProviderError::new(ProviderErrorKind::Cancelled);
+
+        assert!(super::retry_delay_for(&unavailable, 0).is_some());
+        assert!(super::retry_delay_for(&timeout, 0).is_some());
+        assert!(super::retry_delay_for(&rate_limited, 0).is_some());
+        assert!(super::retry_delay_for(&server, 0).is_some());
+        assert!(super::retry_delay_for(&gone, 0).is_none());
+        assert!(super::retry_delay_for(&origin_down, 0).is_none());
+        assert!(super::retry_delay_for(&rejected, 0).is_none());
+        assert!(super::retry_delay_for(&cancelled, 0).is_none());
+        assert!(super::retry_delay_for(&unavailable, 2).is_some());
+        assert!(super::retry_delay_for(&unavailable, 3).is_none());
     }
 }

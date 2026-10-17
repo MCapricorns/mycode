@@ -201,13 +201,13 @@ impl WireProvider {
         };
         (call, retryable)
     }
+}
 
-    fn reducer_for(&self) -> Box<dyn driver::FrameReducer + Send> {
-        match self.resolved.kind.as_str() {
-            "anthropic-messages" => Box::new(anthropic_messages::MessagesReducer::new()),
-            "openai-responses" => Box::new(openai_responses::ResponsesReducer::new()),
-            _ => Box::new(openai_completions::CompletionsReducer::new()),
-        }
+fn reducer_for(kind: &str) -> Box<dyn driver::FrameReducer + Send> {
+    match kind {
+        "anthropic-messages" => Box::new(anthropic_messages::MessagesReducer::new()),
+        "openai-responses" => Box::new(openai_responses::ResponsesReducer::new()),
+        _ => Box::new(openai_completions::CompletionsReducer::new()),
     }
 }
 
@@ -220,11 +220,19 @@ impl Provider for WireProvider {
         Box::pin(async move {
             request.validate()?;
             let (call, retryable) = self.call_for(request);
-            let reducer = self.reducer_for();
+            let kind = self.resolved.kind.clone();
             let (sender, stream) = EventStream::channel(cancel.clone());
             let transport = Arc::clone(&self.transport);
             tokio::spawn(async move {
-                driver::drive(transport, call, retryable, reducer, sender, cancel).await;
+                driver::drive(
+                    transport,
+                    call,
+                    retryable,
+                    move || reducer_for(&kind),
+                    sender,
+                    cancel,
+                )
+                .await;
             });
             Ok(stream)
         })

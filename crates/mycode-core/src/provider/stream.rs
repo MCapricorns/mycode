@@ -67,9 +67,7 @@ impl EventStreamSender {
             Err(JsonBoundError::Oversized) => {
                 protocol_terminal("provider event exceeds the encoded size limit")
             }
-            Err(JsonBoundError::Encode) => {
-                protocol_terminal("provider event could not be encoded")
-            }
+            Err(JsonBoundError::Encode) => protocol_terminal("provider event could not be encoded"),
         };
 
         let Ok(permit) = self.tx.reserve().await else {
