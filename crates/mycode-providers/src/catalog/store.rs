@@ -114,6 +114,7 @@ impl LazyCatalog {
                 };
                 if let Some(home) = &self.home {
                     super::opendesign::attach_stored(home, &mut document);
+                    super::codex::attach_stored(home, &mut document);
                 }
                 Arc::new(document)
             })
@@ -519,6 +520,7 @@ pub async fn refresh(
             return Err("catalog document had no usable providers".to_owned());
         }
         super::opendesign::attach_stored(&parse_home, &mut document);
+        super::codex::attach_stored(&parse_home, &mut document);
         Ok(document)
     })
     .await

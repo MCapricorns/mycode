@@ -182,17 +182,132 @@ async fn finish_oauth_sign_in(
     secret: &OAuthSecret,
     models: &[String],
 ) -> Result<(), String> {
+    // The Codex backend serves its own catalog at `/models` (models.dev does
+    // not carry it), so fetch the live list with the fresh token before
+    // binding. A fetch failure keeps the preset-based flow intact.
+    let live = if provider_id == OPENAI_CODEX_PROVIDER_ID {
+        let account = secret
+            .account_id
+            .clone()
+            .or_else(|| mycode_providers::chatgpt_account_id(&secret.access));
+        mycode_providers::catalog::codex::fetch_live_models(
+            &oauth_call(),
+            &secret.access,
+            account.as_deref(),
+        )
+        .await
+        .ok()
+    } else {
+        None
+    };
+    let bound: Vec<String> = match live.as_ref() {
+        Some(live) if !live.is_empty() => {
+            let served: Vec<String> = live.iter().map(|model| model.id.clone()).collect();
+            let kept: Vec<String> = models
+                .iter()
+                .filter(|id| served.iter().any(|served| served == *id))
+                .cloned()
+                .collect();
+            // Picks the preset offered but the account does not serve are
+            // dropped; none surviving means the whole live list is bound.
+            if kept.is_empty() { served } else { kept }
+        }
+        _ => models.to_vec(),
+    };
     let home = state.home.clone();
     let provider_id = provider_id.to_owned();
     let encoded = secret.encode();
-    let models = models.to_vec();
     let catalog = state.catalog.clone();
     tokio::task::spawn_blocking(move || {
         save_provider_key(&home, &provider_id, &encoded)?;
-        upsert_catalog_provider(&home, &catalog, &provider_id, &models)
+        upsert_catalog_provider(&home, &catalog, &provider_id, &bound)?;
+        if let Some(live) = live {
+            // A store failure must not undo the sign-in; the in-memory
+            // merge below still puts the live rows to work this run.
+            if let Err(message) = mycode_providers::catalog::codex::write_store(&home, &live) {
+                eprintln!("mycode: could not store the Codex model list: {message}");
+            }
+            install_live_codex_catalog(&catalog, &live)?;
+        }
+        Ok(())
     })
     .await
     .map_err(|error| format!("sign-in persistence failed: {error}"))?
+}
+
+/// Merges a freshly fetched Codex listing into the live catalog row so the
+/// model picker shows it without a restart.
+fn install_live_codex_catalog(
+    catalog: &std::sync::RwLock<mycode_providers::catalog::CachedCatalog>,
+    live: &[mycode_providers::catalog::codex::LiveModel],
+) -> Result<(), String> {
+    let mut guard = catalog
+        .write()
+        .map_err(|_| "catalog state is unavailable".to_owned())?;
+    let mut document = guard.document().as_ref().clone();
+    mycode_providers::catalog::codex::attach(&mut document, Some(live));
+    let document = Arc::new(document);
+    *guard = mycode_providers::catalog::CachedCatalog::from_document(
+        document.as_ref().clone(),
+        guard.fetched_at,
+        guard.etag.clone(),
+    );
+    drop(guard);
+    mycode_providers::catalog::install_active(document);
+    Ok(())
+}
+
+/// One background refresh of the stored Codex model list, queued once the
+/// UI reports ready. A signed-in account keeps its backend-served rows
+/// current between sign-ins; every failure stays silent (the preset and
+/// any stored list still stand).
+pub(crate) fn spawn_codex_models_refresh(state: Arc<CoreState>) {
+    tokio::spawn(async move {
+        let home = state.home.clone();
+        let stored = tokio::task::spawn_blocking(move || {
+            mycode_config::read_provider_secrets(&home)
+                .ok()
+                .and_then(|secrets| {
+                    secrets
+                        .key(OPENAI_CODEX_PROVIDER_ID)
+                        .and_then(parse_oauth_secret)
+                })
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(mut secret) = stored else {
+            return;
+        };
+        let now = crate::unix_now().as_secs();
+        if secret.expired(now)
+            && let Ok(fresh) =
+                refresh_oauth_secret(&state.home, OPENAI_CODEX_PROVIDER_ID, secret.clone(), now)
+                    .await
+        {
+            secret = fresh;
+        }
+        let account = secret
+            .account_id
+            .clone()
+            .or_else(|| mycode_providers::chatgpt_account_id(&secret.access));
+        let Ok(live) = mycode_providers::catalog::codex::fetch_live_models(
+            &oauth_call(),
+            &secret.access,
+            account.as_deref(),
+        )
+        .await
+        else {
+            return;
+        };
+        let home = state.home.clone();
+        let catalog = state.catalog.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = mycode_providers::catalog::codex::write_store(&home, &live);
+            let _ = install_live_codex_catalog(&catalog, &live);
+        })
+        .await;
+    });
 }
 
 /// Verifies the grant works, stores the OAuth token, and configures the
@@ -317,7 +432,7 @@ pub(crate) async fn resolve_request_auth(
     if let Some(mut secret) = parse_oauth_secret(stored_key) {
         let now = crate::unix_now().as_secs();
         if secret.expired(now) {
-            secret = refresh_oauth_secret(home, provider, secret, now).await?;
+            secret = refresh_oauth_secret(home, &provider.id, secret, now).await?;
         }
         let mut extra = Vec::new();
         if provider.id == OPENAI_CODEX_PROVIDER_ID {
@@ -350,20 +465,20 @@ static OAUTH_REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(())
 /// stored while this one waited for the refresh lock.
 async fn refresh_oauth_secret(
     home: &HomeLayout,
-    provider: &ProviderSettings,
+    provider_id: &str,
     expired: OAuthSecret,
     now: u64,
 ) -> Result<OAuthSecret, String> {
-    if !refreshes_oauth(&provider.id) {
+    if !refreshes_oauth(provider_id) {
         return Err(OAUTH_EXPIRED.to_owned());
     }
     let _refreshing = OAUTH_REFRESH.lock().await;
     let check_home = home.clone();
-    let provider_id = provider.id.clone();
+    let check_id = provider_id.to_owned();
     let stored = tokio::task::spawn_blocking(move || {
         mycode_config::read_provider_secrets(&check_home)
             .ok()
-            .and_then(|secrets| secrets.key(&provider_id).and_then(parse_oauth_secret))
+            .and_then(|secrets| secrets.key(&check_id).and_then(parse_oauth_secret))
     })
     .await
     .ok()
@@ -375,7 +490,7 @@ async fn refresh_oauth_secret(
     }
     let secret = refresh_codex_token(&oauth_call(), &expired.refresh).await?;
     let save_home = home.clone();
-    let provider_id = provider.id.clone();
+    let provider_id = provider_id.to_owned();
     let encoded = secret.encode();
     let _ =
         tokio::task::spawn_blocking(move || save_provider_key(&save_home, &provider_id, &encoded))
@@ -531,9 +646,10 @@ mod tests {
         );
         // This turn read the old token before the race; it must not spend
         // the already rotated refresh grant.
-        let adopted = super::refresh_oauth_secret(&home, &codex, secret("stale", now), now)
-            .await
-            .expect("no network refresh");
+        let adopted =
+            super::refresh_oauth_secret(&home, &codex.id, secret("stale", now), now)
+                .await
+                .expect("no network refresh");
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(adopted.access, "rotated");
     }

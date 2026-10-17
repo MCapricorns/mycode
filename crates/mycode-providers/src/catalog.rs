@@ -8,6 +8,7 @@
 //! catalog, so new vendors and models appear without an app update.
 use serde::{Deserialize, Serialize};
 
+pub mod codex;
 pub mod modelsdev;
 pub mod opendesign;
 pub mod store;
@@ -320,9 +321,10 @@ pub fn parse_snapshot(bytes: &[u8]) -> CatalogDocument {
 }
 
 /// Adds the presets models.dev does not carry: the Codex subscription and
-/// the curated OpenDesign row. The OpenDesign row always replaces whatever a
-/// cached document holds, so a newer build's curated values take effect;
-/// the store layer then merges a stored live listing over it.
+/// the curated OpenDesign row. Both rows are revisited by the store layer,
+/// which merges a stored live listing (`codex-models.json`,
+/// `opendesign-models.json`) over whatever is here, so a newer sign-in's
+/// fetched values take effect.
 pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> CatalogDocument {
     if document.provider("openai-codex").is_none() {
         document.providers.push(openai_codex_preset());
@@ -332,7 +334,7 @@ pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> Cata
     document
 }
 
-fn openai_codex_preset() -> CatalogProvider {
+pub(crate) fn openai_codex_preset() -> CatalogProvider {
     CatalogProvider {
         id: "openai-codex".to_owned(),
         name: "OpenAI Codex".to_owned(),
@@ -344,8 +346,23 @@ fn openai_codex_preset() -> CatalogProvider {
             ("o3-pro", "o3-pro", &[][..]),
             ("o3", "o3", &["low", "medium", "high"]),
             (
+                "gpt-5.3-codex",
+                "GPT-5.3 Codex",
+                &["low", "medium", "high", "xhigh"],
+            ),
+            (
                 "gpt-5.3-codex-spark",
                 "GPT-5.3 Codex Spark",
+                &["none", "low", "medium", "high", "xhigh"],
+            ),
+            (
+                "gpt-5.4",
+                "GPT-5.4",
+                &["none", "low", "medium", "high", "xhigh"],
+            ),
+            (
+                "gpt-5.4-mini",
+                "GPT-5.4 mini",
                 &["none", "low", "medium", "high", "xhigh"],
             ),
             (
@@ -364,6 +381,11 @@ fn openai_codex_preset() -> CatalogProvider {
                 &["none", "low", "medium", "high", "xhigh", "max"],
             ),
             (
+                "gpt-5.6-sol-pro",
+                "GPT-5.6 Sol Pro",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            (
                 "gpt-5.6-terra",
                 "GPT-5.6 Terra",
                 &["none", "low", "medium", "high", "xhigh", "max"],
@@ -371,6 +393,21 @@ fn openai_codex_preset() -> CatalogProvider {
             (
                 "gpt-6-astra",
                 "GPT-6 Astra",
+                &["low", "medium", "high", "xhigh", "max"],
+            ),
+            (
+                "gpt-6-luna",
+                "GPT-6 Luna",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            (
+                "gpt-6-sol",
+                "GPT-6 Sol",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            (
+                "gpt-6.1-sol",
+                "GPT-6.1 Sol",
                 &["low", "medium", "high", "xhigh", "max"],
             ),
         ]

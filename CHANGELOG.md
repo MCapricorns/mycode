@@ -11,6 +11,7 @@
 - 排队消息每行带三个操作：✎ 撤回到输入框编辑、× 删除、↵ 打断当前回合并立即发送这条。
 - 内置 MCP 目录新增 GitHub 服务器（`https://api.githubcopilot.com/mcp`，Bearer 密钥）。
 - 窗口尺寸持久化：启动恢复上次窗口大小（最大化记还原尺寸），拖动边缘调整后防抖动写回 `ui.json`。
+- Codex 模型列表改由后端实时提供：签入完成时从 `chatgpt.com/backend-api/codex/models` 拉取并缓存到 `codex-models.json`（models.dev 不含 Codex 行），已签入的账户每次启动在首帧后静默刷新；拉取失败或过期令牌刷新失败都回退到预设列表。
 
 ### Fixed
 
@@ -24,6 +25,7 @@
 - 启动路径减负：目录缓存只校验信封、文档保留原始字节，模型选择器等目录界面首次打开才在阻塞池里解析；更新检查与目录刷新推迟到首帧之后；`spawn_blocking` 线程池上限收为 32；全局分配器换为 mimalloc，Windows 目标用 VC-LTL 把 CRT 链到系统自带的 ucrtbase/msvcrt，去掉运行时 DLL 依赖。
 - MCP 与网页搜索后端的启用开关改为先解析密钥、再做真实探测（MCP 走工具探测，网页走一次搜索），成功才落为启用；从内置目录添加的 MCP 服务器默认禁用，不能再绕过探测。
 - 移除自定义（`custom`）网页搜索后端：设置页只保留 querit、anysearch、exa 三个厂商；旧配置文件里的 `custom` 行在加载时直接丢弃（该拼写仍被接受以免旧配置解析报错），此前的自定义行开关也顺带堵上了绕过「密钥+探测」门的口子。
+- `openai-codex` 预设模型更新到 15 个：新增 gpt-6.1-sol、gpt-6-sol、gpt-6-luna、gpt-5.6-sol-pro、gpt-5.4、gpt-5.4-mini、gpt-5.3-codex，作为签入前和实时拉取失败时的兜底。
 
 ## [0.11.25] - 2026-10-17
 
