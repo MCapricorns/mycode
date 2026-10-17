@@ -4236,7 +4236,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-agent"
-version = "0.11.24"
+version = "0.11.25"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
@@ -4256,7 +4256,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-app"
-version = "0.11.24"
+version = "0.11.25"
 dependencies = [
  "bytes",
  "futures-util",
@@ -4282,7 +4282,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-config"
-version = "0.11.24"
+version = "0.11.25"
 dependencies = [
  "rustix",
  "serde",
@@ -4294,7 +4294,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-core"
-version = "0.11.24"
+version = "0.11.25"
 dependencies = [
  "serde",
  "serde_json",
@@ -4305,7 +4305,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.11.24"
+version = "0.11.25"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -4322,7 +4322,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-providers"
-version = "0.11.24"
+version = "0.11.25"
 dependencies = [
  "bytes",
  "http",
@@ -4339,7 +4339,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-tools"
-version = "0.11.24"
+version = "0.11.25"
 dependencies = [
  "aho-corasick",
  "base64 0.23.1",
