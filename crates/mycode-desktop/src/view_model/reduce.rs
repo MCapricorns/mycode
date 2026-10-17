@@ -676,8 +676,15 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             document,
             fetched_at,
         } => {
+            let had_catalog = state.catalog.is_some();
             state.catalog = Some(document);
             state.catalog_fetched_at = fetched_at;
+            if let Some(preset) = state.active_preset.clone()
+                && (!had_catalog && state.preset_models.is_empty()
+                    || preset == mycode_providers::OPENAI_CODEX_PROVIDER_ID)
+            {
+                active_preset_changed(state, Some(preset));
+            }
         }
         DesktopAction::UiStateLoaded {
             recents,
@@ -696,7 +703,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             window_size,
         } => {
             state.thinking_collapsed = thinking_collapsed;
-            state.window_size = window_size;
+            state.window_size = state.window_size.or(window_size);
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;

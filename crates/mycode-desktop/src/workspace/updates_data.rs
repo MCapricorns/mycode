@@ -185,7 +185,13 @@ impl Workspace {
             return;
         };
         if !enabled {
+            self.pending_mcp_enable.remove(&server.id);
             self.apply_action(DesktopAction::SettingsMcpToggled(index, false), cx);
+            return;
+        }
+        if self.pending_mcp_enable.contains(&server.id)
+            || self.vm.mcp_probing.contains(&server.id)
+        {
             return;
         }
         // A row that declares a credential header needs its `mcp-<id>` key

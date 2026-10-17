@@ -141,7 +141,10 @@ pub fn merge(live: &[LiveModel], preset: &[CatalogModel]) -> Vec<CatalogModel> {
         if models.len() >= MAX_MODELS_PER_PROVIDER {
             break;
         }
-        if models.iter().any(|model| model.id == listing.id) {
+        if !usable_family(&listing.id)
+            || !super::valid_model_id(&listing.id)
+            || models.iter().any(|model| model.id == listing.id)
+        {
             continue;
         }
         let curated = preset.iter().find(|model| model.id == listing.id);
@@ -179,10 +182,11 @@ pub fn merge(live: &[LiveModel], preset: &[CatalogModel]) -> Vec<CatalogModel> {
 /// over the preset when one is given, the preset list otherwise.
 pub fn attach(document: &mut CatalogDocument, live: Option<&[LiveModel]>) {
     let mut row = super::openai_codex_preset();
-    if let Some(live) = live
-        && !live.is_empty()
-    {
-        row.models = merge(live, &row.models);
+    if let Some(live) = live {
+        let merged = merge(live, &row.models);
+        if !merged.is_empty() {
+            row.models = merged;
+        }
     }
     match document
         .providers
@@ -208,11 +212,14 @@ pub fn attach_stored(home: &HomeLayout, document: &mut CatalogDocument) {
 #[must_use]
 pub fn read_store(home: &HomeLayout) -> Option<Vec<LiveModel>> {
     let bytes = read_owned_file(home, STORE_PATH, MAX_STORE_BYTES).ok()??;
-    let document: StoreDocument = serde_json::from_slice(&bytes).ok()?;
-    (document.kind == STORE_KIND
-        && document.format_version == STORE_FORMAT_VERSION
-        && !document.models.is_empty())
-    .then_some(document.models)
+    let mut document: StoreDocument = serde_json::from_slice(&bytes).ok()?;
+    if document.kind != STORE_KIND || document.format_version != STORE_FORMAT_VERSION {
+        return None;
+    }
+    document
+        .models
+        .retain(|model| usable_family(&model.id) && super::valid_model_id(&model.id));
+    (!document.models.is_empty()).then_some(document.models)
 }
 
 /// Replaces the stored live listing.
@@ -391,5 +398,15 @@ mod tests {
         assert_eq!(row.models[0].id, "gpt-6.1-sol");
         // Provider constants survive the replace.
         assert_eq!(row.kind, crate::catalog::KIND_OPENAI_RESPONSES);
+
+        // Retired-only stored rows fall back to the preset instead of
+        // leaving an empty Codex model list.
+        let retired = vec![LiveModel {
+            id: "o3".to_owned(),
+            ..LiveModel::default()
+        }];
+        attach(&mut document, Some(&retired));
+        let row = document.provider("openai-codex").expect("codex row");
+        assert_eq!(row.models.len(), crate::catalog::openai_codex_preset().models.len());
     }
 }

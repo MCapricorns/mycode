@@ -133,7 +133,11 @@ impl Workspace {
             return;
         };
         if !enabled {
+            self.pending_web_enable.remove(&backend.id);
             self.apply_action(DesktopAction::SettingsBackendToggled(index, false), cx);
+            return;
+        }
+        if self.pending_web_enable.contains(&backend.id) {
             return;
         }
         self.pending_web_enable.insert(backend.id.clone());
