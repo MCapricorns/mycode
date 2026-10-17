@@ -61,10 +61,12 @@ pub(crate) struct LiveJob {
 
 impl LiveJob {
     /// Role plus the short brief, so a row reads as `scout · map the crate`.
+    /// A job whose progress arrived before its role did falls back to the
+    /// localized generic label.
     #[must_use]
     pub(crate) fn title(&self) -> String {
         let role = if self.role.is_empty() {
-            "agent"
+            crate::i18n::t("Subagent", "子代理")
         } else {
             self.role.as_str()
         };
