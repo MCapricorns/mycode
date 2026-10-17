@@ -611,6 +611,7 @@ impl Workspace {
                 // Refresh the key markers in place: reloading settings here
                 // would race the concurrently running settings save and wipe
                 // the just-added provider (and any other unsaved edits).
+                let stored = mcp_keys.clone();
                 self.apply_action(
                     DesktopAction::ProviderKeySaved {
                         provider_keys,
@@ -618,6 +619,12 @@ impl Workspace {
                     },
                     cx,
                 );
+                // An enable that waited on this key save may probe now.
+                for server_id in stored {
+                    if self.pending_mcp_enable.contains(&server_id) {
+                        self.probe_mcp_for_enable(&server_id, cx);
+                    }
+                }
             }
             BridgeReply::ChatStarted(Ok(())) => {}
             // The turn unwinds over the event channel; the reply itself
@@ -647,13 +654,66 @@ impl Workspace {
                 server_id,
                 outcome: Ok(tools),
             } => {
-                self.apply_action(DesktopAction::McpToolsListed { server_id, tools }, cx);
+                self.apply_action(
+                    DesktopAction::McpToolsListed {
+                        server_id: server_id.clone(),
+                        tools,
+                    },
+                    cx,
+                );
+                // A probe that gated an enable switch lands it now.
+                if self.pending_mcp_enable.remove(&server_id)
+                    && let Some(index) = self.vm.settings.as_ref().and_then(|settings| {
+                        settings
+                            .mcp_servers
+                            .iter()
+                            .position(|server| server.id == server_id)
+                    })
+                {
+                    self.apply_action(DesktopAction::SettingsMcpToggled(index, true), cx);
+                }
             }
             BridgeReply::McpTools {
                 server_id,
                 outcome: Err(message),
             } => {
+                self.pending_mcp_enable.remove(&server_id);
                 self.apply_action(DesktopAction::McpProbeFailed { server_id, message }, cx);
+            }
+            BridgeReply::WebBackendProbed {
+                backend_id,
+                outcome,
+            } => {
+                if self.pending_web_enable.remove(&backend_id) {
+                    match outcome {
+                        Ok(()) => {
+                            let index = self.vm.settings.as_ref().and_then(|settings| {
+                                settings
+                                    .web_backends
+                                    .iter()
+                                    .position(|backend| backend.id == backend_id)
+                            });
+                            if let Some(index) = index {
+                                self.apply_action(
+                                    DesktopAction::SettingsBackendToggled(index, true),
+                                    cx,
+                                );
+                                self.push_toast(
+                                    crate::i18n::t(
+                                        "Search backend verified and enabled",
+                                        "搜索后端已验证并启用",
+                                    )
+                                    .to_owned(),
+                                    crate::workspace::ToastKind::Info,
+                                    cx,
+                                );
+                            }
+                        }
+                        Err(message) => {
+                            self.push_toast(message, crate::workspace::ToastKind::Error, cx);
+                        }
+                    }
+                }
             }
             BridgeReply::Catalog(Ok(info)) => {
                 let refreshed = self.pending_catalog_refresh;
@@ -674,6 +734,9 @@ impl Workspace {
                 }
             }
             BridgeReply::Catalog(Err(message)) => {
+                // A failed lazy load clears the flag so the next surface
+                // open retries; a failed manual refresh also toasts.
+                self.catalog_requested = false;
                 if self.pending_catalog_refresh {
                     self.pending_catalog_refresh = false;
                     self.apply_action(DesktopAction::Failed(message), cx);
@@ -747,6 +810,7 @@ impl Workspace {
                         active_workspace: ui_state.active_workspace,
                         recent_models: ui_state.recent_models,
                         thinking_collapsed: ui_state.thinking_collapsed,
+                        window_size: ui_state.window_size,
                     },
                     cx,
                 );
@@ -893,14 +957,23 @@ impl Workspace {
             BridgeReply::ChatStarted(Err(message)) => {
                 self.apply_action(failed_start(message), cx);
             }
+            BridgeReply::ProviderKeySaved(Err(message)) => {
+                // Pending enables that waited on this key save can never
+                // probe now; entries already probing keep their gate.
+                let probing = &self.vm.mcp_probing;
+                self.pending_mcp_enable.retain(|id| probing.contains(id));
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Settings(Err(message))
-            | BridgeReply::ProviderKeySaved(Err(message))
             | BridgeReply::Recalled(Err(message))
             | BridgeReply::Resources(Err(message))
             | BridgeReply::AskAnswered(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
+            // The first-frame acknowledgement carries no UI state; a lost
+            // reply only means the deferred refresh ran anyway.
+            BridgeReply::UiReady(_) => {}
         }
     }
 }

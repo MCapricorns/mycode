@@ -186,6 +186,14 @@ pub enum BridgeCommand {
         /// so the settings form can test a binding before it is saved.
         server: Box<mycode_config::McpServerSettings>,
     },
+    /// Probe one web-search backend: resolves its key (environment or
+    /// vault), then runs one bounded search. The settings page gates the
+    /// "enabled" switch on this, so a dead key can never silently turn a
+    /// backend on.
+    ProbeWebBackend {
+        /// The backend row to probe.
+        backend: Box<mycode_config::WebBackendSettings>,
+    },
     /// Load one page of committed events older than `before`.
     ///
     /// `before` is the oldest event the UI already shows. The head must
@@ -284,6 +292,10 @@ pub enum BridgeCommand {
         /// Existing directory; `None` reverts to the shared scratch directory.
         path: Option<String>,
     },
+    /// The desktop painted its first frame. Deferred startup work — the
+    /// catalog refresh and the update check — starts here, so the network
+    /// and TLS stack never races the first window paint.
+    UiReady,
     /// Query GitHub for a newer desktop release.
     CheckUpdate,
     /// Download and verify one update offer into a staging directory.
@@ -548,6 +560,14 @@ pub enum BridgeReply {
         /// Listed tool names, or why the probe failed.
         outcome: Result<Vec<String>, String>,
     },
+    /// Web backend probe result. The backend id rides the reply even on
+    /// failure, so the settings page can attribute the error to its row.
+    WebBackendProbed {
+        /// Backend identity the probe ran against.
+        backend_id: String,
+        /// `Ok` means key resolution and a bounded search both succeeded.
+        outcome: Result<(), String>,
+    },
     /// Recall result: truncated conversation plus edited text. Workspace
     /// files are unchanged.
     Recalled(Result<(Box<ActiveConversation>, Option<String>), String>),
@@ -572,6 +592,8 @@ pub enum BridgeReply {
     UiStateSaved(Result<(), String>),
     /// Project directory bind result.
     ProjectSet(Result<(), String>),
+    /// First-frame acknowledgement; deferred startup work has been queued.
+    UiReady(Result<(), String>),
     /// Update check result; `Ok(None)` means the app is current.
     UpdateChecked(Result<Option<UpdateOffer>, String>),
     /// Download-and-verify result.

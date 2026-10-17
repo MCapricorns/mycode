@@ -220,12 +220,12 @@ async fn finish_copilot_sign_in(
 /// Adds or refreshes a catalog provider entry with the chosen models.
 fn upsert_catalog_provider(
     home: &HomeLayout,
-    catalog: &std::sync::RwLock<crate::CatalogInfo>,
+    catalog: &std::sync::RwLock<mycode_providers::catalog::CachedCatalog>,
     provider_id: &str,
     models: &[String],
 ) -> Result<(), String> {
     let catalog = catalog.read().ok().and_then(|guard| {
-        guard.document.provider(provider_id).map(|preset| {
+        guard.document().provider(provider_id).map(|preset| {
             (
                 preset.kind.clone(),
                 preset.base_url.clone(),

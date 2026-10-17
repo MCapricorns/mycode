@@ -26,8 +26,10 @@ pub(crate) const UPDATE_USER_AGENT: &str = concat!("mycode-updates/", env!("CARG
 pub(crate) struct CoreState {
     pub(crate) service: SessionService,
     pub(crate) home: HomeLayout,
-    /// Resolved provider catalog; swapped in place by refreshes.
-    pub(crate) catalog: Arc<RwLock<CatalogInfo>>,
+    /// Resolved provider catalog; swapped in place by refreshes. The entry
+    /// keeps its raw cache bytes until the first `document()` call, so
+    /// startup never pays the multi-megabyte parse.
+    pub(crate) catalog: Arc<RwLock<CachedCatalog>>,
     /// Per-session project directories for tool runs.
     pub(crate) projects: Arc<Mutex<HashMap<String, PathBuf>>>,
     /// Cached short-lived Copilot bearer token and its unix expiry.
@@ -65,14 +67,12 @@ impl CoreState {
                 }
             }
         }
-        let document = Arc::new(cached.document);
-        mycode_providers::catalog::install_active(Arc::clone(&document));
+        // The lazy source is published as-is: `catalog::active()` parses it
+        // on the first real lookup instead of at startup.
+        mycode_providers::catalog::install_active_cached(&cached);
         Self {
             service: SessionService::new(&home),
-            catalog: Arc::new(RwLock::new(CatalogInfo {
-                document,
-                fetched_at: cached.fetched_at,
-            })),
+            catalog: Arc::new(RwLock::new(cached)),
             home,
             projects: Arc::new(Mutex::new(projects)),
             copilot: Arc::new(tokio::sync::Mutex::new(None)),
@@ -118,9 +118,12 @@ pub(crate) fn set_project_dir(
     Ok(())
 }
 
+/// Materializes one cache entry into a reply-ready catalog. Call it from a
+/// blocking context: the first `document()` on a lazy entry runs the full
+/// multi-megabyte parse.
 pub(crate) fn catalog_info_from(cache: CachedCatalog) -> CatalogInfo {
     CatalogInfo {
-        document: Arc::new(cache.document),
+        document: cache.document(),
         fetched_at: cache.fetched_at,
     }
 }
@@ -150,12 +153,24 @@ pub(crate) async fn refresh_catalog(
         RefreshOutcome::Fresh(cache)
         | RefreshOutcome::NotModified(cache)
         | RefreshOutcome::Updated(cache) => {
-            let info = catalog_info_from(cache);
+            // A still-lazy cache materializes off the core thread: the
+            // reply carries a parsed document the UI can read directly.
+            let info = match tokio::task::spawn_blocking({
+                let cache = cache.clone();
+                move || catalog_info_from(cache)
+            })
+            .await
+            {
+                Ok(info) => info,
+                Err(error) => {
+                    return BridgeReply::Catalog(Err(format!("catalog task failed: {error}")));
+                }
+            };
             let providers = info.document.providers.len();
             let fetched_at = info.fetched_at;
             mycode_providers::catalog::install_active(Arc::clone(&info.document));
             if let Ok(mut guard) = state.catalog.write() {
-                *guard = info.clone();
+                *guard = cache;
             }
             let _ = events.send(BridgeEvent::CatalogUpdated {
                 providers,
@@ -224,10 +239,10 @@ pub(crate) async fn refresh_opendesign_models(
         let mut guard = catalog
             .write()
             .map_err(|_| "catalog state is unavailable".to_owned())?;
-        let mut document = guard.document.as_ref().clone();
+        let mut document = guard.document().as_ref().clone();
         opendesign::attach(&mut document, Some(&models));
-        guard.document = Arc::new(document);
-        Ok::<_, String>(guard.clone())
+        *guard = CachedCatalog::from_document(document, guard.fetched_at, guard.etag.clone());
+        Ok::<_, String>(catalog_info_from(guard.clone()))
     })
     .await
     .map_err(|error| format!("OpenDesign task failed: {error}"))??;
@@ -236,14 +251,14 @@ pub(crate) async fn refresh_opendesign_models(
     Ok((info, count))
 }
 
-/// One background catalog refresh shortly after startup.
+/// One background catalog refresh, queued once the UI reports ready.
 pub(crate) fn spawn_catalog_refresh(state: Arc<CoreState>, events: crate::BridgeEventTx) {
     tokio::spawn(async move {
         refresh_catalog(&state, &events, false).await;
     });
 }
 
-/// One background update check shortly after startup.
+/// One background update check, queued once the UI reports ready.
 pub(crate) fn spawn_update_check(state: Arc<CoreState>, events: crate::BridgeEventTx) {
     tokio::spawn(async move {
         let home = state.home.clone();
@@ -287,8 +302,8 @@ pub(crate) fn model_context_window(
     let Ok(catalog) = state.catalog.read() else {
         return 0;
     };
-    let document = &catalog.document;
-    document
+    catalog
+        .document()
         .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
         .map(|entry| entry.context)
         .filter(|context| *context > 0)
@@ -309,7 +324,7 @@ pub(crate) fn model_output_limit(
     }
     if let Ok(catalog) = state.catalog.read()
         && let Some(limit) = catalog
-            .document
+            .document()
             .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
             .map(|entry| entry.output)
             .filter(|output| *output > 0)
@@ -395,11 +410,7 @@ mod tests {
         .expect("cache");
         let state = CoreState::new(
             home,
-            CachedCatalog {
-                document: bundled().clone(),
-                fetched_at: 0,
-                etag: None,
-            },
+            CachedCatalog::from_document(bundled().clone(), 0, None),
             Vec::new(),
         );
         assert!(
@@ -407,7 +418,7 @@ mod tests {
                 .catalog
                 .read()
                 .expect("catalog")
-                .document
+                .document()
                 .provider("marker-fresh")
                 .is_none()
         );
@@ -422,7 +433,7 @@ mod tests {
                 .catalog
                 .read()
                 .expect("catalog")
-                .document
+                .document()
                 .provider("marker-fresh")
                 .is_some()
         );
@@ -452,8 +463,8 @@ mod tests {
         let home = HomeLayout::from_root(&root).expect("home");
         let state = super::CoreState::new(
             home,
-            CachedCatalog {
-                document: CatalogDocument {
+            CachedCatalog::from_document(
+                CatalogDocument {
                     providers: vec![CatalogProvider {
                         id: "lab".to_owned(),
                         models: vec![CatalogModel {
@@ -464,9 +475,9 @@ mod tests {
                         ..CatalogProvider::default()
                     }],
                 },
-                fetched_at: 0,
-                etag: None,
-            },
+                0,
+                None,
+            ),
             Vec::new(),
         );
         let mut provider = ProviderSettings {

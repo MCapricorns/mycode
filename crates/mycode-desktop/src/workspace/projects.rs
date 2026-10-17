@@ -187,20 +187,19 @@ impl Workspace {
     }
 
     fn insert_skill_draft(&mut self, slug: &str, cx: &mut Context<Self>) {
-        let (title, path) = if let Some(cached) =
-            self.vm.skills.iter().find(|skill| skill.slug == slug)
-        {
-            (cached.title.clone(), cached.path.clone())
-        } else {
-            let (workspace, user_home) = self.skill_roots();
-            let Some(skill) = mycode_config::discover_skills(&workspace, user_home.as_deref())
-                .into_iter()
-                .find(|skill| skill.slug == slug)
-            else {
-                return;
+        let (title, path) =
+            if let Some(cached) = self.vm.skills.iter().find(|skill| skill.slug == slug) {
+                (cached.title.clone(), cached.path.clone())
+            } else {
+                let (workspace, user_home) = self.skill_roots();
+                let Some(skill) = mycode_config::discover_skills(&workspace, user_home.as_deref())
+                    .into_iter()
+                    .find(|skill| skill.slug == slug)
+                else {
+                    return;
+                };
+                (skill.title, skill.path.display().to_string())
             };
-            (skill.title, skill.path.display().to_string())
-        };
         // Native tools run directly: ask for a plain read of the skill file.
         // (The retired run_code control channel used to wrap this request.)
         let text = if crate::i18n::is_chinese() {
@@ -828,6 +827,7 @@ impl Workspace {
             active_workspace: self.vm.active_workspace.clone(),
             recent_models: self.vm.recent_models.clone(),
             thinking_collapsed: self.vm.thinking_collapsed,
+            window_size: self.vm.window_size,
         };
         self.dispatch(BridgeCommand::SaveUiState { state }, cx);
     }

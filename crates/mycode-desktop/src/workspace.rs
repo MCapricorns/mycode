@@ -1,7 +1,7 @@
 //! The workspace window view: title bar, sessions sidebar, chat column,
 //! right inspector, and the full-page settings view.
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::Root;
 use gpui_kit::component::command::CommandState;
@@ -40,17 +40,21 @@ pub(crate) use toasts::{Toast, ToastKind};
 const WINDOW_SIZE: gpui_kit::Size<Pixels> = size(px(1760.), px(1040.));
 
 /// Centers the preferred size on the primary display's usable area, shrinking
-/// it when the screen is smaller than that size.
-fn startup_bounds(cx: &App) -> Bounds<Pixels> {
+/// it when the screen is smaller than that size. A persisted windowed size
+/// wins over the default.
+fn startup_bounds(cx: &App, saved: Option<mycode_config::WindowSize>) -> Bounds<Pixels> {
+    let desired = saved
+        .map(|saved| size(px(saved.width as f32), px(saved.height as f32)))
+        .unwrap_or(WINDOW_SIZE);
     let Some(display) = cx.primary_display() else {
         return Bounds {
             origin: gpui_kit::point(px(80.), px(48.)),
-            size: WINDOW_SIZE,
+            size: desired,
         };
     };
     let screen = display.visible_bounds();
-    let width = fit_edge(screen.size.width, WINDOW_SIZE.width, px(960.));
-    let height = fit_edge(screen.size.height, WINDOW_SIZE.height, px(560.));
+    let width = fit_edge(screen.size.width, desired.width, px(960.));
+    let height = fit_edge(screen.size.height, desired.height, px(560.));
     Bounds::centered_at(screen.center(), size(width, height))
 }
 
@@ -96,10 +100,14 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         None,
     )]);
     let (bridge, events) = CoreBridge::start(home.clone());
-    // Open as a regular window at the default bounds: the maximize-on-open
-    // workaround for gpui's stale-scale sizing is retired by user request
-    // (DPI edge cases accepted); the user can maximize manually.
-    let options = client_window_options(startup_bounds(cx));
+    // Open as a regular window at the persisted (or default) bounds: the
+    // maximize-on-open workaround for gpui's stale-scale sizing is retired
+    // by user request (DPI edge cases accepted); the user can maximize
+    // manually.
+    let saved_size = mycode_config::read_ui_state(&home)
+        .ok()
+        .and_then(|state| state.window_size);
+    let options = client_window_options(startup_bounds(cx, saved_size));
     cx.open_window(options, |window, cx| {
         // Platform blur behind translucent chrome. GPUI has no per-element
         // backdrop filter; macOS and Windows implement this appearance, and a
@@ -214,11 +222,23 @@ pub struct Workspace {
     settings_text_save_generation: u64,
     /// A User-Agent (or similar) debounce is waiting to write `settings.json`.
     settings_text_save_pending: bool,
+    /// Bumped on each window-bounds event so only the settled size persists.
+    window_size_generation: u64,
     /// Last `@` fragment already searched, to dedupe bridge dispatches.
     mention_query: Option<(crate::view_model::MentionKind, String)>,
     /// Bumped on each composer edit so a stale mention timer does not search.
     mention_generation: u64,
     pending_catalog_refresh: bool,
+    /// A `GetCatalog` request is in flight. The catalog is loaded lazily:
+    /// nothing asks for it until a surface that needs the document (the
+    /// model picker, a reasoning menu, the Models settings page) opens.
+    catalog_requested: bool,
+    /// MCP server ids whose enable switch waits on a successful tools
+    /// probe; the switch only lands `on` when the probe returns tools.
+    pending_mcp_enable: HashSet<String>,
+    /// Web backend ids whose enable switch waits on a successful search
+    /// probe; the switch only lands `on` when the probe returns `Ok`.
+    pending_web_enable: HashSet<String>,
     /// The in-flight check was started from About, so its result may toast.
     manual_update_check: bool,
     /// Config files reset during this launch. Their names are toasted once.
@@ -347,9 +367,13 @@ impl Workspace {
             settings_save_epoch: 0,
             settings_text_save_generation: 0,
             settings_text_save_pending: false,
+            window_size_generation: 0,
             mention_query: None,
             mention_generation: 0,
             pending_catalog_refresh: false,
+            catalog_requested: false,
+            pending_mcp_enable: HashSet::new(),
+            pending_web_enable: HashSet::new(),
             manual_update_check: false,
             repaired_configs: Vec::new(),
             repair_toast_armed: false,
@@ -401,7 +425,16 @@ impl Workspace {
             workspace.dispatch(BridgeCommand::ListSessions, cx);
             workspace.dispatch(BridgeCommand::LoadSettings, cx);
             workspace.dispatch(BridgeCommand::LoadUiState, cx);
-            workspace.dispatch(BridgeCommand::GetCatalog, cx);
+            // Deferred startup work (catalog refresh, update check) starts
+            // once the first frame painted; the catalog document itself
+            // loads lazily in `ensure_catalog`.
+            cx.on_next_frame(window, |workspace, _window, cx| {
+                workspace.dispatch(BridgeCommand::UiReady, cx);
+            });
+            cx.observe_window_bounds(window, |workspace, window, cx| {
+                workspace.on_window_resized(window, cx);
+            })
+            .detach();
         });
         workspace
     }
@@ -904,11 +937,71 @@ pub(crate) fn parse_env_line(
 
 /// Renders the whole window; split across the `ui` submodule.
 impl Workspace {
+    /// Whether an open surface reads the provider catalog document.
+    fn catalog_needed(&self) -> bool {
+        let vm = &self.vm;
+        vm.model_menu_open
+            || vm.reasoning_menu_open
+            || vm.subagent_menu.is_some()
+            || vm.command_palette_open
+            || (vm.view == crate::view_model::MainView::Settings
+                && matches!(
+                    vm.settings_section,
+                    crate::view_model::SettingsSection::Models
+                        | crate::view_model::SettingsSection::About
+                ))
+    }
+
+    /// Persists a resized window's settled size. The observer fires on every
+    /// bounds change (moves included), so only a size difference arms the
+    /// debounce and only the last generation wins the write.
+    fn on_window_resized(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let bounds = match window.window_bounds() {
+            // `Maximized` still reports the restorable windowed bounds, which
+            // is exactly the size to restore on the next launch.
+            WindowBounds::Windowed(bounds) | WindowBounds::Maximized(bounds) => bounds,
+            WindowBounds::Fullscreen(_) => return,
+        };
+        let size = mycode_config::WindowSize {
+            width: f32::from(bounds.size.width).round().max(0.) as u32,
+            height: f32::from(bounds.size.height).round().max(0.) as u32,
+        };
+        if size.width == 0 || size.height == 0 || self.vm.window_size == Some(size) {
+            return;
+        }
+        self.vm.window_size = Some(size);
+        self.window_size_generation = self.window_size_generation.wrapping_add(1);
+        let generation = self.window_size_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(400))
+                .await;
+            let _ = this.update(cx, |workspace, cx| {
+                if workspace.window_size_generation == generation {
+                    workspace.persist_ui_state(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Loads the provider catalog the first time a surface needs it. The
+    /// document stays unparsed in the core until this request lands, keeping
+    /// the multi-megabyte decode off the startup path.
+    fn ensure_catalog(&mut self, cx: &mut Context<Self>) {
+        if self.catalog_requested || self.vm.catalog.is_some() || !self.catalog_needed() {
+            return;
+        }
+        self.catalog_requested = true;
+        self.dispatch(BridgeCommand::GetCatalog, cx);
+    }
+
     pub(crate) fn render_root(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl gpui_kit::IntoElement {
+        self.ensure_catalog(cx);
         crate::ui::render_root(self, window, cx)
     }
 }

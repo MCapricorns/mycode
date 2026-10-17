@@ -14,12 +14,12 @@ use crate::oauth::oauth_sign_in;
 use crate::search::search_project_files;
 use crate::settings_io::{load_settings, render_config_error, save_provider_key, save_settings};
 use crate::state::{
-    CoreState, UPDATE_USER_AGENT, refresh_catalog, refresh_opendesign_models, set_project_dir,
-    spawn_catalog_refresh, spawn_update_check,
+    CoreState, UPDATE_USER_AGENT, catalog_info_from, refresh_catalog, refresh_opendesign_models,
+    set_project_dir, spawn_catalog_refresh, spawn_update_check,
 };
 use crate::tool_hosts::{deliver_ask_answer, dismiss_ask};
 use crate::turn::{chat_turn, manual_compact};
-use crate::{BridgeCommand, BridgeReply, CatalogInfo, WithReply, protocol::SessionSummary};
+use crate::{BridgeCommand, BridgeReply, WithReply, protocol::SessionSummary};
 
 pub(crate) fn run_core(
     home: HomeLayout,
@@ -28,6 +28,11 @@ pub(crate) fn run_core(
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
+        // Cap the blocking pool: the default ceiling of 512 threads would
+        // let a pathological burst (runaway file IO, stalled TLS calls) grow
+        // process memory by hundreds of stacks. Real concurrency here is a
+        // handful of config and catalog tasks.
+        .max_blocking_threads(32)
         .build()
     {
         Ok(runtime) => runtime,
@@ -53,8 +58,9 @@ pub(crate) fn run_core(
             crate::subagent::recover_agent_worktrees(&recovery_home)
         })
         .await;
-        // The catalog cache is a multi-megabyte document; parse it off the
-        // core thread so startup does not stall the command loop.
+        // The catalog cache is a multi-megabyte document. Startup reads and
+        // validates only its envelope off the core thread; the document
+        // itself stays raw until the first `document()` access.
         let (cached, catalog_repair) = tokio::task::spawn_blocking({
             let home = home.clone();
             move || mycode_providers::catalog::current_with_repair(&home)
@@ -62,11 +68,11 @@ pub(crate) fn run_core(
         .await
         .unwrap_or_else(|_| {
             (
-                mycode_providers::catalog::CachedCatalog {
-                    document: mycode_providers::catalog::bundled().clone(),
-                    fetched_at: 0,
-                    etag: None,
-                },
+                mycode_providers::catalog::CachedCatalog::from_document(
+                    mycode_providers::catalog::bundled().clone(),
+                    0,
+                    None,
+                ),
                 None,
             )
         });
@@ -78,8 +84,11 @@ pub(crate) fn run_core(
         // from `spawn_blocking` has no reactor and cannot start the worker.
         let state = CoreState::new(home.clone(), cached, startup_repairs);
         let state = Arc::new(state);
-        spawn_catalog_refresh(state.clone(), events.clone());
-        spawn_update_check(state.clone(), events.clone());
+        // The catalog refresh and update check stay queued until the desktop
+        // reports its first frame (`UiReady`): reqwest + Schannel pull in
+        // several megabytes and the refresh does not belong on the critical
+        // startup path.
+        let mut ui_ready = false;
         let mut requests = tokio::task::JoinSet::<()>::new();
         loop {
             let with_reply = tokio::select! {
@@ -206,6 +215,14 @@ pub(crate) fn run_core(
                         let _ = reply.send(BridgeReply::OpenDesignModels(outcome));
                     });
                 }
+                BridgeCommand::UiReady => {
+                    if !ui_ready {
+                        ui_ready = true;
+                        spawn_catalog_refresh(state.clone(), events.clone());
+                        spawn_update_check(state.clone(), events.clone());
+                    }
+                    let _ = with_reply.reply.send(BridgeReply::UiReady(Ok(())));
+                }
                 BridgeCommand::CheckUpdate => {
                     let reply = with_reply.reply;
                     tokio::spawn(async move {
@@ -220,6 +237,17 @@ pub(crate) fn run_core(
                         let outcome =
                             crate::updates::download_update(UPDATE_USER_AGENT, &offer).await;
                         let _ = reply.send(BridgeReply::UpdateDownloaded(outcome));
+                    });
+                }
+                BridgeCommand::ProbeWebBackend { backend } => {
+                    let reply = with_reply.reply;
+                    let home = state.home.clone();
+                    tokio::spawn(async move {
+                        let outcome = crate::tool_hosts::probe_web_backend(&home, &backend).await;
+                        let _ = reply.send(BridgeReply::WebBackendProbed {
+                            backend_id: backend.id.clone(),
+                            outcome,
+                        });
                     });
                 }
                 BridgeCommand::StartOAuthSignIn {
@@ -292,6 +320,10 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
             server_id: server.id.clone(),
             outcome: Err(message),
         },
+        BridgeCommand::ProbeWebBackend { backend } => BridgeReply::WebBackendProbed {
+            backend_id: backend.id.clone(),
+            outcome: Err(message),
+        },
         BridgeCommand::RecallMessage { .. } => BridgeReply::Recalled(Err(message)),
         BridgeCommand::DeleteSession { .. } => BridgeReply::SessionDeleted(Err(message)),
         BridgeCommand::RemoveRecent { .. } => BridgeReply::UiStateSaved(Err(message)),
@@ -310,6 +342,7 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         BridgeCommand::LoadUiState => BridgeReply::UiState(Err(message)),
         BridgeCommand::SaveUiState { .. } => BridgeReply::UiStateSaved(Err(message)),
         BridgeCommand::SetProjectDir { .. } => BridgeReply::ProjectSet(Err(message)),
+        BridgeCommand::UiReady => BridgeReply::UiReady(Err(message)),
         BridgeCommand::CheckUpdate => BridgeReply::UpdateChecked(Err(message)),
         BridgeCommand::DownloadUpdate { .. } => BridgeReply::UpdateDownloaded(Err(message)),
         BridgeCommand::StartOAuthSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
@@ -576,14 +609,26 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::AskDismiss { session_id } => {
             BridgeReply::AskAnswered(dismiss_ask(session_id))
         }
-        BridgeCommand::GetCatalog => BridgeReply::Catalog(Ok(state
-            .catalog
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_else(|_| CatalogInfo {
-                document: Arc::new(mycode_providers::catalog::bundled().clone()),
-                fetched_at: 0,
-            }))),
+        BridgeCommand::GetCatalog => {
+            // First request for the catalog pays the lazy parse; keep the
+            // multi-megabyte decode off the core thread.
+            let catalog = Arc::clone(&state.catalog);
+            let info = blocking(move || {
+                let cache = catalog
+                    .read()
+                    .map(|guard| guard.clone())
+                    .unwrap_or_else(|_| {
+                        mycode_providers::catalog::CachedCatalog::from_document(
+                            mycode_providers::catalog::bundled().clone(),
+                            0,
+                            None,
+                        )
+                    });
+                Ok(catalog_info_from(cache))
+            })
+            .await;
+            BridgeReply::Catalog(info)
+        }
         BridgeCommand::LoadUiState => {
             let home = state.home.clone();
             let pending = state.startup_repairs_snapshot();
@@ -619,6 +664,13 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::RefreshOpenDesignModels { .. } => {
             BridgeReply::OpenDesignModels(Err("this request runs as a concurrent task".to_owned()))
         }
+        BridgeCommand::UiReady => BridgeReply::UiReady(Err(
+            "the UI-ready signal is handled on the command loop".to_owned(),
+        )),
+        BridgeCommand::ProbeWebBackend { .. } => BridgeReply::WebBackendProbed {
+            backend_id: String::new(),
+            outcome: Err("this request runs as a concurrent task".to_owned()),
+        },
         BridgeCommand::CheckUpdate => {
             BridgeReply::UpdateChecked(Err("this request runs as a concurrent task".to_owned()))
         }

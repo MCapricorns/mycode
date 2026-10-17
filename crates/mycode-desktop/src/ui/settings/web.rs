@@ -80,9 +80,11 @@ fn render_web_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
             Some(t(
                 "Open a backend to paste its key. Keys live in the vault and show as a \
                  lock; QUERIT_API_KEY / ANYSEARCH_API_KEY / EXA_API_KEY also work. At \
-                 most one backend is active.",
+                 most one backend is active, and enabling runs a live search probe \
+                 first.",
                 "打开后端粘贴密钥。密钥保存在凭据库中，显示为锁形标记；也支持环境变量 \
-                 QUERIT_API_KEY / ANYSEARCH_API_KEY / EXA_API_KEY。最多启用一个后端。",
+                 QUERIT_API_KEY / ANYSEARCH_API_KEY / EXA_API_KEY。最多启用一个后端，\
+                 启用前会先做真实搜索探测。",
             )),
             &theme,
             vec![
@@ -179,8 +181,7 @@ fn vendor_row(
             Switch::new(format!("backend-toggle-{index}"))
                 .checked(enabled)
                 .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
-                    workspace
-                        .apply_action(DesktopAction::SettingsBackendToggled(index, *checked), cx);
+                    workspace.on_backend_toggled(index, *checked, cx);
                 })),
         )
         .into_any_element()
@@ -322,10 +323,7 @@ fn render_web_detail(
                             Switch::new(format!("backend-toggle-{index}"))
                                 .checked(enabled)
                                 .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
-                                    workspace.apply_action(
-                                        DesktopAction::SettingsBackendToggled(index, *checked),
-                                        cx,
-                                    );
+                                    workspace.on_backend_toggled(index, *checked, cx);
                                 })),
                         )
                         .into_any_element(),

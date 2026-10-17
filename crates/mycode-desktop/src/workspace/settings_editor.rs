@@ -160,6 +160,38 @@ impl Workspace {
         self.apply_action(DesktopAction::SettingsBackendRemoved(index), cx);
     }
 
+    /// The row's enable switch. Disabling is immediate; enabling first runs
+    /// a key-resolving search probe against the row, landing `on` only when
+    /// the probe returns `Ok`. A missing key or dead endpoint can therefore
+    /// never silently turn a backend on.
+    pub(crate) fn on_backend_toggled(
+        &mut self,
+        index: usize,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(backend) = self
+            .vm
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.web_backends.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        if !enabled {
+            self.apply_action(DesktopAction::SettingsBackendToggled(index, false), cx);
+            return;
+        }
+        self.pending_web_enable.insert(backend.id.clone());
+        self.dispatch(
+            BridgeCommand::ProbeWebBackend {
+                backend: Box::new(backend),
+            },
+            cx,
+        );
+    }
+
     pub(crate) fn web_key_input(
         &mut self,
         id: &str,

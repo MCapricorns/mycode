@@ -172,6 +172,62 @@ impl Workspace {
 
     // ---- ask / tools ----
 
+    /// The row's enable switch. Disabling is immediate; enabling first
+    /// verifies the stored key (for HTTP rows that declare auth) and a live
+    /// tools probe, landing `on` only when the probe returns tools.
+    pub(crate) fn on_mcp_toggled(&mut self, index: usize, enabled: bool, cx: &mut Context<Self>) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let Some(server) = settings.mcp_servers.get(index).cloned() else {
+            return;
+        };
+        if !enabled {
+            self.apply_action(DesktopAction::SettingsMcpToggled(index, false), cx);
+            return;
+        }
+        // A row that declares a credential header needs its `mcp-<id>` key
+        // before the probe can mean anything.
+        let needs_key = server.transport == "http" && server.key_header.is_some();
+        let keyed = settings.mcp_with_keys.iter().any(|id| id == &server.id);
+        if needs_key && !keyed {
+            self.push_toast(
+                crate::i18n::t(
+                    "Store an API key for this server first",
+                    "请先为该服务器保存 API 密钥",
+                )
+                .to_owned(),
+                crate::workspace::ToastKind::Error,
+                cx,
+            );
+            return;
+        }
+        self.pending_mcp_enable.insert(server.id.clone());
+        self.probe_mcp_for_enable(&server.id, cx);
+    }
+
+    /// Dispatches the tools probe that gates an enable switch: the row is
+    /// marked connecting until the reply lands `enabled` or the error.
+    pub(super) fn probe_mcp_for_enable(&mut self, server_id: &str, cx: &mut Context<Self>) {
+        let Some(server) = self
+            .vm
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.mcp_servers.iter().find(|s| s.id == server_id))
+            .cloned()
+        else {
+            self.pending_mcp_enable.remove(server_id);
+            return;
+        };
+        self.apply_action(DesktopAction::McpProbeStarted(server_id.to_owned()), cx);
+        self.dispatch(
+            BridgeCommand::McpListTools {
+                server: Box::new(server),
+            },
+            cx,
+        );
+    }
+
     /// Probes one MCP server as the editor currently shows it (saved or
     /// not) and marks the row as connecting until the reply lands.
     pub(crate) fn on_list_mcp_tools(&mut self, server_id: &str, cx: &mut Context<Self>) {
@@ -195,13 +251,17 @@ impl Workspace {
 
     pub(crate) fn on_add_builtin_mcp(
         &mut self,
-        server: mycode_config::McpServerSettings,
+        mut server: mycode_config::McpServerSettings,
         api_key: &str,
         cx: &mut Context<Self>,
     ) {
         let server_id = server.id.clone();
+        // New rows start disabled: the enable probe is armed by the key
+        // save that follows, so a pasted key ends in a verified enable.
+        server.enabled = false;
         self.apply_action(DesktopAction::SettingsMcpAdded(server), cx);
         if !api_key.is_empty() {
+            self.pending_mcp_enable.insert(server_id.clone());
             self.dispatch(
                 BridgeCommand::SaveProviderKey {
                     provider_id: format!("mcp-{server_id}"),
