@@ -68,3 +68,9 @@ fn osc_fe_and_invalid_scalars_are_handled() {
         "before\nafter"
     );
 }
+
+#[test]
+fn clixml_entities_decode_once() {
+    let blob = "#< CLIXML\n<Objs><S S=\"Error\">a &amp;lt;b&amp;gt; &quot;c&quot;</S></Objs>";
+    assert_eq!(sanitize_captured_shell_text(blob), "a &lt;b&gt; \"c\"");
+}
