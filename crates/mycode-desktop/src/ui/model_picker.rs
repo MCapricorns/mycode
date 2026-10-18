@@ -128,21 +128,37 @@ pub(crate) fn merge_model_choices(
     choices
 }
 
-/// Case-insensitive filter on id and display name. An empty query keeps
-/// every choice.
+/// Case-insensitive filter on id and display name. Every word of the query
+/// has to match, and separators are ignored, so `gpt5` finds `gpt-5` and
+/// `sonnet 4.6` finds `claude-sonnet-4-6`. An empty query keeps every choice.
 pub(crate) fn filter_model_choices(choices: &[ModelChoice], query: &str) -> Vec<ModelChoice> {
-    let query = query.trim();
-    if query.is_empty() {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .map(squash_separators)
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.is_empty() {
         return choices.to_vec();
     }
-    let needle = query.to_lowercase();
     choices
         .iter()
         .filter(|choice| {
-            choice.id.to_lowercase().contains(&needle)
-                || choice.name.to_lowercase().contains(&needle)
+            let haystack = format!(
+                "{} {}",
+                squash_separators(&choice.id),
+                squash_separators(&choice.name)
+            );
+            words.iter().all(|word| haystack.contains(word.as_str()))
         })
         .cloned()
+        .collect()
+}
+
+/// Lowercases `text` and drops the separators model ids and names mix.
+fn squash_separators(text: &str) -> String {
+    text.chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | '.' | '/' | ':' | ' '))
+        .flat_map(char::to_lowercase)
         .collect()
 }
 
@@ -787,6 +803,24 @@ mod tests {
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].id, "m42");
         assert_eq!(filter_model_choices(&choices, "m299").len(), 1);
+
+        let spelled = vec![
+            ModelChoice {
+                id: "claude-sonnet-4-6".to_owned(),
+                name: "Claude Sonnet 4.6".to_owned(),
+            },
+            ModelChoice {
+                id: "gpt-5.6".to_owned(),
+                name: "GPT-5.6".to_owned(),
+            },
+        ];
+        for query in ["sonnet 4.6", "sonnet46", "claude 4-6"] {
+            let matched = filter_model_choices(&spelled, query);
+            assert_eq!(matched.len(), 1, "{query}");
+            assert_eq!(matched[0].id, "claude-sonnet-4-6", "{query}");
+        }
+        assert_eq!(filter_model_choices(&spelled, "gpt5")[0].id, "gpt-5.6");
+        assert!(filter_model_choices(&spelled, "sonnet gpt").is_empty());
     }
 
     #[test]
