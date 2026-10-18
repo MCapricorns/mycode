@@ -202,7 +202,8 @@ pub(super) enum PlanError {
 /// Classifies one action-path failure.
 #[derive(Debug)]
 enum OpFail {
-    /// Durable substrate failure; fatal for the actor.
+    /// Durable substrate failure. This call fails; the actor stays up
+    /// (see [`PackTaskActor::is_fatal`]).
     Storage,
     /// Terminal domain failure for this operation.
     Domain(SessionError),
