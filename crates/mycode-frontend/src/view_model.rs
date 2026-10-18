@@ -8,6 +8,7 @@
 mod chat;
 mod command_palette;
 mod models;
+mod nav;
 mod projects;
 mod settings;
 mod state;
@@ -33,6 +34,9 @@ pub use self::command_palette::{
 pub use self::models::{
     effective_reasoning_level, model_context_window, model_display_name, provider_display_name,
     rank_model_ids, selected_reasoning_level,
+};
+pub use self::nav::{
+    DismissLayer, SettingsBack, highlight, moved, settings_back_target, top_dismiss_layer,
 };
 pub use self::projects::{
     has_open_folder, newest_session_in_project, open_session_is_empty, project_label,
