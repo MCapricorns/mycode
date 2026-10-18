@@ -95,6 +95,39 @@ fn claude_5_off_is_lowest_effort_and_older_claude_is_disabled() {
     assert!(super::keeps_thinking_when_off("k3-256k"));
 }
 
+/// MiniMax has no off switch: M3.1 400s on `thinking.type = "disabled"`,
+/// so `Off` must wire `adaptive` — the only mode the family accepts.
+#[test]
+fn minimax_off_degrades_to_adaptive() {
+    for endpoint in [
+        "https://api.minimax.cn/anthropic/v1/messages",
+        "https://api.minimaxi.com/anthropic/v1/messages",
+    ] {
+        let mut body = json!({});
+        super::apply_anthropic_thinking_policy(
+            &mut body,
+            "MiniMax-M3.1-Flash-Preview",
+            endpoint,
+            ReasoningLevel::Off,
+        );
+        assert_eq!(body["thinking"]["type"], "adaptive", "{endpoint}: {body}");
+        assert!(
+            super::keeps_thinking_when_off("MiniMax-M3.1-Flash-Preview"),
+            "{endpoint}"
+        );
+    }
+    let mut body = json!({});
+    super::apply_chat_thinking(
+        &mut body,
+        "minimax-m2",
+        "https://api.minimax.cn/v1/chat/completions",
+        ReasoningLevel::Off,
+        super::ThinkingWire::Completions,
+    );
+    assert_eq!(body["thinking"]["type"], "adaptive", "{body}");
+    assert_eq!(body["reasoning_split"], true, "{body}");
+}
+
 #[test]
 fn opendesign_sends_plain_reasoning_effort_for_vendor_models() {
     let endpoint = "https://amr-link.open-design.ai/v1/chat/completions";
