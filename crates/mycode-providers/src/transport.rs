@@ -168,7 +168,9 @@ impl SseTransport for ReqwestTransport {
             if !status.is_success() {
                 // A server that answers with an error status and then stalls
                 // must not pin the turn: the idle ceiling bounds the
-                // error-body read the same way it bounds body chunks.
+                // error-body read the same way it bounds body chunks. The
+                // status still decides the error kind, so a stalled 400 is not
+                // retried as a transient timeout.
                 let body = tokio::select! {
                     biased;
                     () = cancel.cancelled() => {
@@ -176,9 +178,7 @@ impl SseTransport for ReqwestTransport {
                     }
                     text = read_error_body(response, idle) => match text {
                         Ok(body) => body,
-                        Err(()) => {
-                            return Err(ProviderError::new(ProviderErrorKind::Timeout));
-                        }
+                        Err(()) => "(the error body timed out)".to_owned(),
                     },
                 };
                 return Err(ProviderError::with_message(
@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_stalled_error_body_hits_the_idle_timeout() {
+    async fn a_stalled_error_body_keeps_its_status_kind() {
         let url = spawn_stalled_error_server();
         let transport =
             ReqwestTransport::with_read_timeout(Duration::from_millis(200)).expect("transport");
@@ -451,7 +451,8 @@ mod tests {
             .await
             .expect("post settled within the outer bound")
             .expect_err("stalled error body must fail");
-        assert_eq!(error.kind(), mycode_core::ProviderErrorKind::Timeout);
+        assert_eq!(error.kind(), mycode_core::ProviderErrorKind::Rejected);
+        assert_eq!(error.status(), Some(400));
     }
 
     #[tokio::test]
