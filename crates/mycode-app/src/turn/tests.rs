@@ -645,6 +645,66 @@ async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A crash mid-tool leaves an assistant call with no result in the ledger.
+/// The next turn must still send a request the wire accepts.
+#[tokio::test]
+async fn a_call_the_ledger_never_answered_is_paired_on_the_next_turn() {
+    let fixture = turn_fixture().await;
+    let transport = Arc::new(HistoryTransport {
+        bodies: Mutex::new(Vec::new()),
+        hang_partial: false,
+        partial_ready: Arc::new(tokio::sync::Notify::new()),
+    });
+    let writer = crate::ledger::HeadWriter::new(
+        fixture.state.service.clone(),
+        fixture.session.clone(),
+        fixture.branch.clone(),
+        HeadStamp::Empty,
+    );
+    writer
+        .write(EventKind::Message, PROMPT_A.as_bytes())
+        .await
+        .expect("prompt A");
+    let step = mycode_core::AssistantMessage {
+        blocks: vec![mycode_core::ContentBlock::ToolCall(
+            mycode_core::ToolCall::new("call_lost", "read", serde_json::json!({"path": "a.txt"})),
+        )],
+        usage: None,
+        stop_reason: mycode_core::StopReason::ToolUse,
+    };
+    writer
+        .write(
+            EventKind::Message,
+            &serde_json::to_vec(&step).expect("step"),
+        )
+        .await
+        .expect("step");
+    // The process died here: the call opened, its result never landed.
+    writer
+        .open_call("call_lost", "read", "a.txt")
+        .await
+        .expect("open call");
+    writer
+        .write(EventKind::Message, PROMPT_B.as_bytes())
+        .await
+        .expect("prompt B");
+    let (outcome, _) = run_scripted_turn(&fixture, transport.clone()).await;
+    outcome.expect("turn B");
+    let body: serde_json::Value =
+        serde_json::from_str(&prompt_b_body(&transport)).expect("request JSON");
+    let messages = body["messages"].as_array().expect("messages");
+    let answer = messages
+        .iter()
+        .position(|message| message["role"] == "tool" && message["tool_call_id"] == "call_lost")
+        .expect("the lost call was answered");
+    let call = messages
+        .iter()
+        .position(|message| message["role"] == "assistant")
+        .expect("assistant step");
+    assert_eq!(answer, call + 1, "the answer follows its call: {body}");
+    let _ = std::fs::remove_dir_all(&fixture.root);
+}
+
 #[tokio::test]
 async fn chat_turn_fails_fast_when_the_branch_is_missing() {
     let fixture = turn_fixture().await;

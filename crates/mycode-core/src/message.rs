@@ -352,6 +352,110 @@ pub fn interrupted_response_text(detail: &str) -> String {
     format!("[error] the response was interrupted: {detail}")
 }
 
+/// Result text for a call the history never answered.
+const UNANSWERED_CALL_TEXT: &str = "tool call has no recorded result: the turn ended before \
+    it finished (an interrupt, a crash, or the app closing). Its effects, if any, are unknown; \
+    check before relying on them.";
+
+/// Makes the tool-call pairing of `messages` valid for every wire.
+///
+/// Providers reject an assistant `tool_call` that no result answers, and a
+/// result whose call is not on the assistant message right before it. A
+/// replayed ledger can hold either shape after a crash, a closed window, or
+/// a turn that stopped recording mid-tool; without this every later request
+/// in the session fails. Each run of results after an assistant message
+/// keeps one result per call, in the run's order; missing calls get an
+/// error result appended in call order; stray results are dropped.
+///
+/// The edit is deterministic, so repeated requests send identical bytes and
+/// the provider prefix cache holds. Returns whether anything changed.
+pub fn pair_tool_results(messages: &mut Vec<SharedMessage>) -> bool {
+    if tool_pairing_is_valid(messages) {
+        return false;
+    }
+    let mut paired = Vec::with_capacity(messages.len());
+    let mut index = 0;
+    while index < messages.len() {
+        let message = &messages[index];
+        index += 1;
+        let calls: Vec<&str> = match message.as_ref() {
+            Message::Assistant(assistant) => assistant_call_ids(assistant).collect(),
+            // A result that follows no assistant call list is stray.
+            Message::ToolResult(_) => continue,
+            Message::User(_) => Vec::new(),
+        };
+        paired.push(Arc::clone(message));
+        if calls.is_empty() {
+            continue;
+        }
+        let mut answered: Vec<&str> = Vec::with_capacity(calls.len());
+        while let Some(next) = messages.get(index) {
+            let Message::ToolResult(result) = next.as_ref() else {
+                break;
+            };
+            index += 1;
+            let id = result.tool_call_id.as_str();
+            if calls.contains(&id) && !answered.contains(&id) {
+                answered.push(id);
+                paired.push(Arc::clone(next));
+            }
+        }
+        for id in calls {
+            if !answered.contains(&id) {
+                paired.push(Arc::new(Message::ToolResult(ToolResultMessage {
+                    tool_call_id: id.to_owned(),
+                    content: vec![ContentBlock::Text(TextBlock::new(UNANSWERED_CALL_TEXT))],
+                    is_error: true,
+                    details: None,
+                })));
+            }
+        }
+    }
+    *messages = paired;
+    true
+}
+
+fn assistant_call_ids(assistant: &AssistantMessage) -> impl Iterator<Item = &str> {
+    assistant.blocks.iter().filter_map(|block| match block {
+        ContentBlock::ToolCall(call) => Some(call.id.as_str()),
+        _ => None,
+    })
+}
+
+/// The cheap check: every call answered exactly once right after its
+/// assistant message, and no result anywhere else.
+fn tool_pairing_is_valid(messages: &[SharedMessage]) -> bool {
+    let mut index = 0;
+    while index < messages.len() {
+        let message = &messages[index];
+        index += 1;
+        let calls: Vec<&str> = match message.as_ref() {
+            Message::Assistant(assistant) => assistant_call_ids(assistant).collect(),
+            Message::ToolResult(_) => return false,
+            Message::User(_) => continue,
+        };
+        let mut answered = 0usize;
+        while let Some(next) = messages.get(index) {
+            let Message::ToolResult(result) = next.as_ref() else {
+                break;
+            };
+            index += 1;
+            let id = result.tool_call_id.as_str();
+            let duplicate = messages[index - answered - 1..index - 1]
+                .iter()
+                .any(|earlier| matches!(earlier.as_ref(), Message::ToolResult(seen) if seen.tool_call_id == id));
+            if !calls.contains(&id) || duplicate {
+                return false;
+            }
+            answered += 1;
+        }
+        if answered != calls.len() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Token usage reported by a provider.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -403,6 +507,73 @@ mod tests {
         assert_eq!(tool_target("agent", &delegated), "scout map the crate");
         assert_eq!(tool_target("task", &delegated), "");
         assert_eq!(tool_target("exec", &program), "");
+    }
+
+    #[test]
+    fn tool_pairing_answers_missing_calls_and_drops_strays() {
+        use super::{
+            AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
+            UserMessage, pair_tool_results,
+        };
+        use std::sync::Arc;
+
+        let assistant = |ids: &[&str]| {
+            Arc::new(Message::Assistant(AssistantMessage {
+                blocks: ids
+                    .iter()
+                    .map(|id| ContentBlock::ToolCall(ToolCall::new(*id, "read", json!({}))))
+                    .collect(),
+                usage: None,
+                stop_reason: StopReason::ToolUse,
+            }))
+        };
+        let result = |id: &str| {
+            Arc::new(Message::ToolResult(ToolResultMessage {
+                tool_call_id: id.to_owned(),
+                content: Vec::new(),
+                is_error: false,
+                details: None,
+            }))
+        };
+        let user = |text: &str| Arc::new(Message::User(UserMessage::text(text)));
+        let shape = |messages: &[Arc<Message>]| -> Vec<String> {
+            messages
+                .iter()
+                .map(|message| match message.as_ref() {
+                    Message::User(_) => "user".to_owned(),
+                    Message::Assistant(_) => "assistant".to_owned(),
+                    Message::ToolResult(result) => format!(
+                        "{}{}",
+                        result.tool_call_id,
+                        if result.is_error { "!" } else { "" }
+                    ),
+                })
+                .collect()
+        };
+
+        // Valid histories are left alone.
+        let mut valid = vec![user("go"), assistant(&["a", "b"]), result("b"), result("a")];
+        assert!(!pair_tool_results(&mut valid));
+        assert_eq!(shape(&valid), ["user", "assistant", "b", "a"]);
+
+        // A crash after the assistant step: `b` never got a result, a stray
+        // result trails a user message, and `a` was recorded twice.
+        let mut broken = vec![
+            user("go"),
+            assistant(&["a", "b"]),
+            result("a"),
+            result("a"),
+            user("next"),
+            result("zz"),
+            assistant(&["c"]),
+        ];
+        assert!(pair_tool_results(&mut broken));
+        assert_eq!(
+            shape(&broken),
+            ["user", "assistant", "a", "b!", "user", "assistant", "c!"]
+        );
+        // The repair is stable: a second pass changes nothing.
+        assert!(!pair_tool_results(&mut broken));
     }
 
     #[test]
