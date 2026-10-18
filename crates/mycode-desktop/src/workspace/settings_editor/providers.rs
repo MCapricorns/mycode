@@ -156,6 +156,7 @@ impl Workspace {
                 let input = cx.new(|cx| {
                     InputState::new(window, cx)
                         .placeholder(crate::i18n::t("Paste API key", "粘贴 API 密钥"))
+                        .masked(true)
                 });
                 cx.subscribe_in(&input, window, |_, _, event, _, cx| {
                     if matches!(event, InputEvent::Change) {
@@ -358,6 +359,7 @@ impl Workspace {
                 cx.new(|cx| {
                     InputState::new(window, cx)
                         .placeholder(crate::i18n::t("Paste API key", "粘贴 API 密钥"))
+                        .masked(true)
                 })
             })
             .clone()

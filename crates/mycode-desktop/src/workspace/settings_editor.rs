@@ -178,6 +178,7 @@ impl Workspace {
                 cx.new(|cx| {
                     InputState::new(window, cx)
                         .placeholder(crate::i18n::t("Paste API key", "粘贴 API 密钥"))
+                        .masked(true)
                 })
             })
             .clone()
