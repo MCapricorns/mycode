@@ -217,6 +217,7 @@ mod tests {
         let skill = |slug: &str| mycode_config::SkillFile {
             slug: slug.to_owned(),
             title: format!("{slug} title"),
+            description: String::new(),
             path: PathBuf::from(format!("/skills/{slug}/SKILL.md")),
             global: false,
         };

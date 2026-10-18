@@ -83,8 +83,11 @@ pub const MAX_SKILLS: usize = 32;
 pub struct SkillFile {
     /// Command slug without the leading `/`.
     pub slug: String,
-    /// One-line title from the first heading or file stem.
+    /// One-line title from the first heading, the frontmatter `name`, or
+    /// the file stem.
     pub title: String,
+    /// Frontmatter `description`: when to use the skill. Empty when absent.
+    pub description: String,
     /// Absolute path of the skill markdown.
     pub path: PathBuf,
     /// Whether this file came from the user-global `.agents` tree.
@@ -186,21 +189,76 @@ fn push_skill(
     if slug.is_empty() || slug == "agents" || !seen.insert(slug.clone()) {
         return;
     }
-    let title = read_resource(path)
-        .ok()
-        .and_then(|text| {
-            text.lines()
-                .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
-                .map(str::to_owned)
-        })
+    let text = read_resource(path).unwrap_or_default();
+    let (name, description) = skill_frontmatter(&text);
+    let title = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
         .filter(|title| !title.is_empty())
+        .map(str::to_owned)
+        .or(name)
         .unwrap_or_else(|| slug.clone());
     skills.push(SkillFile {
         slug,
         title,
+        description: description.unwrap_or_default(),
         path: path.to_path_buf(),
         global,
     });
+}
+
+/// Longest skill description carried into the prompt catalog.
+const MAX_SKILL_DESCRIPTION_CHARS: usize = 300;
+
+/// `name` and `description` from a SKILL.md frontmatter block. The format is
+/// YAML; this reads the plain, quoted, and folded (`>` / `|`) scalar forms
+/// skill files use and ignores every other key.
+fn skill_frontmatter(text: &str) -> (Option<String>, Option<String>) {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.first().map(|line| line.trim_end()) != Some("---") {
+        return (None, None);
+    }
+    let Some(end) = lines[1..].iter().position(|line| line.trim_end() == "---") else {
+        return (None, None);
+    };
+    let header = &lines[1..=end];
+    let field = |key: &str| -> Option<String> {
+        let start = header.iter().position(|line| {
+            line.strip_prefix(key)
+                .is_some_and(|rest| rest.starts_with(':'))
+        })?;
+        let first = header[start][key.len() + 1..].trim();
+        let value = if matches!(first, ">" | "|" | ">-" | "|-" | ">+" | "|+") {
+            header[start + 1..]
+                .iter()
+                .take_while(|line| line.starts_with([' ', '\t']) || line.trim().is_empty())
+                .map(|line| line.trim())
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            first
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+                .or_else(|| {
+                    first
+                        .strip_prefix('\'')
+                        .and_then(|rest| rest.strip_suffix('\''))
+                })
+                .unwrap_or(first)
+                .to_owned()
+        };
+        let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!value.is_empty()).then(|| {
+            if value.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
+                let cut: String = value.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
+                format!("{cut}…")
+            } else {
+                value
+            }
+        })
+    };
+    (field("name"), field("description"))
 }
 
 /// Reads one resource file into bounded UTF-8 text.
@@ -261,11 +319,14 @@ Do not paste skill bodies into the prompt.",
     for skill in files {
         let _ = write!(
             out,
-            "\n- /{slug} — {title} (`{path}`)",
+            "\n- /{slug} — {title}",
             slug = skill.slug,
-            title = skill.title,
-            path = skill.path.display()
+            title = skill.title
         );
+        if !skill.description.is_empty() {
+            let _ = write!(out, ": {}", skill.description);
+        }
+        let _ = write!(out, " (`{}`)", skill.path.display());
     }
     out.push_str("\n</skills>");
     Some(out)
@@ -370,6 +431,30 @@ mod tests {
         assert!(catalog.contains("/review"), "{catalog}");
         assert!(
             catalog.contains("read the matching SKILL.md by path"),
+            "{catalog}"
+        );
+    }
+
+    #[test]
+    fn frontmatter_description_reaches_the_catalog() {
+        let root = temp("frontmatter");
+        let dir = root.0.join(".agents").join("skills").join("pdf");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: pdf-tools\ndescription: >\n  Fill and merge PDF forms.\n  Use for any .pdf task.\nlicense: MIT\n---\n\nSteps.\n",
+        )
+        .unwrap();
+        let skills = discover_skills(&root.0, None);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].title, "pdf-tools");
+        assert_eq!(
+            skills[0].description,
+            "Fill and merge PDF forms. Use for any .pdf task."
+        );
+        let catalog = super::render_skill_catalog(&skills).unwrap();
+        assert!(
+            catalog.contains("/pdf — pdf-tools: Fill and merge PDF forms."),
             "{catalog}"
         );
     }
