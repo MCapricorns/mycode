@@ -84,13 +84,6 @@ pub(crate) async fn drive(
     sender: EventStreamSender,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let prepared = retryable.then(|| {
-        (
-            call.endpoint.clone(),
-            call.headers.clone(),
-            call.body.clone(),
-        )
-    });
     let mut attempts = 0;
     'attempt: loop {
         let body = loop {
@@ -100,12 +93,7 @@ pub(crate) async fn drive(
                     if let Some(delay) = retry_delay_for(&error, attempts)
                         && attempts + 1 < MAX_ATTEMPTS
                     {
-                        if cancel_sleep(&cancel, delay).await {
-                            let _ = sender
-                                .send(StreamEvent::Error(ProviderError::new(
-                                    ProviderErrorKind::Cancelled,
-                                )))
-                                .await;
+                        if back_off(&sender, &cancel, delay).await {
                             return;
                         }
                         attempts += 1;
@@ -114,14 +102,20 @@ pub(crate) async fn drive(
                     // Transient retries are spent; the body-rewrite rules
                     // still get their one shot at a final rejection they
                     // recognize.
-                    let stripped = prepared.as_ref().and_then(|(endpoint, _, original)| {
-                        crate::cache::retry_body_without_prompt_cache_key(
-                            endpoint, &error, original,
-                        )
-                        .or_else(|| {
-                            crate::anthropic_messages::retry_body_without_thinking(&error, original)
+                    let stripped = retryable
+                        .then(|| {
+                            crate::cache::retry_body_without_prompt_cache_key(
+                                &call.endpoint,
+                                &error,
+                                &call.body,
+                            )
+                            .or_else(|| {
+                                crate::anthropic_messages::retry_body_without_thinking(
+                                    &error, &call.body,
+                                )
+                            })
                         })
-                    });
+                        .flatten();
                     let Some(stripped) = stripped else {
                         let _ = sender.send(StreamEvent::Error(error)).await;
                         return;
@@ -171,12 +165,7 @@ pub(crate) async fn drive(
                         && attempts + 1 < MAX_ATTEMPTS
                         && let Some(delay) = retry_delay_for(&error, attempts)
                     {
-                        if cancel_sleep(&cancel, delay).await {
-                            let _ = sender
-                                .send(StreamEvent::Error(ProviderError::new(
-                                    ProviderErrorKind::Cancelled,
-                                )))
-                                .await;
+                        if back_off(&sender, &cancel, delay).await {
                             return;
                         }
                         attempts += 1;
@@ -196,6 +185,19 @@ pub(crate) async fn drive(
             };
             for frame in frames {
                 let events = reducer.feed(&frame);
+                // An error frame ahead of any output (Anthropic's mid-stream
+                // `overloaded_error`) is the same failure as a refused POST.
+                if !emitted_any
+                    && attempts + 1 < MAX_ATTEMPTS
+                    && let [StreamEvent::Error(error)] = events.as_slice()
+                    && let Some(delay) = retry_delay_for(error, attempts)
+                {
+                    if back_off(&sender, &cancel, delay).await {
+                        return;
+                    }
+                    attempts += 1;
+                    continue 'attempt;
+                }
                 emitted_any |= !events.is_empty();
                 let terminal = send_all(&sender, events).await;
                 if terminal {
@@ -222,11 +224,21 @@ pub(crate) async fn drive(
     }
 }
 
-/// Sleeps for `delay`, returning `true` when cancellation wins the race.
-async fn cancel_sleep(cancel: &tokio_util::sync::CancellationToken, delay: Duration) -> bool {
+/// Sleeps for `delay` before a retry. Returns `true` when cancellation won
+/// the race; the cancellation terminal has then been sent.
+async fn back_off(
+    sender: &EventStreamSender,
+    cancel: &tokio_util::sync::CancellationToken,
+    delay: Duration,
+) -> bool {
     tokio::select! {
         biased;
-        () = cancel.cancelled() => true,
+        () = cancel.cancelled() => {
+            let _ = sender
+                .send(StreamEvent::Error(ProviderError::new(ProviderErrorKind::Cancelled)))
+                .await;
+            true
+        }
         () = tokio::time::sleep(delay) => false,
     }
 }
@@ -538,6 +550,43 @@ mod tests {
         let events = driven(&transport).await;
         assert_eq!(transport.bodies.lock().expect("bodies").len(), 1);
         assert!(matches!(events.last(), Some(StreamEvent::Error(_))));
+    }
+
+    #[tokio::test]
+    async fn an_overloaded_frame_before_output_is_retried() {
+        let transport = scripted(vec![
+            Ok(b"event: error
+data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}
+
+"),
+            Ok(b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}
+
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}
+
+data: {\"type\":\"message_stop\"}
+
+"),
+        ]);
+        let cancel = CancellationToken::new();
+        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        drive(
+            transport.clone(),
+            call("https://api.anthropic.com/v1/messages"),
+            false,
+            || Box::new(crate::anthropic_messages::MessagesReducer::new()),
+            sender,
+            cancel,
+        )
+        .await;
+        assert_eq!(transport.bodies.lock().expect("bodies").len(), 2);
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+        let Some(StreamEvent::Done { message }) = events.last() else {
+            panic!("expected done, got {events:?}");
+        };
+        assert_eq!(message.text(), "ok");
     }
 
     #[test]
