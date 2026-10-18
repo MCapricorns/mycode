@@ -37,8 +37,7 @@ impl Workspace {
                 read.max_output.read(cx).value().to_string(),
             )
         };
-        let existing: Vec<String> = self
-            .vm
+        let existing: Vec<String> = self.vm()
             .settings
             .as_ref()
             .map(|settings| {
@@ -83,14 +82,13 @@ impl Workspace {
     }
 
     pub(crate) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
-        let removed = self
-            .vm
+        let removed = self.vm()
             .settings
             .as_ref()
             .and_then(|settings| settings.providers.get(index))
             .map(|provider| provider.id.clone());
         self.apply_action(FrontendAction::SettingsProviderRemoved(index), cx);
-        if removed.is_some_and(|id| self.vm.provider_detail.as_deref() == Some(id.as_str())) {
+        if removed.is_some_and(|id| self.vm().provider_detail.as_deref() == Some(id.as_str())) {
             self.apply_action(FrontendAction::ProviderDetailOpened(None), cx);
         }
     }
@@ -304,7 +302,7 @@ impl Workspace {
         };
         let typed = input.read(cx).value().to_string();
         let previewed = {
-            let Some(settings) = self.vm.settings.as_ref() else {
+            let Some(settings) = self.vm().settings.as_ref() else {
                 return;
             };
             let Some(current) = settings
@@ -345,8 +343,7 @@ impl Workspace {
     ///
     /// Does not open the add-from-catalog form.
     pub(crate) fn on_start_provider_oauth(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        let models = self
-            .vm
+        let models = self.vm()
             .settings
             .as_ref()
             .and_then(|settings| {
@@ -420,7 +417,7 @@ impl Workspace {
     /// the catalog row's models (or the configured subset when the row is
     /// already in settings).
     pub(crate) fn on_start_oauth_sign_in(&mut self, provider_id: String, cx: &mut Context<Self>) {
-        let models = crate::view_model::preset_pick(&self.vm, &provider_id);
+        let models = crate::view_model::preset_pick(self.vm(), &provider_id);
         if models.is_empty() {
             self.apply_action(
                 FrontendAction::Failed(
@@ -460,7 +457,7 @@ impl Workspace {
 
     /// Adds one catalog preset: provider entry plus stored key, then saves.
     pub(crate) fn on_add_preset(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        let Some(catalog) = self.vm.catalog.clone() else {
+        let Some(catalog) = self.vm().catalog.clone() else {
             return;
         };
         let Some(preset) = catalog.provider(provider_id) else {
@@ -468,7 +465,7 @@ impl Workspace {
         };
         // Checked models in catalog order; an empty selection falls back to
         // the catalog's first model.
-        let checked = self.vm.preset_models.clone();
+        let checked = self.vm().preset_models.clone();
         let mut models: Vec<String> = preset
             .models
             .iter()
@@ -486,8 +483,7 @@ impl Workspace {
         // row (its endpoint and overrides stay). Other presets get a unique
         // id, the catalog spelling suffixed when already configured.
         let opendesign = preset.id == mycode_providers::catalog::opendesign::PROVIDER_ID;
-        let existing = self
-            .vm
+        let existing = self.vm()
             .settings
             .as_ref()
             .and_then(|settings| settings.providers.iter().find(|p| p.id == preset.id))
@@ -496,8 +492,7 @@ impl Workspace {
         let mut id = preset.id.clone();
         let mut suffix = 2;
         while existing.is_none()
-            && self
-                .vm
+            && self.vm()
                 .settings
                 .as_ref()
                 .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))
@@ -541,7 +536,7 @@ impl Workspace {
         self.apply_action(FrontendAction::ActivePresetChanged(None), cx);
         self.apply_action(FrontendAction::ProviderSelected(id), cx);
         self.apply_action(FrontendAction::ModelSelected(model), cx);
-        self.on_save_settings(cx);
-        self.persist_ui_state(cx);
+        self.driver_do(|d, fx| d.save_settings(fx), cx);
+        self.persist_ui_state();
     }
 }

@@ -31,7 +31,7 @@ impl Workspace {
         self.git_diff.clear();
         self.git_diff_panel_open = false;
 
-        let Some(root) = self.vm.project_dir.clone() else {
+        let Some(root) = self.vm().project_dir.clone() else {
             self.git = GitSnapshot::empty(t("No folder", "未打开目录"));
             return;
         };
@@ -52,7 +52,7 @@ impl Workspace {
     pub(crate) fn on_select_git_file(&mut self, path: &str, cx: &mut Context<Self>) {
         self.git_diff_panel_open = true;
         let same_path = self.git_diff_path.as_deref() == Some(path);
-        let Some(root) = self.vm.project_dir.clone() else {
+        let Some(root) = self.vm().project_dir.clone() else {
             return;
         };
         let path = path.to_owned();
@@ -117,7 +117,7 @@ impl Workspace {
             self.git_status_pending = true;
             return;
         }
-        let Some(root) = self.vm.project_dir.clone() else {
+        let Some(root) = self.vm().project_dir.clone() else {
             self.git = GitSnapshot::empty(t("No folder", "未打开目录"));
             return;
         };
@@ -151,7 +151,7 @@ impl Workspace {
         let pending = self.git_status_pending;
         self.git_status_pending = false;
         let current =
-            self.git_generation == generation && self.vm.project_dir.as_deref() == Some(root);
+            self.git_generation == generation && self.vm().project_dir.as_deref() == Some(root);
         if current {
             if self.git != snapshot {
                 self.git = snapshot;
@@ -165,7 +165,7 @@ impl Workspace {
                 self.on_select_git_file(&path, cx);
             }
         }
-        if pending && self.vm.project_dir.is_some() {
+        if pending && self.vm().project_dir.is_some() {
             self.spawn_git_status(cx);
         }
     }

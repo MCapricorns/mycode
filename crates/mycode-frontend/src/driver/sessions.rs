@@ -27,7 +27,7 @@ fn can_rewind(conversation: &ActiveConversation, index: usize) -> bool {
 
 impl FrontendDriver {
     /// Persists the durable UI state projection.
-    pub(crate) fn persist_ui_state(&mut self) {
+    pub fn persist_ui_state(&mut self) {
         let state = mycode_config::UiState {
             recent_projects: self.vm.recents.clone(),
             last_project: self.vm.project_dir.clone(),
@@ -282,5 +282,65 @@ impl FrontendDriver {
                 path: Some(project),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_rewind, previous_event};
+    use crate::view_model::{ConversationEntry, EntryKind};
+    use mycode_app::ActiveConversation;
+
+    fn entry(id: &str, kind: EntryKind) -> ConversationEntry {
+        ConversationEntry {
+            event_id: id.to_owned(),
+            kind,
+            text: "text".into(),
+            call_id: None,
+            thinking: String::new(),
+        }
+    }
+
+    #[test]
+    fn rewind_skips_cancelled_live_tool_placeholders() {
+        let entries = [
+            entry(
+                "evt1-00000000000000000000000000000001",
+                EntryKind::AssistantMessage,
+            ),
+            entry("call-live", EntryKind::ToolCall),
+            entry(
+                "evt1-00000000000000000000000000000002",
+                EntryKind::UserMessage,
+            ),
+        ];
+        assert_eq!(
+            previous_event(&entries, 2),
+            Some(entries[0].event_id.as_str())
+        );
+        assert_eq!(previous_event(&entries, 0), None);
+        assert_eq!(previous_event(&entries, 8), None);
+    }
+
+    #[test]
+    fn first_resident_user_message_can_resolve_older_history() {
+        let mut active = ActiveConversation {
+            session_id: "session".to_owned(),
+            branch_id: "branch".to_owned(),
+            head: "empty".to_owned(),
+            entries: vec![entry(
+                "evt1-00000000000000000000000000000002",
+                EntryKind::UserMessage,
+            )],
+            older_before: Some("evt1-00000000000000000000000000000002".to_owned()),
+            streaming: None,
+            running: false,
+            context_used: 0,
+            context_cache: 0,
+        };
+        assert!(can_rewind(&active, 0));
+        active.older_before = None;
+        assert!(!can_rewind(&active, 0));
+        assert!(!can_rewind(&active, 1));
     }
 }

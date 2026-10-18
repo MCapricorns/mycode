@@ -26,52 +26,6 @@ impl Workspace {
         &self.toasts
     }
 
-    /// Records documents reset at startup and shows one notice after the
-    /// settings and UI replies have both had a chance to arrive.
-    pub(crate) fn note_config_repairs(
-        &mut self,
-        repairs: &[mycode_config::DocumentRepair],
-        cx: &mut Context<Self>,
-    ) {
-        let mut added = false;
-        for repair in repairs {
-            if self
-                .repaired_configs
-                .iter()
-                .any(|existing| existing == repair.path)
-            {
-                continue;
-            }
-            self.repaired_configs.push(repair.path.to_owned());
-            added = true;
-        }
-        if !added || self.repair_toast_armed {
-            return;
-        }
-        self.repair_toast_armed = true;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(500))
-                .await;
-            let _ = this.update(cx, |workspace, cx| {
-                let names = workspace.repaired_configs.join(", ");
-                workspace.push_toast(
-                    format!(
-                        "{} {names}. {}",
-                        crate::i18n::t("Reset unreadable config:", "已重置无法读取的配置:"),
-                        crate::i18n::t(
-                            "The previous files were kept beside them.",
-                            "原文件已留在旁边。",
-                        ),
-                    ),
-                    ToastKind::Info,
-                    cx,
-                );
-            });
-        })
-        .detach();
-    }
-
     /// Keeps errors until dismissal; other notices expire after a readable delay.
     pub(crate) fn push_toast(
         &mut self,

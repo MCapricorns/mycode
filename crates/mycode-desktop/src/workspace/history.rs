@@ -1,18 +1,22 @@
 //! Conversation scroll: tail follow, the theme-change hold, and paging
-//! older history in near the top.
+//! older history in near the top. The load decision is the driver's; the
+//! scroll handle and its anchors stay here.
 use gpui_kit::{Context, Pixels, px};
-use mycode_app::BridgeCommand;
 
 use super::{AppearanceScroll, ScrollHold, Workspace};
-use crate::view_model::FrontendAction;
 
 impl Workspace {
     /// Previous offset and content height for one prepend, consumed by the
     /// chat column on the frame that paints the new rows.
     pub(crate) fn take_scroll_anchor(&mut self) -> Option<(Pixels, Pixels)> {
-        self.scroll_hold
+        let hold = self
+            .scroll_hold
             .take()
-            .map(|hold| (hold.offset_y, hold.content_height))
+            .map(|hold| (hold.offset_y, hold.content_height));
+        if hold.is_some() {
+            self.driver.note_scroll_hold(false);
+        }
+        hold
     }
 
     /// Theme-change scroll hold, consumed by the next conversation paint.
@@ -55,9 +59,9 @@ impl Workspace {
     /// The open subagent window, its log length, and whether its body sits
     /// on the newest step, read before an update lands.
     pub(super) fn subagent_window_mark(&self) -> SubagentMark {
-        let call_id = self.vm.subagent_window.clone();
+        let call_id = self.vm().subagent_window.clone();
         let log_len = call_id.as_deref().map_or(0, |call_id| {
-            self.vm
+            self.vm()
                 .live_jobs
                 .iter()
                 .find(|job| job.call_id == call_id)
@@ -87,16 +91,18 @@ impl Workspace {
     /// notify keeps the docked jump-to-latest row in step with the scroll
     /// position.
     pub(crate) fn on_conversation_scrolled(&mut self, cx: &mut Context<Self>) {
+        self.driver
+            .set_conversation_at_tail(self.conversation_follows_tail());
         cx.notify();
-        if self.vm.history_loading || self.scroll_hold.is_some() || !self.near_history_top() {
+        if self.vm().history_loading || self.scroll_hold.is_some() || !self.near_history_top() {
             return;
         }
-        self.request_older(cx);
+        self.driver_do(|d, fx| d.request_older(fx), cx);
     }
 
     /// Chip click. Works even when the tail still fits on screen.
     pub(crate) fn on_load_older(&mut self, cx: &mut Context<Self>) {
-        self.request_older(cx);
+        self.driver_do(|d, fx| d.request_older(fx), cx);
     }
 
     fn near_history_top(&self) -> bool {
@@ -113,6 +119,8 @@ impl Workspace {
         });
     }
 
+    /// Anchors the viewport while the prepended page lays out. Mirrored into
+    /// the driver so a second `LoadOlder` does not measure the wrong height.
     pub(super) fn capture_scroll_hold(&mut self) {
         let offset = self.conversation_scroll.offset();
         let height = self
@@ -124,35 +132,7 @@ impl Workspace {
             offset_y: offset.y,
             content_height: height,
         });
-    }
-
-    fn request_older(&mut self, cx: &mut Context<Self>) {
-        // `scroll_hold` is the frame where a previous page is still being
-        // anchored. Starting another read here would measure the wrong height.
-        if self.vm.sending || self.vm.history_loading || self.scroll_hold.is_some() {
-            return;
-        }
-        let Some(before) = self
-            .vm
-            .active
-            .as_ref()
-            .and_then(|active| active.older_before.clone())
-        else {
-            return;
-        };
-        let Some((session, branch, expected_head)) = self.open_turn_target() else {
-            return;
-        };
-        self.apply_action(FrontendAction::HistoryLoadStarted, cx);
-        self.dispatch(
-            BridgeCommand::LoadOlder {
-                session,
-                branch,
-                expected_head,
-                before,
-            },
-            cx,
-        );
+        self.driver.note_scroll_hold(true);
     }
 }
 

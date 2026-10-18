@@ -35,7 +35,7 @@ impl Workspace {
 
     /// Whether the model step should focus its search box this frame.
     pub(crate) fn take_model_step_focus(&mut self) -> bool {
-        if self.vm.model_menu_browse.is_none() {
+        if self.vm().model_menu_browse.is_none() {
             return false;
         }
         let pending = self.picker_focus_pending;
@@ -45,35 +45,35 @@ impl Workspace {
 
     /// Enter in the model search box selects the preferred row.
     pub(crate) fn accept_model_search(&mut self, cx: &mut Context<Self>) {
-        let Some(provider) = self.vm.model_menu_browse.clone() else {
+        let Some(provider) = self.vm().model_menu_browse.clone() else {
             return;
         };
-        let choices = crate::ui::model_picker::provider_model_choices(&self.vm, &provider);
+        let choices = crate::ui::model_picker::provider_model_choices(self.vm(), &provider);
         let filtered =
-            crate::ui::model_picker::filter_model_choices(&choices, &self.vm.picker_query);
+            crate::ui::model_picker::filter_model_choices(&choices, &self.vm().picker_query);
         if filtered.is_empty() {
             return;
         }
         let role = self
-            .vm
+            .vm()
             .subagent_menu
             .clone()
             .filter(|(_, field)| field == "model");
         let selected = if let Some((role, _)) = &role {
-            self.vm
+            self.vm()
                 .settings
                 .as_ref()
                 .and_then(|settings| settings.subagents.role(role))
                 .filter(|entry| entry.provider.as_deref() == Some(provider.as_str()))
                 .and_then(|entry| entry.model.clone())
-        } else if self.vm.selected_provider.as_deref() == Some(provider.as_str()) {
-            self.vm.selected_model.clone()
+        } else if self.vm().selected_provider.as_deref() == Some(provider.as_str()) {
+            self.vm().selected_model.clone()
         } else {
             None
         };
         let preferred = crate::ui::model_picker::preferred_index(
             &filtered,
-            &self.vm.picker_query,
+            &self.vm().picker_query,
             selected.as_deref(),
         );
         let index = self.model_highlight(filtered.len(), preferred);
@@ -83,7 +83,7 @@ impl Workspace {
         if let Some((role, _)) = role {
             self.on_set_subagent_route(&role, Some(provider), Some(model), cx);
             self.apply_action(FrontendAction::SubagentMenuToggled(None), cx);
-        } else if self.vm.model_menu_open {
+        } else if self.vm().model_menu_open {
             self.on_select_model_on(&provider, &model, cx);
         }
     }
@@ -102,15 +102,14 @@ impl Workspace {
 
     pub(crate) fn on_select_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
         self.apply_action(FrontendAction::ProviderSelected(provider_id.to_owned()), cx);
-        if self
-            .vm
+        if self.vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.dirty)
         {
-            self.on_save_settings(cx);
+            self.driver_do(|d, fx| d.save_settings(fx), cx);
         }
-        self.persist_ui_state(cx);
+        self.persist_ui_state();
     }
 
     /// Picks one model of the selected provider. The reducer appends an
@@ -122,7 +121,7 @@ impl Workspace {
         model_id: &str,
         cx: &mut Context<Self>,
     ) {
-        if self.vm.selected_provider.as_deref() != Some(provider_id) {
+        if self.vm().selected_provider.as_deref() != Some(provider_id) {
             self.on_select_provider(provider_id, cx);
         }
         self.on_select_model(model_id, cx);
@@ -130,15 +129,14 @@ impl Workspace {
 
     pub(crate) fn on_select_model(&mut self, model_id: &str, cx: &mut Context<Self>) {
         self.apply_action(FrontendAction::ModelSelected(model_id.to_owned()), cx);
-        if self
-            .vm
+        if self.vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.dirty)
         {
-            self.on_save_settings(cx);
+            self.driver_do(|d, fx| d.save_settings(fx), cx);
         }
-        self.persist_ui_state(cx);
+        self.persist_ui_state();
     }
 
     /// Stores the reasoning effort on the open session. Other sessions keep
@@ -148,6 +146,6 @@ impl Workspace {
             FrontendAction::SettingsReasoningChanged(level.to_owned()),
             cx,
         );
-        self.persist_ui_state(cx);
+        self.persist_ui_state();
     }
 }

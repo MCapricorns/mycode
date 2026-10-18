@@ -12,8 +12,7 @@ impl Workspace {
     /// Applies and persists dark or light.
     pub(crate) fn on_select_theme(&mut self, theme_id: &str, cx: &mut Context<Self>) {
         let theme_id = mycode_frontend::normalize_theme(theme_id);
-        if self
-            .vm
+        if self.vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.theme == theme_id)
@@ -26,7 +25,7 @@ impl Workspace {
             FrontendAction::SettingsThemeSelected(theme_id.to_owned()),
             cx,
         );
-        self.on_save_settings(cx);
+        self.driver_do(|d, fx| d.save_settings(fx), cx);
     }
 
     pub(super) fn paint_appearance(&mut self, theme_id: &str, cx: &mut Context<Self>) {
@@ -42,8 +41,7 @@ impl Workspace {
     /// Applies and persists the interface font size. The next frame paints it.
     pub(crate) fn on_select_font_size(&mut self, font_size: &str, cx: &mut Context<Self>) {
         let font_size = crate::ui::desk::normalize_font_size(font_size);
-        if self
-            .vm
+        if self.vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.font_size == font_size)
@@ -55,15 +53,14 @@ impl Workspace {
             FrontendAction::SettingsFontSizeSelected(font_size.to_owned()),
             cx,
         );
-        self.on_save_settings(cx);
+        self.driver_do(|d, fx| d.save_settings(fx), cx);
     }
 
     /// Paints the saved interface font size and the OS UI font onto the
     /// window, once per change. The size comes from the settings projection,
     /// which is what gets written to `settings.json`.
     pub(crate) fn sync_interface_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let size_id = self
-            .vm
+        let size_id = self.vm()
             .settings
             .as_ref()
             .map(|settings| settings.font_size.as_str())
@@ -99,7 +96,7 @@ impl Workspace {
             return;
         }
         self.applied_language = lang;
-        let composer_placeholder = crate::ui::composer_placeholder(self.vm.sending);
+        let composer_placeholder = crate::ui::composer_placeholder(self.vm().sending);
         self.composer.update(cx, |state, cx| {
             state.set_placeholder(composer_placeholder, window, cx);
         });
@@ -137,8 +134,7 @@ impl Workspace {
     /// Applies and persists the UI language. The whole window re-renders on
     /// the next frame, so no theme-style refresh is needed.
     pub(crate) fn on_select_language(&mut self, language: &str, cx: &mut Context<Self>) {
-        if self
-            .vm
+        if self.vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.language == language)
@@ -149,7 +145,7 @@ impl Workspace {
             FrontendAction::SettingsLanguageSelected(language.to_owned()),
             cx,
         );
-        self.on_save_settings(cx);
+        self.driver_do(|d, fx| d.save_settings(fx), cx);
     }
 
     pub(crate) fn on_toggle_language_menu(&mut self, open: bool, cx: &mut Context<Self>) {

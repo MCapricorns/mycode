@@ -76,7 +76,7 @@ impl FrontendDriver {
     }
 
     /// Re-scans the skill directories and folds the result into the state.
-    pub(crate) fn refresh_skills(&mut self, out: &mut Vec<Effect>) {
+    pub fn refresh_skills(&mut self, out: &mut Vec<Effect>) {
         let (workspace, user_home) = self.skill_roots();
         let skills = mycode_config::discover_skills(&workspace, user_home.as_deref())
             .into_iter()
@@ -430,7 +430,7 @@ impl FrontendDriver {
     /// on the folder they were bound to. Clearing `pending_open` makes the
     /// reply scope drop any in-flight open: the parked desk must not be
     /// replaced by a conversation the user already left.
-    pub(crate) fn park_conversation(&mut self, out: &mut Vec<Effect>) {
+    pub fn park_conversation(&mut self, out: &mut Vec<Effect>) {
         self.pending_open = None;
         self.mention_query = None;
         self.pending_composer_prefill = Some(String::new());

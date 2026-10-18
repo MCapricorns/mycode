@@ -18,7 +18,7 @@ impl FrontendDriver {
     }
 
     /// Reads and clears the "this check was user-started" flag.
-    pub(crate) fn take_manual_update_check(&mut self) -> bool {
+    pub fn take_manual_update_check(&mut self) -> bool {
         std::mem::take(&mut self.manual_update_check)
     }
 
@@ -47,7 +47,7 @@ impl FrontendDriver {
 
     /// Downloads the newest offer into staging. One download at a time: a
     /// re-offer mid-download must not restart it.
-    pub(crate) fn download_update(&mut self, out: &mut Vec<Effect>) {
+    pub fn download_update(&mut self, out: &mut Vec<Effect>) {
         if matches!(
             self.vm.update,
             UpdateState::Downloading { .. } | UpdateState::Ready { .. }
