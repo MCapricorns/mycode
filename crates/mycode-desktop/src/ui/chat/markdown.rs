@@ -75,7 +75,20 @@ impl MarkdownCache {
         }
         let blocks = split_markdown(source.as_ref());
         let tables = vec![None; blocks.len()];
-        let scrolls = vec![None; blocks.len()];
+        // A streaming reply changes its source on every delta. Keeping each
+        // table's scroll handles stops a table the reader panned from
+        // snapping back while text below it is still arriving.
+        let scrolls = blocks
+            .iter()
+            .enumerate()
+            .map(|(index, block)| match block {
+                MarkdownBlock::Table(_) => store
+                    .entries
+                    .get(id)
+                    .and_then(|entry| entry.scrolls.get(index).cloned().flatten()),
+                MarkdownBlock::Prose(_) | MarkdownBlock::Code(_) => None,
+            })
+            .collect();
         if !store.entries.contains_key(id) {
             if store.order.len() >= MAX_CACHED_MARKDOWN_ENTRIES
                 && let Some(oldest) = store.order.pop_front()
