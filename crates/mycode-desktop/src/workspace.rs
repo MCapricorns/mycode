@@ -276,6 +276,9 @@ pub struct Workspace {
     /// Consecutive tool runs the transcript has expanded. Keyed by the run's
     /// first call event id.
     expanded_tool_batches: HashSet<String>,
+    /// Recorded thinking traces shown opposite the remembered default,
+    /// keyed by event id.
+    flipped_thinking: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Language last written into input placeholders. `u8::MAX` until the
@@ -357,6 +360,7 @@ impl Workspace {
             git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
+            flipped_thinking: HashSet::new(),
             applied_font_size: String::new(),
             applied_language: u8::MAX,
             ask_text_cleared: HashSet::new(),
@@ -826,18 +830,46 @@ impl Workspace {
         self.keep_tail_pinned(pinned, cx);
     }
 
-    /// Whether thinking traces show their full text. One switch covers
-    /// every trace, live and recorded.
-    pub(crate) fn thinking_open(&self) -> bool {
-        !self.vm().thinking_collapsed
+    /// Whether a thinking trace shows its full text. `event_id` is `None`
+    /// for the live trace, which always follows the remembered default.
+    pub(crate) fn thinking_open(&self, event_id: Option<&str>) -> bool {
+        let flipped = event_id.is_some_and(|id| self.flipped_thinking.contains(id));
+        self.vm().thinking_collapsed == flipped
     }
 
-    /// Expands or collapses every thinking trace and remembers the choice.
-    pub(crate) fn on_toggle_thinking(&mut self, cx: &mut Context<Self>) {
+    /// Toggles one thinking trace.
+    ///
+    /// A recorded trace flips alone: one switch for every trace expanded
+    /// each one above the reader too, and the line they clicked was pushed
+    /// out of view. The live trace changes the remembered default that new
+    /// replies open with, and every recorded trace keeps the state it shows.
+    pub(crate) fn on_toggle_thinking(&mut self, event_id: Option<&str>, cx: &mut Context<Self>) {
         let pinned = self.conversation_follows_tail();
-        self.apply_action(FrontendAction::ThinkingCollapsedToggled, cx);
+        match event_id {
+            Some(id) => {
+                if !self.flipped_thinking.remove(id) {
+                    self.flipped_thinking.insert(id.to_owned());
+                }
+            }
+            None => {
+                let recorded: Vec<String> = self
+                    .vm()
+                    .active
+                    .iter()
+                    .flat_map(|conversation| &conversation.entries)
+                    .filter(|entry| !entry.thinking.is_empty())
+                    .map(|entry| entry.event_id.clone())
+                    .collect();
+                for id in recorded {
+                    if !self.flipped_thinking.remove(&id) {
+                        self.flipped_thinking.insert(id);
+                    }
+                }
+                self.apply_action(FrontendAction::ThinkingCollapsedToggled, cx);
+                self.persist_ui_state();
+            }
+        }
         self.keep_tail_pinned(pinned, cx);
-        self.persist_ui_state();
     }
 
     /// Persists the durable UI state projection (last project, selections,
