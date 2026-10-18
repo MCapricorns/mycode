@@ -319,8 +319,7 @@ fn cross_origin_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Sends one hop on its route. In auto mode, a direct hop that cannot reach
-/// a public host is retried once through a listening local proxy.
+/// Sends one hop on its route.
 async fn send_hop(
     request: &PinnedRequest,
     hop: u32,
@@ -332,9 +331,6 @@ async fn send_hop(
     use crate::proxy::Route;
 
     let parsed = reqwest::Url::parse(url).map_err(|_| format!("url is invalid: {url}"))?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "url has no host".to_owned())?;
     let call = |route: Route, addrs: Vec<IpAddr>| OnceCall {
         method,
         url,
@@ -353,52 +349,23 @@ async fn send_hop(
             .ok()
             .and_then(Result::ok)
             .unwrap_or_default();
-        let sent = if looked_up.is_empty() {
+        if looked_up.is_empty() {
             check_url(request.mode, url)?;
-            send_once(call(route.clone(), Vec::new())).await
-        } else {
-            let addrs = connection_addresses(request.mode, hop, url, &looked_up)?;
-            if addrs
-                .iter()
-                .all(|ip| !is_public_ip(*ip) && !is_fake_ip(*ip))
-            {
-                // A LAN or loopback answer: the proxy cannot reach it.
-                send_once(call(Route::Direct, addrs)).await
-            } else {
-                send_once(call(route.clone(), Vec::new())).await
-            }
-        };
-        return sent.map_err(|failure| {
-            if failure.unreachable && matches!(route, Route::Via(_)) {
-                crate::proxy::forget(host);
-            }
-            failure.message
-        });
-    }
-    let failure = match lookup_addresses(url).await {
-        Ok(looked_up) => {
-            let addrs = connection_addresses(request.mode, hop, url, &looked_up)?;
-            let public = addrs.iter().all(|ip| is_public_ip(*ip));
-            match send_once(call(Route::Direct, addrs)).await {
-                Ok(response) => return Ok(response),
-                Err(failure) if failure.unreachable && public => failure.message,
-                Err(failure) => return Err(failure.message),
-            }
+            return send_once(call(route, Vec::new())).await;
         }
-        Err(message) => message,
-    };
-    // Direct could not reach a public host, or DNS failed: a blocked or
-    // poisoned route. Retry once through a listening local proxy.
-    let Some(proxy) = crate::proxy::fallback_for(host).await else {
-        return Err(failure);
-    };
-    check_url(request.mode, url)?;
-    send_once(call(Route::Via(proxy), Vec::new()))
-        .await
-        .map_err(|retry| {
-            crate::proxy::forget(host);
-            format!("{failure}; through local proxy: {}", retry.message)
-        })
+        let addrs = connection_addresses(request.mode, hop, url, &looked_up)?;
+        if addrs
+            .iter()
+            .all(|ip| !is_public_ip(*ip) && !is_fake_ip(*ip))
+        {
+            // A LAN or loopback answer: the proxy cannot reach it.
+            return send_once(call(Route::Direct, addrs)).await;
+        }
+        return send_once(call(route, Vec::new())).await;
+    }
+    let looked_up = lookup_addresses(url).await?;
+    let addrs = connection_addresses(request.mode, hop, url, &looked_up)?;
+    send_once(call(Route::Direct, addrs)).await
 }
 
 /// URL-level policy for a hop whose addresses this process cannot see
@@ -492,24 +459,7 @@ struct OnceCall<'a> {
     user_agent: Option<&'a str>,
 }
 
-/// Why one hop produced no response.
-struct HopFailure {
-    message: String,
-    /// The connection never opened (refused, reset during the handshake, or
-    /// connect timeout), so nothing was sent and a retry is safe.
-    unreachable: bool,
-}
-
-impl From<String> for HopFailure {
-    fn from(message: String) -> Self {
-        Self {
-            message,
-            unreachable: false,
-        }
-    }
-}
-
-async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, HopFailure> {
+async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, String> {
     let parsed =
         reqwest::Url::parse(call.url).map_err(|_| format!("url is invalid: {}", call.url))?;
     let host = parsed
@@ -543,15 +493,12 @@ async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, HopFailure> 
     let sent = if let Some(idle) = call.read_timeout {
         match tokio::time::timeout(idle, pending).await {
             Ok(result) => result,
-            Err(_) => return Err("request failed: read timed out".to_owned().into()),
+            Err(_) => return Err("request failed: read timed out".to_owned()),
         }
     } else {
         pending.await
     };
-    sent.map_err(|error| HopFailure {
-        unreachable: error.is_connect(),
-        message: format!("request failed: {error}"),
-    })
+    sent.map_err(|error| format!("request failed: {error}"))
 }
 
 /// Everything a hop's client is built from. Hops with equal keys share one

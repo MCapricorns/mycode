@@ -8,7 +8,7 @@ use mycode_config::{AuthorityRevision, ProxyPreference};
 
 use super::{DriverMsg, Effect, FrontendDriver, SETTINGS_TEXT_SAVE_DEBOUNCE, ToastKind};
 use crate::forms;
-use crate::view_model::{FrontendAction, McpSubview, ModelsSubview};
+use crate::view_model::{FrontendAction, McpSubview, ModelsSubview, ProxyTestState};
 
 impl FrontendDriver {
     // ---- the save pipeline ----
@@ -100,8 +100,8 @@ impl FrontendDriver {
         self.flush_settings_text_save(out);
     }
 
-    /// Picks the proxy mode: `auto`, `direct`, or `custom`. Custom keeps a
-    /// stored URL, or starts from Clash's default port.
+    /// Picks the proxy mode: `system` follows the OS, `manual` uses a typed
+    /// URL. Manual keeps a stored URL, or starts from Clash's default port.
     pub fn select_proxy_mode(&mut self, mode: &str, out: &mut Vec<Effect>) {
         let current = self
             .vm
@@ -110,8 +110,7 @@ impl FrontendDriver {
             .map(|settings| settings.proxy.clone())
             .unwrap_or_default();
         let value = match mode {
-            "direct" => mycode_config::PROXY_DIRECT.to_owned(),
-            "custom" => match ProxyPreference::parse(&current) {
+            "manual" => match ProxyPreference::parse(&current) {
                 Some(ProxyPreference::Url(_)) => return,
                 _ => forms::DEFAULT_PROXY_URL.to_owned(),
             },
@@ -125,6 +124,24 @@ impl FrontendDriver {
             },
             out,
         );
+    }
+
+    /// Checks the proxy value on screen by fetching a probe URL through
+    /// it. One test at a time; a value edit resets the result.
+    pub fn test_proxy(&mut self, out: &mut Vec<Effect>) {
+        if self.vm.proxy_test == ProxyTestState::Testing {
+            return;
+        }
+        let Some(proxy) = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.proxy.clone())
+        else {
+            return;
+        };
+        self.act(FrontendAction::ProxyTestChanged(ProxyTestState::Testing), out);
+        self.dispatch(BridgeCommand::TestProxy { proxy });
     }
 
     // ---- web search backends ----

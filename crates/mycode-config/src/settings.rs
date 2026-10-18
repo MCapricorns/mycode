@@ -24,7 +24,7 @@ pub use mcp::{
 pub use providers::{
     MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings,
 };
-pub use proxy::{PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES, ProxyPreference};
+pub use proxy::{PROXY_SCHEMES, ProxyPreference};
 pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
 pub use subagent_roles::{SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings};
 pub use web::{
@@ -106,8 +106,8 @@ impl Default for AppearanceSettings {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct AppSettings {
-    /// Outbound proxy: empty or `auto`, `direct`, or a proxy URL. See
-    /// [`ProxyPreference`].
+    /// Outbound proxy: empty to follow the system proxy, or a proxy URL.
+    /// See [`ProxyPreference`].
     #[serde(skip_serializing_if = "String::is_empty")]
     pub proxy: String,
     /// Configured providers.

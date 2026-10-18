@@ -5,6 +5,40 @@ use crate::view_model::{
 };
 
 #[test]
+fn a_proxy_edit_drops_the_previous_test_result() {
+    let mut state = WorkspaceState {
+        settings: Some(crate::view_model::SettingsState::from_settings(
+            &mycode_config::AppSettings::default(),
+            1,
+            Vec::new(),
+        )),
+        ..WorkspaceState::default()
+    };
+    let passed = crate::view_model::ProxyTestState::Done(mycode_app::ProxyTestReport {
+        route: mycode_app::ProxyTestRoute::Direct,
+        outcome: Ok((204, std::time::Duration::from_millis(80))),
+    });
+    reduce(&mut state, FrontendAction::ProxyTestChanged(passed.clone()));
+    // Re-sending the value already stored is not an edit.
+    reduce(
+        &mut state,
+        FrontendAction::SettingsProxyChanged {
+            value: String::new(),
+            typed: false,
+        },
+    );
+    assert_eq!(state.proxy_test, passed);
+    reduce(
+        &mut state,
+        FrontendAction::SettingsProxyChanged {
+            value: "http://127.0.0.1:7890".to_owned(),
+            typed: true,
+        },
+    );
+    assert_eq!(state.proxy_test, crate::view_model::ProxyTestState::Idle);
+}
+
+#[test]
 fn hiding_and_showing_models_edits_the_provider_hidden_list() {
     let mut provider = mycode_config::ProviderSettings {
         id: "openai".to_owned(),

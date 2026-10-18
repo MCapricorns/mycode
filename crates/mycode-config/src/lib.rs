@@ -71,7 +71,7 @@ pub(crate) fn write_owned_test_bytes(
 pub use settings::{
     AppSettings, AppearanceSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_DISABLED_SKILLS,
     MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
-    MAX_PROVIDERS, MAX_WEB_BACKENDS, McpServerSettings, PROXY_AUTO, PROXY_DIRECT, PROXY_SCHEMES,
+    MAX_PROVIDERS, MAX_WEB_BACKENDS, McpServerSettings, PROXY_SCHEMES,
     ProviderSettings, ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH,
     SUBAGENT_CONCURRENCY, SkillsSettings, SubagentRoleSettings, SubagentSettings, VALID_FONT_SIZES,
     VALID_LANGUAGES, VALID_THEMES, WebBackendSettings, WebSettings, builtin_mcp_servers,

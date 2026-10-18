@@ -4,8 +4,10 @@
 //! The interface always paints the operating-system UI font; there is no
 //! typeface picker. The request identity (User-Agent) is fixed by the
 //! application and is not shown here.
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use mycode_frontend::view_model::ProxyTestState;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled,
     TestSupportExt as _, Window, div, px,
@@ -121,9 +123,55 @@ pub(super) fn render_general_section(
 /// Mode chip id for one stored proxy value.
 fn proxy_mode(stored: &str) -> &'static str {
     match mycode_config::ProxyPreference::parse(stored) {
-        Some(mycode_config::ProxyPreference::Direct) => "direct",
-        Some(mycode_config::ProxyPreference::Url(_)) => "custom",
-        _ => "auto",
+        Some(mycode_config::ProxyPreference::Url(_)) => "manual",
+        _ => "system",
+    }
+}
+
+/// One line for the proxy test result and whether it reads as success
+/// (`None` while idle or running).
+fn proxy_test_line(test: &ProxyTestState) -> (String, Option<bool>) {
+    use mycode_app::ProxyTestRoute;
+    match test {
+        ProxyTestState::Idle => (
+            t(
+                "Test fetches google.com through the setting above.",
+                "测试会按上面的设置请求 google.com。",
+            )
+            .to_owned(),
+            None,
+        ),
+        ProxyTestState::Testing => (t("Testing…", "测试中…").to_owned(), None),
+        ProxyTestState::Invalid(message) => (message.clone(), Some(false)),
+        ProxyTestState::Done(report) => {
+            let route = match &report.route {
+                ProxyTestRoute::Direct => t(
+                    "direct (no system proxy is set)",
+                    "直连（系统没有设置代理）",
+                )
+                .to_owned(),
+                ProxyTestRoute::System(uri) => format!("{} {uri}", t("system proxy", "系统代理")),
+                ProxyTestRoute::Manual(url) => format!("{} {url}", t("proxy", "代理")),
+            };
+            match &report.outcome {
+                Ok((status, elapsed)) => (
+                    format!(
+                        "{} · {route} · HTTP {status} · {} ms",
+                        t("Reached google.com", "已连通 google.com"),
+                        elapsed.as_millis()
+                    ),
+                    Some((200..400).contains(status)),
+                ),
+                Err(message) => (
+                    format!(
+                        "{} · {route} · {}",
+                        t("google.com unreachable", "google.com 不通"),
+                        mycode_app::brief_error(message)
+                    ),
+                    Some(false),
+                ),
+            }
+        }
     }
 }
 
@@ -140,28 +188,25 @@ fn proxy_field(
         .unwrap_or_default();
     let mode = proxy_mode(&stored);
     let options = [
-        ("auto", t("Auto", "智能")),
-        ("direct", t("Direct", "直连")),
-        ("custom", t("Custom", "自定义")),
+        ("system", t("Follow system", "跟随系统")),
+        ("manual", t("Manual", "手动填写")),
     ]
     .into_iter()
     .map(|(id, label)| (id.to_owned(), label.to_owned()))
     .collect::<Vec<_>>();
     let hint = match mode {
-        "direct" => t(
-            "Every request connects directly, ignoring the system proxy.",
-            "所有请求直连，忽略系统代理。",
-        ),
-        "custom" => t(
+        "manual" => t(
             "http, https, socks5, or socks5h. A bare host:port such as 127.0.0.1:7890 is read as http.",
             "支持 http、https、socks5、socks5h。只填 host:port（如 127.0.0.1:7890）按 http 处理。",
         ),
         _ => t(
-            "Uses the system proxy when one is on (Clash \"System Proxy\"). Otherwise connects directly, and a blocked host is retried through a running local Clash (7890 / 7897) or v2rayN (10809) and remembered.",
-            "系统代理开启时使用系统代理（Clash「系统代理」）。否则直连；直连不通的站点会自动改走本机正在运行的 Clash（7890 / 7897）或 v2rayN（10809），并记住该站点。",
+            "Uses the system proxy (environment variables or the OS setting, e.g. Clash \"System Proxy\"). With none set, requests connect directly.",
+            "使用系统代理（环境变量或系统设置，例如 Clash「系统代理」）。系统没有设置代理时直连。",
         ),
     };
-    let input = (mode == "custom").then(|| workspace.settings_proxy_input(window, cx));
+    let (test_text, test_ok) = proxy_test_line(&workspace.vm().proxy_test);
+    let testing = workspace.vm().proxy_test == ProxyTestState::Testing;
+    let input = (mode == "manual").then(|| workspace.settings_proxy_input(window, cx));
     let invalid = input.as_ref().is_some_and(|input| {
         !matches!(
             mycode_config::ProxyPreference::parse(input.read(cx).value().trim()),
@@ -175,9 +220,20 @@ fn proxy_field(
         |workspace, value, cx| workspace.on_select_proxy_mode(value, cx),
         cx,
     );
+    let test_button = Button::new("proxy-test")
+        .label(t("Test", "测试"))
+        .small()
+        .outline()
+        .disabled(testing)
+        .on_click(cx.listener(|workspace, _, _, cx| workspace.on_test_proxy(cx)));
     let theme = cx.theme();
     let muted = theme.muted_foreground;
     let danger = theme.danger;
+    let test_color = match test_ok {
+        Some(true) => theme.success,
+        Some(false) => danger,
+        None => muted,
+    };
     div()
         .id("row-proxy")
         .w_full()
@@ -220,6 +276,26 @@ fn proxy_field(
                 } else {
                     hint
                 }),
+        )
+        .child(
+            div()
+                .id("proxy-test-row")
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(crate::ui::skin::space(2))
+                .child(test_button)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .whitespace_normal()
+                        .text_color(test_color)
+                        .child(test_text),
+                ),
         )
         .into_any_element()
 }

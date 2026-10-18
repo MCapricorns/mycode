@@ -47,7 +47,7 @@
 `AppSettings` 是设置页的唯一文档。
 
 - **外观**：`appearance.theme` 接受 `dark` 或 `light`。`appearance.language` 是 `auto` / `en` / `zh`。`appearance.fontSize` 是 `s` / `m` / `l` / `xl`（正文 12 / 14 / 16 / 18 像素），缺省为 `m`。界面字体固定为操作系统界面字体。旧文件里的 `appearance.palette`、`appearance.fontFamily` 等已移除字段是未知字段，整份文档按上面的规则备份并重置，抢救时这些字段被丢弃
-- **代理**：`proxy`，空或 `auto` 为智能模式（系统代理开启时走系统代理；否则直连，直连不通的公网站点改走本机正在监听的 Clash 7890 / 7897 或 v2rayN 10809 并在本进程内记住）；`direct` 忽略一切代理；也可以写 `http` / `https` / `socks5` / `socks5h` 代理地址，只写 `host:port` 按 `http` 处理。环回、`.local` 和私网地址始终直连
+- **代理**：`proxy`，空为跟随系统（环境变量或系统代理设置，例如 Clash「系统代理」；系统没设代理就直连，不再探测本机端口兜底）；也可以写 `http` / `https` / `socks5` / `socks5h` 代理地址，只写 `host:port` 按 `http` 处理。旧文档里的 `auto`、`direct` 都按跟随系统读。设置页的「测试」按当前设置请求 `https://www.google.com/generate_204`，显示走的线路（直连 / 系统代理地址 / 手动地址）、状态码和耗时。环回、`.local` 和私网地址始终直连
 - **提供商**：id、`kind`（只有 `anthropic-messages`、`openai-completions`、`openai-responses`）、`https://` base URL、模型 id 列表（第一个是默认）、`enabled`，可选 `contextLimit` / `maxOutput`（`maxOutput` 优先于目录 `limit.output`），可选 `hiddenModels`（不出现在对话模型切换、最近使用推荐和命令面板里的模型 id，设置页仍列出以便重新显示）。密钥不在此列
 - **思考强度**：`reasoningEffort` 是保存的默认值，必须是 models.dev 档位（`off`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）。会话里选的模型和强度不写这里，见下文 `ui.json`
 - **Shell**：没有可切换的 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。`MYCODE_SHELL` 不再覆盖选择。旧文件里的 `tools.shell`、`tools.osSandbox` 是未知字段，会让整份文档重置并在抢救时被丢弃：OS 沙箱已随功能移除，进程以当前用户权限运行

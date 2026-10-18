@@ -68,6 +68,7 @@ pub use updates::{PreparedUpdate, UpdateOffer};
 pub use updates::{
     apply_and_restart, brief_error, cleanup_previous_binary, cleanup_stale_stages, current_version,
 };
+pub use mycode_providers::{ProxyTestReport, ProxyTestRoute};
 pub use user_agent::default_user_agent;
 
 use std::path::PathBuf;
@@ -317,6 +318,13 @@ pub enum BridgeCommand {
     DownloadUpdate {
         /// The offer to download.
         offer: UpdateOffer,
+    },
+    /// Fetch the fixed probe URL on the route `proxy` picks, so the user
+    /// can see whether the proxy is in effect. `proxy` is the settings
+    /// value on screen, so an edit not yet saved is what gets tested.
+    TestProxy {
+        /// Stored-form proxy value (empty follows the system).
+        proxy: String,
     },
 }
 
@@ -623,6 +631,9 @@ pub enum BridgeReply {
     UpdateChecked(Result<Option<UpdateOffer>, String>),
     /// Download-and-verify result.
     UpdateDownloaded(Result<PreparedUpdate, String>),
+    /// Proxy test result. `Err` means the value on screen is not a proxy
+    /// setting at all; a failed request still yields a report.
+    ProxyTested(Result<ProxyTestReport, String>),
     /// The device flow started; the user code is on screen.
     CopilotSignInStarted(Result<CopilotSignInInfo, String>),
     /// Title-summarization acceptance; the result rides the event channel as
