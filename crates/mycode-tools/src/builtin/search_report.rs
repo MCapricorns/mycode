@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use serde_json::{Value, json};
 
-use crate::builtin::fs_search::{MAX_PATTERN_BYTES, io_incomplete_notice};
+use crate::builtin::fs_search::{MAX_PATTERN_BYTES, ResolvedRoot, io_incomplete_notice, rel_posix};
 use crate::tool::{ToolError, ToolResult};
 
 /// Rejects NUL bytes and oversized patterns/globs.
@@ -22,11 +22,51 @@ pub(crate) fn reject_pattern_bytes(pattern: &str, label: &str) -> Result<(), Too
     Ok(())
 }
 
+/// A compiled path glob, matched against `/`-separated relative paths.
+///
+/// A glob with no `/` also matches the last path component, the way
+/// `.gitignore` reads it: `main.rs` finds `src/main.rs`. Matched only
+/// against the whole relative path, such a name found nothing below the
+/// search root.
+pub(crate) struct PathGlob {
+    matcher: GlobMatcher,
+    any_depth: bool,
+}
+
+impl PathGlob {
+    pub(crate) fn is_match(&self, relative: &str) -> bool {
+        self.matcher.is_match(relative)
+            || (self.any_depth
+                && relative
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| name != relative && self.matcher.is_match(name)))
+    }
+}
+
 /// Compiles one glob, reporting failures with the tool's `label`.
-pub(crate) fn compile_glob_labeled(pattern: &str, label: &str) -> Result<GlobMatcher, ToolError> {
+///
+/// A comma list with no braces (`*.rs,*.toml`) is read as the brace set
+/// it means. Case folds where the host file system does.
+pub(crate) fn compile_glob_labeled(pattern: &str, label: &str) -> Result<PathGlob, ToolError> {
     reject_pattern_bytes(pattern, &format!("{label} glob"))?;
-    globset::Glob::new(pattern)
-        .map(|glob| glob.compile_matcher())
+    let spelled = if pattern.contains(',') && !pattern.contains('{') {
+        let items: Vec<&str> = pattern
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .collect();
+        format!("{{{}}}", items.join(","))
+    } else {
+        pattern.to_owned()
+    };
+    globset::GlobBuilder::new(&spelled)
+        .case_insensitive(cfg!(any(windows, target_os = "macos")))
+        .build()
+        .map(|glob| PathGlob {
+            matcher: glob.compile_matcher(),
+            any_depth: !spelled.contains('/'),
+        })
         .map_err(|error| {
             ToolError::InvalidArgs(format!("invalid {label} glob `{pattern}`: {error}"))
         })
@@ -54,6 +94,22 @@ pub(crate) struct ReportSpec<'a> {
     pub extra_details: Vec<(&'a str, Value)>,
     /// Result ceiling asserted by the debug checks.
     pub cap: usize,
+}
+
+/// The report for an explicit `path` that is hidden or gitignored. The
+/// walk would skip it, and an empty report read as "the text is not
+/// there", so the model is told why and where to look instead.
+pub(crate) fn skipped_target_report(tool: &str, root: &ResolvedRoot) -> ToolResult {
+    let path = rel_posix(&root.cwd, &root.root);
+    ToolResult::text(format!(
+        "`{path}` is hidden or gitignored, so {tool} does not search it. Use `read` \
+         to open a file there, or the shell tool to search it."
+    ))
+    .with_details(json!({
+        "root": root.root.display().to_string(),
+        "matches": 0,
+        "skipped": true,
+    }))
 }
 
 /// Renders the sorted entries under the shared output cap and assembles the
@@ -99,6 +155,10 @@ pub(crate) fn render_report(
             "[showing first {shown} of {count} {}; {}{reason}]",
             spec.noun, spec.truncated_advice
         );
+    }
+    // An empty body read as a failed call; say the search ran and found nothing.
+    if text.is_empty() && spec.total == 0 {
+        let _ = write!(text, "No {} found.", spec.noun);
     }
     for notice in &spec.extra_notices {
         text.push('\n');

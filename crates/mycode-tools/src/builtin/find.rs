@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use globset::GlobMatcher;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -33,7 +32,10 @@ use super::fs_search::{
     to_posix, walk_retained_tree,
 };
 
-use super::search_report::{ReportSpec, compile_glob_labeled, reject_pattern_bytes, render_report};
+use super::search_report::{
+    PathGlob, ReportSpec, compile_glob_labeled, reject_pattern_bytes, render_report,
+    skipped_target_report,
+};
 
 /// Default cap on reported paths.
 pub const DEFAULT_LIMIT: usize = 1000;
@@ -108,7 +110,9 @@ impl Tool for FindTool {
         "Find files and directories by glob pattern under a directory (default: \
          the session cwd). `*` also matches across `/`. To list one directory, \
          pass it as `path` with pattern `*` and `max_depth` 1. Respects \
-         .gitignore; hidden and gitignored paths are skipped. Reports up to \
+         .gitignore; hidden and gitignored paths are skipped. A pattern without \
+         `/` also matches file names at any depth (`main.rs` finds \
+         `src/main.rs`). Reports up to \
          `limit` (default 1000) matching paths relative to the search root, \
          sorted, using `/` separators; directories end with `/`. A notice \
          follows when more matches exist. Cancellation or the wall-clock limit \
@@ -172,7 +176,7 @@ impl Tool for FindTool {
 }
 
 fn run_find(
-    glob: GlobMatcher,
+    glob: PathGlob,
     root: ResolvedRoot,
     limit: Option<usize>,
     max_depth: Option<usize>,
@@ -184,10 +188,10 @@ fn run_find(
     let report_root = root.root.clone();
 
     match root.target_is_skipped() {
-        Ok(true) => return finish_find_report(&report_root, &state, effective_limit, limits),
+        Ok(true) => return Ok(skipped_target_report("find", &root)),
         Ok(false) => {}
         Err(error) if is_hidden_skip(&error) => {
-            return finish_find_report(&report_root, &state, effective_limit, limits);
+            return Ok(skipped_target_report("find", &root));
         }
         Err(error) => {
             return Ok(ToolResult::error(format!(
@@ -320,14 +324,18 @@ fn find_report(
             noun: "matching paths",
             truncated_advice: "refine the pattern or raise limit",
             output_advice: "refine the pattern or lower limit",
-            extra_notices: Vec::new(),
+            extra_notices: if total == 0 {
+                vec!["[hidden and gitignored paths are skipped]".to_owned()]
+            } else {
+                Vec::new()
+            },
             extra_details: vec![("limit", json!(effective_limit))],
             cap: effective_limit,
         },
     )
 }
 
-fn compile_find_glob(pattern: &str) -> Result<GlobMatcher, ToolError> {
+fn compile_find_glob(pattern: &str) -> Result<PathGlob, ToolError> {
     reject_pattern_bytes(pattern, "pattern")?;
     compile_glob_labeled(pattern, "pattern")
 }
@@ -342,12 +350,20 @@ mod tests {
     use crate::tool::{Tool, ToolError};
 
     async fn find(root: &std::path::Path, max_depth: Option<usize>) -> Result<String, ToolError> {
+        find_matching(root, "*", max_depth).await
+    }
+
+    async fn find_matching(
+        root: &std::path::Path,
+        pattern: &str,
+        max_depth: Option<usize>,
+    ) -> Result<String, ToolError> {
         let ctx = ToolCtx::new(root);
         let mut out = ToolStream::closed();
         let result = FindTool
             .execute(
                 FindArgs {
-                    pattern: "*".to_owned(),
+                    pattern: pattern.to_owned(),
                     path: None,
                     limit: None,
                     max_depth,
@@ -366,6 +382,37 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n"))
+    }
+
+    /// A bare file name finds that file at any depth; a pattern with `/`
+    /// still anchors at the search root. A miss says the search ran.
+    #[tokio::test]
+    async fn a_bare_name_matches_at_any_depth() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-find-name-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src").join("ui")).expect("tree");
+        std::fs::write(root.join("src").join("ui").join("workspace.rs"), "").expect("file");
+
+        let listing = find_matching(&root, "workspace.rs", None)
+            .await
+            .expect("name");
+        assert_eq!(
+            listing.lines().next(),
+            Some("src/ui/workspace.rs"),
+            "{listing}"
+        );
+        let listing = find_matching(&root, "ui/*.rs", None)
+            .await
+            .expect("anchored");
+        assert!(listing.starts_with("No matching paths found."), "{listing}");
+        let listing = find_matching(&root, "src/**/*.rs", None)
+            .await
+            .expect("deep");
+        assert!(listing.contains("src/ui/workspace.rs"), "{listing}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
