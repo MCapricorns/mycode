@@ -568,8 +568,25 @@ impl McpCatalog {
             .join("\n")
     }
 
+    /// Exact name first. Models also send a different case or prefix the
+    /// server (`server.tool`, `server:tool`, `server/tool`, `server__tool`);
+    /// those resolve when exactly one tool matches.
     fn get(&self, name: &str) -> Option<&Arc<DynamicMcpTool>> {
-        self.by_name.get(name)
+        if let Some(tool) = self.by_name.get(name) {
+            return Some(tool);
+        }
+        let bare = name
+            .rsplit_once("__")
+            .map(|(_, tail)| tail)
+            .or_else(|| name.rsplit_once(['.', ':', '/']).map(|(_, tail)| tail))
+            .unwrap_or(name);
+        let mut found = self.by_name.iter().filter(|(candidate, _)| {
+            candidate.eq_ignore_ascii_case(name) || candidate.eq_ignore_ascii_case(bare)
+        });
+        match (found.next(), found.next()) {
+            (Some((_, tool)), None) => Some(tool),
+            _ => None,
+        }
     }
 }
 
@@ -715,10 +732,18 @@ impl ToolDyn for UseTool {
                     "no MCP tool named {name}. Call search_tool with name \"list\"."
                 )));
             };
-            let arguments = args
+            let mut arguments = args
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
+            // Models often send the object as a JSON string.
+            if let Some(parsed) = arguments
+                .as_str()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .filter(Value::is_object)
+            {
+                arguments = parsed;
+            }
             if !arguments.is_object() {
                 return Err(ToolError::InvalidArgs(
                     "arguments must be an object".to_owned(),
@@ -1116,6 +1141,23 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0]["name"], "lookup");
         assert_eq!(calls[0]["arguments"]["query"], "direct");
+        drop(calls);
         let _ = std::fs::remove_dir_all(&root);
+
+        let catalog = super::McpCatalog::from_tools_with_warning(tools, None).expect("catalog");
+        for spelling in [
+            "lookup",
+            "LOOKUP",
+            "docs.lookup",
+            "docs:lookup",
+            "mcp__docs__lookup",
+        ] {
+            assert_eq!(
+                catalog.get(spelling).map(|tool| tool.spec().name),
+                Some("lookup".to_owned()),
+                "{spelling}"
+            );
+        }
+        assert!(catalog.get("docs.missing").is_none());
     }
 }
