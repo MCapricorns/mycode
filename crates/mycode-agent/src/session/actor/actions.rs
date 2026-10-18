@@ -124,7 +124,7 @@ impl SessionCore {
             .ok_or(OpFail::Domain(SessionError::NotFound))?;
         SessionLedger::check_ordering(branch_state, kind, call_id.as_ref())
             .map_err(OpFail::Domain)?;
-        let record_len = store::encoded_record_len(call_id.is_some(), payload.len())
+        let record_len = store::encoded_record_len(call_id.is_some(), payload)
             .ok_or(OpFail::Domain(SessionError::Limit))?;
         let total = ledger
             .total_bytes
@@ -434,7 +434,7 @@ impl SessionCore {
         if format_digest(&payload_digest(&row.payload)) != reservation.payload_digest {
             return Err(OpFail::Domain(SessionError::Corrupt));
         }
-        let upper = store::encoded_record_len(row.call_id.is_some(), row.payload.len())
+        let upper = store::encoded_record_len(row.call_id.is_some(), &row.payload)
             .ok_or(OpFail::Domain(SessionError::Limit))?;
         let total = ledger
             .total_bytes
