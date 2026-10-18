@@ -26,10 +26,11 @@
 const MAX_CALL_BODY_BYTES: usize = 1024 * 1024;
 
 /// Parameters that carry free text: file content, text to match or insert,
-/// a shell command. Their values are never decoded as JSON or XML, and only
-/// the newline that sets the value off from its tags is removed, so
-/// indentation, a leading `{`, and an `<html>` body reach the tool intact.
-const TEXT_PARAMS: [&str; 9] = [
+/// a shell command, a subagent prompt, a web query or goal. Their values are
+/// never decoded as JSON or XML, and only the newline that sets the value
+/// off from its tags is removed, so indentation, a leading `{`, and an
+/// `<html>` body (or a `<task>` block in a prompt) reach the tool intact.
+const TEXT_PARAMS: [&str; 12] = [
     "content",
     "old_string",
     "new_string",
@@ -39,6 +40,9 @@ const TEXT_PARAMS: [&str; 9] = [
     "pattern",
     "replacement",
     "text",
+    "prompt",
+    "query",
+    "goal",
 ];
 
 const OPEN_TOOL: &str = "<tool_call>";
@@ -616,6 +620,15 @@ mod tests {
              <parameter=content>{\"k\": [1]}\n</parameter></function></tool_call>",
         );
         assert_eq!(arguments(&pieces[0])["content"], "{\"k\": [1]}");
+
+        let pieces = parse(
+            "<tool_call><function=agent><parameter=agent>scout</parameter>\
+             <parameter=prompt>\n<task>map the crate</task>\n</parameter></function></tool_call>",
+        );
+        assert_eq!(
+            arguments(&pieces[0])["prompt"],
+            "<task>map the crate</task>"
+        );
     }
 
     /// A large call streamed in small deltas is found without rescanning
