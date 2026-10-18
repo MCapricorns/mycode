@@ -3,10 +3,18 @@
 //! preset form's pre-checked model list.
 
 use crate::i18n::t;
-use crate::view_model::{WorkspaceState, rank_model_ids};
+use crate::view_model::{CacheBreak, WorkspaceState, rank_model_ids};
+use super::usage::arm_cache_watch;
 
 /// The `ProviderSelected` transition: the model picker selected a provider.
 pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
+    // A provider or model change restarts the prompt cache: the next turn's
+    // prefix belongs to a different cache namespace. Arm the watch so a
+    // collapsed hit explains itself instead of silently billing full price.
+    let before = (
+        state.selected_provider.clone(),
+        state.selected_model.clone(),
+    );
     state.selected_provider = Some(provider.clone());
     state.selected_model = state
         .catalog
@@ -24,6 +32,9 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
     state.model_menu_open = false;
     if !selected_model_supports_reasoning(state) {
         state.reasoning_menu_open = false;
+    }
+    if (state.selected_provider.clone(), state.selected_model.clone()) != before {
+        arm_cache_watch(state, CacheBreak::Switch);
     }
     // As in `model_selected`: the stored effort survives the switch. The
     // projection falls back to Default for rungs the new provider does not
@@ -73,7 +84,11 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
     if let Some(provider) = state.selected_provider.clone() {
         mycode_config::remember_model(&mut state.recent_models, &provider, &model);
     }
+    let changed = state.selected_model.as_deref() != Some(model.as_str());
     state.selected_model = Some(model);
+    if changed {
+        arm_cache_watch(state, CacheBreak::Switch);
+    }
     state.model_menu_open = false;
     if !selected_model_supports_reasoning(state) {
         state.reasoning_menu_open = false;
