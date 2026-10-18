@@ -9,7 +9,7 @@ license.workspace = true
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
 mycode-frontend = { path = "../mycode-frontend" }
-ratatui = "0.29"
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
 tui-textarea = "0.7"
 # The global allocator (mimalloc) and VC-LTL link live in the leaf crates
