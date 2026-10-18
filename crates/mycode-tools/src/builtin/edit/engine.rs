@@ -693,53 +693,43 @@ fn literal_miss_error(body: &str, patterns: &[String]) -> ToolError {
     }
 }
 
-struct WhitespaceStripped {
-    text: String,
-    /// Original byte index of each byte in [`Self::text`].
-    map: Vec<usize>,
-}
-
-fn strip_whitespace(text: &str) -> WhitespaceStripped {
-    let mut out = String::with_capacity(text.len());
-    let mut map = Vec::with_capacity(text.len());
-    for (index, ch) in text.char_indices() {
-        if ch.is_whitespace() {
-            continue;
-        }
-        for offset in 0..ch.len_utf8() {
-            map.push(index + offset);
-        }
-        out.push(ch);
-    }
-    WhitespaceStripped { text: out, map }
+fn strip_whitespace(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
 /// Diagnostic-only scan for a literal op that missed. Finds the earliest
-/// body position where a pattern appears once every whitespace byte is
+/// body position where a pattern appears once every whitespace character is
 /// dropped, so different indentation or line wrapping still points the
 /// model at the right spot. Matching itself stays exact — this only
 /// enriches the error.
 fn whitespace_near_miss_line(body: &str, patterns: &[String]) -> Option<usize> {
     let stripped_body = strip_whitespace(body);
-    if stripped_body.text.is_empty() {
+    if stripped_body.is_empty() {
         return None;
     }
-    let haystack = stripped_body.text.as_bytes();
-    let mut best: Option<usize> = None;
-    for pattern in patterns {
-        let needle = strip_whitespace(pattern).text;
-        if needle.is_empty() {
+    let best = patterns
+        .iter()
+        .map(|pattern| strip_whitespace(pattern))
+        .filter(|needle| !needle.is_empty())
+        .filter_map(|needle| memchr::memmem::find(stripped_body.as_bytes(), needle.as_bytes()))
+        .min()?;
+    // Walk the body once to map the stripped offset back to its line,
+    // instead of keeping an index entry for every body byte.
+    let mut kept = 0usize;
+    let mut line = 1usize;
+    for ch in body.chars() {
+        if ch.is_whitespace() {
+            if ch == '\n' {
+                line += 1;
+            }
             continue;
         }
-        if let Some(position) = memchr::memmem::find(haystack, needle.as_bytes()) {
-            let original = stripped_body.map[position];
-            if best.is_none_or(|current| original < current) {
-                best = Some(original);
-            }
+        if kept >= best {
+            break;
         }
+        kept += ch.len_utf8();
     }
-    let start = best?;
-    Some(body[..start].bytes().filter(|byte| *byte == b'\n').count() + 1)
+    Some(line)
 }
 
 fn memmem_matches(body: &str, pattern: &str) -> Result<Vec<Found>, ToolError> {
