@@ -87,50 +87,41 @@ pub(crate) fn command_parameter_doc(kind: ShellKind) -> &'static str {
     }
 }
 
+/// `mode` schema text for one interpreter. A macro so `concat!` can build a
+/// `&'static str` per shell from the shared wording.
+macro_rules! mode_doc {
+    ($interpreter:literal, $starts:literal) => {
+        concat!(
+            "`script` (the default when `mode` is omitted) runs `command` in ",
+            $interpreter,
+            ". `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start ",
+            $starts,
+            "."
+        )
+    };
+}
+
 /// Schema description for `mode`.
 #[must_use]
 pub(crate) fn mode_parameter_doc(kind: ShellKind) -> &'static str {
     match kind {
-        ShellKind::Pwsh => {
-            "`script` (the default when `mode` is omitted) runs `command` in PowerShell 7. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start PowerShell."
-        }
-        ShellKind::WindowsPowerShell => {
-            "`script` (the default when `mode` is omitted) runs `command` in Windows PowerShell 5.1. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start PowerShell."
-        }
-        ShellKind::Bash => {
-            "`script` (the default when `mode` is omitted) runs `command` in bash. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
-        }
-        ShellKind::Zsh => {
-            "`script` (the default when `mode` is omitted) runs `command` in zsh. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
-        }
-        ShellKind::Sh => {
-            "`script` (the default when `mode` is omitted) runs `command` in POSIX sh. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
-        }
-        ShellKind::Cmd => {
-            "`script` (the default when `mode` is omitted) runs `command` in cmd.exe. `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start a shell."
-        }
+        ShellKind::Pwsh => mode_doc!("PowerShell 7", "PowerShell"),
+        ShellKind::WindowsPowerShell => mode_doc!("Windows PowerShell 5.1", "PowerShell"),
+        ShellKind::Bash => mode_doc!("bash", "a shell"),
+        ShellKind::Zsh => mode_doc!("zsh", "a shell"),
+        ShellKind::Sh => mode_doc!("POSIX sh", "a shell"),
+        ShellKind::Cmd => mode_doc!("cmd.exe", "a shell"),
     }
 }
 
-/// Replaces parameter descriptions so the schema matches the active shell.
+/// Replaces the shell-specific parameter descriptions (`command`, `mode`) so
+/// the schema matches the active shell.
 pub(crate) fn apply_parameter_docs(schema: &mut Value, kind: ShellKind) {
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
     };
     set_description(properties.get_mut("command"), command_parameter_doc(kind));
     set_description(properties.get_mut("mode"), mode_parameter_doc(kind));
-    set_description(
-        properties.get_mut("program"),
-        "Executable basename or path. Required when `mode` is `program`. A bare name is searched only in absolute host PATH entries. A path is resolved against the session cwd. Omit for `script`.",
-    );
-    set_description(
-        properties.get_mut("args"),
-        "Argument vector for `program` mode, passed verbatim with no shell parsing.",
-    );
-    set_description(
-        properties.get_mut("timeout_secs"),
-        "Timeout in seconds for this command (default: 120).",
-    );
 }
 
 fn set_description(value: Option<&mut Value>, description: &str) {
@@ -161,115 +152,108 @@ interpreter: {label} ({program})\n\
     )
 }
 
-const POWERSHELL7_DESCRIPTION: &str = "\
-Execute a PowerShell 7 command in the session cwd and return stdout and stderr. \
-`command` is PowerShell, not bash or cmd: cmdlets, pipelines, `$env:NAME`, and \
-PowerShell operators. PowerShell 7 accepts `&&` and `||`. \
-Do not use bash syntax (`2>/dev/null`, `$(...)`, `<<` heredocs). Quote paths that \
-contain spaces; `\\` is the separator and `/` is also accepted. Each call is a new \
-process: `cd` and variable assignments do not persist. To edit a file from this tool, \
-pipe a literal here-string to Python (`@'...'@ | python -`). `mode` `program` spawns \
-`program` with an explicit `args` vector and does not start PowerShell. A PE, ELF, \
-or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with \
-the script path and args. Batch files and a shebang argument of `-c` are rejected. \
-`write` and `edit` remain \
-available. `read`, `grep`, and `find` handle listing, reading, and searching; do not use this tool for those. Do not use this tool to talk \
-to the user. Edits are not undone. \
-Captured stdout/stderr is truncated beyond 50 KiB. A non-zero exit is an error result, \
-not a tool failure. Default timeout: 120 s. There is no permission prompt. Output is \
-captured as UTF-8.";
+/// The interpreter-independent middle of every shell description: tool
+/// routing, `program` mode, and result semantics.
+macro_rules! shared_description {
+    () => {
+        " Each call is a new process in the session cwd, so `cd` and variable \
+assignments do not persist. Use it for builds, tests, git, package managers, and other \
+programs. `read`, `grep`, and `find` handle listing, reading, and searching, and `edit` \
+and `write` change files; do not use this tool for those, and never use it to talk to the \
+user. Commands must exit on their own: no servers, watchers, or interactive prompts. \
+`mode` `program` spawns `program` with a verbatim `args` vector and no shell: a PE, ELF, \
+or Mach-O image runs directly, and a direct shebang wrapper runs its interpreter with the \
+script path and `args`; batch files and a shebang `-c` are rejected. Output beyond 50 KiB \
+keeps its start and end. A non-zero exit is an error result carrying the exit code, not a \
+tool failure. Default timeout: 120 s (`timeout_secs` overrides). There is no permission \
+prompt, and file changes are not undone."
+    };
+}
 
-const POWERSHELL51_DESCRIPTION: &str = "\
-Execute a Windows PowerShell 5.1 command in the session cwd and return stdout and \
-stderr. `command` is Windows PowerShell, not bash, not cmd, and not PowerShell 7-only \
-syntax. `&&` and `||` are syntax errors; chain with `;` and check `$LASTEXITCODE`. \
-Use cmdlets, `$env:NAME`, and `2>$null` instead of `2>/dev/null`. Quote paths that contain spaces. Each call is a new process: `cd` and \
-variable assignments do not persist. To edit a file, pipe a literal here-string to \
-Python (`@'...'@ | python -`). `mode` `program` spawns `program` with an explicit \
-`args` vector and does not start PowerShell. A PE, ELF, or Mach-O image runs \
-directly. A direct shebang wrapper runs its interpreter with the script path and \
-args. Batch files and a shebang argument of `-c` are rejected. `write` and `edit` \
-remain available. `read`, `grep`, and \
-`find` handle listing, reading, and searching; do not use this tool for those. Do not use this tool to talk to the user. Edits are not \
-undone. Captured stdout/stderr is \
-truncated beyond 50 KiB. A non-zero exit is an error result, not a tool failure. \
-Default timeout: 120 s. There is no permission prompt. Output is captured as UTF-8.";
+/// The escape hatch for rewrites `edit` cannot express, in each shell's idiom.
+macro_rules! powershell_bulk_edit {
+    () => {
+        " For a bulk or generated rewrite that `edit` cannot express, pipe a literal \
+here-string to Python (`@'...'@ | python -`)."
+    };
+}
 
-const BASH_DESCRIPTION: &str = "\
-Execute a bash command in the session cwd (`bash -c`) and return stdout and stderr. \
-Use bash syntax: pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path \
-separator is `/`. Each call is a new process; `cd` and exports do not persist. To \
-edit a file, run Python (`python3` or `python`) with a quoted heredoc or a short \
-script. `mode` `program` spawns `program` with an explicit `args` vector and does \
-not start a shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. \
-`write` and `edit` remain available. `read`, `grep`, and `find` handle listing, reading, and searching; do not use this tool for those. \
-Do not use this tool to talk to the user. Edits are not undone. Captured stdout/stderr is truncated beyond \
-50 KiB. A non-zero exit is an error result, not a tool failure. Default timeout: \
-120 s. There is no permission prompt.";
+macro_rules! posix_bulk_edit {
+    () => {
+        " For a bulk or generated rewrite that `edit` cannot express, run Python (`python3` \
+or `python`) with a quoted heredoc."
+    };
+}
 
-const ZSH_DESCRIPTION: &str = "\
-Execute a zsh command in the session cwd (`zsh -c`) and return stdout and stderr. \
-Use zsh syntax: pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path \
-separator is `/`. Each call is a new process; `cd` and exports do not persist. To \
-edit a file, run Python (`python3` or `python`) with a quoted heredoc or a short \
-script. `mode` `program` spawns `program` with an explicit `args` vector and does \
-not start a shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. \
-`write` and `edit` remain available. `read`, `grep`, and `find` handle listing, reading, and searching; do not use this tool for those. \
-Do not use this tool to talk to the user. Edits are not undone. Captured stdout/stderr is truncated beyond \
-50 KiB. A non-zero exit is an error result, not a tool failure. Default timeout: \
-120 s. There is no permission prompt.";
+const POWERSHELL7_DESCRIPTION: &str = concat!(
+    "Run a PowerShell 7 (`pwsh`) command and return its stdout and stderr. `command` is \
+PowerShell, not bash or cmd: use cmdlets, pipelines, `$env:NAME`, and `2>$null`; `&&` and \
+`||` work. Do not send bash syntax such as `2>/dev/null`, `export`, or `<<` heredocs. Quote \
+paths that contain spaces. Output is captured as UTF-8.",
+    shared_description!(),
+    powershell_bulk_edit!()
+);
 
-const SH_DESCRIPTION: &str = "\
-Execute a POSIX sh command in the session cwd (`sh -c`) and return stdout and \
-stderr. Use POSIX syntax: pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. \
-Do not rely on bash arrays or `[[ ]]`. The path separator is `/`. Each call is a \
-new process; `cd` and exports do not persist. To edit a file, run Python \
-(`python3` or `python`) with a quoted heredoc or a short script. `mode` `program` \
-spawns `program` with an explicit `args` vector and does not start a shell. A PE, \
-ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter \
-with the script path and args. Batch files and a shebang argument of `-c` are \
-rejected. `write` and `edit` remain \
-available. `read`, `grep`, and `find` handle listing, reading, and searching; do not use this tool for those. Do not use this tool to \
-talk to the user. Edits are not undone. Captured stdout/stderr is truncated \
-beyond 50 KiB. A non-zero exit is \
-an error result, not a tool failure. Default timeout: 120 s. There is no \
-permission prompt.";
+const POWERSHELL51_DESCRIPTION: &str = concat!(
+    "Run a Windows PowerShell 5.1 command and return its stdout and stderr. `command` is \
+Windows PowerShell, not bash, cmd, or PowerShell 7-only syntax: `&&`, `||`, and the ternary \
+operator are syntax errors, so chain with `;` and check `$LASTEXITCODE`. Use cmdlets, \
+`$env:NAME`, and `2>$null` instead of `2>/dev/null`. Quote paths that contain spaces. \
+Output is captured as UTF-8.",
+    shared_description!(),
+    powershell_bulk_edit!()
+);
 
-const CMD_DESCRIPTION: &str = "\
-Execute a cmd.exe command in the session cwd (`cmd.exe /d /s /c`) and return stdout \
-and stderr. PowerShell was not found, so this is the last-resort shell. Use cmd \
-syntax: `%VAR%`, quoted Windows paths, and `&` or `&&` to chain. \
-Each call is a new process. Prefer `write` and `edit` for file changes. `mode` \
-`program` spawns `program` with an explicit `args` vector and does not start a \
-shell; a PE, ELF, or Mach-O image runs directly. A direct shebang wrapper runs its interpreter with the script path and args. Batch files and a shebang argument of `-c` are rejected. `read`, \
-`grep`, and `find` handle listing, reading, and searching; do not use this tool for those. Do not use this tool to talk to the user. \
-Edits are not undone. Captured \
-stdout/stderr is truncated beyond 50 KiB. A non-zero exit is an error result, \
-not a tool failure. Default timeout: 120 s. There is no permission prompt.";
+const BASH_DESCRIPTION: &str = concat!(
+    "Run a bash command (`bash -c`) and return its stdout and stderr. Use bash syntax: \
+pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path separator is `/`; quote \
+paths that contain spaces.",
+    shared_description!(),
+    posix_bulk_edit!()
+);
 
-const POWERSHELL_SNIPPET: &str = "\
-powershell: mode script runs one PowerShell command (command), including a \
-here-string piped to python that edits files; mode program runs one \
-kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
+const ZSH_DESCRIPTION: &str = concat!(
+    "Run a zsh command (`zsh -c`) and return its stdout and stderr. Use zsh syntax: pipes, \
+`&&` / `||`, redirection, `$VAR`, and `$(...)`. The path separator is `/`; quote paths \
+that contain spaces.",
+    shared_description!(),
+    posix_bulk_edit!()
+);
 
-const BASH_SNIPPET: &str = "\
-bash: mode script runs one bash command (command), including a Python heredoc \
-or short script that edits files; mode program runs one kernel image or shebang wrapper \
-with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
+const SH_DESCRIPTION: &str = concat!(
+    "Run a POSIX sh command (`sh -c`) and return its stdout and stderr. Use POSIX syntax: \
+pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`; do not rely on bash arrays or \
+`[[ ]]`. The path separator is `/`; quote paths that contain spaces.",
+    shared_description!(),
+    posix_bulk_edit!()
+);
 
-const ZSH_SNIPPET: &str = "\
-zsh: mode script runs one zsh command (command), including a Python heredoc \
-or short script that edits files; mode program runs one kernel image or shebang wrapper \
-with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
+const CMD_DESCRIPTION: &str = concat!(
+    "Run a cmd.exe command (`cmd.exe /d /s /c`) and return its stdout and stderr. \
+PowerShell was not found, so this is the last-resort shell. Use cmd syntax: `%VAR%`, \
+quoted Windows paths, and `&` or `&&` to chain.",
+    shared_description!()
+);
 
-const SH_SNIPPET: &str = "\
-sh: mode script runs one POSIX sh command (command), including a Python heredoc \
-or short script that edits files; mode program runs one kernel image or shebang wrapper \
-with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
+/// One-line system-prompt entry. The tool name prefix is stripped by the
+/// prompt builder when it repeats the list item's name.
+macro_rules! snippet {
+    ($tool:literal, $interpreter:literal) => {
+        concat!(
+            $tool,
+            ": mode script (the default) runs one ",
+            $interpreter,
+            " command (`command`); mode program runs one program with an explicit `args` \
+vector and no shell. Optional `timeout_secs`."
+        )
+    };
+}
 
-const CMD_SNIPPET: &str = "\
-cmd: mode script runs one cmd.exe command (command); mode program runs one \
-kernel image or shebang wrapper with explicit args and no shell. Optional timeout_secs. `mode` defaults to script.";
+const POWERSHELL_SNIPPET: &str = snippet!("powershell", "PowerShell");
+const BASH_SNIPPET: &str = snippet!("bash", "bash");
+const ZSH_SNIPPET: &str = snippet!("zsh", "zsh");
+const SH_SNIPPET: &str = snippet!("sh", "POSIX sh");
+const CMD_SNIPPET: &str = snippet!("cmd", "cmd.exe");
 
 const POWERSHELL7_GUIDANCE: &str = "\
 The `powershell` tool runs PowerShell 7 (`pwsh`). Write PowerShell, not bash or cmd.
