@@ -2,7 +2,7 @@
 //!
 //! Bounded markdown files discovered at fixed locations: the session
 //! workspace (`AGENTS.md`, `MYCODE.md`, `.mycode/agents.md`,
-//! `.agents/AGENTS.md`), the MYCode home (`AGENTS.md`), and the user home
+//! `.agents/AGENTS.md`), the MYCode home (`AGENTS.md`), and the OS user home
 //! (`.agents/AGENTS.md`). Each file becomes one system prompt contribution.
 //! Nothing enters the prompt unbounded or from arbitrary paths.
 
@@ -61,7 +61,9 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
         false,
     );
     push("AGENTS.md", home.root().join("AGENTS.md"), true);
-    if let Some(user_home) = home.root().parent() {
+    // The OS user home, not the parent of the MYCode root: with
+    // `MYCODE_HOME` relocated, that parent is an arbitrary directory.
+    if let Some(user_home) = os_user_home() {
         push(
             "AGENTS.md",
             user_home.join(".agents").join("AGENTS.md"),
