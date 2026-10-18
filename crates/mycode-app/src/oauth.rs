@@ -2,6 +2,7 @@
 //! loops, token refresh, and settings upserts.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use mycode_config::{HomeLayout, ProviderSettings, replace_app_settings};
 use mycode_providers::{
@@ -19,6 +20,10 @@ use crate::{BridgeEvent, BridgeReply, CopilotSignInInfo};
 /// expiry field (unlike the Copilot `DeviceCodeStart`), so the poll
 /// deadline mirrors the documented lifetime.
 const CODEX_FLOW_LIFETIME_SECS: u64 = 15 * 60;
+
+/// Consecutive failed polls a device flow tolerates. A flow polls for up to
+/// fifteen minutes, so one dropped request must not end the sign-in.
+const MAX_POLL_FAILURES: u32 = 3;
 
 fn oauth_call() -> PinnedCall {
     PinnedCall::new(
@@ -38,6 +43,8 @@ pub(crate) async fn oauth_sign_in(
     models: Vec<String>,
 ) -> BridgeReply {
     let call = oauth_call();
+    // A newer sign-in supersedes any loop still polling an older code.
+    let generation = state.sign_in_generation.fetch_add(1, Ordering::SeqCst) + 1;
     match provider_id.as_str() {
         OPENAI_CODEX_PROVIDER_ID => {
             let start = match start_codex_device_flow(&call).await {
@@ -45,7 +52,7 @@ pub(crate) async fn oauth_sign_in(
                 Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
             };
             open_browser(CODEX_VERIFICATION_URI);
-            spawn_codex_poll(state, events, call, start.clone(), models);
+            spawn_codex_poll(state, events, call, start.clone(), models, generation);
             BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
                 provider_id: provider_id.clone(),
                 user_code: start.user_code,
@@ -58,7 +65,7 @@ pub(crate) async fn oauth_sign_in(
                 Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
             };
             open_browser(&start.verification_uri);
-            spawn_copilot_poll(state, events, call, start.clone(), models);
+            spawn_copilot_poll(state, events, call, start.clone(), models, generation);
             BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
                 provider_id: provider_id.clone(),
                 user_code: start.user_code,
@@ -81,21 +88,32 @@ fn spawn_copilot_poll(
     call: PinnedCall,
     start: DeviceCodeStart,
     models: Vec<String>,
+    generation: u64,
 ) {
     let mut interval_secs = start.interval_secs.max(1);
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(start.expires_in_secs.max(1));
     let device_code = start.device_code;
     tokio::spawn(async move {
+        let mut failures = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+            if state.sign_in_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
             if std::time::Instant::now() >= deadline {
                 let _ = events.send(BridgeEvent::CopilotSignInFailed {
                     message: "the sign-in code expired before authorization".to_owned(),
                 });
                 return;
             }
-            match poll_device_token(&call, &device_code).await {
+            let polled = poll_device_token(&call, &device_code).await;
+            if polled.is_err() && failures + 1 < MAX_POLL_FAILURES {
+                failures += 1;
+                continue;
+            }
+            failures = 0;
+            match polled {
                 Ok(DeviceTokenPoll::Pending) => {}
                 Ok(DeviceTokenPoll::SlowDown) => interval_secs += 5,
                 Ok(DeviceTokenPoll::Denied(reason)) => {
@@ -127,20 +145,31 @@ fn spawn_codex_poll(
     call: PinnedCall,
     start: mycode_providers::CodexDeviceStart,
     models: Vec<String>,
+    generation: u64,
 ) {
     let interval_secs = start.interval_secs.max(1);
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(CODEX_FLOW_LIFETIME_SECS);
     tokio::spawn(async move {
+        let mut failures = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+            if state.sign_in_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
             if std::time::Instant::now() >= deadline {
                 let _ = events.send(BridgeEvent::CopilotSignInFailed {
                     message: "the sign-in code expired before authorization".to_owned(),
                 });
                 return;
             }
-            match poll_codex_device_token(&call, &start).await {
+            let polled = poll_codex_device_token(&call, &start).await;
+            if polled.is_err() && failures + 1 < MAX_POLL_FAILURES {
+                failures += 1;
+                continue;
+            }
+            failures = 0;
+            match polled {
                 Ok(CodexDevicePoll::Ready {
                     authorization_code,
                     code_verifier,
