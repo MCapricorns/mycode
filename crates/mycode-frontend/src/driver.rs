@@ -346,6 +346,9 @@ pub struct FrontendDriver {
     agent_roles_project: Option<String>,
     /// The roles surface was opened again, or the project changed.
     agent_roles_stale: bool,
+    /// The `LoadUiState` reply landed (either way), so the remembered
+    /// project no longer overwrites one the frontend picks.
+    ui_state_loaded: bool,
     /// Free-text answers to the pending ask card, aligned with its rows.
     pub ask_texts: Vec<String>,
     /// The question the ask card is showing; answers step one at a time.
@@ -413,6 +416,7 @@ impl FrontendDriver {
             agent_roles: None,
             agent_roles_project: None,
             agent_roles_stale: false,
+            ui_state_loaded: false,
             ask_texts: Vec::new(),
             ask_index: 0,
         };
@@ -507,6 +511,13 @@ impl FrontendDriver {
         self.schedule(UI_STATE_SAVE_DEBOUNCE, move || {
             DriverMsg::UiStateSaveTick { generation }
         });
+    }
+
+    /// Whether the startup `LoadUiState` reply has been folded in. A
+    /// frontend that opens its own folder (the terminal's working
+    /// directory) waits for this, or the remembered project replaces it.
+    pub fn ui_state_loaded(&self) -> bool {
+        self.ui_state_loaded
     }
 
     /// The bundle waiting for the MCP-command confirmation, if any.

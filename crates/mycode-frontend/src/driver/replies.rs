@@ -417,6 +417,7 @@ impl FrontendDriver {
                 }
             }
             BridgeReply::UiState(Ok((ui_state, repairs))) => {
+                self.ui_state_loaded = true;
                 self.note_config_repairs(&repairs);
                 self.act(
                     FrontendAction::UiStateLoaded {
@@ -440,7 +441,7 @@ impl FrontendDriver {
                 self.restore_session_projects();
                 self.refresh_skills(out);
             }
-            BridgeReply::UiState(Err(_)) => {}
+            BridgeReply::UiState(Err(_)) => self.ui_state_loaded = true,
             BridgeReply::UiStateSaved(Ok(())) => {}
             BridgeReply::UiStateSaved(Err(message)) => {
                 self.act(FrontendAction::Failed(message), out);
