@@ -401,13 +401,17 @@ fn resolve_on_path_windows(command: &str) -> Option<PathBuf> {
     mycode_tools::first_program_on_path(command, &path_var, &pathext)
 }
 
-/// Environment variables a stdio MCP child may inherit.
+/// Environment variables a stdio MCP child may inherit: the MCP SDK's
+/// `getDefaultEnvironment` set (npm and Python servers on Windows look up
+/// `APPDATA` / `LOCALAPPDATA` for their caches) plus locale and temp dirs.
 const STDIO_ENV_ALLOWLIST: &[&str] = &[
     "PATH",
     "HOME",
     "USER",
+    "USERNAME",
     "LOGNAME",
     "SHELL",
+    "TERM",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
@@ -424,6 +428,10 @@ const STDIO_ENV_ALLOWLIST: &[&str] = &[
     "USERPROFILE",
     "HOMEDRIVE",
     "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMFILES",
+    "PROCESSOR_ARCHITECTURE",
 ];
 
 /// Allowlisted process environment, then the server's own map.
