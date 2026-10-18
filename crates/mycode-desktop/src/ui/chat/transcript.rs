@@ -43,10 +43,16 @@ pub(super) fn render_streaming_entry(
     } = display;
     let desk = Desk::of(theme);
     let working = t("WORKING", "工作中");
-    let status = if streaming.status.is_empty() {
-        working.to_owned()
+    let elapsed = workspace.vm().turn_elapsed_ms();
+    let elapsed = if elapsed >= 1_000 {
+        format!(" · {}", crate::view_model::elapsed_label(elapsed))
     } else {
-        format!("{working} · {}", streaming.status)
+        String::new()
+    };
+    let status = if streaming.status.is_empty() {
+        format!("{working}{elapsed}")
+    } else {
+        format!("{working} · {}{elapsed}", streaming.status)
     };
     let has_text = !streaming.text.trim().is_empty();
     desk_shell(

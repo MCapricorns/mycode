@@ -647,22 +647,24 @@ impl Workspace {
         cx.notify();
     }
 
-    /// While any subagent runs, repaint once a second so each elapsed-time
-    /// line keeps counting between progress events. The loop retires itself
-    /// as soon as the last job leaves.
+    /// While a turn or a subagent runs, repaint once a second so each
+    /// elapsed-time label keeps counting between progress events. The loop
+    /// retires itself as soon as nothing live is left.
     fn ensure_job_tick(&mut self, cx: &mut Context<Self>) {
-        if self.job_tick_running || self.vm().live_jobs.is_empty() {
+        let idle = self.vm().live_jobs.is_empty() && !self.vm().sending;
+        if self.job_tick_running || idle {
             return;
         }
         self.job_tick_running = true;
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                // Clear the flag in the same update that finds an empty
-                // list, so a job starting right after still gets a tick.
+                // Clear the flag in the same update that finds nothing
+                // live, so a job starting right after still gets a tick.
                 let running = this
                     .update(cx, |workspace, cx| {
-                        if workspace.vm().live_jobs.is_empty() {
+                        let idle = workspace.vm().live_jobs.is_empty() && !workspace.vm().sending;
+                        if idle {
                             workspace.job_tick_running = false;
                             false
                         } else {
