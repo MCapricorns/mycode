@@ -279,9 +279,9 @@ pub struct Workspace {
     /// Recorded thinking traces shown opposite the remembered default,
     /// keyed by event id.
     flipped_thinking: HashSet<String>,
-    /// Session whose trash button was clicked once and waits for the
-    /// confirming click.
-    armed_session_delete: Option<String>,
+    /// Row delete (`session:<id>`, `provider:<id>`) clicked once and
+    /// waiting for the confirming click.
+    armed_delete: Option<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Language last written into input placeholders. `u8::MAX` until the
@@ -364,7 +364,7 @@ impl Workspace {
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
             flipped_thinking: HashSet::new(),
-            armed_session_delete: None,
+            armed_delete: None,
             applied_font_size: String::new(),
             applied_language: u8::MAX,
             ask_text_cleared: HashSet::new(),

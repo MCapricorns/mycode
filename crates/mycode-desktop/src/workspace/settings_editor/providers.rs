@@ -57,8 +57,30 @@ impl Workspace {
         }
     }
 
+    /// Removes one provider row on the second click of its trash button.
     pub(crate) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.driver_do(|d, fx| d.remove_provider(index, fx), cx);
+        let Some(key) = self.provider_delete_key(index) else {
+            return;
+        };
+        if self.confirm_delete(&key, cx) {
+            self.driver_do(|d, fx| d.remove_provider(index, fx), cx);
+        }
+    }
+
+    /// Whether provider row `index` is waiting for its confirming click.
+    pub(crate) fn provider_delete_armed(&self, index: usize) -> bool {
+        self.provider_delete_key(index)
+            .is_some_and(|key| self.delete_armed(&key))
+    }
+
+    /// Keyed by provider id, so a row that shifts index cannot inherit an
+    /// armed delete.
+    fn provider_delete_key(&self, index: usize) -> Option<String> {
+        self.vm()
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.providers.get(index))
+            .map(|provider| format!("provider:{}", provider.id))
     }
 
     /// Search box for the shared model picker. Created once; the value is

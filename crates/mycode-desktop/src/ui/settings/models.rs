@@ -69,7 +69,7 @@ fn render_models_list_page(
         .map(|level| (level.clone(), crate::ui::chat::reasoning_row_label(level)))
         .collect();
     let catalog = workspace.vm().catalog.clone();
-    let mut provider_rows: Vec<(usize, String, String, usize, bool, bool)> = Vec::new();
+    let mut provider_rows: Vec<(usize, String, String, usize, bool, bool, bool)> = Vec::new();
     {
         let Some(settings) = workspace.vm().settings.as_ref() else {
             return div().into_any_element();
@@ -98,13 +98,25 @@ fn render_models_list_page(
                 provider.models.len(),
                 keyed,
                 provider.enabled,
+                workspace.provider_delete_armed(index),
             ));
         }
     }
     let provider_row_elements: Vec<AnyElement> = provider_rows
         .into_iter()
-        .map(|(index, name, host, models, keyed, enabled)| {
-            provider_row(index, name, host, models, keyed, enabled, cx)
+        .map(|(index, name, host, models, keyed, enabled, armed)| {
+            provider_row(
+                ProviderRow {
+                    index,
+                    name,
+                    host,
+                    models,
+                    keyed,
+                    enabled,
+                    armed,
+                },
+                cx,
+            )
         })
         .collect();
     let theme = cx.theme();
@@ -256,15 +268,28 @@ fn render_models_list_page(
         .into_any_element()
 }
 
-fn provider_row(
+/// One configured provider as the Models page lists it.
+struct ProviderRow {
     index: usize,
     name: String,
     host: String,
     models: usize,
     keyed: bool,
     enabled: bool,
-    cx: &Context<Workspace>,
-) -> AnyElement {
+    /// The trash was clicked once and waits for the confirming click.
+    armed: bool,
+}
+
+fn provider_row(row: ProviderRow, cx: &Context<Workspace>) -> AnyElement {
+    let ProviderRow {
+        index,
+        name,
+        host,
+        models,
+        keyed,
+        enabled,
+        armed,
+    } = row;
     let theme = cx.theme();
     let desk = crate::ui::desk::Desk::of(theme);
     div()
@@ -345,14 +370,41 @@ fn provider_row(
                         .apply_action(FrontendAction::SettingsProviderToggled(index, *checked), cx);
                 })),
         )
-        .child(crate::ui::icon_button(
-            format!("provider-remove-{index}"),
-            IconName::Trash,
-            cx.listener(move |workspace, _, _, cx| {
+        .map(|this| {
+            let on_remove = cx.listener(move |workspace, _, _, cx| {
                 workspace.on_remove_provider(index, cx);
-            }),
-            cx,
-        ))
+            });
+            if armed {
+                // Removing a provider drops its endpoint and model list; the
+                // second click is the confirmation.
+                this.child(
+                    div()
+                        .id(format!("provider-remove-{index}"))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .h(px(24.))
+                        .rounded(px(4.))
+                        .flex_shrink_0()
+                        .cursor_pointer()
+                        .bg(theme.danger.opacity(0.12))
+                        .text_color(theme.danger)
+                        .text_xs()
+                        .on_click(on_remove)
+                        .child(Icon::new(IconName::Trash).xsmall())
+                        .child(t("Remove?", "移除？")),
+                )
+            } else {
+                this.child(crate::ui::icon_button(
+                    format!("provider-remove-{index}"),
+                    IconName::Trash,
+                    on_remove,
+                    cx,
+                ))
+            }
+        })
         .into_any_element()
 }
 
