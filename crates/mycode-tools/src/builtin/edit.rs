@@ -171,11 +171,13 @@ pub enum EditOp {
         start_line: usize,
         /// Last line to replace (inclusive).
         end_line: usize,
-        /// Exact bytes of the selected range.
+        /// Current text of the selected lines; the final line ending may be
+        /// left off.
         expected_text: Option<String>,
-        /// Blake3 hex of the selected range.
+        /// Blake3 hex of the selected range, including its final line ending.
         expected_hash: Option<String>,
-        /// Replacement for the range (may be empty).
+        /// New text for those lines; empty deletes them. A missing final line
+        /// ending is supplied from the replaced lines.
         replacement: String,
     },
 }
