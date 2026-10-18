@@ -605,6 +605,7 @@ fn render_queued_followups(
                     queue_icon(
                         SharedString::from(format!("queued-recall-{index}")),
                         IconName::Pencil,
+                        t("Recall to edit", "撤回到输入框修改"),
                         theme,
                     )
                     .on_click(cx.listener(move |workspace, _, window, cx| {
@@ -615,6 +616,7 @@ fn render_queued_followups(
                     queue_icon(
                         SharedString::from(format!("queued-remove-{index}")),
                         IconName::X,
+                        t("Remove from the queue", "移出队列"),
                         theme,
                     )
                     .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -625,6 +627,11 @@ fn render_queued_followups(
                     queue_icon(
                         SharedString::from(format!("queued-send-{index}")),
                         IconName::CornerDownLeft,
+                        if sending {
+                            t("Interrupt this turn and send now", "打断本轮并立即发送")
+                        } else {
+                            t("Send now", "立即发送")
+                        },
                         theme,
                     )
                     .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -639,10 +646,12 @@ fn render_queued_followups(
 fn queue_icon(
     id: impl Into<gpui_kit::ElementId>,
     icon: IconName,
+    label: &'static str,
     theme: &gpui_kit::component::theme::Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
+        .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
         .size(px(20.))
         .flex()
         .items_center()
