@@ -349,10 +349,27 @@ pub(crate) async fn compact_history(
 fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {
     let mut compacted = Vec::with_capacity(tail.len() + 1);
     compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
-        display_summary_text(summary),
+        request_summary_text(summary),
     ))));
     compacted.extend(tail.iter().cloned());
     compacted
+}
+
+/// The summary frame a request sees. Same `COMPACTION SUMMARY` marker the
+/// ledger card carries so [`is_summary_message`] still matches, plus an
+/// ownership line: a resumed model that reads the checkpoint as *another*
+/// agent's notes re-verifies finished work from scratch instead of
+/// continuing. The ledger card itself keeps [`display_summary_text`], which
+/// is user-facing and needs no framing.
+fn request_summary_text(summary: &str) -> String {
+    format!(
+        "{SUMMARY_PREFIX}\n\n\
+         This is a compressed checkpoint of your own earlier work in this \
+         session. Everything it lists as done was done by you — trust it and \
+         continue from the next steps; re-verify a file only when something \
+         the summary claims is missing.\n\n\
+         {summary}"
+    )
 }
 
 fn message_tokens(message: &Message) -> usize {
@@ -691,9 +708,9 @@ fn summary_user_text(transcript: &str) -> String {
 fn summary_request(transcript: &str, max_output_tokens: u64) -> Request {
     let mut request = Request::new()
         .with_system_prompt(
-            "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a \
-handoff summary for another coding-agent model that will resume the task.\n\
-Write dense factual prose, no preamble. Cover:\n\
+            "You are performing a CONTEXT CHECKPOINT COMPACTION. Summarize \
+your own work so far so you can resume it after a context reset.\n\
+Write dense factual prose in first person, no preamble. Cover:\n\
 - User goals and constraints\n\
 - Decisions made, and why\n\
 - Files and paths touched (created, edited, read)\n\
