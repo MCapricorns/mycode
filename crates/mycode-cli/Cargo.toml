@@ -1,0 +1,24 @@
+[package]
+name = "mycode-cli"
+description = "Terminal frontend for MYCode: same shared backend and product layer as the desktop, rendered with ratatui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mycode-app = { path = "../mycode-app" }
+mycode-config = { path = "../mycode-config" }
+mycode-frontend = { path = "../mycode-frontend" }
+ratatui = "0.29"
+crossterm = "0.28"
+tui-textarea = "0.7"
+# The global allocator (mimalloc) and VC-LTL link live in the leaf crates
+# mycode-core / mycode-config so every target in the workspace shares them;
+# nothing is declared here on purpose.
+
+[[bin]]
+name = "mycode"
+path = "src/main.rs"
+
+[lints]
+workspace = true
