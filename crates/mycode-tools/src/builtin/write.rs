@@ -28,8 +28,9 @@ pub struct WriteArgs {
     pub path: String,
     /// The complete new content of the file.
     pub content: String,
-    /// Opaque revision from a prior `read`. Required to replace an existing
-    /// file unless `overwrite` is true.
+    /// Required when the file already exists (unless `overwrite` is true):
+    /// the `mycode-rev1-…` token from the `[revision …]` line of your latest
+    /// `read`, `edit`, or `write` of this file. Omit for a new file.
     pub expected_revision: Option<String>,
     /// Replace an existing file without a revision check. Default false.
     /// Cannot be combined with `expected_revision`.
@@ -58,17 +59,21 @@ impl Tool for WriteTool {
 
     fn description(&self) -> &str {
         "Write a UTF-8 text file inside the session cwd, an added workspace \
-         root, or the OS temp directory. Missing files are created atomically \
-         (parents created as needed). Existing files are replaced only when \
-         `expected_revision` matches a prior read, or `overwrite` is true. \
-         The two options cannot be combined. Hidden files are writable. \
-         Does not follow symlinks or reparse points."
+         root, or the OS temp directory. Replacing an EXISTING file requires \
+         either `expected_revision` (the token from the `[revision …]` line \
+         of your latest read/edit/write of that file) or `overwrite: true`; \
+         without one the call is refused. The two cannot be combined. New \
+         files need neither and are created atomically (parents created as \
+         needed). Prefer `edit` for partial changes. Hidden files are \
+         writable. Does not follow symlinks or reparse points."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "write: create or replace a file (path, content, optional \
-             expected_revision/overwrite).",
+            "write: create a new file, or replace an existing one in full — \
+             replacing requires expected_revision (from the file's latest \
+             `[revision …]` line) or overwrite=true. Prefer edit for partial \
+             changes.",
         )
     }
 
@@ -188,5 +193,41 @@ mod tests {
         assert!(err.to_string().contains("escapes the session cwd"), "{err}");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn replacing_without_a_revision_names_the_file_and_both_remedies() {
+        let cwd = std::env::temp_dir().join(format!(
+            "mycode-write-replace-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        let ctx = ToolCtx::new(&cwd);
+        let (mut stream, _rx) = ToolStream::channel();
+        let args = |overwrite: bool| WriteArgs {
+            path: "notes.txt".to_owned(),
+            content: "v\n".to_owned(),
+            expected_revision: None,
+            overwrite,
+        };
+        WriteTool
+            .execute(args(false), &ctx, &mut stream)
+            .await
+            .expect("create");
+        // Models that skip the revision must learn the fix from the error.
+        let err = WriteTool
+            .execute(args(false), &ctx, &mut stream)
+            .await
+            .expect_err("replace without revision");
+        let text = err.to_string();
+        for needle in ["notes.txt", "expected_revision", "[revision", "overwrite=true"] {
+            assert!(text.contains(needle), "{needle} missing from: {text}");
+        }
+        WriteTool
+            .execute(args(true), &ctx, &mut stream)
+            .await
+            .expect("overwrite");
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }
