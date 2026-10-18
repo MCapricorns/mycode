@@ -393,7 +393,15 @@ impl BridgeAgentHost {
         let role_name = role.name.clone();
         let progress_sink = progress.clone();
         let forwarder = tokio::spawn(async move {
-            while let Ok(event) = event_rx.recv().await {
+            loop {
+                let event = match event_rx.recv().await {
+                    Ok(event) => event,
+                    // A child streams every token on this bus; a burst that
+                    // outruns the buffer skips lines, it must not end the
+                    // progress feed for the rest of the run.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 match event {
                     mycode_core::events::AgentEvent::ToolStarted { name, target, .. } => {
                         let label = mycode_core::tool_label(&name, &target);

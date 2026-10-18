@@ -57,6 +57,7 @@ pub(crate) fn chat_turn(
     let mut control = TurnControl::register(&state, &session_id);
     async move {
         let cwd = state.project_dir(&session_id);
+        let (head_session, head_branch) = (session.clone(), branch.clone());
         let outcome = run_chat_turn(
             &state,
             &events,
@@ -78,10 +79,18 @@ pub(crate) fn chat_turn(
             } else {
                 message
             };
+            // Setup can already have written: a pre-turn compaction card
+            // lands before a cancel is noticed. Report the durable head so
+            // the UI's next history page, recall, or `/compact` does not
+            // fail the moved-head check against its own summary row.
+            let head = branch_head(&state.service, &head_session, &head_branch)
+                .await
+                .map(|head| head_spelling(&head))
+                .unwrap_or_default();
             let _ = events.send(BridgeEvent::ChatFailed {
                 session_id: session_id.clone(),
                 message,
-                head: String::new(),
+                head,
             });
         }
         // A steer accepted after the agent's last drain was never sent.
