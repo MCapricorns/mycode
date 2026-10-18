@@ -182,19 +182,18 @@ struct CacheEnvelope<'a> {
     kind: String,
     fetched_at: u64,
     etag: Option<String>,
-    // Never read: the field's only job is to make the scan cover the whole
-    // document span, so malformed JSON inside it still fails the envelope.
+    // Borrowed so the scan covers the whole document span (malformed JSON
+    // inside it still fails the envelope) without decoding the model list;
+    // a revalidation writes the span back unchanged.
     #[serde(borrow)]
-    #[allow(dead_code)]
     document: &'a serde_json::value::RawValue,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CacheDocument {
     format_version: u32,
     kind: String,
-    fetched_at: u64,
     etag: Option<String>,
     document: CatalogDocument,
 }
@@ -334,14 +333,7 @@ pub fn current_with_repair(
 }
 
 fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
-    let document = CacheDocument {
-        format_version: CACHE_FORMAT_VERSION,
-        kind: CACHE_KIND.to_owned(),
-        fetched_at: cache.fetched_at,
-        etag: cache.etag.clone(),
-        document: cache.document().as_ref().clone(),
-    };
-    let mut bytes = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
+    let mut bytes = encode_cache(cache)?;
     bytes.push(b'\n');
     if bytes.len() > MAX_CACHE_BYTES {
         return Err("catalog cache exceeded its size bound".to_owned());
@@ -350,6 +342,39 @@ fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
         Ok(bytes.clone())
     })
     .map_err(|error| error.to_string())
+}
+
+/// Serializes one cache entry. A lazy entry that was never consulted is
+/// re-enveloped around its raw document span: a 304 revalidation only moves
+/// `fetchedAt` and the ETag, and must not parse and re-encode megabytes of
+/// models to do it.
+fn encode_cache(cache: &CachedCatalog) -> Result<Vec<u8>, String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Envelope<'a, D: Serialize> {
+        format_version: u32,
+        kind: &'a str,
+        fetched_at: u64,
+        etag: Option<&'a str>,
+        document: D,
+    }
+    fn encode<D: Serialize>(cache: &CachedCatalog, document: D) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&Envelope {
+            format_version: CACHE_FORMAT_VERSION,
+            kind: CACHE_KIND,
+            fetched_at: cache.fetched_at,
+            etag: cache.etag.as_deref(),
+            document,
+        })
+        .map_err(|error| error.to_string())
+    }
+    if let CatalogSource::Lazy(lazy) = &cache.source
+        && lazy.ready.get().is_none()
+        && let Ok(raw) = serde_json::from_slice::<CacheEnvelope>(&lazy.raw)
+    {
+        return encode(cache, raw.document);
+    }
+    encode(cache, &*cache.document())
 }
 
 /// Runs a blocking catalog step off the async runtime: cache IO and the
@@ -710,5 +735,33 @@ mod tests {
         );
         assert_eq!(cached.fetched_at, 42);
         assert!(first.provider("acme").is_some());
+    }
+
+    #[test]
+    fn revalidating_a_lazy_cache_rewrites_the_envelope_only() {
+        let file = json!({
+            "formatVersion": CACHE_FORMAT_VERSION,
+            "kind": CACHE_KIND,
+            "fetchedAt": 7,
+            "etag": "\"old\"",
+            "document": { "providers": [{ "id": "acme", "models": [{ "id": "m1" }] }] }
+        });
+        let CacheParse::Ready(cached) = parse_cache(file.to_string().as_bytes()) else {
+            panic!("expected envelope-ready cache");
+        };
+        let refreshed = super::CachedCatalog {
+            fetched_at: 99,
+            etag: Some("\"new\"".to_owned()),
+            ..cached
+        };
+        let bytes = super::encode_cache(&refreshed).unwrap();
+        let CatalogSource::Lazy(lazy) = &refreshed.source else {
+            panic!("the document must stay unparsed");
+        };
+        assert!(lazy.ready.get().is_none(), "encoding must not materialize");
+        let written: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(written["fetchedAt"], 99);
+        assert_eq!(written["etag"], "\"new\"");
+        assert_eq!(written["document"], file["document"]);
     }
 }
