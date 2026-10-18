@@ -46,8 +46,7 @@ pub fn normalize_api_key(raw: &str) -> String {
 /// Returns a one-line reason when the text is not JSON or contains no
 /// recognizable server entries.
 pub fn parse_mcp_import(text: &str) -> Result<Vec<ImportedMcpServer>, String> {
-    let value: Value =
-        serde_json::from_str(text.trim()).map_err(|_| "paste is not valid JSON".to_owned())?;
+    let value = parse_lenient(text).ok_or_else(|| "paste is not valid JSON".to_owned())?;
     let mut imported = Vec::new();
     collect_servers(&value, &mut imported)?;
     if imported.is_empty() {
@@ -57,6 +56,66 @@ pub fn parse_mcp_import(text: &str) -> Result<Vec<ImportedMcpServer>, String> {
         return Err("too many MCP servers in the pasted JSON".to_owned());
     }
     Ok(imported)
+}
+
+/// Parses JSON the way config files are pasted: VS Code's `mcp.json` allows
+/// comments and trailing commas, and docs often show one `"name": {...}`
+/// entry without the enclosing braces.
+fn parse_lenient(text: &str) -> Option<Value> {
+    let cleaned = strip_jsonc(text.trim());
+    let cleaned = cleaned.trim();
+    serde_json::from_str(cleaned).ok().or_else(|| {
+        let fragment = cleaned.trim_end_matches(',');
+        serde_json::from_str(&format!("{{{fragment}}}")).ok()
+    })
+}
+
+/// Drops `//` and `/* */` comments and trailing commas outside strings.
+fn strip_jsonc(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            match ch {
+                '\\' => out.extend(chars.next()),
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                while chars.peek().is_some_and(|next| *next != '\n') {
+                    chars.next();
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut last = ' ';
+                for next in chars.by_ref() {
+                    if last == '*' && next == '/' {
+                        break;
+                    }
+                    last = next;
+                }
+            }
+            '}' | ']' => {
+                let kept = out.trim_end().len();
+                if out[..kept].ends_with(',') {
+                    out.truncate(kept - 1);
+                }
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn collect_servers(value: &Value, out: &mut Vec<ImportedMcpServer>) -> Result<(), String> {
@@ -152,6 +211,9 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
         })
         .unwrap_or_default();
     let (api_key, key_header) = lift_header_key(spec.get("headers"));
+    // Claude Desktop and Cline mark a parked server `"disabled": true`.
+    let enabled = spec.get("disabled").and_then(Value::as_bool) != Some(true)
+        && spec.get("enabled").and_then(Value::as_bool) != Some(false);
     let is_http = matches!(
         transport,
         "http" | "sse" | "streamable-http" | "streamable_http"
@@ -164,7 +226,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
         return Ok(ImportedMcpServer {
             server: McpServerSettings {
                 id,
-                enabled: true,
+                enabled,
                 transport: "http".to_owned(),
                 command: None,
                 args: Vec::new(),
@@ -203,7 +265,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
     Ok(ImportedMcpServer {
         server: McpServerSettings {
             id,
-            enabled: true,
+            enabled,
             transport: "stdio".to_owned(),
             command: Some(command),
             args,
@@ -288,5 +350,33 @@ mod tests {
         .expect("valid stdio import");
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].server.id, "good");
+    }
+
+    #[test]
+    fn import_accepts_jsonc_fragments_and_disabled_rows() {
+        let jsonc = r#"{
+            // VS Code mcp.json
+            "servers": {
+                "docs": { "url": "https://mcp.example.com/mcp", /* remote */ },
+                "local": { "command": "uvx", "args": ["tool//name"], "disabled": true },
+            },
+        }"#;
+        let imported = parse_mcp_import(jsonc).expect("jsonc import");
+        assert_eq!(imported.len(), 2);
+        let local = imported
+            .iter()
+            .find(|row| row.server.id == "local")
+            .expect("local");
+        assert!(!local.server.enabled);
+        assert_eq!(local.server.args, vec!["tool//name".to_owned()]);
+        assert!(
+            imported
+                .iter()
+                .any(|row| row.server.id == "docs" && row.server.enabled)
+        );
+
+        let fragment = r#""github": { "command": "npx", "args": ["-y", "server-github"] },"#;
+        let imported = parse_mcp_import(fragment).expect("fragment import");
+        assert_eq!(imported[0].server.id, "github");
     }
 }
