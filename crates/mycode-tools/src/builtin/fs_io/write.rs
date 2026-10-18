@@ -277,10 +277,10 @@ fn write_existing(
     }
     if !overwrite {
         let expected = expected_revision.ok_or_else(|| {
-            ToolError::InvalidArgs(
-                "refusing to overwrite an existing file without expected_revision or overwrite=true"
-                    .to_owned(),
-            )
+            ToolError::InvalidArgs(format!(
+                "{key} already exists: pass expected_revision (the `[revision …]` token from \
+                 your latest read, edit, or write of this file) or overwrite=true"
+            ))
         })?;
         let mut reader = existing
             .try_clone()
