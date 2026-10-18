@@ -4,48 +4,35 @@
 //! with [`set_proxy_preference`] whenever settings load or save. Each hop
 //! then asks [`route_for`] how to leave the machine:
 //!
-//! - `Direct` ignores every proxy.
+//! - `System` follows the system proxy (environment variables, or the OS
+//!   setting Clash's "system proxy" switch writes) when it covers the host,
+//!   and connects directly otherwise. Nothing is probed or retried behind
+//!   the user's back.
 //! - `Url` sends every public host through that proxy.
-//! - `Auto` follows the system proxy (environment variables, or the OS
-//!   setting Clash's "system proxy" switch writes) when it covers the host.
-//!   Otherwise the hop goes direct, and a public host that cannot be reached
-//!   (DNS failure, refused or reset connection, connect timeout) is retried
-//!   through a local Clash-style port. A host that needed the proxy keeps
-//!   using it for the rest of the process, until the proxy itself stops
-//!   answering.
 //!
 //! Loopback, `.local`, and literal private addresses never use a proxy, so
 //! local models keep working while a proxy is on.
+//!
+//! [`test_proxy`] answers "is the proxy actually working": it fetches a
+//! fixed probe URL on the route a preference picks and reports the route,
+//! the status, and the round trip.
 
-use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use parking_lot::RwLock;
 use std::time::{Duration, Instant};
 
 use mycode_config::ProxyPreference;
 
-/// Mixed/HTTP ports of common local proxy clients, probed in order:
-/// Clash and Clash for Windows / ClashX (7890), Clash Verge Rev (7897),
-/// v2rayN (10809).
-const LOCAL_PROXY_PORTS: [u16; 3] = [7890, 7897, 10809];
-/// How long one loopback probe may take. A listening port answers at once.
-const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
-/// How long a probe result is reused before the ports are checked again.
-const PROBE_TTL: Duration = Duration::from_secs(30);
-/// Hosts remembered as needing the proxy. The map is cleared when full.
-const MAX_LEARNED_HOSTS: usize = 256;
+/// Fetched by [`test_proxy`]. Answers 204 with no body, and is blocked in
+/// the networks where a proxy is needed at all.
+pub const PROXY_TEST_URL: &str = "https://www.google.com/generate_204";
+/// Whole-request ceiling for one proxy test.
+const PROXY_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-static PREFERENCE: RwLock<ProxyPreference> = RwLock::new(ProxyPreference::Auto);
-static LEARNED: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
-static PROBE: Mutex<Option<(Instant, Option<String>)>> = Mutex::new(None);
+static PREFERENCE: RwLock<ProxyPreference> = RwLock::new(ProxyPreference::System);
 
 /// Installs the proxy preference every later request follows.
 pub fn set_proxy_preference(preference: ProxyPreference) {
-    let mut current = PREFERENCE.write();
-    if *current != preference {
-        *current = preference;
-        LEARNED.lock().take();
-    }
+    *PREFERENCE.write() = preference;
 }
 
 fn preference() -> ProxyPreference {
@@ -89,63 +76,22 @@ impl Route {
     }
 }
 
-/// First route for a hop to `url`.
+/// Route for a hop to `url` under the installed preference.
 pub(crate) fn route_for(url: &reqwest::Url) -> Route {
+    route_with(&preference(), url)
+}
+
+fn route_with(preference: &ProxyPreference, url: &reqwest::Url) -> Route {
     let Some(host) = url.host_str() else {
         return Route::Direct;
     };
     if !crate::http_pin::public_host(host) {
         return Route::Direct;
     }
-    match preference() {
-        ProxyPreference::Direct => Route::Direct,
-        ProxyPreference::Url(proxy) => Route::Via(proxy),
-        ProxyPreference::Auto => {
-            if let Some(proxy) = system_proxy(url) {
-                Route::System(proxy)
-            } else if let Some(proxy) = learned(host) {
-                Route::Via(proxy)
-            } else {
-                Route::Direct
-            }
-        }
+    match preference {
+        ProxyPreference::Url(proxy) => Route::Via(proxy.clone()),
+        ProxyPreference::System => system_proxy(url).map_or(Route::Direct, Route::System),
     }
-}
-
-/// The local proxy to retry a public host through after a direct hop could
-/// not connect. Only `Auto` falls back. The host is remembered on success of
-/// the probe, so later hops go straight to the proxy.
-pub(crate) async fn fallback_for(host: &str) -> Option<String> {
-    if preference() != ProxyPreference::Auto || !crate::http_pin::public_host(host) {
-        return None;
-    }
-    let proxy = local_proxy().await?;
-    let mut learned = LEARNED.lock();
-    let hosts = learned.get_or_insert_with(HashMap::new);
-    if hosts.len() >= MAX_LEARNED_HOSTS {
-        hosts.clear();
-    }
-    hosts.insert(host.to_ascii_lowercase(), proxy.clone());
-    Some(proxy)
-}
-
-/// Drops a remembered proxy for `host` after that proxy stopped answering,
-/// so the next hop tries direct again. The whole probe cache goes too: a
-/// dead proxy endpoint invalidates the cached port answer for every host,
-/// not just this one.
-pub(crate) fn forget(host: &str) {
-    if let Some(hosts) = LEARNED.lock().as_mut() {
-        hosts.remove(&host.to_ascii_lowercase());
-    }
-    PROBE.lock().take();
-}
-
-fn learned(host: &str) -> Option<String> {
-    LEARNED
-        .lock()
-        .as_ref()?
-        .get(&host.to_ascii_lowercase())
-        .cloned()
 }
 
 /// The proxy the environment or OS settings send `url` to, if any. This is
@@ -157,33 +103,70 @@ fn system_proxy(url: &reqwest::Url) -> Option<String> {
         .map(|intercept| intercept.uri().to_string())
 }
 
-/// The first listening local proxy port, cached for [`PROBE_TTL`].
-async fn local_proxy() -> Option<String> {
-    if let Some((at, found)) = PROBE.lock().as_ref()
-        && at.elapsed() < PROBE_TTL
-    {
-        return found.clone();
+/// Which way a proxy test left the machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProxyTestRoute {
+    /// No proxy applied: the system has none for this host.
+    Direct,
+    /// The system proxy at this URI.
+    System(String),
+    /// The proxy URL the user typed.
+    Manual(String),
+}
+
+/// Outcome of one [`test_proxy`] run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxyTestReport {
+    /// The route the request took.
+    pub route: ProxyTestRoute,
+    /// HTTP status and round trip on success, or why it failed.
+    pub outcome: Result<(u16, Duration), String>,
+}
+
+/// Fetches [`PROXY_TEST_URL`] on the route `preference` picks, so the user
+/// sees whether the proxy is in effect and actually reaches the internet.
+/// ICMP ping cannot answer that: it never goes through an HTTP proxy.
+pub async fn test_proxy(preference: &ProxyPreference) -> ProxyTestReport {
+    let url = reqwest::Url::parse(PROXY_TEST_URL).expect("static probe url parses");
+    let route = route_with(preference, &url);
+    let reported = match &route {
+        Route::Direct => ProxyTestRoute::Direct,
+        Route::System(uri) => ProxyTestRoute::System(uri.clone()),
+        Route::Via(proxy) => ProxyTestRoute::Manual(proxy.clone()),
+    };
+    let outcome = async {
+        let client = route
+            .apply(
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(crate::transport::CONNECT_TIMEOUT)
+                    .timeout(PROXY_TEST_TIMEOUT),
+            )?
+            .build()
+            .map_err(|error| format!("client failed to start: {error}"))?;
+        let started = Instant::now();
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| format!("request failed: {error}"))?;
+        Ok((response.status().as_u16(), started.elapsed()))
     }
-    let mut found = None;
-    for port in LOCAL_PROXY_PORTS {
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-        if let Ok(Ok(_)) =
-            tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(address)).await
-        {
-            found = Some(format!("http://127.0.0.1:{port}"));
-            break;
-        }
+    .await;
+    ProxyTestReport {
+        route: reported,
+        outcome,
     }
-    *PROBE.lock() = Some((Instant::now(), found.clone()));
-    found
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Route;
+    use super::{Route, route_with};
+    use mycode_config::ProxyPreference;
 
     #[test]
     fn local_hosts_never_route_through_a_proxy() {
+        let manual = ProxyPreference::Url("http://127.0.0.1:7890".to_owned());
         for url in [
             "http://localhost:11434/v1",
             "http://127.0.0.1:8080/",
@@ -191,8 +174,18 @@ mod tests {
             "http://box.local/",
         ] {
             let parsed = reqwest::Url::parse(url).expect("url");
-            assert_eq!(super::route_for(&parsed), Route::Direct, "{url}");
+            assert_eq!(route_with(&manual, &parsed), Route::Direct, "{url}");
         }
+    }
+
+    #[test]
+    fn a_manual_proxy_carries_every_public_host() {
+        let manual = ProxyPreference::Url("socks5h://127.0.0.1:7891".to_owned());
+        let parsed = reqwest::Url::parse("https://api.openai.com/v1").expect("url");
+        assert_eq!(
+            route_with(&manual, &parsed),
+            Route::Via("socks5h://127.0.0.1:7891".to_owned())
+        );
     }
 
     #[test]

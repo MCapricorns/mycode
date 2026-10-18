@@ -22,6 +22,20 @@ pub enum MainView {
     Settings,
 }
 
+/// The settings page's proxy connectivity check.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ProxyTestState {
+    /// No test has run for the value on screen.
+    #[default]
+    Idle,
+    /// A test request is in flight.
+    Testing,
+    /// The test ran; the report says which route it took and how it went.
+    Done(mycode_app::ProxyTestReport),
+    /// The value on screen is not a proxy setting.
+    Invalid(String),
+}
+
 /// Self-update progress shown in settings and banners.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum UpdateState {
@@ -180,6 +194,9 @@ pub struct WorkspaceState {
     pub auto_update: bool,
     /// Self-update progress.
     pub update: UpdateState,
+    /// The proxy connectivity check. Reset whenever the proxy value
+    /// changes, so a stale result never vouches for a new setting.
+    pub proxy_test: ProxyTestState,
     /// Last persisted windowed size; written back on resize.
     pub window_size: Option<mycode_config::WindowSize>,
     /// Whether the update dialog (download/install prompt) is open.
@@ -646,6 +663,8 @@ pub enum FrontendAction {
     McpTransportMenuToggled(bool),
     /// Self-update progress changed.
     UpdateStateChanged(UpdateState),
+    /// The proxy connectivity check started, finished, or was invalidated.
+    ProxyTestChanged(ProxyTestState),
     /// A release offer was resolved. Publishing it also flips the update
     /// state to `Available`; the download button reads the stored offer.
     UpdateOfferFound(mycode_app::UpdateOffer),

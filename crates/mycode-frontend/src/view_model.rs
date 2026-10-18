@@ -58,5 +58,5 @@ pub use self::usage::{
 pub use self::settings::{
     CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
 };
-pub use self::state::{FrontendAction, MainView, UpdateState};
+pub use self::state::{FrontendAction, MainView, ProxyTestState, UpdateState};
 pub use self::usage::CacheBreak;

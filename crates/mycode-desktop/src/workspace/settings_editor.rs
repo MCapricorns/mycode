@@ -62,11 +62,16 @@ impl Workspace {
         input
     }
 
-    /// Picks the proxy mode from the General page: `auto`, `direct`, or
-    /// `custom`. Custom keeps a stored URL, or starts from Clash's default
-    /// port.
+    /// Picks the proxy mode from the General page: `system` or `manual`.
+    /// Manual keeps a stored URL, or starts from Clash's default port.
     pub(crate) fn on_select_proxy_mode(&mut self, mode: &str, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.select_proxy_mode(mode, fx), cx);
+    }
+
+    /// The General page's "Test" button: fetch a probe URL through the
+    /// proxy value on screen.
+    pub(crate) fn on_test_proxy(&mut self, cx: &mut Context<Self>) {
+        self.driver_do(|d, fx| d.test_proxy(fx), cx);
     }
 
     // ---- web search backends ----

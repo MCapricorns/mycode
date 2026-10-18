@@ -14,7 +14,8 @@ mod usage;
 use mycode_app::CHAT_CANCELLED;
 
 use super::{
-    ActiveConversation, FrontendAction, MentionKind, TurnStats, UpdateState, WorkspaceState,
+    ActiveConversation, FrontendAction, MentionKind, ProxyTestState, TurnStats, UpdateState,
+    WorkspaceState,
 };
 
 pub use self::models::{
@@ -654,6 +655,13 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.inspector_pinned = pinned;
         }
         FrontendAction::SettingsProxyChanged { value, .. } => {
+            if state
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.proxy != value)
+            {
+                state.proxy_test = ProxyTestState::Idle;
+            }
             edit_settings(state, |settings| {
                 if settings.proxy == value {
                     return false;
@@ -958,6 +966,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         FrontendAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
         FrontendAction::LanguageMenuToggled(open) => state.language_menu_open = open,
         FrontendAction::UpdateStateChanged(update) => state.update = update,
+        FrontendAction::ProxyTestChanged(test) => state.proxy_test = test,
         FrontendAction::UpdateDialogToggled(open) => state.update_dialog_open = open,
         FrontendAction::CommandPaletteSet(open) => {
             state.command_palette_open = open;

@@ -448,6 +448,17 @@ impl FrontendDriver {
             BridgeReply::ProjectSet(Err(message)) => {
                 self.act(FrontendAction::Failed(message), out);
             }
+            BridgeReply::ProxyTested(outcome) => {
+                // An edit while the test ran reset the state; that answer
+                // was for a value no longer on screen.
+                if self.vm.proxy_test == crate::view_model::ProxyTestState::Testing {
+                    let test = match outcome {
+                        Ok(report) => crate::view_model::ProxyTestState::Done(report),
+                        Err(message) => crate::view_model::ProxyTestState::Invalid(message),
+                    };
+                    self.act(FrontendAction::ProxyTestChanged(test), out);
+                }
+            }
             BridgeReply::UpdateChecked(Ok(None)) => {
                 if matches!(
                     self.vm.update,

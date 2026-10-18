@@ -1,44 +1,41 @@
 //! Outbound proxy preference (`proxy` in `settings.json`).
 //!
-//! The stored value is one string: empty or `auto` for the smart default,
-//! `direct` to ignore every proxy, or a proxy URL. A bare `host:port` (what
-//! Clash shows as its port) reads as an `http://` proxy.
+//! The stored value is one string: empty to follow the system proxy, or a
+//! proxy URL the user typed. A bare `host:port` (what Clash shows as its
+//! port) reads as an `http://` proxy. The retired `auto` and `direct`
+//! values from older documents read as the system mode.
 
 use super::AppSettings;
 
-/// Stored value of the smart default. An empty field means the same.
-pub const PROXY_AUTO: &str = "auto";
-/// Stored value that turns every proxy off.
-pub const PROXY_DIRECT: &str = "direct";
+/// Stored values from older documents that now mean the system mode.
+const LEGACY_SYSTEM_VALUES: [&str; 3] = ["auto", "direct", "system"];
 /// Proxy URL schemes reqwest connects through.
 pub const PROXY_SCHEMES: [&str; 4] = ["http", "https", "socks5", "socks5h"];
 
 /// How outbound HTTP leaves this machine.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ProxyPreference {
-    /// The system proxy (environment or OS settings, which Clash's "system
-    /// proxy" switch writes) when one covers the host. Otherwise direct, and
-    /// a public host that cannot be reached directly is retried through a
-    /// local Clash-style port when one is listening.
+    /// Exactly what the system says: the environment variables or the OS
+    /// proxy setting (which Clash's "system proxy" switch writes) when one
+    /// covers the host, otherwise direct.
     #[default]
-    Auto,
-    /// Never use a proxy, including the system one.
-    Direct,
+    System,
     /// Send every public request through this normalized URL.
     Url(String),
 }
 
 impl ProxyPreference {
-    /// Parses a stored or typed value. `None` when the value is not empty,
-    /// `auto`, `direct`, or a proxy URL with a host.
+    /// Parses a stored or typed value. `None` when the value is neither
+    /// empty, a legacy mode word, nor a proxy URL with a host.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         let value = value.trim();
-        if value.is_empty() || value.eq_ignore_ascii_case(PROXY_AUTO) {
-            return Some(Self::Auto);
-        }
-        if value.eq_ignore_ascii_case(PROXY_DIRECT) {
-            return Some(Self::Direct);
+        if value.is_empty()
+            || LEGACY_SYSTEM_VALUES
+                .iter()
+                .any(|legacy| value.eq_ignore_ascii_case(legacy))
+        {
+            return Some(Self::System);
         }
         normalize_proxy_url(value).map(Self::Url)
     }
@@ -84,7 +81,7 @@ fn normalize_proxy_url(value: &str) -> Option<String> {
 
 impl AppSettings {
     /// The proxy preference this document asks for. An unparsable value
-    /// reads as [`ProxyPreference::Auto`]; [`Self::validate`] rejects it
+    /// reads as [`ProxyPreference::System`]; [`Self::validate`] rejects it
     /// before a document is published.
     #[must_use]
     pub fn proxy_preference(&self) -> ProxyPreference {
@@ -95,7 +92,7 @@ impl AppSettings {
         super::bounded_text(&self.proxy, super::MAX_FIELD_BYTES)
             .map_err(|_| "proxy: too long or contains line breaks or NUL")?;
         ProxyPreference::parse(&self.proxy).map(|_| ()).ok_or(
-            "proxy: must be empty, auto, direct, or a http, https, socks5, or socks5h proxy URL",
+            "proxy: must be empty (system proxy) or a http, https, socks5, or socks5h proxy URL",
         )
     }
 }
@@ -105,16 +102,14 @@ mod tests {
     use super::ProxyPreference;
 
     #[test]
-    fn empty_and_auto_are_the_smart_default() {
-        assert_eq!(ProxyPreference::parse(""), Some(ProxyPreference::Auto));
-        assert_eq!(
-            ProxyPreference::parse("  AUTO "),
-            Some(ProxyPreference::Auto)
-        );
-        assert_eq!(
-            ProxyPreference::parse("Direct"),
-            Some(ProxyPreference::Direct)
-        );
+    fn empty_and_legacy_modes_follow_the_system() {
+        for value in ["", "  AUTO ", "Direct", "system"] {
+            assert_eq!(
+                ProxyPreference::parse(value),
+                Some(ProxyPreference::System),
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

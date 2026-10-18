@@ -40,7 +40,8 @@ use mycode_app::{ConversationEntry, EntryKind};
 use mycode_config::{VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES};
 use mycode_frontend::driver::{Effect, FrontendDriver, ToastKind};
 use mycode_frontend::view_model::{
-    FrontendAction, MainView, MentionKind, SettingsSection, UpdateState, WorkspaceState,
+    FrontendAction, MainView, MentionKind, ProxyTestState, SettingsSection, UpdateState,
+    WorkspaceState,
     elapsed_label, model_display_name, preferred_slash_index, provider_display_name,
     selected_reasoning_level, selected_reasoning_levels,
 };
@@ -85,6 +86,8 @@ enum SettingsOverlay {
     ApiKey { provider: String, buffer: String },
     /// Single-line input for one provider's base URL.
     BaseUrl { index: usize, buffer: String },
+    /// Single-line input for the manual proxy URL.
+    ProxyUrl { buffer: String },
 }
 
 /// One selectable row on the settings page.
@@ -100,9 +103,11 @@ enum SettingItem {
     Language,
     /// Cycles `s`/`m`/`l`/`xl`.
     FontSize,
-    /// Cycles `auto`/`direct`; a custom URL only shows, Enter returns to
-    /// `auto`.
+    /// Enter edits the manual proxy URL; Left/Right switch between
+    /// following the system and the manual URL.
     Proxy,
+    /// Fetches google.com through the proxy setting and shows the result.
+    ProxyTest,
     /// Toggles automatic update checks.
     AutoUpdate,
     /// Checks, downloads, or installs an update depending on state.
@@ -259,34 +264,20 @@ impl Tui {
     /// Surfaces the self-install outcome as a one-shot notice.
     fn note_install(&mut self, report: &InstallReport) {
         if let Some(warning) = &report.warning {
-            self.notices.push(Notice {
-                kind: ToastKind::Warning,
-                text: format!("install: {warning}"),
-                shown: Instant::now(),
-            });
-            return;
-        }
-        if report.copied && report.path_added {
-            self.notices.push(Notice {
-                kind: ToastKind::Info,
-                text: format!(
-                    "installed to {} — restart the terminal to run mycode-cli",
+            self.push_notice(ToastKind::Warning, format!("install: {warning}"));
+        } else if report.path_added {
+            self.push_notice(
+                ToastKind::Info,
+                format!(
+                    "installed to {} and added to PATH — open a new terminal and run mycode-cli",
                     report.target.display()
                 ),
-                shown: Instant::now(),
-            });
+            );
         } else if report.copied {
-            self.notices.push(Notice {
-                kind: ToastKind::Info,
-                text: format!("installed to {}", report.target.display()),
-                shown: Instant::now(),
-            });
-        } else if report.path_added {
-            self.notices.push(Notice {
-                kind: ToastKind::Info,
-                text: "added the install dir to PATH — restart the terminal".to_owned(),
-                shown: Instant::now(),
-            });
+            self.push_notice(
+                ToastKind::Info,
+                format!("installed to {}", report.target.display()),
+            );
         }
     }
 
@@ -430,6 +421,25 @@ impl Tui {
 
     /// A bracketed paste lands as text, newlines included, never as Enter.
     fn on_paste(&mut self, text: &str) {
+        // On the settings page a paste belongs to the open single-line
+        // input (an API key is nearly always pasted), never to the hidden
+        // composer.
+        if self.driver.vm().view == MainView::Settings {
+            let line: String = text.chars().filter(|ch| !ch.is_control()).collect();
+            match &mut self.settings_overlay {
+                Some(
+                    SettingsOverlay::ApiKey { buffer, .. }
+                    | SettingsOverlay::BaseUrl { buffer, .. }
+                    | SettingsOverlay::ProxyUrl { buffer },
+                ) => buffer.push_str(line.trim()),
+                Some(SettingsOverlay::Model { filter, cursor, .. }) => {
+                    filter.push_str(&line);
+                    *cursor = 0;
+                }
+                None => {}
+            }
+            return;
+        }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         self.composer.insert_str(text);
         let mut effects = Vec::new();
@@ -464,13 +474,7 @@ impl Tui {
             return;
         }
         match (key.code, ctrl, alt) {
-            (KeyCode::Char('c'), true, false) => {
-                if self.driver.vm().sending || self.driver.vm().compacting {
-                    self.driver.cancel_chat(&mut effects);
-                } else {
-                    self.quit = true;
-                }
-            }
+            (KeyCode::Char('c'), true, false) => self.interrupt_or_quit(&mut effects),
             (KeyCode::Esc, false, false) => {
                 if self.driver.vm().pending_ask.is_some() {
                     self.driver.dismiss_ask(&mut effects);
@@ -616,7 +620,8 @@ impl Tui {
         }
         let items = settings_items(self.driver.vm());
         match (key.code, ctrl) {
-            (KeyCode::Char('c'), true) | (KeyCode::Char('q'), false) => self.quit = true,
+            (KeyCode::Char('c'), true) => self.interrupt_or_quit(effects),
+            (KeyCode::Char('q'), false) if !self.turn_busy() => self.quit = true,
             (KeyCode::Esc, false) => {
                 self.driver.show_main_view(MainView::Chat, effects);
             }
@@ -641,9 +646,19 @@ impl Tui {
                 self.settings_cursor = items.len().saturating_sub(1);
             }
             (KeyCode::Enter, false) | (KeyCode::Char(' '), false) => {
-                if let Some(item) = items.get(self.settings_cursor) {
-                    let item = item.clone();
-                    self.activate_setting(item, 1, effects);
+                match items.get(self.settings_cursor) {
+                    // Enter types the manual URL; committing it switches mode.
+                    Some(SettingItem::Proxy) => {
+                        let buffer = manual_proxy(self.driver.vm()).unwrap_or_else(|| {
+                            mycode_frontend::forms::DEFAULT_PROXY_URL.to_owned()
+                        });
+                        self.settings_overlay = Some(SettingsOverlay::ProxyUrl { buffer });
+                    }
+                    Some(item) => {
+                        let item = item.clone();
+                        self.activate_setting(item, 1, effects);
+                    }
+                    None => {}
                 }
             }
             (KeyCode::Left, false) | (KeyCode::Right, false) => {
@@ -677,10 +692,28 @@ impl Tui {
         }
     }
 
+    /// A running turn or compaction.
+    fn turn_busy(&self) -> bool {
+        self.driver.vm().sending || self.driver.vm().compacting
+    }
+
+    /// `Ctrl+C`: cancel a running turn first, quit only when idle.
+    fn interrupt_or_quit(&mut self, effects: &mut Vec<Effect>) {
+        if self.turn_busy() {
+            self.driver.cancel_chat(effects);
+        } else {
+            self.quit = true;
+        }
+    }
+
     /// Key input while a settings overlay (model pick, key input) is open.
     fn on_overlay_key(&mut self, key: KeyEvent, ctrl: bool, effects: &mut Vec<Effect>) {
         if ctrl && key.code == KeyCode::Char('c') {
-            self.quit = true;
+            self.interrupt_or_quit(effects);
+            return;
+        }
+        // Other control chords (Ctrl+V, Ctrl+A, …) are not text.
+        if ctrl && matches!(key.code, KeyCode::Char(_)) {
             return;
         }
         match self.settings_overlay.take() {
@@ -689,12 +722,32 @@ impl Tui {
                 cursor,
                 filter,
             }) => self.on_picker_key(key, provider, cursor, filter, effects),
-            Some(SettingsOverlay::ApiKey { provider, buffer }) => {
-                self.on_input_key(key, provider, buffer, effects)
+            Some(SettingsOverlay::ApiKey {
+                provider,
+                mut buffer,
+            }) => match edit_line(&key, &mut buffer) {
+                LineKey::Cancel => {}
+                LineKey::Submit => self.submit_api_key(provider, &buffer),
+                LineKey::Edited => {
+                    self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
+                }
+            },
+            Some(SettingsOverlay::BaseUrl { index, mut buffer }) => {
+                match edit_line(&key, &mut buffer) {
+                    LineKey::Cancel => {}
+                    LineKey::Submit => self.submit_base_url(index, &buffer, effects),
+                    LineKey::Edited => {
+                        self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
+                    }
+                }
             }
-            Some(SettingsOverlay::BaseUrl { index, buffer }) => {
-                self.on_base_url_key(key, index, buffer, effects)
-            }
+            Some(SettingsOverlay::ProxyUrl { mut buffer }) => match edit_line(&key, &mut buffer) {
+                LineKey::Cancel => {}
+                LineKey::Submit if self.submit_proxy_url(&buffer, effects) => {}
+                LineKey::Submit | LineKey::Edited => {
+                    self.settings_overlay = Some(SettingsOverlay::ProxyUrl { buffer });
+                }
+            },
             None => {}
         }
     }
@@ -887,80 +940,69 @@ impl Tui {
         }
     }
 
-    /// The masked API-key input for a provider/MCP/web row.
-    fn on_input_key(
-        &mut self,
-        key: KeyEvent,
-        provider: String,
-        mut buffer: String,
-        _effects: &mut Vec<Effect>,
-    ) {
-        match key.code {
-            KeyCode::Esc => {}
-            KeyCode::Enter => {
-                if !self.driver.save_key(provider.clone(), &buffer) {
-                    self.notices.push(Notice {
-                        kind: ToastKind::Error,
-                        text: "key refused — empty or looks like a placeholder".to_owned(),
-                        shown: Instant::now(),
-                    });
-                }
-            }
-            KeyCode::Backspace => {
-                buffer.pop();
-                self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
-            }
-            KeyCode::Char(ch) => {
-                buffer.push(ch);
-                self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
-            }
-            _ => {
-                self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
-            }
+    /// Enter on the masked API-key input for a provider/MCP/web row.
+    fn submit_api_key(&mut self, provider: String, buffer: &str) {
+        if !self.driver.save_key(provider, buffer) {
+            self.push_notice(
+                ToastKind::Error,
+                "key refused — empty or looks like a placeholder".to_owned(),
+            );
         }
     }
 
-    /// The base-URL input for a provider row.
-    fn on_base_url_key(
-        &mut self,
-        key: KeyEvent,
-        index: usize,
-        mut buffer: String,
-        effects: &mut Vec<Effect>,
-    ) {
-        match key.code {
-            KeyCode::Esc => {}
-            KeyCode::Enter => {
-                if let Some(provider) = self
-                    .driver
-                    .vm()
-                    .settings
-                    .as_ref()
-                    .and_then(|settings| settings.providers.get(index))
-                {
-                    let id = provider.id.clone();
-                    self.driver.act(
-                        FrontendAction::SettingsProviderBaseUrlChanged {
-                            id,
-                            base_url: buffer.trim().to_owned(),
-                        },
-                        effects,
-                    );
-                    self.driver.save_settings(effects);
-                }
-            }
-            KeyCode::Backspace => {
-                buffer.pop();
-                self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
-            }
-            KeyCode::Char(ch) => {
-                buffer.push(ch);
-                self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
-            }
-            _ => {
-                self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
-            }
+    /// Enter on the base-URL input for a provider row.
+    fn submit_base_url(&mut self, index: usize, buffer: &str, effects: &mut Vec<Effect>) {
+        let Some(id) = self
+            .driver
+            .vm()
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.providers.get(index))
+            .map(|provider| provider.id.clone())
+        else {
+            return;
+        };
+        self.driver.act(
+            FrontendAction::SettingsProviderBaseUrlChanged {
+                id,
+                base_url: buffer.trim().to_owned(),
+            },
+            effects,
+        );
+        self.driver.save_settings(effects);
+    }
+
+    /// Enter on the manual proxy input. An empty value goes back to the
+    /// system proxy; an invalid one keeps the input open. Returns whether
+    /// the input should close.
+    fn submit_proxy_url(&mut self, buffer: &str, effects: &mut Vec<Effect>) -> bool {
+        let value = buffer.trim();
+        if value.is_empty() {
+            self.driver.select_proxy_mode("system", effects);
+            return true;
         }
+        if !matches!(
+            mycode_config::ProxyPreference::parse(value),
+            Some(mycode_config::ProxyPreference::Url(_))
+        ) {
+            self.push_notice(
+                ToastKind::Error,
+                "not a proxy URL — http, https, socks5, or socks5h (host:port reads as http)"
+                    .to_owned(),
+            );
+            return false;
+        }
+        self.driver.proxy_url_typed(value, effects);
+        self.driver.proxy_url_committed(effects);
+        true
+    }
+
+    fn push_notice(&mut self, kind: ToastKind, text: String) {
+        self.notices.push(Notice {
+            kind,
+            text,
+            shown: Instant::now(),
+        });
     }
 
     /// Enter / Left / Right on a settings row.
@@ -1025,21 +1067,16 @@ impl Tui {
                 self.driver.select_font_size(&next, effects);
             }
             SettingItem::Proxy => {
-                let proxy = self
-                    .driver
-                    .vm()
-                    .settings
-                    .as_ref()
-                    .map(|settings| settings.proxy.clone())
-                    .unwrap_or_default();
-                // auto → direct → auto. A stored URL only leaves via auto.
-                let mode = if proxy == mycode_config::PROXY_DIRECT {
-                    "auto"
+                // Left/Right flip system ⇄ manual; manual keeps a stored URL
+                // or starts from Clash's default port.
+                let mode = if manual_proxy(self.driver.vm()).is_some() {
+                    "system"
                 } else {
-                    "direct"
+                    "manual"
                 };
                 self.driver.select_proxy_mode(mode, effects);
             }
+            SettingItem::ProxyTest => self.driver.test_proxy(effects),
             SettingItem::AutoUpdate => {
                 let next = !self.driver.vm().auto_update;
                 self.driver.toggle_auto_update(next, effects);
@@ -1424,6 +1461,20 @@ impl Tui {
                     )),
                 ],
             ),
+            SettingsOverlay::ProxyUrl { buffer } => (
+                " Manual proxy ".to_owned(),
+                vec![
+                    Line::from(Span::styled(format!(" {buffer}▌"), Style::default())),
+                    Line::from(Span::styled(
+                        " http / https / socks5 / socks5h · host:port reads as http",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    Line::from(Span::styled(
+                        " Enter save · empty = follow system · Esc cancel",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ],
+            ),
         };
         let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(4));
         let width = (area.width.saturating_mul(2) / 3)
@@ -1715,6 +1766,42 @@ fn settings_items(vm: &WorkspaceState) -> Vec<SettingItem> {
         .collect()
 }
 
+/// The stored manual proxy URL, or `None` while following the system.
+fn manual_proxy(vm: &WorkspaceState) -> Option<String> {
+    let stored = vm.settings.as_ref()?.proxy.clone();
+    match mycode_config::ProxyPreference::parse(&stored) {
+        Some(mycode_config::ProxyPreference::Url(url)) => Some(url),
+        _ => None,
+    }
+}
+
+/// The "Proxy test" row value: which route the probe took and how it went.
+fn proxy_test_value(test: &ProxyTestState) -> String {
+    use mycode_app::ProxyTestRoute;
+    match test {
+        ProxyTestState::Idle => "Enter to fetch google.com through the proxy".to_owned(),
+        ProxyTestState::Testing => "testing…".to_owned(),
+        ProxyTestState::Invalid(message) => format!("✗ {message}"),
+        ProxyTestState::Done(report) => {
+            let route = match &report.route {
+                ProxyTestRoute::Direct => "direct (no system proxy set)".to_owned(),
+                ProxyTestRoute::System(uri) => format!("system proxy {uri}"),
+                ProxyTestRoute::Manual(url) => format!("proxy {url}"),
+            };
+            match &report.outcome {
+                Ok((status, elapsed)) => format!(
+                    "✓ google.com · {route} · HTTP {status} · {} ms",
+                    elapsed.as_millis()
+                ),
+                Err(message) => format!(
+                    "✗ google.com unreachable · {route} · {}",
+                    mycode_app::brief_error(message)
+                ),
+            }
+        }
+    }
+}
+
 /// The full settings page: headers and rows in display order.
 fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
     let mut rows = Vec::new();
@@ -1774,15 +1861,19 @@ fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
             .unwrap_or_else(|| "m".to_owned()),
         dim: false,
     });
-    let proxy = settings.map(|s| s.proxy.clone()).unwrap_or_default();
     rows.push(SettingRow::Item {
         item: SettingItem::Proxy,
         label: "Proxy".to_owned(),
-        value: if proxy.is_empty() {
-            "auto".to_owned()
-        } else {
-            proxy
+        value: match manual_proxy(vm) {
+            Some(url) => format!("manual · {url}  (Enter edit · ←→ follow system)"),
+            None => "follow system  (Enter type a proxy · ←→ manual)".to_owned(),
         },
+        dim: false,
+    });
+    rows.push(SettingRow::Item {
+        item: SettingItem::ProxyTest,
+        label: "Proxy test".to_owned(),
+        value: proxy_test_value(&vm.proxy_test),
         dim: false,
     });
     rows.push(SettingRow::Item {
@@ -2024,6 +2115,30 @@ fn push_wrapped(
             format!("{indent}{line}"),
             text_style,
         )));
+    }
+}
+
+/// What one key did to a single-line settings input.
+enum LineKey {
+    Submit,
+    Cancel,
+    Edited,
+}
+
+/// Shared editing for the API-key, base-URL, and proxy inputs.
+fn edit_line(key: &KeyEvent, buffer: &mut String) -> LineKey {
+    match key.code {
+        KeyCode::Esc => LineKey::Cancel,
+        KeyCode::Enter => LineKey::Submit,
+        KeyCode::Backspace => {
+            buffer.pop();
+            LineKey::Edited
+        }
+        KeyCode::Char(ch) => {
+            buffer.push(ch);
+            LineKey::Edited
+        }
+        _ => LineKey::Edited,
     }
 }
 

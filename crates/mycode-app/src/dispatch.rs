@@ -242,6 +242,16 @@ pub(crate) fn run_core(
                         ));
                     });
                 }
+                BridgeCommand::TestProxy { proxy } => {
+                    let reply = with_reply.reply;
+                    tokio::spawn(async move {
+                        let outcome = match mycode_config::ProxyPreference::parse(&proxy) {
+                            Some(preference) => Ok(mycode_providers::test_proxy(&preference).await),
+                            None => Err("not a proxy URL: http, https, socks5, or socks5h".to_owned()),
+                        };
+                        let _ = reply.send(BridgeReply::ProxyTested(outcome));
+                    });
+                }
                 BridgeCommand::DownloadUpdate { offer } => {
                     let reply = with_reply.reply;
                     let task_state = state.clone();
@@ -363,6 +373,7 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         BridgeCommand::UiReady => BridgeReply::UiReady(Err(message)),
         BridgeCommand::CheckUpdate => BridgeReply::UpdateChecked(Err(message)),
         BridgeCommand::DownloadUpdate { .. } => BridgeReply::UpdateDownloaded(Err(message)),
+        BridgeCommand::TestProxy { .. } => BridgeReply::ProxyTested(Err(message)),
         BridgeCommand::StartOAuthSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
         BridgeCommand::CancelChat { .. } => BridgeReply::ChatCancelled(Err(message)),
         BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(message)),
@@ -704,6 +715,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::DownloadUpdate { .. } => {
             BridgeReply::UpdateDownloaded(Err("downloads run as concurrent tasks".to_owned()))
+        }
+        BridgeCommand::TestProxy { .. } => {
+            BridgeReply::ProxyTested(Err("this request runs as a concurrent task".to_owned()))
         }
     }
 }
