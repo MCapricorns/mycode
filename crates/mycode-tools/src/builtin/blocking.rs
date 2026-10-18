@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::tool::ToolError;
+use crate::tool::{INTERRUPTED_NOTE, ToolError};
 
 #[cfg(unix)]
 mod signal;
@@ -106,7 +106,7 @@ where
 {
     if cancel.is_cancelled() {
         return Err(ToolError::Execution(format!(
-            "{label} cancelled before completion"
+            "{label} cancelled before completion{INTERRUPTED_NOTE}"
         )));
     }
     let worker_cancel = cancel.child_token();
@@ -120,9 +120,9 @@ where
         InterruptibleWorker::spawn(
             move || {
                 if function_cancel.is_cancelled() {
-                    return Err(ToolError::Execution(
-                        "cancelled before completion".to_owned(),
-                    ));
+                    return Err(ToolError::Execution(format!(
+                        "cancelled before completion{INTERRUPTED_NOTE}"
+                    )));
                 }
                 function(function_cancel)
             },
@@ -150,7 +150,7 @@ where
                 .map(|error| format!("; interrupt error: {error}"))
                 .unwrap_or_default();
             Err(ToolError::Execution(format!(
-                "{label} cancelled before completion{suffix}"
+                "{label} cancelled before completion{suffix}{INTERRUPTED_NOTE}"
             )))
         },
         _ = &mut deadline_wait => {
@@ -172,7 +172,7 @@ where
                     .map(|error| format!("; interrupt error: {error}"))
                     .unwrap_or_default();
                 return Err(ToolError::Execution(format!(
-                    "{label} cancelled before completion{suffix}"
+                    "{label} cancelled before completion{suffix}{INTERRUPTED_NOTE}"
                 )));
             }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {

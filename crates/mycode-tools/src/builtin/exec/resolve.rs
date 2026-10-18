@@ -20,7 +20,7 @@ use super::spawn::{SpawnFailure, SpawnGate};
 use crate::builtin::fs_search::lexical_normalize;
 #[cfg(windows)]
 use crate::builtin::fs_search::windows_extended_length_path;
-use crate::tool::ToolError;
+use crate::tool::{INTERRUPTED_NOTE, ToolError};
 
 /// Maximum UTF-8 bytes accepted for `program`.
 const MAX_PROGRAM_BYTES: usize = 32_767;
@@ -256,9 +256,9 @@ pub(super) fn verify_pinned_digest(
 
 pub(super) fn check_cancelled(cancel: &CancellationToken) -> Result<(), ToolError> {
     if cancel.is_cancelled() {
-        Err(ToolError::Execution(
-            "command cancelled before completion".into(),
-        ))
+        Err(ToolError::Execution(format!(
+            "command cancelled before completion{INTERRUPTED_NOTE}"
+        )))
     } else {
         Ok(())
     }

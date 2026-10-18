@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
-use crate::tool::{Tool, ToolError, ToolResult};
+use crate::tool::{INTERRUPTED_NOTE, Tool, ToolError, ToolResult};
 
 use super::blocking::run_blocking_until;
 use super::fs_search::{
@@ -153,7 +153,7 @@ impl Tool for FindTool {
         run_blocking_until("find", &cancel, deadline, move |worker_cancel| {
             if worker_cancel.is_cancelled() {
                 return Err(ToolError::Execution(
-                    "find cancelled before completion".to_owned(),
+                    format!("find cancelled before completion{INTERRUPTED_NOTE}"),
                 ));
             }
             let glob = compile_find_glob(&pattern)?;

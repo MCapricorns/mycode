@@ -12,7 +12,7 @@ use crate::builtin::fs_search::{
     resolve_relative_argument, validate_component_name,
 };
 pub(crate) use crate::roots::anchor_file_path;
-use crate::tool::ToolError;
+use crate::tool::{INTERRUPTED_NOTE, ToolError};
 
 use super::*;
 
@@ -20,7 +20,7 @@ pub(super) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
     if cancel.is_cancelled() {
         Err(io::Error::new(
             ErrorKind::Interrupted,
-            "file operation cancelled before completion",
+            format!("file operation cancelled before completion{INTERRUPTED_NOTE}"),
         ))
     } else {
         Ok(())
