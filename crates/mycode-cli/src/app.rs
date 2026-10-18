@@ -112,9 +112,15 @@ impl Tui {
     fn event_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>, wake: &WakeRx) -> i32 {
         let mut effects = Vec::new();
         loop {
-            // Drain driver work deposited since the last frame.
+            // Drain driver work deposited since the last frame: replies and
+            // timers through `poll`, streamed core events through
+            // `next_event` — a frontend that skips either never sees the
+            // turn finish.
             while wake.try_recv().is_ok() {}
             self.driver.poll(&mut effects);
+            while let Some(event) = self.driver.next_event() {
+                self.driver.on_event(event, &mut effects);
+            }
             if !effects.is_empty() {
                 self.apply_effects(std::mem::take(&mut effects));
             }
