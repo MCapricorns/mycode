@@ -11,21 +11,7 @@ use crate::view_model::FrontendAction;
 impl Workspace {
     /// Applies and persists dark or light.
     pub(crate) fn on_select_theme(&mut self, theme_id: &str, cx: &mut Context<Self>) {
-        let theme_id = mycode_frontend::normalize_theme(theme_id);
-        if self.vm()
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.theme == theme_id)
-        {
-            return;
-        }
-        self.capture_appearance_scroll();
-        self.paint_appearance(theme_id, cx);
-        self.apply_action(
-            FrontendAction::SettingsThemeSelected(theme_id.to_owned()),
-            cx,
-        );
-        self.driver_do(|d, fx| d.save_settings(fx), cx);
+        self.driver_do(|d, fx| d.select_theme(theme_id, fx), cx);
     }
 
     pub(super) fn paint_appearance(&mut self, theme_id: &str, cx: &mut Context<Self>) {
@@ -40,20 +26,7 @@ impl Workspace {
 
     /// Applies and persists the interface font size. The next frame paints it.
     pub(crate) fn on_select_font_size(&mut self, font_size: &str, cx: &mut Context<Self>) {
-        let font_size = crate::ui::desk::normalize_font_size(font_size);
-        if self.vm()
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.font_size == font_size)
-        {
-            return;
-        }
-        self.applied_font_size.clear();
-        self.apply_action(
-            FrontendAction::SettingsFontSizeSelected(font_size.to_owned()),
-            cx,
-        );
-        self.driver_do(|d, fx| d.save_settings(fx), cx);
+        self.driver_do(|d, fx| d.select_font_size(font_size, fx), cx);
     }
 
     /// Paints the saved interface font size and the OS UI font onto the
@@ -134,18 +107,7 @@ impl Workspace {
     /// Applies and persists the UI language. The whole window re-renders on
     /// the next frame, so no theme-style refresh is needed.
     pub(crate) fn on_select_language(&mut self, language: &str, cx: &mut Context<Self>) {
-        if self.vm()
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.language == language)
-        {
-            return;
-        }
-        self.apply_action(
-            FrontendAction::SettingsLanguageSelected(language.to_owned()),
-            cx,
-        );
-        self.driver_do(|d, fx| d.save_settings(fx), cx);
+        self.driver_do(|d, fx| d.select_language(language, fx), cx);
     }
 
     pub(crate) fn on_toggle_language_menu(&mut self, open: bool, cx: &mut Context<Self>) {

@@ -86,27 +86,7 @@ impl Workspace {
     /// `custom`. Custom keeps a stored URL, or starts from Clash's default
     /// port.
     pub(crate) fn on_select_proxy_mode(&mut self, mode: &str, cx: &mut Context<Self>) {
-        let current = self.vm()
-            .settings
-            .as_ref()
-            .map(|settings| settings.proxy.clone())
-            .unwrap_or_default();
-        let value = match mode {
-            "direct" => mycode_config::PROXY_DIRECT.to_owned(),
-            "custom" => match mycode_config::ProxyPreference::parse(&current) {
-                Some(mycode_config::ProxyPreference::Url(_)) => return,
-                _ => DEFAULT_PROXY_URL.to_owned(),
-            },
-            _ => String::new(),
-        };
-        self.proxy_sync_pending = true;
-        self.apply_action(
-            FrontendAction::SettingsProxyChanged {
-                value,
-                typed: false,
-            },
-            cx,
-        );
+        self.driver_do(|d, fx| d.select_proxy_mode(mode, fx), cx);
     }
 
     // ---- web search backends ----
