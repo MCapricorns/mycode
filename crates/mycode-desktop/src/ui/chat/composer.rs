@@ -375,6 +375,17 @@ fn composer_round_button(
                 workspace.on_send(window, cx);
             }
         }))
+        // Two round icons sit side by side while a turn runs; the tooltip
+        // tells the queueing arrow from the stop that ends everything.
+        .when(sending, |this| {
+            this.tooltip(|window, cx| {
+                Tooltip::new(t(
+                    "Stop this turn and every subagent",
+                    "停止本轮和所有子代理",
+                ))
+                .build(window, cx)
+            })
+        })
         .when(sending, |this| {
             this.child(div().size(px(9.)).rounded(px(2.)).bg(theme.foreground))
         })
@@ -384,7 +395,7 @@ fn composer_round_button(
 }
 
 /// The send arrow shown next to the stop square while a turn runs: click
-/// steers the turn or queues the draft, same as Enter.
+/// queues the draft for after the turn, same as Enter.
 fn composer_send_button(cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     div()
@@ -401,6 +412,13 @@ fn composer_send_button(cx: &Context<Workspace>) -> impl IntoElement {
         .on_click(cx.listener(move |workspace, _, window, cx| {
             workspace.on_send(window, cx);
         }))
+        .tooltip(|window, cx| {
+            Tooltip::new(t(
+                "Queue for after this turn (Ctrl+Enter interrupts)",
+                "排队到本轮之后（Ctrl+Enter 打断发送）",
+            ))
+            .build(window, cx)
+        })
         .child(Icon::new(IconName::ArrowUp).small())
 }
 
