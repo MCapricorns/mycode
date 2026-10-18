@@ -7,7 +7,7 @@ use gpui_kit::{AppContext as _, Context, Entity, Window};
 
 use mycode_app::BridgeCommand;
 
-use crate::view_model::{DesktopAction, MainView, UpdateState, close_floating_menus};
+use crate::view_model::{FrontendAction, MainView, UpdateState, close_floating_menus};
 use crate::workspace::Workspace;
 
 /// Wakes once a day of runtime, then checks for an update when that is enabled.
@@ -125,14 +125,14 @@ impl Workspace {
             UpdateState::Downloading { .. } | UpdateState::Ready { .. }
         ) {
             if manual {
-                self.apply_action(DesktopAction::UpdateDialogToggled(true), cx);
+                self.apply_action(FrontendAction::UpdateDialogToggled(true), cx);
             }
             return;
         }
         if manual {
             self.manual_update_check = true;
         }
-        self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::Checking), cx);
+        self.apply_action(FrontendAction::UpdateStateChanged(UpdateState::Checking), cx);
         self.dispatch(BridgeCommand::CheckUpdate, cx);
     }
 
@@ -149,7 +149,7 @@ impl Workspace {
             return;
         };
         self.apply_action(
-            DesktopAction::UpdateStateChanged(UpdateState::Downloading {
+            FrontendAction::UpdateStateChanged(UpdateState::Downloading {
                 version: offer.version.clone(),
             }),
             cx,
@@ -163,14 +163,14 @@ impl Workspace {
             return;
         };
         if let Err(message) = mycode_app::apply_and_restart(&prepared) {
-            self.apply_action(DesktopAction::Failed(message), cx);
+            self.apply_action(FrontendAction::Failed(message), cx);
             return;
         }
         cx.quit();
     }
 
     pub(crate) fn on_toggle_auto_update(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::AutoUpdateToggled(enabled), cx);
+        self.apply_action(FrontendAction::AutoUpdateToggled(enabled), cx);
         self.persist_ui_state(cx);
     }
 
@@ -188,7 +188,7 @@ impl Workspace {
         };
         if !enabled {
             self.pending_mcp_enable.remove(&server.id);
-            self.apply_action(DesktopAction::SettingsMcpToggled(index, false), cx);
+            self.apply_action(FrontendAction::SettingsMcpToggled(index, false), cx);
             return;
         }
         if self.pending_mcp_enable.contains(&server.id) || self.vm.mcp_probing.contains(&server.id)
@@ -228,7 +228,7 @@ impl Workspace {
             self.pending_mcp_enable.remove(server_id);
             return;
         };
-        self.apply_action(DesktopAction::McpProbeStarted(server_id.to_owned()), cx);
+        self.apply_action(FrontendAction::McpProbeStarted(server_id.to_owned()), cx);
         self.dispatch(
             BridgeCommand::McpListTools {
                 server: Box::new(server),
@@ -249,7 +249,7 @@ impl Workspace {
         else {
             return;
         };
-        self.apply_action(DesktopAction::McpProbeStarted(server_id.to_owned()), cx);
+        self.apply_action(FrontendAction::McpProbeStarted(server_id.to_owned()), cx);
         self.dispatch(
             BridgeCommand::McpListTools {
                 server: Box::new(server),
@@ -268,7 +268,7 @@ impl Workspace {
         // New rows start disabled: the enable probe is armed by the key
         // save that follows, so a pasted key ends in a verified enable.
         server.enabled = false;
-        self.apply_action(DesktopAction::SettingsMcpAdded(server), cx);
+        self.apply_action(FrontendAction::SettingsMcpAdded(server), cx);
         if !api_key.is_empty() {
             self.pending_mcp_enable.insert(server_id.clone());
             self.dispatch(
@@ -311,7 +311,7 @@ impl Workspace {
                                 .is_some_and(|answer| !answer.is_empty()) =>
                     {
                         workspace.apply_action(
-                            DesktopAction::AskChoicePicked {
+                            FrontendAction::AskChoicePicked {
                                 index: input_index,
                                 answer: String::new(),
                             },
@@ -346,7 +346,7 @@ impl Workspace {
             .and_then(|rows| rows.get(index))
             .is_some_and(|row| row.multiple);
         let answer = mycode_tools::builtin::toggle_ask_choice(&current, &answer, multiple);
-        self.apply_action(DesktopAction::AskChoicePicked { index, answer }, cx);
+        self.apply_action(FrontendAction::AskChoicePicked { index, answer }, cx);
         if submit {
             self.on_answer_ask(self.vm.ask_answers.clone(), cx);
         }
@@ -428,7 +428,7 @@ impl Workspace {
         };
         self.ask_inputs.clear();
         self.ask_index = 0;
-        self.apply_action(DesktopAction::AskAnswered, cx);
+        self.apply_action(FrontendAction::AskAnswered, cx);
         self.dispatch(BridgeCommand::AskDismiss { session_id }, cx);
     }
 
@@ -439,7 +439,7 @@ impl Workspace {
         // Each question owns its text; the next request starts with empty fields.
         self.ask_inputs.clear();
         self.ask_index = 0;
-        self.apply_action(DesktopAction::AskAnswered, cx);
+        self.apply_action(FrontendAction::AskAnswered, cx);
         self.dispatch(
             BridgeCommand::AskAnswer {
                 session_id,
@@ -481,11 +481,11 @@ impl Workspace {
                     cx.notify();
                 }
                 DismissLayer::Changes => {
-                    self.apply_action(DesktopAction::ChangesPanelToggled(false), cx);
+                    self.apply_action(FrontendAction::ChangesPanelToggled(false), cx);
                 }
                 DismissLayer::Inspector => {
                     self.apply_action(
-                        DesktopAction::InspectorChanged {
+                        FrontendAction::InspectorChanged {
                             open: false,
                             pinned: false,
                         },
@@ -501,7 +501,7 @@ impl Workspace {
             return;
         }
         if self.vm.subagent_window.is_some() {
-            self.apply_action(DesktopAction::SubagentWindowChanged(None), cx);
+            self.apply_action(FrontendAction::SubagentWindowChanged(None), cx);
             return;
         }
         let mut dismissed = close_floating_menus(&mut self.vm);
@@ -531,7 +531,7 @@ impl Workspace {
                     self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
                 }
                 SettingsBack::Desk => {
-                    self.apply_action(DesktopAction::ShowMainView(MainView::Chat), cx);
+                    self.apply_action(FrontendAction::ShowMainView(MainView::Chat), cx);
                 }
             }
             dismissed = true;

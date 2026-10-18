@@ -233,21 +233,6 @@ impl SettingsSection {
         }
     }
 
-    /// Nav row icon.
-    pub fn icon(self) -> gpui_kit::assets::IconName {
-        use gpui_kit::assets::IconName;
-        match self {
-            Self::General => IconName::SlidersHorizontal,
-            Self::Models => IconName::Bot,
-            Self::Agents => IconName::Sparkles,
-            Self::Skills => IconName::Terminal,
-            Self::Mcp => IconName::PlugZap,
-            Self::Web => IconName::Globe,
-            Self::Data => IconName::Database,
-            Self::About => IconName::Info,
-        }
-    }
-
     /// One-line description shown in the page header and matched by nav search.
     pub fn hint(self) -> &'static str {
         match self {
@@ -322,7 +307,7 @@ mod tests {
         };
         super::super::reduce(
             &mut vm,
-            super::super::DesktopAction::SettingsProviderBaseUrlChanged {
+            super::super::FrontendAction::SettingsProviderBaseUrlChanged {
                 id: "missing".to_owned(),
                 base_url: "https://other.example/v1".to_owned(),
             },
@@ -330,7 +315,7 @@ mod tests {
         assert!(!vm.settings.as_ref().expect("settings").dirty);
         super::super::reduce(
             &mut vm,
-            super::super::DesktopAction::SettingsProviderBaseUrlChanged {
+            super::super::FrontendAction::SettingsProviderBaseUrlChanged {
                 id: "gateway".to_owned(),
                 base_url: accepted,
             },

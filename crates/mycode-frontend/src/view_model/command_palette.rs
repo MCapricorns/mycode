@@ -16,7 +16,7 @@ use crate::i18n::t;
 
 /// One thing the palette can run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PaletteCommand {
+pub enum PaletteCommand {
     /// Start a task in the open folder.
     NewSession,
     /// Open a session that can be read.
@@ -31,7 +31,7 @@ pub(crate) enum PaletteCommand {
 
 /// Which block a row belongs to. Order is the palette order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PaletteGroupId {
+pub enum PaletteGroupId {
     Sessions,
     Models,
     Commands,
@@ -40,7 +40,7 @@ pub(crate) enum PaletteGroupId {
 
 /// One searchable row.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PaletteItem {
+pub struct PaletteItem {
     pub command: PaletteCommand,
     pub label: String,
     /// Extra terms matched besides [`Self::label`]. Both languages are
@@ -52,21 +52,21 @@ pub(crate) struct PaletteItem {
 
 /// One headed block of rows. Empty blocks are omitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PaletteGroup {
+pub struct PaletteGroup {
     pub id: PaletteGroupId,
     pub items: Vec<PaletteItem>,
 }
 
 /// The full palette, before the query filter.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PaletteCatalog {
+pub struct PaletteCatalog {
     pub groups: Vec<PaletteGroup>,
 }
 
 /// Builds the palette from the current desk. Corrupt sessions and disabled
 /// providers are left out: those rows cannot be opened or selected.
 #[must_use]
-pub(crate) fn palette_catalog(state: &WorkspaceState) -> PaletteCatalog {
+pub fn palette_catalog(state: &WorkspaceState) -> PaletteCatalog {
     let mut groups = Vec::new();
     push_group(&mut groups, PaletteGroupId::Sessions, session_items(state));
     push_group(&mut groups, PaletteGroupId::Models, model_items(state));
@@ -80,7 +80,7 @@ pub(crate) fn palette_catalog(state: &WorkspaceState) -> PaletteCatalog {
 /// The command widget reports the same coordinates after a query filter, so
 /// confirm can resolve the row without storing the filtered list.
 #[must_use]
-pub(crate) fn palette_item(
+pub fn palette_item(
     catalog: &PaletteCatalog,
     section: usize,
     row: usize,
@@ -353,7 +353,7 @@ fn words(values: &[&str]) -> Vec<String> {
 mod tests {
     use super::{palette_catalog, palette_item, palette_matches};
     use crate::view_model::{
-        DesktopAction, MainView, PaletteCommand, PaletteGroupId, SettingsSection, SettingsState,
+        FrontendAction, MainView, PaletteCommand, PaletteGroupId, SettingsSection, SettingsState,
         SkillEntry, WorkspaceState, reduce,
     };
 
@@ -508,7 +508,7 @@ mod tests {
         let mut state = populated();
         reduce(
             &mut state,
-            DesktopAction::SettingsSkillToggled("review".to_owned(), false),
+            FrontendAction::SettingsSkillToggled("review".to_owned(), false),
         );
         let settings = state.settings.as_ref().expect("settings");
         assert!(settings.dirty);
@@ -523,7 +523,7 @@ mod tests {
 
         reduce(
             &mut state,
-            DesktopAction::SettingsSkillToggled("review".to_owned(), true),
+            FrontendAction::SettingsSkillToggled("review".to_owned(), true),
         );
         assert_eq!(state.enabled_skills().len(), 1);
         assert!(
@@ -575,11 +575,11 @@ mod tests {
             view: MainView::Chat,
             ..WorkspaceState::default()
         };
-        reduce(&mut state, DesktopAction::CommandPaletteSet(true));
+        reduce(&mut state, FrontendAction::CommandPaletteSet(true));
         assert!(state.command_palette_open);
         assert!(!state.model_menu_open);
         assert!(!state.reasoning_menu_open);
-        reduce(&mut state, DesktopAction::CommandPaletteSet(false));
+        reduce(&mut state, FrontendAction::CommandPaletteSet(false));
         assert!(!state.command_palette_open);
     }
 

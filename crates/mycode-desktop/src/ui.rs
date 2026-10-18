@@ -22,7 +22,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use crate::view_model::MainView;
+use crate::view_model::{MainView, SettingsSection};
 use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::composer_placeholder;
@@ -401,6 +401,21 @@ pub(super) fn hover_delete_button(
 
 pub(super) fn short_id(id: &str) -> String {
     id.chars().take(12).collect()
+}
+
+/// Nav-row icon for one settings section (GPUI asset names stay in the UI
+/// layer; the shared view-model owns only the section vocabulary).
+pub(crate) fn section_icon(section: SettingsSection) -> IconName {
+    match section {
+        SettingsSection::General => IconName::SlidersHorizontal,
+        SettingsSection::Models => IconName::Bot,
+        SettingsSection::Agents => IconName::Sparkles,
+        SettingsSection::Skills => IconName::Terminal,
+        SettingsSection::Mcp => IconName::PlugZap,
+        SettingsSection::Web => IconName::Globe,
+        SettingsSection::Data => IconName::Database,
+        SettingsSection::About => IconName::Info,
+    }
 }
 
 /// Stable element id for a full path. Prefix truncation collides on siblings.

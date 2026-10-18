@@ -52,7 +52,7 @@ pub(super) fn language_selected(state: &mut WorkspaceState, language: String) {
 }
 
 pub(super) fn theme_selected(state: &mut WorkspaceState, theme: &str) {
-    let theme = crate::ui::desk::normalize_theme(theme).to_owned();
+    let theme = crate::normalize_theme(theme).to_owned();
     if let Some(settings) = state.settings.as_mut() {
         settings.theme = theme;
         mark_settings_dirty(settings);

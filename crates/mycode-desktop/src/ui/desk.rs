@@ -42,19 +42,10 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
     color
 }
 
-/// Canonical appearance id. Unknown values fall back to dark.
-#[must_use]
-pub fn normalize_theme(theme: &str) -> &'static str {
-    mycode_config::VALID_THEMES
-        .into_iter()
-        .find(|id| *id == theme)
-        .unwrap_or("dark")
-}
-
 /// GPUI mode for a stored appearance id.
 #[must_use]
 pub fn theme_mode(theme: &str) -> ThemeMode {
-    if normalize_theme(theme) == "light" {
+    if mycode_frontend::normalize_theme(theme) == "light" {
         ThemeMode::Light
     } else {
         ThemeMode::Dark
@@ -542,8 +533,6 @@ mod tests {
         );
         assert_ne!(spec.bg, super::dark_spec().bg);
         assert_ne!(spec.bg, spec.accent, "page and accent must differ");
-        assert_eq!(super::normalize_theme("light"), "light");
-        assert_eq!(super::normalize_theme("nope"), "dark");
         assert_eq!(
             super::theme_mode("light"),
             gpui_kit::component::theme::ThemeMode::Light

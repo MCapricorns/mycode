@@ -4511,6 +4511,7 @@ dependencies = [
  "gpui-kit",
  "mycode-app",
  "mycode-config",
+ "mycode-frontend",
  "mycode-providers",
  "mycode-tools",
  "notify",
@@ -4519,6 +4520,18 @@ dependencies = [
  "tokio",
  "windows-sys 0.61.2",
  "winresource",
+]
+
+[[package]]
+name = "mycode-frontend"
+version = "0.11.29"
+dependencies = [
+ "mycode-app",
+ "mycode-config",
+ "mycode-providers",
+ "mycode-tools",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

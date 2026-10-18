@@ -209,7 +209,7 @@ fn item_icon(command: &PaletteCommand) -> IconName {
                 IconName::Sparkles
             }
         }
-        PaletteCommand::OpenSettings(section) => section.icon(),
+        PaletteCommand::OpenSettings(section) => crate::ui::section_icon(*section),
     }
 }
 

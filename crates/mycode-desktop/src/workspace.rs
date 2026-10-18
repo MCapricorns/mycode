@@ -13,7 +13,7 @@ use mycode_app::{HeadStamp, SessionEventId};
 use mycode_config::HomeLayout;
 
 use crate::ui::{McpForm, ProviderForm};
-use crate::view_model::{DesktopAction, MainView, WorkspaceState, reduce};
+use crate::view_model::{FrontendAction, MainView, WorkspaceState, reduce};
 use mycode_app::{BridgeCommand, BridgeEventRx, CoreBridge};
 
 mod appearance;
@@ -438,7 +438,7 @@ impl Workspace {
             cx.subscribe_in(&filter, window, |workspace, entity, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = entity.read(cx).value().to_string();
-                    workspace.apply_action(DesktopAction::SessionFilterChanged(text), cx);
+                    workspace.apply_action(FrontendAction::SessionFilterChanged(text), cx);
                 }
             })
             .detach();
@@ -569,7 +569,7 @@ impl Workspace {
         match event {
             InputEvent::Change => {
                 let text = self.composer.read(cx).value().to_string();
-                self.apply_action(DesktopAction::ComposerChanged(text), cx);
+                self.apply_action(FrontendAction::ComposerChanged(text), cx);
                 self.refresh_mention_search(cx);
             }
             InputEvent::PressEnter {
@@ -578,7 +578,7 @@ impl Workspace {
             } => {
                 let draft = self.composer.read(cx).value().to_string();
                 if draft != self.vm.composer_draft {
-                    self.apply_action(DesktopAction::ComposerChanged(draft), cx);
+                    self.apply_action(FrontendAction::ComposerChanged(draft), cx);
                 }
                 if self.accept_open_mention(window, cx) {
                     return;
@@ -595,26 +595,26 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn apply_action(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
+    pub(crate) fn apply_action(&mut self, action: FrontendAction, cx: &mut Context<Self>) {
         let grew = matches!(
             action,
-            DesktopAction::MessageSent { .. }
-                | DesktopAction::TurnArmed
-                | DesktopAction::ChatDelta(_)
-                | DesktopAction::ChatThinkingDelta(_)
-                | DesktopAction::ToolStarted { .. }
-                | DesktopAction::ToolProgress { .. }
-                | DesktopAction::ToolResultAppended(_)
-                | DesktopAction::ChatDone { .. }
-                | DesktopAction::ConversationOpened(_)
-                | DesktopAction::SessionCreated(_)
+            FrontendAction::MessageSent { .. }
+                | FrontendAction::TurnArmed
+                | FrontendAction::ChatDelta(_)
+                | FrontendAction::ChatThinkingDelta(_)
+                | FrontendAction::ToolStarted { .. }
+                | FrontendAction::ToolProgress { .. }
+                | FrontendAction::ToolResultAppended(_)
+                | FrontendAction::ChatDone { .. }
+                | FrontendAction::ConversationOpened(_)
+                | FrontendAction::SessionCreated(_)
         );
         let drop_hold = matches!(
             action,
-            DesktopAction::ConversationOpened(_)
-                | DesktopAction::SessionCreated(_)
-                | DesktopAction::SessionDeleted
-                | DesktopAction::ConversationParked
+            FrontendAction::ConversationOpened(_)
+                | FrontendAction::SessionCreated(_)
+                | FrontendAction::SessionDeleted
+                | FrontendAction::ConversationParked
         );
         self.reset_menu_navigation(&action);
         if drop_hold {
@@ -623,9 +623,9 @@ impl Workspace {
         if drop_hold
             || matches!(
                 action,
-                DesktopAction::AskRequested(_)
-                    | DesktopAction::ChatDone { .. }
-                    | DesktopAction::ChatFailed { .. }
+                FrontendAction::AskRequested(_)
+                    | FrontendAction::ChatDone { .. }
+                    | FrontendAction::ChatFailed { .. }
             )
         {
             self.ask_inputs.clear();
@@ -640,19 +640,19 @@ impl Workspace {
         let subagent_before = self.subagent_window_mark();
         let text_edit = matches!(
             action,
-            DesktopAction::SettingsProxyChanged { typed: true, .. }
+            FrontendAction::SettingsProxyChanged { typed: true, .. }
         );
         let epoch_before = self
             .vm
             .settings
             .as_ref()
             .map(|settings| settings.edit_epoch);
-        if matches!(action, DesktopAction::ShowMainView(view) if view != MainView::Settings)
+        if matches!(action, FrontendAction::ShowMainView(view) if view != MainView::Settings)
             && self.vm.view == MainView::Settings
         {
             self.flush_settings_text_save(cx);
         }
-        if let DesktopAction::SettingsMcpRemoved(index) = &action
+        if let FrontendAction::SettingsMcpRemoved(index) = &action
             && let Some(id) = self
                 .vm
                 .settings
@@ -763,7 +763,7 @@ impl Workspace {
         section: crate::view_model::SettingsSection,
         cx: &mut Context<Self>,
     ) {
-        self.apply_action(DesktopAction::ShowSettingsSection(section), cx);
+        self.apply_action(FrontendAction::ShowSettingsSection(section), cx);
         if section == crate::view_model::SettingsSection::Skills {
             self.refresh_skills(cx);
         }
@@ -804,17 +804,17 @@ impl Workspace {
         view: crate::view_model::ModelsSubview,
         cx: &mut Context<Self>,
     ) {
-        self.apply_action(DesktopAction::ShowModelsSubview(view), cx);
+        self.apply_action(FrontendAction::ShowModelsSubview(view), cx);
     }
 
     /// Opens one vendor's Web detail page (key, enable switch, endpoint).
     pub(crate) fn on_open_web_detail(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::WebDetailOpened(Some(id.to_owned())), cx);
+        self.apply_action(FrontendAction::WebDetailOpened(Some(id.to_owned())), cx);
     }
 
     /// Returns from a Web vendor detail to the backend list.
     pub(crate) fn on_close_web_detail(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::WebDetailOpened(None), cx);
+        self.apply_action(FrontendAction::WebDetailOpened(None), cx);
     }
 
     /// Switches the MCP settings sub-page.
@@ -823,11 +823,11 @@ impl Workspace {
         view: crate::view_model::McpSubview,
         cx: &mut Context<Self>,
     ) {
-        self.apply_action(DesktopAction::ShowMcpSubview(view), cx);
+        self.apply_action(FrontendAction::ShowMcpSubview(view), cx);
     }
 
     pub(crate) fn on_toggle_provider_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProviderKindMenuToggled(open), cx);
+        self.apply_action(FrontendAction::ProviderKindMenuToggled(open), cx);
     }
 
     /// Picks the custom provider form's wire protocol.
@@ -835,11 +835,11 @@ impl Workspace {
         if let Some(form) = self.provider_form.clone() {
             form.update(cx, |form, _| form.kind = kind.to_owned());
         }
-        self.apply_action(DesktopAction::ProviderKindMenuToggled(false), cx);
+        self.apply_action(FrontendAction::ProviderKindMenuToggled(false), cx);
     }
 
     pub(crate) fn on_toggle_mcp_transport_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::McpTransportMenuToggled(open), cx);
+        self.apply_action(FrontendAction::McpTransportMenuToggled(open), cx);
     }
 
     /// Picks the custom MCP form's transport.
@@ -847,12 +847,12 @@ impl Workspace {
         if let Some(form) = self.mcp_form.clone() {
             form.update(cx, |form, _| form.transport = transport.to_owned());
         }
-        self.apply_action(DesktopAction::McpTransportMenuToggled(false), cx);
+        self.apply_action(FrontendAction::McpTransportMenuToggled(false), cx);
     }
 
     pub(crate) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
         if crate::view_model::project_of_session(&self.vm.session_projects, session_id).is_none() {
-            self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
+            self.apply_action(FrontendAction::ActiveProjectChanged(None), cx);
         }
         self.follow_session_project(session_id, cx);
         self.request_open_session(session_id, cx);
@@ -861,7 +861,7 @@ impl Workspace {
     /// Switches the main area between chat and settings.
     pub(crate) fn on_show_main_view(&mut self, view: MainView, cx: &mut Context<Self>) {
         let entering_settings = view == MainView::Settings && self.vm.view != MainView::Settings;
-        self.apply_action(DesktopAction::ShowMainView(view), cx);
+        self.apply_action(FrontendAction::ShowMainView(view), cx);
         if entering_settings {
             self.settings_focus_pending = true;
             self.refresh_skills(cx);
@@ -881,7 +881,7 @@ impl Workspace {
     /// Opens, closes, or pins the inspector. Does not touch the session.
     /// The pair is persisted so a resident panel survives a restart.
     pub(crate) fn on_set_inspector(&mut self, open: bool, pinned: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::InspectorChanged { open, pinned }, cx);
+        self.apply_action(FrontendAction::InspectorChanged { open, pinned }, cx);
         self.persist_ui_state(cx);
     }
 
@@ -919,7 +919,7 @@ impl Workspace {
 
     /// Expands or collapses every thinking trace and remembers the choice.
     pub(crate) fn on_toggle_thinking(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ThinkingCollapsedToggled, cx);
+        self.apply_action(FrontendAction::ThinkingCollapsedToggled, cx);
         self.persist_ui_state(cx);
     }
 

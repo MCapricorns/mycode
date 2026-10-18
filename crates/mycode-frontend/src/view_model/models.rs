@@ -7,7 +7,7 @@ use super::state::WorkspaceState;
 
 /// Catalog display name for one provider, or the id when the catalog has none.
 #[must_use]
-pub(crate) fn provider_display_name(state: &WorkspaceState, id: &str) -> String {
+pub fn provider_display_name(state: &WorkspaceState, id: &str) -> String {
     state
         .catalog
         .as_ref()
@@ -17,7 +17,7 @@ pub(crate) fn provider_display_name(state: &WorkspaceState, id: &str) -> String 
 
 /// Catalog display name for one model, or the id when the catalog has none.
 #[must_use]
-pub(crate) fn model_display_name(state: &WorkspaceState, provider: &str, model_id: &str) -> String {
+pub fn model_display_name(state: &WorkspaceState, provider: &str, model_id: &str) -> String {
     state
         .catalog
         .as_ref()
@@ -35,7 +35,7 @@ pub(crate) fn model_display_name(state: &WorkspaceState, provider: &str, model_i
 /// Effective context window (in tokens) for the selected provider and model,
 /// preferring a configured provider override over the catalog limit.
 #[must_use]
-pub(crate) fn model_context_window(vm: &WorkspaceState) -> u64 {
+pub fn model_context_window(vm: &WorkspaceState) -> u64 {
     let shown = vm.selected_model.as_deref();
     let provider_id = vm.selected_provider.as_deref();
     let provider_row = provider_id.and_then(|id| {
@@ -76,7 +76,7 @@ pub(crate) fn model_context_window(vm: &WorkspaceState) -> u64 {
 /// composer chip, the reasoning menu, and the turn request so they can never
 /// disagree.
 #[must_use]
-pub(crate) fn selected_reasoning_level(state: &WorkspaceState) -> String {
+pub fn selected_reasoning_level(state: &WorkspaceState) -> String {
     let levels = reduce::selected_reasoning_levels(state);
     effective_reasoning_level(
         &levels,
@@ -90,7 +90,7 @@ pub(crate) fn selected_reasoning_level(state: &WorkspaceState) -> String {
 /// The stored pick when `levels` advertises it, else the strongest rung,
 /// else `default`.
 #[must_use]
-pub(crate) fn effective_reasoning_level(levels: &[String], stored: Option<&str>) -> String {
+pub fn effective_reasoning_level(levels: &[String], stored: Option<&str>) -> String {
     stored
         .filter(|stored| levels.iter().any(|level| level == stored))
         .or_else(|| reduce::strongest_reasoning_level(levels))
@@ -137,7 +137,7 @@ fn compact_model(id: &str) -> bool {
 
 /// Stable strongest-first order. Equal scores keep the original order.
 #[must_use]
-pub(crate) fn rank_model_ids(ids: impl IntoIterator<Item = String>) -> Vec<String> {
+pub fn rank_model_ids(ids: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut indexed: Vec<(usize, String)> = ids.into_iter().enumerate().collect();
     indexed.sort_by(|left, right| {
         model_strength(&right.1)

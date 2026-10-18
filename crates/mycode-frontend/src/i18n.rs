@@ -28,19 +28,19 @@ static LANGUAGE: AtomicU8 = AtomicU8::new(0);
 
 /// Whether the UI renders in Simplified Chinese.
 #[must_use]
-pub(crate) fn is_chinese() -> bool {
+pub fn is_chinese() -> bool {
     LANGUAGE.load(Ordering::Relaxed) == 1
 }
 
 /// Picks one of the two spellings for the active language.
 #[must_use]
-pub(crate) fn t(en: &'static str, zh: &'static str) -> &'static str {
+pub fn t(en: &'static str, zh: &'static str) -> &'static str {
     if is_chinese() { zh } else { en }
 }
 
 /// Applies a configured language id (`auto`, `en`, `zh`). `auto` follows the
 /// operating system's UI language.
-pub(crate) fn apply_language(configured: &str) {
+pub fn apply_language(configured: &str) {
     let chinese = match configured {
         "zh" => true,
         "en" => false,

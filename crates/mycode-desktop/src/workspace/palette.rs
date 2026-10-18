@@ -7,7 +7,7 @@
 use gpui_kit::component::command::CommandState;
 use gpui_kit::{AppContext as _, Context, Entity, Focusable as _, Window};
 
-use crate::view_model::{DesktopAction, MainView, PaletteCommand, palette_catalog, palette_item};
+use crate::view_model::{FrontendAction, MainView, PaletteCommand, palette_catalog, palette_item};
 use crate::workspace::Workspace;
 
 impl Workspace {
@@ -45,7 +45,7 @@ impl Workspace {
         } else {
             self.palette_focus_pending = false;
         }
-        self.apply_action(DesktopAction::CommandPaletteSet(open), cx);
+        self.apply_action(FrontendAction::CommandPaletteSet(open), cx);
         if !open {
             self.restore_focus_after_palette(window, cx);
         }

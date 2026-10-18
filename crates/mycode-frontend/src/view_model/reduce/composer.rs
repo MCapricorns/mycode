@@ -11,7 +11,7 @@ use super::super::state::WorkspaceState;
 
 /// What Enter or the send arrow should do with the current draft.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ComposerSubmit {
+pub enum ComposerSubmit {
     /// An open session can take the text.
     Send,
     /// No session yet, and a folder is open. Create one, then send `text`.
@@ -25,7 +25,7 @@ pub(crate) enum ComposerSubmit {
 /// Decides Enter / send. The welcome desk has no session, so a non-empty
 /// draft starts a task instead of being dropped.
 #[must_use]
-pub(crate) fn composer_submit(state: &WorkspaceState, draft: &str) -> ComposerSubmit {
+pub fn composer_submit(state: &WorkspaceState, draft: &str) -> ComposerSubmit {
     if state.active.is_some() {
         return ComposerSubmit::Send;
     }
@@ -147,7 +147,7 @@ pub(super) fn slash_items(
 ///
 /// An exact `/fragment` or `mcp:fragment` wins. Otherwise the first row,
 /// which the menu paints as the keyboard target.
-pub(crate) fn preferred_slash_index(fragment: &str, items: &[MentionItem]) -> usize {
+pub fn preferred_slash_index(fragment: &str, items: &[MentionItem]) -> usize {
     if items.is_empty() {
         return 0;
     }

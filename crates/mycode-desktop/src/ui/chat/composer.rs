@@ -689,7 +689,7 @@ fn composer_meter_chip(
             let detail: SharedString = meter.detail.clone().into();
             this.tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
         })
-        .when_some(meter.parts.hit_percent, |row, percent| {
+        .when_some(meter.parts.remaining_percent, |row, percent| {
             row.child(cache_ring(percent, theme))
         })
         .when(!meter.parts.ratio.is_empty(), |row| {
@@ -703,7 +703,9 @@ fn composer_meter_chip(
         })
 }
 
-/// A 16px ring whose stroke is the cache-hit share of the latest prompt.
+/// A 16px ring whose stroke is the remaining share of the model's context
+/// window: a full ring is a free budget, and the stroke depletes as the
+/// latest prompt fills it. The cache-hit figure stays on the hover detail.
 fn cache_ring(percent: u64, theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
     let svg = cache_ring_svg(
         percent,
@@ -770,12 +772,14 @@ fn context_meter(workspace: &Workspace) -> Option<ComposerMeter> {
     // With no usage yet the chip still shows `0 / window`, so the budget is
     // visible from the first message instead of appearing after the first
     // reply.
+    // The hit and cache figures are the latest prompt's; the in/out sums are
+    // the whole turn's, so each carries its own scope label.
     let parts = crate::view_model::context_meter_parts(
         used,
         window,
         cached,
         t("cached", "缓存"),
-        t("cache hit", "缓存命中"),
+        t("last request hit", "最近请求命中"),
     );
     let selected_model = vm.selected_model.clone();
     let model_of = |turn: &crate::view_model::TurnStats| {
@@ -787,7 +791,13 @@ fn context_meter(workspace: &Workspace) -> Option<ComposerMeter> {
         .live_turn
         .as_ref()
         .filter(|turn| model_of(turn))
-        .or_else(|| vm.last_turn.as_ref().filter(|turn| model_of(turn)));
+        .map(|turn| (t("This turn, total", "本轮合计"), turn))
+        .or_else(|| {
+            vm.last_turn
+                .as_ref()
+                .filter(|turn| model_of(turn))
+                .map(|turn| (t("Last turn, total", "上一轮合计"), turn))
+        });
     let mut detail: Vec<String> = Vec::new();
     if !parts.hit.is_empty() {
         detail.push(parts.hit.clone());
@@ -795,9 +805,9 @@ fn context_meter(workspace: &Workspace) -> Option<ComposerMeter> {
     if !parts.cache.is_empty() {
         detail.push(parts.cache.clone());
     }
-    if let Some(turn) = turn {
+    if let Some((label, turn)) = turn {
         detail.push(format!(
-            "{} {} · {} {}",
+            "{label} {} {} · {} {}",
             crate::ui::compact_count(turn.input),
             t("in", "入"),
             crate::ui::compact_count(turn.output),

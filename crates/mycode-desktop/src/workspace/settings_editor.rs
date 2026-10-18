@@ -7,7 +7,7 @@ use gpui_kit::{AppContext as _, Context, Entity, Window};
 use mycode_app::BridgeCommand;
 
 use crate::ui::{McpForm, build_mcp_server};
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 mod providers;
@@ -45,7 +45,7 @@ impl Workspace {
                             Some(mycode_config::ProxyPreference::Url(_))
                         ) {
                             workspace.apply_action(
-                                DesktopAction::SettingsProxyChanged {
+                                FrontendAction::SettingsProxyChanged {
                                     value: text,
                                     typed: true,
                                 },
@@ -103,7 +103,7 @@ impl Workspace {
         };
         self.proxy_sync_pending = true;
         self.apply_action(
-            DesktopAction::SettingsProxyChanged {
+            FrontendAction::SettingsProxyChanged {
                 value,
                 typed: false,
             },
@@ -134,7 +134,7 @@ impl Workspace {
         };
         if !enabled {
             self.pending_web_enable.remove(&backend.id);
-            self.apply_action(DesktopAction::SettingsBackendToggled(index, false), cx);
+            self.apply_action(FrontendAction::SettingsBackendToggled(index, false), cx);
             return;
         }
         if self.pending_web_enable.contains(&backend.id) {
@@ -268,7 +268,7 @@ impl Workspace {
             )
         };
         if id.is_empty() {
-            self.apply_action(DesktopAction::Failed("fill id".to_owned()), cx);
+            self.apply_action(FrontendAction::Failed("fill id".to_owned()), cx);
             return;
         }
         if self
@@ -278,7 +278,7 @@ impl Workspace {
             .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.id == id))
         {
             self.apply_action(
-                DesktopAction::Failed(format!("an MCP server named '{id}' already exists")),
+                FrontendAction::Failed(format!("an MCP server named '{id}' already exists")),
                 cx,
             );
             return;
@@ -286,11 +286,11 @@ impl Workspace {
         let server = match build_mcp_server(&id, &transport, &endpoint, &command, &env_line) {
             Ok(server) => server,
             Err(message) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
                 return;
             }
         };
-        self.apply_action(DesktopAction::SettingsMcpAdded(server), cx);
+        self.apply_action(FrontendAction::SettingsMcpAdded(server), cx);
         if transport == "http"
             && let Some(api_key) = normalized_key_input(&api_key)
         {
@@ -334,7 +334,7 @@ impl Workspace {
         let imported = match mycode_config::parse_mcp_import(&raw) {
             Ok(imported) => imported,
             Err(message) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
                 return;
             }
         };
@@ -359,7 +359,7 @@ impl Workspace {
             let server_id = row.server.id.clone();
             existing.push(server_id.clone());
             let api_key = row.api_key.clone();
-            self.apply_action(DesktopAction::SettingsMcpAdded(row.server), cx);
+            self.apply_action(FrontendAction::SettingsMcpAdded(row.server), cx);
             added += 1;
             if let Some(api_key) = api_key.and_then(|key| normalized_key_input(&key)) {
                 self.dispatch(
@@ -379,7 +379,7 @@ impl Workspace {
             // One aggregated message: per-row failures overwrote each other,
             // so only the last duplicate name was ever reported.
             self.apply_action(
-                DesktopAction::Failed(format!(
+                FrontendAction::Failed(format!(
                     "MCP servers already exist: {}",
                     duplicates.join(", ")
                 )),
@@ -392,7 +392,7 @@ impl Workspace {
 
     pub(crate) fn on_skill_enabled(&mut self, slug: &str, enabled: bool, cx: &mut Context<Self>) {
         self.apply_action(
-            DesktopAction::SettingsSkillToggled(slug.to_owned(), enabled),
+            FrontendAction::SettingsSkillToggled(slug.to_owned(), enabled),
             cx,
         );
     }
@@ -410,7 +410,7 @@ impl Workspace {
         };
         let mut next = settings.subagents.clone();
         next.role_mut(role).enabled = enabled;
-        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        self.apply_action(FrontendAction::SettingsSubagentsChanged(next), cx);
     }
 
     pub(crate) fn on_toggle_subagent_menu(
@@ -421,7 +421,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let next = open.then(|| (role.to_owned(), field.to_owned()));
-        self.apply_action(DesktopAction::SubagentMenuToggled(next), cx);
+        self.apply_action(FrontendAction::SubagentMenuToggled(next), cx);
     }
 
     pub(crate) fn on_set_subagent_thinking(
@@ -436,7 +436,7 @@ impl Workspace {
         let mut next = settings.subagents.clone();
         let entry = next.role_mut(role);
         entry.thinking = thinking.filter(|level| level != "inherit" && level != "default");
-        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        self.apply_action(FrontendAction::SettingsSubagentsChanged(next), cx);
     }
 
     pub(crate) fn on_set_subagent_route(
@@ -491,7 +491,7 @@ impl Workspace {
                 }
             }
         }
-        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        self.apply_action(FrontendAction::SettingsSubagentsChanged(next), cx);
     }
 
     /// Restores each chat's working directory after startup so a later
@@ -573,7 +573,7 @@ impl Workspace {
         };
         if let Err(message) = document.validate() {
             self.apply_action(
-                DesktopAction::SettingsSaveFailed(format!("invalid settings: {message}")),
+                FrontendAction::SettingsSaveFailed(format!("invalid settings: {message}")),
                 cx,
             );
             return;

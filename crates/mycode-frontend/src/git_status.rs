@@ -57,7 +57,7 @@ fn repository_root(folder: &Path) -> RepoRoot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GitFile {
+pub struct GitFile {
     pub path: String,
     pub status: String,
     /// Previous path for a rename or copy. Diffs use [`Self::path`].
@@ -66,7 +66,7 @@ pub(crate) struct GitFile {
 
 /// Branch plus dirty files for the open folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GitSnapshot {
+pub struct GitSnapshot {
     pub branch: String,
     pub files: Vec<GitFile>,
     pub note: Option<String>,
@@ -75,7 +75,7 @@ pub(crate) struct GitSnapshot {
 }
 
 impl GitSnapshot {
-    pub(crate) fn empty(note: impl Into<String>) -> Self {
+    pub fn empty(note: impl Into<String>) -> Self {
         Self {
             branch: String::new(),
             files: Vec::new(),
@@ -91,7 +91,7 @@ impl GitSnapshot {
 /// opportunistically rewriting the index, which would contend with the user's
 /// own git commands and subagent worktree updates. The file list keeps 80
 /// dirty paths and sets [`GitSnapshot::stopped_early`] when another remains.
-pub(crate) fn read_status(root: &Path) -> GitSnapshot {
+pub fn read_status(root: &Path) -> GitSnapshot {
     let root = match repository_root(root) {
         RepoRoot::Root(root) => root,
         RepoRoot::NotARepository => {
@@ -167,7 +167,7 @@ fn parse_porcelain(text: &str) -> GitSnapshot {
 ///
 /// `git diff HEAD` includes staged edits. An untracked file has no HEAD
 /// object, so the whole file is shown as added lines.
-pub(crate) fn read_diff(root: &Path, path: &str) -> String {
+pub fn read_diff(root: &Path, path: &str) -> String {
     let root = match repository_root(root) {
         RepoRoot::Root(root) => root,
         RepoRoot::NotARepository => {

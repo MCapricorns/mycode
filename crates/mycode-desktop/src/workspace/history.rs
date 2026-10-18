@@ -4,7 +4,7 @@ use gpui_kit::{Context, Pixels, px};
 use mycode_app::BridgeCommand;
 
 use super::{AppearanceScroll, ScrollHold, Workspace};
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 
 impl Workspace {
     /// Previous offset and content height for one prepend, consumed by the
@@ -143,7 +143,7 @@ impl Workspace {
         let Some((session, branch, expected_head)) = self.open_turn_target() else {
             return;
         };
-        self.apply_action(DesktopAction::HistoryLoadStarted, cx);
+        self.apply_action(FrontendAction::HistoryLoadStarted, cx);
         self.dispatch(
             BridgeCommand::LoadOlder {
                 session,

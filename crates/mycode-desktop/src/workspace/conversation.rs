@@ -6,7 +6,7 @@ use mycode_app::{
 };
 
 use super::Workspace;
-use crate::view_model::{ConversationEntry, DesktopAction, EntryKind};
+use crate::view_model::{ConversationEntry, FrontendAction, EntryKind};
 
 fn previous_event(entries: &[ConversationEntry], index: usize) -> Option<&str> {
     entries
@@ -111,7 +111,7 @@ impl Workspace {
                         }
                     }
                     BridgeReply::Older(Err(message)) => {
-                        workspace.apply_action(DesktopAction::Failed(message), cx)
+                        workspace.apply_action(FrontendAction::Failed(message), cx)
                     }
                     _ => {}
                 }
@@ -154,17 +154,17 @@ impl Workspace {
                             .as_ref()
                             .is_some_and(|active| active.session_id == session_id)
                         {
-                            workspace.apply_action(DesktopAction::SessionDeleted, cx);
+                            workspace.apply_action(FrontendAction::SessionDeleted, cx);
                         }
                         // Forget bindings only after the core confirms deletion;
                         // failure must leave both the transcript and routing intact.
                         workspace
-                            .apply_action(DesktopAction::SessionBindingsForgotten(session_id), cx);
+                            .apply_action(FrontendAction::SessionBindingsForgotten(session_id), cx);
                         workspace.persist_ui_state(cx);
                         workspace.dispatch(BridgeCommand::ListSessions, cx);
                     }
                     BridgeReply::SessionDeleted(Err(message)) => {
-                        workspace.apply_action(DesktopAction::Failed(message), cx)
+                        workspace.apply_action(FrontendAction::Failed(message), cx)
                     }
                     _ => {}
                 }

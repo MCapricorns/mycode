@@ -5,7 +5,7 @@ use gpui_kit::{
 };
 
 use crate::ui::model_picker::{ModelPickerTarget, ProviderChoice};
-use crate::view_model::{DesktopAction, MentionKind};
+use crate::view_model::{FrontendAction, MentionKind};
 
 use super::Workspace;
 
@@ -36,24 +36,24 @@ fn moved(current: usize, len: usize, down: bool) -> usize {
 }
 
 impl Workspace {
-    pub(super) fn reset_menu_navigation(&mut self, action: &DesktopAction) {
+    pub(super) fn reset_menu_navigation(&mut self, action: &FrontendAction) {
         match action {
-            DesktopAction::ComposerChanged(text) if text != &self.vm.composer_draft => {
+            FrontendAction::ComposerChanged(text) if text != &self.vm.composer_draft => {
                 self.menu_navigation.mention = None;
             }
-            DesktopAction::MentionFiles(_) => self.menu_navigation.mention = None,
-            DesktopAction::ReasoningMenuToggled(_) => self.menu_navigation.reasoning = None,
-            DesktopAction::ModelMenuToggled(_) | DesktopAction::SubagentMenuToggled(_) => {
+            FrontendAction::MentionFiles(_) => self.menu_navigation.mention = None,
+            FrontendAction::ReasoningMenuToggled(_) => self.menu_navigation.reasoning = None,
+            FrontendAction::ModelMenuToggled(_) | FrontendAction::SubagentMenuToggled(_) => {
                 self.menu_navigation.model = None;
                 self.menu_navigation.provider = None;
             }
-            DesktopAction::ModelMenuBrowse(_) => self.menu_navigation.model = None,
-            DesktopAction::PickerQueryChanged(query) if query != &self.vm.picker_query => {
+            FrontendAction::ModelMenuBrowse(_) => self.menu_navigation.model = None,
+            FrontendAction::PickerQueryChanged(query) if query != &self.vm.picker_query => {
                 self.menu_navigation.model = None;
             }
-            DesktopAction::ConversationOpened(_)
-            | DesktopAction::SessionDeleted
-            | DesktopAction::ConversationParked => {
+            FrontendAction::ConversationOpened(_)
+            | FrontendAction::SessionDeleted
+            | FrontendAction::ConversationParked => {
                 self.menu_navigation = MenuNavigation::default();
             }
             _ => {}
@@ -198,7 +198,7 @@ impl Workspace {
                                     None,
                                     cx,
                                 );
-                                self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+                                self.apply_action(FrontendAction::SubagentMenuToggled(None), cx);
                             }
                         }
                         ProviderChoice::Pin(pin) => crate::ui::model_picker::select_model(

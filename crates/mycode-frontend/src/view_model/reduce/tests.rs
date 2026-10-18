@@ -1,6 +1,6 @@
 use super::reduce;
 use crate::view_model::{
-    ActiveConversation, ConversationEntry, DesktopAction, EntryKind, TurnStats, UpdateState,
+    ActiveConversation, ConversationEntry, FrontendAction, EntryKind, TurnStats, UpdateState,
     WorkspaceState,
 };
 
@@ -80,7 +80,7 @@ fn an_offer_found_publishes_the_offer_and_flips_available_together() {
         checksum_url: "https://example.com/app.zip.sha256".to_owned(),
     };
     let mut state = WorkspaceState::default();
-    reduce(&mut state, DesktopAction::UpdateOfferFound(offer.clone()));
+    reduce(&mut state, FrontendAction::UpdateOfferFound(offer.clone()));
     // The download button's handler reads `last_offer`; an Available
     // state without a published offer is a dead button.
     assert_eq!(state.last_offer, Some(offer));
@@ -93,7 +93,7 @@ fn an_offer_found_publishes_the_offer_and_flips_available_together() {
     );
     reduce(
         &mut state,
-        DesktopAction::UpdateStaged(mycode_app::PreparedUpdate {
+        FrontendAction::UpdateStaged(mycode_app::PreparedUpdate {
             new_binary: std::path::PathBuf::from("stage/app.exe"),
             stage_dir: std::path::PathBuf::from("stage"),
             binary_sha256: "abc123".to_owned(),
@@ -128,7 +128,7 @@ fn the_open_conversation_is_capped_at_the_resident_entry_ceiling() {
         thinking: String::new(),
     };
     let mut state = open(entries, None);
-    reduce(&mut state, DesktopAction::TurnArmed);
+    reduce(&mut state, FrontendAction::TurnArmed);
     let active = state.active.expect("conversation stays open");
     assert_eq!(
         active.entries.len(),
@@ -159,7 +159,7 @@ fn older_loaded_is_not_trimmed_past_the_resident_ceiling() {
     let mut state = open(tail, Some(&requested));
     reduce(
         &mut state,
-        DesktopAction::OlderLoaded {
+        FrontendAction::OlderLoaded {
             session_id: "ses".to_owned(),
             entries: older_page,
             older_before: None,
@@ -168,9 +168,9 @@ fn older_loaded_is_not_trimmed_past_the_resident_ceiling() {
     );
     reduce(
         &mut state,
-        DesktopAction::ComposerChanged("draft".to_owned()),
+        FrontendAction::ComposerChanged("draft".to_owned()),
     );
-    reduce(&mut state, DesktopAction::HistoryLoadStarted);
+    reduce(&mut state, FrontendAction::HistoryLoadStarted);
     let active = state.active.expect("open");
     assert_eq!(active.entries.len(), super::MAX_RESIDENT_ENTRIES + 10);
     assert_eq!(
@@ -205,7 +205,7 @@ fn non_turn_failure_preserves_sending_and_streaming_during_a_turn() {
     };
     reduce(
         &mut state,
-        DesktopAction::Failed("branch head moved on".to_owned()),
+        FrontendAction::Failed("branch head moved on".to_owned()),
     );
     assert!(state.sending, "non-turn failure must not clear sending");
     assert_eq!(state.error.as_deref(), Some("branch head moved on"));
@@ -225,7 +225,7 @@ fn inspector_changed_toggles_open_and_keeps_the_pin() {
     assert!(!state.inspector_pinned);
     reduce(
         &mut state,
-        DesktopAction::InspectorChanged {
+        FrontendAction::InspectorChanged {
             open: true,
             pinned: false,
         },
@@ -234,7 +234,7 @@ fn inspector_changed_toggles_open_and_keeps_the_pin() {
     assert!(!state.inspector_pinned);
     reduce(
         &mut state,
-        DesktopAction::InspectorChanged {
+        FrontendAction::InspectorChanged {
             open: true,
             pinned: true,
         },
@@ -243,7 +243,7 @@ fn inspector_changed_toggles_open_and_keeps_the_pin() {
     assert!(state.inspector_pinned);
     reduce(
         &mut state,
-        DesktopAction::InspectorChanged {
+        FrontendAction::InspectorChanged {
             open: false,
             pinned: true,
         },
@@ -257,7 +257,7 @@ fn older_page_prepends_when_the_cursor_still_matches() {
     let mut state = open(vec![user("e5", "new")], Some("e5"));
     reduce(
         &mut state,
-        DesktopAction::OlderLoaded {
+        FrontendAction::OlderLoaded {
             session_id: "ses".to_owned(),
             entries: vec![user("e0", "old")],
             older_before: None,
@@ -282,7 +282,7 @@ fn stale_older_page_is_dropped() {
     let mut state = open(vec![user("e5", "new")], Some("e5"));
     reduce(
         &mut state,
-        DesktopAction::OlderLoaded {
+        FrontendAction::OlderLoaded {
             session_id: "ses".to_owned(),
             entries: vec![user("e0", "old")],
             older_before: None,
@@ -337,7 +337,7 @@ fn reasoning_pick_stays_on_the_session_and_does_not_dirty_settings() {
     });
     reduce(
         &mut state,
-        DesktopAction::SettingsReasoningChanged("high".to_owned()),
+        FrontendAction::SettingsReasoningChanged("high".to_owned()),
     );
     let settings = state.settings.expect("settings");
     assert_eq!(settings.reasoning.as_deref(), Some("high"));
@@ -381,7 +381,7 @@ fn a_new_session_clears_the_previous_context_meter() {
     };
     reduce(
         &mut state,
-        DesktopAction::SessionCreated(mycode_app::SessionSummary {
+        FrontendAction::SessionCreated(mycode_app::SessionSummary {
             session_id: "new".to_owned(),
             root_branch_id: "branch".to_owned(),
             title: String::new(),
@@ -407,7 +407,7 @@ fn a_new_session_clears_the_previous_context_meter() {
     // session's in-memory meter does not leak across.
     reduce(
         &mut state,
-        DesktopAction::ConversationOpened(ActiveConversation {
+        FrontendAction::ConversationOpened(ActiveConversation {
             session_id: "old".to_owned(),
             branch_id: "branch".to_owned(),
             head: "use-1".to_owned(),
@@ -428,7 +428,7 @@ fn a_new_session_clears_the_previous_context_meter() {
     // meter. The ring must not wait for another turn.
     reduce(
         &mut state,
-        DesktopAction::ConversationOpened(ActiveConversation {
+        FrontendAction::ConversationOpened(ActiveConversation {
             session_id: "metered".to_owned(),
             branch_id: "branch".to_owned(),
             head: "use-2".to_owned(),
@@ -445,7 +445,7 @@ fn a_new_session_clears_the_previous_context_meter() {
     assert!(state.last_turn.is_none());
     assert!(state.live_turn.is_none());
 
-    reduce(&mut state, DesktopAction::ConversationParked);
+    reduce(&mut state, FrontendAction::ConversationParked);
     assert!(state.active.is_none());
     assert_eq!(state.context_used, 0);
     assert_eq!(state.context_cache, 0);
@@ -453,7 +453,7 @@ fn a_new_session_clears_the_previous_context_meter() {
 
     state.context_used = 25_000;
     state.context_cache = 24_300;
-    reduce(&mut state, DesktopAction::SessionDeleted);
+    reduce(&mut state, FrontendAction::SessionDeleted);
     assert_eq!(state.context_used, 0);
     assert_eq!(state.context_cache, 0);
 }
@@ -461,34 +461,34 @@ fn a_new_session_clears_the_previous_context_meter() {
 #[test]
 fn a_held_queue_stays_held_until_it_empties_or_a_new_session_opens() {
     let mut state = open(Vec::new(), None);
-    reduce(&mut state, DesktopAction::QueuePaused(true));
+    reduce(&mut state, FrontendAction::QueuePaused(true));
     assert!(!state.queue_paused, "an empty queue is never held");
 
-    reduce(&mut state, DesktopAction::MessageQueued("one".to_owned()));
-    reduce(&mut state, DesktopAction::MessageQueued("two".to_owned()));
-    reduce(&mut state, DesktopAction::QueuePaused(true));
+    reduce(&mut state, FrontendAction::MessageQueued("one".to_owned()));
+    reduce(&mut state, FrontendAction::MessageQueued("two".to_owned()));
+    reduce(&mut state, FrontendAction::QueuePaused(true));
     assert!(state.queue_paused);
     reduce(
         &mut state,
-        DesktopAction::SteersReturned(vec!["three".to_owned()]),
+        FrontendAction::SteersReturned(vec!["three".to_owned()]),
     );
     assert!(state.queue_paused, "returned steers join a held queue");
-    reduce(&mut state, DesktopAction::QueuedMessageRemoved(0));
+    reduce(&mut state, FrontendAction::QueuedMessageRemoved(0));
     assert!(state.queue_paused);
-    reduce(&mut state, DesktopAction::QueuedMessageTaken);
-    reduce(&mut state, DesktopAction::QueuedMessageRemoved(0));
+    reduce(&mut state, FrontendAction::QueuedMessageTaken);
+    reduce(&mut state, FrontendAction::QueuedMessageRemoved(0));
     assert!(state.queued.is_empty());
     assert!(!state.queue_paused, "the hold ends with the queue");
 
-    reduce(&mut state, DesktopAction::MessageQueued("five".to_owned()));
-    reduce(&mut state, DesktopAction::MessageQueued("six".to_owned()));
-    reduce(&mut state, DesktopAction::QueuePaused(true));
-    reduce(&mut state, DesktopAction::QueueCleared);
+    reduce(&mut state, FrontendAction::MessageQueued("five".to_owned()));
+    reduce(&mut state, FrontendAction::MessageQueued("six".to_owned()));
+    reduce(&mut state, FrontendAction::QueuePaused(true));
+    reduce(&mut state, FrontendAction::QueueCleared);
     assert!(state.queued.is_empty() && !state.queue_paused);
 
-    reduce(&mut state, DesktopAction::MessageQueued("four".to_owned()));
-    reduce(&mut state, DesktopAction::QueuePaused(true));
-    reduce(&mut state, DesktopAction::SessionDeleted);
+    reduce(&mut state, FrontendAction::MessageQueued("four".to_owned()));
+    reduce(&mut state, FrontendAction::QueuePaused(true));
+    reduce(&mut state, FrontendAction::SessionDeleted);
     assert!(state.queued.is_empty() && !state.queue_paused);
 }
 
@@ -502,7 +502,7 @@ fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
     let session_id = state.active.as_ref().expect("active").session_id.clone();
     reduce(
         &mut state,
-        DesktopAction::SteerCommitted {
+        FrontendAction::SteerCommitted {
             session_id,
             head: String::new(),
             entry: user("use-steer", "first"),
@@ -511,7 +511,7 @@ fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
     assert_eq!(state.pending_steers, ["second"]);
     reduce(
         &mut state,
-        DesktopAction::SteersReturned(vec!["second".to_owned()]),
+        FrontendAction::SteersReturned(vec!["second".to_owned()]),
     );
     assert!(state.pending_steers.is_empty());
     assert_eq!(state.queued, ["second"]);
@@ -522,7 +522,7 @@ fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
     state.pending_steers.push("late".to_owned());
     reduce(
         &mut state,
-        DesktopAction::ChatFailed {
+        FrontendAction::ChatFailed {
             message: mycode_app::CHAT_CANCELLED.to_owned(),
             head: String::new(),
         },

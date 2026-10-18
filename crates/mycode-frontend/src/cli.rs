@@ -42,20 +42,44 @@ pub fn early_action<S: AsRef<str>>(args: &[S]) -> Option<EarlyAction> {
     }
 }
 
+/// The self-update helper entry point shared by every `mycode*` binary.
+///
+/// `Some(code)` means the args requested `--mycode-apply-update` and the
+/// helper already ran: the caller exits with `code` without touching the
+/// rest of the startup path. `None` means a normal launch.
+#[must_use]
+pub fn apply_update_from_args(args: &[String]) -> Option<i32> {
+    match mycode_app::parse_apply_update_args(args) {
+        Ok(Some(request)) => Some(match mycode_app::run_apply_update_helper(&request) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("updater: {error}");
+                1
+            }
+        }),
+        Err(error) => {
+            eprintln!("updater: {error}");
+            Some(1)
+        }
+        Ok(None) => None,
+    }
+}
+
 /// `mycode <version>` for `--version` and the help header.
 #[must_use]
 pub fn version_line() -> String {
     format!("mycode {}", env!("CARGO_PKG_VERSION"))
 }
 
-/// Text for `--help`.
+/// Text for `--help`. `bin` is the invoking binary name shown in the usage
+/// line (`mycode-desktop`, `mycode`).
 #[must_use]
-pub fn help_text() -> String {
+pub fn help_text(bin: &str) -> String {
     format!(
         "{}\n\
-Desktop coding agent.\n\
+Coding agent.\n\
 \n\
-Usage: mycode-desktop [OPTIONS]\n\
+Usage: {bin} [OPTIONS]\n\
 \n\
 Options:\n\
   -h, --help      Show this help and exit\n\
@@ -105,8 +129,9 @@ mod tests {
         assert_eq!(early_action(&["folder"]), None);
         let version = version_line();
         assert!(version.starts_with("mycode "), "{version}");
-        assert!(help_text().contains("--version"));
-        assert!(help_text().contains(&version));
+        assert!(help_text("mycode-desktop").contains("--version"));
+        assert!(help_text("mycode-desktop").contains(&version));
+        assert!(help_text("mycode").contains("Usage: mycode "));
     }
 
     #[test]

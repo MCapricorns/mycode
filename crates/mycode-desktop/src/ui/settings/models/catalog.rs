@@ -15,7 +15,7 @@ use gpui_kit::{
 use super::super::widgets::{row_header, settings_card};
 use crate::i18n::t;
 use crate::ui::skin;
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 /// The catalog picker page: search + every provider from models.dev; picking
@@ -441,7 +441,7 @@ fn preset_model_row(
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(move |_, _, cx| {
             let _ = weak.update(cx, |workspace, cx| {
-                workspace.apply_action(DesktopAction::PresetModelToggled(model_id.clone()), cx);
+                workspace.apply_action(FrontendAction::PresetModelToggled(model_id.clone()), cx);
             });
         })
         .child(model.to_owned())

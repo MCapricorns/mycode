@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 
 use mycode_app::{BridgeCommand, SessionId};
 
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 impl Workspace {
@@ -89,7 +89,7 @@ impl Workspace {
                 global: skill.global,
             })
             .collect();
-        self.apply_action(DesktopAction::SkillsLoaded(skills), cx);
+        self.apply_action(FrontendAction::SkillsLoaded(skills), cx);
     }
 
     /// Enter accepts the highlighted file or command instead of sending an
@@ -130,7 +130,7 @@ impl Workspace {
                 if let Some(position) = text.rfind('@') {
                     text.replace_range(position.., &format!("@{} ", item.insert));
                 }
-                self.apply_action(DesktopAction::ComposerChanged(text.clone()), cx);
+                self.apply_action(FrontendAction::ComposerChanged(text.clone()), cx);
                 self.composer
                     .update(cx, |state, cx| state.set_value(text, window, cx));
             }
@@ -138,7 +138,7 @@ impl Workspace {
                 if let Some(slug) = item.insert.strip_prefix('/') {
                     self.insert_skill_draft(slug, cx);
                     let draft = self.pending_composer_prefill.clone().unwrap_or_default();
-                    self.apply_action(DesktopAction::ComposerChanged(draft), cx);
+                    self.apply_action(FrontendAction::ComposerChanged(draft), cx);
                 }
             }
             _ => self.run_slash_command(&item.insert, cx),
@@ -172,7 +172,7 @@ impl Workspace {
             self.pending_composer_prefill = Some(String::new());
         }
         let draft = self.pending_composer_prefill.clone().unwrap_or_default();
-        self.apply_action(DesktopAction::ComposerChanged(draft), cx);
+        self.apply_action(FrontendAction::ComposerChanged(draft), cx);
     }
 
     pub(crate) fn on_refresh_skills(&mut self, cx: &mut Context<Self>) {
@@ -236,7 +236,7 @@ impl Workspace {
         if project.is_empty() {
             return;
         }
-        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
+        self.apply_action(FrontendAction::WorkspaceRootAdded(project.to_owned()), cx);
         if self.active_can_adopt(project)
             && let Some(session_id) = self.open_session_id()
         {
@@ -257,10 +257,10 @@ impl Workspace {
             .as_deref()
             .is_some_and(|current| crate::view_model::same_project_path(current, project));
         let removed_sessions = crate::view_model::sessions_removed_with_root(&self.vm, project);
-        self.apply_action(DesktopAction::WorkspaceRootRemoved(project.to_owned()), cx);
+        self.apply_action(FrontendAction::WorkspaceRootRemoved(project.to_owned()), cx);
         if chat_uses_it {
             self.park_conversation(cx);
-            self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
+            self.apply_action(FrontendAction::ActiveProjectChanged(None), cx);
             self.refresh_skills(cx);
         }
         for session_id in removed_sessions {
@@ -278,7 +278,7 @@ impl Workspace {
             },
             cx,
         );
-        self.apply_action(DesktopAction::RecentRemoved(project.to_owned()), cx);
+        self.apply_action(FrontendAction::RecentRemoved(project.to_owned()), cx);
     }
 
     pub(crate) fn on_new_session(&mut self, cx: &mut Context<Self>) -> bool {
@@ -334,7 +334,7 @@ impl Workspace {
             },
             cx,
         );
-        self.apply_action(DesktopAction::WorkspaceRootAdded(project.clone()), cx);
+        self.apply_action(FrontendAction::WorkspaceRootAdded(project.clone()), cx);
         let already = self
             .vm
             .project_dir
@@ -344,13 +344,13 @@ impl Workspace {
             self.persist_ui_state(cx);
             return;
         }
-        self.apply_action(DesktopAction::ActiveProjectChanged(Some(project)), cx);
+        self.apply_action(FrontendAction::ActiveProjectChanged(Some(project)), cx);
         self.refresh_skills(cx);
         self.persist_ui_state(cx);
     }
 
     pub(crate) fn on_toggle_project_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProjectMenuToggled(open), cx);
+        self.apply_action(FrontendAction::ProjectMenuToggled(open), cx);
     }
 
     // ---- project selection ----
@@ -410,7 +410,7 @@ impl Workspace {
                     let _ = write!(draft, "@{} ", path.display());
                 }
                 workspace.pending_composer_prefill = Some(draft.clone());
-                workspace.apply_action(DesktopAction::ComposerChanged(draft), cx);
+                workspace.apply_action(FrontendAction::ComposerChanged(draft), cx);
             });
         })
         .detach();
@@ -526,8 +526,8 @@ impl Workspace {
         if project.is_empty() {
             return;
         }
-        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
-        self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+        self.apply_action(FrontendAction::WorkspaceRootAdded(project.to_owned()), cx);
+        self.apply_action(FrontendAction::ProjectOpened(project.to_owned()), cx);
         let Some(session_id) = self.open_session_id() else {
             self.pending_open = None;
             self.pending_project = Some(project.to_owned());
@@ -537,7 +537,7 @@ impl Workspace {
             return;
         };
         self.apply_action(
-            DesktopAction::WorkspaceFolderFocused {
+            FrontendAction::WorkspaceFolderFocused {
                 session_id: session_id.clone(),
                 project: project.to_owned(),
             },
@@ -563,7 +563,7 @@ impl Workspace {
     /// this folder gets its own session.
     fn open_isolated_project(&mut self, project: &str, cx: &mut Context<Self>) {
         if self.active_is_project(project) {
-            self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+            self.apply_action(FrontendAction::ProjectOpened(project.to_owned()), cx);
             self.refresh_skills(cx);
             self.persist_ui_state(cx);
             return;
@@ -579,8 +579,8 @@ impl Workspace {
     /// Shows `project` and either opens its newest chat or, when `create`
     /// is set and it has none, starts a fresh chat bound only to it.
     fn focus_project_chat(&mut self, project: &str, create: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
-        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
+        self.apply_action(FrontendAction::ProjectOpened(project.to_owned()), cx);
+        self.apply_action(FrontendAction::WorkspaceRootAdded(project.to_owned()), cx);
         if let Some(session_id) = crate::view_model::newest_session_in_project(
             &self.vm.sessions,
             &self.vm.session_projects,
@@ -643,7 +643,7 @@ impl Workspace {
         self.pending_open = None;
         self.mention_query = None;
         self.pending_composer_prefill = Some(String::new());
-        self.apply_action(DesktopAction::ConversationParked, cx);
+        self.apply_action(FrontendAction::ConversationParked, cx);
     }
 
     /// Binds one new or still-unbound session to `project`.
@@ -654,14 +654,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.apply_action(
-            DesktopAction::SessionProjectBound {
+            FrontendAction::SessionProjectBound {
                 session_id: session_id.to_owned(),
                 project: project.to_owned(),
             },
             cx,
         );
-        self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
-        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
+        self.apply_action(FrontendAction::ProjectOpened(project.to_owned()), cx);
+        self.apply_action(FrontendAction::WorkspaceRootAdded(project.to_owned()), cx);
         self.dispatch(
             BridgeCommand::SetProjectDir {
                 session_id: session_id.to_owned(),
