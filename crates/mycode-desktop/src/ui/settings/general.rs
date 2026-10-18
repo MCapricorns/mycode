@@ -7,11 +7,11 @@
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
-use mycode_frontend::view_model::ProxyTestState;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled,
     TestSupportExt as _, Window, div, px,
 };
+use mycode_frontend::view_model::ProxyTestState;
 
 use super::widgets::{DropdownSpec, choice_chips, dropdown_field, settings_card, settings_row};
 use crate::i18n::t;

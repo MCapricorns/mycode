@@ -71,13 +71,12 @@ pub(crate) fn write_owned_test_bytes(
 pub use settings::{
     AppSettings, AppearanceSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_DISABLED_SKILLS,
     MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
-    MAX_PROVIDERS, MAX_WEB_BACKENDS, McpServerSettings, PROXY_SCHEMES,
-    ProviderSettings, ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH,
-    SUBAGENT_CONCURRENCY, SkillsSettings, SubagentRoleSettings, SubagentSettings, VALID_FONT_SIZES,
-    VALID_LANGUAGES, VALID_THEMES, WebBackendSettings, WebSettings, builtin_mcp_servers,
-    builtin_web_backends, is_mcp_executable, merged_web_backends, read_app_settings,
-    read_app_settings_with_repair, replace_app_settings, salvage_app_settings, split_command_line,
-    web_key_env,
+    MAX_PROVIDERS, MAX_WEB_BACKENDS, McpServerSettings, PROXY_SCHEMES, ProviderSettings,
+    ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SUBAGENT_CONCURRENCY, SkillsSettings,
+    SubagentRoleSettings, SubagentSettings, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES,
+    WebBackendSettings, WebSettings, builtin_mcp_servers, builtin_web_backends, is_mcp_executable,
+    merged_web_backends, read_app_settings, read_app_settings_with_repair, replace_app_settings,
+    salvage_app_settings, split_command_line, web_key_env,
 };
 #[doc(inline)]
 pub use subagents::{

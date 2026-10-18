@@ -221,7 +221,12 @@ mod tests {
             .await
             .expect_err("replace without revision");
         let text = err.to_string();
-        for needle in ["notes.txt", "expected_revision", "[revision", "overwrite=true"] {
+        for needle in [
+            "notes.txt",
+            "expected_revision",
+            "[revision",
+            "overwrite=true",
+        ] {
             assert!(text.contains(needle), "{needle} missing from: {text}");
         }
         WriteTool
