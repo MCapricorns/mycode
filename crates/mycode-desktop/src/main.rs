@@ -110,7 +110,7 @@ fn main() {
     if let Some(action) = mycode_frontend::cli::early_action(&args) {
         let text = match action {
             mycode_frontend::cli::EarlyAction::Version => {
-                format!("{}\n", mycode_frontend::cli::version_line())
+                format!("{}\n", mycode_frontend::cli::version_line("mycode-desktop"))
             }
             mycode_frontend::cli::EarlyAction::Help => {
                 mycode_frontend::cli::help_text("mycode-desktop")
@@ -142,6 +142,18 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Relocate a downloaded binary into the install dir: the installed copy
+    // is spawned with the source path, this process exits, and the new copy
+    // deletes the download and writes the desktop shortcut.
+    match mycode_app::install::ensure_desktop_installed(&home) {
+        mycode_app::install::DesktopInstall::Exit => std::process::exit(0),
+        mycode_app::install::DesktopInstall::Run {
+            cleanup: Some(source),
+        } => {
+            std::thread::spawn(move || mycode_app::install::cleanup_installed_source(source));
+        }
+        mycode_app::install::DesktopInstall::Run { cleanup: None } => {}
+    }
     gpui_kit::application()
         .with_assets(BrandAssets)
         .run(move |cx| {

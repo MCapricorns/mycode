@@ -236,15 +236,15 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: mycode-desktop.exe
-            cli: mycode.exe
+            cli: mycode-cli.exe
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             binary: mycode-desktop.exe
-            cli: mycode.exe
+            cli: mycode-cli.exe
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: mycode-desktop
-            cli: mycode
+            cli: mycode-cli
     steps:
       - uses: actions/checkout@v5
         with:

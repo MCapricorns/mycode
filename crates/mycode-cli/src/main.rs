@@ -1,4 +1,4 @@
-//! MYCode terminal frontend (`mycode`).
+//! MYCode terminal frontend (`mycode-cli`).
 //!
 //! Same shared backend and product layer as the desktop: `FrontendDriver`
 //! owns the bridge, reducer, and persistence; this binary only renders
@@ -17,13 +17,15 @@ fn main() {
     if let Some(action) = mycode_frontend::cli::early_action(&args) {
         let text = match action {
             mycode_frontend::cli::EarlyAction::Version => {
-                format!("{}\n", mycode_frontend::cli::version_line())
+                format!("{}\n", mycode_frontend::cli::version_line("mycode-cli"))
             }
-            mycode_frontend::cli::EarlyAction::Help => mycode_frontend::cli::help_text("mycode"),
+            mycode_frontend::cli::EarlyAction::Help => {
+                mycode_frontend::cli::help_text("mycode-cli")
+            }
             mycode_frontend::cli::EarlyAction::Unknown(flag) => {
                 eprintln!(
-                    "mycode: unknown option {flag}\n\n{}",
-                    mycode_frontend::cli::help_text("mycode")
+                    "mycode-cli: unknown option {flag}\n\n{}",
+                    mycode_frontend::cli::help_text("mycode-cli")
                 );
                 std::process::exit(1);
             }
@@ -36,9 +38,10 @@ fn main() {
     let home = match HomeLayout::from_env(HomeEnv::from_process()) {
         Ok(home) => home,
         Err(error) => {
-            eprintln!("mycode home unavailable: {error}");
+            eprintln!("mycode-cli: home unavailable: {error}");
             std::process::exit(1);
         }
     };
-    std::process::exit(app::run(home));
+    let install = mycode_app::install::ensure_cli_installed(&home);
+    std::process::exit(app::run(home, install));
 }

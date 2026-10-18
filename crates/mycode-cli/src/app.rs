@@ -4,15 +4,24 @@
 //! is already the container — and every picklist or card is a transient
 //! overlay above the composer.
 //!
-//! Key map: `Enter` submits (or accepts the highlighted `/`/`@` row),
+//! `/settings` swaps the transcript for a settings page: providers, model
+//! and thinking pickers, appearance, toggles for MCP / web / skills, and
+//! the update row. Settings edits ride the same `FrontendAction`s and
+//! debounced save pipeline the desktop uses; the TUI only owns cursor and
+//! overlay state.
+//!
+//! Key map: `Enter` submits (or accepts the highlighted `/`/`@` row —
+//! a partial command like `/se` resolves to `/settings`),
 //! `Alt+Enter`/`Ctrl+J` inserts a newline, `Up`/`Down` move through an open
-//! `/`/`@` menu, `Esc` dismisses the topmost layer or cancels a running
-//! turn, `Ctrl+C` cancels the turn and quits when idle, `Ctrl+N` starts a
-//! new task, `PageUp`/`PageDown` scroll.
+//! `/`/`@` menu or the settings list, `Esc` dismisses the topmost layer,
+//! closes the settings page, or cancels a running turn, `Ctrl+C` cancels
+//! the turn and quits when idle, `Ctrl+N` starts a new task,
+//! `PageUp`/`PageDown` scroll.
 //!
 //! The terminal's working directory is the project: once the remembered UI
 //! state has loaded, it replaces the folder a desktop session left behind,
-//! so tools never run in a directory other than the one `mycode` started in.
+//! so tools never run in a directory other than the one `mycode-cli`
+//! started in.
 
 use std::io::{self, Stdout};
 use std::sync::mpsc;
@@ -24,11 +33,17 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
 };
+use mycode_app::install::InstallReport;
 use mycode_app::{ConversationEntry, EntryKind};
+use mycode_config::{VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES};
 use mycode_frontend::driver::{Effect, FrontendDriver, ToastKind};
-use mycode_frontend::view_model::{FrontendAction, MentionKind, preferred_slash_index};
+use mycode_frontend::view_model::{
+    FrontendAction, MainView, MentionKind, SettingsSection, UpdateState, WorkspaceState,
+    model_display_name, preferred_slash_index, provider_display_name, selected_reasoning_level,
+    selected_reasoning_levels,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::{Frame, Terminal};
@@ -45,6 +60,10 @@ type WakeRx = mpsc::Receiver<()>;
 const NOTICE_TTL: Duration = Duration::from_secs(6);
 /// Rows of an open `/`/`@` menu painted above the composer.
 const MENU_ROWS: usize = 8;
+/// Ferris orange for the crab greeting and thinking text.
+const CRAB: Color = Color::Rgb(0xf0, 0x74, 0x20);
+/// Rows of the settings picker overlay.
+const PICKER_ROWS: usize = 10;
 
 /// One transient notice above the status bar.
 struct Notice {
@@ -53,8 +72,68 @@ struct Notice {
     shown: Instant,
 }
 
+/// A picker floating over the settings page.
+enum SettingsOverlay {
+    /// Two-step provider → model pick. `provider=None` is the provider
+    /// step; `Some(id)` lists that provider's models.
+    Model {
+        provider: Option<String>,
+        cursor: usize,
+        filter: String,
+    },
+    /// Single-line input for one provider's API key (masked).
+    ApiKey { provider: String, buffer: String },
+    /// Single-line input for one provider's base URL.
+    BaseUrl { index: usize, buffer: String },
+}
+
+/// One selectable row on the settings page.
+#[derive(Clone)]
+enum SettingItem {
+    /// Opens the provider → model picker.
+    Model,
+    /// Cycles the session's reasoning effort.
+    Thinking,
+    /// Cycles `dark`/`light`.
+    Theme,
+    /// Cycles `auto`/`en`/`zh`.
+    Language,
+    /// Cycles `s`/`m`/`l`/`xl`.
+    FontSize,
+    /// Cycles `auto`/`direct`; a custom URL only shows, Enter returns to
+    /// `auto`.
+    Proxy,
+    /// Toggles automatic update checks.
+    AutoUpdate,
+    /// Checks, downloads, or installs an update depending on state.
+    Update,
+    /// Provider row index; Enter toggles, `a` edits the API key, `u` the
+    /// base URL.
+    Provider(usize),
+    /// MCP server row index; Enter toggles (enable runs the probe), `a`
+    /// edits its `mcp-<id>` key.
+    Mcp(usize),
+    /// Web backend row index; Enter toggles (enable runs the probe), `a`
+    /// edits its `web-<id>` key.
+    Web(usize),
+    /// Skill row index into `vm.skills`; Enter toggles it.
+    Skill(usize),
+}
+
+/// A settings line: a dim section header or a selectable item row.
+enum SettingRow {
+    Header(String),
+    Item {
+        item: SettingItem,
+        label: String,
+        value: String,
+        dim: bool,
+    },
+}
+
 /// Terminal-side state the shared layer deliberately does not own:
-/// keystroke-level text editing, scroll offset, and painted notices.
+/// keystroke-level text editing, scroll offset, painted notices, and the
+/// settings page's cursor/overlay.
 struct Tui {
     driver: FrontendDriver,
     composer: TextArea<'static>,
@@ -73,12 +152,18 @@ struct Tui {
     /// The working directory, applied as the project once the remembered
     /// UI state has loaded. `None` after that (or when it is unreadable).
     startup_dir: Option<String>,
+    /// Cursor over the settings page's item rows (headers are skipped).
+    settings_cursor: usize,
+    /// The floating picker on the settings page, if open.
+    settings_overlay: Option<SettingsOverlay>,
+    /// The view last painted — a change into Settings resets the cursor.
+    was_settings: bool,
     quit: bool,
 }
 
 /// Installs the terminal, runs the event loop, restores the terminal.
 /// Returns the process exit code.
-pub fn run(home: mycode_config::HomeLayout) -> i32 {
+pub fn run(home: mycode_config::HomeLayout, install: InstallReport) -> i32 {
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
     let mut driver = FrontendDriver::start(home, move || {
         let _ = wake_tx.send(());
@@ -90,11 +175,12 @@ pub fn run(home: mycode_config::HomeLayout) -> i32 {
     let mut terminal = match TerminalGuard::enter() {
         Ok(terminal) => terminal,
         Err(error) => {
-            eprintln!("mycode: cannot start the terminal UI: {error}");
+            eprintln!("mycode-cli: cannot start the terminal UI: {error}");
             return 1;
         }
     };
     let mut app = Tui::new(driver);
+    app.note_install(&install);
     app.apply_effects(std::mem::take(&mut effects));
     app.event_loop(&mut terminal.0, &wake_rx)
 }
@@ -119,7 +205,11 @@ impl TerminalGuard {
         }));
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            SetTitle(format!("MYCode Cli {}", env!("CARGO_PKG_VERSION")))
+        )?;
         // Best effort: where the terminal reports pastes as one event, a
         // multi-line paste cannot submit line by line. Consoles that type a
         // paste out as keys are covered by the burst check in `on_key`.
@@ -155,7 +245,44 @@ impl Tui {
             startup_dir: std::env::current_dir()
                 .ok()
                 .map(|dir| dir.to_string_lossy().into_owned()),
+            settings_cursor: 0,
+            settings_overlay: None,
+            was_settings: false,
             quit: false,
+        }
+    }
+
+    /// Surfaces the self-install outcome as a one-shot notice.
+    fn note_install(&mut self, report: &InstallReport) {
+        if let Some(warning) = &report.warning {
+            self.notices.push(Notice {
+                kind: ToastKind::Warning,
+                text: format!("install: {warning}"),
+                shown: Instant::now(),
+            });
+            return;
+        }
+        if report.copied && report.path_added {
+            self.notices.push(Notice {
+                kind: ToastKind::Info,
+                text: format!(
+                    "installed to {} — restart the terminal to run mycode-cli",
+                    report.target.display()
+                ),
+                shown: Instant::now(),
+            });
+        } else if report.copied {
+            self.notices.push(Notice {
+                kind: ToastKind::Info,
+                text: format!("installed to {}", report.target.display()),
+                shown: Instant::now(),
+            });
+        } else if report.path_added {
+            self.notices.push(Notice {
+                kind: ToastKind::Info,
+                text: "added the install dir to PATH — restart the terminal".to_owned(),
+                shown: Instant::now(),
+            });
         }
     }
 
@@ -191,6 +318,24 @@ impl Tui {
                 self.dirty = true;
                 self.set_composer_text(&text);
             }
+            // Entering Settings starts the cursor at the first row and drops
+            // a picker left open by whatever closed the page before.
+            let in_settings = self.driver.vm().view == MainView::Settings;
+            if in_settings != self.was_settings {
+                self.dirty = true;
+                if in_settings {
+                    self.settings_cursor = 0;
+                    self.settings_overlay = None;
+                    // The model picker and update row read the catalog.
+                    self.driver.act(
+                        FrontendAction::ShowSettingsSection(SettingsSection::Models),
+                        &mut effects,
+                    );
+                    self.driver.ensure_catalog();
+                    self.apply_effects(std::mem::take(&mut effects));
+                }
+            }
+            self.was_settings = in_settings;
             self.expire_notices();
             if self.dirty {
                 self.dirty = false;
@@ -301,6 +446,13 @@ impl Tui {
         let mut effects = Vec::new();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        // On the settings page every key routes to the list/pickers; an open
+        // ask card (a running turn's question) still wins Esc and Enter.
+        if self.driver.vm().view == MainView::Settings && self.driver.vm().pending_ask.is_none() {
+            self.on_settings_key(key, ctrl, alt, &mut effects);
+            self.apply_effects(effects);
+            return;
+        }
         match (key.code, ctrl, alt) {
             (KeyCode::Char('c'), true, false) => {
                 if self.driver.vm().sending || self.driver.vm().compacting {
@@ -438,8 +590,557 @@ impl Tui {
         self.set_composer_text("");
     }
 
+    // ---- settings page ----
+
+    /// All key input while `vm.view == Settings`.
+    fn on_settings_key(
+        &mut self,
+        key: KeyEvent,
+        ctrl: bool,
+        _alt: bool,
+        effects: &mut Vec<Effect>,
+    ) {
+        if self.settings_overlay.is_some() {
+            self.on_overlay_key(key, ctrl, effects);
+            return;
+        }
+        let items = settings_items(self.driver.vm());
+        match (key.code, ctrl) {
+            (KeyCode::Char('c'), true) | (KeyCode::Char('q'), false) => self.quit = true,
+            (KeyCode::Esc, false) => {
+                self.driver.show_main_view(MainView::Chat, effects);
+            }
+            (KeyCode::Up, false) => {
+                self.settings_cursor = self.settings_cursor.saturating_sub(1);
+            }
+            (KeyCode::Down, false) => {
+                if !items.is_empty() {
+                    self.settings_cursor = (self.settings_cursor + 1).min(items.len() - 1);
+                }
+            }
+            (KeyCode::PageUp, _) => {
+                self.settings_cursor = self.settings_cursor.saturating_sub(10);
+            }
+            (KeyCode::PageDown, _) => {
+                if !items.is_empty() {
+                    self.settings_cursor = (self.settings_cursor + 10).min(items.len() - 1);
+                }
+            }
+            (KeyCode::Home, false) => self.settings_cursor = 0,
+            (KeyCode::End, false) => {
+                self.settings_cursor = items.len().saturating_sub(1);
+            }
+            (KeyCode::Enter, false) | (KeyCode::Char(' '), false) => {
+                if let Some(item) = items.get(self.settings_cursor) {
+                    let item = item.clone();
+                    self.activate_setting(item, 1, effects);
+                }
+            }
+            (KeyCode::Left, false) | (KeyCode::Right, false) => {
+                let direction = if key.code == KeyCode::Left { -1 } else { 1 };
+                if let Some(item) = items.get(self.settings_cursor) {
+                    let item = item.clone();
+                    self.activate_setting(item, direction, effects);
+                }
+            }
+            (KeyCode::Char('a'), false) => {
+                if let Some(item) = items.get(self.settings_cursor) {
+                    self.open_key_editor(item);
+                }
+            }
+            (KeyCode::Char('u'), false) => {
+                if let Some(SettingItem::Provider(index)) = items.get(self.settings_cursor)
+                    && let Some(provider) = self
+                        .driver
+                        .vm()
+                        .settings
+                        .as_ref()
+                        .and_then(|settings| settings.providers.get(*index))
+                {
+                    self.settings_overlay = Some(SettingsOverlay::BaseUrl {
+                        index: *index,
+                        buffer: provider.base_url.clone(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Key input while a settings overlay (model pick, key input) is open.
+    fn on_overlay_key(&mut self, key: KeyEvent, ctrl: bool, effects: &mut Vec<Effect>) {
+        if ctrl && key.code == KeyCode::Char('c') {
+            self.quit = true;
+            return;
+        }
+        match self.settings_overlay.take() {
+            Some(SettingsOverlay::Model {
+                provider,
+                cursor,
+                filter,
+            }) => self.on_picker_key(key, provider, cursor, filter, effects),
+            Some(SettingsOverlay::ApiKey { provider, buffer }) => {
+                self.on_input_key(key, provider, buffer, effects)
+            }
+            Some(SettingsOverlay::BaseUrl { index, buffer }) => {
+                self.on_base_url_key(key, index, buffer, effects)
+            }
+            None => {}
+        }
+    }
+
+    /// The provider → model pick overlay.
+    fn on_picker_key(
+        &mut self,
+        key: KeyEvent,
+        provider: Option<String>,
+        mut cursor: usize,
+        mut filter: String,
+        effects: &mut Vec<Effect>,
+    ) {
+        let rows = self.picker_rows(provider.as_deref(), &filter);
+        match key.code {
+            KeyCode::Esc => return, // overlay stays closed
+            KeyCode::Left => {
+                // Back to the provider step.
+                if provider.is_some() {
+                    self.settings_overlay = Some(SettingsOverlay::Model {
+                        provider: None,
+                        cursor: 0,
+                        filter: String::new(),
+                    });
+                }
+                return;
+            }
+            KeyCode::Up => cursor = cursor.saturating_sub(1),
+            KeyCode::Down => {
+                if !rows.is_empty() {
+                    cursor = (cursor + 1).min(rows.len() - 1);
+                }
+            }
+            KeyCode::Home => cursor = 0,
+            KeyCode::End => cursor = rows.len().saturating_sub(1),
+            KeyCode::Enter => {
+                if let Some(row) = rows.get(cursor) {
+                    self.pick_model_row(row.clone(), effects);
+                }
+                return;
+            }
+            KeyCode::Backspace => {
+                if filter.pop().is_none() && provider.is_some() {
+                    // Empty filter + backspace goes back a step.
+                    self.settings_overlay = Some(SettingsOverlay::Model {
+                        provider: None,
+                        cursor: 0,
+                        filter: String::new(),
+                    });
+                    return;
+                }
+                cursor = 0;
+            }
+            KeyCode::Char(ch) => {
+                filter.push(ch);
+                cursor = 0;
+            }
+            _ => {}
+        }
+        self.settings_overlay = Some(SettingsOverlay::Model {
+            provider,
+            cursor,
+            filter,
+        });
+    }
+
+    /// The rows one picker step shows, filtered by the typed query.
+    fn picker_rows(&self, provider: Option<&str>, filter: &str) -> Vec<PickerRow> {
+        let vm = self.driver.vm();
+        let Some(settings) = vm.settings.as_ref() else {
+            return Vec::new();
+        };
+        match provider {
+            None => {
+                let mut rows: Vec<PickerRow> = Vec::new();
+                let mut seen_pins = std::collections::HashSet::new();
+                let mut pins = 0usize;
+                for pin in &vm.recent_models {
+                    let offered = settings.providers.iter().any(|provider| {
+                        provider.id == pin.provider
+                            && provider.enabled
+                            && provider.shows_model(&pin.model)
+                    });
+                    if !offered || !seen_pins.insert((&pin.provider, &pin.model)) {
+                        continue;
+                    }
+                    rows.push(PickerRow::Pin {
+                        provider: pin.provider.clone(),
+                        model: pin.model.clone(),
+                        label: format!(
+                            "{} · {}",
+                            model_display_name(vm, &pin.provider, &pin.model),
+                            provider_display_name(vm, &pin.provider)
+                        ),
+                    });
+                    pins += 1;
+                    if pins >= 3 {
+                        break;
+                    }
+                }
+                for provider in &settings.providers {
+                    if !provider.enabled {
+                        continue;
+                    }
+                    let id = provider.id.clone();
+                    rows.push(PickerRow::Provider {
+                        id: id.clone(),
+                        label: provider_display_name(vm, &id),
+                    });
+                }
+                filter_picker_rows(rows, filter)
+            }
+            Some(provider_id) => {
+                let row = settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == provider_id);
+                let catalog: Vec<(String, String)> = vm
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.provider(provider_id))
+                    .map(|provider| {
+                        provider
+                            .models
+                            .iter()
+                            .map(|model| (model.id.clone(), model.name.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let configured = row
+                    .map(|provider| provider.models.clone())
+                    .unwrap_or_default();
+                let mut seen = std::collections::HashSet::new();
+                let mut rows = Vec::new();
+                for (id, name) in catalog
+                    .into_iter()
+                    .chain(configured.into_iter().map(|id| (id.clone(), id)))
+                {
+                    if !seen.insert(id.clone()) {
+                        continue;
+                    }
+                    // Hidden models stay out of the pick list.
+                    if row.is_some_and(|provider| !provider.shows_model(&id)) {
+                        continue;
+                    }
+                    rows.push(PickerRow::Model {
+                        provider: provider_id.to_owned(),
+                        model: id.clone(),
+                        label: if name.is_empty() { id } else { name },
+                    });
+                }
+                filter_picker_rows(rows, filter)
+            }
+        }
+    }
+
+    /// Enter on a picker row: pins and models select, providers descend.
+    fn pick_model_row(&mut self, row: PickerRow, effects: &mut Vec<Effect>) {
+        match row {
+            PickerRow::Provider { id, .. } => {
+                self.settings_overlay = Some(SettingsOverlay::Model {
+                    provider: Some(id),
+                    cursor: 0,
+                    filter: String::new(),
+                });
+            }
+            PickerRow::Pin {
+                provider, model, ..
+            }
+            | PickerRow::Model {
+                provider, model, ..
+            } => {
+                if self.driver.vm().selected_provider.as_deref() != Some(provider.as_str()) {
+                    self.driver
+                        .act(FrontendAction::ProviderSelected(provider), effects);
+                }
+                self.driver
+                    .act(FrontendAction::ModelSelected(model), effects);
+                if self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .is_some_and(|settings| settings.dirty)
+                {
+                    self.driver.save_settings(effects);
+                }
+                self.driver.persist_ui_state();
+            }
+        }
+    }
+
+    /// The masked API-key input for a provider/MCP/web row.
+    fn on_input_key(
+        &mut self,
+        key: KeyEvent,
+        provider: String,
+        mut buffer: String,
+        _effects: &mut Vec<Effect>,
+    ) {
+        match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Enter => {
+                if !self.driver.save_key(provider.clone(), &buffer) {
+                    self.notices.push(Notice {
+                        kind: ToastKind::Error,
+                        text: "key refused — empty or looks like a placeholder".to_owned(),
+                        shown: Instant::now(),
+                    });
+                }
+            }
+            KeyCode::Backspace => {
+                buffer.pop();
+                self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
+            }
+            KeyCode::Char(ch) => {
+                buffer.push(ch);
+                self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
+            }
+            _ => {
+                self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
+            }
+        }
+    }
+
+    /// The base-URL input for a provider row.
+    fn on_base_url_key(
+        &mut self,
+        key: KeyEvent,
+        index: usize,
+        mut buffer: String,
+        effects: &mut Vec<Effect>,
+    ) {
+        match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Enter => {
+                if let Some(provider) = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| settings.providers.get(index))
+                {
+                    let id = provider.id.clone();
+                    self.driver.act(
+                        FrontendAction::SettingsProviderBaseUrlChanged {
+                            id,
+                            base_url: buffer.trim().to_owned(),
+                        },
+                        effects,
+                    );
+                    self.driver.save_settings(effects);
+                }
+            }
+            KeyCode::Backspace => {
+                buffer.pop();
+                self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
+            }
+            KeyCode::Char(ch) => {
+                buffer.push(ch);
+                self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
+            }
+            _ => {
+                self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
+            }
+        }
+    }
+
+    /// Enter / Left / Right on a settings row.
+    fn activate_setting(&mut self, item: SettingItem, direction: i8, effects: &mut Vec<Effect>) {
+        match item {
+            SettingItem::Model => {
+                self.settings_overlay = Some(SettingsOverlay::Model {
+                    provider: None,
+                    cursor: 0,
+                    filter: String::new(),
+                });
+            }
+            SettingItem::Thinking => {
+                let levels = selected_reasoning_levels(self.driver.vm());
+                if levels.is_empty() {
+                    return;
+                }
+                let current = selected_reasoning_level(self.driver.vm());
+                let len = levels.len() as i64;
+                let next = levels
+                    .iter()
+                    .position(|level| *level == current)
+                    .map(|index| (index as i64 + i64::from(direction)).rem_euclid(len))
+                    .unwrap_or(0) as usize;
+                self.driver.act(
+                    FrontendAction::SettingsReasoningChanged(levels[next].clone()),
+                    effects,
+                );
+                self.driver.persist_ui_state();
+            }
+            SettingItem::Theme => {
+                let current = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .map(|settings| settings.theme.clone())
+                    .unwrap_or_default();
+                let next = cycle(&VALID_THEMES, &current, direction);
+                self.driver.select_theme(&next, effects);
+            }
+            SettingItem::Language => {
+                let current = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .map(|settings| settings.language.clone())
+                    .unwrap_or_else(|| "auto".to_owned());
+                let next = cycle(&VALID_LANGUAGES, &current, direction);
+                self.driver.select_language(&next, effects);
+            }
+            SettingItem::FontSize => {
+                let current = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .map(|settings| settings.font_size.clone())
+                    .unwrap_or_else(|| "m".to_owned());
+                let next = cycle(&VALID_FONT_SIZES, &current, direction);
+                self.driver.select_font_size(&next, effects);
+            }
+            SettingItem::Proxy => {
+                let proxy = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .map(|settings| settings.proxy.clone())
+                    .unwrap_or_default();
+                // auto → direct → auto. A stored URL only leaves via auto.
+                let mode = if proxy == mycode_config::PROXY_DIRECT {
+                    "auto"
+                } else {
+                    "direct"
+                };
+                self.driver.select_proxy_mode(mode, effects);
+            }
+            SettingItem::AutoUpdate => {
+                let next = !self.driver.vm().auto_update;
+                self.driver.toggle_auto_update(next, effects);
+            }
+            SettingItem::Update => match &self.driver.vm().update {
+                UpdateState::Available { .. } => self.driver.download_update(effects),
+                UpdateState::Ready { .. } => self.driver.install_update(effects),
+                UpdateState::Checking | UpdateState::Downloading { .. } => {}
+                _ => self.driver.check_update(true, effects),
+            },
+            SettingItem::Provider(index) => {
+                let enabled = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| settings.providers.get(index))
+                    .is_some_and(|provider| provider.enabled);
+                self.driver.act(
+                    FrontendAction::SettingsProviderToggled(index, !enabled),
+                    effects,
+                );
+                self.driver.save_settings(effects);
+            }
+            SettingItem::Mcp(index) => {
+                let enabled = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| settings.mcp_servers.get(index))
+                    .is_some_and(|server| server.enabled);
+                self.driver.toggle_mcp_server(index, !enabled, effects);
+            }
+            SettingItem::Web(index) => {
+                let enabled = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| settings.web_backends.get(index))
+                    .is_some_and(|backend| backend.enabled);
+                self.driver.toggle_web_backend(index, !enabled, effects);
+            }
+            SettingItem::Skill(index) => {
+                let Some(skill) = self.driver.vm().skills.get(index) else {
+                    return;
+                };
+                let disabled_now = self
+                    .driver
+                    .vm()
+                    .settings
+                    .as_ref()
+                    .is_some_and(|settings| settings.skills.disabled.contains(&skill.slug));
+                self.driver.act(
+                    FrontendAction::SettingsSkillToggled(skill.slug.clone(), disabled_now),
+                    effects,
+                );
+                self.driver.save_settings(effects);
+            }
+        }
+    }
+
+    /// `a` on a row opens the right key input, when the row has a key id.
+    fn open_key_editor(&mut self, item: &SettingItem) {
+        let target = match item {
+            SettingItem::Provider(index) => self
+                .driver
+                .vm()
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.providers.get(*index))
+                .map(|provider| provider.id.clone()),
+            SettingItem::Mcp(index) => self
+                .driver
+                .vm()
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.mcp_servers.get(*index))
+                .map(|server| format!("mcp-{}", server.id)),
+            SettingItem::Web(index) => self
+                .driver
+                .vm()
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.web_backends.get(*index))
+                .map(|backend| format!("web-{}", backend.id)),
+            _ => None,
+        };
+        if let Some(provider) = target {
+            self.settings_overlay = Some(SettingsOverlay::ApiKey {
+                provider,
+                buffer: String::new(),
+            });
+        }
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
+        if self.driver.vm().view == MainView::Settings {
+            let vertical =
+                Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(area);
+            self.draw_settings(frame, vertical[0]);
+            self.draw_status(frame, vertical[1]);
+            if self.driver.vm().pending_ask.is_some() {
+                self.draw_ask(frame, area);
+            } else {
+                self.draw_settings_overlay(frame, area);
+            }
+            return;
+        }
         let composer_height = (self.composer.lines().len() as u16 + 2).clamp(3, 8);
         let vertical = Layout::vertical([
             Constraint::Min(3),
@@ -470,14 +1171,20 @@ impl Tui {
             if let Some(stream) = &active.streaming {
                 if !stream.thinking.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        format!("  {}", first_line(&stream.thinking)),
+                        format!("  ✻ {}", first_line(&stream.thinking)),
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(Color::Magenta)
                             .add_modifier(Modifier::ITALIC),
                     )));
                 }
                 if !stream.text.is_empty() {
-                    push_wrapped(&mut lines, "⏺ ", &stream.text, Style::default());
+                    push_wrapped(
+                        &mut lines,
+                        "⏺ ",
+                        Style::default().fg(CRAB),
+                        &stream.text,
+                        Style::default(),
+                    );
                 } else if !stream.status.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("  {}", stream.status),
@@ -486,10 +1193,7 @@ impl Tui {
                 }
             }
         } else {
-            lines.push(Line::from(Span::styled(
-                "mycode — type below and press Enter to start.",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.extend(welcome_lines(env!("CARGO_PKG_VERSION")));
         }
         for queued in &vm.queued {
             lines.push(Line::from(Span::styled(
@@ -532,6 +1236,204 @@ impl Tui {
         );
     }
 
+    /// The settings list: dim section headers between selectable rows, the
+    /// cursor row reversed, scrolls to keep the cursor visible.
+    fn draw_settings(&mut self, frame: &mut Frame, area: Rect) {
+        let vm = self.driver.vm();
+        let rows = settings_rows(vm);
+        let mut item_index = 0usize;
+        let mut cursor_line = 0usize;
+        let mut lines: Vec<Line> = vec![
+            Line::from(Span::styled(
+                "Settings",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+        for row in &rows {
+            match row {
+                SettingRow::Header(title) => {
+                    lines.push(Line::from(Span::styled(
+                        format!(" {title}"),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                }
+                SettingRow::Item {
+                    label, value, dim, ..
+                } => {
+                    let selected = item_index == self.settings_cursor;
+                    let style = if selected {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else if *dim {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default()
+                    };
+                    let value_style = Style::default().fg(Color::DarkGray);
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!(" {} {:<24}", if selected { "❯" } else { " " }, label),
+                            style,
+                        ),
+                        Span::styled(format!(" {value}"), value_style),
+                    ]));
+                    if selected {
+                        cursor_line = lines.len() - 1;
+                    }
+                    item_index += 1;
+                }
+            }
+        }
+        if let Some(error) = &vm.error {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(" ✖ {error}"),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        let height = usize::from(area.height);
+        let scroll = if cursor_line >= height {
+            cursor_line + 1 - height
+        } else {
+            0
+        };
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)),
+            area,
+        );
+    }
+
+    /// The settings overlay (model pick / key input) centered on screen.
+    fn draw_settings_overlay(&self, frame: &mut Frame, area: Rect) {
+        let Some(overlay) = &self.settings_overlay else {
+            return;
+        };
+        let (title, lines) = match overlay {
+            SettingsOverlay::Model {
+                provider,
+                cursor,
+                filter,
+            } => {
+                let rows = self.picker_rows(provider.as_deref(), filter);
+                let first = cursor.saturating_sub(PICKER_ROWS - 1);
+                let mut lines: Vec<Line> = Vec::new();
+                if provider.is_some() {
+                    lines.push(Line::from(Span::styled(
+                        " ← providers",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                for (index, row) in rows.iter().enumerate().skip(first).take(PICKER_ROWS) {
+                    let style = if index == *cursor {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    let vm = self.driver.vm();
+                    let mark = match row {
+                        PickerRow::Pin { .. } => "★ ",
+                        PickerRow::Provider { id, .. } => {
+                            if vm.selected_provider.as_deref() == Some(id.as_str()) {
+                                "● "
+                            } else {
+                                "  "
+                            }
+                        }
+                        PickerRow::Model {
+                            provider, model, ..
+                        } => {
+                            if vm.selected_provider.as_deref() == Some(provider.as_str())
+                                && vm.selected_model.as_deref() == Some(model.as_str())
+                            {
+                                "● "
+                            } else {
+                                "  "
+                            }
+                        }
+                    };
+                    lines.push(Line::from(vec![Span::styled(
+                        format!(" {}{}", mark, row.label()),
+                        style,
+                    )]));
+                }
+                if rows.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "  no matches",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        " {}type to filter · Enter {}· Esc close",
+                        if filter.is_empty() {
+                            String::new()
+                        } else {
+                            format!("filter: {filter} · ")
+                        },
+                        if provider.is_none() {
+                            "open "
+                        } else {
+                            "select "
+                        }
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                let title = match provider {
+                    Some(id) => format!(" {} ", provider_display_name(self.driver.vm(), id)),
+                    None => " Model ".to_owned(),
+                };
+                (title, lines)
+            }
+            SettingsOverlay::ApiKey { provider, buffer } => {
+                let masked = "•".repeat(buffer.chars().count());
+                (
+                    format!(" API key — {provider} "),
+                    vec![
+                        Line::from(Span::styled(format!(" {masked}▌"), Style::default())),
+                        Line::from(Span::styled(
+                            " Enter save · Esc cancel",
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ],
+                )
+            }
+            SettingsOverlay::BaseUrl { buffer, .. } => (
+                " Base URL ".to_owned(),
+                vec![
+                    Line::from(Span::styled(format!(" {buffer}▌"), Style::default())),
+                    Line::from(Span::styled(
+                        " Enter save · Esc cancel",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ],
+            ),
+        };
+        let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(4));
+        let width = (area.width.saturating_mul(2) / 3)
+            .max(34)
+            .min(area.width.saturating_sub(4));
+        let popup = Rect {
+            x: area.x + (area.width.saturating_sub(width)) / 2,
+            y: area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        };
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(title),
+            ),
+            popup,
+        );
+    }
+
     /// The only bordered widget: the composer.
     fn draw_composer(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
@@ -564,6 +1466,22 @@ impl Tui {
                     format!(" {}", notice.text),
                     Style::default().fg(color),
                 )),
+                area,
+            );
+            return;
+        }
+        if vm.view == MainView::Settings {
+            let saving = if vm.settings.as_ref().is_some_and(|settings| settings.saving) {
+                "saving… · "
+            } else if vm.settings.as_ref().is_some_and(|settings| settings.dirty) {
+                "unsaved · "
+            } else {
+                ""
+            };
+            let status =
+                format!(" {saving}↑↓ move · Enter/←→ change · a api key · u base url · Esc back ");
+            frame.render_widget(
+                Paragraph::new(Span::styled(status, Style::default().fg(Color::DarkGray))),
                 area,
             );
             return;
@@ -704,6 +1622,269 @@ impl Tui {
     }
 }
 
+/// One row of the settings model picker.
+#[derive(Clone)]
+enum PickerRow {
+    /// A recently used provider+model pin.
+    Pin {
+        provider: String,
+        model: String,
+        label: String,
+    },
+    /// An enabled provider; Enter descends to its model list.
+    Provider { id: String, label: String },
+    /// One model of one provider.
+    Model {
+        provider: String,
+        model: String,
+        label: String,
+    },
+}
+
+impl PickerRow {
+    fn label(&self) -> &str {
+        match self {
+            Self::Pin { label, .. } | Self::Provider { label, .. } | Self::Model { label, .. } => {
+                label
+            }
+        }
+    }
+
+    fn id(&self) -> &str {
+        match self {
+            Self::Pin { model, .. } | Self::Model { model, .. } => model,
+            Self::Provider { id, .. } => id,
+        }
+    }
+}
+
+/// Case-insensitive substring filter on the row label and id.
+fn filter_picker_rows(rows: Vec<PickerRow>, filter: &str) -> Vec<PickerRow> {
+    let words: Vec<String> = filter
+        .split_whitespace()
+        .map(|word| word.to_ascii_lowercase())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|row| {
+            let haystack = format!("{} {}", row.label(), row.id()).to_ascii_lowercase();
+            words.iter().all(|word| haystack.contains(word.as_str()))
+        })
+        .collect()
+}
+
+/// Next value in `values` cycling by `direction` (wraps); unknown currents
+/// start at the first entry.
+fn cycle(values: &[&'static str], current: &str, direction: i8) -> String {
+    let len = values.len() as i64;
+    let index = values
+        .iter()
+        .position(|value| *value == current)
+        .map(|index| index as i64);
+    let next = match index {
+        Some(index) => (index + i64::from(direction)).rem_euclid(len),
+        None => 0,
+    };
+    values[next as usize].to_owned()
+}
+
+/// The selectable items of the settings page, in display order.
+fn settings_items(vm: &WorkspaceState) -> Vec<SettingItem> {
+    settings_rows(vm)
+        .into_iter()
+        .filter_map(|row| match row {
+            SettingRow::Item { item, .. } => Some(item),
+            SettingRow::Header(_) => None,
+        })
+        .collect()
+}
+
+/// The full settings page: headers and rows in display order.
+fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
+    let mut rows = Vec::new();
+    let settings = vm.settings.as_ref();
+
+    rows.push(SettingRow::Header("Model".to_owned()));
+    let model = match (
+        vm.selected_provider.as_deref(),
+        vm.selected_model.as_deref(),
+    ) {
+        (Some(provider), Some(model)) => format!(
+            "{} / {}",
+            provider_display_name(vm, provider),
+            model_display_name(vm, provider, model)
+        ),
+        (_, Some(model)) => model.to_owned(),
+        _ => "none — Enter to pick".to_owned(),
+    };
+    rows.push(SettingRow::Item {
+        item: SettingItem::Model,
+        label: "Model".to_owned(),
+        value: model,
+        dim: false,
+    });
+    let thinking = selected_reasoning_level(vm);
+    rows.push(SettingRow::Item {
+        item: SettingItem::Thinking,
+        label: "Thinking".to_owned(),
+        value: if thinking == "default" {
+            "default".to_owned()
+        } else {
+            thinking
+        },
+        dim: false,
+    });
+
+    rows.push(SettingRow::Header("General".to_owned()));
+    rows.push(SettingRow::Item {
+        item: SettingItem::Theme,
+        label: "Theme".to_owned(),
+        value: settings.map(|s| s.theme.clone()).unwrap_or_default(),
+        dim: false,
+    });
+    rows.push(SettingRow::Item {
+        item: SettingItem::Language,
+        label: "Language".to_owned(),
+        value: settings
+            .map(|s| s.language.clone())
+            .unwrap_or_else(|| "auto".to_owned()),
+        dim: false,
+    });
+    rows.push(SettingRow::Item {
+        item: SettingItem::FontSize,
+        label: "Font size".to_owned(),
+        value: settings
+            .map(|s| s.font_size.clone())
+            .unwrap_or_else(|| "m".to_owned()),
+        dim: false,
+    });
+    let proxy = settings.map(|s| s.proxy.clone()).unwrap_or_default();
+    rows.push(SettingRow::Item {
+        item: SettingItem::Proxy,
+        label: "Proxy".to_owned(),
+        value: if proxy.is_empty() {
+            "auto".to_owned()
+        } else {
+            proxy
+        },
+        dim: false,
+    });
+    rows.push(SettingRow::Item {
+        item: SettingItem::AutoUpdate,
+        label: "Auto-update".to_owned(),
+        value: if vm.auto_update {
+            "on".to_owned()
+        } else {
+            "off".to_owned()
+        },
+        dim: false,
+    });
+
+    rows.push(SettingRow::Header("Providers".to_owned()));
+    if let Some(settings) = settings {
+        for (index, provider) in settings.providers.iter().enumerate() {
+            let key = if settings.providers_with_keys.contains(&provider.id) {
+                " · key ✓"
+            } else {
+                ""
+            };
+            rows.push(SettingRow::Item {
+                item: SettingItem::Provider(index),
+                label: format!(
+                    "[{}] {}",
+                    if provider.enabled { "x" } else { " " },
+                    provider.id
+                ),
+                value: format!("{} · {} models{key}", provider.kind, provider.models.len()),
+                dim: !provider.enabled,
+            });
+        }
+        if settings.providers.is_empty() {
+            rows.push(SettingRow::Header("  (none configured)".to_owned()));
+        }
+    }
+
+    rows.push(SettingRow::Header("MCP".to_owned()));
+    if let Some(settings) = settings {
+        for (index, server) in settings.mcp_servers.iter().enumerate() {
+            let probing = if vm.mcp_probing.contains(&server.id) {
+                " · probing…"
+            } else {
+                ""
+            };
+            rows.push(SettingRow::Item {
+                item: SettingItem::Mcp(index),
+                label: format!("[{}] {}", if server.enabled { "x" } else { " " }, server.id),
+                value: format!("{}{}", server.transport, probing),
+                dim: !server.enabled,
+            });
+        }
+        if settings.mcp_servers.is_empty() {
+            rows.push(SettingRow::Header("  (none configured)".to_owned()));
+        }
+    }
+
+    rows.push(SettingRow::Header("Web search".to_owned()));
+    if let Some(settings) = settings {
+        for (index, backend) in settings.web_backends.iter().enumerate() {
+            rows.push(SettingRow::Item {
+                item: SettingItem::Web(index),
+                label: format!(
+                    "[{}] {}",
+                    if backend.enabled { "x" } else { " " },
+                    backend.id
+                ),
+                value: String::new(),
+                dim: !backend.enabled,
+            });
+        }
+        if settings.web_backends.is_empty() {
+            rows.push(SettingRow::Header("  (none configured)".to_owned()));
+        }
+    }
+
+    if !vm.skills.is_empty() {
+        rows.push(SettingRow::Header("Skills".to_owned()));
+        for (index, skill) in vm.skills.iter().enumerate() {
+            let disabled = settings.is_some_and(|s| s.skills.disabled.contains(&skill.slug));
+            rows.push(SettingRow::Item {
+                item: SettingItem::Skill(index),
+                label: format!("[{}] /{}", if disabled { " " } else { "x" }, skill.slug),
+                value: skill.title.clone(),
+                dim: disabled,
+            });
+        }
+    }
+
+    rows.push(SettingRow::Header(format!(
+        "About — mycode-cli {}",
+        env!("CARGO_PKG_VERSION")
+    )));
+    let update = match &vm.update {
+        UpdateState::Idle => "press Enter to check".to_owned(),
+        UpdateState::Checking => "checking…".to_owned(),
+        UpdateState::UpToDate => "up to date".to_owned(),
+        UpdateState::Available { version, .. } => {
+            format!("v{version} available — Enter to download")
+        }
+        UpdateState::Downloading { version } => format!("downloading v{version}…"),
+        UpdateState::Ready { version } => {
+            format!("v{version} ready — Enter to install and restart")
+        }
+        UpdateState::Failed(message) => format!("failed: {message} — Enter to retry"),
+    };
+    rows.push(SettingRow::Item {
+        item: SettingItem::Update,
+        label: "Update".to_owned(),
+        value: update,
+        dim: false,
+    });
+    rows
+}
+
 /// Applies the composer's fixed styling to a fresh textarea.
 fn new_composer(mut composer: TextArea<'static>) -> TextArea<'static> {
     composer.set_cursor_line_style(Style::default());
@@ -712,34 +1893,81 @@ fn new_composer(mut composer: TextArea<'static>) -> TextArea<'static> {
     composer
 }
 
+/// The crab greeting on an empty transcript — "hi ferris".
+fn welcome_lines(version: &str) -> Vec<Line<'static>> {
+    let crab = Style::default().fg(CRAB);
+    let dim = Style::default().fg(Color::DarkGray);
+    vec![
+        Line::from(Span::styled("    ▄  ▄▄▄▄▄▄▄  ▄", crab)),
+        Line::from(vec![
+            Span::styled("  ▄▄█ █ o o █ █▄▄", crab),
+            Span::styled(
+                "   hi ferris",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   ▀▀ ▀▀▀▀▀▀▀▀ ▀▀", crab),
+            Span::styled(format!("   MYCode Cli {version}"), dim),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  type below and press Enter · / for commands · /settings picks a model · @ for files",
+            dim,
+        )),
+        Line::from(""),
+    ]
+}
+
 fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
     match entry.kind {
         EntryKind::UserMessage => {
             lines.push(Line::from(""));
             push_wrapped(
                 lines,
                 "❯ ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
                 &entry.text,
-                Style::default().add_modifier(Modifier::BOLD),
+                bold,
             );
         }
         EntryKind::AssistantMessage => {
+            let thinking = Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::ITALIC);
             if !entry.thinking.is_empty() {
-                push_wrapped(
-                    lines,
-                    "  ",
-                    &entry.thinking,
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                );
+                push_wrapped(lines, "  ✻ ", thinking, &entry.thinking, thinking);
             }
-            push_wrapped(lines, "⏺ ", &entry.text, Style::default());
+            // Interruption lines the agent committed (`[error] …`) stay
+            // visible but read as errors, not as answer text.
+            let marker = Style::default().fg(CRAB);
+            let error = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+            let mut normal: Vec<&str> = Vec::new();
+            for line in entry.text.lines() {
+                if line.starts_with("[error]") {
+                    if !normal.is_empty() {
+                        let joined = normal.join("\n");
+                        push_wrapped(lines, "⏺ ", marker, &joined, Style::default());
+                        normal.clear();
+                    }
+                    push_wrapped(lines, "✖ ", error, line, error);
+                } else {
+                    normal.push(line);
+                }
+            }
+            if !normal.is_empty() {
+                let joined = normal.join("\n");
+                push_wrapped(lines, "⏺ ", marker, &joined, Style::default());
+            }
         }
         EntryKind::ToolCall => {
             push_wrapped(
                 lines,
                 "⚒ ",
+                Style::default().fg(Color::Cyan),
                 first_line(&entry.text),
                 Style::default().fg(Color::Cyan),
             );
@@ -748,6 +1976,7 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
             push_wrapped(
                 lines,
                 "  ⎿ ",
+                Style::default().fg(Color::DarkGray),
                 first_line(&entry.text),
                 Style::default().fg(Color::DarkGray),
             );
@@ -755,20 +1984,33 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
     }
 }
 
-/// `marker` plus a wrapped body: first line carries the marker, continuation
-/// lines indent under the text.
-fn push_wrapped(lines: &mut Vec<Line<'_>>, marker: &str, text: &str, style: Style) {
+/// `marker` plus a wrapped body: first line carries the marker in
+/// `marker_style`, continuation lines indent under the text in
+/// `text_style`.
+fn push_wrapped(
+    lines: &mut Vec<Line<'_>>,
+    marker: &str,
+    marker_style: Style,
+    text: &str,
+    text_style: Style,
+) {
     let mut iter = text.lines();
     let indent = " ".repeat(marker.chars().count());
     match iter.next() {
-        Some(first) => lines.push(Line::from(Span::styled(format!("{marker}{first}"), style))),
+        Some(first) => lines.push(Line::from(vec![
+            Span::styled(marker.to_owned(), marker_style),
+            Span::styled(first.to_owned(), text_style),
+        ])),
         None => {
-            lines.push(Line::from(Span::styled(marker.to_owned(), style)));
+            lines.push(Line::from(Span::styled(marker.to_owned(), marker_style)));
             return;
         }
     }
     for line in iter {
-        lines.push(Line::from(Span::styled(format!("{indent}{line}"), style)));
+        lines.push(Line::from(Span::styled(
+            format!("{indent}{line}"),
+            text_style,
+        )));
     }
 }
 

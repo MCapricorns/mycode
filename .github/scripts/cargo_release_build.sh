@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the release binaries (desktop `mycode-desktop` and CLI `mycode` from
-# the mycode-cli package), retrying only crates.io network failures.
+# Build the release binaries (desktop `mycode-desktop` and CLI `mycode-cli`
+# from the mycode-cli package), retrying only crates.io network failures.
 #
 # The macOS release job for 797dfde (run 38037377671) failed in
 # "Build release binary". Cargo exhausted its own resolver retries in about
