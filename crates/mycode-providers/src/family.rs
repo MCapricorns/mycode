@@ -521,10 +521,12 @@ fn apply_zai_anthropic(body: &mut Value, level: ReasoningLevel) {
 }
 
 fn apply_minimax(body: &mut Value, level: ReasoningLevel, wire: ThinkingWire) {
-    if level == ReasoningLevel::Off {
-        body["thinking"] = json!({ "type": "disabled" });
-        return;
-    }
+    // MiniMax has no off switch: M3.1 rejects `disabled` outright
+    // ("requires adaptive thinking"), and `adaptive` is accepted by every
+    // MiniMax model — `enabled` is the field the API actually refuses. So
+    // `Off` degrades to the same wire shape as any other level; callers
+    // sizing an output cap consult `keeps_thinking_when_off`.
+    let _ = level;
     body["thinking"] = json!({ "type": "adaptive" });
     // Chat Completions inlines `<think>` unless this is set. The Messages
     // API already returns thinking blocks; an unknown field there can 400.
@@ -891,6 +893,8 @@ pub fn keeps_thinking_when_off(model: &str) -> bool {
     claude_thinking_always_on(&model_id)
         || is_k3_model(&model_id)
         || model_id.contains("kimi-k2.7-code")
+        // MiniMax only ships `adaptive`; an `Off` request still thinks.
+        || model_id.contains("minimax")
 }
 
 fn claude_summarized_display(model_id: &str) -> bool {

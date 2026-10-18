@@ -260,7 +260,7 @@ fn summary_off_keeps_disabled_thinking_and_the_summary_breakpoint() {
         "https://api.minimax.io/anthropic/v1/messages",
         &summary,
     );
-    assert_eq!(minimax["thinking"]["type"], "disabled");
+    assert_eq!(minimax["thinking"]["type"], "adaptive");
     assert!(minimax.get("output_config").is_none());
     assert!(minimax["thinking"].get("budget_tokens").is_none());
     assert_eq!(
