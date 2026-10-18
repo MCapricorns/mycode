@@ -154,21 +154,19 @@ pub(crate) fn run_core(
                     session_id,
                     call_id,
                 } => {
+                    // A short synchronous map edit, like `Steer`; no task needed.
                     let key = format!("{session_id}:{call_id}");
-                    let reply = with_reply.reply;
-                    let cancels = state.subagent_cancels.clone();
-                    tokio::spawn(async move {
-                        let mut map = cancels.lock();
-                        let outcome = match map.remove(&key) {
-                            Some(token) => {
-                                token.cancel();
-                                Ok(())
-                            }
-                            None => Err("that subagent is not running".to_owned()),
-                        };
-                        drop(map);
-                        let _ = reply.send(BridgeReply::SubagentCancelled(outcome));
-                    });
+                    let token = state.subagent_cancels.lock().remove(&key);
+                    let outcome = match token {
+                        Some(token) => {
+                            token.cancel();
+                            Ok(())
+                        }
+                        None => Err("that subagent is not running".to_owned()),
+                    };
+                    let _ = with_reply
+                        .reply
+                        .send(BridgeReply::SubagentCancelled(outcome));
                 }
                 BridgeCommand::SummarizeTitle {
                     session,
@@ -202,20 +200,15 @@ pub(crate) fn run_core(
                     let _ = with_reply.reply.send(BridgeReply::Steered(outcome));
                 }
                 BridgeCommand::CancelChat { session_id } => {
-                    let reply = with_reply.reply;
-                    let cancels = state.turn_cancels.clone();
-                    tokio::spawn(async move {
-                        let map = cancels.lock();
-                        let outcome = match map.get(&session_id) {
-                            Some(token) => {
-                                token.cancel();
-                                Ok(())
-                            }
-                            None => Err("no turn is running for this session".to_owned()),
-                        };
-                        drop(map);
-                        let _ = reply.send(BridgeReply::ChatCancelled(outcome));
-                    });
+                    let token = state.turn_cancels.lock().get(&session_id).cloned();
+                    let outcome = match token {
+                        Some(token) => {
+                            token.cancel();
+                            Ok(())
+                        }
+                        None => Err("no turn is running for this session".to_owned()),
+                    };
+                    let _ = with_reply.reply.send(BridgeReply::ChatCancelled(outcome));
                 }
                 BridgeCommand::RefreshCatalog => {
                     let task_state = state.clone();
