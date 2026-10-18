@@ -148,6 +148,54 @@ fn the_open_conversation_is_capped_at_the_resident_entry_ceiling() {
 }
 
 #[test]
+fn a_failed_or_stopped_turn_marks_the_transcript_tail() {
+    let mut state = open(Vec::new(), None);
+    reduce(&mut state, FrontendAction::TurnArmed);
+    reduce(
+        &mut state,
+        FrontendAction::ChatFailed {
+            message: "provider returned 500".to_owned(),
+            head: String::new(),
+        },
+    );
+    assert_eq!(
+        state.turn_alert.as_deref(),
+        Some("provider returned 500"),
+        "a provider failure keeps its message as the red tail row"
+    );
+    // A new send clears the previous turn's alert before the reply starts.
+    reduce(
+        &mut state,
+        FrontendAction::MessageSent {
+            head: "evt-x".to_owned(),
+            entry: user("evt-x", "again"),
+        },
+    );
+    assert!(state.turn_alert.is_none());
+
+    // The user stop shows the same red row with a stopped label, not the
+    // cancellation sentinel, and raises no error banner.
+    reduce(&mut state, FrontendAction::TurnArmed);
+    reduce(
+        &mut state,
+        FrontendAction::ChatFailed {
+            message: mycode_app::CHAT_CANCELLED.to_owned(),
+            head: String::new(),
+        },
+    );
+    assert!(state.error.is_none());
+    assert_eq!(
+        state.turn_alert.as_deref(),
+        Some(crate::i18n::t("Stopped by user", "已被用户停止")),
+        "a user stop also paints the transcript tail"
+    );
+
+    // Leaving the conversation takes the alert with it.
+    reduce(&mut state, FrontendAction::ConversationParked);
+    assert!(state.turn_alert.is_none());
+}
+
+#[test]
 fn older_loaded_is_not_trimmed_past_the_resident_ceiling() {
     let tail: Vec<ConversationEntry> = (10..super::MAX_RESIDENT_ENTRIES + 10)
         .map(|index| user(&ledger_id(index), "row"))

@@ -145,6 +145,11 @@ pub struct WorkspaceState {
     pub settings: Option<SettingsState>,
     /// Last terminal error surfaced to the user.
     pub error: Option<String>,
+    /// Red transcript-tail row for a turn that ended without a reply —
+    /// provider failure or a user stop. Cleared when the next turn arms or
+    /// the conversation leaves the screen; not part of the ledger, so a
+    /// reopened transcript does not show it again.
+    pub turn_alert: Option<String>,
     /// Chat or settings main view.
     pub view: MainView,
     /// Settings navigation section.
