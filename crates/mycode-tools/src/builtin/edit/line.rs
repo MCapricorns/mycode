@@ -13,8 +13,12 @@ pub(super) fn line_range_planned(
 ) -> Result<Planned, ToolError> {
     let (start, end) = locate_line_range(body, start_line, end_line)?;
     let range = &body[start..end];
+    let terminator = trailing_terminator(range);
+    // The selected lines own their final terminator, but a model quoting
+    // them usually leaves it off; both spellings name the same lines.
     if let Some(expected) = expected_text
-        && range != expected
+        && expected != range
+        && expected != &range[..range.len() - terminator.len()]
     {
         return Err(ToolError::Execution(
             "line range does not match expected_text; re-read the file".to_owned(),
@@ -28,11 +32,28 @@ pub(super) fn line_range_planned(
             ));
         }
     }
+    // A replacement without its own line ending would splice the next line
+    // onto its last one; it inherits the ending of the lines it replaces.
+    let mut replacement = replacement.to_owned();
+    if !replacement.is_empty() && !replacement.ends_with(['\n', '\r']) {
+        replacement.push_str(terminator);
+    }
     Ok(Planned {
         start: start + bom_len,
         end: end + bom_len,
-        replacement: replacement.to_owned(),
+        replacement,
     })
+}
+
+/// The CR, LF, or CRLF that ends `range`, or `""` for a final line without one.
+fn trailing_terminator(range: &str) -> &str {
+    if range.ends_with("\r\n") {
+        "\r\n"
+    } else if range.ends_with(['\n', '\r']) {
+        &range[range.len() - 1..]
+    } else {
+        ""
+    }
 }
 
 /// Returns the CR, LF, or CRLF terminator length at `index`.
@@ -141,4 +162,39 @@ fn locate_line_range(
 fn hash_eq(expected: &str, actual_hex: &str) -> bool {
     let expected = expected.strip_prefix("blake3:").unwrap_or(expected).trim();
     expected.eq_ignore_ascii_case(actual_hex)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::line_range_planned;
+
+    fn replace(body: &str, start: usize, end: usize, expected: &str, with: &str) -> String {
+        let planned = line_range_planned(body, start, end, Some(expected), None, with, 0)
+            .unwrap_or_else(|error| panic!("{error}"));
+        format!(
+            "{}{}{}",
+            &body[..planned.start],
+            planned.replacement,
+            &body[planned.end..]
+        )
+    }
+
+    #[test]
+    fn expected_text_may_omit_the_final_line_ending() {
+        let body = "one\ntwo\nthree\n";
+        assert_eq!(replace(body, 2, 2, "two\n", "TWO\n"), "one\nTWO\nthree\n");
+        assert_eq!(replace(body, 2, 2, "two", "TWO\n"), "one\nTWO\nthree\n");
+        assert!(line_range_planned(body, 2, 2, Some("tw"), None, "x", 0).is_err());
+    }
+
+    #[test]
+    fn a_replacement_without_a_line_ending_keeps_the_next_line_separate() {
+        assert_eq!(
+            replace("a\r\nb\r\nc\r\n", 1, 2, "a\r\nb", "x"),
+            "x\r\nc\r\n"
+        );
+        // The last line has no terminator to inherit, and deleting stays a delete.
+        assert_eq!(replace("a\nb", 2, 2, "b", "z"), "a\nz");
+        assert_eq!(replace("a\nb\nc\n", 2, 2, "b", ""), "a\nc\n");
+    }
 }
