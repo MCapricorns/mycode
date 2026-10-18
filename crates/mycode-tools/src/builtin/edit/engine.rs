@@ -355,87 +355,131 @@ pub(super) fn plan_edits(
     let bom_len = if had_bom { UTF8_BOM.len() } else { 0 };
     let mut planned = Vec::new();
     let mut replacement_bytes = 0usize;
-    for op in ops {
+    for (index, op) in ops.iter().enumerate() {
         check_cancel(cancel)?;
-        match op {
-            PreparedOp::Literal {
-                patterns,
-                replacements,
-                pick,
-            } => {
-                let mut matches = literal_matches(body, patterns)?;
-                // Deterministic positional order for `nth` picks and for the
-                // overlap rejection that follows.
-                matches.sort_by_key(|found| (found.start, found.end));
-                reject_overlapping_candidates(&matches)?;
-                let newline = dominant_newline(body);
-                for found in select_matches(matches, *pick, "literal")? {
-                    let replacement = match_newlines(&replacements[found.pattern_id], newline);
-                    reserve_planned(
-                        &mut planned,
-                        &mut replacement_bytes,
-                        found.start + bom_len,
-                        found.end + bom_len,
-                        &replacement,
-                    )?;
-                }
-            }
-            PreparedOp::Regex {
-                compiled,
-                replacement,
-                pick,
-            } => regex_planned(
-                body,
-                compiled,
-                replacement,
-                *pick,
-                bom_len,
-                &mut planned,
-                &mut replacement_bytes,
-            )?,
-            PreparedOp::LineRange {
-                start_line,
-                end_line,
-                expected_text,
-                expected_hash,
-                replacement,
-            } => {
-                let range = super::line::line_range_planned(
-                    body,
-                    *start_line,
-                    *end_line,
-                    expected_text.as_deref(),
-                    expected_hash.as_deref(),
-                    replacement,
-                    bom_len,
-                )?;
-                reserve_planned(
-                    &mut planned,
-                    &mut replacement_bytes,
-                    range.start,
-                    range.end,
-                    &range.replacement,
-                )?;
-            }
-            PreparedOp::Fuzzy {
-                pattern,
-                replacement,
-                max_distance,
-            } => super::fuzzy::plan_fuzzy(
-                body,
-                super::fuzzy::FuzzyPlan {
-                    pattern,
-                    replacement,
-                    max_distance: *max_distance,
-                },
-                bom_len,
-                &mut planned,
-                &mut replacement_bytes,
-                cancel,
-            )?,
-        }
+        plan_op(
+            body,
+            op,
+            bom_len,
+            &mut planned,
+            &mut replacement_bytes,
+            cancel,
+        )
+        .map_err(|error| tag_op_error(index, ops.len(), error))?;
     }
     Ok(planned)
+}
+
+/// Plans one prepared operation onto the pending replacement list.
+fn plan_op(
+    body: &str,
+    op: &PreparedOp,
+    bom_len: usize,
+    planned: &mut Vec<Planned>,
+    replacement_bytes: &mut usize,
+    cancel: &CancellationToken,
+) -> Result<(), ToolError> {
+    match op {
+        PreparedOp::Literal {
+            patterns,
+            replacements,
+            pick,
+        } => {
+            let mut matches = literal_matches(body, patterns)?;
+            if matches.is_empty() {
+                return Err(literal_miss_error(body, patterns));
+            }
+            // Deterministic positional order for `nth` picks and for the
+            // overlap rejection that follows.
+            matches.sort_by_key(|found| (found.start, found.end));
+            reject_overlapping_candidates(&matches)?;
+            let newline = dominant_newline(body);
+            for found in select_matches(matches, *pick, "literal")? {
+                let replacement = match_newlines(&replacements[found.pattern_id], newline);
+                reserve_planned(
+                    planned,
+                    replacement_bytes,
+                    found.start + bom_len,
+                    found.end + bom_len,
+                    &replacement,
+                )?;
+            }
+            Ok(())
+        }
+        PreparedOp::Regex {
+            compiled,
+            replacement,
+            pick,
+        } => regex_planned(
+            body,
+            compiled,
+            replacement,
+            *pick,
+            bom_len,
+            planned,
+            replacement_bytes,
+        ),
+        PreparedOp::LineRange {
+            start_line,
+            end_line,
+            expected_text,
+            expected_hash,
+            replacement,
+        } => {
+            let range = super::line::line_range_planned(
+                body,
+                *start_line,
+                *end_line,
+                expected_text.as_deref(),
+                expected_hash.as_deref(),
+                replacement,
+                bom_len,
+            )?;
+            reserve_planned(
+                planned,
+                replacement_bytes,
+                range.start,
+                range.end,
+                &range.replacement,
+            )
+        }
+        PreparedOp::Fuzzy {
+            pattern,
+            replacement,
+            max_distance,
+        } => super::fuzzy::plan_fuzzy(
+            body,
+            super::fuzzy::FuzzyPlan {
+                pattern,
+                replacement,
+                max_distance: *max_distance,
+            },
+            bom_len,
+            planned,
+            replacement_bytes,
+            cancel,
+        ),
+    }
+}
+
+/// Tags a planning failure with its operation index in a batch.
+///
+/// A multi-operation call is atomic — one miss discards every planned
+/// change. Without the index and that fact, the model cannot tell which op
+/// failed and may keep editing as if the earlier ops had landed.
+fn tag_op_error(index: usize, total: usize, error: ToolError) -> ToolError {
+    if total <= 1 {
+        return error;
+    }
+    let prefix = format!(
+        "operation {} of {total} failed (the call is atomic: no changes were applied): ",
+        index + 1
+    );
+    match error {
+        ToolError::Execution(message) => ToolError::Execution(format!("{prefix}{message}")),
+        ToolError::InvalidArgs(message) => ToolError::InvalidArgs(format!("{prefix}{message}")),
+        other => other,
+    }
 }
 
 /// Pushes one planned replacement, enforcing the global match and aggregate
@@ -633,6 +677,69 @@ fn match_newlines(text: &str, newline: Option<&str>) -> String {
     } else {
         lf.replace('\n', "\r\n")
     }
+}
+
+/// The miss error for a literal op. When a whitespace-insensitive scan
+/// still finds the pattern — the usual cause is different indentation —
+/// the hint names the line so the model can correct the pattern instead
+/// of re-reading the whole file.
+fn literal_miss_error(body: &str, patterns: &[String]) -> ToolError {
+    const BASE: &str = "literal pattern not found; re-read the file and provide the exact text";
+    match whitespace_near_miss_line(body, patterns) {
+        Some(line) => ToolError::Execution(format!(
+            "{BASE}; line {line} contains similar text that differs only in whitespace/indentation"
+        )),
+        None => ToolError::Execution(BASE.to_owned()),
+    }
+}
+
+struct WhitespaceStripped {
+    text: String,
+    /// Original byte index of each byte in [`Self::text`].
+    map: Vec<usize>,
+}
+
+fn strip_whitespace(text: &str) -> WhitespaceStripped {
+    let mut out = String::with_capacity(text.len());
+    let mut map = Vec::with_capacity(text.len());
+    for (index, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        for offset in 0..ch.len_utf8() {
+            map.push(index + offset);
+        }
+        out.push(ch);
+    }
+    WhitespaceStripped { text: out, map }
+}
+
+/// Diagnostic-only scan for a literal op that missed. Finds the earliest
+/// body position where a pattern appears once every whitespace byte is
+/// dropped, so different indentation or line wrapping still points the
+/// model at the right spot. Matching itself stays exact — this only
+/// enriches the error.
+fn whitespace_near_miss_line(body: &str, patterns: &[String]) -> Option<usize> {
+    let stripped_body = strip_whitespace(body);
+    if stripped_body.text.is_empty() {
+        return None;
+    }
+    let haystack = stripped_body.text.as_bytes();
+    let mut best: Option<usize> = None;
+    for pattern in patterns {
+        let needle = strip_whitespace(pattern).text;
+        if needle.is_empty() {
+            continue;
+        }
+        if let Some(position) = memchr::memmem::find(haystack, needle.as_bytes()) {
+            let original = stripped_body.map[position];
+            if best.is_none_or(|current| original < current) {
+                best = Some(original);
+            }
+        }
+    }
+    let start = best?;
+    Some(body[..start].bytes().filter(|byte| *byte == b'\n').count() + 1)
 }
 
 fn memmem_matches(body: &str, pattern: &str) -> Result<Vec<Found>, ToolError> {
@@ -921,7 +1028,13 @@ pub(super) fn apply_planned(
 }
 
 #[cfg(test)]
+mod near_miss_tests;
+
+#[cfg(test)]
 mod newline_tests;
 
 #[cfg(test)]
 mod normalize_tests;
+
+#[cfg(test)]
+mod op_index_tests;
