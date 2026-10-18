@@ -429,7 +429,7 @@ async fn lookup_addresses(url: &str) -> Result<Vec<IpAddr>, String> {
         .host_str()
         .ok_or_else(|| "url has no host".to_owned())?;
     let port = parsed.port_or_known_default().unwrap_or(80);
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Ok(ip) = bare_host(host).parse::<IpAddr>() {
         return Ok(vec![ip]);
     }
     let mut addrs = Vec::new();
@@ -549,17 +549,29 @@ fn pooled_client(key: ClientKey) -> Result<reqwest::Client, String> {
 }
 
 pub(crate) fn public_host(host: &str) -> bool {
-    let lower = host.to_ascii_lowercase();
+    let bare = bare_host(host);
+    let lower = bare.to_ascii_lowercase();
     if lower.is_empty()
         || matches!(lower.as_str(), "localhost" | "localhost.localdomain")
         || lower.ends_with(".local")
     {
         return false;
     }
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Ok(ip) = bare.parse::<IpAddr>() {
         return is_public_ip(ip);
     }
     true
+}
+
+/// `Url::host_str` keeps the brackets of an IPv6 literal (`[::1]`) and a
+/// fully qualified name may end in a dot (`localhost.`); both are stripped
+/// before the host is classified or parsed as an address.
+fn bare_host(host: &str) -> &str {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    host.strip_suffix('.').unwrap_or(host)
 }
 
 /// `198.18.0.0/15`, the benchmarking range local fake-ip DNS uses.
