@@ -642,9 +642,12 @@ mod tests {
     use mycode_config::HomeLayout;
 
     fn scratch() -> (std::path::PathBuf, HomeLayout) {
+        // The clock alone is too coarse on Windows for parallel tests.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "mycode-ledger-{}-{}",
+            "mycode-ledger-{}-{}-{}",
             std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             crate::unix_now().as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("scratch");
