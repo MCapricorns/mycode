@@ -143,7 +143,7 @@ pub fn upsert_session_model(
     if !valid_session_id(session_id) || !valid_pin_part(provider) || !valid_pin_part(model) {
         return;
     }
-    let reasoning = reasoning.filter(|level| valid_effort_token(level));
+    let reasoning = reasoning.filter(|level| is_valid_effort_token(level));
     pins.retain(|pin| pin.session_id != session_id);
     pins.insert(
         0,
@@ -174,10 +174,6 @@ pub fn is_valid_effort_token(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-}
-
-fn valid_effort_token(value: &str) -> bool {
-    is_valid_effort_token(value)
 }
 
 /// Durable desktop UI state.
@@ -356,7 +352,7 @@ impl UiState {
             return Err(invalid());
         }
         if let Some(reasoning) = &self.selected_reasoning
-            && !valid_effort_token(reasoning)
+            && !is_valid_effort_token(reasoning)
         {
             return Err(invalid());
         }
@@ -379,7 +375,7 @@ impl UiState {
                 || pin
                     .reasoning
                     .as_deref()
-                    .is_some_and(|level| !valid_effort_token(level))
+                    .is_some_and(|level| !is_valid_effort_token(level))
                 || self.session_models[..index]
                     .iter()
                     .any(|earlier| earlier.session_id == pin.session_id)

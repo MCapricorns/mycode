@@ -2,8 +2,11 @@
 
 use std::path::Path;
 
+use crate::mcp_import::parse_mcp_import;
 use crate::settings::McpServerSettings;
-use crate::{mcp_import::parse_mcp_import, settings::is_mcp_executable};
+
+/// Largest project MCP document read; a pasted config is a few KiB.
+const MAX_PROJECT_MCP_BYTES: u64 = 256 * 1024;
 
 /// Reads project MCP servers.
 ///
@@ -13,33 +16,28 @@ use crate::{mcp_import::parse_mcp_import, settings::is_mcp_executable};
 /// # Errors
 ///
 /// Returns a message when the project file cannot be read or parsed,
-/// or when a stdio command is a shell string.
+/// is oversized, or a stdio command is a shell string.
 pub fn project_mcp_servers(project: &Path) -> Result<Vec<McpServerSettings>, String> {
     let file = project.join(".mycode").join("mcp.json");
-    if !file.is_file() {
-        if file.exists() {
-            return Err("project MCP config is not a file".to_owned());
-        }
-        return Ok(Vec::new());
+    let metadata = match std::fs::metadata(&file) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("project MCP config unreadable: {error}")),
+    };
+    if !metadata.is_file() {
+        return Err("project MCP config is not a file".to_owned());
+    }
+    if metadata.len() > MAX_PROJECT_MCP_BYTES {
+        return Err("project MCP config is larger than 256 KiB".to_owned());
     }
     let text = std::fs::read_to_string(&file)
         .map_err(|error| format!("project MCP config unreadable: {error}"))?;
-    let imported = parse_mcp_import(&text)?;
-    for server in &imported {
-        if server.server.transport == "stdio"
-            && !server
-                .server
-                .command
-                .as_deref()
-                .is_some_and(is_mcp_executable)
-        {
-            return Err(format!(
-                "project MCP server '{}' command must be an executable, not a shell string",
-                server.server.id
-            ));
-        }
-    }
-    Ok(imported.into_iter().map(|server| server.server).collect())
+    // The import parser already refuses a stdio command that is a shell
+    // string, so every row it returns is safe to spawn.
+    Ok(parse_mcp_import(&text)?
+        .into_iter()
+        .map(|server| server.server)
+        .collect())
 }
 
 #[cfg(test)]
