@@ -43,6 +43,7 @@ impl FrontendDriver {
                 // Refresh the sidebar so the session title picks up the turn.
                 self.dispatch(BridgeCommand::ListSessions);
                 self.act(FrontendAction::ChatDone { head, entry }, out);
+                self.resync_after_turn(&session_id);
                 self.pump_queued_send(out);
                 return;
             }
@@ -56,6 +57,7 @@ impl FrontendDriver {
                 }
                 let cancelled = message == CHAT_CANCELLED;
                 self.act(FrontendAction::ChatFailed { message, head }, out);
+                self.resync_after_turn(&session_id);
                 // A user interrupt frees the turn; queued follow-ups start next.
                 // Provider errors keep the queue so a failed retry cannot loop.
                 if cancelled {
@@ -296,5 +298,22 @@ impl FrontendDriver {
             }
         };
         self.act(action, out);
+    }
+
+    /// Reloads a chat that was opened mid-turn once that turn has ended,
+    /// so steps committed while the open was in flight show up. A queued
+    /// follow-up about to start the next turn defers the reload to that
+    /// turn's end, so the reopen never races the send.
+    fn resync_after_turn(&mut self, session_id: &str) {
+        if self.resync_on_turn_end.as_deref() != Some(session_id) {
+            return;
+        }
+        if !self.vm.queued.is_empty() && !self.vm.queue_paused {
+            return;
+        }
+        self.resync_on_turn_end = None;
+        if self.pending_open.is_none() {
+            self.request_open_session(session_id);
+        }
     }
 }

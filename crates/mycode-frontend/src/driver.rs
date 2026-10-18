@@ -345,6 +345,11 @@ pub struct FrontendDriver {
     /// The `LoadUiState` reply landed (either way), so the remembered
     /// project no longer overwrites one the frontend picks.
     ui_state_loaded: bool,
+    /// Session opened while its turn was running. Events committed between
+    /// the core reading that snapshot and the reply landing here were
+    /// dropped as belonging to another chat, so the transcript reloads from
+    /// the ledger once the turn ends.
+    resync_on_turn_end: Option<String>,
     /// Free-text answers to the pending ask card, aligned with its rows.
     pub ask_texts: Vec<String>,
     /// The question the ask card is showing; answers step one at a time.
@@ -413,6 +418,7 @@ impl FrontendDriver {
             agent_roles_project: None,
             agent_roles_stale: false,
             ui_state_loaded: false,
+            resync_on_turn_end: None,
             ask_texts: Vec::new(),
             ask_index: 0,
         };
