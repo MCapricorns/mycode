@@ -586,13 +586,17 @@ fn transcript_head(
     &history[start..head_end]
 }
 
+/// The prior checkpoint stands in for everything before `head`, so it is
+/// kept whole; only the message log is cut to [`TRANSCRIPT_CAP_CHARS`],
+/// dropping its oldest messages first.
 fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> String {
-    let mut transcript = String::new();
+    let mut prefix = String::new();
     if let Some(summary) = prior_summary {
-        transcript.push_str("Previous checkpoint:\n");
-        transcript.push_str(summary);
-        transcript.push_str("\n\n");
+        prefix.push_str("Previous checkpoint:\n");
+        prefix.push_str(summary);
+        prefix.push_str("\n\n");
     }
+    let mut transcript = String::new();
     for message in head {
         if is_summary_message(message) {
             continue;
@@ -612,9 +616,12 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> 
             .nth(count - TRANSCRIPT_CAP_CHARS)
             .map(|(index, _)| index)
             .unwrap_or(0);
-        format!("...earlier content elided...\n{}", &transcript[skip..])
+        format!(
+            "{prefix}...earlier content elided...\n{}",
+            &transcript[skip..]
+        )
     } else {
-        transcript
+        prefix + &transcript
     }
 }
 

@@ -55,6 +55,24 @@ fn a_later_compact_summarizes_only_the_uncovered_head() {
 }
 
 #[test]
+fn an_oversized_head_keeps_the_prior_checkpoint() {
+    let filler = "x".repeat(3_900);
+    let mut history: Vec<_> = (0..120)
+        .map(|index| user(&format!("m{index} {filler}")))
+        .collect();
+    history.push(user("newest"));
+    let transcript = compaction_transcript(Some("prior summary"), &history);
+    assert!(
+        transcript.starts_with("Previous checkpoint:\nprior summary"),
+        "{}",
+        &transcript[..200]
+    );
+    assert!(transcript.contains("earlier content elided"));
+    assert!(transcript.contains("newest"));
+    assert!(!transcript.contains("m0 "));
+}
+
+#[test]
 fn the_first_compact_still_includes_the_whole_head() {
     let history = vec![user("one"), user("two"), user("tail")];
     let head = transcript_head(&history, 2, None);
