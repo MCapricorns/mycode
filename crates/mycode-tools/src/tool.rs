@@ -438,8 +438,9 @@ impl<T: Tool> ToolDyn for T {
         out: &'a mut ToolStream,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
         Box::pin(async move {
-            let args = self.prepare_args(normalize_tool_args(args));
+            let mut args = self.prepare_args(normalize_tool_args(args));
             let schema = self.params_schema();
+            coerce_scalar_strings(&mut args, &schema);
             validate_args_with_schema(&schema, &args)?;
             let typed = serde_json::from_value(args)
                 .map_err(|err| ToolError::InvalidArgs(err.to_string()))?;
@@ -466,6 +467,83 @@ pub(crate) fn normalize_tool_args(args: Value) -> Value {
     alias_key(map, "new_str", "new_string");
     unwrap_echoed_values(map);
     args
+}
+
+/// Turns a string such as `"10"` or `"true"` into the number or boolean a
+/// top-level property expects.
+///
+/// XML tool calls carry every parameter as text, and some JSON-calling
+/// models quote scalars too; without this every `limit`, `timeout_secs`, or
+/// `overwrite` they send fails validation. A property that also accepts a
+/// string is never touched, and text that does not parse stays as it was so
+/// validation still names the bad value.
+fn coerce_scalar_strings(args: &mut Value, schema: &Value) {
+    let (Some(map), Some(properties)) = (
+        args.as_object_mut(),
+        schema.get("properties").and_then(Value::as_object),
+    ) else {
+        return;
+    };
+    for (key, value) in map.iter_mut() {
+        let Value::String(text) = value else {
+            continue;
+        };
+        let Some(property) = properties.get(key) else {
+            continue;
+        };
+        let types = scalar_types(property);
+        if types.is_empty() || types.contains(&"string") {
+            continue;
+        }
+        let text = text.trim();
+        let coerced = if types.contains(&"integer")
+            && let Ok(number) = text.parse::<i64>()
+        {
+            Some(Value::from(number))
+        } else if types.contains(&"integer")
+            && let Ok(number) = text.parse::<u64>()
+        {
+            Some(Value::from(number))
+        } else if types.contains(&"number")
+            && let Ok(number) = text.parse::<f64>()
+            && number.is_finite()
+        {
+            Some(Value::from(number))
+        } else if types.contains(&"boolean") {
+            match text.to_ascii_lowercase().as_str() {
+                "true" => Some(Value::Bool(true)),
+                "false" => Some(Value::Bool(false)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(coerced) = coerced {
+            *value = coerced;
+        }
+    }
+}
+
+/// The JSON `type` names a property schema allows, including those of
+/// `anyOf`/`oneOf` arms (schemars spells `Option<T>` either way).
+fn scalar_types(property: &Value) -> Vec<&str> {
+    let mut types = Vec::new();
+    match property.get("type") {
+        Some(Value::String(name)) => types.push(name.as_str()),
+        Some(Value::Array(names)) => types.extend(names.iter().filter_map(Value::as_str)),
+        _ => {}
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        for arm in property
+            .get(keyword)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            types.extend(scalar_types(arm));
+        }
+    }
+    types
 }
 
 /// Unwraps `{key: {key: value}}` into `{key: value}`.
@@ -562,6 +640,46 @@ mod tests {
         assert_eq!(args, json!({"mode": {"mode": "program", "x": 1}}));
         let args = normalize_tool_args(json!({"questions": [{"question": "Go?"}]}));
         assert_eq!(args, json!({"questions": [{"question": "Go?"}]}));
+    }
+
+    #[test]
+    fn quoted_scalars_become_the_type_the_schema_expects() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "limit": { "type": ["integer", "null"], "minimum": 0 },
+                "ratio": { "type": "number" },
+                "overwrite": { "type": "boolean", "default": false },
+                "maybe": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+                "name": { "type": "string" },
+                "either": { "type": ["string", "integer"] }
+            }
+        });
+        let mut args = json!({
+            "limit": " 10 ",
+            "ratio": "0.5",
+            "overwrite": "True",
+            "maybe": "false",
+            "name": "42",
+            "either": "7",
+            "unknown": "1"
+        });
+        super::coerce_scalar_strings(&mut args, &schema);
+        assert_eq!(
+            args,
+            json!({
+                "limit": 10,
+                "ratio": 0.5,
+                "overwrite": true,
+                "maybe": false,
+                "name": "42",
+                "either": "7",
+                "unknown": "1"
+            })
+        );
+        let mut bad = json!({ "limit": "ten", "overwrite": "yes" });
+        super::coerce_scalar_strings(&mut bad, &schema);
+        assert_eq!(bad, json!({ "limit": "ten", "overwrite": "yes" }));
     }
 
     #[tokio::test]
