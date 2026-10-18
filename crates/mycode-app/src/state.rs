@@ -44,6 +44,11 @@ pub(crate) struct CoreState {
     pub(crate) mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     /// Documents reset before the UI asked for settings or UI state.
     startup_repairs: Mutex<Vec<DocumentRepair>>,
+    /// Orders whole-document `ui.json` replacements. Each save runs on the
+    /// blocking pool; without this an older snapshot dispatched first could
+    /// finish last and overwrite the newer one. The tokio mutex is FIFO, so
+    /// writes land in the order the frontend sent them.
+    pub(crate) ui_state_writes: tokio::sync::Mutex<()>,
 }
 
 impl CoreState {
@@ -81,6 +86,7 @@ impl CoreState {
             steer_inboxes: Arc::new(Mutex::new(HashMap::new())),
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),
             startup_repairs: Mutex::new(startup_repairs),
+            ui_state_writes: tokio::sync::Mutex::new(()),
         }
     }
 

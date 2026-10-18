@@ -500,6 +500,32 @@ pub fn replace_ui_state(home: &crate::HomeLayout, state: &UiState) -> Result<(),
     locked_update_owned_file(home, UI_STATE_PATH, MAX_UI_STATE_BYTES, |_| Ok(bytes))
 }
 
+/// Applies one edit to the stored UI state inside the owned-file lock.
+///
+/// A separate read and [`replace_ui_state`] lets a concurrent writer land
+/// between the two and be overwritten with the older copy. Here the edit
+/// sees exactly the document it replaces. A missing document starts from the
+/// defaults.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the stored document fails validation, the
+/// edited state is invalid, or the transaction fails.
+pub fn update_ui_state(
+    home: &crate::HomeLayout,
+    edit: impl FnOnce(&mut UiState),
+) -> Result<(), ConfigError> {
+    locked_update_owned_file(home, UI_STATE_PATH, MAX_UI_STATE_BYTES, |current| {
+        let mut state = match current {
+            Some(bytes) => decode_ui_state(bytes)?,
+            None => UiState::default(),
+        };
+        edit(&mut state);
+        state.validate()?;
+        replace_bytes(&state)
+    })
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SerializedUiState {

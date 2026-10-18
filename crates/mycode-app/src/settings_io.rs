@@ -4,9 +4,8 @@
 
 use mycode_config::{
     AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES,
-    MAX_SECRETS_BYTES, SECRETS_FORMAT_VERSION, SECRETS_PATH, SETTINGS_FORMAT_VERSION,
-    SETTINGS_PATH, read_app_settings_with_repair, read_owned_file,
-    read_provider_secrets_with_repair, replace_app_settings, replace_provider_secrets,
+    SETTINGS_FORMAT_VERSION, SETTINGS_PATH, read_app_settings_with_repair, read_owned_file,
+    read_provider_secrets_with_repair, replace_app_settings, update_provider_key,
 };
 
 /// Settings loaded for the UI, including any documents reset on this read.
@@ -132,29 +131,27 @@ fn split_key_ids(secrets: &mycode_config::ProviderSecrets) -> (Vec<String>, Vec<
     (provider_keys, mcp_keys)
 }
 
-/// Stores or clears one provider key under the secret-store CAS, returning
-/// the refreshed key-id lists so the UI updates its markers in place.
+/// Stores or clears one provider key, returning the refreshed key-id lists
+/// so the UI updates its markers in place.
+///
+/// The key lands in one locked read-modify-write: concurrent saves (several
+/// keys from one `mcp.json` import, an OAuth refresh rotating its token
+/// mid-turn) each apply to the current document instead of failing a
+/// revision check against one another.
 pub(crate) fn save_provider_key(
     home: &HomeLayout,
     provider_id: &str,
     api_key: &str,
 ) -> Result<(Vec<String>, Vec<String>), String> {
-    let secrets = read_provider_secrets_with_repair(home)
-        .map(|(secrets, _repair)| secrets)
-        .map_err(|error| render_config_error(&error))?;
-    let expected = stored_revision(
-        home,
-        SECRETS_PATH,
-        MAX_SECRETS_BYTES,
-        SECRETS_FORMAT_VERSION,
-        "secrets",
-    )?;
+    // A damaged store is quarantined and reset (keeping intact keys) first;
+    // the locked update below rejects a document it cannot decode.
+    read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
     let api_key = mycode_config::normalize_api_key(api_key);
-    let updated = secrets.with_key(
+    let updated = update_provider_key(
+        home,
         provider_id,
         (!api_key.is_empty()).then_some(api_key.as_str()),
-    );
-    replace_provider_secrets(home, expected, &updated)
-        .map_err(|error| render_config_error(&error))?;
+    )
+    .map_err(|error| render_config_error(&error))?;
     Ok(split_key_ids(&updated))
 }

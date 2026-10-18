@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use mycode_config::{HomeLayout, read_ui_state, replace_ui_state};
+use mycode_config::{HomeLayout, read_ui_state, replace_ui_state, update_ui_state};
 
 use crate::ledger::{
     delete_session, forget_session_bindings, inspect_summaries, load_older, open_conversation,
@@ -586,10 +586,10 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             let project = project.clone();
             BridgeReply::UiStateSaved(
                 blocking(move || {
-                    let mut ui_state =
-                        read_ui_state(&home).map_err(|error| render_config_error(&error))?;
-                    ui_state.remove_recent(&project);
-                    replace_ui_state(&home, &ui_state).map_err(|error| render_config_error(&error))
+                    // Repair first; the locked edit rejects a damaged file.
+                    read_ui_state(&home).map_err(|error| render_config_error(&error))?;
+                    update_ui_state(&home, |ui_state| ui_state.remove_recent(&project))
+                        .map_err(|error| render_config_error(&error))
                 })
                 .await,
             )
@@ -676,6 +676,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::SaveUiState { state: ui_state } => {
             let home = state.home.clone();
             let ui_state = ui_state.clone();
+            // Held across the write: snapshots replace the whole document,
+            // so they must land in dispatch order.
+            let _ordered = state.ui_state_writes.lock().await;
             BridgeReply::UiStateSaved(
                 blocking(move || {
                     replace_ui_state(&home, &ui_state).map_err(|error| render_config_error(&error))

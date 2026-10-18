@@ -49,7 +49,7 @@ pub use resources::{
 pub use secrets::{
     MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_PATH,
     read_provider_secrets, read_provider_secrets_with_repair, replace_provider_secrets,
-    salvage_provider_secrets,
+    salvage_provider_secrets, update_provider_key,
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
@@ -89,7 +89,8 @@ pub use ui_state::{
     MAX_RECENT_PROJECTS, MAX_SESSION_PROJECTS, MAX_SESSION_WORKSPACES, MAX_WINDOW_EDGE_PX,
     MAX_WORKSPACE_ROOTS, MAX_WORKSPACES, ModelPin, SessionModelPin, UiState, WindowSize,
     WorkspaceDef, is_valid_effort_token, read_ui_state, read_ui_state_with_repair, remember_model,
-    replace_ui_state, salvage_ui_state, same_project_path, session_model, upsert_session_model,
+    replace_ui_state, salvage_ui_state, same_project_path, session_model, update_ui_state,
+    upsert_session_model,
 };
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
