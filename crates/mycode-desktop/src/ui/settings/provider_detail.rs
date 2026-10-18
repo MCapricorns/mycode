@@ -193,7 +193,7 @@ fn models_card(
                 .text_color(theme.muted_foreground)
                 .child(format!(
                     "{} {shown} / {}",
-                    t("Shown in chat:", "对话中显示:"),
+                    t("Shown in chat:", "对话中显示："),
                     choices.len()
                 )),
         )

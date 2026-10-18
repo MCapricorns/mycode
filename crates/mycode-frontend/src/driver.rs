@@ -613,7 +613,7 @@ impl FrontendDriver {
                     self.toast(
                         format!(
                             "{} {names}. {}",
-                            crate::i18n::t("Reset unreadable config:", "已重置无法读取的配置:"),
+                            crate::i18n::t("Reset unreadable config:", "已重置无法读取的配置："),
                             crate::i18n::t(
                                 "The previous files were kept beside them.",
                                 "原文件已留在旁边。",

@@ -221,7 +221,7 @@ impl FrontendDriver {
                     format!(
                         "{} v{version}{}",
                         crate::i18n::t("New version", "发现新版本"),
-                        crate::i18n::t(", downloading…", ",正在下载…")
+                        crate::i18n::t(", downloading…", "，正在下载…")
                     ),
                     ToastKind::Info,
                     out,

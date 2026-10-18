@@ -42,14 +42,14 @@ pub(super) fn render_update_dialog(
         ),
         UpdateState::Failed(message) => format!(
             "{} {}",
-            t("Update failed:", "更新失败:"),
+            t("Update failed:", "更新失败："),
             ellipsis(message, 200)
         ),
     };
     let detail = match &vm.update {
         UpdateState::Available { .. } => t(
             "The download starts on its own; installing waits for your confirm.",
-            "下载会自动进行,安装需你确认。",
+            "下载会自动进行，安装需你确认。",
         ),
         UpdateState::Downloading { .. } => t(
             "The install prompt appears when the package is verified.",

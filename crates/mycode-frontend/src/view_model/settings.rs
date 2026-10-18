@@ -145,7 +145,7 @@ impl SettingsState {
         document.validate().map_err(|error| {
             format!(
                 "{} {}",
-                t("invalid settings:", "设置无效:"),
+                t("invalid settings:", "设置无效："),
                 error.summary()
             )
         })?;

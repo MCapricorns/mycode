@@ -561,12 +561,12 @@ fn render_custom_provider_page(
                         .gap_2()
                         .text_sm()
                         .child(labeled_field(
-                            t("context window (optional)", "上下文窗口(可选)"),
+                            t("context window (optional)", "上下文窗口（可选）"),
                             context_input,
                             theme,
                         ))
                         .child(labeled_field(
-                            t("max output tokens (optional)", "最大输出 token(可选)"),
+                            t("max output tokens (optional)", "最大输出 token（可选）"),
                             max_output_input,
                             theme,
                         ))
