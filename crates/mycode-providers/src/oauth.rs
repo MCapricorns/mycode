@@ -550,7 +550,7 @@ pub async fn exchange_codex_code(
         ));
     }
     let payload = bounded_json(response, "Codex token").await?;
-    secret_from_token_payload(&payload, None, true)
+    secret_from_token_payload(&payload, None)
 }
 
 /// Refreshes a Codex access token.
@@ -576,13 +576,12 @@ pub async fn refresh_codex_token(call: &PinnedCall, refresh: &str) -> Result<OAu
         return Err(format!("token refresh returned {}", response.status()));
     }
     let payload = bounded_json(response, "token refresh").await?;
-    secret_from_token_payload(&payload, Some(refresh), true)
+    secret_from_token_payload(&payload, Some(refresh))
 }
 
 fn secret_from_token_payload(
     payload: &Value,
     previous_refresh: Option<&str>,
-    extract_account: bool,
 ) -> Result<OAuthSecret, String> {
     let access = field(payload, "access_token")
         .ok_or_else(|| "token response was missing access_token".to_owned())?;
@@ -595,17 +594,12 @@ fn secret_from_token_payload(
         .and_then(Value::as_u64)
         .unwrap_or(3600);
     let now = crate::catalog::store::unix_now();
-    let account_id = if extract_account {
-        chatgpt_account_id(access)
-    } else {
-        None
-    };
     Ok(OAuthSecret {
         kind: "oauth".to_owned(),
         access: access.to_owned(),
         refresh,
         expires: now.saturating_add(expires_in.saturating_sub(300)),
-        account_id,
+        account_id: chatgpt_account_id(access),
     })
 }
 
