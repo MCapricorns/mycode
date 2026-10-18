@@ -164,10 +164,11 @@ impl Tool for AgentTool {
             .host
             .run_subagent(request, out, &ctx.cancel, &ctx.call_id)
             .await?;
-        let answer = answer
-            .chars()
-            .take(MAX_AGENT_ANSWER_CHARS)
-            .collect::<String>();
+        let mut answer = answer;
+        if let Some((cut, _)) = answer.char_indices().nth(MAX_AGENT_ANSWER_CHARS) {
+            answer.truncate(cut);
+            answer.push_str("\n[answer truncated: the subagent replied with more text]");
+        }
         Ok(ToolResult::text(answer))
     }
 }
