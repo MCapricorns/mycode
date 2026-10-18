@@ -141,22 +141,31 @@ pub fn read_provider_secrets_with_repair(
 
 fn publish_secrets(home: &HomeLayout, secrets: &ProviderSecrets) -> Result<(), ConfigError> {
     secrets.validate()?;
-    let revision = AuthorityRevision::ABSENT.checked_next()?;
+    let bytes = encode_secrets(secrets, AuthorityRevision::ABSENT.checked_next()?)?;
+    locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |_| Ok(bytes))
+}
+
+/// Serializes one validated store at `revision`.
+fn encode_secrets(
+    secrets: &ProviderSecrets,
+    revision: AuthorityRevision,
+) -> Result<Vec<u8>, ConfigError> {
     let mut document = serde_json::Map::new();
     document.insert("formatVersion".into(), SECRETS_FORMAT_VERSION.into());
     document.insert("kind".into(), SECRETS_KIND.into());
     document.insert("revision".into(), revision.get().into());
     let mut keys = serde_json::Map::new();
-    for id in secrets.provider_ids() {
-        if let Some(key) = secrets.key(id) {
-            keys.insert(id.to_owned(), key.to_owned().into());
-        }
+    for (id, key) in &secrets.provider_keys {
+        keys.insert(id.clone(), key.clone().into());
     }
     document.insert("providerKeys".into(), keys.into());
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
     bytes.push(b'\n');
-    locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |_| Ok(bytes))
+    if bytes.len() > MAX_SECRETS_BYTES {
+        return Err(ConfigError::new(ConfigErrorKind::Oversized));
+    }
+    Ok(bytes)
 }
 
 /// Extracts the still-valid keys of a document the strict read rejected, so
@@ -199,25 +208,46 @@ pub fn replace_provider_secrets(
             return Err(ConfigError::new(ConfigErrorKind::RevisionConflict));
         }
         let revision = current_revision.checked_next()?;
-        let mut document = serde_json::Map::new();
-        document.insert("formatVersion".into(), SECRETS_FORMAT_VERSION.into());
-        document.insert("kind".into(), SECRETS_KIND.into());
-        document.insert("revision".into(), revision.get().into());
-        let mut keys = serde_json::Map::new();
-        for (id, key) in &secrets.provider_keys {
-            keys.insert(id.clone(), key.clone().into());
-        }
-        document.insert("providerKeys".into(), keys.into());
-        let mut bytes = serde_json::to_vec_pretty(&document)
-            .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
-        bytes.push(b'\n');
-        if bytes.len() > MAX_SECRETS_BYTES {
-            return Err(ConfigError::new(ConfigErrorKind::Oversized));
-        }
+        let bytes = encode_secrets(secrets, revision)?;
         published_revision = Some(revision);
         Ok(bytes)
     })?;
     published_revision.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
+}
+
+/// Sets or clears one provider key in a single locked read-modify-write.
+///
+/// Unlike [`replace_provider_secrets`], two writers that race never fail
+/// each other with a revision conflict: each applies its own key to the
+/// document the lock hands it, so concurrent key saves (an `mcp.json`
+/// import, an OAuth token rotation mid-turn) all land. Returns the store as
+/// published.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the stored document fails validation, the
+/// updated store is invalid, or the transaction fails.
+pub fn update_provider_key(
+    home: &HomeLayout,
+    provider_id: &str,
+    key: Option<&str>,
+) -> Result<ProviderSecrets, ConfigError> {
+    let mut published = None;
+    locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |current| {
+        let (secrets, current_revision) = match current {
+            Some(bytes) => {
+                let parsed = decode_secrets(bytes)?;
+                (parsed.secrets, parsed.revision)
+            }
+            None => (ProviderSecrets::new(), AuthorityRevision::ABSENT),
+        };
+        let secrets = secrets.with_key(provider_id, key);
+        secrets.validate()?;
+        let bytes = encode_secrets(&secrets, current_revision.checked_next()?)?;
+        published = Some(secrets);
+        Ok(bytes)
+    })?;
+    published.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
 }
 
 #[derive(Deserialize)]
@@ -273,6 +303,55 @@ mod tests {
             .err()
             .expect("unknown field in secrets.json must fail validation");
         assert_eq!(error.kind(), crate::ConfigErrorKind::AuthorityValidation);
+    }
+
+    #[test]
+    fn concurrent_key_updates_all_land() {
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-secrets-race-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&parent).expect("temp parent");
+        let root = parent.join("home");
+        std::fs::create_dir(&root).expect("home");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                .expect("private home");
+        }
+        let home = crate::HomeLayout::from_root(&root).expect("layout");
+        // Each writer used to read, then CAS against the revision it read;
+        // every racer but one failed with a conflict and its key was lost.
+        let writers: Vec<_> = (0..6)
+            .map(|index| {
+                let home = home.clone();
+                std::thread::spawn(move || {
+                    super::update_provider_key(
+                        &home,
+                        &format!("mcp-server{index}"),
+                        Some(&format!("sk-{index}")),
+                    )
+                    .expect("update");
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().expect("writer");
+        }
+        let secrets = super::read_provider_secrets(&home).expect("read");
+        for index in 0..6 {
+            assert_eq!(
+                secrets.key(&format!("mcp-server{index}")),
+                Some(format!("sk-{index}").as_str())
+            );
+        }
+        // Clearing goes through the same locked edit.
+        let cleared = super::update_provider_key(&home, "mcp-server0", None).expect("clear");
+        assert!(cleared.key("mcp-server0").is_none());
+        assert_eq!(cleared.provider_ids().len(), 5);
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]

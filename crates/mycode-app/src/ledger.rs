@@ -445,10 +445,11 @@ pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), 
 /// ids that no longer resolve to anything. The state is advisory, so a
 /// failure here is reported but never blocks the deletion itself.
 pub(crate) fn forget_session_bindings(home: &HomeLayout, session_id: &str) -> Result<(), String> {
-    let mut ui_state =
-        mycode_config::read_ui_state(home).map_err(|error| format!("ui state: {error}"))?;
-    ui_state.forget_session(session_id);
-    mycode_config::replace_ui_state(home, &ui_state).map_err(|error| format!("ui state: {error}"))
+    // Repair a damaged document first; the locked edit rejects one it
+    // cannot decode.
+    mycode_config::read_ui_state(home).map_err(|error| format!("ui state: {error}"))?;
+    mycode_config::update_ui_state(home, |ui_state| ui_state.forget_session(session_id))
+        .map_err(|error| format!("ui state: {error}"))
 }
 
 pub(crate) fn head_spelling(head: &HeadStamp) -> String {
