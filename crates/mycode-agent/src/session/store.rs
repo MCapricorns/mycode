@@ -73,6 +73,14 @@ impl<'a> SessionPaths<'a> {
         self.relative(&format!("/{PAYLOADS_DIR}"))
     }
 
+    /// Relative owned path of the human-readable title marker.
+    ///
+    /// Session directory names are random ids; `title.txt` is what a human
+    /// debugging `sessions/` reads to tell one session from another.
+    pub(crate) fn title_txt(&self) -> String {
+        self.relative("/title.txt")
+    }
+
     /// Relative owned path of one externalized payload.
     pub(crate) fn payload_file(&self, event: &SessionEventId) -> String {
         format!(

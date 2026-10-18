@@ -333,20 +333,39 @@ impl SessionStore {
             return Err(StoreError::Storage);
         }
 
+        let title = jsonl::message_title(request.kind, request.payload).unwrap_or_default();
+        // Resolve before `commit_append`: `paths` borrows `&self.home`.
+        let title_marker = (!title.is_empty())
+            .then(|| paths.absolute(&paths.title_txt()).ok())
+            .flatten();
         let committed = self.commit_append(
             request,
             record_len,
             payload_len,
             encoded.external,
             event_charge,
+            &title,
         );
-        if committed.is_err()
-            && let Some(path) = payload_path
-        {
-            fs::remove(&path);
+        match committed {
+            Ok(location) => {
+                if let Some(marker) = title_marker
+                    && !marker.exists()
+                {
+                    // A human debugging `sessions/` reads this file to tell
+                    // the randomly-named directories apart.
+                    let _ = fs::create_exclusive(&marker, title.as_bytes());
+                }
+                Ok(location)
+            }
+            Err(error) => {
+                if let Some(path) = payload_path {
+                    fs::remove(&path);
+                }
+                Err(error)
+            }
         }
-        committed
     }
+
 
     fn commit_append(
         &mut self,
@@ -355,6 +374,7 @@ impl SessionStore {
         payload_len: u64,
         external: bool,
         event_charge: u64,
+        title: &str,
     ) -> Result<AppendedLocation, StoreError> {
         let offset = request.expected_committed;
         let new_committed = offset.checked_add(record_len).ok_or(StoreError::Limit)?;
@@ -362,7 +382,6 @@ impl SessionStore {
             .expected_count
             .checked_add(1)
             .ok_or(StoreError::Limit)?;
-        let title = jsonl::message_title(request.kind, request.payload).unwrap_or_default();
         let expected_head = encode_head(request.expected_head);
         let tx = self.conn.transaction().map_err(|_| StoreError::Storage)?;
         let changed = tx
@@ -961,6 +980,17 @@ pub(crate) fn rename_indexed_session(
         params![title, session_id],
     )
     .map_err(|_| StoreError::Storage)?;
+    // Refresh the human-readable marker beside the branch logs; the fallback
+    // title written at first append may still be sitting there.
+    if !title.is_empty()
+        && let Some(id) = SessionId::parse(session_id)
+    {
+        let paths = SessionPaths::new(home, &id);
+        if let Ok(marker) = paths.absolute(&paths.title_txt()) {
+            fs::remove(&marker);
+            let _ = fs::create_exclusive(&marker, title.as_bytes());
+        }
+    }
     Ok(())
 }
 

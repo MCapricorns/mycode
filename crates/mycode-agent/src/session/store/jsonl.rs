@@ -51,6 +51,11 @@ struct LineFile<'a> {
     ts: u64,
     digest: &'a str,
     bytes: u64,
+    /// Plain-text payload when the bytes are valid UTF-8 (the common case:
+    /// messages, tool calls, and results are all JSON or text). Base64
+    /// `payload` below is only the binary fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload_text: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     payload: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,6 +74,8 @@ struct LineOwned {
     digest: String,
     bytes: u64,
     #[serde(default)]
+    payload_text: Option<String>,
+    #[serde(default)]
     payload: Option<String>,
     #[serde(default)]
     payload_file: Option<String>,
@@ -79,15 +86,36 @@ struct LineOwned {
 /// The figure is an upper bound used at reservation time, before the line
 /// exists. Inline payloads expand under base64; external payloads are charged
 /// as the file plus a short line.
-pub(crate) fn encoded_record_len(has_call_id: bool, payload_len: usize) -> Option<u64> {
+pub(crate) fn encoded_record_len(has_call_id: bool, payload: &[u8]) -> Option<u64> {
     let call = if has_call_id { 48 } else { 0 };
-    let body = if payload_len >= EXTERNAL_PAYLOAD_THRESHOLD {
-        256usize.checked_add(payload_len)?
+    let body = if payload.len() >= EXTERNAL_PAYLOAD_THRESHOLD {
+        256usize.checked_add(payload.len())?
+    } else if let Ok(text) = std::str::from_utf8(payload) {
+        // The stored JSON string is escaped; size it exactly so the session
+        // cap reservation matches the bytes that will be written.
+        256usize.checked_add(escaped_json_string_len(text))?
     } else {
-        let expanded = payload_len.saturating_add(2) / 3 * 4;
+        let expanded = payload.len().saturating_add(2) / 3 * 4;
         256usize.checked_add(expanded)?
     };
     u64::try_from(body.checked_add(call)?).ok()
+}
+
+/// The length of `text` as a serialized JSON string, quotes included.
+///
+/// serde_json escapes `"`, `\`, the `\b \t \n \f \r` shorthands, and the
+/// remaining control bytes below 0x20 as `\u00XX`; everything else —
+/// non-ASCII included — is written as-is.
+fn escaped_json_string_len(text: &str) -> usize {
+    let mut len = 2; // the surrounding quotes
+    for byte in text.as_bytes() {
+        len += match byte {
+            b'"' | b'\\' | 0x08 | 0x09 | 0x0A | 0x0C | 0x0D => 2,
+            0x00..=0x1F => 6,
+            _ => 1,
+        };
+    }
+    len
 }
 
 /// Charge of one committed line against the session byte cap.
@@ -131,11 +159,10 @@ pub(crate) fn encode_line(
 ) -> Result<EncodedLine, ()> {
     let external = payload.len() >= EXTERNAL_PAYLOAD_THRESHOLD;
     let payload_file = external.then(|| format!("payloads/{}.bin", event_id.as_str()));
-    let inline = if external {
-        None
-    } else {
-        Some(STANDARD.encode(payload))
-    };
+    let text = (!external)
+        .then(|| std::str::from_utf8(payload).ok())
+        .flatten();
+    let inline = (!external && text.is_none()).then(|| STANDARD.encode(payload));
     let line = LineFile {
         id: event_id.as_str(),
         kind: kind_label(kind),
@@ -143,6 +170,7 @@ pub(crate) fn encode_line(
         ts,
         digest,
         bytes: u64::try_from(payload.len()).map_err(|_| ())?,
+        payload_text: text,
         payload: inline,
         payload_file: payload_file.as_deref(),
     };
@@ -180,9 +208,10 @@ pub(crate) fn decode_line(bytes: &[u8]) -> Result<DecodedLine, ()> {
         return Err(());
     }
     let _ = line.ts;
-    let payload = match (&line.payload, &line.payload_file) {
-        (Some(inline), None) => STANDARD.decode(inline).map_err(|_| ())?,
-        (None, Some(_)) => Vec::new(),
+    let payload = match (&line.payload_text, &line.payload, &line.payload_file) {
+        (Some(text), None, None) => text.clone().into_bytes(),
+        (None, Some(inline), None) => STANDARD.decode(inline).map_err(|_| ())?,
+        (None, None, Some(_)) => Vec::new(),
         _ => return Err(()),
     };
     let external = line.payload_file.is_some();
