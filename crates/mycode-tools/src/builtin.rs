@@ -68,3 +68,50 @@ pub(crate) fn truncate_bytes(text: &str, max_bytes: usize) -> (String, bool) {
     }
     (text[..text.floor_char_boundary(max_bytes)].to_owned(), true)
 }
+
+/// Byte-cap truncation that keeps the start and the end of `text` and
+/// drops the middle, for command output whose last lines carry the verdict.
+///
+/// Returns `(text, truncated)`. The kept parts respect char boundaries and
+/// sum to at most `max_bytes`; the marker between them is extra.
+pub(crate) fn truncate_middle(text: &str, max_bytes: usize) -> (String, bool) {
+    if text.len() <= max_bytes {
+        return (text.to_owned(), false);
+    }
+    let head_budget = max_bytes * 2 / 5;
+    let head_end = text.floor_char_boundary(head_budget);
+    let tail_start = text.ceil_char_boundary(text.len() - (max_bytes - head_budget));
+    let omitted = tail_start - head_end;
+    (
+        format!(
+            "{}\n[... {omitted} bytes omitted ...]\n{}",
+            &text[..head_end],
+            &text[tail_start..]
+        ),
+        true,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_middle;
+
+    #[test]
+    fn middle_truncation_keeps_both_ends_on_char_boundaries() {
+        assert_eq!(truncate_middle("short", 10), ("short".to_owned(), false));
+        let text = format!("{}{}", "头".repeat(40), "尾".repeat(40));
+        let (cut, truncated) = truncate_middle(&text, 100);
+        assert!(truncated);
+        let (head, rest) = cut.split_once("\n[... ").expect("marker");
+        let (marker, tail) = rest
+            .split_once(" bytes omitted ...]\n")
+            .expect("marker end");
+        assert!(head.chars().all(|ch| ch == '头') && !head.is_empty());
+        assert!(tail.chars().all(|ch| ch == '尾') && !tail.is_empty());
+        assert!(head.len() + tail.len() <= 100);
+        assert_eq!(
+            marker.parse::<usize>().unwrap(),
+            text.len() - head.len() - tail.len()
+        );
+    }
+}

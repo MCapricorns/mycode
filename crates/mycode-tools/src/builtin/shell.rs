@@ -45,8 +45,8 @@ use crate::builtin::exec::{
     snapshot_child_environment,
 };
 use crate::builtin::process::{
-    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, collection_error,
-    command_cancelled_error, decode_captured_text, display_exit, mark_timed_out,
+    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, captured_text,
+    collection_error, command_cancelled_error, display_exit, mark_timed_out,
 };
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
@@ -772,8 +772,10 @@ fn format_result(
     forced_error: bool,
     notice: Option<&str>,
 ) -> ToolResult {
-    let stdout_text = sanitize_captured_shell_text(&decode_captured_text(&stdout.retained));
-    let stderr_text = sanitize_captured_shell_text(&decode_captured_text(&stderr.retained));
+    let (stdout_text, stdout_cut) = captured_text(&stdout);
+    let (stderr_text, stderr_cut) = captured_text(&stderr);
+    let stdout_text = sanitize_captured_shell_text(&stdout_text);
+    let stderr_text = sanitize_captured_shell_text(&stderr_text);
 
     let mut text = String::new();
     if !stdout_text.trim().is_empty() {
@@ -787,13 +789,13 @@ fn format_result(
         text.push_str(&stderr_text);
     }
 
-    let (text, truncated) = crate::builtin::truncate_bytes(&text, MAX_OUTPUT_BYTES);
-    let mut text = text;
+    let (mut text, cut) = crate::builtin::truncate_middle(&text, MAX_OUTPUT_BYTES);
+    let truncated = cut || stdout_cut || stderr_cut;
     if truncated {
         let total = stdout.total_bytes.saturating_add(stderr.total_bytes);
         let _ = write!(
             text,
-            "\n[output truncated: showed first {MAX_OUTPUT_BYTES} of {total} bytes]"
+            "\n[output truncated: showed the start and end of {total} bytes]"
         );
     }
 
