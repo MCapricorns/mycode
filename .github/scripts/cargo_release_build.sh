@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the desktop release binary, retrying only crates.io network failures.
+# Build the release binaries (desktop `mycode-desktop` and CLI `mycode` from
+# the mycode-cli package), retrying only crates.io network failures.
 #
 # The macOS release job for 797dfde (run 38037377671) failed in
 # "Build release binary". Cargo exhausted its own resolver retries in about
@@ -91,7 +92,7 @@ warm_index
 while true; do
   log="$(mktemp)"
   set +e
-  cargo build --release --locked -p mycode-desktop --target "${target}" >"${log}" 2>&1
+  cargo build --release --locked -p mycode-desktop -p mycode-cli --target "${target}" >"${log}" 2>&1
   status=$?
   set -e
   cat "${log}"

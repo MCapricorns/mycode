@@ -25,9 +25,11 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_PACKAGES = (
     "mycode-agent",
     "mycode-app",
+    "mycode-cli",
     "mycode-config",
     "mycode-core",
     "mycode-desktop",
+    "mycode-frontend",
     "mycode-providers",
     "mycode-tools",
 )
@@ -742,6 +744,13 @@ def _expect_workflow_contract() -> None:
             f"mycode-desktop-<tag>-{target}.zip" in workflow,
             f"missing release asset comment {target}",
         )
+        _expect(
+            f"mycode-<tag>-{target}.zip" in workflow,
+            f"missing CLI release asset comment {target}",
+        )
+    build_sh = (ROOT / ".github/scripts/cargo_release_build.sh").read_text(encoding="utf-8")
+    _expect("-p mycode-desktop" in build_sh, "desktop release build missing")
+    _expect("-p mycode-cli" in build_sh, "CLI release build missing")
     _expect("Package (Linux)" not in release_build, "Linux packaging is back")
     _expect(
         "x86_64-unknown-linux-gnu" not in release_build,
