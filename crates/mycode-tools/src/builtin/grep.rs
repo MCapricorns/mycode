@@ -29,7 +29,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use globset::GlobMatcher;
 use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, MmapChoice, Searcher, SearcherBuilder, Sink, SinkMatch};
@@ -50,7 +49,10 @@ use super::fs_search::{
     stop_reason_error, to_posix, walk_retained_tree,
 };
 
-use super::search_report::{ReportSpec, compile_glob_labeled, reject_pattern_bytes, render_report};
+use super::search_report::{
+    PathGlob, ReportSpec, compile_glob_labeled, reject_pattern_bytes, render_report,
+    skipped_target_report,
+};
 
 /// Default cap on reported matching lines.
 pub const MAX_MATCHES: usize = 200;
@@ -121,9 +123,10 @@ struct SearchState {
     /// A text file had callbacks stopped while provisional slots were full.
     count_incomplete: AtomicBool,
     match_limit: u64,
-    /// The pattern looked like a regex (`|` or `.*`) but `is_regex` was not
-    /// set, so it matched literally. Surfaced on a zero-match report.
+    /// The pattern looked like a regex but `is_regex` was not set. It was
+    /// also matched as one when `widened`, else only literally.
     literal_meta: bool,
+    widened: bool,
     files_searched: AtomicU64,
     lines_truncated: AtomicBool,
     io_errors: IoErrors,
@@ -139,6 +142,7 @@ impl SearchState {
             count_incomplete: AtomicBool::new(false),
             match_limit: limits.count_budget,
             literal_meta: false,
+            widened: false,
             files_searched: AtomicU64::new(0),
             lines_truncated: AtomicBool::new(false),
             io_errors: IoErrors::new(IO_ERROR_SAMPLES),
@@ -360,9 +364,12 @@ impl Tool for GrepTool {
 
     fn description(&self) -> &str {
         "Search file contents under a directory (or the session cwd). Literal \
-         text by default, regex with is_regex; optional include/exclude globs. \
-         Reports up to 200 matching lines as `path:line:text`, with a notice \
-         when more matches exist. Hidden and gitignored files are skipped."
+         text by default, regex with is_regex. Case is smart: an all-lowercase \
+         pattern ignores case. Optional include/exclude globs; one without `/` \
+         matches file names at any depth (`*.rs`, `main.rs`, `*.rs,*.toml`). \
+         Matching is per line. Reports up to 200 matching lines as \
+         `path:line:text`, with a notice when more matches exist. Hidden and \
+         gitignored files are skipped."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -429,8 +436,8 @@ fn run_search(
     matcher: RegexMatcher,
     mut root: ResolvedRoot,
     args: &GrepArgs,
-    include: Option<GlobMatcher>,
-    exclude: Option<GlobMatcher>,
+    include: Option<PathGlob>,
+    exclude: Option<PathGlob>,
     cancel: &CancellationToken,
     limits: &Limits,
 ) -> Result<ToolResult, ToolError> {
@@ -440,14 +447,15 @@ fn run_search(
         .min(limits.stored_ceiling);
     let mut state = SearchState::new(limits, Arc::clone(&root.limiter));
     state.literal_meta = !args.is_regex && pattern_looks_regex(&args.pattern);
+    state.widened = widens_to_regex(&args.pattern, args.is_regex);
     let state = Arc::new(state);
     let report_root = root.root.clone();
 
     match root.target_is_skipped() {
-        Ok(true) => return finish_search_report(&report_root, &state, cap, limits),
+        Ok(true) => return Ok(skipped_target_report("grep", &root)),
         Ok(false) => {}
         Err(error) if is_hidden_skip(&error) => {
-            return finish_search_report(&report_root, &state, cap, limits);
+            return Ok(skipped_target_report("grep", &root));
         }
         Err(error) => {
             return Ok(ToolResult::error(format!(
@@ -507,8 +515,8 @@ fn finish_search_report(
 fn walk_and_search(
     matcher: &RegexMatcher,
     root: Arc<ResolvedRoot>,
-    include: &Option<GlobMatcher>,
-    exclude: &Option<GlobMatcher>,
+    include: &Option<PathGlob>,
+    exclude: &Option<PathGlob>,
     state: &Arc<SearchState>,
     cap: usize,
     cancel: &CancellationToken,
@@ -583,8 +591,8 @@ fn search_one_file(
     matcher: &RegexMatcher,
     root: &mut ResolvedRoot,
     relative: &str,
-    include: &Option<GlobMatcher>,
-    exclude: &Option<GlobMatcher>,
+    include: &Option<PathGlob>,
+    exclude: &Option<PathGlob>,
     state: &Arc<SearchState>,
     cap: usize,
     cancel: &CancellationToken,
@@ -827,10 +835,18 @@ fn assemble_report(
                         limits.line_bytes
                     ));
                 }
-                if state.literal_meta
-                    && total == 0
-                    && state.files_searched.load(Ordering::Relaxed) > 0
-                {
+                let files_searched = state.files_searched.load(Ordering::Relaxed);
+                if total == 0 && files_searched > 0 {
+                    notices.push(format!(
+                        "[searched {files_searched} files; hidden and gitignored files are skipped]"
+                    ));
+                }
+                if state.widened {
+                    notices.push(
+                        "[pattern has regex syntax but is_regex is not set; it matched both literally and as a regular expression]"
+                            .to_owned(),
+                    );
+                } else if state.literal_meta && total == 0 && files_searched > 0 {
                     notices.push(
                         "[pattern contains `|`/`.*` but is_regex is not set; it matched literally — pass is_regex to use it as a regular expression]"
                             .to_owned(),
@@ -844,26 +860,49 @@ fn assemble_report(
     )
 }
 
-/// `a|b` and `foo.*bar` are how a model writes an alternation or a span;
-/// as a literal they almost never exist in real text. Other metacharacters
-/// (`(`, `[`, `^`) appear in ordinary text too often to be a signal.
+/// `a|b`, `foo.*bar`, and escapes like `\s+` or `\(` are how a model
+/// writes a regex; as a literal they almost never exist in real text.
+/// Bare metacharacters (`(`, `[`, `^`) appear in ordinary text too often to
+/// be a signal.
 fn pattern_looks_regex(pattern: &str) -> bool {
-    pattern.contains('|') || pattern.contains(".*")
+    const SIGNALS: [&str; 10] = [
+        "|", ".*", ".+", "\\b", "\\s", "\\w", "\\d", "\\(", "\\[", "\\.",
+    ];
+    SIGNALS.iter().any(|signal| pattern.contains(signal))
 }
 
+/// Whether a literal search also matches `pattern` as a regex. A model that
+/// forgets `is_regex` otherwise gets an empty report for a pattern that is
+/// plainly a regex. The literal reading still matches, and a regex that
+/// matches the empty string (`a || b` read as alternation) would match
+/// every line, so it stays literal.
+fn widens_to_regex(pattern: &str, is_regex: bool) -> bool {
+    !is_regex
+        && pattern_looks_regex(pattern)
+        && regex::Regex::new(pattern).is_ok_and(|regex| !regex.is_match(""))
+}
+
+/// Builds the line matcher. Case is smart: an all-lowercase pattern ignores
+/// case, one with an uppercase letter matches it exactly.
 fn compile_matcher(pattern: &str, is_regex: bool) -> Result<RegexMatcher, ToolError> {
     reject_pattern_bytes(pattern, "pattern")?;
+    let (spelled, fixed) = if widens_to_regex(pattern, is_regex) {
+        (format!("{}|(?:{pattern})", regex::escape(pattern)), false)
+    } else {
+        (pattern.to_owned(), !is_regex)
+    };
     RegexMatcherBuilder::new()
-        .fixed_strings(!is_regex)
+        .fixed_strings(fixed)
+        .case_smart(true)
         .crlf(true)
         .ban_byte(Some(0))
         .size_limit(REGEX_SIZE_LIMIT)
         .dfa_size_limit(REGEX_DFA_SIZE_LIMIT)
-        .build(pattern)
+        .build(&spelled)
         .map_err(|error| ToolError::InvalidArgs(format!("invalid regex: {error}")))
 }
 
-fn compile_glob(glob: Option<&str>, label: &str) -> Result<Option<GlobMatcher>, ToolError> {
+fn compile_glob(glob: Option<&str>, label: &str) -> Result<Option<PathGlob>, ToolError> {
     match glob {
         None => Ok(None),
         Some(pattern) => Ok(Some(compile_glob_labeled(pattern, label)?)),
@@ -986,8 +1025,10 @@ mod tests {
                 .collect::<String>()
         };
 
+        // A regex-looking literal is matched as a regex too, and says so.
         let literal = run("alpha|needle", false, "a.txt").await;
         let literal_text = text(&literal);
+        assert!(literal_text.contains("alpha needle"), "{literal_text}");
         assert!(literal_text.contains("is_regex"), "{literal_text}");
 
         let regex = run("alpha|needle", true, "a.txt").await;
@@ -995,12 +1036,109 @@ mod tests {
         assert!(regex_text.contains("alpha needle"), "{regex_text}");
         assert!(!regex_text.contains("is_regex"), "{regex_text}");
 
-        // A real literal match containing a pipe stays quiet.
-        std::fs::write(root.join("b.txt"), "a|b\n").expect("file b");
-        let hit = run("a|b", false, "b.txt").await;
+        // A pattern whose regex reading matches the empty string stays
+        // literal: `a || b` as alternation would match every line.
+        std::fs::write(root.join("b.txt"), "a || b\nplain\n").expect("file b");
+        let hit = run("a || b", false, "b.txt").await;
         let hit_text = text(&hit);
-        assert!(hit_text.contains("a|b"), "{hit_text}");
+        assert!(hit_text.contains("a || b"), "{hit_text}");
+        assert!(!hit_text.contains("plain"), "{hit_text}");
         assert!(!hit_text.contains("is_regex"), "{hit_text}");
+
+        // Nothing found still says the search ran.
+        let miss = run("absent", false, "a.txt").await;
+        assert!(
+            text(&miss).starts_with("No matching lines found."),
+            "{}",
+            text(&miss)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn grep_args(pattern: &str) -> GrepArgs {
+        GrepArgs {
+            pattern: pattern.to_owned(),
+            is_regex: false,
+            path: None,
+            include: None,
+            exclude: None,
+            max_results: None,
+        }
+    }
+
+    async fn grep_text(root: &std::path::Path, args: GrepArgs) -> String {
+        let prepared = crate::builtin::fs_search::prepare_search_async_with_access(
+            root.to_path_buf(),
+            args.path.clone(),
+            CancellationToken::new(),
+            SearchAccess::Content,
+        )
+        .await
+        .expect("prepare");
+        let ctx = ToolCtx::new(root).with_prepared_search(Arc::new(prepared));
+        let (mut out, _rx) = ToolStream::channel();
+        let result = GrepTool.execute(args, &ctx, &mut out).await.expect("grep");
+        result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The ways a model asks for text that is there and used to get an
+    /// empty report: a bare file name as `include`, a comma list, a
+    /// lowercase pattern for a capitalized word, and an explicit hidden
+    /// path.
+    #[tokio::test]
+    async fn common_model_spellings_find_the_text() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-grep-spell-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src/deep")).expect("dir");
+        std::fs::create_dir_all(root.join(".github")).expect("hidden dir");
+        std::fs::write(root.join("src/deep/main.rs"), "fn Needle() {}\n").expect("rs");
+        std::fs::write(root.join("Cargo.toml"), "needle = 1\n").expect("toml");
+        std::fs::write(root.join(".github/ci.yml"), "needle\n").expect("yml");
+
+        let text = grep_text(
+            &root,
+            GrepArgs {
+                include: Some("main.rs".to_owned()),
+                ..grep_args("Needle")
+            },
+        )
+        .await;
+        assert!(text.contains("src/deep/main.rs:1:"), "{text}");
+
+        let text = grep_text(
+            &root,
+            GrepArgs {
+                include: Some("*.rs, *.toml".to_owned()),
+                ..grep_args("needle")
+            },
+        )
+        .await;
+        assert!(text.contains("src/deep/main.rs:1:"), "smart case: {text}");
+        assert!(text.contains("Cargo.toml:1:"), "{text}");
+
+        // An uppercase letter makes the match exact.
+        let text = grep_text(&root, grep_args("NEEDLE")).await;
+        assert!(text.starts_with("No matching lines found."), "{text}");
+
+        let text = grep_text(
+            &root,
+            GrepArgs {
+                path: Some(".github".to_owned()),
+                ..grep_args("needle")
+            },
+        )
+        .await;
+        assert!(text.contains("hidden or gitignored"), "{text}");
         let _ = std::fs::remove_dir_all(root);
     }
 }
