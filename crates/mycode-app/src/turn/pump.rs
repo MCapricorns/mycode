@@ -9,6 +9,7 @@ use mycode_agent::session::EventKind;
 use mycode_core::events::{AgentEvent, MessageDelta, TurnOutcome};
 use mycode_core::{AssistantMessage, ContentBlock, Message, UserMessage};
 use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
@@ -35,7 +36,8 @@ pub(super) struct LedgerPump {
 impl LedgerPump {
     /// Runs until the turn ends. Every exit sends exactly one terminal event
     /// (`ChatDone` or `ChatFailed`) so the desktop can leave the sending state.
-    pub(super) async fn run(self, mut agent_rx: broadcast::Receiver<AgentEvent>) {
+    pub(super) async fn run(self, agent_rx: broadcast::Receiver<AgentEvent>) {
+        let mut agent_rx = relay(agent_rx);
         // A text-only reply is held until the turn ends: a later step or a
         // steer may still follow it.
         let mut pending_assistant: Option<Arc<Message>> = None;
@@ -46,12 +48,12 @@ impl LedgerPump {
         let mut saw_opening_user = false;
         loop {
             let event = match agent_rx.recv().await {
-                Ok(event) => event,
-                Err(RecvError::Lagged(_)) => {
+                Some(Ok(event)) => event,
+                Some(Err(RecvError::Lagged(_))) => {
                     self.fail("agent event stream lagged").await;
                     return;
                 }
-                Err(RecvError::Closed) => {
+                Some(Err(RecvError::Closed)) | None => {
                     // Every terminal event returns below, so a closed bus
                     // means the agent stopped before its turn started: a
                     // cancel during the first request's hook ends the
@@ -197,6 +199,9 @@ impl LedgerPump {
                         Ok(()) => CHAT_CANCELLED.to_owned(),
                         Err(failure) => failure,
                     };
+                    // A checkpoint written mid-turn is already what the next
+                    // request sends; its card must not vanish with the turn.
+                    self.publish_deferred().await;
                     self.fail(message).await;
                     return;
                 }
@@ -217,16 +222,21 @@ impl LedgerPump {
                     match closing {
                         Ok(Some(entry)) => self.finish(entry).await,
                         Ok(None) => {
+                            self.publish_deferred().await;
                             self.fail("the turn ended without an assistant message")
                                 .await;
                         }
-                        Err(failure) => self.fail(failure).await,
+                        Err(failure) => {
+                            self.publish_deferred().await;
+                            self.fail(failure).await;
+                        }
                     }
                     return;
                 }
                 AgentEvent::Error(error) => {
                     // Best effort: the error is the report either way.
                     let _ = self.commit_held_step(pending_assistant.take()).await;
+                    self.publish_deferred().await;
                     self.fail(format!("agent error: {error}")).await;
                     return;
                 }
@@ -238,8 +248,19 @@ impl LedgerPump {
         let _ = self.events.send(event);
     }
 
+    /// Ends the turn as failed. The agent is cancelled too: a pump that
+    /// stops recording (a lagged bus, a failed ledger write) must not leave
+    /// the model running tools that nothing records and the UI no longer
+    /// shows. After a terminal agent event the cancel is a no-op.
     async fn fail(&self, message: impl Into<String>) {
+        self.cancel.cancel();
         emit_chat_failed(&self.events, &self.writer, &self.session_id, message).await;
+    }
+
+    async fn publish_deferred(&self) {
+        self.deferred
+            .publish(&self.writer, &self.events, &self.session_id)
+            .await;
     }
 
     fn send_usage(&self, usage: &TurnUsage) {
@@ -323,15 +344,36 @@ impl LedgerPump {
     /// tool call from its result; ChatDone then carries the head that
     /// includes them.
     async fn finish(&self, entry: ConversationEntry) {
-        self.deferred
-            .publish(&self.writer, &self.events, &self.session_id)
-            .await;
+        self.publish_deferred().await;
         self.send(BridgeEvent::ChatDone {
             session_id: self.session_id.clone(),
             head: self.writer.head().await,
             entry,
         });
     }
+}
+
+/// Moves the agent bus onto an unbounded queue as fast as it fills.
+///
+/// The pump awaits a ledger fsync for every tool call, result, and step.
+/// Meanwhile a chatty tool or a few subagents can publish hundreds of
+/// progress lines, and a lagged broadcast receiver loses events for good —
+/// an assistant step or a tool result among them. The relay only moves
+/// events, so it keeps up; the queue absorbs the burst.
+fn relay(
+    mut agent_rx: broadcast::Receiver<AgentEvent>,
+) -> mpsc::UnboundedReceiver<Result<AgentEvent, RecvError>> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let item = agent_rx.recv().await;
+            let closed = matches!(item, Err(RecvError::Closed));
+            if tx.send(item).is_err() || closed {
+                return;
+            }
+        }
+    });
+    rx
 }
 
 async fn emit_chat_failed(
