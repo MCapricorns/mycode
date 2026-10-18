@@ -438,6 +438,15 @@ fn asset_prefix_names_each_binary_family() {
 }
 
 #[test]
+fn a_renamed_binary_keeps_the_desktop_family() {
+    assert_eq!(super::asset_family(Some("mycode")), "mycode");
+    assert_eq!(super::asset_family(Some("MYCode")), "mycode");
+    assert_eq!(super::asset_family(Some("mycode-desktop")), "mycode-desktop");
+    assert_eq!(super::asset_family(Some("MYCode Desktop")), "mycode-desktop");
+    assert_eq!(super::asset_family(None), "mycode-desktop");
+}
+
+#[test]
 fn windows_x86_64_selects_the_published_zip_not_the_checksum() {
     let offer = super::resolve_asset_for(
         "windows",

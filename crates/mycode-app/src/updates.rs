@@ -58,20 +58,25 @@ fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
     }
 }
 
-/// File stem of the running executable (`mycode-desktop`, `mycode`, …).
+/// Published asset family of the running executable: `mycode` for the
+/// terminal binary, `mycode-desktop` otherwise.
 ///
-/// Release assets are published per binary, so the stem names the asset
-/// family this install self-updates from. A lookup failure keeps the
-/// desktop family, matching every release so far.
+/// Only two families are published, so the stem is mapped onto them rather
+/// than used verbatim: a desktop binary the user renamed (or a lookup
+/// failure) must keep updating from the desktop family instead of asking
+/// the release for an asset that never exists.
 fn exe_stem() -> String {
-    std::env::current_exe()
+    let stem = std::env::current_exe()
         .ok()
-        .and_then(|path| {
-            path.file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-        })
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| "mycode-desktop".to_owned())
+        .and_then(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()));
+    asset_family(stem.as_deref()).to_owned()
+}
+
+fn asset_family(stem: Option<&str>) -> &'static str {
+    match stem {
+        Some(stem) if stem.eq_ignore_ascii_case("mycode") => "mycode",
+        _ => "mycode-desktop",
+    }
 }
 
 /// Release-asset prefix for one executable stem: published names look
