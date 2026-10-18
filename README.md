@@ -50,7 +50,7 @@
 | Windows ARM64 | zip |
 | macOS Apple Silicon | zip / dmg |
 
-每个平台另有 `mycode` CLI 压缩包（`mycode-v*`；无 dmg）；两个二进制各自匹配自己前缀的压缩包自更新。
+每个平台另有 `mycode-cli` 终端压缩包（`mycode-cli-v*`；无 dmg）。CLI 首次运行时把自己复制进 `~/.mycode/bin` 并把该目录写进用户 `PATH`（Windows 写注册表，macOS 写 `~/.zprofile` / `~/.bash_profile`），桌面版则复制为 `~/.mycode/bin/mycode-desktop`（或 `MYCode.app`）再重新启动并在桌面留快捷方式；刷新终端后即可直接敲 `mycode-cli`。两个二进制各自匹配自己前缀的压缩包自更新。
 
 暂无 Intel macOS 和 Linux 包。dmg 里的应用是 ad-hoc 签名，首次打开请右键「打开」，或执行：
 

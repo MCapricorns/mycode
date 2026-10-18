@@ -2,7 +2,7 @@
 //!
 //! The checker resolves the latest published release, picks the release
 //! asset matching the running platform and binary — published names are
-//! `<exe stem>-v<version>-<target>.zip`, so `mycode` and
+//! `<exe stem>-v<version>-<target>.zip`, so `mycode-cli` and
 //! `mycode-desktop` update from disjoint archives — and compares
 //! semantic versions. The
 //! installer downloads the asset plus its `.sha256` sidecar, verifies the
@@ -58,13 +58,15 @@ fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
     }
 }
 
-/// Published asset family of the running executable: `mycode` for the
+/// Published asset family of the running executable: `mycode-cli` for the
 /// terminal binary, `mycode-desktop` otherwise.
 ///
 /// Only two families are published, so the stem is mapped onto them rather
 /// than used verbatim: a desktop binary the user renamed (or a lookup
 /// failure) must keep updating from the desktop family instead of asking
-/// the release for an asset that never exists.
+/// the release for an asset that never exists. A pre-rename `mycode`
+/// binary keeps updating into the CLI family — the installed copy lands as
+/// `mycode-cli` beside it.
 fn exe_stem() -> String {
     let stem = std::env::current_exe().ok().and_then(|path| {
         path.file_stem()
@@ -75,7 +77,11 @@ fn exe_stem() -> String {
 
 fn asset_family(stem: Option<&str>) -> &'static str {
     match stem {
-        Some(stem) if stem.eq_ignore_ascii_case("mycode") => "mycode",
+        Some(stem)
+            if stem.eq_ignore_ascii_case("mycode-cli") || stem.eq_ignore_ascii_case("mycode") =>
+        {
+            "mycode-cli"
+        }
         _ => "mycode-desktop",
     }
 }

@@ -35,6 +35,7 @@ mod bridge_tests;
 mod compaction;
 mod dispatch;
 mod export;
+pub mod install;
 mod ledger;
 mod mcp_client;
 mod mcp_tools;

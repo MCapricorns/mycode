@@ -65,14 +65,14 @@ pub fn apply_update_from_args(args: &[String]) -> Option<i32> {
     }
 }
 
-/// `mycode <version>` for `--version` and the help header.
+/// `<bin> <version>` for `--version` and the help header.
 #[must_use]
-pub fn version_line() -> String {
-    format!("mycode {}", env!("CARGO_PKG_VERSION"))
+pub fn version_line(bin: &str) -> String {
+    format!("{bin} {}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Text for `--help`. `bin` is the invoking binary name shown in the usage
-/// line (`mycode-desktop`, `mycode`).
+/// line and the version header (`mycode-desktop`, `mycode-cli`).
 #[must_use]
 pub fn help_text(bin: &str) -> String {
     format!(
@@ -84,7 +84,7 @@ Usage: {bin} [OPTIONS]\n\
 Options:\n\
   -h, --help      Show this help and exit\n\
   -V, --version   Show the version and exit\n",
-        version_line()
+        version_line(bin)
     )
 }
 
@@ -127,11 +127,11 @@ mod tests {
             other => panic!("unknown flag should be an error, got {other:?}"),
         }
         assert_eq!(early_action(&["folder"]), None);
-        let version = version_line();
-        assert!(version.starts_with("mycode "), "{version}");
+        let version = version_line("mycode-cli");
+        assert_eq!(version, format!("mycode-cli {}", env!("CARGO_PKG_VERSION")));
         assert!(help_text("mycode-desktop").contains("--version"));
-        assert!(help_text("mycode-desktop").contains(&version));
-        assert!(help_text("mycode").contains("Usage: mycode "));
+        assert!(help_text("mycode-desktop").contains("mycode-desktop"));
+        assert!(help_text("mycode-cli").contains("Usage: mycode-cli "));
     }
 
     #[test]
