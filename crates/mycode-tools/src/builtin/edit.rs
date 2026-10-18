@@ -77,6 +77,9 @@ pub struct EditArgs {
     /// Replacement for `old_string`. Used only when `operations` is omitted;
     /// ignored when `operations` is set.
     pub new_string: Option<String>,
+    /// Replace every occurrence of `old_string` instead of exactly one.
+    #[serde(default)]
+    pub replace_all: bool,
     /// Bounded batch of literal, regex, line-range, and fuzzy operations.
     /// When set, this list is the whole edit and `old_string`/`new_string`
     /// are ignored.
@@ -193,7 +196,9 @@ impl Tool for EditTool {
          are ignored. Batch literal, fuzzy (whitespace-insensitive, unique \
          best match), bounded regex, and line-range ops all match one \
          snapshot and publish once. `old_string` must match \
-         exactly once. Hidden files are editable. Returns a revision and a \
+         exactly once, or every time with `replace_all`; line endings and \
+         spaces at the end of a line may differ, indentation may not. Hidden \
+         files are editable. Returns a revision and a \
          bounded diff summary, not the file body."
     }
 
@@ -371,6 +376,7 @@ mod schema_tests {
                     expected_revision: None,
                     old_string: Some("before".to_owned()),
                     new_string: Some("after".to_owned()),
+                    replace_all: false,
                     operations: None,
                 },
                 &ctx,

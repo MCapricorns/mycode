@@ -457,6 +457,13 @@ pub(crate) fn normalize_tool_args(args: Value) -> Value {
     };
     alias_key(map, "timeout", "timeout_secs");
     alias_key(map, "cmd", "command");
+    // Spellings other agents' file tools use. Without them the file
+    // preflight fails on a missing `path`, or `edit` reports that no
+    // replacement was given, and the model spends a turn on the retry.
+    alias_key(map, "file_path", "path");
+    alias_key(map, "filepath", "path");
+    alias_key(map, "old_str", "old_string");
+    alias_key(map, "new_str", "new_string");
     unwrap_echoed_values(map);
     args
 }

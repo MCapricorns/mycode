@@ -44,6 +44,28 @@ fn a_miss_with_different_line_wrapping_points_at_the_start_line() {
 }
 
 #[test]
+fn a_near_miss_quotes_the_file_text() {
+    let body = "fn f() {\n\tlet x = 1;\n\tlet y = 2;\n}\n";
+    let text = miss(body, &[literal("    let x = 1;\n    let y = 2;", "z")]);
+    assert!(text.contains("line 2"), "{text}");
+    assert!(
+        text.contains("The file there reads:\n\tlet x = 1;\n\tlet y = 2;"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_stale_copy_is_anchored_on_its_first_line() {
+    let body = "fn handle_request(req) {\n    validate(req);\n    respond(req);\n}\n";
+    let text = miss(
+        body,
+        &[literal("fn handle_request(req) {\n    check(req);\n", "x")],
+    );
+    assert!(text.contains("first line matches line 1"), "{text}");
+    assert!(text.contains("validate(req);"), "{text}");
+}
+
+#[test]
 fn a_genuine_miss_keeps_the_plain_message() {
     let body = "if let Some(v) = conn.last();\n";
     let text = miss(body, &[literal("match conn.last()", "x")]);
