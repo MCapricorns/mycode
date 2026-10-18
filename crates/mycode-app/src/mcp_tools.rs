@@ -55,9 +55,7 @@ impl DynamicMcpTool {
         result_dir: Arc<std::path::PathBuf>,
     ) -> Self {
         let validator = jsonschema::validator_for(&tool.input_schema).ok();
-        let snippet = format!(
-            "MCP tool on server '{server_id}'. Call it when the task matches; do not wait to be asked."
-        );
+        let snippet = mcp_snippet(&server_id, tool.description.as_deref());
         let spec = ToolSpec {
             name: tool.name.clone(),
             description: tool
@@ -82,6 +80,32 @@ impl DynamicMcpTool {
 
     pub(crate) fn read_only(&self) -> bool {
         self.read_only
+    }
+}
+
+/// Longest description summary carried into the system-prompt tool list.
+const MCP_SNIPPET_CHARS: usize = 160;
+
+/// One prompt-list line: what the tool does (the first sentence of its
+/// description) and which server serves it. The full description stays in
+/// the tool spec.
+fn mcp_snippet(server_id: &str, description: Option<&str>) -> String {
+    let summary = description
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|text| match text.find(". ") {
+            Some(end) => text[..=end].to_owned(),
+            None => text,
+        })
+        .filter(|text| !text.is_empty());
+    match summary {
+        Some(summary) => {
+            let mut summary: String = summary.chars().take(MCP_SNIPPET_CHARS).collect();
+            if summary.chars().count() == MCP_SNIPPET_CHARS {
+                summary.push('\u{2026}');
+            }
+            format!("{summary} (MCP server '{server_id}')")
+        }
+        None => format!("MCP tool on server '{server_id}'."),
     }
 }
 
@@ -905,6 +929,20 @@ mod tests {
             input_schema: serde_json::json!({"type": "object", "filler": filler}),
             read_only: false,
         }
+    }
+
+    #[test]
+    fn mcp_snippets_say_what_the_tool_does() {
+        assert_eq!(
+            super::mcp_snippet("docs", Some("Look up a library.\n  Returns  pages. More.")),
+            "Look up a library. (MCP server 'docs')"
+        );
+        assert_eq!(
+            super::mcp_snippet("docs", None),
+            "MCP tool on server 'docs'."
+        );
+        let long = super::mcp_snippet("docs", Some(&"word ".repeat(80)));
+        assert!(long.ends_with("\u{2026} (MCP server 'docs')"), "{long}");
     }
 
     #[test]
