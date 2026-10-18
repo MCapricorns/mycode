@@ -186,10 +186,14 @@ impl mycode_providers::SseTransport for SummaryTransport {
 }
 
 fn scratch_home() -> (std::path::PathBuf, mycode_config::HomeLayout) {
+    // Parallel tests start within one clock tick (100ns on Windows), so the
+    // timestamp alone handed two tests the same home.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
-        "mycode-compact-{}-{}",
+        "mycode-compact-{}-{}-{}",
         std::process::id(),
-        crate::unix_now().as_nanos()
+        crate::unix_now().as_nanos(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&root).expect("scratch");
     #[cfg(unix)]
