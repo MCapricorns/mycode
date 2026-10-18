@@ -129,11 +129,34 @@ pub fn export_to_file(home: &HomeLayout, path: &Path) -> Result<ExportSummary, S
     let mut body =
         serde_json::to_vec_pretty(&bundle).map_err(|error| format!("encode: {error}"))?;
     body.push(b'\n');
-    std::fs::write(path, &body).map_err(|error| format!("write: {error}"))?;
+    write_private(path, &body).map_err(|error| format!("write: {error}"))?;
     Ok(ExportSummary {
         secrets,
         bytes: body.len(),
     })
+}
+
+/// Writes the bundle readable by its owner only on Unix: it carries API keys
+/// in plaintext, and a default 0644 file is readable by every local account.
+fn write_private(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // `mode` only applies to a new file; an older export keeps its bits.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(body)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, body)
+    }
 }
 
 /// Applies one bundle: settings, UI state, and provider keys replace local
