@@ -212,7 +212,13 @@ pub(super) fn render_chat(
                                         .children(entry_elements)
                                         .when_some(streaming_element, |this, streaming| {
                                             this.child(streaming)
-                                        }),
+                                        })
+                                        .when_some(
+                                            workspace.vm().turn_alert.as_ref(),
+                                            |this, alert| {
+                                                this.child(render_turn_alert(alert, cx.theme()))
+                                            },
+                                        ),
                                 ),
                             ),
                     ),
@@ -234,6 +240,31 @@ pub(super) fn render_chat(
             |this| this.child(render_jump_to_latest(cx)),
         )
         .child(composer::render_composer(workspace, window, cx))
+        .into_any_element()
+}
+
+/// Red transcript-tail row for a turn that closed without a reply. The
+/// same alert a failed tool row paints, so an interrupted or failed turn
+/// is not mistaken for a completed answer.
+fn render_turn_alert(
+    message: &str,
+    theme: &gpui_kit::component::theme::Theme,
+) -> gpui_kit::AnyElement {
+    div()
+        .id("turn-alert")
+        .w_full()
+        .px_4()
+        .py(px(6.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(crate::ui::lamp(theme.danger))
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.danger)
+                .child(message.to_owned()),
+        )
         .into_any_element()
 }
 

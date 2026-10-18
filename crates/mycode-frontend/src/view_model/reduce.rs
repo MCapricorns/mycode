@@ -81,6 +81,7 @@ fn reset_turn_view(state: &mut WorkspaceState) {
     state.queued.clear();
     state.queue_paused = false;
     state.pending_steers.clear();
+    state.turn_alert = None;
     retire_live_jobs(state);
     // The conversation leaving the screen takes its runtime bookkeeping
     // with it; the restored transcript has no clocks to show.
@@ -385,10 +386,12 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             }
             state.composer_draft.clear();
             state.mention = None;
+            state.turn_alert = None;
         }
         FrontendAction::TurnArmed => {
             state.sending = true;
             state.error = None;
+            state.turn_alert = None;
             set_streaming_status(
                 state,
                 crate::i18n::t("Waiting for the model", "等待模型响应"),
@@ -591,6 +594,14 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // A user-initiated cancel resets the turn without an error
             // banner; the sentinel travels as the failure message.
             // Context meters stay: a cancel is not a new empty session.
+            // The transcript keeps a red row for any turn that closed
+            // without a reply — provider failure or a user stop — so an
+            // interrupted tail is not mistaken for a normal answer.
+            state.turn_alert = Some(if message == CHAT_CANCELLED {
+                crate::i18n::t("Stopped by user", "已被用户停止").to_owned()
+            } else {
+                message.clone()
+            });
             if message != CHAT_CANCELLED {
                 state.error = Some(message);
             }
