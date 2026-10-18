@@ -452,7 +452,7 @@ fn kind_phrase(kind: &str, count: usize) -> String {
             format!("read {count} files"),
             format!("读取 {count} 个文件"),
         ),
-        "edit" => (format!("edited {count}"), format!("编辑了 {count}")),
+        "edit" => (format!("edited {count}"), format!("编辑了 {count} 次")),
         "search" if count == 1 => (
             format!("searched {count} time"),
             format!("搜索了 {count} 次"),
@@ -485,7 +485,7 @@ fn kind_phrase(kind: &str, count: usize) -> String {
             format!("ran {count} agents"),
             format!("运行了 {count} 个子代理"),
         ),
-        "ask" => (format!("asked {count}"), format!("提问了 {count}")),
+        "ask" => (format!("asked {count}"), format!("提问了 {count} 次")),
         _ if count == 1 => (
             format!("{count} other call"),
             format!("另外 {count} 次调用"),
@@ -876,7 +876,7 @@ fn line_number(number: Option<u32>, theme: &Theme) -> impl IntoElement {
 }
 
 fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
-    let hits = lines.iter().filter(|line| !line.starts_with('[')).count();
+    let hits = lines.iter().filter(|line| !is_search_notice(line)).count();
     let label = if tool == "find" {
         t("PATHS", "路径")
     } else {
@@ -894,7 +894,7 @@ fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> imp
         .font_family(theme.mono_font_family.clone())
         .child(preview_caption(&format!("{label}  {hits}"), theme))
         .children(lines.iter().take(shown).enumerate().map(|(index, line)| {
-            let notice = line.starts_with('[');
+            let notice = is_search_notice(line);
             div()
                 .w_full()
                 .min_w_0()
@@ -931,6 +931,14 @@ fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> imp
                 theme,
             ))
         })
+}
+
+/// A line of a grep or find report that is not a result: a bracketed
+/// notice, the empty-report line, or the skipped-path explanation.
+fn is_search_notice(line: &str) -> bool {
+    line.starts_with('[')
+        || line.starts_with("No matching ")
+        || line.contains(" is hidden or gitignored, so ")
 }
 
 fn preview_caption(label: &str, theme: &Theme) -> impl IntoElement {
