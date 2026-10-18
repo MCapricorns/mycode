@@ -9,6 +9,7 @@ members = [
     "crates/mycode-app",
     "crates/mycode-frontend",
     "crates/mycode-desktop",
+    "crates/mycode-cli",
 ]
 # mod.rs is legacy module layout; modern foo.rs + foo/ is enforced.
 [workspace.lints]
