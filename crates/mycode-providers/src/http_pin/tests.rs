@@ -470,3 +470,26 @@ fn a_redirect_to_another_origin_drops_credentials() {
         super::origin_of("https://api.example.com:8443/v1")
     );
 }
+
+#[test]
+fn bracketed_and_dotted_local_hosts_are_not_public() {
+    for host in [
+        "[::1]",
+        "[fd00::1]",
+        "localhost.",
+        "printer.local.",
+        "127.0.0.1.",
+    ] {
+        assert!(!super::public_host(host), "{host}");
+    }
+    assert!(super::public_host("[2606:4700::1111]"));
+    assert!(super::public_host("example.com."));
+}
+
+#[tokio::test]
+async fn an_ipv6_literal_resolves_without_dns() {
+    let addrs = super::lookup_addresses("https://[::1]:8443/v1")
+        .await
+        .unwrap();
+    assert_eq!(addrs, [std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)]);
+}
