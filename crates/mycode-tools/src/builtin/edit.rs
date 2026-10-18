@@ -121,7 +121,7 @@ pub enum Occurrence {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditOp {
-    /// Literal search: one pattern uses memmem; several use Aho-Corasick.
+    /// Literal search for one pattern or several at once.
     Literal {
         /// Single needle. Mutually exclusive with `patterns`.
         pattern: Option<String>,
@@ -151,14 +151,15 @@ pub enum EditOp {
     },
     /// Unique-best fuzzy replace after token/whitespace normalization.
     ///
-    /// Not an occurrence flag on `literal` and never falls back to exact
-    /// memmem. `max_distance` is required and must be 1, 2, or 3.
+    /// Not an occurrence flag on `literal` and never falls back to an
+    /// exact match. `max_distance` is required and must be 1, 2, or 3.
     Fuzzy {
         /// Needle tokenized the same way as the file (whitespace collapsed).
         pattern: String,
         /// Replacement for the unique best original byte range.
         replacement: String,
-        /// Inclusive character Levenshtein cap on the normalized form.
+        /// Most character edits allowed between the needle and the match,
+        /// after whitespace normalization (inclusive).
         max_distance: u32,
     },
     /// Inclusive 1-based line range with expected old text and/or hash.
@@ -189,9 +190,9 @@ impl Tool for EditTool {
          {path, old_string, new_string} or {path, operations:[...]}. \
          Example: {\"path\":\"a.rs\",\"operations\":[{\"type\":\"literal\",\"pattern\":\"foo\",\"replacement\":\"bar\"}]}. \
          When `operations` is present it is applied and `old_string`/`new_string` \
-         are ignored. Batch literal (memmem / Aho-Corasick), fuzzy \
-         (unique-best normalized Levenshtein), bounded regex, and line-range \
-         ops all match one snapshot and publish once. `old_string` must match \
+         are ignored. Batch literal, fuzzy (whitespace-insensitive, unique \
+         best match), bounded regex, and line-range ops all match one \
+         snapshot and publish once. `old_string` must match \
          exactly once. Hidden files are editable. Returns a revision and a \
          bounded diff summary, not the file body."
     }

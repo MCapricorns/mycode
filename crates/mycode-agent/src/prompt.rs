@@ -39,6 +39,7 @@ fn tool_calling(shell_tool: &str) -> String {
 - Put independent reads in one response: `read`, `grep`, `find`, and web lookups emitted together run at the same time. Edits and `{shell_tool}` calls run one at a time, in the order you emit them.\n\
 - Use the dedicated tools first: `find` lists and locates files and directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n\
 - Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
+- A `{shell_tool}` call waits for its command to exit. Do not start one that waits for input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn until the timeout. Pass non-interactive flags instead.\n\
 - Read existing content before changing it. Change files with `write` and `edit`. {hint}\n\
 - Use `{shell_tool}` with `mode` `program` for one kernel image, or a direct shebang wrapper, and an explicit argument vector. That path does not parse a shell command string.\n\
 - Never use `{shell_tool}` to talk to the user.\n\
