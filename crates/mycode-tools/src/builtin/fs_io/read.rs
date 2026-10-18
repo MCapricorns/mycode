@@ -74,16 +74,40 @@ fn window_text(
         .collect();
     let text = selected.join("\n");
     let (mut text, byte_truncated) = crate::builtin::truncate_bytes(&text, MAX_BYTES);
+    let mut shown = selected.len();
+    let mut cut_line = false;
+    if byte_truncated {
+        // Keep whole lines only, so the notice never claims a line the byte
+        // cap cut and the suggested offset resumes exactly where this stops.
+        match text.rfind('\n') {
+            Some(last_break) => {
+                text.truncate(last_break);
+                shown = text.matches('\n').count() + 1;
+            }
+            None => {
+                shown = 1;
+                cut_line = true;
+            }
+        }
+    }
     let truncated = byte_truncated || capped_end < end;
     if truncated {
-        let _ = write!(
-            text,
-            "\n[output truncated: showing lines {}-{} of {total_lines}; re-invoke with offset/limit to read more]",
-            start + 1,
-            start + selected.len(),
-        );
+        let last = start + shown;
+        if cut_line {
+            let _ = write!(
+                text,
+                "\n[output truncated: line {last} alone exceeds {MAX_BYTES} bytes; only its start is shown]"
+            );
+        } else {
+            let _ = write!(
+                text,
+                "\n[output truncated: showing lines {}-{last} of {total_lines}; continue with offset={}]",
+                start + 1,
+                last + 1,
+            );
+        }
     }
-    (text, total_lines, selected.len(), truncated)
+    (text, total_lines, shown, truncated)
 }
 
 fn append_revision(body: &str, revision: &FileRevision) -> String {
@@ -275,8 +299,37 @@ mod tests {
 
     use tokio_util::sync::CancellationToken;
 
-    use super::read_file;
+    use super::{MAX_BYTES, read_file, window_text};
     use crate::tool::ToolError;
+
+    #[test]
+    fn a_byte_cut_window_reports_only_whole_lines() {
+        let line = "x".repeat(1000);
+        let file = vec![line.as_str(); 120].join("\n");
+        let (text, total, shown, truncated) = window_text(&file, None, None);
+        assert!(truncated);
+        assert_eq!(total, 120);
+        assert_eq!(shown, MAX_BYTES / 1001);
+        let (body, notice) = text.rsplit_once('\n').expect("notice line");
+        assert!(
+            body.lines().all(|row| row == line),
+            "every shown line is whole"
+        );
+        assert_eq!(body.lines().count(), shown);
+        assert!(
+            notice.ends_with(&format!("continue with offset={}]", shown + 1)),
+            "{notice}"
+        );
+    }
+
+    #[test]
+    fn a_single_oversized_line_says_it_was_cut() {
+        let file = format!("short\n{}\nafter", "y".repeat(MAX_BYTES + 10));
+        let (text, _, shown, truncated) = window_text(&file, Some(2), Some(1));
+        assert!(truncated);
+        assert_eq!(shown, 1);
+        assert!(text.ends_with("line 2 alone exceeds 51200 bytes; only its start is shown]"));
+    }
 
     #[test]
     fn offset_zero_is_rejected_before_any_io() {
