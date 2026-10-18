@@ -15,8 +15,8 @@ mod skills;
 mod web;
 mod widgets;
 
-pub(crate) use mcp::{McpForm, build_mcp_server};
-pub(crate) use models::{ProviderForm, build_custom_provider};
+pub(crate) use mcp::McpForm;
+pub(crate) use models::ProviderForm;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;

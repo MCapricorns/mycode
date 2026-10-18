@@ -9,7 +9,6 @@ use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext as _, Bounds, Context, Entity, Pixels, Window, WindowBounds};
 use gpui_kit::{px, size};
-use mycode_app::BridgeCommand;
 use mycode_app::BridgeEvent;
 use mycode_config::HomeLayout;
 use mycode_frontend::driver::{Effect, FrontendDriver};
@@ -31,7 +30,7 @@ mod settings_editor;
 mod toasts;
 mod updates_data;
 
-pub(crate) use settings_editor::normalized_key_input;
+pub(crate) use mycode_frontend::forms::normalized_key_input;
 pub(crate) use toasts::{Toast, ToastKind};
 
 /// Preferred first-window size. The origin is computed from the primary
@@ -677,12 +676,6 @@ impl Workspace {
         self.session_filter_input.clone()
     }
 
-    /// Fire-and-forget commands through the driver's bridge. The reply is
-    /// routed by scope inside the driver when it lands.
-    fn dispatch(&self, command: BridgeCommand, _cx: &mut Context<Self>) {
-        self.driver.dispatch(command);
-    }
-
     // ---- thin nav / toggle dispatchers ----
 
     pub(crate) fn on_show_settings_section(
@@ -879,73 +872,6 @@ impl Workspace {
     }
 }
 
-/// Parses one optional token-count field: empty keeps `None`, a plain number
-/// overrides; anything else is an error.
-pub(crate) fn parse_token_field(raw: &str) -> Result<Option<u64>, ()> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    trimmed.parse::<u64>().map(Some).map_err(|_| ())
-}
-
-/// Parses the stdio form's environment line: `KEY=VALUE` pairs separated by
-/// commas or whitespace, values optionally quoted. Empty input is no env.
-pub(crate) fn parse_env_line(
-    line: &str,
-) -> Result<std::collections::BTreeMap<String, String>, String> {
-    let mut env = std::collections::BTreeMap::new();
-    for word in mycode_config::split_command_line(&space_separate_env(line)) {
-        let Some((key, value)) = word.split_once('=') else {
-            return Err(format!("env entry '{word}' must look like KEY=VALUE"));
-        };
-        let key = key.trim();
-        if key.is_empty() {
-            return Err("env entry has an empty variable name".to_owned());
-        }
-        env.insert(key.to_owned(), value.to_owned());
-    }
-    if env.len() > mycode_config::MAX_MCP_ENV_VARS {
-        return Err(format!(
-            "at most {} env entries per server",
-            mycode_config::MAX_MCP_ENV_VARS
-        ));
-    }
-    Ok(env)
-}
-
-/// Maps commas to spaces outside quotes so [`mycode_config::split_command_line`]
-/// sees one word per `KEY=VALUE` while a quoted value keeps its commas.
-fn space_separate_env(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut quote: Option<char> = None;
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match quote {
-            Some(open) if ch == open => {
-                quote = None;
-                out.push(ch);
-            }
-            // Mirror split_command_line: a backslash escapes `"` and `\`
-            // inside double quotes, so `\",` is not a comma outside quotes.
-            Some('"') if ch == '\\' && matches!(chars.peek(), Some('"' | '\\')) => {
-                out.push(ch);
-                if let Some(next) = chars.next() {
-                    out.push(next);
-                }
-            }
-            Some(_) => out.push(ch),
-            None if ch == '"' || ch == '\'' => {
-                quote = Some(ch);
-                out.push(ch);
-            }
-            None if ch == ',' => out.push(' '),
-            None => out.push(ch),
-        }
-    }
-    out
-}
-
 /// Renders the whole window; split across the `ui` submodule.
 impl Workspace {
     /// Persists a resized window's settled size. The driver debounces; only
@@ -998,20 +924,5 @@ mod tests {
         assert_eq!(titlebar.traffic_light_position, Some(TRAFFIC_LIGHTS));
         assert!(f32::from(TRAFFIC_LIGHTS.x) >= 0.);
         assert!(f32::from(TRAFFIC_LIGHTS.y) >= 0.);
-    }
-
-    #[test]
-    fn env_line_keeps_commas_inside_quoted_values() {
-        let env = parse_env_line(r#"A=1, B="x,y", C='p,q' D=2"#).unwrap();
-        assert_eq!(env.get("A").map(String::as_str), Some("1"));
-        assert_eq!(env.get("B").map(String::as_str), Some("x,y"));
-        assert_eq!(env.get("C").map(String::as_str), Some("p,q"));
-        assert_eq!(env.get("D").map(String::as_str), Some("2"));
-    }
-
-    #[test]
-    fn env_line_rejects_a_bare_word() {
-        assert!(parse_env_line("A=1 stray").is_err());
-        assert!(parse_env_line("=value").is_err());
     }
 }

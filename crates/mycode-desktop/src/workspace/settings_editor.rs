@@ -4,25 +4,13 @@
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
-use mycode_app::BridgeCommand;
+use mycode_frontend::forms::DEFAULT_PROXY_URL;
 
-use crate::ui::{McpForm, build_mcp_server};
+use crate::ui::McpForm;
 use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 mod providers;
-
-/// Trims an API key candidate for UI button enablement and save dispatch.
-///
-/// Saving an empty or whitespace-only key field is a no-op so the replace-key
-/// flow cannot delete a stored credential.
-pub(crate) fn normalized_key_input(raw: &str) -> Option<String> {
-    let key = mycode_config::normalize_api_key(raw);
-    (!key.is_empty() && !key.eq_ignore_ascii_case("bearer")).then_some(key)
-}
-
-/// The URL the custom proxy mode starts from: Clash's mixed port.
-pub(crate) const DEFAULT_PROXY_URL: &str = "http://127.0.0.1:7890";
 
 impl Workspace {
     /// The proxy URL field. Only a value that parses as a proxy reaches the
@@ -39,21 +27,12 @@ impl Workspace {
                 window,
                 |workspace, entity, event, _, cx| match event {
                     InputEvent::Change => {
-                        let text = entity.read(cx).value().trim().to_owned();
-                        if matches!(
-                            mycode_config::ProxyPreference::parse(&text),
-                            Some(mycode_config::ProxyPreference::Url(_))
-                        ) {
-                            workspace.apply_action(
-                                FrontendAction::SettingsProxyChanged {
-                                    value: text,
-                                    typed: true,
-                                },
-                                cx,
-                            );
-                        }
+                        let text = entity.read(cx).value().to_string();
+                        workspace.driver_do(|d, fx| d.proxy_url_typed(&text, fx), cx);
                     }
-                    InputEvent::Blur => workspace.flush_settings_text_save(cx),
+                    InputEvent::Blur => {
+                        workspace.driver_do(|d, fx| d.proxy_url_committed(fx), cx);
+                    }
                     InputEvent::Focus | InputEvent::PressEnter { .. } => {}
                 },
             )
@@ -143,18 +122,13 @@ impl Workspace {
         let Some(input) = self.web_key_inputs.get(id).cloned() else {
             return;
         };
-        let Some(api_key) = normalized_key_input(&input.read(cx).value()) else {
+        let raw = input.read(cx).value().to_string();
+        if !self.driver.save_key(format!("web-{id}"), &raw) {
             return;
-        };
+        }
         input.update(cx, |state, cx| state.set_value("", window, cx));
         self.web_key_replace.remove(id);
-        self.dispatch(
-            BridgeCommand::SaveProviderKey {
-                provider_id: format!("web-{id}"),
-                api_key,
-            },
-            cx,
-        );
+        cx.notify();
     }
 
     pub(crate) fn on_cancel_replace_web_key(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -226,43 +200,18 @@ impl Workspace {
                 read.api_key.read(cx).value().to_string(),
             )
         };
-        if id.is_empty() {
-            self.apply_action(FrontendAction::Failed("fill id".to_owned()), cx);
-            return;
+        let mut added = false;
+        self.driver_do(
+            |d, fx| {
+                added = d.add_custom_mcp(
+                    &id, &transport, &endpoint, &command, &env_line, &api_key, fx,
+                );
+            },
+            cx,
+        );
+        if added {
+            form.update(cx, |form, cx| form.clear(window, cx));
         }
-        if self
-            .vm()
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.id == id))
-        {
-            self.apply_action(
-                FrontendAction::Failed(format!("an MCP server named '{id}' already exists")),
-                cx,
-            );
-            return;
-        }
-        let server = match build_mcp_server(&id, &transport, &endpoint, &command, &env_line) {
-            Ok(server) => server,
-            Err(message) => {
-                self.apply_action(FrontendAction::Failed(message), cx);
-                return;
-            }
-        };
-        self.apply_action(FrontendAction::SettingsMcpAdded(server), cx);
-        if transport == "http"
-            && let Some(api_key) = normalized_key_input(&api_key)
-        {
-            self.dispatch(
-                BridgeCommand::SaveProviderKey {
-                    provider_id: format!("mcp-{id}"),
-                    api_key,
-                },
-                cx,
-            );
-        }
-        form.update(cx, |form, cx| form.clear(window, cx));
-        self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
     }
 
     pub(crate) fn mcp_json_input(
@@ -289,61 +238,10 @@ impl Workspace {
             return;
         };
         let raw = input.read(cx).value().to_string();
-        let mut added = 0usize;
-        let imported = match mycode_config::parse_mcp_import(&raw) {
-            Ok(imported) => imported,
-            Err(message) => {
-                self.apply_action(FrontendAction::Failed(message), cx);
-                return;
-            }
-        };
-        let mut existing: Vec<String> = self
-            .vm()
-            .settings
-            .as_ref()
-            .map(|settings| {
-                settings
-                    .mcp_servers
-                    .iter()
-                    .map(|server| server.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut duplicates: Vec<String> = Vec::new();
-        for row in imported {
-            if existing.contains(&row.server.id) {
-                duplicates.push(row.server.id.clone());
-                continue;
-            }
-            let server_id = row.server.id.clone();
-            existing.push(server_id.clone());
-            let api_key = row.api_key.clone();
-            self.apply_action(FrontendAction::SettingsMcpAdded(row.server), cx);
-            added += 1;
-            if let Some(api_key) = api_key.and_then(|key| normalized_key_input(&key)) {
-                self.dispatch(
-                    BridgeCommand::SaveProviderKey {
-                        provider_id: format!("mcp-{server_id}"),
-                        api_key,
-                    },
-                    cx,
-                );
-            }
-        }
-        input.update(cx, |state, cx| state.set_value("", window, cx));
-        if added > 0 {
-            self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
-        }
-        if !duplicates.is_empty() {
-            // One aggregated message: per-row failures overwrote each other,
-            // so only the last duplicate name was ever reported.
-            self.apply_action(
-                FrontendAction::Failed(format!(
-                    "MCP servers already exist: {}",
-                    duplicates.join(", ")
-                )),
-                cx,
-            );
+        let mut parsed = false;
+        self.driver_do(|d, fx| parsed = d.import_mcp_json(&raw, fx), cx);
+        if parsed {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
         }
     }
 
@@ -364,12 +262,7 @@ impl Workspace {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(settings) = self.vm().settings.as_ref() else {
-            return;
-        };
-        let mut next = settings.subagents.clone();
-        next.role_mut(role).enabled = enabled;
-        self.apply_action(FrontendAction::SettingsSubagentsChanged(next), cx);
+        self.driver_do(|d, fx| d.toggle_subagent_role(role, enabled, fx), cx);
     }
 
     pub(crate) fn on_toggle_subagent_menu(
@@ -389,13 +282,7 @@ impl Workspace {
         thinking: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(settings) = self.vm().settings.as_ref() else {
-            return;
-        };
-        let mut next = settings.subagents.clone();
-        let entry = next.role_mut(role);
-        entry.thinking = thinking.filter(|level| level != "inherit" && level != "default");
-        self.apply_action(FrontendAction::SettingsSubagentsChanged(next), cx);
+        self.driver_do(|d, fx| d.set_subagent_thinking(role, thinking, fx), cx);
     }
 
     pub(crate) fn on_set_subagent_route(
@@ -405,78 +292,6 @@ impl Workspace {
         model: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(settings) = self.vm().settings.as_ref() else {
-            return;
-        };
-        let mut next = settings.subagents.clone();
-        let entry = next.role_mut(role);
-        if provider.as_deref() == Some("inherit") || model.as_deref() == Some("inherit") {
-            entry.provider = None;
-            entry.model = None;
-        } else if let Some(provider) = provider {
-            let model = model.or_else(|| {
-                settings
-                    .providers
-                    .iter()
-                    .find(|item| item.id == provider)
-                    .and_then(|item| item.models.first().cloned())
-            });
-            match model {
-                Some(model) => {
-                    entry.provider = Some(provider);
-                    entry.model = Some(model);
-                }
-                None => {
-                    entry.provider = None;
-                    entry.model = None;
-                }
-            }
-        } else if let Some(model) = model {
-            let fallback = self.vm().selected_provider.clone().or_else(|| {
-                settings
-                    .providers
-                    .iter()
-                    .find(|item| item.enabled)
-                    .map(|item| item.id.clone())
-            });
-            match fallback {
-                Some(provider) => {
-                    entry.provider = Some(provider);
-                    entry.model = Some(model);
-                }
-                None => {
-                    entry.provider = None;
-                    entry.model = None;
-                }
-            }
-        }
-        self.apply_action(FrontendAction::SettingsSubagentsChanged(next), cx);
-    }
-
-    /// Waits out the text-field debounce, then writes `settings.json`.
-    /// Writes a pending text-field edit immediately. Blur and leaving
-    /// Settings use this so the draft is not waiting on the debounce.
-    pub(crate) fn flush_settings_text_save(&mut self, cx: &mut Context<Self>) {
-        self.driver_do(|d, fx| d.flush_settings_text_save(fx), cx);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalized_key_input;
-
-    #[test]
-    fn blank_key_inputs_are_refused_and_bearer_prefixes_are_stripped() {
-        assert_eq!(normalized_key_input(""), None);
-        assert_eq!(normalized_key_input("   \t\n  "), None);
-        assert_eq!(normalized_key_input("Bearer   "), None);
-        assert_eq!(
-            normalized_key_input("  sk-test-123  "),
-            Some("sk-test-123".to_owned())
-        );
-        assert_eq!(
-            normalized_key_input("Bearer sk-test-123"),
-            Some("sk-test-123".to_owned())
-        );
+        self.driver_do(|d, fx| d.set_subagent_route(role, provider, model, fx), cx);
     }
 }

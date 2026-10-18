@@ -92,11 +92,6 @@ impl FrontendDriver {
         }
     }
 
-    /// The update dialog opened or closed.
-    pub fn toggle_update_dialog(&mut self, open: bool, out: &mut Vec<Effect>) {
-        self.act(FrontendAction::UpdateDialogToggled(open), out);
-    }
-
     // ---- ask card ----
 
     /// One choice picked on an ask row: clears the row's free text, toggles

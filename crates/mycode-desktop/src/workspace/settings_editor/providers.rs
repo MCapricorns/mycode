@@ -3,10 +3,9 @@
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
-use mycode_app::BridgeCommand;
+use mycode_frontend::forms::normalized_key_input;
 
-use super::normalized_key_input;
-use crate::ui::{ProviderForm, build_custom_provider};
+use crate::ui::ProviderForm;
 use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
@@ -37,49 +36,25 @@ impl Workspace {
                 read.max_output.read(cx).value().to_string(),
             )
         };
-        let existing: Vec<String> = self
-            .vm()
-            .settings
-            .as_ref()
-            .map(|settings| {
-                settings
-                    .providers
-                    .iter()
-                    .map(|provider| provider.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let provider = match build_custom_provider(
-            &existing,
-            &id,
-            &kind,
-            &base_url,
-            &model,
-            &context_limit,
-            &max_output,
-        ) {
-            Ok(provider) => provider,
-            Err(message) => {
-                self.apply_action(FrontendAction::Failed(message), cx);
-                return;
-            }
-        };
-        let provider_id = provider.id.clone();
-        self.apply_action(FrontendAction::SettingsProviderAdded(provider), cx);
-        if let Some(api_key) = normalized_key_input(&api_key) {
-            self.dispatch(
-                BridgeCommand::SaveProviderKey {
-                    provider_id,
-                    api_key,
-                },
-                cx,
-            );
-        }
-        form.update(cx, |form, cx| form.clear(window, cx));
-        self.apply_action(
-            FrontendAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
+        let mut added = false;
+        self.driver_do(
+            |d, fx| {
+                added = d.add_custom_provider(
+                    &id,
+                    &kind,
+                    &base_url,
+                    &model,
+                    &api_key,
+                    &context_limit,
+                    &max_output,
+                    fx,
+                );
+            },
             cx,
         );
+        if added {
+            form.update(cx, |form, cx| form.clear(window, cx));
+        }
     }
 
     pub(crate) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -220,18 +195,13 @@ impl Workspace {
         let Some(input) = self.provider_key_inputs.get(id).cloned() else {
             return;
         };
-        let Some(api_key) = normalized_key_input(&input.read(cx).value()) else {
+        let raw = input.read(cx).value().to_string();
+        if !self.driver.save_key(id.to_owned(), &raw) {
             return;
-        };
+        }
         input.update(cx, |state, cx| state.set_value("", window, cx));
         self.provider_key_replace.remove(id);
-        self.dispatch(
-            BridgeCommand::SaveProviderKey {
-                provider_id: id.to_owned(),
-                api_key,
-            },
-            cx,
-        );
+        cx.notify();
     }
 
     pub(crate) fn on_cancel_replace_provider_key(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -284,6 +254,7 @@ impl Workspace {
 
     /// Commits an endpoint edit after the same document validation the settings
     /// save runs, then writes `settings.json`. The key vault is not touched.
+    /// An accepted value is written back normalized and becomes the seed.
     pub(crate) fn on_apply_provider_endpoint(
         &mut self,
         id: &str,
@@ -294,67 +265,30 @@ impl Workspace {
             return;
         };
         let typed = input.read(cx).value().to_string();
-        let previewed = {
-            let Some(settings) = self.vm().settings.as_ref() else {
-                return;
-            };
-            let Some(current) = settings
-                .providers
-                .iter()
-                .find(|provider| provider.id == id)
-                .map(|provider| provider.base_url.clone())
-            else {
-                return;
-            };
-            if typed.trim() == current {
-                return;
-            }
-            settings.preview_provider_base_url(id, &typed)
+        let base_url = |workspace: &Self| {
+            workspace.vm().settings.as_ref().and_then(|settings| {
+                settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == id)
+                    .map(|provider| provider.base_url.clone())
+            })
         };
-        match previewed {
-            Ok(base_url) => {
-                input.update(cx, |state, cx| {
-                    state.set_value(base_url.clone(), window, cx)
-                });
-                self.provider_endpoint_seed
-                    .insert(id.to_owned(), base_url.clone());
-                self.apply_action(
-                    FrontendAction::SettingsProviderBaseUrlChanged {
-                        id: id.to_owned(),
-                        base_url,
-                    },
-                    cx,
-                );
-            }
-            Err(message) => {
-                self.apply_action(FrontendAction::Failed(message), cx);
-            }
-        }
+        let before = base_url(self);
+        self.driver_do(|d, fx| d.apply_provider_endpoint(id, &typed, fx), cx);
+        let Some(after) = base_url(self).filter(|after| Some(after) != before.as_ref()) else {
+            return;
+        };
+        input.update(cx, |state, cx| state.set_value(after.clone(), window, cx));
+        self.provider_endpoint_seed.insert(id.to_owned(), after);
     }
 
     /// Device-code sign-in for a provider that is already configured.
     ///
     /// Does not open the add-from-catalog form.
     pub(crate) fn on_start_provider_oauth(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        let models = self
-            .vm()
-            .settings
-            .as_ref()
-            .and_then(|settings| {
-                settings
-                    .providers
-                    .iter()
-                    .find(|provider| provider.id == provider_id)
-            })
-            .map(|provider| provider.models.clone())
-            .unwrap_or_default();
-        self.dispatch(
-            BridgeCommand::StartOAuthSignIn {
-                provider_id: provider_id.to_owned(),
-                models,
-            },
-            cx,
-        );
+        self.driver.start_provider_oauth(provider_id);
+        cx.notify();
     }
 
     // ---- provider presets from the catalog ----
@@ -411,27 +345,7 @@ impl Workspace {
     /// the catalog row's models (or the configured subset when the row is
     /// already in settings).
     pub(crate) fn on_start_oauth_sign_in(&mut self, provider_id: String, cx: &mut Context<Self>) {
-        let models = crate::view_model::preset_pick(self.vm(), &provider_id);
-        if models.is_empty() {
-            self.apply_action(
-                FrontendAction::Failed(
-                    crate::i18n::t(
-                        "Provider catalog is not loaded yet; refresh it in About and try again.",
-                        "服务商目录尚未就绪，可在「关于」页刷新目录后重试。",
-                    )
-                    .to_owned(),
-                ),
-                cx,
-            );
-            return;
-        }
-        self.dispatch(
-            BridgeCommand::StartOAuthSignIn {
-                provider_id,
-                models,
-            },
-            cx,
-        );
+        self.driver_do(|d, fx| d.start_oauth_sign_in(provider_id, fx), cx);
     }
 
     pub(crate) fn preset_key_input(
@@ -451,50 +365,13 @@ impl Workspace {
 
     /// Adds one catalog preset: provider entry plus stored key, then saves.
     pub(crate) fn on_add_preset(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        let Some(catalog) = self.vm().catalog.clone() else {
-            return;
-        };
-        let Some(preset) = catalog.provider(provider_id) else {
-            return;
-        };
-        // Checked models in catalog order; an empty selection falls back to
-        // the catalog's first model.
-        let checked = self.vm().preset_models.clone();
-        let mut models: Vec<String> = preset
-            .models
-            .iter()
-            .filter(|entry| checked.contains(&entry.id))
-            .map(|entry| entry.id.clone())
-            .collect();
-        if models.is_empty() {
-            let Some(first) = preset.models.first() else {
-                return;
-            };
-            models.push(first.id.clone());
-        }
-        let model = models[0].clone();
-        // OpenDesign is one gateway: adding it again updates the configured
-        // row (its endpoint and overrides stay). Other presets get a unique
-        // id, the catalog spelling suffixed when already configured.
-        let opendesign = preset.id == mycode_providers::catalog::opendesign::PROVIDER_ID;
-        let existing = self
+        let known = self
             .vm()
-            .settings
+            .catalog
             .as_ref()
-            .and_then(|settings| settings.providers.iter().find(|p| p.id == preset.id))
-            .filter(|_| opendesign)
-            .cloned();
-        let mut id = preset.id.clone();
-        let mut suffix = 2;
-        while existing.is_none()
-            && self
-                .vm()
-                .settings
-                .as_ref()
-                .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))
-        {
-            id = format!("{}-{suffix}", preset.id);
-            suffix += 1;
+            .is_some_and(|catalog| catalog.provider(provider_id).is_some());
+        if !known {
+            return;
         }
         let api_key = self
             .preset_key_input
@@ -502,37 +379,6 @@ impl Workspace {
             .and_then(|input| normalized_key_input(&input.read(cx).value()));
         // Drop the input entity so the pasted key never lingers on screen.
         self.preset_key_input = None;
-        let row = match existing {
-            Some(existing) => mycode_config::ProviderSettings {
-                models,
-                enabled: true,
-                ..existing
-            },
-            None => mycode_config::ProviderSettings {
-                id: id.clone(),
-                kind: preset.kind.clone(),
-                base_url: preset.base_url.clone(),
-                models,
-                enabled: true,
-                context_limit: None,
-                max_output: None,
-                hidden_models: Vec::new(),
-            },
-        };
-        self.apply_action(FrontendAction::SettingsProviderAdded(row), cx);
-        if let Some(api_key) = api_key {
-            self.dispatch(
-                BridgeCommand::SaveProviderKey {
-                    provider_id: id.clone(),
-                    api_key,
-                },
-                cx,
-            );
-        }
-        self.apply_action(FrontendAction::ActivePresetChanged(None), cx);
-        self.apply_action(FrontendAction::ProviderSelected(id), cx);
-        self.apply_action(FrontendAction::ModelSelected(model), cx);
-        self.driver_do(|d, fx| d.save_settings(fx), cx);
-        self.persist_ui_state();
+        self.driver_do(|d, fx| d.add_preset_provider(provider_id, api_key, fx), cx);
     }
 }

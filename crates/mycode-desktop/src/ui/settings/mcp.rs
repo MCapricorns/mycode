@@ -587,70 +587,6 @@ impl McpForm {
     }
 }
 
-/// Builds the server row the custom form currently describes, from its raw
-/// field values. Pure validation and construction only; the workspace
-/// method decides what to do with the result.
-pub(crate) fn build_mcp_server(
-    id: &str,
-    transport: &str,
-    endpoint: &str,
-    command: &str,
-    env_line: &str,
-) -> Result<mycode_config::McpServerSettings, String> {
-    let server = match transport {
-        "http" => {
-            if endpoint.is_empty() {
-                return Err(t("http servers need an endpoint", "HTTP 服务器需要端点").to_owned());
-            }
-            mycode_config::McpServerSettings {
-                id: id.to_owned(),
-                enabled: true,
-                transport: transport.to_owned(),
-                command: None,
-                args: Vec::new(),
-                env: Default::default(),
-                endpoint: Some(endpoint.to_owned()),
-                key_header: Some("bearer".to_owned()),
-            }
-        }
-        "stdio" => {
-            // The form takes the whole line the server docs publish
-            // (`npx -y @scope/server --flag`); split it here so the
-            // child gets a program plus argv, not one giant program name.
-            let mut words = mycode_config::split_command_line(command).into_iter();
-            let Some(program) = words.next().filter(|word| !word.is_empty()) else {
-                return Err(t("stdio servers need a command", "stdio 服务器需要命令").to_owned());
-            };
-            let env = crate::workspace::parse_env_line(env_line)?;
-            mycode_config::McpServerSettings {
-                id: id.to_owned(),
-                enabled: true,
-                transport: transport.to_owned(),
-                command: Some(program),
-                args: words.collect(),
-                env,
-                endpoint: None,
-                key_header: None,
-            }
-        }
-        _ => {
-            return Err(t(
-                "transport must be http or stdio",
-                "传输方式必须是 http 或 stdio",
-            )
-            .to_owned());
-        }
-    };
-    let probe = mycode_config::AppSettings {
-        mcp_servers: vec![server.clone()],
-        ..mycode_config::AppSettings::default()
-    };
-    probe
-        .validate()
-        .map_err(|error| format!("invalid MCP server: {}", error.summary()))?;
-    Ok(server)
-}
-
 fn render_mcp_form(
     workspace: &mut Workspace,
     window: &mut Window,
@@ -759,46 +695,4 @@ fn render_mcp_form(
         ],
     )
     .into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::build_mcp_server;
-
-    #[test]
-    fn custom_mcp_builder_validates_id_endpoint_and_stdio_command() {
-        let bad_id = build_mcp_server("Bad Id", "http", "https://mcp.example.com/mcp", "", "")
-            .expect_err("invalid portable id must be refused");
-        assert!(bad_id.contains("invalid MCP server"), "{bad_id}");
-
-        let bad_url = build_mcp_server("my-mcp", "http", "http://mcp.example.com/mcp", "", "")
-            .expect_err("non-https endpoint must be refused");
-        assert!(bad_url.contains("https://"), "{bad_url}");
-
-        let bad_cmd = build_mcp_server("my-mcp", "stdio", "", "npx|evil", "")
-            .expect_err("shell metacharacters in executable must be refused");
-        assert!(bad_cmd.contains("invalid MCP server"), "{bad_cmd}");
-
-        let stdio = build_mcp_server(
-            "fs-mcp",
-            "stdio",
-            "http://leftover.invalid",
-            "npx -y @modelcontextprotocol/server-filesystem C:\\projects",
-            "FOO=bar",
-        )
-        .expect("valid stdio MCP server");
-        assert_eq!(stdio.id, "fs-mcp");
-        assert_eq!(stdio.transport, "stdio");
-        assert_eq!(stdio.command.as_deref(), Some("npx"));
-        assert_eq!(
-            stdio.args,
-            vec![
-                "-y".to_owned(),
-                "@modelcontextprotocol/server-filesystem".to_owned(),
-                "C:\\projects".to_owned(),
-            ]
-        );
-        assert_eq!(stdio.env.get("FOO").map(String::as_str), Some("bar"));
-        assert!(stdio.endpoint.is_none());
-    }
 }
