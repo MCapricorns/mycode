@@ -32,7 +32,8 @@
 | `settings_io` | 设置 CAS 和单把密钥的写入 |
 | `search` | 作曲栏 `@` 提到的项目文件：不区分大小写的子串，跳过 `.git`、`node_modules`、`target` 等目录，最多看 8192 项、返回 64 条 |
 | `export` | 产品数据的导出与导入包：设置、界面状态和 API 密钥（明文），不带会话。导入会新增、修改或删除 MCP stdio 命令时先拒绝，桌面在“数据”卡片里让用户确认后再带 `confirm_mcp_commands` 重发 |
-| `updates` | 检查、下载、校验、准备重启安装。错误收成一行。发布资产名形如 `{可执行文件名}-v{版本}-{target}.zip`，前缀取当前可执行文件的文件名主体：`mycode-desktop` 只匹配 `mycode-desktop-v*`，`mycode` 只匹配 `mycode-v*`，两个二进制各取自己的包。macOS 用 `update.sh`；Windows 复制当前程序，带 `--mycode-apply-update` 等参数替换安装文件。其它平台没有安装包，更新检查会说明没有对应平台的资源。换好并校验新二进制后，旧版本的备份文件会被删掉，不在安装目录里堆积。启动检查失败会送到界面提示 |
+| `updates` | 检查、下载、校验、准备重启安装。错误收成一行。发布资产名形如 `{可执行文件名}-v{版本}-{target}.zip`，前缀取当前可执行文件的文件名主体：`mycode-desktop` 只匹配 `mycode-desktop-v*`，`mycode-cli`（以及改名前的 `mycode`）只匹配 `mycode-cli-v*`，两个二进制各取自己的包。macOS 用 `update.sh`；Windows 复制当前程序，带 `--mycode-apply-update` 等参数替换安装文件。其它平台没有安装包，更新检查会说明没有对应平台的资源。换好并校验新二进制后，旧版本的备份文件会被删掉，不在安装目录里堆积。启动检查失败会送到界面提示 |
+| `install` | 自安装。`mycode-cli` 在所有平台上把自己复制进 `<home>/bin` 并加进用户 PATH（Windows 写 `HKCU\Environment`，macOS 写 shell 配置文件），进入界面前在终端里提示一次。桌面版只在 Windows 自安装：不在 `<home>/bin` 里运行时复制为 `<home>/bin/mycode-desktop.exe`、带原参数启动安装副本后退出，安装副本删除原来那个 `mycode-desktop*.exe` 并建桌面快捷方式；macOS 用 dmg 装进「应用程序」，不自安装。清理下载只删文件。debug 构建和 `MYCODE_NO_INSTALL=1` 跳过 |
 
 ## 回合装配
 
