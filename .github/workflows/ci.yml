@@ -57,10 +57,10 @@
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.dmg        (+ .sha256)
-#   mycode-<tag>-x86_64-pc-windows-msvc.zip              (+ .sha256)
-#   mycode-<tag>-aarch64-pc-windows-msvc.zip             (+ .sha256)
-#   mycode-<tag>-aarch64-apple-darwin.zip                (+ .sha256)
-# The `mycode` zips carry the `mycode-cli` package's CLI binary; only the
+#   mycode-cli-<tag>-x86_64-pc-windows-msvc.zip          (+ .sha256)
+#   mycode-cli-<tag>-aarch64-pc-windows-msvc.zip         (+ .sha256)
+#   mycode-cli-<tag>-aarch64-apple-darwin.zip            (+ .sha256)
+# The `mycode-cli` zips carry the `mycode-cli` package's binary; only the
 # desktop app is wrapped into a dmg. Each binary self-updates from the
 # asset family named after its own executable stem.
 

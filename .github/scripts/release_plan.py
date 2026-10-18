@@ -745,7 +745,7 @@ def _expect_workflow_contract() -> None:
             f"missing release asset comment {target}",
         )
         _expect(
-            f"mycode-<tag>-{target}.zip" in workflow,
+            f"mycode-cli-<tag>-{target}.zip" in workflow,
             f"missing CLI release asset comment {target}",
         )
     build_sh = (ROOT / ".github/scripts/cargo_release_build.sh").read_text(encoding="utf-8")

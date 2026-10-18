@@ -39,26 +39,24 @@
 | **MCP** | 支持 stdio 与 HTTP，多个服务器并发连接；只读工具可并发调用。 |
 | **网页** | 内置搜索与抓取后端，结果有字节上限。 |
 | **界面** | 中英双语、深浅主题、四档字号；`Ctrl-K` / `Cmd-K` 命令面板。 |
+| **终端版** | `mycode-cli` 和桌面版共用同一套会话、设置与工具；`/settings` 选模型、填密钥、开关 MCP。 |
+| **代理** | 跟随系统代理，或手动填写 `http` / `socks5` 地址；设置里「测试」一键确认能否连通 google.com。 |
 
 ## 安装
 
-从 [Releases](https://github.com/MCapricorns/mycode/releases/latest) 下载对应平台的压缩包，每个文件旁有 `.sha256`：
+从 [Releases](https://github.com/MCapricorns/mycode/releases/latest) 下载，每个文件旁有 `.sha256`：
 
-| 平台 | 文件 |
-| --- | --- |
-| Windows x64 | zip |
-| Windows ARM64 | zip |
-| macOS Apple Silicon | zip / dmg |
+| 平台 | 桌面版 | 终端版 |
+| --- | --- | --- |
+| Windows x64 | `mycode-desktop-v*-x86_64-pc-windows-msvc.zip` | `mycode-cli-v*-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `mycode-desktop-v*-aarch64-pc-windows-msvc.zip` | `mycode-cli-v*-aarch64-pc-windows-msvc.zip` |
+| macOS Apple Silicon | `mycode-desktop-v*-aarch64-apple-darwin.dmg` | `mycode-cli-v*-aarch64-apple-darwin.zip` |
 
-每个平台另有 `mycode-cli` 终端压缩包（`mycode-cli-v*`；无 dmg）。CLI 首次运行时把自己复制进 `~/.mycode/bin` 并把该目录写进用户 `PATH`（Windows 写注册表，macOS 写 `~/.zprofile` / `~/.bash_profile`），桌面版则复制为 `~/.mycode/bin/mycode-desktop`（或 `MYCode.app`）再重新启动并在桌面留快捷方式；刷新终端后即可直接敲 `mycode-cli`。两个二进制各自匹配自己前缀的压缩包自更新。
+- **Windows 桌面版**：解压后双击 `mycode-desktop.exe`。它会把自己装到 `~/.mycode/bin/mycode-desktop.exe`，启动装好的那份，删掉刚才双击的旧 exe，并在桌面放 `MYCode` 快捷方式。以后从快捷方式打开即可。
+- **macOS 桌面版**：打开 dmg，把 `MYCode.app` 拖进「应用程序」。应用是 ad-hoc 签名，首次打开请右键「打开」，或执行 `xattr -d com.apple.quarantine /Applications/MYCode.app`。
+- **终端版 `mycode-cli`**：首次运行把自己复制进 `~/.mycode/bin`，并把该目录加进用户 `PATH`（Windows 写注册表，macOS 写 `~/.zprofile` 等 shell 配置）。随后会提示安装位置，按 Enter 继续；之后新开的终端里直接敲 `mycode-cli` 就能运行。
 
-暂无 Intel macOS 和 Linux 包。dmg 里的应用是 ad-hoc 签名，首次打开请右键「打开」，或执行：
-
-```sh
-xattr -d com.apple.quarantine /Applications/MYCode.app
-```
-
-应用内置更新：右上角提示可更新，下载并校验后确认即重启安装。
+两个程序都内置自动更新，只取自己那一类的安装包：桌面版右上角提示可更新，下载并校验后确认即重启安装；终端版在 `/settings` 的「Update」一行检查和安装。Release 里 macOS 桌面版的 zip 只给自动更新用，手动安装请用 dmg。暂无 Intel macOS 和 Linux 包。`MYCODE_NO_INSTALL=1` 可以跳过自安装。
 
 ### 从源码构建
 
@@ -67,8 +65,10 @@ xattr -d com.apple.quarantine /Applications/MYCode.app
 ```sh
 git clone https://github.com/MCapricorns/mycode.git
 cd mycode
-cargo build --release -p mycode-desktop
+cargo build --release -p mycode-desktop -p mycode-cli
 ```
+
+从源码跑发布版时，建议设 `MYCODE_NO_INSTALL=1`，免得它把自己装进 `~/.mycode/bin`。
 
 ## 快速开始
 
@@ -106,7 +106,8 @@ cargo build --release -p mycode-desktop
 ├─ ui.json         工作区、文件夹、每个会话的模型与思考档位
 ├─ sessions.db     会话索引
 ├─ sessions/       会话账本（JSONL）
-└─ agents/         自定义子代理角色
+├─ agents/         自定义子代理角色
+└─ bin/            自安装的 mycode-cli（Windows 上还有 mycode-desktop）
 ```
 
 工具以当前用户权限运行，环境变量白名单不是沙箱。详见 [docs/tools.md](docs/tools.md) 和 [docs/config.md](docs/config.md)。
