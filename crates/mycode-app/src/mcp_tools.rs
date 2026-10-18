@@ -250,7 +250,19 @@ pub(crate) struct McpPool {
     /// that did not connect; the next turn retries only those.
     servers: Vec<Option<Vec<Arc<DynamicMcpTool>>>>,
     warning: Option<String>,
+    /// Earliest retry of the servers that did not connect. Until then a turn
+    /// reuses the live servers instead of waiting on a dead one again.
+    retry_after: Option<std::time::Instant>,
 }
+
+/// Bound on one server's handshake and tool listing. The channel's own
+/// timeout is the per-call budget, so without this a server that accepts
+/// the connection and never answers held every turn start for two of them.
+const MCP_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How long a server that failed to connect is left alone before a turn
+/// tries it again. A settings change or a lost connection retries at once.
+const MCP_RETRY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(120);
 
 impl McpPool {
     fn tools(&self) -> Vec<Arc<DynamicMcpTool>> {
@@ -303,7 +315,10 @@ pub(crate) async fn connect_mcp_tools(
                     && !cached.broken.load(Ordering::Relaxed)
                     && cached.servers.len() == enabled.len() =>
             {
-                if cached.servers.iter().all(Option::is_some) {
+                let cooling = cached
+                    .retry_after
+                    .is_some_and(|retry| std::time::Instant::now() < retry);
+                if cooling || cached.servers.iter().all(Option::is_some) {
                     return (cached.tools(), cached.warning.clone());
                 }
                 (Arc::clone(&cached.broken), cached.servers.clone())
@@ -329,9 +344,15 @@ pub(crate) async fn connect_mcp_tools(
                 // it must be the full request budget, not a connect-phase
                 // bound. A 10s value here made every tool call that outlasted
                 // it fail with Timeout and drop the connection mid-turn.
-                let mut client = open_mcp_client(server, api_key).await.ok()?;
-                let listed = client.list_tools().await.ok()?;
-                Some((client, listed))
+                let handshake = async {
+                    let mut client = open_mcp_client(server, api_key).await.ok()?;
+                    let listed = client.list_tools().await.ok()?;
+                    Some((client, listed))
+                };
+                tokio::time::timeout(MCP_HANDSHAKE_TIMEOUT, handshake)
+                    .await
+                    .ok()
+                    .flatten()
             }
         })
         .collect::<Vec<_>>();
@@ -361,11 +382,16 @@ pub(crate) async fn connect_mcp_tools(
                 .collect(),
         );
     }
+    let retry_after = slots
+        .iter()
+        .any(Option::is_none)
+        .then(|| std::time::Instant::now() + MCP_RETRY_COOLDOWN);
     let live = McpPool {
         fingerprint,
         broken,
         servers: slots,
         warning: project_warning.clone(),
+        retry_after,
     };
     let tools = live.tools();
     *pool.lock().await = Some(live);
