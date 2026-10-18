@@ -561,7 +561,11 @@ impl McpForm {
             "KEY=value, OTHER=value (optional)",
             "KEY=value, OTHER=value（可选）",
         ));
-        let api_key = make(t("api key (leave empty to skip)", "API 密钥（留空则跳过）"));
+        let api_key = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("api key (leave empty to skip)", "API 密钥（留空则跳过）"))
+                .masked(true)
+        });
         cx.new(|_| Self {
             id,
             transport: "http".to_owned(),
