@@ -33,8 +33,10 @@ const MAX_ARG_BYTES: usize = 64 * 1024;
 /// One MiB bounds validation and platform-encoding allocations independently
 /// of the target-specific command-line limit applied by the OS.
 const MAX_TOTAL_ARG_BYTES: usize = 1024 * 1024;
-/// Maximum image size hashed and launched.
-const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum image size hashed and launched. Common toolchain images outgrow
+/// 64 MiB (Windows `node.exe` is about 80 MiB, Electron hosts more), so the
+/// bound only keeps a pathological file from being hashed without end.
+const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 /// Prefix read for magic-byte classification.
 const IMAGE_HEADER_BYTES: usize = 4_096;
 
