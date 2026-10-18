@@ -78,11 +78,11 @@ pub(super) fn render_streaming_entry(
                 this.child(markdown::prose_measure(thinking_box(
                     id,
                     &streaming.thinking,
-                    workspace.thinking_open(),
+                    workspace.thinking_open(None),
                     true,
                     theme,
                     cx.listener(|workspace, _, _, cx| {
-                        workspace.on_toggle_thinking(cx);
+                        workspace.on_toggle_thinking(None, cx);
                     }),
                 )))
             })
@@ -113,21 +113,24 @@ pub(super) fn render_entry(
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     match entry.kind {
-        EntryKind::AssistantMessage => desk_block(
-            entry,
-            assistant_block(
+        EntryKind::AssistantMessage => {
+            let event_id = entry.event_id.clone();
+            desk_block(
                 entry,
-                workspace.thinking_open(),
-                display,
-                cache,
-                theme,
-                window,
-                cx.listener(|workspace, _, _, cx| {
-                    workspace.on_toggle_thinking(cx);
-                }),
-            ),
-        )
-        .into_any_element(),
+                assistant_block(
+                    entry,
+                    workspace.thinking_open(Some(&entry.event_id)),
+                    display,
+                    cache,
+                    theme,
+                    window,
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_toggle_thinking(Some(&event_id), cx);
+                    }),
+                ),
+            )
+            .into_any_element()
+        }
         EntryKind::ToolResult => {
             let desk = Desk::of(theme);
             let failed = entry.text.starts_with("failed:");
