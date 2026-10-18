@@ -1,18 +1,20 @@
 //! Self-install into `<home>/bin`, PATH registration, and download cleanup.
 //!
-//! Both shipped binaries install the same way: the running executable is
-//! copied into `<home>/bin` and that directory is put on the user PATH —
-//! the HKCU `Environment` registry value on Windows, shell profile files on
-//! macOS — so a refreshed terminal resolves `mycode-cli` without a package
-//! manager.
+//! The terminal binary installs itself on every platform: the running
+//! executable is copied into `<home>/bin` and that directory is put on the
+//! user PATH — the HKCU `Environment` registry value on Windows, shell
+//! profile files on macOS — so a refreshed terminal resolves `mycode-cli`
+//! without a package manager, and self-updates always land in a
+//! user-writable directory.
 //!
-//! The desktop additionally relocates: after the copy it spawns the
-//! installed binary and the download exits, so the GUI the user sees always
-//! runs from the install dir. The installed copy deletes the download it
-//! replaced (the launcher holds the file until it exits, so deletion
-//! retries briefly on a background thread) and drops a desktop shortcut.
-//! Sweeping `~/Downloads` and `~/Desktop` removes any MYCode binary or
-//! release archive left behind, whichever binary launched first.
+//! The desktop installs itself on Windows only (macOS ships a dmg the user
+//! drags to `/Applications`). Launched from anywhere but `<home>/bin`, it
+//! copies itself there, spawns the installed copy with the same arguments,
+//! and exits. The installed copy deletes the old exe it replaced (the
+//! launcher holds the file until it exits, so deletion retries briefly on a
+//! background thread) and drops a desktop shortcut. Sweeping `~/Downloads`
+//! and `~/Desktop` removes loose MYCode binaries and release archives of
+//! the self-installing families.
 //!
 //! Debug builds and `MYCODE_NO_INSTALL=1` skip the whole dance so
 //! `cargo run` stays in `target/`.
@@ -21,6 +23,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -30,6 +33,7 @@ use mycode_config::HomeLayout;
 const NO_INSTALL_ENV: &str = "MYCODE_NO_INSTALL";
 /// Set on the spawned installed copy so it knows which download it
 /// replaced; that source is deleted once the launcher exits.
+#[cfg(windows)]
 const INSTALLED_FROM_ENV: &str = "MYCODE_INSTALLED_FROM";
 
 /// `mycode-cli` plus the platform executable suffix.
@@ -175,69 +179,42 @@ pub enum DesktopInstall {
     Exit,
 }
 
-/// The installable unit: the `.app` bundle on macOS when the exe sits
-/// inside one, otherwise the executable file itself.
-#[cfg(target_os = "macos")]
-fn install_unit(exe: &Path, dir: &Path) -> (PathBuf, PathBuf) {
-    for ancestor in exe.ancestors() {
-        if ancestor.extension().is_some_and(|ext| ext == "app") {
-            return (ancestor.to_path_buf(), dir.join("MYCode.app"));
-        }
-    }
-    (exe.to_path_buf(), dir.join(desktop_exe_name()))
+/// Whether the canonical `exe` is `target`. `target` is canonicalized
+/// too: on Windows a canonical path carries the `\\?\` prefix, and
+/// comparing it against the lexical home path never matches.
+#[cfg(any(windows, test))]
+fn is_installed_exe(exe: &Path, target: &Path) -> bool {
+    paths_equal(exe, &canonical(target))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn install_unit(exe: &Path, dir: &Path) -> (PathBuf, PathBuf) {
-    (exe.to_path_buf(), dir.join(desktop_exe_name()))
+#[cfg(any(windows, test))]
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Whether `exe` is the installed unit itself (a file) or lives inside it
-/// (a `.app` bundle).
-fn exe_inside_unit(exe: &Path, unit: &Path) -> bool {
-    if unit.extension().is_some_and(|ext| ext == "app") {
-        exe.starts_with(unit)
-    } else {
-        paths_equal(exe, unit)
-    }
-}
-
-fn copy_dir(source: &Path, target: &Path) -> io::Result<()> {
-    fs::create_dir_all(target)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let from = entry.path();
-        let to = target.join(&name);
-        if entry.file_type()?.is_dir() {
-            copy_dir(&from, &to)?;
-        } else {
-            fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
-}
-
-/// Copies `unit` (file or `.app` dir) onto `target` in place.
-fn copy_unit(unit: &Path, target: &Path) -> io::Result<()> {
-    if unit.is_dir() {
-        let stage = target.with_extension("installing");
-        if stage.exists() {
-            fs::remove_dir_all(&stage)?;
-        }
-        copy_dir(unit, &stage)?;
-        if target.exists() {
-            fs::remove_dir_all(target)?;
-        }
-        fs::rename(&stage, target)
-    } else {
-        install_file(unit, target).map(|_| ())
-    }
+/// Whether `path` names a MYCode desktop executable the installer may
+/// delete after relocating: a plain file called `mycode-desktop*.exe`.
+/// The marker env is inherited by child processes, so it alone is never
+/// proof that a path is ours.
+fn is_replaced_desktop_exe(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    path.is_file() && name.starts_with("mycode-desktop") && name.ends_with(".exe")
 }
 
 /// Installs the desktop binary into `<home>/bin`, spawns the installed
 /// copy, and hands off. PATH registration still happens so a terminal can
-/// run the GUI by name.
+/// run the GUI by name. Windows only: the macOS app ships as a dmg the
+/// user drags to `/Applications`, and updates in place from there.
+#[cfg(not(windows))]
+pub fn ensure_desktop_installed(_home: &HomeLayout) -> DesktopInstall {
+    DesktopInstall::Run { cleanup: None }
+}
+
+/// See the non-Windows twin; this is the real install.
+#[cfg(windows)]
 pub fn ensure_desktop_installed(home: &HomeLayout) -> DesktopInstall {
     if install_skipped() {
         return DesktopInstall::Run { cleanup: None };
@@ -247,22 +224,37 @@ pub fn ensure_desktop_installed(home: &HomeLayout) -> DesktopInstall {
         Ok(exe) => exe,
         Err(_) => return DesktopInstall::Run { cleanup: None },
     };
-    let (unit, target) = install_unit(&exe, &dir);
-    if exe_inside_unit(&exe, &target) {
+    let target = dir.join(desktop_exe_name());
+    if is_installed_exe(&exe, &target) {
         sweep_downloaded_binaries();
-        let cleanup = env::var_os(INSTALLED_FROM_ENV).map(PathBuf::from);
+        // Child processes inherit the marker; once the source is gone a
+        // later restart must not recreate a shortcut the user deleted.
+        let cleanup = env::var_os(INSTALLED_FROM_ENV)
+            .map(PathBuf::from)
+            .filter(|source| source.exists());
         if cleanup.is_some() {
             create_desktop_shortcut(&target);
             let _ = ensure_path_entry(&dir);
         }
         return DesktopInstall::Run { cleanup };
     }
-    if copy_unit(&unit, &target).is_err() {
+    // A spawned copy that still does not see itself installed must not
+    // spawn again, or every launch would hand off forever.
+    if env::var_os(INSTALLED_FROM_ENV).is_some() {
+        return DesktopInstall::Run { cleanup: None };
+    }
+    if install_file(&exe, &target).is_err() {
         // Stay on the download rather than failing to launch at all.
         return DesktopInstall::Run { cleanup: None };
     }
     let _ = ensure_path_entry(&dir);
-    let spawned = spawn_installed(&exe, &unit, &target);
+    // The installed copy learns which download it replaced, so it can
+    // delete it and make the shortcut once this process has exited.
+    let spawned = Command::new(&target)
+        .args(env::args_os().skip(1))
+        .env(INSTALLED_FROM_ENV, &exe)
+        .spawn()
+        .is_ok();
     if spawned {
         DesktopInstall::Exit
     } else {
@@ -270,44 +262,16 @@ pub fn ensure_desktop_installed(home: &HomeLayout) -> DesktopInstall {
     }
 }
 
-/// Launches the installed unit detached, marking it with the download it
-/// replaces so the installed copy cleans up and makes the shortcut.
-fn spawn_installed(exe: &Path, unit: &Path, target: &Path) -> bool {
-    // On macOS an installed `.app` runs via its inner binary; that keeps
-    // env propagation trivial and avoids `open`'s indirection.
-    let program = if target.extension().is_some_and(|ext| ext == "app") {
-        exe.file_name()
-            .map(|name| target.join("Contents/MacOS").join(name))
-            .unwrap_or_else(|| target.to_path_buf())
-    } else {
-        target.to_path_buf()
-    };
-    Command::new(program)
-        .env(INSTALLED_FROM_ENV, unit)
-        .spawn()
-        .is_ok()
-}
-
-/// Deletes the download an installed binary replaced. The launcher holds
-/// its exe until it exits, so this retries for a few seconds — spawn it on
-/// a thread, never block the UI on it.
+/// Deletes the old executable an installed copy replaced. The launcher
+/// holds its exe until it exits, so this retries for a few seconds — spawn
+/// it on a thread, never block the UI on it.
 pub fn cleanup_installed_source(source: PathBuf) {
-    if install_skipped() {
-        return;
-    }
-    // Only ever delete under the user home; the marker env is not proof.
-    let Some(root) = user_home() else { return };
-    if !source.starts_with(&root) {
+    if install_skipped() || !is_replaced_desktop_exe(&source) {
         return;
     }
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let removed = if source.is_dir() {
-            fs::remove_dir_all(&source)
-        } else {
-            fs::remove_file(&source)
-        };
-        match removed {
+        match fs::remove_file(&source) {
             Ok(()) => return,
             Err(_) if !source.exists() => return,
             Err(_) if Instant::now() < deadline => {
@@ -351,9 +315,9 @@ pub fn sweep_downloaded_binaries() {
             }) {
                 continue;
             }
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                let _ = fs::remove_dir_all(&path);
-            } else {
+            // Files only: a folder named `mycode` is far more likely a
+            // checkout than a download.
+            if entry.file_type().is_ok_and(|kind| kind.is_file()) {
                 let _ = fs::remove_file(&path);
             }
         }
@@ -361,25 +325,25 @@ pub fn sweep_downloaded_binaries() {
 }
 
 /// Whether a loose filename in Downloads/Desktop is one of our release
-/// artifacts: the shipped binaries, the `.app`, or `*-v*` archives.
+/// artifacts: a shipped binary or a `*-v*` archive. Binary names match
+/// exactly. The desktop family counts only on Windows, where the desktop
+/// installs itself; on macOS the user may run it from a download or keep
+/// the dmg, so the CLI leaves those alone.
 fn is_download_artifact(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    let bare = [
-        "mycode",
-        "mycode.exe",
-        "mycode-cli",
-        "mycode-cli.exe",
-        "mycode-desktop",
-        "mycode-desktop.exe",
-    ];
-    if bare.contains(&lower.as_str()) || name == "MYCode.app" {
+    let mut bare = vec!["mycode", "mycode.exe", "mycode-cli", "mycode-cli.exe"];
+    let mut archives = vec!["mycode-v", "mycode-cli-v"];
+    if cfg!(windows) {
+        bare.push("mycode-desktop.exe");
+        archives.push("mycode-desktop-v");
+    }
+    if bare.contains(&name) {
         return true;
     }
-    let archive = |stem: &str| {
+    archives.iter().any(|stem| {
         lower.starts_with(stem)
             && (lower.ends_with(".zip") || lower.ends_with(".dmg") || lower.ends_with(".sha256"))
-    };
-    archive("mycode-v") || archive("mycode-cli-v") || archive("mycode-desktop-v")
+    })
 }
 
 /// Ensures `dir` appears in the user's PATH, appending it when absent.
@@ -562,13 +526,10 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// Writes a desktop shortcut for the installed unit. Best-effort: a failed
-/// shortcut must not block the install.
+/// Writes a desktop shortcut for the installed desktop binary.
+/// Best-effort: a failed shortcut must not block the install.
 #[cfg(windows)]
 fn create_desktop_shortcut(target: &Path) {
-    if target.extension().is_some_and(|ext| ext == "app") {
-        return;
-    }
     let exe = target.to_string_lossy().replace('\'', "''");
     let script = format!(
         "$desktop=[Environment]::GetFolderPath('Desktop');\
@@ -577,49 +538,15 @@ fn create_desktop_shortcut(target: &Path) {
          $sc.TargetPath='{exe}';$sc.WorkingDirectory=[IO.Path]::GetDirectoryName('{exe}');\
          $sc.IconLocation='{exe},0';$sc.Save()"
     );
+    use std::os::windows::process::CommandExt as _;
+    // The desktop is a windowed app; without this a console flashes up.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .and_then(|mut child| child.wait());
 }
-
-/// Finder alias `MYCode` on the desktop pointing at the installed `.app`.
-/// No shortcut is made for a bare downloaded binary.
-#[cfg(target_os = "macos")]
-fn create_desktop_shortcut(target: &Path) {
-    if !target.extension().is_some_and(|ext| ext == "app") {
-        return;
-    }
-    let Some(home) = user_home() else { return };
-    let desktop = home.join("Desktop");
-    for stale in [desktop.join("MYCode"), desktop.join("MYCode alias")] {
-        if stale.exists() {
-            let _ = fs::remove_file(&stale);
-        }
-    }
-    let app = target
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    let desk = desktop
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    let _ = Command::new("osascript")
-        .args([
-            "-e",
-            &format!(
-                "tell application \"Finder\" to make new alias file at POSIX file \"{desk}\" to POSIX file \"{app}\""
-            ),
-            "-e",
-            "tell application \"Finder\" to set name of result to \"MYCode\"",
-        ])
-        .spawn()
-        .and_then(|mut child| child.wait());
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn create_desktop_shortcut(_: &Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -632,12 +559,8 @@ mod tests {
             "mycode.exe",
             "mycode-cli",
             "mycode-cli.exe",
-            "mycode-desktop",
-            "mycode-desktop.exe",
-            "MYCode.app",
             "mycode-v0.11.32-x86_64-pc-windows-msvc.zip",
             "mycode-cli-v0.12.0-aarch64-apple-darwin.zip",
-            "mycode-desktop-v0.12.0-aarch64-apple-darwin.dmg",
             "mycode-cli-v0.12.0-x86_64-pc-windows-msvc.zip.sha256",
         ] {
             assert!(is_download_artifact(name), "{name}");
@@ -646,11 +569,52 @@ mod tests {
             "mycode-notes.txt",
             "mycode-cli.zip",
             "MYCODE-CLI.EXE.bak",
-            "some-app.app",
+            "MYCode.app",
+            "MYCode",
             "other.zip",
         ] {
             assert!(!is_download_artifact(name), "{name}");
         }
+        // The desktop installs itself only on Windows; elsewhere the user
+        // may run it from a download or keep the dmg.
+        for name in [
+            "mycode-desktop.exe",
+            "mycode-desktop-v0.12.0-x86_64-pc-windows-msvc.zip",
+            "mycode-desktop-v0.12.0-aarch64-apple-darwin.dmg",
+        ] {
+            assert_eq!(is_download_artifact(name), cfg!(windows), "{name}");
+        }
+    }
+
+    #[test]
+    fn only_a_desktop_exe_is_deleted_after_relocation() {
+        let dir = env::temp_dir().join(format!("mycode-replaced-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("dir");
+        let old = dir.join("mycode-desktop-old.EXE");
+        let other = dir.join("notes.exe");
+        fs::write(&old, b"bin").expect("old");
+        fs::write(&other, b"bin").expect("other");
+        assert!(is_replaced_desktop_exe(&old));
+        // An inherited marker pointing at anything else is ignored.
+        assert!(!is_replaced_desktop_exe(&other));
+        assert!(!is_replaced_desktop_exe(&dir));
+        assert!(!is_replaced_desktop_exe(&dir.join("mycode-desktop.exe")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_canonical_exe_matches_its_lexical_install_path() {
+        // `current_exe().canonicalize()` is compared against the lexical
+        // `<home>/bin` target; on Windows only the canonical form carries
+        // `\\?\`, so a plain comparison never saw the installed copy.
+        let dir = env::temp_dir().join(format!("mycode-install-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join(desktop_exe_name());
+        fs::write(&target, b"bin").expect("file");
+        let exe = target.canonicalize().expect("canonical");
+        assert!(is_installed_exe(&exe, &target));
+        assert!(!is_installed_exe(&exe, &dir.join("other")));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(not(windows))]

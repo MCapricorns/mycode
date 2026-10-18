@@ -43,5 +43,37 @@ fn main() {
         }
     };
     let install = mycode_app::install::ensure_cli_installed(&home);
+    announce_install(&install);
     std::process::exit(app::run(home, install));
+}
+
+/// Tells the user, before the TUI takes the screen, that `mycode-cli` now
+/// runs from any new terminal. The first install (PATH just written) waits
+/// for Enter, so a console opened by double-clicking the download does not
+/// flash past it.
+fn announce_install(report: &mycode_app::install::InstallReport) {
+    use std::io::{BufRead as _, IsTerminal as _, Write as _};
+
+    if let Some(warning) = &report.warning {
+        eprintln!("mycode-cli: install skipped: {warning}");
+        return;
+    }
+    if !report.copied && !report.path_added {
+        return;
+    }
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "MYCode CLI installed: {}", report.target.display());
+    if report.path_added {
+        let _ = writeln!(
+            out,
+            "Its folder was added to your PATH. Open a new terminal and run: mycode-cli"
+        );
+    } else {
+        let _ = writeln!(out, "Run it from any terminal with: mycode-cli");
+    }
+    if report.path_added && std::io::stdin().is_terminal() {
+        let _ = write!(out, "Press Enter to continue...");
+        let _ = out.flush();
+        let _ = std::io::stdin().lock().read_line(&mut String::new());
+    }
 }
