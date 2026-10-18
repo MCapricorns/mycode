@@ -82,15 +82,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
-        let removed = self.vm()
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.providers.get(index))
-            .map(|provider| provider.id.clone());
-        self.apply_action(FrontendAction::SettingsProviderRemoved(index), cx);
-        if removed.is_some_and(|id| self.vm().provider_detail.as_deref() == Some(id.as_str())) {
-            self.apply_action(FrontendAction::ProviderDetailOpened(None), cx);
-        }
+        self.driver_do(|d, fx| d.remove_provider(index, fx), cx);
     }
 
     /// Search box for the shared model picker. Created once; the value is
