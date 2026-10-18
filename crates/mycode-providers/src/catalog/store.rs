@@ -401,6 +401,10 @@ pub async fn refresh(
         return RefreshOutcome::Fresh(existing);
     }
 
+    // The catalog is megabytes. A total request timeout also bounds the body,
+    // so a slow link or proxy never finished one; only idle gaps are bounded
+    // per chunk, with a generous ceiling over the whole download.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
     let mut headers = vec![("accept".to_owned(), "application/json".to_owned())];
     if let Some(etag) = existing.etag.clone() {
         headers.push(("if-none-match".to_owned(), etag));
@@ -411,8 +415,8 @@ pub async fn refresh(
         headers,
         body: None,
         mode: crate::PinMode::CheckRedirect,
-        timeout: Some(std::time::Duration::from_secs(30)),
-        read_timeout: None,
+        timeout: None,
+        read_timeout: Some(std::time::Duration::from_secs(30)),
         user_agent: Some(user_agent.to_owned()),
         follow_redirects: true,
         cancel: tokio_util::sync::CancellationToken::new(),
@@ -461,6 +465,9 @@ pub async fn refresh(
                 return RefreshOutcome::Unavailable("catalog read failed: timed out".to_owned());
             }
         };
+        if tokio::time::Instant::now() >= deadline {
+            return RefreshOutcome::Unavailable("catalog read failed: timed out".to_owned());
+        }
         if bytes.len().saturating_add(chunk.len()) > MAX_CLOUD_BYTES {
             return RefreshOutcome::Unavailable("catalog document oversized".to_owned());
         }
