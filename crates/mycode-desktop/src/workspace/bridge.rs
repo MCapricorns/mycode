@@ -5,7 +5,7 @@ use gpui_kit::Context;
 use mycode_app::{BridgeCommand, BridgeEvent, BridgeReply};
 
 use crate::view_model::{
-    CHAT_CANCELLED, CacheBreak, DesktopAction, SettingsState, UpdateState, cache_alert_text,
+    CHAT_CANCELLED, CacheBreak, FrontendAction, SettingsState, UpdateState, cache_alert_text,
 };
 use crate::workspace::Workspace;
 
@@ -92,8 +92,8 @@ impl ReplyScope {
     }
 }
 
-fn failed_start(message: String) -> DesktopAction {
-    DesktopAction::ChatFailed {
+fn failed_start(message: String) -> FrontendAction {
+    FrontendAction::ChatFailed {
         message,
         head: String::new(),
     }
@@ -108,19 +108,19 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::ChatDelta(delta)
+                FrontendAction::ChatDelta(delta)
             }
             BridgeEvent::ChatThinking { session_id, delta } => {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::ChatThinkingDelta(delta)
+                FrontendAction::ChatThinkingDelta(delta)
             }
             BridgeEvent::AssistantStep { session_id, entry } => {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::AssistantStepCommitted(entry)
+                FrontendAction::AssistantStepCommitted(entry)
             }
             BridgeEvent::ChatDone {
                 session_id,
@@ -132,7 +132,7 @@ impl Workspace {
                 }
                 // Refresh the sidebar so the session title picks up the turn.
                 self.dispatch(BridgeCommand::ListSessions, cx);
-                self.apply_action(DesktopAction::ChatDone { head, entry }, cx);
+                self.apply_action(FrontendAction::ChatDone { head, entry }, cx);
                 self.pump_queued_send(cx);
                 return;
             }
@@ -145,7 +145,7 @@ impl Workspace {
                     return;
                 }
                 let cancelled = message == CHAT_CANCELLED;
-                self.apply_action(DesktopAction::ChatFailed { message, head }, cx);
+                self.apply_action(FrontendAction::ChatFailed { message, head }, cx);
                 // A user interrupt frees the turn; queued follow-ups start next.
                 // Provider errors keep the queue so a failed retry cannot loop.
                 if cancelled {
@@ -157,10 +157,10 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                self.apply_action(DesktopAction::SteersReturned(texts), cx);
+                self.apply_action(FrontendAction::SteersReturned(texts), cx);
                 // Steers handed back after a user stop join a held queue.
                 if self.queue_hold_on_return {
-                    self.apply_action(DesktopAction::QueuePaused(true), cx);
+                    self.apply_action(FrontendAction::QueuePaused(true), cx);
                 }
                 self.pump_queued_send(cx);
                 return;
@@ -173,7 +173,7 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::SteerCommitted {
+                FrontendAction::SteerCommitted {
                     session_id,
                     head,
                     entry,
@@ -195,7 +195,7 @@ impl Workspace {
                 }
                 let previous = self.vm.cache_alert;
                 self.apply_action(
-                    DesktopAction::UsageSnapshot {
+                    FrontendAction::UsageSnapshot {
                         model,
                         input,
                         context,
@@ -226,7 +226,7 @@ impl Workspace {
                     mycode_app::CacheDisruption::Compaction => CacheBreak::Compaction,
                     mycode_app::CacheDisruption::Steer => CacheBreak::Steer,
                 };
-                DesktopAction::CacheBreakArmed(cause)
+                FrontendAction::CacheBreakArmed(cause)
             }
             BridgeEvent::AskRequested {
                 session_id,
@@ -235,7 +235,7 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::AskRequested(questions)
+                FrontendAction::AskRequested(questions)
             }
             BridgeEvent::ToolStarted {
                 session_id,
@@ -246,7 +246,7 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::ToolStarted {
+                FrontendAction::ToolStarted {
                     call_id,
                     name,
                     target,
@@ -261,7 +261,7 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::ToolProgress {
+                FrontendAction::ToolProgress {
                     call_id,
                     name,
                     message,
@@ -271,10 +271,10 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::ToolResultAppended(entry)
+                FrontendAction::ToolResultAppended(entry)
             }
             BridgeEvent::SessionTitle { session_id, title } => {
-                DesktopAction::SessionTitled { session_id, title }
+                FrontendAction::SessionTitled { session_id, title }
             }
             BridgeEvent::CatalogUpdated { .. } => {
                 if self.catalog_requested || self.vm.catalog.is_some() || self.catalog_needed() {
@@ -292,10 +292,10 @@ impl Workspace {
                     self.catalog_requested = true;
                     self.dispatch(BridgeCommand::GetCatalog, cx);
                 }
-                DesktopAction::CopilotSignInFinished(Ok(()))
+                FrontendAction::CopilotSignInFinished(Ok(()))
             }
             BridgeEvent::CopilotSignInFailed { message } => {
-                DesktopAction::CopilotSignInFinished(Err(message))
+                FrontendAction::CopilotSignInFinished(Err(message))
             }
             BridgeEvent::UpdateAvailable { offer } => {
                 // A second offer must not knock a download or a staged
@@ -308,7 +308,7 @@ impl Workspace {
                     return;
                 }
                 let version = offer.version.clone();
-                self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
+                self.apply_action(FrontendAction::UpdateOfferFound(offer), cx);
                 self.push_toast(
                     format!(
                         "{} v{version}{}",
@@ -327,7 +327,7 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                self.apply_action(DesktopAction::SummaryShown(entry), cx);
+                self.apply_action(FrontendAction::SummaryShown(entry), cx);
                 return;
             }
             BridgeEvent::CompactFinished {
@@ -339,7 +339,7 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                self.apply_action(DesktopAction::CompactFinished { ok, head }, cx);
+                self.apply_action(FrontendAction::CompactFinished { ok, head }, cx);
                 // Follow-ups queued while the composer was locked start now.
                 self.pump_queued_send(cx);
                 let text = match message.as_str() {
@@ -382,7 +382,7 @@ impl Workspace {
                 }
                 let brief = mycode_app::brief_error(&message);
                 self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
+                    FrontendAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
                     cx,
                 );
                 self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
@@ -395,11 +395,11 @@ impl Workspace {
     pub(super) fn apply_reply(&mut self, reply: BridgeReply, cx: &mut Context<Self>) {
         match reply {
             BridgeReply::Sessions(Ok(sessions)) => {
-                self.apply_action(DesktopAction::SessionsLoaded(sessions), cx);
+                self.apply_action(FrontendAction::SessionsLoaded(sessions), cx);
             }
             BridgeReply::Created(Ok(summary)) => {
                 let session_id = summary.session_id.clone();
-                self.apply_action(DesktopAction::SessionCreated(summary), cx);
+                self.apply_action(FrontendAction::SessionCreated(summary), cx);
                 if self.vm.pending_welcome_send.is_some() {
                     self.welcome_send_session = Some(session_id.clone());
                 }
@@ -414,7 +414,7 @@ impl Workspace {
                     if let Some(text) = self.vm.pending_welcome_send.clone() {
                         self.pending_composer_prefill = Some(text);
                     }
-                    self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                    self.apply_action(FrontendAction::WelcomeSendConsumed, cx);
                 }
                 if let Some(project) = self.pending_project.take() {
                     if opening {
@@ -423,7 +423,7 @@ impl Workspace {
                         // The session was still created for this folder; bind
                         // it without moving the view's project back.
                         self.apply_action(
-                            DesktopAction::SessionProjectBound {
+                            FrontendAction::SessionProjectBound {
                                 session_id: session_id.clone(),
                                 project,
                             },
@@ -449,7 +449,7 @@ impl Workspace {
                     .active
                     .as_ref()
                     .is_some_and(|active| active.session_id != conversation.session_id);
-                self.apply_action(DesktopAction::ConversationOpened(conversation), cx);
+                self.apply_action(FrontendAction::ConversationOpened(conversation), cx);
                 if switching {
                     self.pending_composer_prefill = Some(String::new());
                     self.mention_query = None;
@@ -474,7 +474,7 @@ impl Workspace {
                     self.capture_scroll_hold();
                 }
                 self.apply_action(
-                    DesktopAction::OlderLoaded {
+                    FrontendAction::OlderLoaded {
                         session_id: page.session_id,
                         entries: page.entries,
                         older_before: page.older,
@@ -487,20 +487,20 @@ impl Workspace {
                 }
             }
             BridgeReply::Older(Err(message)) => {
-                self.apply_action(DesktopAction::HistoryLoadFinished, cx);
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::HistoryLoadFinished, cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
             BridgeReply::Resources(Ok(files)) => {
-                self.apply_action(DesktopAction::ResourcesLoaded(files), cx);
+                self.apply_action(FrontendAction::ResourcesLoaded(files), cx);
             }
             BridgeReply::ProjectFiles(Ok(files)) => {
-                self.apply_action(DesktopAction::MentionFiles(files), cx);
+                self.apply_action(FrontendAction::MentionFiles(files), cx);
             }
             // A failed mention search just leaves the menu empty.
             BridgeReply::ProjectFiles(Err(_)) => {}
             BridgeReply::CopilotSignInStarted(Ok(info)) => {
                 self.apply_action(
-                    DesktopAction::CopilotSignInStarted(crate::view_model::CopilotSignIn {
+                    FrontendAction::CopilotSignInStarted(crate::view_model::CopilotSignIn {
                         provider_id: info.provider_id,
                         user_code: info.user_code,
                         verification_uri: info.verification_uri,
@@ -509,7 +509,7 @@ impl Workspace {
                 );
             }
             BridgeReply::CopilotSignInStarted(Err(message)) => {
-                self.apply_action(DesktopAction::CopilotSignInFinished(Err(message)), cx);
+                self.apply_action(FrontendAction::CopilotSignInFinished(Err(message)), cx);
             }
             BridgeReply::AskAnswered(Ok(())) => {}
             BridgeReply::Sent {
@@ -527,7 +527,7 @@ impl Workspace {
                 if !applicable {
                     return;
                 }
-                self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
+                self.apply_action(FrontendAction::MessageSent { head, entry }, cx);
                 self.begin_chat_turn(cx);
             }
             BridgeReply::Settings(Ok(loaded)) => {
@@ -548,12 +548,12 @@ impl Workspace {
                     self.paint_appearance(&state.theme, cx);
                     self.proxy_sync_pending = true;
                 }
-                self.apply_action(DesktopAction::SettingsLoaded(Box::new(state)), cx);
+                self.apply_action(FrontendAction::SettingsLoaded(Box::new(state)), cx);
             }
             BridgeReply::Exported(Ok(_summary)) => {}
             BridgeReply::Exported(Err(message)) => {
                 self.apply_action(
-                    DesktopAction::Failed(format!(
+                    FrontendAction::Failed(format!(
                         "{} {message}",
                         crate::i18n::t("export failed:", "导出失败:")
                     )),
@@ -589,7 +589,7 @@ impl Workspace {
             BridgeReply::Imported(Err(message)) => {
                 self.import_request = None;
                 self.apply_action(
-                    DesktopAction::Failed(format!(
+                    FrontendAction::Failed(format!(
                         "{} {message}",
                         crate::i18n::t("import failed:", "导入失败:")
                     )),
@@ -600,7 +600,7 @@ impl Workspace {
                 let prefill = edit;
                 let session_id = conversation.session_id.clone();
                 self.apply_action(
-                    DesktopAction::ConversationOpened((*conversation).clone()),
+                    FrontendAction::ConversationOpened((*conversation).clone()),
                     cx,
                 );
                 self.follow_session_project(&session_id, cx);
@@ -625,7 +625,7 @@ impl Workspace {
             }
             BridgeReply::SettingsSaved(Ok(revision)) => {
                 self.apply_action(
-                    DesktopAction::SettingsSaved {
+                    FrontendAction::SettingsSaved {
                         revision: revision.get(),
                         edit_epoch: self.settings_save_epoch,
                     },
@@ -642,7 +642,7 @@ impl Workspace {
                 // the just-added provider (and any other unsaved edits).
                 let stored = mcp_keys.clone();
                 self.apply_action(
-                    DesktopAction::ProviderKeySaved {
+                    FrontendAction::ProviderKeySaved {
                         provider_keys,
                         mcp_keys,
                     },
@@ -667,7 +667,7 @@ impl Workspace {
             BridgeReply::ChatCancelled(Err(_)) => {
                 if self.vm.sending {
                     self.apply_action(
-                        DesktopAction::ChatFailed {
+                        FrontendAction::ChatFailed {
                             message: CHAT_CANCELLED.to_owned(),
                             head: String::new(),
                         },
@@ -686,7 +686,7 @@ impl Workspace {
                 outcome: Ok(tools),
             } => {
                 self.apply_action(
-                    DesktopAction::McpToolsListed {
+                    FrontendAction::McpToolsListed {
                         server_id: server_id.clone(),
                         tools,
                     },
@@ -701,7 +701,7 @@ impl Workspace {
                             .position(|server| server.id == server_id)
                     })
                 {
-                    self.apply_action(DesktopAction::SettingsMcpToggled(index, true), cx);
+                    self.apply_action(FrontendAction::SettingsMcpToggled(index, true), cx);
                 }
             }
             BridgeReply::McpTools {
@@ -709,7 +709,7 @@ impl Workspace {
                 outcome: Err(message),
             } => {
                 self.pending_mcp_enable.remove(&server_id);
-                self.apply_action(DesktopAction::McpProbeFailed { server_id, message }, cx);
+                self.apply_action(FrontendAction::McpProbeFailed { server_id, message }, cx);
             }
             BridgeReply::WebBackendProbed {
                 backend_id,
@@ -726,7 +726,7 @@ impl Workspace {
                             });
                             if let Some(index) = index {
                                 self.apply_action(
-                                    DesktopAction::SettingsBackendToggled(index, true),
+                                    FrontendAction::SettingsBackendToggled(index, true),
                                     cx,
                                 );
                                 self.push_toast(
@@ -750,7 +750,7 @@ impl Workspace {
                 let refreshed = self.pending_catalog_refresh;
                 self.pending_catalog_refresh = false;
                 self.apply_action(
-                    DesktopAction::CatalogLoaded {
+                    FrontendAction::CatalogLoaded {
                         document: info.document,
                         fetched_at: info.fetched_at,
                     },
@@ -770,13 +770,13 @@ impl Workspace {
                 self.catalog_requested = false;
                 if self.pending_catalog_refresh {
                     self.pending_catalog_refresh = false;
-                    self.apply_action(DesktopAction::Failed(message), cx);
+                    self.apply_action(FrontendAction::Failed(message), cx);
                 }
             }
             BridgeReply::UiState(Ok((ui_state, repairs))) => {
                 self.note_config_repairs(&repairs, cx);
                 self.apply_action(
-                    DesktopAction::UiStateLoaded {
+                    FrontendAction::UiStateLoaded {
                         recents: ui_state.recent_projects,
                         last_project: ui_state.last_project,
                         auto_update: ui_state.auto_update,
@@ -800,11 +800,11 @@ impl Workspace {
             BridgeReply::UiState(Err(_)) => {}
             BridgeReply::UiStateSaved(Ok(())) => {}
             BridgeReply::UiStateSaved(Err(message)) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
             BridgeReply::ProjectSet(Ok(())) => {}
             BridgeReply::ProjectSet(Err(message)) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
             BridgeReply::UpdateChecked(Ok(None)) => {
                 if matches!(
@@ -814,7 +814,7 @@ impl Workspace {
                     let _ = self.take_manual_update_check();
                     return;
                 }
-                self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::UpToDate), cx);
+                self.apply_action(FrontendAction::UpdateStateChanged(UpdateState::UpToDate), cx);
                 if self.take_manual_update_check() {
                     self.push_toast(
                         crate::i18n::t("You're up to date", "已是最新版本").to_owned(),
@@ -838,7 +838,7 @@ impl Workspace {
                 // The offer action also flips the state to Available; the
                 // download button reads `last_offer`, so the two must land
                 // together or the button is dead.
-                self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
+                self.apply_action(FrontendAction::UpdateOfferFound(offer), cx);
                 if self.take_manual_update_check() {
                     self.push_toast(
                         format!("v{version} {}", crate::i18n::t("is available", "可用")),
@@ -859,7 +859,7 @@ impl Workspace {
                 }
                 let brief = mycode_app::brief_error(&message);
                 self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
+                    FrontendAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
                     cx,
                 );
                 // Manual and automatic checks both toast. The About row does
@@ -873,7 +873,7 @@ impl Workspace {
                     .last_offer
                     .as_ref()
                     .map(|offer| offer.version.clone());
-                self.apply_action(DesktopAction::UpdateStaged(prepared), cx);
+                self.apply_action(FrontendAction::UpdateStaged(prepared), cx);
                 let message = match version {
                     Some(version) => format!(
                         "v{version} {}",
@@ -885,31 +885,31 @@ impl Workspace {
                 };
                 self.push_toast(message, crate::workspace::ToastKind::Info, cx);
                 // Downloading runs on its own; installing never does.
-                self.apply_action(DesktopAction::UpdateDialogToggled(true), cx);
+                self.apply_action(FrontendAction::UpdateDialogToggled(true), cx);
             }
             BridgeReply::UpdateDownloaded(Err(message)) => {
                 let brief = mycode_app::brief_error(&message);
                 self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
+                    FrontendAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
                     cx,
                 );
                 self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
-                self.apply_action(DesktopAction::UpdateDialogToggled(true), cx);
+                self.apply_action(FrontendAction::UpdateDialogToggled(true), cx);
             }
             BridgeReply::SettingsSaved(Err(message)) => {
-                self.apply_action(DesktopAction::SettingsSaveFailed(message), cx);
+                self.apply_action(FrontendAction::SettingsSaveFailed(message), cx);
             }
             BridgeReply::SessionDeleted(Err(message)) => {
                 // The sidebar row was dropped optimistically. Put the session
                 // back from disk when the delete did not actually happen.
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
                 self.dispatch(BridgeCommand::ListSessions, cx);
                 self.dispatch(BridgeCommand::LoadUiState, cx);
             }
             BridgeReply::Created(Err(message)) => {
                 self.welcome_send_session = None;
-                self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::WelcomeSendConsumed, cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
             BridgeReply::Conversation(Err(message)) => {
                 // A failed open still ends the wait: a stale pending_open
@@ -917,9 +917,9 @@ impl Workspace {
                 self.pending_open = None;
                 if self.welcome_send_session.is_some() {
                     self.welcome_send_session = None;
-                    self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                    self.apply_action(FrontendAction::WelcomeSendConsumed, cx);
                 }
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
             BridgeReply::Sent {
                 session,
@@ -942,14 +942,14 @@ impl Workspace {
                 // probe now; entries already probing keep their gate.
                 let probing = &self.vm.mcp_probing;
                 self.pending_mcp_enable.retain(|id| probing.contains(id));
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Settings(Err(message))
             | BridgeReply::Recalled(Err(message))
             | BridgeReply::Resources(Err(message))
             | BridgeReply::AskAnswered(Err(message)) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
             // The first-frame acknowledgement carries no UI state; a lost
             // reply only means the deferred refresh ran anyway.

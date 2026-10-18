@@ -2,14 +2,14 @@
 //! sidebar's flat view of sessions and folders.
 
 use mycode_app::SessionSummary;
-pub(crate) use mycode_config::same_project_path;
+pub use mycode_config::same_project_path;
 
 use super::state::WorkspaceState;
 
 /// Short display label for a project folder path (its trailing component, or
 /// the full path when it has none).
 #[must_use]
-pub(crate) fn project_label(path: &str) -> String {
+pub fn project_label(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -19,7 +19,7 @@ pub(crate) fn project_label(path: &str) -> String {
 
 /// The folder bound to one session, if it has one.
 #[must_use]
-pub(crate) fn project_of_session<'a>(
+pub fn project_of_session<'a>(
     bindings: &'a [(String, String)],
     session_id: &str,
 ) -> Option<&'a str> {
@@ -32,7 +32,7 @@ pub(crate) fn project_of_session<'a>(
 /// Every session with its project binding, in stored order. The binding map
 /// is indexed once instead of scanned per session.
 #[must_use]
-pub(crate) fn session_rows(state: &WorkspaceState) -> Vec<(&SessionSummary, Option<&str>)> {
+pub fn session_rows(state: &WorkspaceState) -> Vec<(&SessionSummary, Option<&str>)> {
     let mut projects: std::collections::HashMap<&str, &str> =
         std::collections::HashMap::with_capacity(state.session_projects.len());
     for (session, project) in &state.session_projects {
@@ -48,7 +48,7 @@ pub(crate) fn session_rows(state: &WorkspaceState) -> Vec<(&SessionSummary, Opti
 /// Task cards belong to the open session's project. Leaving that project
 /// hides them instead of leaving another project's work on screen.
 #[must_use]
-pub(crate) fn task_surface_visible(state: &WorkspaceState) -> bool {
+pub fn task_surface_visible(state: &WorkspaceState) -> bool {
     let Some(session_id) = state
         .active
         .as_ref()
@@ -104,7 +104,7 @@ pub fn open_session_is_empty(state: &WorkspaceState) -> bool {
 /// directory. A folder only ever takes its own chats — sessions bound to a
 /// different folder are untouched.
 #[must_use]
-pub(crate) fn sessions_removed_with_root(state: &WorkspaceState, project: &str) -> Vec<String> {
+pub fn sessions_removed_with_root(state: &WorkspaceState, project: &str) -> Vec<String> {
     state
         .session_projects
         .iter()
@@ -115,7 +115,7 @@ pub(crate) fn sessions_removed_with_root(state: &WorkspaceState, project: &str) 
 
 /// Newest session already bound to `project`. `sessions` is newest-first.
 #[must_use]
-pub(crate) fn newest_session_in_project<'a>(
+pub fn newest_session_in_project<'a>(
     sessions: &'a [SessionSummary],
     bindings: &[(String, String)],
     project: &str,

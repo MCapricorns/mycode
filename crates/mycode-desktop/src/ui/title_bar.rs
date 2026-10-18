@@ -268,7 +268,7 @@ fn title_controls(
                     .hover(move |this| this.bg(hover))
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.apply_action(
-                            crate::view_model::DesktopAction::UpdateDialogToggled(true),
+                            crate::view_model::FrontendAction::UpdateDialogToggled(true),
                             cx,
                         );
                     }))

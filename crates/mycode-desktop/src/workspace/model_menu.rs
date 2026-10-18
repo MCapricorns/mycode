@@ -2,7 +2,7 @@
 use gpui_kit::{Context, Window};
 
 use super::Workspace;
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 
 impl Workspace {
     pub(crate) fn on_toggle_model_menu(
@@ -11,7 +11,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_action(DesktopAction::ModelMenuToggled(open), cx);
+        self.apply_action(FrontendAction::ModelMenuToggled(open), cx);
         if open && let Some(input) = self.model_picker_input.clone() {
             input.update(cx, |state, cx| state.set_value("", window, cx));
         }
@@ -28,7 +28,7 @@ impl Workspace {
     ) {
         self.picker_focus_pending = provider_id.is_some();
         self.apply_action(
-            DesktopAction::ModelMenuBrowse(provider_id.map(str::to_owned)),
+            FrontendAction::ModelMenuBrowse(provider_id.map(str::to_owned)),
             cx,
         );
     }
@@ -82,26 +82,26 @@ impl Workspace {
         };
         if let Some((role, _)) = role {
             self.on_set_subagent_route(&role, Some(provider), Some(model), cx);
-            self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+            self.apply_action(FrontendAction::SubagentMenuToggled(None), cx);
         } else if self.vm.model_menu_open {
             self.on_select_model_on(&provider, &model, cx);
         }
     }
 
     pub(crate) fn on_open_provider_detail(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProviderDetailOpened(Some(id.to_owned())), cx);
+        self.apply_action(FrontendAction::ProviderDetailOpened(Some(id.to_owned())), cx);
     }
 
     pub(crate) fn on_close_provider_detail(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProviderDetailOpened(None), cx);
+        self.apply_action(FrontendAction::ProviderDetailOpened(None), cx);
     }
 
     pub(crate) fn on_toggle_reasoning_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ReasoningMenuToggled(open), cx);
+        self.apply_action(FrontendAction::ReasoningMenuToggled(open), cx);
     }
 
     pub(crate) fn on_select_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProviderSelected(provider_id.to_owned()), cx);
+        self.apply_action(FrontendAction::ProviderSelected(provider_id.to_owned()), cx);
         if self
             .vm
             .settings
@@ -129,7 +129,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_select_model(&mut self, model_id: &str, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ModelSelected(model_id.to_owned()), cx);
+        self.apply_action(FrontendAction::ModelSelected(model_id.to_owned()), cx);
         if self
             .vm
             .settings
@@ -145,7 +145,7 @@ impl Workspace {
     /// the effort they already chose.
     pub(crate) fn on_select_reasoning(&mut self, level: &str, cx: &mut Context<Self>) {
         self.apply_action(
-            DesktopAction::SettingsReasoningChanged(level.to_owned()),
+            FrontendAction::SettingsReasoningChanged(level.to_owned()),
             cx,
         );
         self.persist_ui_state(cx);

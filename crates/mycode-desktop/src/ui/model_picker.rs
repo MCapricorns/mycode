@@ -18,7 +18,7 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::skin::{self, menu_panel};
-use crate::view_model::{DesktopAction, WorkspaceState};
+use crate::view_model::{FrontendAction, WorkspaceState};
 pub(crate) use crate::view_model::{model_display_name, provider_display_name};
 use crate::workspace::Workspace;
 
@@ -616,7 +616,7 @@ pub(crate) fn select_model(
                 Some(model.to_owned()),
                 cx,
             );
-            workspace.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+            workspace.apply_action(FrontendAction::SubagentMenuToggled(None), cx);
         }
     }
 }
@@ -692,7 +692,7 @@ fn session_model_row(role: &str, highlighted: bool, cx: &Context<Workspace>) -> 
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_set_subagent_route(&role, Some("inherit".to_owned()), None, cx);
-            workspace.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+            workspace.apply_action(FrontendAction::SubagentMenuToggled(None), cx);
         }))
         .child(div().text_sm().child(t("Session model", "会话模型")))
         .into_any_element()

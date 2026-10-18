@@ -383,16 +383,30 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
     // These are totals over every request of the turn (one per tool round),
     // so they exceed the context meter, which is the latest prompt alone;
     // the labels and the request count say so.
+    // The hit row shares the sum row's timeframe, so it is "本轮" only while
+    // the turn still runs and "上一轮" once the sums are the last turn's.
     let turn_row = vm
         .live_turn
         .as_ref()
         .filter(|turn| model_of(turn))
-        .map(|turn| (t("This turn, total", "本轮合计"), turn))
+        .map(|turn| {
+            (
+                t("This turn, total", "本轮合计"),
+                t("Turn cache hit", "本轮缓存命中"),
+                turn,
+            )
+        })
         .or_else(|| {
             vm.last_turn
                 .as_ref()
                 .filter(|turn| model_of(turn))
-                .map(|turn| (t("Last turn, total", "上一轮合计"), turn))
+                .map(|turn| {
+                    (
+                        t("Last turn, total", "上一轮合计"),
+                        t("Last turn cache hit", "上一轮缓存命中"),
+                        turn,
+                    )
+                })
         });
     let show_turn = turn_row.is_some();
 
@@ -429,12 +443,14 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             // cache) so the two never read as disagreeing numbers.
             let used = vm.context_used;
             let cached = vm.context_cache;
+            // The meter is one prompt, so the hit word names that scope:
+            // the turn row below it reports the summed hit instead.
             let parts = crate::view_model::context_meter_parts(
                 used,
                 context_window,
                 cached,
                 t("cached", "缓存"),
-                t("cache hit", "缓存命中"),
+                t("last request hit", "最近请求命中"),
             );
             this.child(bar_row(
                 "context",
@@ -445,7 +461,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 theme,
             ))
         })
-        .when_some(turn_row, |this, (label, turn)| {
+        .when_some(turn_row, |this, (label, hit_label, turn)| {
             let hit = crate::view_model::turn_cache_hit(turn);
             this.child(stat_line(
                 label,
@@ -463,7 +479,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             ))
             .when_some(hit, |row, percent| {
                 row.child(stat_line(
-                    t("Turn cache hit", "本轮缓存命中"),
+                    hit_label,
                     &format!("{percent}%"),
                     theme.foreground,
                     theme,

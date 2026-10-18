@@ -15,7 +15,7 @@ use gpui_kit::{
 use super::widgets::{DropdownSpec, dropdown_field, labeled_field, row_header, settings_card};
 use crate::i18n::t;
 use crate::ui::skin;
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 mod catalog;
@@ -342,7 +342,7 @@ fn provider_row(
                 .checked(enabled)
                 .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
                     workspace
-                        .apply_action(DesktopAction::SettingsProviderToggled(index, *checked), cx);
+                        .apply_action(FrontendAction::SettingsProviderToggled(index, *checked), cx);
                 })),
         )
         .child(crate::ui::icon_button(

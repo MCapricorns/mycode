@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn a_running_agent_leaves_its_step_off_the_status_line() {
         use crate::view_model::{
-            ActiveConversation, ConversationEntry, DesktopAction, EntryKind, WorkspaceState,
+            ActiveConversation, ConversationEntry, FrontendAction, EntryKind, WorkspaceState,
         };
 
         let mut state = WorkspaceState {
@@ -339,7 +339,7 @@ mod tests {
         };
         super::super::reduce(
             &mut state,
-            DesktopAction::ToolStarted {
+            FrontendAction::ToolStarted {
                 call_id: "c1".to_owned(),
                 name: "agent".to_owned(),
                 target: "scout map tokio".to_owned(),
@@ -351,7 +351,7 @@ mod tests {
         assert!(!waiting.contains("tokio"), "{waiting}");
         super::super::reduce(
             &mut state,
-            DesktopAction::ToolProgress {
+            FrontendAction::ToolProgress {
                 call_id: "c1".to_owned(),
                 name: "agent".to_owned(),
                 message: "agent|scout|tool|read src/lib.rs".to_owned(),
@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(status(&state), waiting);
         super::super::reduce(
             &mut state,
-            DesktopAction::ToolResultAppended(ConversationEntry {
+            FrontendAction::ToolResultAppended(ConversationEntry {
                 event_id: "res-c1".to_owned(),
                 kind: EntryKind::ToolResult,
                 text: "done".into(),
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn a_finished_turn_parks_every_running_clock() {
         use crate::view_model::{
-            ActiveConversation, ConversationEntry, DesktopAction, EntryKind, WorkspaceState,
+            ActiveConversation, ConversationEntry, FrontendAction, EntryKind, WorkspaceState,
         };
 
         let mut state = WorkspaceState {
@@ -398,7 +398,7 @@ mod tests {
         for call_id in ["c1", "c2"] {
             super::super::reduce(
                 &mut state,
-                DesktopAction::ToolStarted {
+                FrontendAction::ToolStarted {
                     call_id: call_id.to_owned(),
                     name: "agent".to_owned(),
                     target: "scout".to_owned(),
@@ -407,7 +407,7 @@ mod tests {
         }
         super::super::reduce(
             &mut state,
-            DesktopAction::ChatDone {
+            FrontendAction::ChatDone {
                 head: "evt-2".to_owned(),
                 entry: ConversationEntry {
                     event_id: "evt-2".to_owned(),
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn an_artisan_past_the_cap_warns_until_it_starts() {
         use crate::view_model::{
-            ActiveConversation, DesktopAction, WorkspaceState, capped_artisan_count,
+            ActiveConversation, FrontendAction, WorkspaceState, capped_artisan_count,
             capped_artisan_status,
         };
 
@@ -447,7 +447,7 @@ mod tests {
         };
         super::super::reduce(
             &mut state,
-            DesktopAction::ToolProgress {
+            FrontendAction::ToolProgress {
                 call_id: "c1".to_owned(),
                 name: String::new(),
                 message: "agent|scout|queued|map tokio".to_owned(),
@@ -455,7 +455,7 @@ mod tests {
         );
         super::super::reduce(
             &mut state,
-            DesktopAction::ToolProgress {
+            FrontendAction::ToolProgress {
                 call_id: "c2".to_owned(),
                 name: String::new(),
                 message: "agent|artisan|capped|4".to_owned(),
@@ -463,7 +463,7 @@ mod tests {
         );
         super::super::reduce(
             &mut state,
-            DesktopAction::ToolProgress {
+            FrontendAction::ToolProgress {
                 call_id: "c3".to_owned(),
                 name: String::new(),
                 message: "agent|scout|capped|4".to_owned(),
@@ -503,7 +503,7 @@ mod tests {
 
         super::super::reduce(
             &mut state,
-            DesktopAction::ToolProgress {
+            FrontendAction::ToolProgress {
                 call_id: "c2".to_owned(),
                 name: String::new(),
                 message: "agent|artisan|path|/tmp/wt".to_owned(),
@@ -520,7 +520,7 @@ mod tests {
 
         super::super::reduce(
             &mut state,
-            DesktopAction::SubagentDismissed("c1".to_owned()),
+            FrontendAction::SubagentDismissed("c1".to_owned()),
         );
         assert!(state.live_jobs.iter().all(|job| job.call_id != "c1"));
         // The cancel `x` stops its clock immediately, before the result lands.

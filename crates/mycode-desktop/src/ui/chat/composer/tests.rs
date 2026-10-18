@@ -23,6 +23,24 @@ fn composer_placeholder_asks_the_agent_without_a_product_name() {
 }
 
 #[test]
+fn cache_ring_svg_dash_tracks_the_percent_argument() {
+    let track = gpui_kit::hsla(0.6, 0.2, 0.7, 0.35);
+    let ink = gpui_kit::hsla(0.6, 0.8, 0.6, 1.0);
+    // r=6 in a 16px viewBox; the dash must cover `percent` of the circle.
+    let circumference = std::f32::consts::PI * 2. * 6.;
+    for percent in [0_u64, 25, 80, 100] {
+        let svg = cache_ring_svg(percent, track, ink);
+        let dash = circumference * percent as f32 / 100.;
+        let gap = circumference - dash;
+        let expected = format!(r#"stroke-dasharray="{dash:.2} {gap:.2}""#);
+        assert!(
+            svg.contains(&expected),
+            "{percent}% ring must draw {expected}: {svg}"
+        );
+    }
+}
+
+#[test]
 fn cache_ring_svg_preserves_track_stroke_opacity() {
     let track = gpui_kit::hsla(0.6, 0.2, 0.7, 0.35);
     let ink = gpui_kit::hsla(0.6, 0.8, 0.6, 1.0);

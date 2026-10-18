@@ -482,7 +482,7 @@ fn nav_row(
             workspace.on_show_settings_section(candidate, cx);
         }))
         .child(
-            Icon::new(candidate.icon())
+            Icon::new(crate::ui::section_icon(candidate))
                 .with_size(px(14.))
                 .text_color(if selected {
                     theme.primary

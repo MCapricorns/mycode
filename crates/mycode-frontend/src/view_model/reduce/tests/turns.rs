@@ -6,10 +6,10 @@ use crate::view_model::{ComposerSubmit, composer_submit};
 #[test]
 fn a_finished_turn_promotes_its_live_meter_to_last_turn() {
     let mut state = open(Vec::new(), None);
-    reduce(&mut state, DesktopAction::TurnArmed);
+    reduce(&mut state, FrontendAction::TurnArmed);
     reduce(
         &mut state,
-        DesktopAction::UsageSnapshot {
+        FrontendAction::UsageSnapshot {
             model: "glm-5.3".to_owned(),
             input: 100,
             context: 12_000,
@@ -27,7 +27,7 @@ fn a_finished_turn_promotes_its_live_meter_to_last_turn() {
 
     reduce(
         &mut state,
-        DesktopAction::ChatDone {
+        FrontendAction::ChatDone {
             head: "evt-2".to_owned(),
             entry: user("evt-2", "reply"),
         },
@@ -70,7 +70,7 @@ fn a_new_session_inherits_the_open_chat_model() {
     };
     reduce(
         &mut state,
-        DesktopAction::SessionCreated(mycode_app::SessionSummary {
+        FrontendAction::SessionCreated(mycode_app::SessionSummary {
             session_id: "new".to_owned(),
             root_branch_id: "branch".to_owned(),
             title: String::new(),
@@ -115,8 +115,8 @@ fn manual_and_auto_compaction_show_the_summary_in_the_chat() {
         thinking: String::new(),
     };
     // Both triggers emit this action with the written summary.
-    reduce(&mut state, DesktopAction::SummaryShown(entry.clone()));
-    reduce(&mut state, DesktopAction::SummaryShown(entry));
+    reduce(&mut state, FrontendAction::SummaryShown(entry.clone()));
+    reduce(&mut state, FrontendAction::SummaryShown(entry));
     let entries = &state.active.expect("open").entries;
     assert_eq!(entries.len(), 1);
     assert!(mycode_app::is_compaction_summary(&entries[0].text));
@@ -167,7 +167,7 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
         call_id: None,
         thinking: String::new(),
     };
-    reduce(&mut state, DesktopAction::SummaryShown(summary));
+    reduce(&mut state, FrontendAction::SummaryShown(summary));
     let held = state.active.as_ref().expect("open");
     assert!(
         held.entries
@@ -191,7 +191,7 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
     };
     reduce(
         &mut state,
-        DesktopAction::ChatDone {
+        FrontendAction::ChatDone {
             head: "reply-1".to_owned(),
             entry: reply,
         },
@@ -219,7 +219,7 @@ fn welcome_enter_holds_the_draft_until_the_new_session_opens() {
     );
     reduce(
         &mut state,
-        DesktopAction::WelcomeSendHeld("explain the build".to_owned()),
+        FrontendAction::WelcomeSendHeld("explain the build".to_owned()),
     );
     assert_eq!(
         state.pending_welcome_send.as_deref(),
@@ -228,7 +228,7 @@ fn welcome_enter_holds_the_draft_until_the_new_session_opens() {
     assert_eq!(state.composer_draft, "explain the build");
     reduce(
         &mut state,
-        DesktopAction::SessionCreated(mycode_app::SessionSummary {
+        FrontendAction::SessionCreated(mycode_app::SessionSummary {
             session_id: "new".to_owned(),
             root_branch_id: "branch".to_owned(),
             title: String::new(),
@@ -246,7 +246,7 @@ fn welcome_enter_holds_the_draft_until_the_new_session_opens() {
     assert!(state.active.is_some());
     reduce(
         &mut state,
-        DesktopAction::ConversationOpened(ActiveConversation {
+        FrontendAction::ConversationOpened(ActiveConversation {
             session_id: "new".to_owned(),
             branch_id: "branch".to_owned(),
             head: "empty".to_owned(),
@@ -267,7 +267,7 @@ fn welcome_enter_holds_the_draft_until_the_new_session_opens() {
         composer_submit(&state, &state.composer_draft),
         ComposerSubmit::Send
     );
-    reduce(&mut state, DesktopAction::WelcomeSendConsumed);
+    reduce(&mut state, FrontendAction::WelcomeSendConsumed);
     assert!(state.pending_welcome_send.is_none());
 }
 
@@ -280,7 +280,7 @@ fn welcome_enter_without_a_folder_does_not_start_a_task() {
     assert_eq!(composer_submit(&state, "hello"), ComposerSubmit::NeedFolder);
     reduce(
         &mut state,
-        DesktopAction::WelcomeSendHeld("hello".to_owned()),
+        FrontendAction::WelcomeSendHeld("hello".to_owned()),
     );
     assert!(state.pending_welcome_send.is_none());
     assert_eq!(state.composer_draft, "hello");
@@ -340,7 +340,7 @@ fn chat_failed_head_updates_conversation_without_clearing_context() {
     };
     reduce(
         &mut state,
-        DesktopAction::ChatFailed {
+        FrontendAction::ChatFailed {
             message: mycode_app::CHAT_CANCELLED.to_owned(),
             head: "evt-partial".to_owned(),
         },
@@ -355,7 +355,7 @@ fn chat_failed_head_updates_conversation_without_clearing_context() {
 
     reduce(
         &mut state,
-        DesktopAction::ChatFailed {
+        FrontendAction::ChatFailed {
             message: "provider down".to_owned(),
             head: String::new(),
         },
@@ -371,16 +371,16 @@ fn chat_failed_head_updates_conversation_without_clearing_context() {
 #[test]
 fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
     let mut state = open(Vec::new(), None);
-    reduce(&mut state, DesktopAction::TurnArmed);
+    reduce(&mut state, FrontendAction::TurnArmed);
     reduce(
         &mut state,
-        DesktopAction::MessageQueued("follow up".to_owned()),
+        FrontendAction::MessageQueued("follow up".to_owned()),
     );
     state.pending_steers.push("steer".to_owned());
     assert!(state.sending);
     reduce(
         &mut state,
-        DesktopAction::SessionCreated(mycode_app::SessionSummary {
+        FrontendAction::SessionCreated(mycode_app::SessionSummary {
             session_id: "new".to_owned(),
             root_branch_id: "branch".to_owned(),
             title: String::new(),
@@ -413,7 +413,7 @@ fn streaming_text_stops_at_the_character_cap() {
     // character cap, so both paths are exercised.
     let chunk = "\u{4e2d}".repeat(1024);
     for _ in 0..(mycode_app::MAX_STREAMING_CHARS / 1024 + 4) {
-        reduce(&mut state, DesktopAction::ChatDelta(chunk.clone()));
+        reduce(&mut state, FrontendAction::ChatDelta(chunk.clone()));
     }
     let text = &state
         .active
@@ -449,7 +449,7 @@ fn steer_committed_appends_the_entry_and_moves_the_head() {
     };
     reduce(
         &mut state,
-        DesktopAction::SteerCommitted {
+        FrontendAction::SteerCommitted {
             session_id: "other".to_owned(),
             head: "evt-ignored".to_owned(),
             entry: entry.clone(),
@@ -466,7 +466,7 @@ fn steer_committed_appends_the_entry_and_moves_the_head() {
     );
     reduce(
         &mut state,
-        DesktopAction::SteerCommitted {
+        FrontendAction::SteerCommitted {
             session_id: "ses".to_owned(),
             head: "evt-steer".to_owned(),
             entry,
@@ -490,22 +490,22 @@ fn ending_a_turn_clears_pending_ask_and_subagent_detail_window() {
     state.sending = true;
     reduce(
         &mut state,
-        DesktopAction::AskRequested(vec![prompt.clone()]),
+        FrontendAction::AskRequested(vec![prompt.clone()]),
     );
     reduce(
         &mut state,
-        DesktopAction::AskChoicePicked {
+        FrontendAction::AskChoicePicked {
             index: 0,
             answer: "a".to_owned(),
         },
     );
     reduce(
         &mut state,
-        DesktopAction::SubagentWindowChanged(Some("call-1".to_owned())),
+        FrontendAction::SubagentWindowChanged(Some("call-1".to_owned())),
     );
     reduce(
         &mut state,
-        DesktopAction::ChatFailed {
+        FrontendAction::ChatFailed {
             message: mycode_app::CHAT_CANCELLED.to_owned(),
             head: String::new(),
         },
@@ -515,14 +515,14 @@ fn ending_a_turn_clears_pending_ask_and_subagent_detail_window() {
     assert!(state.subagent_window.is_none());
 
     state.sending = true;
-    reduce(&mut state, DesktopAction::AskRequested(vec![prompt]));
+    reduce(&mut state, FrontendAction::AskRequested(vec![prompt]));
     reduce(
         &mut state,
-        DesktopAction::SubagentWindowChanged(Some("call-2".to_owned())),
+        FrontendAction::SubagentWindowChanged(Some("call-2".to_owned())),
     );
     reduce(
         &mut state,
-        DesktopAction::ChatDone {
+        FrontendAction::ChatDone {
             head: "evt-done".to_owned(),
             entry: user("evt-done", "done"),
         },
@@ -538,7 +538,7 @@ fn stragglers_after_the_turn_do_not_resurrect_running_state() {
     state.sending = true;
     reduce(
         &mut state,
-        DesktopAction::ToolStarted {
+        FrontendAction::ToolStarted {
             call_id: "c1".to_owned(),
             name: "agent".to_owned(),
             target: "scout map".to_owned(),
@@ -546,7 +546,7 @@ fn stragglers_after_the_turn_do_not_resurrect_running_state() {
     );
     reduce(
         &mut state,
-        DesktopAction::ChatDone {
+        FrontendAction::ChatDone {
             head: "evt-2".to_owned(),
             entry: user("evt-2", "reply"),
         },
@@ -558,16 +558,16 @@ fn stragglers_after_the_turn_do_not_resurrect_running_state() {
     // live job, the status line, or a streaming bubble.
     reduce(
         &mut state,
-        DesktopAction::ToolProgress {
+        FrontendAction::ToolProgress {
             call_id: "c1".to_owned(),
             name: String::new(),
             message: "agent|scout|step|still running".to_owned(),
         },
     );
-    reduce(&mut state, DesktopAction::ChatDelta("tail".to_owned()));
+    reduce(&mut state, FrontendAction::ChatDelta("tail".to_owned()));
     reduce(
         &mut state,
-        DesktopAction::UsageSnapshot {
+        FrontendAction::UsageSnapshot {
             model: "m".to_owned(),
             input: 1,
             context: 1,
@@ -594,7 +594,7 @@ fn reopening_a_session_with_a_live_turn_restores_sending() {
     let mut state = open(Vec::new(), None);
     reduce(
         &mut state,
-        DesktopAction::ConversationOpened(ActiveConversation {
+        FrontendAction::ConversationOpened(ActiveConversation {
             session_id: "other".to_owned(),
             branch_id: "br".to_owned(),
             head: "evt-head".to_owned(),
@@ -610,7 +610,7 @@ fn reopening_a_session_with_a_live_turn_restores_sending() {
     // Live events for the in-flight turn flow into the view again.
     reduce(
         &mut state,
-        DesktopAction::ToolProgress {
+        FrontendAction::ToolProgress {
             call_id: "c1".to_owned(),
             name: String::new(),
             message: "agent|scout|step|mapping".to_owned(),
@@ -635,7 +635,7 @@ fn compacting_locks_the_composer_and_finish_advances_the_head() {
         }),
         ..WorkspaceState::default()
     };
-    reduce(&mut state, DesktopAction::CompactArmed);
+    reduce(&mut state, FrontendAction::CompactArmed);
     assert!(state.compacting);
     // A draft typed while the card is up is still in the composer, and a
     // queued message waits — nothing is dropped mid-compact.
@@ -643,7 +643,7 @@ fn compacting_locks_the_composer_and_finish_advances_the_head() {
     state.queued.push("queued".to_owned());
     reduce(
         &mut state,
-        DesktopAction::CompactFinished {
+        FrontendAction::CompactFinished {
             ok: true,
             head: "evt-sum".to_owned(),
         },
@@ -673,7 +673,7 @@ fn a_failed_compact_clears_the_lock_without_moving_the_head() {
     };
     reduce(
         &mut state,
-        DesktopAction::CompactFinished {
+        FrontendAction::CompactFinished {
             ok: false,
             head: "e1".to_owned(),
         },

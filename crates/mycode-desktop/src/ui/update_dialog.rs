@@ -103,7 +103,7 @@ pub(super) fn render_update_dialog(
                 .bg(super::skin::modal_scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.apply_action(
-                        crate::view_model::DesktopAction::UpdateDialogToggled(false),
+                        crate::view_model::FrontendAction::UpdateDialogToggled(false),
                         cx,
                     );
                 })),
@@ -162,7 +162,7 @@ pub(super) fn render_update_dialog(
                             super::skin::glass_button("update-dialog-later", false, theme)
                                 .on_click(cx.listener(|workspace, _, _, cx| {
                                     workspace.apply_action(
-                                        crate::view_model::DesktopAction::UpdateDialogToggled(
+                                        crate::view_model::FrontendAction::UpdateDialogToggled(
                                             false,
                                         ),
                                         cx,

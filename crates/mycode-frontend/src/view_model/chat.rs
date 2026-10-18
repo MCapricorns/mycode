@@ -4,7 +4,7 @@
 
 /// Composer mention autocomplete: `@` files or `/` commands, skills, and MCP.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ComposerMention {
+pub struct ComposerMention {
     /// Trigger kind active in the draft.
     pub kind: MentionKind,
     /// Typed text after the trigger character.
@@ -15,7 +15,7 @@ pub(crate) struct ComposerMention {
 
 /// One autocomplete row.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MentionItem {
+pub struct MentionItem {
     /// Token passed to accept: `/new`, `/slug`, `mcp:<server>`, or a file path.
     pub insert: String,
     /// Secondary label. Command labels are English ids resolved at render.
@@ -26,7 +26,7 @@ pub(crate) struct MentionItem {
 
 /// Section of a composer autocomplete row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MentionGroup {
+pub enum MentionGroup {
     /// `@` file path.
     File,
     /// Built-in composer command.
@@ -40,7 +40,7 @@ pub(crate) enum MentionGroup {
 /// One running `agent` call. Finished jobs drop out of the list once
 /// they complete.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct LiveJob {
+pub struct LiveJob {
     /// Provider-assigned call id.
     pub call_id: String,
     /// Catalog role when known (`scout`, `artisan`, …).
@@ -67,7 +67,7 @@ impl LiveJob {
     /// A job whose progress arrived before its role did falls back to the
     /// localized generic label.
     #[must_use]
-    pub(crate) fn title(&self) -> String {
+    pub fn title(&self) -> String {
         let role = if self.role.is_empty() {
             crate::i18n::t("Subagent", "子代理")
         } else {
@@ -83,7 +83,7 @@ impl LiveJob {
     /// Progress line for a row. Token steps are localized; a cap warning is
     /// already a sentence.
     #[must_use]
-    pub(crate) fn step_label(&self) -> String {
+    pub fn step_label(&self) -> String {
         match self.step.as_str() {
             "" | "starting" => crate::i18n::t("starting", "启动中").to_owned(),
             "queued" => crate::i18n::t("queued", "排队中").to_owned(),
@@ -94,7 +94,7 @@ impl LiveJob {
     /// Milliseconds this job has been running. A defaulted job (`started_ms`
     /// of 0) reports no time rather than a duration since the epoch.
     #[must_use]
-    pub(crate) fn elapsed_ms(&self) -> u64 {
+    pub fn elapsed_ms(&self) -> u64 {
         if self.started_ms == 0 {
             return 0;
         }
@@ -107,7 +107,7 @@ impl LiveJob {
 /// `42s`, `3m 05s`, `1h 02m` — compact enough for a status line tail.
 /// Seconds granularity is all a row that repaints once a second can show.
 #[must_use]
-pub(crate) fn elapsed_label(ms: u64) -> String {
+pub fn elapsed_label(ms: u64) -> String {
     let total = ms / 1_000;
     if total < 60 {
         format!("{total}s")
@@ -120,7 +120,7 @@ pub(crate) fn elapsed_label(ms: u64) -> String {
 
 /// How many listed jobs are artisans waiting past the concurrency cap.
 #[must_use]
-pub(crate) fn capped_artisan_count(jobs: &[LiveJob]) -> usize {
+pub fn capped_artisan_count(jobs: &[LiveJob]) -> usize {
     jobs.iter()
         .filter(|job| job.capped && job.role == "artisan")
         .count()
@@ -128,7 +128,7 @@ pub(crate) fn capped_artisan_count(jobs: &[LiveJob]) -> usize {
 
 /// Status and banner copy for artisans queued past the concurrency cap.
 #[must_use]
-pub(crate) fn capped_artisan_status(count: usize) -> String {
+pub fn capped_artisan_status(count: usize) -> String {
     if count == 1 {
         crate::i18n::t(
             "1 artisan queued past the concurrency cap",
@@ -150,7 +150,7 @@ pub(crate) fn capped_artisan_status(count: usize) -> String {
 /// call already names its task, so the line only says the turn is waiting;
 /// a cap warning is the one detail it still carries.
 #[must_use]
-pub(crate) fn subagent_wait_status(jobs: &[LiveJob]) -> Option<String> {
+pub fn subagent_wait_status(jobs: &[LiveJob]) -> Option<String> {
     let capped = capped_artisan_count(jobs);
     match jobs.len() {
         0 => None,
@@ -168,7 +168,7 @@ pub(crate) fn subagent_wait_status(jobs: &[LiveJob]) -> Option<String> {
 /// shows a cancel `x`. A finished call, a stopped turn, or a job that has
 /// already left the live list shows none.
 #[must_use]
-pub(crate) fn subagent_cancellable(
+pub fn subagent_cancellable(
     call_id: Option<&str>,
     finished: bool,
     turn_running: bool,
@@ -183,7 +183,7 @@ pub(crate) fn subagent_cancellable(
 
 /// The mention trigger parsed from the composer draft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MentionKind {
+pub enum MentionKind {
     /// `@` file reference against the session project.
     File,
     /// `/` command at the very start of the draft.
@@ -191,7 +191,7 @@ pub(crate) enum MentionKind {
 }
 
 /// Built-in slash commands offered by the composer menu.
-pub(crate) const COMPOSER_COMMANDS: &[(&str, &str)] = &[
+pub const COMPOSER_COMMANDS: &[(&str, &str)] = &[
     ("/new", "new chat"),
     ("/compact", "compact context"),
     ("/settings", "settings"),
@@ -200,7 +200,7 @@ pub(crate) const COMPOSER_COMMANDS: &[(&str, &str)] = &[
 /// Whether `title` matches a sidebar filter. An empty filter matches every
 /// title. The comparison is case-insensitive and does not touch disk.
 #[must_use]
-pub(crate) fn session_title_matches(title: &str, filter: &str) -> bool {
+pub fn session_title_matches(title: &str, filter: &str) -> bool {
     let filter = filter.trim();
     filter.is_empty() || title.to_lowercase().contains(&filter.to_lowercase())
 }

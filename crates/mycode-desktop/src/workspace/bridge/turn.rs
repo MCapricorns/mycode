@@ -5,7 +5,7 @@ use gpui_kit::{Context, Window};
 use mycode_app::{BranchId, BridgeCommand, SessionId};
 
 use super::failed_start;
-use crate::view_model::{DesktopAction, EntryKind};
+use crate::view_model::{FrontendAction, EntryKind};
 use crate::workspace::Workspace;
 
 impl Workspace {
@@ -82,7 +82,7 @@ impl Workspace {
         let provider_id = provider.id.clone();
         // Locks the composer and shows the waiting card until
         // `CompactFinished` lands (success, failure, or a cancelled run).
-        self.apply_action(DesktopAction::CompactArmed, cx);
+        self.apply_action(FrontendAction::CompactArmed, cx);
         self.dispatch(
             BridgeCommand::CompactSession {
                 session,
@@ -230,7 +230,7 @@ impl Workspace {
         if self.vm.queued.len() >= crate::view_model::MAX_QUEUED_MESSAGES {
             return;
         }
-        self.apply_action(DesktopAction::MessageQueued(draft), cx);
+        self.apply_action(FrontendAction::MessageQueued(draft), cx);
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         cx.notify();
@@ -248,7 +248,7 @@ impl Workspace {
             return;
         }
         let draft = self.vm.queued[0].clone();
-        self.apply_action(DesktopAction::QueuedMessageTaken, cx);
+        self.apply_action(FrontendAction::QueuedMessageTaken, cx);
         self.send_text(draft, false, None, cx);
     }
 
@@ -270,8 +270,8 @@ impl Workspace {
             return;
         }
         self.welcome_send_session = None;
-        self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
-        self.apply_action(DesktopAction::ComposerChanged(String::new()), cx);
+        self.apply_action(FrontendAction::WelcomeSendConsumed, cx);
+        self.apply_action(FrontendAction::ComposerChanged(String::new()), cx);
         self.pending_composer_prefill = Some(String::new());
         self.send_text(text, true, None, cx);
     }
@@ -290,7 +290,7 @@ impl Workspace {
             return;
         };
         self.queue_hold_on_return = false;
-        self.apply_action(DesktopAction::TurnArmed, cx);
+        self.apply_action(FrontendAction::TurnArmed, cx);
         if clear_composer {
             self.vm.composer_draft.clear();
             if let Some(window) = window {

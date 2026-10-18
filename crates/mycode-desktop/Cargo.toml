@@ -21,6 +21,7 @@ notify = "8.2.0"
 chrono.workspace = true
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
+mycode-frontend = { path = "../mycode-frontend" }
 mycode-providers = { path = "../mycode-providers" }
 mycode-tools = { path = "../mycode-tools" }
 # The global allocator (mimalloc) and VC-LTL link live in the leaf crates

@@ -16,7 +16,7 @@ use gpui_kit::{
 use super::widgets::settings_card;
 use crate::i18n::t;
 use crate::ui::skin;
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 pub(super) fn render_provider_detail(
@@ -119,7 +119,7 @@ pub(super) fn render_provider_detail(
                                 .checked(enabled)
                                 .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
                                     workspace.apply_action(
-                                        DesktopAction::SettingsProviderToggled(index, *checked),
+                                        FrontendAction::SettingsProviderToggled(index, *checked),
                                         cx,
                                     );
                                 })),
@@ -172,7 +172,7 @@ fn models_card(
             .disabled(disabled)
             .on_click(cx.listener(move |workspace, _, _, cx| {
                 workspace.apply_action(
-                    DesktopAction::SettingsModelsShown {
+                    FrontendAction::SettingsModelsShown {
                         provider: provider_id.clone(),
                         models: models.clone(),
                         shown: show,
@@ -251,7 +251,7 @@ fn models_card(
                     .checked(visible)
                     .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
                         workspace.apply_action(
-                            DesktopAction::SettingsModelsShown {
+                            FrontendAction::SettingsModelsShown {
                                 provider: provider_id.clone(),
                                 models: vec![model.clone()],
                                 shown: *checked,

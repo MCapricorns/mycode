@@ -93,7 +93,7 @@ fn install_surface_panic_hook() {
             .map(str::to_owned)
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| info.to_string());
-        if let Some(notice) = mycode_desktop::cli::surface_failure_message(&message) {
+        if let Some(notice) = mycode_frontend::cli::surface_failure_message(&message) {
             eprintln!("{notice}");
             std::process::exit(1);
         }
@@ -103,33 +103,22 @@ fn install_surface_panic_hook() {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match mycode_app::parse_apply_update_args(&args) {
-        Ok(Some(request)) => {
-            let code = match mycode_app::run_apply_update_helper(&request) {
-                Ok(()) => 0,
-                Err(error) => {
-                    eprintln!("updater: {error}");
-                    1
-                }
-            };
-            std::process::exit(code);
-        }
-        Err(error) => {
-            eprintln!("updater: {error}");
-            std::process::exit(1);
-        }
-        Ok(None) => {}
+    // The self-update helper entry is shared with every `mycode*` binary.
+    if let Some(code) = mycode_frontend::cli::apply_update_from_args(&args) {
+        std::process::exit(code);
     }
-    if let Some(action) = mycode_desktop::cli::early_action(&args) {
+    if let Some(action) = mycode_frontend::cli::early_action(&args) {
         let text = match action {
-            mycode_desktop::cli::EarlyAction::Version => {
-                format!("{}\n", mycode_desktop::cli::version_line())
+            mycode_frontend::cli::EarlyAction::Version => {
+                format!("{}\n", mycode_frontend::cli::version_line())
             }
-            mycode_desktop::cli::EarlyAction::Help => mycode_desktop::cli::help_text(),
-            mycode_desktop::cli::EarlyAction::Unknown(flag) => {
+            mycode_frontend::cli::EarlyAction::Help => {
+                mycode_frontend::cli::help_text("mycode-desktop")
+            }
+            mycode_frontend::cli::EarlyAction::Unknown(flag) => {
                 emit_early_text(&format!(
                     "mycode: unknown option {flag}\n\n{}",
-                    mycode_desktop::cli::help_text()
+                    mycode_frontend::cli::help_text("mycode-desktop")
                 ));
                 std::process::exit(1);
             }

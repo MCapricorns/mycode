@@ -1,5 +1,5 @@
 use super::{ReplyScope, failed_start};
-use crate::view_model::{DesktopAction, WorkspaceState, reduce};
+use crate::view_model::{FrontendAction, WorkspaceState, reduce};
 use mycode_app::ActiveConversation;
 
 fn conversation(session: &str, branch: &str) -> ActiveConversation {
@@ -22,7 +22,7 @@ fn rejected_start_releases_sending_and_removes_the_waiting_bubble() {
         active: Some(conversation("a", "branch")),
         ..WorkspaceState::default()
     };
-    reduce(&mut state, DesktopAction::TurnArmed);
+    reduce(&mut state, FrontendAction::TurnArmed);
     assert!(state.sending);
     assert!(state.active.as_ref().unwrap().streaming.is_some());
     reduce(&mut state, failed_start("start refused".to_owned()));
@@ -60,7 +60,7 @@ fn superseded_open_and_file_search_replies_are_ignored() {
     assert!(ReplyScope::Open("new".to_owned()).applies(&state, Some("new")));
     reduce(
         &mut state,
-        DesktopAction::ComposerChanged("@second".to_owned()),
+        FrontendAction::ComposerChanged("@second".to_owned()),
     );
     assert!(
         !ReplyScope::Mention {

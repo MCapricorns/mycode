@@ -1,5 +1,5 @@
 //! Reducer internals: the pure transition functions behind
-//! [`super::reduce`]. The `DesktopAction` mutations live here; the parent
+//! [`super::reduce`]. The `FrontendAction` mutations live here; the parent
 //! module declares the state, action, and projection types. The dispatch
 //! match lives here; arm bodies with their own logic live in the topical
 //! submodules.
@@ -14,15 +14,15 @@ mod usage;
 use mycode_app::CHAT_CANCELLED;
 
 use super::{
-    ActiveConversation, DesktopAction, MentionKind, TurnStats, UpdateState, WorkspaceState,
+    ActiveConversation, FrontendAction, MentionKind, TurnStats, UpdateState, WorkspaceState,
 };
 
-pub(crate) use self::models::{
+pub use self::models::{
     preset_pick, reasoning_levels_for, selected_model_supports_reasoning,
     selected_reasoning_levels, strongest_reasoning_level,
 };
 
-pub(crate) use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
+pub use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
 use self::composer::{parse_mention, slash_items};
 use self::jobs::{
     drop_live_job, refresh_subagent_status, retire_live_jobs, tool_progress, tool_started,
@@ -111,49 +111,49 @@ fn push_entry_once(conversation: &mut ActiveConversation, entry: mycode_app::Con
 }
 
 /// Applies one action to the state.
-pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
+pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
     // A paged-back window stays readable through ordinary UI actions. Only
     // new tail activity (or opening a new snapshot) applies the live ceiling.
     let trim_window = matches!(
         action,
-        DesktopAction::TurnArmed
-            | DesktopAction::MessageSent { .. }
-            | DesktopAction::SteerCommitted { .. }
-            | DesktopAction::AssistantStepCommitted(_)
-            | DesktopAction::ToolStarted { .. }
-            | DesktopAction::ToolResultAppended(_)
-            | DesktopAction::ChatDone { .. }
-            | DesktopAction::ChatFailed { .. }
-            | DesktopAction::SummaryShown(_)
-            | DesktopAction::ConversationOpened(_)
+        FrontendAction::TurnArmed
+            | FrontendAction::MessageSent { .. }
+            | FrontendAction::SteerCommitted { .. }
+            | FrontendAction::AssistantStepCommitted(_)
+            | FrontendAction::ToolStarted { .. }
+            | FrontendAction::ToolResultAppended(_)
+            | FrontendAction::ChatDone { .. }
+            | FrontendAction::ChatFailed { .. }
+            | FrontendAction::SummaryShown(_)
+            | FrontendAction::ConversationOpened(_)
     );
     let touches_providers = matches!(
         action,
-        DesktopAction::SettingsLoaded(_)
-            | DesktopAction::SettingsProviderAdded(_)
-            | DesktopAction::SettingsProviderRemoved(_)
-            | DesktopAction::SettingsProviderToggled(_, _)
-            | DesktopAction::SettingsSaved { .. }
-            | DesktopAction::UiStateLoaded { .. }
+        FrontendAction::SettingsLoaded(_)
+            | FrontendAction::SettingsProviderAdded(_)
+            | FrontendAction::SettingsProviderRemoved(_)
+            | FrontendAction::SettingsProviderToggled(_, _)
+            | FrontendAction::SettingsSaved { .. }
+            | FrontendAction::UiStateLoaded { .. }
     );
     // Streaming ticks arrive many times a second and change no catalog the
     // `/` menu lists; rebuilding it for each one is wasted work.
     let streaming_tick = matches!(
         action,
-        DesktopAction::ChatDelta(_)
-            | DesktopAction::ChatThinkingDelta(_)
-            | DesktopAction::ToolProgress { .. }
-            | DesktopAction::UsageSnapshot { .. }
+        FrontendAction::ChatDelta(_)
+            | FrontendAction::ChatThinkingDelta(_)
+            | FrontendAction::ToolProgress { .. }
+            | FrontendAction::UsageSnapshot { .. }
     );
     match action {
-        DesktopAction::SessionsLoaded(mut sessions) => {
+        FrontendAction::SessionsLoaded(mut sessions) => {
             let active_id = state.active.as_ref().map(|c| c.session_id.as_str());
             for session in &mut sessions {
                 session.active = active_id == Some(session.session_id.as_str());
             }
             state.sessions = sessions;
         }
-        DesktopAction::SessionTitled { session_id, title } => {
+        FrontendAction::SessionTitled { session_id, title } => {
             if let Some(row) = state
                 .sessions
                 .iter_mut()
@@ -162,7 +162,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 row.title = title;
             }
         }
-        DesktopAction::SessionCreated(mut summary) => {
+        FrontendAction::SessionCreated(mut summary) => {
             // A new chat keeps the model already on the picker and pins it,
             // so leaving and coming back does not jump to the first enabled
             // model. The previous chat's pin is written first.
@@ -199,7 +199,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             // starts with an empty meter.
             clear_session_usage(state);
         }
-        DesktopAction::SessionDeleted => {
+        FrontendAction::SessionDeleted => {
             state.active = None;
             reset_turn_view(state);
             state.error = None;
@@ -207,7 +207,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             clear_session_usage(state);
             restore_live_reasoning(state);
         }
-        DesktopAction::ConversationParked => {
+        FrontendAction::ConversationParked => {
             state.active = None;
             for session in &mut state.sessions {
                 session.active = false;
@@ -220,7 +220,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.resources.clear();
             clear_session_usage(state);
         }
-        DesktopAction::ConversationOpened(conversation) => {
+        FrontendAction::ConversationOpened(conversation) => {
             let had_other = state
                 .active
                 .as_ref()
@@ -289,12 +289,12 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.mention = None;
             }
         }
-        DesktopAction::ComposerChanged(text) => {
+        FrontendAction::ComposerChanged(text) => {
             let bounded = bounded_draft(text);
             state.mention = parse_mention(&bounded);
             state.composer_draft = bounded;
         }
-        DesktopAction::WelcomeSendHeld(text) => {
+        FrontendAction::WelcomeSendHeld(text) => {
             if state.pending_welcome_send.is_none()
                 && let ComposerSubmit::StartTask(text) = composer_submit(state, &text)
             {
@@ -304,10 +304,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 }
             }
         }
-        DesktopAction::WelcomeSendConsumed => {
+        FrontendAction::WelcomeSendConsumed => {
             state.pending_welcome_send = None;
         }
-        DesktopAction::MentionFiles(files) => {
+        FrontendAction::MentionFiles(files) => {
             if let Some(mention) = state.mention.as_mut()
                 && mention.kind == MentionKind::File
             {
@@ -321,20 +321,20 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                     .collect();
             }
         }
-        DesktopAction::CopilotSignInStarted(info) => {
+        FrontendAction::CopilotSignInStarted(info) => {
             state.copilot_sign_in = Some(info);
             state.copilot_error = None;
         }
-        DesktopAction::CopilotSignInFinished(outcome) => {
+        FrontendAction::CopilotSignInFinished(outcome) => {
             state.copilot_sign_in = None;
             state.copilot_error = outcome.err();
         }
-        DesktopAction::MessageQueued(text) => {
+        FrontendAction::MessageQueued(text) => {
             queue_message(state, text);
             state.composer_draft.clear();
             state.mention = None;
         }
-        DesktopAction::SteersReturned(texts) => {
+        FrontendAction::SteersReturned(texts) => {
             for text in texts {
                 if let Some(position) = state.pending_steers.iter().position(|sent| *sent == text) {
                     state.pending_steers.remove(position);
@@ -342,43 +342,43 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 queue_message(state, text);
             }
         }
-        DesktopAction::QueuedMessageRemoved(index) => {
+        FrontendAction::QueuedMessageRemoved(index) => {
             if index < state.queued.len() {
                 state.queued.remove(index);
             }
             state.queue_paused &= !state.queued.is_empty();
         }
-        DesktopAction::QueueCleared => {
+        FrontendAction::QueueCleared => {
             state.queued.clear();
             state.queue_paused = false;
         }
-        DesktopAction::QueuedMessageTaken => {
+        FrontendAction::QueuedMessageTaken => {
             if !state.queued.is_empty() {
                 state.queued.remove(0);
             }
             state.queue_paused &= !state.queued.is_empty();
         }
-        DesktopAction::QueuePaused(paused) => {
+        FrontendAction::QueuePaused(paused) => {
             state.queue_paused = paused && !state.queued.is_empty();
         }
-        DesktopAction::QueuedMessagePromoted(index) => {
+        FrontendAction::QueuedMessagePromoted(index) => {
             if index < state.queued.len() {
                 let item = state.queued.remove(index);
                 state.queued.insert(0, item);
             }
         }
-        DesktopAction::SubagentWindowChanged(call_id) => {
+        FrontendAction::SubagentWindowChanged(call_id) => {
             state.subagent_window = call_id;
         }
-        DesktopAction::ChangesPanelToggled(open) => {
+        FrontendAction::ChangesPanelToggled(open) => {
             state.changes_panel_open = open;
         }
-        DesktopAction::SubagentDismissed(call_id) => {
+        FrontendAction::SubagentDismissed(call_id) => {
             if drop_live_job(state, &call_id) && state.sending {
                 refresh_subagent_status(state);
             }
         }
-        DesktopAction::MessageSent { head, entry } => {
+        FrontendAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.head = head;
                 conversation.entries.push(entry);
@@ -386,7 +386,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.composer_draft.clear();
             state.mention = None;
         }
-        DesktopAction::TurnArmed => {
+        FrontendAction::TurnArmed => {
             state.sending = true;
             state.error = None;
             set_streaming_status(
@@ -394,7 +394,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 crate::i18n::t("Waiting for the model", "等待模型响应"),
             );
         }
-        DesktopAction::ChatDelta(delta) => {
+        FrontendAction::ChatDelta(delta) => {
             // Events arriving after the turn's Done/Failed are stragglers
             // from work the view already closed; applying them would
             // resurrect a streaming bubble over a finished transcript.
@@ -402,7 +402,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 append_streaming(state, false, delta);
             }
         }
-        DesktopAction::ToolStarted {
+        FrontendAction::ToolStarted {
             call_id,
             name,
             target,
@@ -411,7 +411,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 tool_started(state, call_id, name, target);
             }
         }
-        DesktopAction::ToolProgress {
+        FrontendAction::ToolProgress {
             call_id,
             name,
             message,
@@ -422,7 +422,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 tool_progress(state, call_id, name, message);
             }
         }
-        DesktopAction::ToolResultAppended(entry) => {
+        FrontendAction::ToolResultAppended(entry) => {
             if let Some(call_id) = entry.call_id.as_deref()
                 && drop_live_job(state, call_id)
                 && state.sending
@@ -433,9 +433,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.entries.push(entry);
             }
         }
-        DesktopAction::ResourcesLoaded(files) => state.resources = files,
-        DesktopAction::SkillsLoaded(skills) => state.skills = skills,
-        DesktopAction::UsageSnapshot {
+        FrontendAction::ResourcesLoaded(files) => state.resources = files,
+        FrontendAction::SkillsLoaded(skills) => state.skills = skills,
+        FrontendAction::UsageSnapshot {
             model,
             input,
             context,
@@ -466,7 +466,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             // zero leaves the watch armed for the next real reading.
             observe_cache_hit(state, context, context_cache);
         }
-        DesktopAction::AskRequested(rows) => {
+        FrontendAction::AskRequested(rows) => {
             // A late ask after the turn closed must not reopen the modal.
             if !state.sending {
                 return;
@@ -474,19 +474,19 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.ask_answers = vec![String::new(); rows.len()];
             state.pending_ask = Some(rows);
         }
-        DesktopAction::AskChoicePicked { index, answer } => {
+        FrontendAction::AskChoicePicked { index, answer } => {
             if let Some(slot) = state.ask_answers.get_mut(index) {
                 *slot = answer;
             }
         }
-        DesktopAction::AskAnswered => {
+        FrontendAction::AskAnswered => {
             state.pending_ask = None;
             state.ask_answers.clear();
         }
-        DesktopAction::SessionFilterChanged(query) => state.session_filter = query,
-        DesktopAction::HistoryLoadStarted => state.history_loading = true,
-        DesktopAction::HistoryLoadFinished => state.history_loading = false,
-        DesktopAction::OlderLoaded {
+        FrontendAction::SessionFilterChanged(query) => state.session_filter = query,
+        FrontendAction::HistoryLoadStarted => state.history_loading = true,
+        FrontendAction::HistoryLoadFinished => state.history_loading = false,
+        FrontendAction::OlderLoaded {
             session_id,
             entries,
             older_before,
@@ -505,12 +505,12 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 active.older_before = older_before;
             }
         }
-        DesktopAction::ChatThinkingDelta(delta) => {
+        FrontendAction::ChatThinkingDelta(delta) => {
             if state.sending {
                 append_streaming(state, true, delta);
             }
         }
-        DesktopAction::SummaryShown(entry) => {
+        FrontendAction::SummaryShown(entry) => {
             if summary_waits_for_the_reply(state) {
                 if state
                     .pending_summary
@@ -523,11 +523,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 push_entry_once(conversation, entry);
             }
         }
-        DesktopAction::CompactArmed => {
+        FrontendAction::CompactArmed => {
             state.compacting = true;
             state.error = None;
         }
-        DesktopAction::CompactFinished { ok: _, head } => {
+        FrontendAction::CompactFinished { ok: _, head } => {
             state.compacting = false;
             if !head.is_empty()
                 && let Some(conversation) = state.active.as_mut()
@@ -535,7 +535,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.head = head;
             }
         }
-        DesktopAction::AssistantStepCommitted(entry) => {
+        FrontendAction::AssistantStepCommitted(entry) => {
             if let Some(conversation) = state.active.as_mut() {
                 push_entry_once(conversation, entry);
             }
@@ -555,7 +555,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 streaming.thinking.clear();
             }
         }
-        DesktopAction::ChatDone { head, entry } => {
+        FrontendAction::ChatDone { head, entry } => {
             // Steers that did not commit come back as `SteersReturned`.
             state.pending_steers.clear();
             let summary = state.pending_summary.take();
@@ -576,7 +576,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             // the turn's sums, so it becomes the completed-turn stats.
             state.last_turn = state.live_turn.take();
         }
-        DesktopAction::ChatFailed { message, head } => {
+        FrontendAction::ChatFailed { message, head } => {
             state.pending_steers.clear();
             let summary = state.pending_summary.take();
             if let Some(conversation) = state.active.as_mut() {
@@ -597,8 +597,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             end_turn(state);
             state.live_turn = None;
         }
-        DesktopAction::CacheBreakArmed(cause) => arm_cache_watch(state, cause),
-        DesktopAction::SteerCommitted {
+        FrontendAction::CacheBreakArmed(cause) => arm_cache_watch(state, cause),
+        FrontendAction::SteerCommitted {
             session_id,
             head,
             entry,
@@ -619,22 +619,22 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 push_entry_once(conversation, entry);
             }
         }
-        DesktopAction::Failed(message) => {
+        FrontendAction::Failed(message) => {
             state.error = Some(message);
         }
-        DesktopAction::SettingsLoaded(settings) => settings::settings_loaded(state, *settings),
-        DesktopAction::SettingsLanguageSelected(language) => {
+        FrontendAction::SettingsLoaded(settings) => settings::settings_loaded(state, *settings),
+        FrontendAction::SettingsLanguageSelected(language) => {
             settings::language_selected(state, language);
         }
-        DesktopAction::SettingsThemeSelected(theme) => settings::theme_selected(state, &theme),
-        DesktopAction::SettingsFontSizeSelected(font_size) => {
+        FrontendAction::SettingsThemeSelected(theme) => settings::theme_selected(state, &theme),
+        FrontendAction::SettingsFontSizeSelected(font_size) => {
             settings::font_size_selected(state, font_size);
         }
-        DesktopAction::InspectorChanged { open, pinned } => {
+        FrontendAction::InspectorChanged { open, pinned } => {
             state.inspector_open = open;
             state.inspector_pinned = pinned;
         }
-        DesktopAction::SettingsProxyChanged { value, .. } => {
+        FrontendAction::SettingsProxyChanged { value, .. } => {
             edit_settings(state, |settings| {
                 if settings.proxy == value {
                     return false;
@@ -643,12 +643,12 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 true
             });
         }
-        DesktopAction::SettingsModelsShown {
+        FrontendAction::SettingsModelsShown {
             provider,
             models,
             shown,
         } => settings::models_shown(state, &provider, models, shown),
-        DesktopAction::SettingsProviderToggled(index, enabled) => {
+        FrontendAction::SettingsProviderToggled(index, enabled) => {
             edit_settings(state, |settings| {
                 settings.providers.get_mut(index).is_some_and(|provider| {
                     provider.enabled = enabled;
@@ -656,26 +656,26 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 })
             });
         }
-        DesktopAction::SettingsProviderBaseUrlChanged { id, base_url } => {
+        FrontendAction::SettingsProviderBaseUrlChanged { id, base_url } => {
             settings::provider_base_url_changed(state, &id, base_url);
         }
-        DesktopAction::SettingsProviderAdded(provider) => settings::provider_added(state, provider),
-        DesktopAction::SettingsProviderRemoved(index) => settings::provider_removed(state, index),
-        DesktopAction::SettingsBackendToggled(index, enabled) => {
+        FrontendAction::SettingsProviderAdded(provider) => settings::provider_added(state, provider),
+        FrontendAction::SettingsProviderRemoved(index) => settings::provider_removed(state, index),
+        FrontendAction::SettingsBackendToggled(index, enabled) => {
             settings::backend_toggled(state, index, enabled);
         }
-        DesktopAction::SettingsSubagentsChanged(subagents) => {
+        FrontendAction::SettingsSubagentsChanged(subagents) => {
             edit_settings(state, |settings| {
                 settings.subagents = subagents;
                 true
             });
         }
-        DesktopAction::SettingsSkillToggled(slug, enabled) => {
+        FrontendAction::SettingsSkillToggled(slug, enabled) => {
             edit_settings(state, |settings| {
                 settings.skills.set_enabled(&slug, enabled)
             });
         }
-        DesktopAction::SubagentMenuToggled(menu) => {
+        FrontendAction::SubagentMenuToggled(menu) => {
             let opening = menu.is_some();
             state.subagent_menu = menu;
             state.model_menu_browse = None;
@@ -685,17 +685,17 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.reasoning_menu_open = false;
             }
         }
-        DesktopAction::SettingsSaved {
+        FrontendAction::SettingsSaved {
             revision,
             edit_epoch,
         } => settings::settings_saved(state, revision, edit_epoch),
-        DesktopAction::SettingsSaveFailed(message) => {
+        FrontendAction::SettingsSaveFailed(message) => {
             if let Some(settings) = state.settings.as_mut() {
                 settings.saving = false;
             }
             state.error = Some(message);
         }
-        DesktopAction::ProviderKeySaved {
+        FrontendAction::ProviderKeySaved {
             provider_keys,
             mcp_keys,
         } => {
@@ -704,9 +704,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.mcp_with_keys = mcp_keys;
             }
         }
-        DesktopAction::SettingsMcpAdded(server) => settings::mcp_added(state, server),
-        DesktopAction::SettingsMcpRemoved(index) => settings::mcp_removed(state, index),
-        DesktopAction::SettingsMcpToggled(index, enabled) => {
+        FrontendAction::SettingsMcpAdded(server) => settings::mcp_added(state, server),
+        FrontendAction::SettingsMcpRemoved(index) => settings::mcp_removed(state, index),
+        FrontendAction::SettingsMcpToggled(index, enabled) => {
             edit_settings(state, |settings| {
                 settings.mcp_servers.get_mut(index).is_some_and(|server| {
                     server.enabled = enabled;
@@ -714,20 +714,20 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 })
             });
         }
-        DesktopAction::McpProbeStarted(server_id) => {
+        FrontendAction::McpProbeStarted(server_id) => {
             if !state.mcp_probing.contains(&server_id) {
                 state.mcp_probing.push(server_id);
             }
         }
-        DesktopAction::McpToolsListed { server_id, tools } => {
+        FrontendAction::McpToolsListed { server_id, tools } => {
             settings::mcp_tools_listed(state, server_id, tools);
         }
-        DesktopAction::McpProbeFailed { server_id, message } => {
+        FrontendAction::McpProbeFailed { server_id, message } => {
             state.mcp_probing.retain(|id| *id != server_id);
             state.mcp_tools.retain(|(id, _)| *id != server_id);
             state.error = Some(message);
         }
-        DesktopAction::ShowMainView(view) => {
+        FrontendAction::ShowMainView(view) => {
             state.view = view;
             state.provider_detail = None;
             state.web_detail = None;
@@ -735,7 +735,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             // renders above the destination view.
             close_floating_menus(state);
         }
-        DesktopAction::ShowSettingsSection(section) => {
+        FrontendAction::ShowSettingsSection(section) => {
             if section != super::SettingsSection::Models {
                 state.provider_detail = None;
             }
@@ -748,8 +748,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.subagent_menu = None;
             state.settings_section = section;
         }
-        DesktopAction::ProjectMenuToggled(open) => state.project_menu_open = open,
-        DesktopAction::CatalogLoaded {
+        FrontendAction::ProjectMenuToggled(open) => state.project_menu_open = open,
+        FrontendAction::CatalogLoaded {
             document,
             fetched_at,
         } => {
@@ -763,7 +763,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 active_preset_changed(state, Some(preset));
             }
         }
-        DesktopAction::UiStateLoaded {
+        FrontendAction::UiStateLoaded {
             recents,
             last_project,
             auto_update,
@@ -810,27 +810,27 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 remember_session_model(state, &session_id);
             }
         }
-        DesktopAction::ThinkingCollapsedToggled => {
+        FrontendAction::ThinkingCollapsedToggled => {
             state.thinking_collapsed = !state.thinking_collapsed;
         }
-        DesktopAction::SessionBindingsForgotten(session_id) => {
+        FrontendAction::SessionBindingsForgotten(session_id) => {
             session_bindings_forgotten(state, session_id)
         }
-        DesktopAction::WorkspaceRootAdded(project) => workspace_root_added(state, project),
-        DesktopAction::WorkspaceRootRemoved(project) => {
+        FrontendAction::WorkspaceRootAdded(project) => workspace_root_added(state, project),
+        FrontendAction::WorkspaceRootRemoved(project) => {
             workspace_root_removed(state, project);
         }
-        DesktopAction::ProjectOpened(project) => {
+        FrontendAction::ProjectOpened(project) => {
             state.project_dir = Some(project.clone());
             state.recents.retain(|existing| existing != &project);
             state.recents.insert(0, project);
             state.recents.truncate(mycode_config::MAX_RECENT_PROJECTS);
         }
-        DesktopAction::SessionProjectBound {
+        FrontendAction::SessionProjectBound {
             session_id,
             project,
         } => session_project_bound(state, session_id, project),
-        DesktopAction::WorkspaceFolderFocused {
+        FrontendAction::WorkspaceFolderFocused {
             session_id,
             project,
         } => {
@@ -840,13 +840,13 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.project_dir = Some(project.clone());
             bind_session_project(state, session_id, project);
         }
-        DesktopAction::ActiveProjectChanged(project) => {
+        FrontendAction::ActiveProjectChanged(project) => {
             state.project_dir = project;
             if !super::task_surface_visible(state) {
                 state.subagent_window = None;
             }
         }
-        DesktopAction::RecentRemoved(project) => {
+        FrontendAction::RecentRemoved(project) => {
             state
                 .recents
                 .retain(|existing| !super::same_project_path(existing, &project));
@@ -858,9 +858,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.project_dir = None;
             }
         }
-        DesktopAction::ProviderSelected(provider) => provider_selected(state, provider),
-        DesktopAction::ModelSelected(model) => model_selected(state, model),
-        DesktopAction::ModelMenuToggled(open) => {
+        FrontendAction::ProviderSelected(provider) => provider_selected(state, provider),
+        FrontendAction::ModelSelected(model) => model_selected(state, model),
+        FrontendAction::ModelMenuToggled(open) => {
             state.model_menu_open = open;
             state.model_menu_browse = None;
             state.picker_query.clear();
@@ -869,27 +869,27 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.subagent_menu = None;
             }
         }
-        DesktopAction::ModelMenuBrowse(provider) => {
+        FrontendAction::ModelMenuBrowse(provider) => {
             state.reasoning_menu_open = false;
             state.model_menu_browse = provider;
             state.picker_query.clear();
         }
-        DesktopAction::PickerQueryChanged(query) => state.picker_query = query,
-        DesktopAction::SettingsQueryChanged(query) => state.settings_query = query,
-        DesktopAction::ProviderDetailOpened(provider) => {
+        FrontendAction::PickerQueryChanged(query) => state.picker_query = query,
+        FrontendAction::SettingsQueryChanged(query) => state.settings_query = query,
+        FrontendAction::ProviderDetailOpened(provider) => {
             state.provider_detail = provider;
             state.model_menu_open = false;
             state.model_menu_browse = None;
             state.picker_query.clear();
         }
-        DesktopAction::PresetModelQueryChanged(query) => state.preset_model_query = query,
-        DesktopAction::ReasoningMenuToggled(open) => {
+        FrontendAction::PresetModelQueryChanged(query) => state.preset_model_query = query,
+        FrontendAction::ReasoningMenuToggled(open) => {
             state.reasoning_menu_open = open;
             if open {
                 state.model_menu_open = false;
             }
         }
-        DesktopAction::SettingsReasoningChanged(level) => {
+        FrontendAction::SettingsReasoningChanged(level) => {
             state.reasoning_menu_open = false;
             // Stored on the session pin. The live projection is updated so the
             // chip matches, and the document is left clean so this action does
@@ -910,16 +910,16 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.default_reasoning = picked;
             remember_active_session_model(state);
         }
-        DesktopAction::PresetSearchChanged(text) => state.preset_search = text,
-        DesktopAction::ActivePresetChanged(preset) => active_preset_changed(state, preset),
-        DesktopAction::PresetModelToggled(model) => {
+        FrontendAction::PresetSearchChanged(text) => state.preset_search = text,
+        FrontendAction::ActivePresetChanged(preset) => active_preset_changed(state, preset),
+        FrontendAction::PresetModelToggled(model) => {
             if let Some(position) = state.preset_models.iter().position(|m| *m == model) {
                 state.preset_models.remove(position);
             } else {
                 state.preset_models.push(model);
             }
         }
-        DesktopAction::ShowModelsSubview(view) => {
+        FrontendAction::ShowModelsSubview(view) => {
             state.models_subview = view;
             state.provider_kind_menu_open = false;
             state.mcp_transport_menu_open = false;
@@ -928,23 +928,23 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             // catalog row's models, edited later on the provider detail.
             active_preset_changed(state, None);
         }
-        DesktopAction::WebDetailOpened(backend) => state.web_detail = backend,
-        DesktopAction::ShowMcpSubview(view) => {
+        FrontendAction::WebDetailOpened(backend) => state.web_detail = backend,
+        FrontendAction::ShowMcpSubview(view) => {
             state.mcp_subview = view;
             state.mcp_transport_menu_open = false;
         }
-        DesktopAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
-        DesktopAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
-        DesktopAction::LanguageMenuToggled(open) => state.language_menu_open = open,
-        DesktopAction::UpdateStateChanged(update) => state.update = update,
-        DesktopAction::UpdateDialogToggled(open) => state.update_dialog_open = open,
-        DesktopAction::CommandPaletteSet(open) => {
+        FrontendAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
+        FrontendAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
+        FrontendAction::LanguageMenuToggled(open) => state.language_menu_open = open,
+        FrontendAction::UpdateStateChanged(update) => state.update = update,
+        FrontendAction::UpdateDialogToggled(open) => state.update_dialog_open = open,
+        FrontendAction::CommandPaletteSet(open) => {
             state.command_palette_open = open;
             if open {
                 close_floating_menus(state);
             }
         }
-        DesktopAction::UpdateOfferFound(offer) => {
+        FrontendAction::UpdateOfferFound(offer) => {
             // The offer and the Available flip are one transition: the
             // download button's handler reads `last_offer`, so an
             // Available state without a published offer is a dead button.
@@ -954,8 +954,8 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             };
             state.last_offer = Some(offer);
         }
-        DesktopAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
-        DesktopAction::UpdateStaged(prepared) => {
+        FrontendAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
+        FrontendAction::UpdateStaged(prepared) => {
             let version = state
                 .last_offer
                 .as_ref()
@@ -1019,7 +1019,7 @@ fn fill_open_slash(state: &mut WorkspaceState) {
 
 /// Closes every floating menu layer, whatever view it belongs to. Returns
 /// whether anything was open, so Escape can tell a dismissal from a no-op.
-pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
+pub fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     let was_open = state.project_menu_open
         || state.model_menu_open
         || state.reasoning_menu_open

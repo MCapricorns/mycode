@@ -55,7 +55,7 @@ pub enum UpdateState {
 
 /// Whole-window state.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct WorkspaceState {
+pub struct WorkspaceState {
     /// Sidebar sessions, newest-relevant order preserved from the core.
     pub sessions: Vec<SessionSummary>,
     /// Open conversation, when any.
@@ -232,7 +232,7 @@ pub(crate) struct WorkspaceState {
 impl WorkspaceState {
     /// Final runtime of a finished subagent call, in milliseconds. The
     /// latest entry wins when a call id was reused.
-    pub(crate) fn job_elapsed(&self, call_id: &str) -> Option<u64> {
+    pub fn job_elapsed(&self, call_id: &str) -> Option<u64> {
         self.job_elapsed
             .iter()
             .rev()
@@ -242,7 +242,7 @@ impl WorkspaceState {
 
     /// Discovered skills minus the ones switched off on the Skills page.
     /// The composer `/` menu and the command palette list only these.
-    pub(crate) fn enabled_skills(&self) -> Vec<SkillEntry> {
+    pub fn enabled_skills(&self) -> Vec<SkillEntry> {
         let disabled = self.settings.as_ref().map(|settings| &settings.skills);
         self.skills
             .iter()
@@ -254,7 +254,7 @@ impl WorkspaceState {
 
 /// Everything the UI can do to the state.
 #[derive(Clone, Debug, PartialEq)]
-pub enum DesktopAction {
+pub enum FrontendAction {
     /// The core returned the session list.
     SessionsLoaded(Vec<SessionSummary>),
     /// A session was created and opened.
@@ -643,6 +643,6 @@ pub enum DesktopAction {
 }
 
 /// Maximum composer text before the send is rejected locally.
-pub(crate) const MAX_COMPOSER_CHARS: usize = 64 * 1024;
+pub const MAX_COMPOSER_CHARS: usize = 64 * 1024;
 /// Follow-ups waiting behind one in-flight turn.
-pub(crate) const MAX_QUEUED_MESSAGES: usize = 8;
+pub const MAX_QUEUED_MESSAGES: usize = 8;

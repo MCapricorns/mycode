@@ -2,7 +2,7 @@
 
 /// Compact token-count spelling: 12.3k / 1.2M.
 #[must_use]
-pub(crate) fn compact_count(count: u64) -> String {
+pub fn compact_count(count: u64) -> String {
     if count >= 999_950 {
         format!("{:.1}M", count as f64 / 1_000_000.0)
     } else if count >= 1_000 {
@@ -14,7 +14,7 @@ pub(crate) fn compact_count(count: u64) -> String {
 
 /// The pieces of a context meter. Any string may be empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ContextMeterParts {
+pub struct ContextMeterParts {
     /// `12.0k / 1.0M`. Empty when the context window is unknown.
     pub ratio: String,
     /// `11.8k cached`. Empty when the latest prompt reported no cache read.
@@ -26,6 +26,10 @@ pub(crate) struct ContextMeterParts {
     pub hit: String,
     /// Whole-percent cache hit, when there is one to draw.
     pub hit_percent: Option<u64>,
+    /// Whole-percent of the context window still free, when the window is
+    /// known. Frontends draw this as the depleting meter; `hit_percent`
+    /// stays the cache-read share for tooltips and labels.
+    pub remaining_percent: Option<u64>,
 }
 
 /// Splits the latest prompt into a window ratio, a cache-hit percent, and a
@@ -35,7 +39,7 @@ pub(crate) struct ContextMeterParts {
 /// piece. The composer hides the whole meter when both the prompt and the
 /// cache read are zero; the inspector still shows `0 / window`.
 #[must_use]
-pub(crate) fn context_meter_parts(
+pub fn context_meter_parts(
     used: u64,
     window: u64,
     cached: u64,
@@ -61,6 +65,7 @@ pub(crate) fn context_meter_parts(
         cache,
         hit,
         hit_percent,
+        remaining_percent: context_remaining_percent(used, window),
     }
 }
 
@@ -109,7 +114,7 @@ fn context_meter_label(
 /// input excludes them, so a cache read larger than `input` is measured
 /// against `input + cache`.
 #[must_use]
-pub(crate) fn cache_percent(cache: u64, input: u64) -> Option<u64> {
+pub fn cache_percent(cache: u64, input: u64) -> Option<u64> {
     if cache == 0 {
         return None;
     }
@@ -119,6 +124,19 @@ pub(crate) fn cache_percent(cache: u64, input: u64) -> Option<u64> {
         input
     };
     (base > 0).then_some((cache.min(base) * 100) / base)
+}
+
+/// Share of the context window still free, as a whole percent.
+///
+/// `None` when the window is unknown (`0`), so callers can skip the meter
+/// instead of drawing a fake full one. `used` past the window saturates at
+/// `0`: the meter reads empty, never negative.
+#[must_use]
+pub fn context_remaining_percent(used: u64, window: u64) -> Option<u64> {
+    if window == 0 {
+        return None;
+    }
+    Some(100_u64.saturating_sub(used.saturating_mul(100) / window))
 }
 
 /// Lowest hit percent treated as a warm prompt cache.
@@ -132,7 +150,7 @@ const CACHE_COLLAPSE_DROP: u64 = 30;
 /// as `None` on [`TurnStats::cache`], same as an omitted field, so a model
 /// that never reports cache does not show a fake `0%`.
 #[must_use]
-pub(crate) fn turn_cache_hit(turn: &TurnStats) -> Option<u64> {
+pub fn turn_cache_hit(turn: &TurnStats) -> Option<u64> {
     cache_percent(turn.cache.unwrap_or(0), turn.input)
 }
 
@@ -149,7 +167,7 @@ pub enum CacheBreak {
 }
 
 impl CacheBreak {
-    pub(crate) fn merge(self, other: Self) -> Self {
+    pub fn merge(self, other: Self) -> Self {
         match (self, other) {
             (Self::Compaction, Self::Compaction) => Self::Compaction,
             (Self::Steer, Self::Steer) => Self::Steer,
@@ -160,7 +178,7 @@ impl CacheBreak {
 
 /// Armed after compaction or a steer until the next prompt reports a size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CacheWatch {
+pub struct CacheWatch {
     pub cause: CacheBreak,
     /// Hit percent of the prompt before the rewrite. `None` is cold.
     pub before: Option<u64>,
@@ -168,7 +186,7 @@ pub(crate) struct CacheWatch {
 
 /// Shown when the prompt after a rewrite misses a previously warm cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CacheAlert {
+pub struct CacheAlert {
     pub cause: CacheBreak,
     /// Hit percent before the rewrite.
     pub before: u64,
@@ -183,7 +201,7 @@ pub(crate) struct CacheAlert {
 /// lower. A missing later reading counts as 0%. A cold-to-colder change is
 /// not a collapse.
 #[must_use]
-pub(crate) fn cache_hit_collapsed(before: Option<u64>, after: Option<u64>) -> bool {
+pub fn cache_hit_collapsed(before: Option<u64>, after: Option<u64>) -> bool {
     let Some(before) = before
         .map(|hit| hit.min(100))
         .filter(|hit| *hit >= WARM_CACHE_HIT)
@@ -196,14 +214,14 @@ pub(crate) fn cache_hit_collapsed(before: Option<u64>, after: Option<u64>) -> bo
 
 /// The warning can leave once a later prompt is warm again.
 #[must_use]
-pub(crate) fn cache_hit_recovered(after: Option<u64>) -> bool {
+pub fn cache_hit_recovered(after: Option<u64>) -> bool {
     after.is_some_and(|hit| hit >= WARM_CACHE_HIT)
 }
 
 /// Sentence for the Details warning and the toast. Both languages stay
 /// next to each other; the numbers fill `{before}` and `{after}`.
 #[must_use]
-pub(crate) fn cache_alert_text(alert: &CacheAlert) -> String {
+pub fn cache_alert_text(alert: &CacheAlert) -> String {
     let template = match alert.cause {
         CacheBreak::Compaction => crate::i18n::t(
             "Cache hit fell from {before}% to {after}% after compaction.",
@@ -226,7 +244,7 @@ pub(crate) fn cache_alert_text(alert: &CacheAlert) -> String {
 /// Metrics for one turn's token accounting: `live_turn` while the turn runs,
 /// promoted to `last_turn` when it commits.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TurnStats {
+pub struct TurnStats {
     /// Model id the turn ran on.
     pub model: String,
     /// Input (prompt) tokens reported by the provider.
@@ -246,7 +264,7 @@ mod tests {
     use super::{
         CacheAlert, CacheBreak, TurnStats, cache_alert_text, cache_hit_collapsed,
         cache_hit_recovered, cache_percent, context_meter_label, context_meter_parts,
-        format_context_meter, turn_cache_hit,
+        context_remaining_percent, format_context_meter, turn_cache_hit,
     };
 
     #[test]
@@ -277,6 +295,7 @@ mod tests {
         assert_eq!(parts.cache, "11.8k cached");
         assert_eq!(parts.hit, "cache hit 98%");
         assert_eq!(parts.hit_percent, Some(98));
+        assert_eq!(parts.remaining_percent, Some(99));
         let uncached = context_meter_parts(12_000, 1_000_000, 0, "cached", "cache hit");
         assert!(uncached.cache.is_empty());
         assert!(uncached.hit.is_empty());
@@ -294,6 +313,23 @@ mod tests {
         );
         assert_eq!(cache_percent(11_800, 545), Some(95));
         assert_eq!(cache_percent(100, 400), Some(25));
+    }
+
+    #[test]
+    fn context_remaining_percent_depletes_and_hides_an_unknown_window() {
+        assert_eq!(context_remaining_percent(0, 1_000_000), Some(100));
+        assert_eq!(context_remaining_percent(500_000, 1_000_000), Some(50));
+        assert_eq!(context_remaining_percent(200_000, 1_000_000), Some(80));
+        assert_eq!(context_remaining_percent(1_000_000, 1_000_000), Some(0));
+        // Over-window saturates at empty rather than wrapping negative.
+        assert_eq!(context_remaining_percent(1_200_000, 1_000_000), Some(0));
+        assert_eq!(context_remaining_percent(12_000, 0), None);
+        assert_eq!(context_remaining_percent(0, 0), None);
+        // The parts carry it, so frontends never recompute the share.
+        let parts = context_meter_parts(200_000, 1_000_000, 0, "cached", "cache hit");
+        assert_eq!(parts.remaining_percent, Some(80));
+        let unknown = context_meter_parts(200_000, 0, 0, "cached", "cache hit");
+        assert_eq!(unknown.remaining_percent, None);
     }
 
     #[test]

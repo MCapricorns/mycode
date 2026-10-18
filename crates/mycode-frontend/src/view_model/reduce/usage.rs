@@ -78,7 +78,7 @@ mod tests {
     use mycode_app::{ActiveConversation, ConversationEntry, EntryKind};
 
     use super::super::reduce;
-    use crate::view_model::{CacheBreak, DesktopAction, WorkspaceState, turn_cache_hit};
+    use crate::view_model::{CacheBreak, FrontendAction, WorkspaceState, turn_cache_hit};
 
     fn warm() -> WorkspaceState {
         WorkspaceState {
@@ -100,8 +100,8 @@ mod tests {
         }
     }
 
-    fn snapshot(context: u64, context_cache: u64, input: u64, cache: Option<u64>) -> DesktopAction {
-        DesktopAction::UsageSnapshot {
+    fn snapshot(context: u64, context_cache: u64, input: u64, cache: Option<u64>) -> FrontendAction {
+        FrontendAction::UsageSnapshot {
             model: "m".to_owned(),
             input,
             context,
@@ -138,7 +138,7 @@ mod tests {
         let mut state = warm();
         reduce(
             &mut state,
-            DesktopAction::CacheBreakArmed(CacheBreak::Compaction),
+            FrontendAction::CacheBreakArmed(CacheBreak::Compaction),
         );
         assert_eq!(
             state.cache_watch.expect("armed").before,
@@ -159,7 +159,7 @@ mod tests {
         assert!(state.cache_watch.is_none());
         reduce(
             &mut state,
-            DesktopAction::ChatDone {
+            FrontendAction::ChatDone {
                 head: "h2".to_owned(),
                 entry: entry("done"),
             },
@@ -177,7 +177,7 @@ mod tests {
         let mut state = warm();
         reduce(
             &mut state,
-            DesktopAction::CacheBreakArmed(CacheBreak::Steer),
+            FrontendAction::CacheBreakArmed(CacheBreak::Steer),
         );
         reduce(&mut state, snapshot(10_000, 7_000, 10_000, Some(7_000)));
         assert!(state.cache_alert.is_none());
@@ -194,13 +194,13 @@ mod tests {
         let mut state = warm();
         reduce(
             &mut state,
-            DesktopAction::CacheBreakArmed(CacheBreak::Compaction),
+            FrontendAction::CacheBreakArmed(CacheBreak::Compaction),
         );
         state.context_used = 100;
         state.context_cache = 0;
         reduce(
             &mut state,
-            DesktopAction::CacheBreakArmed(CacheBreak::Steer),
+            FrontendAction::CacheBreakArmed(CacheBreak::Steer),
         );
         let watch = state.cache_watch.expect("still the first arm");
         assert_eq!(watch.before, Some(92));
@@ -226,7 +226,7 @@ mod tests {
         let mut state = warm();
         reduce(
             &mut state,
-            DesktopAction::CacheBreakArmed(CacheBreak::Compaction),
+            FrontendAction::CacheBreakArmed(CacheBreak::Compaction),
         );
         reduce(&mut state, snapshot(10_000, 0, 10_000, None));
         assert!(state.cache_alert.is_some());
@@ -239,13 +239,13 @@ mod tests {
         let mut state = warm();
         reduce(
             &mut state,
-            DesktopAction::CacheBreakArmed(CacheBreak::Steer),
+            FrontendAction::CacheBreakArmed(CacheBreak::Steer),
         );
         reduce(&mut state, snapshot(10_000, 0, 10_000, None));
         assert!(state.cache_alert.is_some());
         reduce(
             &mut state,
-            DesktopAction::ConversationOpened(ActiveConversation {
+            FrontendAction::ConversationOpened(ActiveConversation {
                 session_id: "other".to_owned(),
                 branch_id: "br".to_owned(),
                 head: "o".to_owned(),

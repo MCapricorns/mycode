@@ -7,7 +7,7 @@ use mycode_app::BridgeCommand;
 
 use super::normalized_key_input;
 use crate::ui::{ProviderForm, build_custom_provider};
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 impl Workspace {
@@ -60,12 +60,12 @@ impl Workspace {
         ) {
             Ok(provider) => provider,
             Err(message) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
                 return;
             }
         };
         let provider_id = provider.id.clone();
-        self.apply_action(DesktopAction::SettingsProviderAdded(provider), cx);
+        self.apply_action(FrontendAction::SettingsProviderAdded(provider), cx);
         if let Some(api_key) = normalized_key_input(&api_key) {
             self.dispatch(
                 BridgeCommand::SaveProviderKey {
@@ -77,7 +77,7 @@ impl Workspace {
         }
         form.update(cx, |form, cx| form.clear(window, cx));
         self.apply_action(
-            DesktopAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
+            FrontendAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
             cx,
         );
     }
@@ -89,9 +89,9 @@ impl Workspace {
             .as_ref()
             .and_then(|settings| settings.providers.get(index))
             .map(|provider| provider.id.clone());
-        self.apply_action(DesktopAction::SettingsProviderRemoved(index), cx);
+        self.apply_action(FrontendAction::SettingsProviderRemoved(index), cx);
         if removed.is_some_and(|id| self.vm.provider_detail.as_deref() == Some(id.as_str())) {
-            self.apply_action(DesktopAction::ProviderDetailOpened(None), cx);
+            self.apply_action(FrontendAction::ProviderDetailOpened(None), cx);
         }
     }
 
@@ -113,11 +113,11 @@ impl Workspace {
                 |workspace, entity, event, _, cx| match event {
                     InputEvent::Change => {
                         let text = entity.read(cx).value().to_string();
-                        workspace.apply_action(DesktopAction::PickerQueryChanged(text), cx);
+                        workspace.apply_action(FrontendAction::PickerQueryChanged(text), cx);
                     }
                     InputEvent::PressEnter { .. } => {
                         let text = entity.read(cx).value().to_string();
-                        workspace.apply_action(DesktopAction::PickerQueryChanged(text), cx);
+                        workspace.apply_action(FrontendAction::PickerQueryChanged(text), cx);
                         workspace.accept_model_search(cx);
                     }
                     InputEvent::Focus | InputEvent::Blur => {}
@@ -143,7 +143,7 @@ impl Workspace {
             cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = entity.read(cx).value().to_string();
-                    workspace.apply_action(DesktopAction::SettingsQueryChanged(text), cx);
+                    workspace.apply_action(FrontendAction::SettingsQueryChanged(text), cx);
                 }
             })
             .detach();
@@ -167,7 +167,7 @@ impl Workspace {
             cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = entity.read(cx).value().to_string();
-                    workspace.apply_action(DesktopAction::PresetModelQueryChanged(text), cx);
+                    workspace.apply_action(FrontendAction::PresetModelQueryChanged(text), cx);
                 }
             })
             .detach();
@@ -328,7 +328,7 @@ impl Workspace {
                 self.provider_endpoint_seed
                     .insert(id.to_owned(), base_url.clone());
                 self.apply_action(
-                    DesktopAction::SettingsProviderBaseUrlChanged {
+                    FrontendAction::SettingsProviderBaseUrlChanged {
                         id: id.to_owned(),
                         base_url,
                     },
@@ -336,7 +336,7 @@ impl Workspace {
                 );
             }
             Err(message) => {
-                self.apply_action(DesktopAction::Failed(message), cx);
+                self.apply_action(FrontendAction::Failed(message), cx);
             }
         }
     }
@@ -382,7 +382,7 @@ impl Workspace {
             cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = entity.read(cx).value().to_string();
-                    workspace.apply_action(DesktopAction::PresetSearchChanged(text), cx);
+                    workspace.apply_action(FrontendAction::PresetSearchChanged(text), cx);
                 }
             })
             .detach();
@@ -404,7 +404,7 @@ impl Workspace {
             input.update(cx, |state, cx| state.set_value("", window, cx));
         }
         self.apply_action(
-            DesktopAction::ActivePresetChanged(Some(provider_id.to_owned())),
+            FrontendAction::ActivePresetChanged(Some(provider_id.to_owned())),
             cx,
         );
     }
@@ -413,7 +413,7 @@ impl Workspace {
     /// row.
     pub(crate) fn on_close_preset(&mut self, cx: &mut Context<Self>) {
         self.preset_key_input = None;
-        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+        self.apply_action(FrontendAction::ActivePresetChanged(None), cx);
     }
 
     /// Starts an OAuth device-flow sign-in from the shared page, binding
@@ -423,7 +423,7 @@ impl Workspace {
         let models = crate::view_model::preset_pick(&self.vm, &provider_id);
         if models.is_empty() {
             self.apply_action(
-                DesktopAction::Failed(
+                FrontendAction::Failed(
                     crate::i18n::t(
                         "Provider catalog is not loaded yet; refresh it in About and try again.",
                         "服务商目录尚未就绪，可在「关于」页刷新目录后重试。",
@@ -528,7 +528,7 @@ impl Workspace {
                 hidden_models: Vec::new(),
             },
         };
-        self.apply_action(DesktopAction::SettingsProviderAdded(row), cx);
+        self.apply_action(FrontendAction::SettingsProviderAdded(row), cx);
         if let Some(api_key) = api_key {
             self.dispatch(
                 BridgeCommand::SaveProviderKey {
@@ -538,9 +538,9 @@ impl Workspace {
                 cx,
             );
         }
-        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
-        self.apply_action(DesktopAction::ProviderSelected(id), cx);
-        self.apply_action(DesktopAction::ModelSelected(model), cx);
+        self.apply_action(FrontendAction::ActivePresetChanged(None), cx);
+        self.apply_action(FrontendAction::ProviderSelected(id), cx);
+        self.apply_action(FrontendAction::ModelSelected(model), cx);
         self.on_save_settings(cx);
         self.persist_ui_state(cx);
     }

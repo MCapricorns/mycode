@@ -1,0 +1,24 @@
+[package]
+name = "mycode-frontend"
+description = "UI-agnostic product layer shared by MYCode frontends: view-model state machine, i18n, git status, and CLI argument parsing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mycode-app = { path = "../mycode-app" }
+mycode-config = { path = "../mycode-config" }
+mycode-providers = { path = "../mycode-providers" }
+mycode-tools = { path = "../mycode-tools" }
+# Sync primitives and the executor-agnostic reply futures: this crate never
+# owns a runtime.
+tokio = { workspace = true, features = ["sync", "time"] }
+# The global allocator (mimalloc) and VC-LTL link live in the leaf crates
+# mycode-core / mycode-config so every target in the workspace shares them;
+# nothing is declared here on purpose.
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Globalization"] }
+
+[lints]
+workspace = true

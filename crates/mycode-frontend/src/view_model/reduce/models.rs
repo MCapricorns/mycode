@@ -104,7 +104,7 @@ fn listed_models(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
 /// picks that still exist in the catalog row, else the whole row (or the
 /// configured list when the catalog row is not loaded yet).
 #[must_use]
-pub(crate) fn preset_pick(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
+pub fn preset_pick(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
     let listed = listed_models(state, provider_id);
     let configured: Vec<String> = state
         .settings
@@ -185,7 +185,7 @@ pub(super) fn ensure_model_selection(state: &mut WorkspaceState) {
 /// Unknown catalog rows keep the control visible so custom providers are
 /// not locked out; the menu itself is built from `reasoning_levels_for`.
 #[must_use]
-pub(crate) fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool {
+pub fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool {
     let Some(provider_id) = state.selected_provider.as_deref() else {
         return true;
     };
@@ -221,7 +221,7 @@ fn endpoint_base_url<'a>(state: &'a WorkspaceState, provider_id: &str) -> Option
 /// custom endpoint does not look unset, but the menu does not invent
 /// off/on/low/medium/high/xhigh/max.
 #[must_use]
-pub(crate) fn reasoning_levels_for(
+pub fn reasoning_levels_for(
     state: &WorkspaceState,
     provider_id: Option<&str>,
     model_id: Option<&str>,
@@ -256,7 +256,7 @@ fn unpublished_reasoning_levels(state: &WorkspaceState) -> Vec<String> {
 
 /// Thinking choices for the composer chip's selected model.
 #[must_use]
-pub(crate) fn selected_reasoning_levels(state: &WorkspaceState) -> Vec<String> {
+pub fn selected_reasoning_levels(state: &WorkspaceState) -> Vec<String> {
     reasoning_levels_for(
         state,
         state.selected_provider.as_deref(),
@@ -379,7 +379,7 @@ fn effort_rank(token: &str) -> Option<usize> {
 /// The strongest rung one model advertises: its highest effort, else the
 /// toggle's On. `None` when it offers only Default or nothing.
 #[must_use]
-pub(crate) fn strongest_reasoning_level(levels: &[String]) -> Option<&str> {
+pub fn strongest_reasoning_level(levels: &[String]) -> Option<&str> {
     levels
         .iter()
         .filter_map(|level| {
@@ -479,7 +479,7 @@ mod tests {
         opendesign::attach(&mut doc);
         crate::view_model::reduce(
             &mut lazy,
-            crate::view_model::DesktopAction::CatalogLoaded {
+            crate::view_model::FrontendAction::CatalogLoaded {
                 document: std::sync::Arc::new(doc),
                 fetched_at: 1,
             },
@@ -745,8 +745,8 @@ mod tests {
     fn loaded_ui_state(
         reasoning: Option<&str>,
         session_models: Vec<mycode_config::SessionModelPin>,
-    ) -> crate::view_model::DesktopAction {
-        crate::view_model::DesktopAction::UiStateLoaded {
+    ) -> crate::view_model::FrontendAction {
+        crate::view_model::FrontendAction::UiStateLoaded {
             recents: Vec::new(),
             last_project: None,
             auto_update: true,
@@ -828,7 +828,7 @@ mod tests {
         // Leaving the chat puts the remembered pick back on the composer.
         crate::view_model::reduce(
             &mut state,
-            crate::view_model::DesktopAction::ConversationParked,
+            crate::view_model::FrontendAction::ConversationParked,
         );
         assert_eq!(live_reasoning(&state), Some("max"));
     }
@@ -865,7 +865,7 @@ mod tests {
         };
         crate::view_model::reduce(
             &mut state,
-            crate::view_model::DesktopAction::SettingsLoaded(Box::new(
+            crate::view_model::FrontendAction::SettingsLoaded(Box::new(
                 SettingsState::from_settings(&document, 2, Vec::new()),
             )),
         );

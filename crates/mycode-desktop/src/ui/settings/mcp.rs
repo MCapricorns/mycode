@@ -17,7 +17,7 @@ use super::widgets::{DropdownSpec, dropdown_field, labeled_field, settings_card}
 use crate::i18n::t;
 use crate::ui::desk::Desk;
 use crate::ui::skin;
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
 pub(super) fn render_mcp_section(
@@ -475,7 +475,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                     format!("mcp-remove-{id}"),
                     IconName::Trash,
                     cx.listener(move |workspace, _, _, cx| {
-                        workspace.apply_action(DesktopAction::SettingsMcpRemoved(index), cx);
+                        workspace.apply_action(FrontendAction::SettingsMcpRemoved(index), cx);
                     }),
                     cx,
                 )),

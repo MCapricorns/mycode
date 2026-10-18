@@ -6,12 +6,12 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::{Context, Entity, Window, px};
 
 use super::Workspace;
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 
 impl Workspace {
     /// Applies and persists dark or light.
     pub(crate) fn on_select_theme(&mut self, theme_id: &str, cx: &mut Context<Self>) {
-        let theme_id = crate::ui::desk::normalize_theme(theme_id);
+        let theme_id = mycode_frontend::normalize_theme(theme_id);
         if self
             .vm
             .settings
@@ -23,7 +23,7 @@ impl Workspace {
         self.capture_appearance_scroll();
         self.paint_appearance(theme_id, cx);
         self.apply_action(
-            DesktopAction::SettingsThemeSelected(theme_id.to_owned()),
+            FrontendAction::SettingsThemeSelected(theme_id.to_owned()),
             cx,
         );
         self.on_save_settings(cx);
@@ -52,7 +52,7 @@ impl Workspace {
         }
         self.applied_font_size.clear();
         self.apply_action(
-            DesktopAction::SettingsFontSizeSelected(font_size.to_owned()),
+            FrontendAction::SettingsFontSizeSelected(font_size.to_owned()),
             cx,
         );
         self.on_save_settings(cx);
@@ -146,13 +146,13 @@ impl Workspace {
             return;
         }
         self.apply_action(
-            DesktopAction::SettingsLanguageSelected(language.to_owned()),
+            FrontendAction::SettingsLanguageSelected(language.to_owned()),
             cx,
         );
         self.on_save_settings(cx);
     }
 
     pub(crate) fn on_toggle_language_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::LanguageMenuToggled(open), cx);
+        self.apply_action(FrontendAction::LanguageMenuToggled(open), cx);
     }
 }

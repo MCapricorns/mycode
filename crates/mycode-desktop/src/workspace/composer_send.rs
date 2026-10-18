@@ -3,13 +3,13 @@ use gpui_kit::{Context, Window};
 use mycode_app::BridgeCommand;
 
 use super::Workspace;
-use crate::view_model::DesktopAction;
+use crate::view_model::FrontendAction;
 
 impl Workspace {
     pub(crate) fn on_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.composer.read(cx).value().to_string();
         if draft != self.vm.composer_draft {
-            self.apply_action(DesktopAction::ComposerChanged(draft.clone()), cx);
+            self.apply_action(FrontendAction::ComposerChanged(draft.clone()), cx);
         }
         if self.welcome_send_session.is_some() || self.vm.pending_welcome_send.is_some() {
             return;
@@ -33,7 +33,7 @@ impl Workspace {
         // Send with an empty composer is an explicit send of the queue,
         // so it also releases a queue held by a stop.
         self.queue_hold_on_return = false;
-        self.apply_action(DesktopAction::QueuePaused(false), cx);
+        self.apply_action(FrontendAction::QueuePaused(false), cx);
         self.pump_queued_send(cx);
     }
 
@@ -44,7 +44,7 @@ impl Workspace {
         let draft = self.composer.read(cx).value().to_string();
         if draft.trim().is_empty() {
             self.queue_hold_on_return = false;
-            self.apply_action(DesktopAction::QueuePaused(false), cx);
+            self.apply_action(FrontendAction::QueuePaused(false), cx);
             if self.vm.sending || self.vm.compacting {
                 self.cancel_turn(cx);
             } else {
@@ -74,9 +74,9 @@ impl Workspace {
         }
         match crate::view_model::composer_submit(&self.vm, draft) {
             crate::view_model::ComposerSubmit::StartTask(text) => {
-                self.apply_action(DesktopAction::WelcomeSendHeld(text), cx);
+                self.apply_action(FrontendAction::WelcomeSendHeld(text), cx);
                 if !self.on_new_session(cx) {
-                    self.apply_action(DesktopAction::WelcomeSendConsumed, cx);
+                    self.apply_action(FrontendAction::WelcomeSendConsumed, cx);
                 }
             }
             crate::view_model::ComposerSubmit::NeedFolder => {
@@ -93,7 +93,7 @@ impl Workspace {
 
     pub(crate) fn on_remove_queued(&mut self, index: usize, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx);
+        self.apply_action(FrontendAction::QueuedMessageRemoved(index), cx);
     }
 
     /// Takes queued follow-ups back into the composer so they can be edited
@@ -114,8 +114,8 @@ impl Workspace {
             return;
         }
         let removed = match index {
-            Some(index) => DesktopAction::QueuedMessageRemoved(index),
-            None => DesktopAction::QueueCleared,
+            Some(index) => FrontendAction::QueuedMessageRemoved(index),
+            None => FrontendAction::QueueCleared,
         };
         self.apply_action(removed, cx);
         let draft = self.composer.read(cx).value().to_string();
@@ -128,7 +128,7 @@ impl Workspace {
             state.set_value(text.clone(), window, cx);
             state.focus(window, cx);
         });
-        self.apply_action(DesktopAction::ComposerChanged(text), cx);
+        self.apply_action(FrontendAction::ComposerChanged(text), cx);
     }
 
     /// Sends a held queue now. While a turn still runs, the queue is only
@@ -136,7 +136,7 @@ impl Workspace {
     pub(crate) fn on_resume_queued(&mut self, cx: &mut Context<Self>) {
         cx.stop_propagation();
         self.queue_hold_on_return = false;
-        self.apply_action(DesktopAction::QueuePaused(false), cx);
+        self.apply_action(FrontendAction::QueuePaused(false), cx);
         self.pump_queued_send(cx);
     }
 
@@ -147,20 +147,20 @@ impl Workspace {
         } else {
             Some(call_id.to_owned())
         };
-        self.apply_action(DesktopAction::SubagentWindowChanged(next), cx);
+        self.apply_action(FrontendAction::SubagentWindowChanged(next), cx);
     }
 
     /// Opens or closes the full working-tree changes drawer.
     pub(crate) fn on_toggle_changes_panel(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ChangesPanelToggled(open), cx);
+        self.apply_action(FrontendAction::ChangesPanelToggled(open), cx);
     }
 
     /// Stops the in-flight turn and sends one queued follow-up immediately.
     pub(crate) fn on_interrupt_queued(&mut self, index: usize, cx: &mut Context<Self>) {
         cx.stop_propagation();
         self.queue_hold_on_return = false;
-        self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
-        self.apply_action(DesktopAction::QueuePaused(false), cx);
+        self.apply_action(FrontendAction::QueuedMessagePromoted(index), cx);
+        self.apply_action(FrontendAction::QueuePaused(false), cx);
         if self.vm.sending || self.vm.compacting {
             self.cancel_turn(cx);
             return;
@@ -176,7 +176,7 @@ impl Workspace {
         if call_id.is_empty() {
             return;
         }
-        self.apply_action(DesktopAction::SubagentDismissed(call_id.to_owned()), cx);
+        self.apply_action(FrontendAction::SubagentDismissed(call_id.to_owned()), cx);
         self.dispatch(
             BridgeCommand::CancelSubagent {
                 session_id,
@@ -195,7 +195,7 @@ impl Workspace {
         if !self.vm.sending && !self.vm.compacting {
             return;
         }
-        self.apply_action(DesktopAction::QueuePaused(true), cx);
+        self.apply_action(FrontendAction::QueuePaused(true), cx);
         self.queue_hold_on_return = true;
         self.cancel_turn(cx);
     }
