@@ -85,6 +85,10 @@ impl FrontendDriver {
                     return;
                 }
                 self.pending_open = None;
+                // The snapshot was read before this reply landed. Events in
+                // between were dropped (another chat was open) or applied to
+                // the entries this snapshot now replaces.
+                self.resync_on_turn_end = conversation.running.then(|| session_id.clone());
                 let switching = self
                     .vm
                     .active

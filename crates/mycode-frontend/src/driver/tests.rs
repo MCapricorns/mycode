@@ -83,3 +83,57 @@ fn superseded_open_and_file_search_replies_are_ignored() {
         .applies(&state, None)
     );
 }
+
+#[test]
+fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
+    use mycode_app::{BranchId, BridgeEvent, BridgeReply, ConversationEntry, EntryKind, SessionId};
+
+    let root = std::env::temp_dir().join(format!(
+        "mycode-driver-resync-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).expect("root");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    }
+    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let mut driver = super::FrontendDriver::start(home, || {});
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    let mut running = conversation(&session, &branch);
+    running.running = true;
+    let mut out = Vec::new();
+    driver.pending_open = Some(session.clone());
+    driver.on_reply(
+        ReplyScope::Open(session.clone()),
+        BridgeReply::Conversation(Ok(running)),
+        &mut out,
+    );
+    assert!(driver.vm.sending, "the reopened turn is still running");
+    assert!(driver.pending_open.is_none());
+    driver.on_event(
+        BridgeEvent::ChatDone {
+            session_id: session.clone(),
+            head: "empty".to_owned(),
+            entry: ConversationEntry {
+                event_id: "evt".to_owned(),
+                kind: EntryKind::AssistantMessage,
+                text: "done".into(),
+                call_id: None,
+                thinking: String::new(),
+            },
+        },
+        &mut out,
+    );
+    assert_eq!(
+        driver.pending_open.as_deref(),
+        Some(session.as_str()),
+        "the turn end reopens the chat to pick up steps the open missed"
+    );
+    assert!(driver.resync_on_turn_end.is_none());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
