@@ -49,6 +49,9 @@ pub(crate) struct CoreState {
     /// finish last and overwrite the newer one. The tokio mutex is FIFO, so
     /// writes land in the order the frontend sent them.
     pub(crate) ui_state_writes: tokio::sync::Mutex<()>,
+    /// Bumped by every device-flow sign-in. A poll loop whose flow was
+    /// replaced stops quietly instead of reporting into the newer flow.
+    pub(crate) sign_in_generation: std::sync::atomic::AtomicU64,
 }
 
 impl CoreState {
@@ -87,6 +90,7 @@ impl CoreState {
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),
             startup_repairs: Mutex::new(startup_repairs),
             ui_state_writes: tokio::sync::Mutex::new(()),
+            sign_in_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
