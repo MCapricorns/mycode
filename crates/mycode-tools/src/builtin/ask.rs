@@ -195,27 +195,25 @@ impl Tool for AskTool {
     }
 }
 
-/// Renders one answer per question. A multi-select answer keeps each
-/// selected line under the same number.
+/// Renders each question with its answer, so the model reads the decision
+/// next to what it asked. A multi-select answer lists one selection per line.
 pub fn render_ask_answers(answers: &[AskAnswer]) -> String {
     let mut rendered = String::new();
     for (index, answer) in answers.iter().enumerate() {
         if index > 0 {
             rendered.push('\n');
         }
-        let number = index + 1;
-        if answer.answer.is_empty() {
-            let _ = write!(rendered, "{number}. (skipped)");
-            continue;
-        }
+        let _ = write!(rendered, "{}. {}", index + 1, answer.question.trim());
         let bounded: String = answer.answer.chars().take(MAX_ANSWER_CHARS).collect();
-        let mut lines = bounded.lines();
-        if let Some(first) = lines.next() {
-            let _ = write!(rendered, "{number}. {first}");
-            for line in lines {
-                rendered.push('\n');
-                rendered.push_str(line);
-            }
+        let mut lines = bounded
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .peekable();
+        if lines.peek().is_none() {
+            rendered.push_str("\n   (skipped)");
+        }
+        for line in lines {
+            let _ = write!(rendered, "\n   -> {line}");
         }
     }
     rendered
@@ -771,6 +769,24 @@ mod tests {
         for snack in snacks {
             assert!(rendered.contains(snack), "{rendered}");
         }
+    }
+
+    #[test]
+    fn answers_render_beside_their_questions() {
+        let rendered = render_ask_answers(&[
+            AskAnswer {
+                question: " Which colors? ".into(),
+                answer: "red\nblue".into(),
+            },
+            AskAnswer {
+                question: "Deadline?".into(),
+                answer: String::new(),
+            },
+        ]);
+        assert_eq!(
+            rendered,
+            "1. Which colors?\n   -> red\n   -> blue\n2. Deadline?\n   (skipped)"
+        );
     }
 
     #[test]
