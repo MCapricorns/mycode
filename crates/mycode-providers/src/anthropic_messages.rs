@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use mycode_core::{
     AssistantMessage, ContentBlock, Message, StopReason, ThinkingBlock, ToolSpec, Usage,
 };
-use mycode_core::{Request, StreamEvent};
+use mycode_core::{ProviderError, ProviderErrorKind, Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
@@ -664,6 +664,22 @@ impl MessagesReducer {
     }
 }
 
+/// Maps an output-free `error` frame onto the HTTP status the same failure
+/// carries as a refused request, so the shared retry rules apply to it.
+fn error_frame_failure(event: &Value, detail: &str) -> ProviderError {
+    let (kind, status) = match event["error"]["type"].as_str() {
+        Some("overloaded_error") => (ProviderErrorKind::Unavailable, Some(529)),
+        Some("rate_limit_error") => (ProviderErrorKind::Unavailable, Some(429)),
+        Some("api_error") => (ProviderErrorKind::Unavailable, Some(500)),
+        _ => (ProviderErrorKind::Rejected, None),
+    };
+    let error = ProviderError::with_message(kind, detail);
+    match status {
+        Some(status) => error.with_status(status),
+        None => error,
+    }
+}
+
 impl FrameReducer for MessagesReducer {
     fn feed(&mut self, data: &str) -> Vec<StreamEvent> {
         if self.terminal_sent || data.trim().is_empty() {
@@ -700,6 +716,12 @@ impl FrameReducer for MessagesReducer {
                         .unwrap_or("provider error frame")
                         .to_owned()
                 });
+                if !self.has_content() {
+                    // Nothing to keep: report the frame as the request failure
+                    // it is, so the driver can retry an overload or rate limit.
+                    self.terminal_sent = true;
+                    return vec![StreamEvent::Error(error_frame_failure(&event, &detail))];
+                }
                 self.begin_interrupt(&detail);
                 vec![self.assemble()]
             }

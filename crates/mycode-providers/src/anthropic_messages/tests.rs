@@ -176,6 +176,19 @@ fn error_event_keeps_prior_thinking() {
 }
 
 #[test]
+fn an_output_free_error_frame_is_a_request_failure() {
+    let mut reducer = MessagesReducer::new();
+    reducer.feed(r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#);
+    let events = reducer
+        .feed(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#);
+    let [mycode_core::StreamEvent::Error(error)] = events.as_slice() else {
+        panic!("expected one error terminal, got {events:?}");
+    };
+    assert_eq!(error.status(), Some(529));
+    assert_eq!(error.message(), Some("Overloaded"));
+}
+
+#[test]
 fn parallel_tool_results_and_a_steer_share_one_user_turn() {
     use mycode_core::{ToolCall, ToolResultMessage, UserMessage};
     let result = |id: &str| {
