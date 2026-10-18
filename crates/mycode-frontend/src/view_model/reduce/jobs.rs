@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn a_running_agent_leaves_its_step_off_the_status_line() {
         use crate::view_model::{
-            ActiveConversation, ConversationEntry, FrontendAction, EntryKind, WorkspaceState,
+            ActiveConversation, ConversationEntry, EntryKind, FrontendAction, WorkspaceState,
         };
 
         let mut state = WorkspaceState {
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn a_finished_turn_parks_every_running_clock() {
         use crate::view_model::{
-            ActiveConversation, ConversationEntry, FrontendAction, EntryKind, WorkspaceState,
+            ActiveConversation, ConversationEntry, EntryKind, FrontendAction, WorkspaceState,
         };
 
         let mut state = WorkspaceState {

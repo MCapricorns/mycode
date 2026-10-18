@@ -37,7 +37,10 @@ fn main() {
     let vm = driver.vm();
     println!(
         "== boot: model={:?} provider={:?} sessions={} project={:?}",
-        vm.selected_model, vm.selected_provider, vm.sessions.len(), vm.project_dir
+        vm.selected_model,
+        vm.selected_provider,
+        vm.sessions.len(),
+        vm.project_dir
     );
 
     // A provider can be overridden for the smoke run: `smoke.exe <provider> <model>`.
@@ -189,8 +192,7 @@ fn saw_tool(driver: &FrontendDriver, since: usize, needle: &str) -> bool {
         .iter()
         .any(|entry| {
             entry.kind == mycode_app::EntryKind::ToolCall
-                && (needle.is_empty()
-                    || entry.text.to_lowercase().contains(needle))
+                && (needle.is_empty() || entry.text.to_lowercase().contains(needle))
         })
 }
 

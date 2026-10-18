@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use mycode_app::BridgeCommand;
 
-use super::{DriverMsg, Effect, FrontendDriver, ToastKind, MENTION_SEARCH_DEBOUNCE};
+use super::{DriverMsg, Effect, FrontendDriver, MENTION_SEARCH_DEBOUNCE, ToastKind};
 use crate::view_model::{FrontendAction, MainView, MentionGroup, MentionKind};
 
 impl FrontendDriver {
@@ -274,7 +274,10 @@ impl FrontendDriver {
             .as_deref()
             .is_some_and(|current| crate::view_model::same_project_path(current, project));
         let removed_sessions = crate::view_model::sessions_removed_with_root(&self.vm, project);
-        self.act(FrontendAction::WorkspaceRootRemoved(project.to_owned()), out);
+        self.act(
+            FrontendAction::WorkspaceRootRemoved(project.to_owned()),
+            out,
+        );
         if chat_uses_it {
             self.park_conversation(out);
             self.act(FrontendAction::ActiveProjectChanged(None), out);

@@ -126,7 +126,9 @@ impl Workspace {
             self.vm().changes_panel_open,
             // The Details overlay is painted only on the desk. A leftover
             // unpinned inspector must not consume Escape while Settings is up.
-            self.vm().inspector_open && !self.vm().inspector_pinned && self.vm().view == MainView::Chat,
+            self.vm().inspector_open
+                && !self.vm().inspector_pinned
+                && self.vm().view == MainView::Chat,
         ) {
             match layer {
                 DismissLayer::Picker => self.on_picker_cancel(cx),
@@ -199,7 +201,8 @@ impl Workspace {
         // queue, so a stray keypress cannot touch running work. A held
         // queue — after Stop, when nothing is sending — still recalls into
         // the composer for editing.
-        if !dismissed && !self.vm().sending && !self.vm().compacting && !self.vm().queued.is_empty() {
+        if !dismissed && !self.vm().sending && !self.vm().compacting && !self.vm().queued.is_empty()
+        {
             self.on_recall_queued(None, window, cx);
         }
     }

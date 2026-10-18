@@ -217,9 +217,8 @@ impl FrontendDriver {
             BridgeReply::Older(Ok(page)) => {
                 if let Some(target) = previous_event(&page.entries, page.entries.len()) {
                     self.finish_recall(request, target.to_owned());
-                } else if let Some(older) = page
-                    .older
-                    .filter(|older| older != &page.requested_before)
+                } else if let Some(older) =
+                    page.older.filter(|older| older != &page.requested_before)
                 {
                     self.resolve_recall_page(request, older, out);
                 } else {

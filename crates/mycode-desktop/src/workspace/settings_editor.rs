@@ -62,7 +62,8 @@ impl Workspace {
         }
         let input = self.proxy_input.clone().expect("proxy input");
         if self.proxy_sync_pending {
-            let target = self.vm()
+            let target = self
+                .vm()
                 .settings
                 .as_ref()
                 .map(|settings| settings.proxy.clone())
@@ -101,7 +102,10 @@ impl Workspace {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        self.driver_do(|driver, fx| driver.toggle_web_backend(index, enabled, fx), cx);
+        self.driver_do(
+            |driver, fx| driver.toggle_web_backend(index, enabled, fx),
+            cx,
+        );
     }
 
     pub(crate) fn web_key_input(
@@ -226,7 +230,8 @@ impl Workspace {
             self.apply_action(FrontendAction::Failed("fill id".to_owned()), cx);
             return;
         }
-        if self.vm()
+        if self
+            .vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.id == id))
@@ -292,7 +297,8 @@ impl Workspace {
                 return;
             }
         };
-        let mut existing: Vec<String> = self.vm()
+        let mut existing: Vec<String> = self
+            .vm()
             .settings
             .as_ref()
             .map(|settings| {
@@ -453,7 +459,6 @@ impl Workspace {
     pub(crate) fn flush_settings_text_save(&mut self, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.flush_settings_text_save(fx), cx);
     }
-
 }
 
 #[cfg(test)]

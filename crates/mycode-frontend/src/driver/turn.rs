@@ -61,7 +61,10 @@ impl FrontendDriver {
         });
         let Some(provider) = provider else {
             self.toast(
-                crate::i18n::t("Choose a model before compacting.", "压缩前先选择一个模型。"),
+                crate::i18n::t(
+                    "Choose a model before compacting.",
+                    "压缩前先选择一个模型。",
+                ),
                 ToastKind::Info,
                 out,
             );
@@ -111,7 +114,9 @@ impl FrontendDriver {
                 settings
                     .providers
                     .iter()
-                    .find(|provider| provider.enabled && Some(&provider.id) == selected_provider.as_ref())
+                    .find(|provider| {
+                        provider.enabled && Some(&provider.id) == selected_provider.as_ref()
+                    })
                     .or_else(|| settings.providers.iter().find(|provider| provider.enabled))
             })
             .map(|provider| (provider.id.clone(), provider.models.clone()));

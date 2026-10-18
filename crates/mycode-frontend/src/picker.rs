@@ -208,10 +208,7 @@ pub fn provider_model_choices(vm: &WorkspaceState, provider_id: &str) -> Vec<Mod
 
 /// Catalog and configured models for one provider, hidden ones included.
 /// The settings page lists these so a hidden model can be shown again.
-pub fn all_provider_model_choices(
-    vm: &WorkspaceState,
-    provider_id: &str,
-) -> Vec<ModelChoice> {
+pub fn all_provider_model_choices(vm: &WorkspaceState, provider_id: &str) -> Vec<ModelChoice> {
     let catalog = vm
         .catalog
         .as_ref()

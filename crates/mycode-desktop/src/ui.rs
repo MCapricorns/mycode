@@ -13,10 +13,10 @@ mod skin;
 mod title_bar;
 mod update_dialog;
 
+use gpui_kit::Focusable as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
-use gpui_kit::Focusable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     ClickEvent, Context, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
@@ -69,7 +69,11 @@ pub fn render_root(
     // paint, so the driver's request resolves at the next frame.
     if workspace.take_focus_restore() {
         if workspace.vm().view == crate::view_model::MainView::Chat {
-            workspace.composer().read(cx).focus_handle(cx).focus(window, cx);
+            workspace
+                .composer()
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
         } else {
             focus_handle.focus(window, cx);
         }

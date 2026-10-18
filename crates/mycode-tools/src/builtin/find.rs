@@ -152,9 +152,9 @@ impl Tool for FindTool {
         let prepared = ctx.prepared_search.clone();
         run_blocking_until("find", &cancel, deadline, move |worker_cancel| {
             if worker_cancel.is_cancelled() {
-                return Err(ToolError::Execution(
-                    format!("find cancelled before completion{INTERRUPTED_NOTE}"),
-                ));
+                return Err(ToolError::Execution(format!(
+                    "find cancelled before completion{INTERRUPTED_NOTE}"
+                )));
             }
             let glob = compile_find_glob(&pattern)?;
             let root = bind_search_root_with_access(

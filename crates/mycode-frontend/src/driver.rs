@@ -15,8 +15,8 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -27,9 +27,7 @@ use mycode_app::{
 };
 use mycode_config::HomeLayout;
 
-use crate::view_model::{
-    FrontendAction, MainView, MentionKind, WorkspaceState, reduce,
-};
+use crate::view_model::{FrontendAction, MainView, MentionKind, WorkspaceState, reduce};
 
 mod events;
 mod projects;
@@ -174,9 +172,7 @@ impl ReplyScope {
                 session: session_id.clone(),
                 query: query.clone(),
             },
-            BridgeCommand::DeleteSession { session_id } => {
-                Self::DeletedSession(session_id.clone())
-            }
+            BridgeCommand::DeleteSession { session_id } => Self::DeletedSession(session_id.clone()),
             _ => Self::Global,
         }
     }
@@ -459,9 +455,7 @@ impl FrontendDriver {
     /// Session, branch, and head of the open conversation, read without
     /// cloning its transcript. `None` without an open chat or when its ids
     /// do not parse.
-    pub fn open_turn_target(
-        &self,
-    ) -> Option<(SessionId, BranchId, HeadStamp)> {
+    pub fn open_turn_target(&self) -> Option<(SessionId, BranchId, HeadStamp)> {
         let active = self.vm.active.as_ref()?;
         Some((
             SessionId::parse(&active.session_id)?,
@@ -508,8 +502,8 @@ impl FrontendDriver {
         self.vm.window_size = Some(size);
         self.ui_state_save_generation = self.ui_state_save_generation.wrapping_add(1);
         let generation = self.ui_state_save_generation;
-        self.schedule(UI_STATE_SAVE_DEBOUNCE, move || {
-            DriverMsg::UiStateSaveTick { generation }
+        self.schedule(UI_STATE_SAVE_DEBOUNCE, move || DriverMsg::UiStateSaveTick {
+            generation,
         });
     }
 
@@ -755,12 +749,7 @@ impl FrontendDriver {
     }
 
     /// Convenience for one-off pushes.
-    pub(crate) fn toast(
-        &self,
-        text: impl Into<String>,
-        kind: ToastKind,
-        out: &mut Vec<Effect>,
-    ) {
+    pub(crate) fn toast(&self, text: impl Into<String>, kind: ToastKind, out: &mut Vec<Effect>) {
         let text = text.into();
         if text.trim().is_empty() {
             return;
@@ -832,10 +821,7 @@ impl FrontendDriver {
 
     /// Records documents reset at startup and toasts their names once the
     /// settings and UI replies have had a chance to arrive.
-    pub fn note_config_repairs(
-        &mut self,
-        repairs: &[mycode_config::DocumentRepair],
-    ) {
+    pub fn note_config_repairs(&mut self, repairs: &[mycode_config::DocumentRepair]) {
         let mut added = false;
         for repair in repairs {
             if self

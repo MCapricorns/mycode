@@ -137,7 +137,11 @@ impl Tui {
     }
 
     /// Poll → effects → paint → keys, until the driver or the user quits.
-    fn event_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>, wake: &WakeRx) -> i32 {
+    fn event_loop(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        wake: &WakeRx,
+    ) -> i32 {
         let mut effects = Vec::new();
         loop {
             // Drain driver work deposited since the last frame: replies and
@@ -192,7 +196,8 @@ impl Tui {
         };
         self.driver
             .act(FrontendAction::ProjectOpened(dir.clone()), effects);
-        self.driver.act(FrontendAction::WorkspaceRootAdded(dir), effects);
+        self.driver
+            .act(FrontendAction::WorkspaceRootAdded(dir), effects);
     }
 
     /// Maps shared effects onto terminal-side state.
@@ -237,7 +242,8 @@ impl Tui {
         let draft = self.composer.lines().join("\n");
         if draft != self.driver.vm().composer_draft {
             self.mention_selected = None;
-            self.driver.act(FrontendAction::ComposerChanged(draft), effects);
+            self.driver
+                .act(FrontendAction::ComposerChanged(draft), effects);
         }
     }
 
@@ -275,9 +281,7 @@ impl Tui {
             // A console that types a paste out as keys delivers its lines as
             // Enter presses with more input already waiting; those become
             // newlines instead of one submit per pasted line.
-            (KeyCode::Enter, false, false)
-                if !matches!(event::poll(Duration::ZERO), Ok(true)) =>
-            {
+            (KeyCode::Enter, false, false) if !matches!(event::poll(Duration::ZERO), Ok(true)) => {
                 self.submit_current(&mut effects);
             }
             // Newline: terminals that report Alt/Ctrl+Enter land here; the
@@ -421,7 +425,9 @@ impl Tui {
                 if !stream.thinking.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("  {}", first_line(&stream.thinking)),
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
                     )));
                 }
                 if !stream.text.is_empty() {
@@ -556,7 +562,10 @@ impl Tui {
                 };
                 Line::from(vec![
                     Span::styled(format!(" {} ", item.insert), style),
-                    Span::styled(format!(" {}", item.label), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(" {}", item.label),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ])
             })
             .collect();
@@ -618,7 +627,10 @@ impl Tui {
         } else {
             "  (type a number or an answer, Enter continues, Esc dismisses)"
         };
-        lines.push(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))));
+        lines.push(Line::from(Span::styled(
+            hint,
+            Style::default().fg(Color::DarkGray),
+        )));
         let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(4));
         // `max` before `min`: on a terminal narrower than 34 columns a
         // `clamp(30, width - 4)` would have min > max and panic.
@@ -634,11 +646,11 @@ impl Tui {
         frame.render_widget(Clear, popup);
         frame.render_widget(
             Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!(" question {} of {} ", index + 1, asks.len())),
-                )
+                .block(Block::default().borders(Borders::ALL).title(format!(
+                    " question {} of {} ",
+                    index + 1,
+                    asks.len()
+                )))
                 .wrap(Wrap { trim: false }),
             popup,
         );
@@ -657,7 +669,12 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
     match entry.kind {
         EntryKind::UserMessage => {
             lines.push(Line::from(""));
-            push_wrapped(lines, "❯ ", &entry.text, Style::default().add_modifier(Modifier::BOLD));
+            push_wrapped(
+                lines,
+                "❯ ",
+                &entry.text,
+                Style::default().add_modifier(Modifier::BOLD),
+            );
         }
         EntryKind::AssistantMessage => {
             if !entry.thinking.is_empty() {
@@ -665,7 +682,9 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
                     lines,
                     "  ",
                     &entry.thinking,
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
                 );
             }
             push_wrapped(lines, "⏺ ", &entry.text, Style::default());

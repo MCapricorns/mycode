@@ -80,11 +80,7 @@ pub fn palette_catalog(state: &WorkspaceState) -> PaletteCatalog {
 /// The command widget reports the same coordinates after a query filter, so
 /// confirm can resolve the row without storing the filtered list.
 #[must_use]
-pub fn palette_item(
-    catalog: &PaletteCatalog,
-    section: usize,
-    row: usize,
-) -> Option<&PaletteItem> {
+pub fn palette_item(catalog: &PaletteCatalog, section: usize, row: usize) -> Option<&PaletteItem> {
     catalog
         .groups
         .get(section)

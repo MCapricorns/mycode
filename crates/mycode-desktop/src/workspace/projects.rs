@@ -219,5 +219,4 @@ impl Workspace {
     pub(crate) fn on_open_workspace_folder(&mut self, project: &str, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.open_workspace_folder(project, fx), cx);
     }
-
 }

@@ -6,7 +6,7 @@
 use mycode_app::BridgeCommand;
 use mycode_config::{AuthorityRevision, ProxyPreference};
 
-use super::{DriverMsg, Effect, FrontendDriver, ToastKind, SETTINGS_TEXT_SAVE_DEBOUNCE};
+use super::{DriverMsg, Effect, FrontendDriver, SETTINGS_TEXT_SAVE_DEBOUNCE, ToastKind};
 use crate::forms;
 use crate::view_model::{FrontendAction, McpSubview, ModelsSubview};
 
@@ -51,7 +51,13 @@ impl FrontendDriver {
             .settings
             .as_ref()
             .filter(|settings| !settings.saving && settings.dirty)
-            .map(|settings| (settings.to_settings(), settings.edit_epoch, settings.revision))
+            .map(|settings| {
+                (
+                    settings.to_settings(),
+                    settings.edit_epoch,
+                    settings.revision,
+                )
+            })
         else {
             return;
         };
@@ -78,10 +84,7 @@ impl FrontendDriver {
     /// a save.
     pub fn proxy_url_typed(&mut self, text: &str, out: &mut Vec<Effect>) {
         let text = text.trim();
-        if matches!(
-            ProxyPreference::parse(text),
-            Some(ProxyPreference::Url(_))
-        ) {
+        if matches!(ProxyPreference::parse(text), Some(ProxyPreference::Url(_))) {
             self.act(
                 FrontendAction::SettingsProxyChanged {
                     value: text.to_owned(),
@@ -188,8 +191,7 @@ impl FrontendDriver {
             self.act(FrontendAction::SettingsMcpToggled(index, false), out);
             return;
         }
-        if self.pending_mcp_enable.contains(&server.id)
-            || self.vm.mcp_probing.contains(&server.id)
+        if self.pending_mcp_enable.contains(&server.id) || self.vm.mcp_probing.contains(&server.id)
         {
             return;
         }
@@ -336,7 +338,9 @@ impl FrontendDriver {
             existing.push(server_id.clone());
             self.act(FrontendAction::SettingsMcpAdded(row.server), out);
             added += 1;
-            if let Some(api_key) = row.api_key.and_then(|key| forms::normalized_key_input(&key))
+            if let Some(api_key) = row
+                .api_key
+                .and_then(|key| forms::normalized_key_input(&key))
             {
                 self.dispatch(BridgeCommand::SaveProviderKey {
                     provider_id: format!("mcp-{server_id}"),
@@ -543,10 +547,7 @@ impl FrontendDriver {
                 api_key,
             });
         }
-        self.act(
-            FrontendAction::ShowModelsSubview(ModelsSubview::List),
-            out,
-        );
+        self.act(FrontendAction::ShowModelsSubview(ModelsSubview::List), out);
     }
 
     /// Removes one provider row and closes its detail page when open.

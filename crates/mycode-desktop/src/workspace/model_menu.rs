@@ -89,7 +89,10 @@ impl Workspace {
     }
 
     pub(crate) fn on_open_provider_detail(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.apply_action(FrontendAction::ProviderDetailOpened(Some(id.to_owned())), cx);
+        self.apply_action(
+            FrontendAction::ProviderDetailOpened(Some(id.to_owned())),
+            cx,
+        );
     }
 
     pub(crate) fn on_close_provider_detail(&mut self, cx: &mut Context<Self>) {
@@ -102,7 +105,8 @@ impl Workspace {
 
     pub(crate) fn on_select_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
         self.apply_action(FrontendAction::ProviderSelected(provider_id.to_owned()), cx);
-        if self.vm()
+        if self
+            .vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.dirty)
@@ -129,7 +133,8 @@ impl Workspace {
 
     pub(crate) fn on_select_model(&mut self, model_id: &str, cx: &mut Context<Self>) {
         self.apply_action(FrontendAction::ModelSelected(model_id.to_owned()), cx);
-        if self.vm()
+        if self
+            .vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.dirty)

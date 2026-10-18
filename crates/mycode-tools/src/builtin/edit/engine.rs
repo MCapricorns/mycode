@@ -20,9 +20,9 @@ pub(super) use self::preview::snippet;
 
 pub(super) fn check_cancel(cancel: &CancellationToken) -> Result<(), ToolError> {
     if cancel.is_cancelled() {
-        Err(ToolError::Execution(
-            format!("file operation cancelled before completion{INTERRUPTED_NOTE}"),
-        ))
+        Err(ToolError::Execution(format!(
+            "file operation cancelled before completion{INTERRUPTED_NOTE}"
+        )))
     } else {
         Ok(())
     }

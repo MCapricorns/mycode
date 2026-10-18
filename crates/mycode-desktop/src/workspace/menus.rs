@@ -54,7 +54,9 @@ impl Workspace {
                 self.menu_navigation.provider = None;
             }
             FrontendAction::ModelMenuBrowse(_) => self.menu_navigation.model = None,
-            FrontendAction::PickerQueryChanged(query) if query.as_str() != self.vm().picker_query => {
+            FrontendAction::PickerQueryChanged(query)
+                if query.as_str() != self.vm().picker_query =>
+            {
                 self.menu_navigation.model = None;
             }
             FrontendAction::ConversationOpened(_)
@@ -70,8 +72,16 @@ impl Workspace {
     /// call whose actions the window never sees (replies and events).
     pub(super) fn menu_navigation_mark(&self) -> MenuNavigationMark {
         MenuNavigationMark {
-            session: self.vm().active.as_ref().map(|active| active.session_id.clone()),
-            mention_len: self.vm().mention.as_ref().map(|mention| mention.items.len()),
+            session: self
+                .vm()
+                .active
+                .as_ref()
+                .map(|active| active.session_id.clone()),
+            mention_len: self
+                .vm()
+                .mention
+                .as_ref()
+                .map(|mention| mention.items.len()),
         }
     }
 
@@ -171,7 +181,8 @@ impl Workspace {
             }
             return true;
         }
-        let role = self.vm()
+        let role = self
+            .vm()
             .subagent_menu
             .as_ref()
             .filter(|(_, field)| field == "model")
@@ -182,16 +193,21 @@ impl Workspace {
                 .unwrap_or(ModelPickerTarget::Session);
             if let Some(provider) = self.vm().model_menu_browse.clone() {
                 let choices = crate::ui::model_picker::provider_model_choices(self.vm(), &provider);
-                let filtered =
-                    crate::ui::model_picker::filter_model_choices(&choices, &self.vm().picker_query);
+                let filtered = crate::ui::model_picker::filter_model_choices(
+                    &choices,
+                    &self.vm().picker_query,
+                );
                 if filtered.is_empty() {
                     return true;
                 }
                 if key == "enter" {
                     self.accept_model_search(cx);
                 } else {
-                    let selected =
-                        crate::ui::model_picker::selected_in_provider(self.vm(), &target, &provider);
+                    let selected = crate::ui::model_picker::selected_in_provider(
+                        self.vm(),
+                        &target,
+                        &provider,
+                    );
                     let preferred = crate::ui::model_picker::preferred_index(
                         &filtered,
                         &self.vm().picker_query,
@@ -247,7 +263,8 @@ impl Workspace {
             }
             return true;
         }
-        if self.vm()
+        if self
+            .vm()
             .mention
             .as_ref()
             .is_some_and(|mention| !mention.items.is_empty())

@@ -228,9 +228,9 @@ fn normalize(
 
 fn check_cancel(cancel: Option<&CancellationToken>) -> Result<(), ToolError> {
     if cancel.is_some_and(CancellationToken::is_cancelled) {
-        Err(ToolError::Execution(
-            format!("file operation cancelled before completion{INTERRUPTED_NOTE}"),
-        ))
+        Err(ToolError::Execution(format!(
+            "file operation cancelled before completion{INTERRUPTED_NOTE}"
+        )))
     } else {
         Ok(())
     }
@@ -400,9 +400,9 @@ fn candidate_starts(
                 // before the token index would have been a multiple of the interval.
                 #[cfg(test)]
                 if tok.orig_end >= fuzzy_test_cancel_at() {
-                    return Err(ToolError::Execution(
-                        format!("file operation cancelled before completion{INTERRUPTED_NOTE}"),
-                    ));
+                    return Err(ToolError::Execution(format!(
+                        "file operation cancelled before completion{INTERRUPTED_NOTE}"
+                    )));
                 }
                 next_cancel_check = tok.orig_end.saturating_add(FUZZY_CANCEL_INTERVAL);
             }

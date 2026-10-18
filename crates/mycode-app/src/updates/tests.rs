@@ -441,8 +441,14 @@ fn asset_prefix_names_each_binary_family() {
 fn a_renamed_binary_keeps_the_desktop_family() {
     assert_eq!(super::asset_family(Some("mycode")), "mycode");
     assert_eq!(super::asset_family(Some("MYCode")), "mycode");
-    assert_eq!(super::asset_family(Some("mycode-desktop")), "mycode-desktop");
-    assert_eq!(super::asset_family(Some("MYCode Desktop")), "mycode-desktop");
+    assert_eq!(
+        super::asset_family(Some("mycode-desktop")),
+        "mycode-desktop"
+    );
+    assert_eq!(
+        super::asset_family(Some("MYCode Desktop")),
+        "mycode-desktop"
+    );
     assert_eq!(super::asset_family(None), "mycode-desktop");
 }
 

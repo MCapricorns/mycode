@@ -66,9 +66,10 @@ fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
 /// failure) must keep updating from the desktop family instead of asking
 /// the release for an asset that never exists.
 fn exe_stem() -> String {
-    let stem = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()));
+    let stem = std::env::current_exe().ok().and_then(|path| {
+        path.file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+    });
     asset_family(stem.as_deref()).to_owned()
 }
 

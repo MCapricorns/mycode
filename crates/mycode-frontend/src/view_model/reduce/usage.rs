@@ -100,7 +100,12 @@ mod tests {
         }
     }
 
-    fn snapshot(context: u64, context_cache: u64, input: u64, cache: Option<u64>) -> FrontendAction {
+    fn snapshot(
+        context: u64,
+        context_cache: u64,
+        input: u64,
+        cache: Option<u64>,
+    ) -> FrontendAction {
         FrontendAction::UsageSnapshot {
             model: "m".to_owned(),
             input,
@@ -147,10 +152,7 @@ mod tests {
             &mut state,
             FrontendAction::ModelSelected("other".to_owned()),
         );
-        assert_eq!(
-            state.cache_watch.expect("armed").cause,
-            CacheBreak::Switch
-        );
+        assert_eq!(state.cache_watch.expect("armed").cause, CacheBreak::Switch);
         reduce(&mut state, snapshot(10_000, 0, 10_000, None));
         assert_eq!(
             state.cache_alert.expect("collapse").cause,
