@@ -80,6 +80,10 @@ pub struct WorkspaceState {
     pub thinking_collapsed: bool,
     /// A send is in flight.
     pub sending: bool,
+    /// Unix milliseconds when the in-flight turn armed. `0` while idle; a
+    /// reopened session counts from the reopen because the real start is
+    /// not carried over the wire.
+    pub turn_started_ms: u64,
     /// A manual `/compact` is running. It is not a turn — no streaming
     /// bubble — but it locks the composer the same way so a follow-up
     /// queues instead of racing the compaction's expected-head check.
@@ -235,6 +239,17 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// Milliseconds the in-flight turn has been running. `0` when no turn
+    /// is armed or the clock was never stamped.
+    pub fn turn_elapsed_ms(&self) -> u64 {
+        if self.turn_started_ms == 0 || !self.sending {
+            return 0;
+        }
+        crate::unix_now()
+            .as_millis()
+            .saturating_sub(u128::from(self.turn_started_ms)) as u64
+    }
+
     /// Final runtime of a finished subagent call, in milliseconds. The
     /// latest entry wins when a call id was reused.
     pub fn job_elapsed(&self, call_id: &str) -> Option<u64> {

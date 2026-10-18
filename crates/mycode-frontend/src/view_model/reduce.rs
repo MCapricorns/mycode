@@ -76,6 +76,7 @@ fn queue_message(state: &mut WorkspaceState, text: String) {
 /// ever be cleared once another conversation takes the screen.
 fn reset_turn_view(state: &mut WorkspaceState) {
     state.sending = false;
+    state.turn_started_ms = 0;
     state.compacting = false;
     state.pending_summary = None;
     state.queued.clear();
@@ -99,6 +100,7 @@ fn end_turn(state: &mut WorkspaceState) {
     state.pending_ask = None;
     state.ask_answers.clear();
     state.sending = false;
+    state.turn_started_ms = 0;
 }
 
 fn push_entry_once(conversation: &mut ActiveConversation, entry: mycode_app::ConversationEntry) {
@@ -265,6 +267,11 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // just-armed turn by a few async hops; only the fresh-open case
             // trusts the wire value outright.
             state.sending = running || (!switched && state.sending);
+            if state.sending && state.turn_started_ms == 0 {
+                // The wire does not carry the real turn start; count from
+                // the reopen so the elapsed label still ticks.
+                state.turn_started_ms = crate::unix_now().as_millis() as u64;
+            }
             for session in &mut state.sessions {
                 session.active = session.session_id == session_id;
             }
@@ -390,6 +397,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::TurnArmed => {
             state.sending = true;
+            state.turn_started_ms = crate::unix_now().as_millis() as u64;
             state.error = None;
             state.turn_alert = None;
             set_streaming_status(

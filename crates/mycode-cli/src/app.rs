@@ -41,8 +41,8 @@ use mycode_config::{VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES};
 use mycode_frontend::driver::{Effect, FrontendDriver, ToastKind};
 use mycode_frontend::view_model::{
     FrontendAction, MainView, MentionKind, SettingsSection, UpdateState, WorkspaceState,
-    model_display_name, preferred_slash_index, provider_display_name, selected_reasoning_level,
-    selected_reasoning_levels,
+    elapsed_label, model_display_name, preferred_slash_index, provider_display_name,
+    selected_reasoning_level, selected_reasoning_levels,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -158,6 +158,9 @@ struct Tui {
     settings_overlay: Option<SettingsOverlay>,
     /// The view last painted — a change into Settings resets the cursor.
     was_settings: bool,
+    /// Last frame time while a turn streams: the status line's elapsed
+    /// seconds tick once a second without repainting at full poll speed.
+    stream_paint: Instant,
     quit: bool,
 }
 
@@ -248,6 +251,7 @@ impl Tui {
             settings_cursor: 0,
             settings_overlay: None,
             was_settings: false,
+            stream_paint: Instant::now(),
             quit: false,
         }
     }
@@ -337,11 +341,17 @@ impl Tui {
             }
             self.was_settings = in_settings;
             self.expire_notices();
+            // A live turn repaints once a second so the elapsed label in
+            // the status line ticks between deltas.
+            if self.driver.vm().sending && self.stream_paint.elapsed() >= Duration::from_secs(1) {
+                self.dirty = true;
+            }
             if self.dirty {
                 self.dirty = false;
                 if terminal.draw(|frame| self.draw(frame)).is_err() {
                     return 1;
                 }
+                self.stream_paint = Instant::now();
             }
             // Paging up past the resident window pulls the next older page;
             // the tail-relative offset keeps the reader on the same rows.
@@ -1169,9 +1179,12 @@ impl Tui {
                 render_entry(entry, &mut lines);
             }
             if let Some(stream) = &active.streaming {
+                // The elapsed tail proves a long think is still alive; the
+                // newest thinking line does the same for its content.
+                let elapsed = elapsed_suffix(vm);
                 if !stream.thinking.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        format!("  ✻ {}", first_line(&stream.thinking)),
+                        format!("  ✻ {}{elapsed}", thinking_tail(&stream.thinking)),
                         Style::default()
                             .fg(Color::Magenta)
                             .add_modifier(Modifier::ITALIC),
@@ -1187,7 +1200,7 @@ impl Tui {
                     );
                 } else if !stream.status.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        format!("  {}", stream.status),
+                        format!("  {}{elapsed}", stream.status),
                         Style::default().fg(Color::DarkGray),
                     )));
                 }
@@ -2016,6 +2029,33 @@ fn push_wrapped(
 
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
+}
+
+/// ` · 42s` while a turn runs; empty at rest or before the clock starts.
+fn elapsed_suffix(vm: &WorkspaceState) -> String {
+    let ms = vm.turn_elapsed_ms();
+    if ms == 0 {
+        String::new()
+    } else {
+        format!(" · {}", elapsed_label(ms))
+    }
+}
+
+/// Newest non-empty thinking line, cut from the front so a line still
+/// streaming shows its newest words — same rule as the desktop headline.
+fn thinking_tail(text: &str) -> String {
+    const MAX: usize = 72;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .unwrap_or("");
+    let count = line.chars().count();
+    if count <= MAX {
+        return line.to_owned();
+    }
+    let tail: String = line.chars().skip(count - (MAX - 1)).collect();
+    format!("…{tail}")
 }
 
 /// `~/…` display for the status bar's directory segment.
