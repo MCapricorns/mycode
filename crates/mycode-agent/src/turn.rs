@@ -397,7 +397,25 @@ pub(crate) async fn dispatch_tool_call(
 
     let tool_name = canonical_tool_name(&call.name);
     let Some(tool) = env.tools.get(tool_name) else {
-        return completed_error(env, &call_id, call, format!("unknown tool: {}", call.name));
+        // Naming the real tools lets the model correct a guessed name in
+        // one retry instead of guessing again.
+        const LISTED: usize = 40;
+        let names = env.tools.names();
+        let mut available = names
+            .iter()
+            .take(LISTED)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if names.len() > LISTED {
+            available.push_str(&format!(", and {} more", names.len() - LISTED));
+        }
+        return completed_error(
+            env,
+            &call_id,
+            call,
+            format!("unknown tool: {}; available tools: {available}", call.name),
+        );
     };
 
     let args = call.arguments.clone();
