@@ -140,7 +140,10 @@ impl FrontendDriver {
         else {
             return;
         };
-        self.act(FrontendAction::ProxyTestChanged(ProxyTestState::Testing), out);
+        self.act(
+            FrontendAction::ProxyTestChanged(ProxyTestState::Testing),
+            out,
+        );
         self.dispatch(BridgeCommand::TestProxy { proxy });
     }
 
