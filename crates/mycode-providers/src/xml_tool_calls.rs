@@ -17,10 +17,29 @@
 //! A parameter value that is a JSON array or object is decoded, and repeated
 //! parameter tags become one array. That keeps list and object arguments
 //! (such as `ask_user` `choices`) in the shape the tool schema expects.
-//! Plain text stays a string.
+//! Plain text stays a string; free-text parameters (file content, edit
+//! text, a command) keep their exact text, see [`TEXT_PARAMS`].
 
 /// Cap on one buffered tool-call body; oversized bodies fall back to text.
-const MAX_CALL_BODY_CHARS: usize = 32 * 1024;
+/// A `write` of a real source file outgrew the old 32K-character cap, and
+/// the call was lost as visible markup.
+const MAX_CALL_BODY_BYTES: usize = 1024 * 1024;
+
+/// Parameters that carry free text: file content, text to match or insert,
+/// a shell command. Their values are never decoded as JSON or XML, and only
+/// the newline that sets the value off from its tags is removed, so
+/// indentation, a leading `{`, and an `<html>` body reach the tool intact.
+const TEXT_PARAMS: [&str; 9] = [
+    "content",
+    "old_string",
+    "new_string",
+    "old_str",
+    "new_str",
+    "command",
+    "pattern",
+    "replacement",
+    "text",
+];
 
 const OPEN_TOOL: &str = "<tool_call>";
 const CLOSE_TOOL: &str = "</tool_call>";
@@ -66,6 +85,9 @@ pub(crate) struct XmlToolCallParser {
     buffer: String,
     /// The opening tag currently being buffered, when one has started.
     open: Option<CallTag>,
+    /// Bytes of an open call's body already searched for its closing tag,
+    /// so each delta scans only what is new.
+    searched: usize,
 }
 
 impl XmlToolCallParser {
@@ -76,16 +98,24 @@ impl XmlToolCallParser {
         loop {
             if let Some(open) = self.open {
                 let close = open.close();
-                let Some(end) = self.buffer.find(close) else {
-                    if self.buffer.chars().count() > MAX_CALL_BODY_CHARS {
+                // Back off one tag length so a tag split across deltas is found.
+                let from = self
+                    .buffer
+                    .floor_char_boundary(self.searched.saturating_sub(close.len()));
+                let Some(found) = self.buffer[from..].find(close) else {
+                    self.searched = self.buffer.len();
+                    if self.buffer.len() > MAX_CALL_BODY_BYTES {
                         // A runaway body without a closing tag degrades to
                         // visible text instead of unbounded buffering.
                         let raw = std::mem::take(&mut self.buffer);
                         self.open = None;
+                        self.searched = 0;
                         pieces.push(XmlPiece::Text(format!("{}{raw}", open.open())));
                     }
                     break;
                 };
+                let end = from + found;
+                self.searched = 0;
                 let body = self.buffer[..end].to_owned();
                 self.buffer.replace_range(..end + close.len(), "");
                 self.open = None;
@@ -117,6 +147,7 @@ impl XmlToolCallParser {
                 }
                 self.buffer.replace_range(..tag.open().len(), "");
                 self.open = Some(tag);
+                self.searched = 0;
             }
         }
         pieces
@@ -127,6 +158,7 @@ impl XmlToolCallParser {
     /// it surfaces as text instead of disappearing from the assembled message.
     pub(crate) fn finish(&mut self) -> Vec<XmlPiece> {
         let open = self.open.take();
+        self.searched = 0;
         let rest = std::mem::take(&mut self.buffer);
         if rest.is_empty() {
             Vec::new()
@@ -316,7 +348,12 @@ fn parameters_object(region: &str) -> Option<serde_json::Map<String, serde_json:
         let key = parameter_key(header)?;
         let value_start = header_end + 1;
         let value_end = region[value_start..].find("</parameter>")? + value_start;
-        let value = coerce_xml_value(&region[value_start..value_end]);
+        let raw = &region[value_start..value_end];
+        let value = if TEXT_PARAMS.contains(&key.as_str()) {
+            serde_json::Value::String(text_value(raw))
+        } else {
+            coerce_xml_value(raw)
+        };
         insert_param(&mut map, key, value);
         cursor = value_end + "</parameter>".len();
     }
@@ -354,6 +391,20 @@ fn insert_param(
             map.insert(key, serde_json::Value::Array(vec![existing, value]));
         }
     }
+}
+
+/// A free-text parameter body without the one newline on each side that
+/// formats `<parameter=k>\n…\n</parameter>`. Other whitespace is content.
+fn text_value(raw: &str) -> String {
+    let raw = raw
+        .strip_prefix("\r\n")
+        .or_else(|| raw.strip_prefix('\n'))
+        .unwrap_or(raw);
+    let raw = raw
+        .strip_suffix("\r\n")
+        .or_else(|| raw.strip_suffix('\n'))
+        .unwrap_or(raw);
+    raw.to_owned()
 }
 
 /// Decodes a parameter body. JSON arrays and objects keep their types; a
@@ -542,6 +593,63 @@ mod tests {
         };
         assert_eq!(name, "read");
         assert_eq!(arguments(&pieces[0])["path"], "src/a.rs");
+    }
+
+    /// Edit text kept its indentation only by luck before: every value was
+    /// trimmed, and one that looked like JSON or XML was decoded into an
+    /// object the edit schema rejected.
+    #[test]
+    fn free_text_parameters_keep_their_exact_text() {
+        let pieces = parse(
+            "<tool_call><function=edit>\n<parameter=path>\n src/a.html \n</parameter>\n\
+             <parameter=old_string>\n    <div>{x}</div>\n</parameter>\n\
+             <parameter=new_string>\n    <div>{y}</div>\n\n</parameter>\n\
+             </function></tool_call>",
+        );
+        let args = arguments(&pieces[0]);
+        assert_eq!(args["path"], "src/a.html");
+        assert_eq!(args["old_string"], "    <div>{x}</div>");
+        assert_eq!(args["new_string"], "    <div>{y}</div>\n");
+
+        let pieces = parse(
+            "<tool_call><function=write><parameter=path>a.json</parameter>\
+             <parameter=content>{\"k\": [1]}\n</parameter></function></tool_call>",
+        );
+        assert_eq!(arguments(&pieces[0])["content"], "{\"k\": [1]}");
+    }
+
+    /// A large call streamed in small deltas is found without rescanning
+    /// the whole body each time, and a body past the old 32K cap survives.
+    #[test]
+    fn a_large_call_split_across_deltas_parses() {
+        let content = "line of file content\n".repeat(4096);
+        let call = format!(
+            "<tool_call><function=write><parameter=path>big.txt</parameter>\
+             <parameter=content>{content}</parameter></function></tool_call>done"
+        );
+        let mut parser = XmlToolCallParser::default();
+        let mut pieces = Vec::new();
+        let bytes = call.as_bytes();
+        for chunk in bytes.chunks(7) {
+            pieces.extend(parser.feed(std::str::from_utf8(chunk).expect("ascii")));
+        }
+        pieces.extend(parser.finish());
+        let call = pieces
+            .iter()
+            .find(|piece| matches!(piece, XmlPiece::ToolCall { .. }))
+            .expect("tool call");
+        assert_eq!(
+            arguments(call)["content"].as_str().map(str::len),
+            Some(content.len() - 1)
+        );
+        let text: String = pieces
+            .iter()
+            .filter_map(|piece| match piece {
+                XmlPiece::Text(text) => Some(text.as_str()),
+                XmlPiece::ToolCall { .. } => None,
+            })
+            .collect();
+        assert_eq!(text, "done");
     }
 
     #[test]
