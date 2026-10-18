@@ -93,6 +93,7 @@ pub(super) fn render_sidebar(
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let has_folder = crate::view_model::has_open_folder(workspace.vm());
+    let armed_delete = workspace.armed_session_delete().map(str::to_owned);
 
     div()
         .id("sidebar")
@@ -111,6 +112,7 @@ pub(super) fn render_sidebar(
             session_count,
             filter_miss,
             desk.faint,
+            armed_delete.as_deref(),
         ))
         .child(render_sidebar_footer(workspace, view, cx))
 }
@@ -257,10 +259,11 @@ fn sessions_section(
     session_count: usize,
     filter_miss: bool,
     faint: gpui_kit::Hsla,
+    armed_delete: Option<&str>,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let now = chrono::Local::now();
-    let grouped_rows = build_grouped_session_rows(sessions, cwd, now, cx);
+    let grouped_rows = build_grouped_session_rows(sessions, cwd, now, armed_delete, cx);
     div()
         .id("sidebar-sessions")
         .flex_1()
@@ -328,6 +331,7 @@ fn build_grouped_session_rows(
     sessions: &[(SessionSummary, Option<String>)],
     cwd: Option<&str>,
     now: chrono::DateTime<chrono::Local>,
+    armed_delete: Option<&str>,
     cx: &Context<Workspace>,
 ) -> Vec<gpui_kit::AnyElement> {
     let theme = cx.theme();
@@ -355,7 +359,15 @@ fn build_grouped_session_rows(
             let relative =
                 format_session_relative_time(summary.updated_at_ms, summary.corrupt, now);
             elements.push(
-                session_row(summary, project.as_deref(), cwd, relative, cx).into_any_element(),
+                session_row(
+                    summary,
+                    project.as_deref(),
+                    cwd,
+                    relative,
+                    armed_delete == Some(summary.session_id.as_str()),
+                    cx,
+                )
+                .into_any_element(),
             );
         }
     }
@@ -487,6 +499,7 @@ fn session_row(
     project: Option<&str>,
     cwd: Option<&str>,
     relative_time: Option<String>,
+    armed: bool,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
@@ -591,15 +604,51 @@ fn session_row(
                     .child(label),
             )
         })
-        .child(super::hover_delete_button(
-            format!("session-delete-{}", summary.session_id),
-            IconName::Trash,
-            "session-row",
-            cx.listener(move |workspace, _, _, cx| {
+        .map(|row| {
+            let on_delete = cx.listener(move |workspace, _, _, cx| {
                 workspace.on_delete_session(&session_id, cx);
-            }),
-            cx,
-        ))
+            });
+            if armed {
+                row.child(armed_delete_button(&summary.session_id, on_delete, theme))
+            } else {
+                row.child(super::hover_delete_button(
+                    format!("session-delete-{}", summary.session_id),
+                    IconName::Trash,
+                    "session-row",
+                    on_delete,
+                    cx,
+                ))
+            }
+        })
+}
+
+/// The trash after its first click: always visible, red, and labeled, so
+/// the second click is a choice and not a slip.
+fn armed_delete_button(
+    session_id: &str,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
+    theme: &Theme,
+) -> impl IntoElement {
+    div()
+        .id(format!("session-delete-{session_id}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .h(px(20.))
+        .rounded(px(4.))
+        .flex_shrink_0()
+        .cursor_pointer()
+        .bg(theme.danger.opacity(0.12))
+        .text_color(theme.danger)
+        .text_xs()
+        .on_click(move |event, window, cx| {
+            cx.stop_propagation();
+            on_click(event, window, cx);
+        })
+        .child(Icon::new(IconName::Trash).xsmall())
+        .child(t("Delete?", "删除？"))
 }
 
 fn render_sidebar_footer(

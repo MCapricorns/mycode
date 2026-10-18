@@ -16,10 +16,39 @@ impl Workspace {
         self.driver_do(|d, fx| d.recall_message(index, fx), cx);
     }
 
-    /// Deletes one session straight from its row's trash button. The row
-    /// control is a deliberate hover target, so no confirmation dialog.
+    /// Deletes one session from its row's trash button on the second click.
+    ///
+    /// The first click arms the button for [`DELETE_CONFIRM_WINDOW`]. A
+    /// delete cannot be undone, and one stray click on the hover target used
+    /// to remove the whole conversation. Still no dialog: the second click
+    /// lands on the same spot.
     pub(crate) fn on_delete_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        if self.armed_session_delete.as_deref() != Some(session_id) {
+            self.armed_session_delete = Some(session_id.to_owned());
+            let armed = session_id.to_owned();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(DELETE_CONFIRM_WINDOW).await;
+                let _ = this.update(cx, |workspace, cx| {
+                    if workspace.armed_session_delete.as_deref() == Some(armed.as_str()) {
+                        workspace.armed_session_delete = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
+        self.armed_session_delete = None;
         self.driver.delete_session(session_id);
         cx.notify();
     }
+
+    /// The session whose trash button is waiting for its second click.
+    pub(crate) fn armed_session_delete(&self) -> Option<&str> {
+        self.armed_session_delete.as_deref()
+    }
 }
+
+/// How long an armed session delete waits for the confirming click.
+const DELETE_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
