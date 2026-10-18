@@ -47,10 +47,13 @@ fn extract_clixml_s_nodes(text: &str, kind: &str) -> Vec<String> {
 }
 
 fn decode_clixml_text(text: &str) -> String {
+    // `&amp;` last, so an escaped entity such as `&amp;lt;` stays `&lt;`.
     let unescaped = text
-        .replace("&amp;", "&")
         .replace("&lt;", "<")
-        .replace("&gt;", ">");
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
     decode_clixml_char_escapes(&unescaped).trim_end().to_owned()
 }
 
