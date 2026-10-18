@@ -97,10 +97,12 @@ impl Workspace {
             .entry(id.to_owned())
             .or_insert_with(|| {
                 let input = cx.new(|cx| {
-                    InputState::new(window, cx).placeholder(crate::i18n::t(
-                        "Paste API key (Bearer is added)",
-                        "粘贴 API 密钥（自动加 Bearer）",
-                    ))
+                    InputState::new(window, cx)
+                        .placeholder(crate::i18n::t(
+                            "Paste API key (Bearer is added)",
+                            "粘贴 API 密钥（自动加 Bearer）",
+                        ))
+                        .masked(true)
                 });
                 cx.subscribe_in(&input, window, |_, _, event, _, cx| {
                     if matches!(event, InputEvent::Change) {
