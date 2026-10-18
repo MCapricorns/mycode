@@ -41,7 +41,7 @@ fn tool_calling(shell_tool: &str) -> String {
 - Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
 - A `{shell_tool}` call waits for its command to exit. Do not start one that waits for input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn until the timeout. Pass non-interactive flags instead.\n\
 - Read existing content before changing it. Change files with `write` and `edit`. {hint}\n\
-- Use `{shell_tool}` with `mode` `program` for one kernel image, or a direct shebang wrapper, and an explicit argument vector. That path does not parse a shell command string.\n\
+- `{shell_tool}` `mode` `program` runs one executable with an explicit `args` vector and no shell parsing. Prefer it when a command string would need fragile quoting.\n\
 - Never use `{shell_tool}` to talk to the user.\n\
 - Editing or recalling a chat message does not restore or delete workspace files.\n\
 </tool_calling>"
