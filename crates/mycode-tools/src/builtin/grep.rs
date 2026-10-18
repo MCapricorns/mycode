@@ -396,9 +396,9 @@ impl Tool for GrepTool {
         let prepared = ctx.prepared_search.clone();
         run_blocking_until("search", &cancel, deadline, move |worker_cancel| {
             if worker_cancel.is_cancelled() {
-                return Err(ToolError::Execution(
-                    format!("search cancelled before completion{INTERRUPTED_NOTE}"),
-                ));
+                return Err(ToolError::Execution(format!(
+                    "search cancelled before completion{INTERRUPTED_NOTE}"
+                )));
             }
             let matcher = compile_matcher(&args.pattern, args.is_regex)?;
             let include = compile_glob(args.include.as_deref(), "include")?;

@@ -366,7 +366,6 @@ impl SessionStore {
         }
     }
 
-
     fn commit_append(
         &mut self,
         request: &AppendRequest<'_>,

@@ -41,7 +41,10 @@ impl FrontendDriver {
         if manual {
             self.manual_update_check = true;
         }
-        self.act(FrontendAction::UpdateStateChanged(UpdateState::Checking), out);
+        self.act(
+            FrontendAction::UpdateStateChanged(UpdateState::Checking),
+            out,
+        );
         self.dispatch(BridgeCommand::CheckUpdate);
     }
 

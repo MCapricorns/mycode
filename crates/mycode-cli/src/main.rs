@@ -19,9 +19,7 @@ fn main() {
             mycode_frontend::cli::EarlyAction::Version => {
                 format!("{}\n", mycode_frontend::cli::version_line())
             }
-            mycode_frontend::cli::EarlyAction::Help => {
-                mycode_frontend::cli::help_text("mycode")
-            }
+            mycode_frontend::cli::EarlyAction::Help => mycode_frontend::cli::help_text("mycode"),
             mycode_frontend::cli::EarlyAction::Unknown(flag) => {
                 eprintln!(
                     "mycode: unknown option {flag}\n\n{}",

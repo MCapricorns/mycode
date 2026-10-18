@@ -2,9 +2,9 @@
 //! that exists, clamping the stored thinking pick to the catalog, and the
 //! preset form's pre-checked model list.
 
+use super::usage::arm_cache_watch;
 use crate::i18n::t;
 use crate::view_model::{CacheBreak, WorkspaceState, rank_model_ids};
-use super::usage::arm_cache_watch;
 
 /// The `ProviderSelected` transition: the model picker selected a provider.
 pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
@@ -33,7 +33,11 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
     if !selected_model_supports_reasoning(state) {
         state.reasoning_menu_open = false;
     }
-    if (state.selected_provider.clone(), state.selected_model.clone()) != before {
+    if (
+        state.selected_provider.clone(),
+        state.selected_model.clone(),
+    ) != before
+    {
         arm_cache_watch(state, CacheBreak::Switch);
     }
     // As in `model_selected`: the stored effort survives the switch. The

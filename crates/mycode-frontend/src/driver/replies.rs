@@ -4,9 +4,7 @@
 use mycode_app::{BridgeCommand, BridgeReply};
 
 use super::{Effect, FrontendDriver, ReplyScope, ToastKind};
-use crate::view_model::{
-    CHAT_CANCELLED, FrontendAction, SettingsState, UpdateState,
-};
+use crate::view_model::{CHAT_CANCELLED, FrontendAction, SettingsState, UpdateState};
 
 fn failed_start(message: String) -> FrontendAction {
     FrontendAction::ChatFailed {
@@ -367,10 +365,7 @@ impl FrontendDriver {
                                     .position(|backend| backend.id == backend_id)
                             });
                             if let Some(index) = index {
-                                self.act(
-                                    FrontendAction::SettingsBackendToggled(index, true),
-                                    out,
-                                );
+                                self.act(FrontendAction::SettingsBackendToggled(index, true), out);
                                 self.toast(
                                     crate::i18n::t(
                                         "Search backend verified and enabled",
@@ -400,8 +395,7 @@ impl FrontendDriver {
                 );
                 if refreshed {
                     self.toast(
-                        crate::i18n::t("Provider catalog refreshed", "服务商目录已刷新")
-                            .to_owned(),
+                        crate::i18n::t("Provider catalog refreshed", "服务商目录已刷新").to_owned(),
                         ToastKind::Info,
                         out,
                     );
@@ -527,8 +521,7 @@ impl FrontendDriver {
                         crate::i18n::t("is ready to install", "已就绪,可安装")
                     ),
                     None => {
-                        crate::i18n::t("Update is ready to install", "更新已就绪,可安装")
-                            .to_owned()
+                        crate::i18n::t("Update is ready to install", "更新已就绪,可安装").to_owned()
                     }
                 };
                 self.toast(message, ToastKind::Info, out);

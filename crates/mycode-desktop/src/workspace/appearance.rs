@@ -33,7 +33,8 @@ impl Workspace {
     /// window, once per change. The size comes from the settings projection,
     /// which is what gets written to `settings.json`.
     pub(crate) fn sync_interface_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let size_id = self.vm()
+        let size_id = self
+            .vm()
             .settings
             .as_ref()
             .map(|settings| settings.font_size.as_str())

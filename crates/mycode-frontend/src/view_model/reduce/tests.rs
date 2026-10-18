@@ -1,6 +1,6 @@
 use super::reduce;
 use crate::view_model::{
-    ActiveConversation, ConversationEntry, FrontendAction, EntryKind, TurnStats, UpdateState,
+    ActiveConversation, ConversationEntry, EntryKind, FrontendAction, TurnStats, UpdateState,
     WorkspaceState,
 };
 

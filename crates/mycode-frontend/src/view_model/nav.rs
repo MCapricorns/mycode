@@ -100,8 +100,9 @@ pub fn moved(current: usize, len: usize, down: bool) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{DismissLayer, SettingsBack, highlight, moved, settings_back_target,
-        top_dismiss_layer};
+    use super::{
+        DismissLayer, SettingsBack, highlight, moved, settings_back_target, top_dismiss_layer,
+    };
     use crate::view_model::{McpSubview, ModelsSubview, SettingsSection};
 
     #[test]

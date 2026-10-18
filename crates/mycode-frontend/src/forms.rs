@@ -98,11 +98,10 @@ pub fn build_mcp_server(
     let server = match transport {
         "http" => {
             if endpoint.is_empty() {
-                return Err(crate::i18n::t(
-                    "http servers need an endpoint",
-                    "HTTP 服务器需要端点",
-                )
-                .to_owned());
+                return Err(
+                    crate::i18n::t("http servers need an endpoint", "HTTP 服务器需要端点")
+                        .to_owned(),
+                );
             }
             mycode_config::McpServerSettings {
                 id: id.to_owned(),
@@ -121,11 +120,10 @@ pub fn build_mcp_server(
             // child gets a program plus argv, not one giant program name.
             let mut words = mycode_config::split_command_line(command).into_iter();
             let Some(program) = words.next().filter(|word| !word.is_empty()) else {
-                return Err(crate::i18n::t(
-                    "stdio servers need a command",
-                    "stdio 服务器需要命令",
-                )
-                .to_owned());
+                return Err(
+                    crate::i18n::t("stdio servers need a command", "stdio 服务器需要命令")
+                        .to_owned(),
+                );
             };
             let env = parse_env_line(env_line)?;
             mycode_config::McpServerSettings {
@@ -185,13 +183,15 @@ pub fn build_custom_provider(
             mycode_config::MAX_PROVIDERS
         ));
     }
-    let (context_limit, max_output) =
-        match (parse_token_field(context_limit), parse_token_field(max_output)) {
-            (Ok(a), Ok(b)) => (a, b),
-            _ => {
-                return Err("context window and max output must be plain numbers".to_owned());
-            }
-        };
+    let (context_limit, max_output) = match (
+        parse_token_field(context_limit),
+        parse_token_field(max_output),
+    ) {
+        (Ok(a), Ok(b)) => (a, b),
+        _ => {
+            return Err("context window and max output must be plain numbers".to_owned());
+        }
+    };
     let provider = mycode_config::ProviderSettings {
         id: id.to_owned(),
         kind: kind.to_owned(),
@@ -385,6 +385,9 @@ mod tests {
             collect_ask_answers(&questions, &[], &["only first".to_owned()]),
             Err(1)
         );
-        assert_eq!(collect_ask_answers(&[question(true)], &[], &[]), Ok(vec![String::new()]));
+        assert_eq!(
+            collect_ask_answers(&[question(true)], &[], &[]),
+            Ok(vec![String::new()])
+        );
     }
 }

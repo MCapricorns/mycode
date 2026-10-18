@@ -49,8 +49,8 @@ pub use self::reduce::{
 };
 pub use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
 pub use self::usage::{
-    CacheAlert, ContextMeterParts, TurnStats, cache_alert_text, compact_count,
-    context_meter_parts, context_remaining_percent, turn_cache_hit,
+    CacheAlert, ContextMeterParts, TurnStats, cache_alert_text, compact_count, context_meter_parts,
+    context_remaining_percent, turn_cache_hit,
 };
 
 // Kept public API: the `FrontendAction` vocabulary is `pub`, so its payload

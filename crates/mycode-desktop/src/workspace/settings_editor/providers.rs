@@ -37,7 +37,8 @@ impl Workspace {
                 read.max_output.read(cx).value().to_string(),
             )
         };
-        let existing: Vec<String> = self.vm()
+        let existing: Vec<String> = self
+            .vm()
             .settings
             .as_ref()
             .map(|settings| {
@@ -335,7 +336,8 @@ impl Workspace {
     ///
     /// Does not open the add-from-catalog form.
     pub(crate) fn on_start_provider_oauth(&mut self, provider_id: &str, cx: &mut Context<Self>) {
-        let models = self.vm()
+        let models = self
+            .vm()
             .settings
             .as_ref()
             .and_then(|settings| {
@@ -475,7 +477,8 @@ impl Workspace {
         // row (its endpoint and overrides stay). Other presets get a unique
         // id, the catalog spelling suffixed when already configured.
         let opendesign = preset.id == mycode_providers::catalog::opendesign::PROVIDER_ID;
-        let existing = self.vm()
+        let existing = self
+            .vm()
             .settings
             .as_ref()
             .and_then(|settings| settings.providers.iter().find(|p| p.id == preset.id))
@@ -484,7 +487,8 @@ impl Workspace {
         let mut id = preset.id.clone();
         let mut suffix = 2;
         while existing.is_none()
-            && self.vm()
+            && self
+                .vm()
                 .settings
                 .as_ref()
                 .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))

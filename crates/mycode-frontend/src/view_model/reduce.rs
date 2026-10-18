@@ -670,7 +670,9 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         FrontendAction::SettingsProviderBaseUrlChanged { id, base_url } => {
             settings::provider_base_url_changed(state, &id, base_url);
         }
-        FrontendAction::SettingsProviderAdded(provider) => settings::provider_added(state, provider),
+        FrontendAction::SettingsProviderAdded(provider) => {
+            settings::provider_added(state, provider)
+        }
         FrontendAction::SettingsProviderRemoved(index) => settings::provider_removed(state, index),
         FrontendAction::SettingsBackendToggled(index, enabled) => {
             settings::backend_toggled(state, index, enabled);

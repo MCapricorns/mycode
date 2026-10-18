@@ -77,7 +77,6 @@ pub const INTERRUPTED_NOTE: &str =
 /// crashing the loop. See `docs/agent.md`.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ToolError {
-
     /// Arguments failed schema validation or are semantically invalid.
     #[error("invalid arguments: {0}")]
     InvalidArgs(String),
