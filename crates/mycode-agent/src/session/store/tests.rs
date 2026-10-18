@@ -624,7 +624,7 @@ fn missing_or_lengthened_external_payload_and_bad_index_rows_report_corrupt() {
             &summary_session.session_id,
             &summary_session.branch_id,
             &HeadStamp::Empty,
-            "<compaction_summary display=\"true\">\nsummary text\n</compaction_summary>",
+            "COMPACTION SUMMARY\n\nsummary text",
         )
         .await;
         append_text(

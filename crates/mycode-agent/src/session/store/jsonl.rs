@@ -137,9 +137,11 @@ pub(crate) fn message_title(kind: EventKind, payload: &[u8]) -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(payload);
-    if text
-        .trim_start()
-        .starts_with("<compaction_summary display=\"true\">")
+    // The summary card starts with `COMPACTION SUMMARY` (the app's
+    // `display_summary_text`); older ledgers used the XML-style marker.
+    let start = text.trim_start();
+    if start.starts_with("COMPACTION SUMMARY\n")
+        || start.starts_with("<compaction_summary display=\"true\">")
     {
         return None;
     }
