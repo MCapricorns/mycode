@@ -330,48 +330,31 @@ pub(crate) async fn launch_program(
     }
 
     let identity = prepared_identity(&prepared);
-    let PreparedIdentity {
-        program,
-        digest,
-        invocation_digest,
-        image_identity,
-        image,
-        env_summary,
-        wrapper,
-    } = identity;
     let outcome = run_prepared(prepared, lease, &ctx.cancel, &mut deadline).await?;
     let duration_ms = started.elapsed().as_millis() as u64;
-    match outcome {
+    let (mut result, metadata) = match outcome {
         RunOutcome::Done {
             status,
             stdout,
             stderr,
             metadata,
         } => {
-            let execution_identity = execution_identity(&invocation_digest, metadata);
-            Ok(with_image_metadata(
-                format_result(
-                    Some(status),
-                    &program,
-                    &argv,
-                    &execution_identity,
-                    &digest,
-                    stdout,
-                    stderr,
-                    duration_ms,
-                    false,
-                    None,
-                ),
-                image,
-                metadata,
-                &image_identity,
-                &invocation_digest,
-                &env_summary,
-                wrapper.as_deref(),
-            ))
+            let result = format_result(
+                Some(status),
+                &identity.program,
+                &argv,
+                &execution_identity(&identity.invocation_digest, metadata),
+                &identity.digest,
+                stdout,
+                stderr,
+                duration_ms,
+                false,
+                None,
+            );
+            (result, metadata)
         }
         RunOutcome::CollectFailed { error, teardown } => {
-            Err(collection_error(&error, teardown.err()))
+            return Err(collection_error(&error, teardown.err()));
         }
         RunOutcome::Timeout {
             stdout,
@@ -380,30 +363,30 @@ pub(crate) async fn launch_program(
             started,
             metadata,
         } => {
-            let execution_identity = execution_identity(&invocation_digest, metadata);
-            Ok(with_image_metadata(
-                timed_out_result(
-                    &program,
-                    &argv,
-                    &execution_identity,
-                    &digest,
-                    stdout,
-                    stderr,
-                    duration_ms,
-                    timeout,
-                    teardown,
-                    started,
-                ),
-                image,
-                metadata,
-                &image_identity,
-                &invocation_digest,
-                &env_summary,
-                wrapper.as_deref(),
-            ))
+            let result = timed_out_result(
+                &identity.program,
+                &argv,
+                &execution_identity(&identity.invocation_digest, metadata),
+                &identity.digest,
+                stdout,
+                stderr,
+                duration_ms,
+                timeout,
+                teardown,
+                started,
+            );
+            (result, metadata)
         }
-        RunOutcome::Cancelled { teardown } => Err(command_cancelled_error(teardown.err())),
-    }
+        RunOutcome::Cancelled { teardown } => {
+            return Err(command_cancelled_error(teardown.err()));
+        }
+    };
+    let details = result
+        .details
+        .as_mut()
+        .expect("format_result populates details");
+    apply_execution_details(details, &identity, metadata);
+    Ok(result)
 }
 
 fn timed_out_before_spawn_result(
@@ -477,32 +460,6 @@ fn execution_identity(invocation_digest: &str, metadata: ExecutionMetadata) -> S
         }
         _ => invocation_digest.to_owned(),
     }
-}
-
-fn with_image_metadata(
-    mut result: ToolResult,
-    image: &str,
-    metadata: ExecutionMetadata,
-    image_identity: &str,
-    invocation_digest: &str,
-    env_summary: &Value,
-    wrapper: Option<&str>,
-) -> ToolResult {
-    let details = result.details.as_mut().expect("details were populated");
-    details["image"] = json!(image);
-    details["image_identity"] = json!(image_identity);
-    details["invocation_digest_sha256"] = json!(invocation_digest);
-    details["env_summary"] = env_summary.clone();
-    if let Some(architecture) = metadata.loaded_architecture() {
-        details["loaded_architecture"] = json!(architecture);
-    }
-    if let Some(translated) = metadata.translated() {
-        details["translated"] = json!(translated);
-    }
-    if let Some(wrapper) = wrapper {
-        details["wrapper"] = json!(wrapper);
-    }
-    result
 }
 
 #[expect(
