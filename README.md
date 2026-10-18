@@ -50,6 +50,8 @@
 | Windows ARM64 | zip |
 | macOS Apple Silicon | zip / dmg |
 
+每个平台另有 `mycode` CLI 压缩包（`mycode-v*`；无 dmg）；两个二进制各自匹配自己前缀的压缩包自更新。
+
 暂无 Intel macOS 和 Linux 包。dmg 里的应用是 ad-hoc 签名，首次打开请右键「打开」，或执行：
 
 ```sh

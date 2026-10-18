@@ -1,7 +1,10 @@
-//! GitHub-release based self-update for the MYCode desktop application.
+//! GitHub-release based self-update for the MYCode binaries.
 //!
 //! The checker resolves the latest published release, picks the release
-//! asset matching the running platform, and compares semantic versions. The
+//! asset matching the running platform and binary — published names are
+//! `<exe stem>-v<version>-<target>.zip`, so `mycode` and
+//! `mycode-desktop` update from disjoint archives — and compares
+//! semantic versions. The
 //! installer downloads the asset plus its `.sha256` sidecar, verifies the
 //! digest, and extracts the new binary into a staging directory. macOS hands
 //! the swap to a detached shell script. Windows copies the running
@@ -53,6 +56,30 @@ fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
         ("macos", "aarch64") => "-aarch64-apple-darwin.zip",
         _ => "",
     }
+}
+
+/// File stem of the running executable (`mycode-desktop`, `mycode`, …).
+///
+/// Release assets are published per binary, so the stem names the asset
+/// family this install self-updates from. A lookup failure keeps the
+/// desktop family, matching every release so far.
+fn exe_stem() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "mycode-desktop".to_owned())
+}
+
+/// Release-asset prefix for one executable stem: published names look
+/// like `{stem}-v0.9.18-x86_64-pc-windows-msvc.zip`. The trailing `-v`
+/// keeps the two families disjoint even though `mycode` is a strict
+/// prefix of `mycode-desktop`.
+fn asset_prefix(exe_stem: &str) -> String {
+    format!("{exe_stem}-v")
 }
 
 /// One installable update offer.
@@ -180,6 +207,7 @@ fn resolve_asset(
     resolve_asset_for(
         std::env::consts::OS,
         std::env::consts::ARCH,
+        &exe_stem(),
         tag,
         notes_url,
         assets,
@@ -192,6 +220,7 @@ fn resolve_asset(
 fn resolve_asset_for(
     os: &str,
     arch: &str,
+    exe_stem: &str,
     tag: &str,
     notes_url: &str,
     assets: &[AssetJson],
@@ -203,14 +232,15 @@ fn resolve_asset_for(
     // Published names look like
     // `mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip`. The `.sha256`
     // sidecar shares the prefix and must not be selected.
+    let prefix = asset_prefix(exe_stem);
     let asset = assets.iter().find(|asset| {
-        asset.name.starts_with("mycode-desktop-")
+        asset.name.starts_with(&prefix)
             && asset.name.ends_with(suffix)
             && !asset.name.ends_with(".sha256")
     });
     let Some(asset) = asset else {
         return Err(format!(
-            "update check failed: release has no mycode-desktop*{suffix} asset"
+            "update check failed: release has no {prefix}*{suffix} asset"
         ));
     };
     if !is_release_download(&asset.browser_download_url) {
@@ -293,9 +323,10 @@ pub async fn download_update(
     .await?;
 
     let verify_stage_dir = stage_dir.clone();
+    let exe = exe_stem();
     let verify_stage = tokio::task::spawn_blocking(move || -> Result<(PathBuf, String), String> {
         verify_checksum(&asset_path, &checksum_path)?;
-        let binary_path = extract_binary(&asset_path, &verify_stage_dir)?;
+        let binary_path = extract_binary(&asset_path, &verify_stage_dir, &exe)?;
         let binary_sha256 = file_sha256(&binary_path)?;
         let _ = std::fs::remove_file(&asset_path);
         let _ = std::fs::remove_file(&checksum_path);
@@ -403,7 +434,7 @@ fn verify_checksum(asset: &Path, checksum_file: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
+fn extract_binary(asset: &Path, stage_dir: &Path, exe_stem: &str) -> Result<PathBuf, String> {
     let file = std::fs::File::open(asset).map_err(|error| format!("asset open: {error}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| format!("asset open: {error}"))?;
     let mut entry_name: Option<String> = None;
@@ -419,7 +450,7 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
             continue;
         }
         let base = name.split('/').next_back().unwrap_or(&name);
-        let executable = name.ends_with(".exe") || base == "mycode-desktop";
+        let executable = name.ends_with(".exe") || base == exe_stem;
         if !executable {
             continue;
         }
@@ -450,7 +481,7 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
     let base_name = entry_name
         .split('/')
         .next_back()
-        .unwrap_or("mycode-desktop")
+        .unwrap_or(exe_stem)
         .to_owned();
     let binary_path = stage_dir.join(&base_name);
     let mut entry = archive

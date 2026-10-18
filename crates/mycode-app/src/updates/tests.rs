@@ -432,10 +432,17 @@ fn release_assets() -> Vec<super::AssetJson> {
 }
 
 #[test]
+fn asset_prefix_names_each_binary_family() {
+    assert_eq!(super::asset_prefix("mycode-desktop"), "mycode-desktop-v");
+    assert_eq!(super::asset_prefix("mycode"), "mycode-v");
+}
+
+#[test]
 fn windows_x86_64_selects_the_published_zip_not_the_checksum() {
     let offer = super::resolve_asset_for(
         "windows",
         "x86_64",
+        "mycode-desktop",
         "v0.9.18",
         "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
         &release_assets(),
@@ -471,12 +478,62 @@ fn an_asset_hosted_outside_the_release_is_refused() {
         let result = super::resolve_asset_for(
             "windows",
             "x86_64",
+            "mycode-desktop",
             "v0.9.18",
             "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
             &assets,
         );
         assert!(result.is_err(), "{url}");
     }
+}
+
+#[test]
+fn the_cli_stem_never_matches_desktop_assets() {
+    // `mycode` is a strict prefix of `mycode-desktop`: the `-v` boundary
+    // keeps the CLI from installing the desktop archive.
+    let result = super::resolve_asset_for(
+        "windows",
+        "x86_64",
+        "mycode",
+        "v0.9.18",
+        "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
+        &release_assets(),
+    );
+    assert!(
+        result.is_err(),
+        "a `mycode` binary must not match `mycode-desktop-*` assets"
+    );
+}
+
+#[test]
+fn the_cli_stem_selects_the_cli_zip() {
+    let mut assets = release_assets();
+    assets.push(super::AssetJson {
+        name: "mycode-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
+        browser_download_url:
+            "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-v0.9.18-x86_64-pc-windows-msvc.zip"
+                .to_owned(),
+    });
+    let offer = super::resolve_asset_for(
+        "windows",
+        "x86_64",
+        "mycode",
+        "v0.9.18",
+        "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
+        &assets,
+    )
+    .unwrap()
+    .expect("windows x86_64 is a published update target");
+    assert!(
+        offer
+            .asset_url
+            .ends_with("mycode-v0.9.18-x86_64-pc-windows-msvc.zip")
+    );
+    assert!(
+        offer
+            .checksum_url
+            .ends_with("mycode-v0.9.18-x86_64-pc-windows-msvc.zip.sha256")
+    );
 }
 
 #[test]
@@ -494,7 +551,7 @@ fn an_archive_entry_with_a_drive_prefix_is_refused() {
             .unwrap();
         writer.write_all(b"payload").unwrap();
         writer.finish().unwrap();
-        let error = super::extract_binary(&asset, &dir).expect_err(name);
+        let error = super::extract_binary(&asset, &dir, "mycode-desktop").expect_err(name);
         assert!(error.contains("unsafe"), "{name}: {error}");
     }
     let _ = std::fs::remove_dir_all(&dir);
