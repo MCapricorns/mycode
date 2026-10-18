@@ -453,11 +453,7 @@ fn path_has_dir(dir: &Path) -> io::Result<bool> {
         return Ok(true);
     }
     for file in profile_files() {
-        if file
-            .as_ref()
-            .and_then(|file| fs::read_to_string(file).ok())
-            .is_some_and(|text| profile_mentions(&text, dir))
-        {
+        if fs::read_to_string(&file).is_ok_and(|text| profile_mentions(&text, dir)) {
             return Ok(true);
         }
     }
