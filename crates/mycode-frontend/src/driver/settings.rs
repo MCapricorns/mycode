@@ -14,7 +14,7 @@ impl FrontendDriver {
     // ---- the save pipeline ----
 
     /// Waits out the text-field debounce, then writes `settings.json`.
-    pub(crate) fn schedule_settings_text_save(&mut self) {
+    pub fn schedule_settings_text_save(&mut self) {
         self.settings_text_save_generation = self.settings_text_save_generation.wrapping_add(1);
         self.settings_text_save_pending = true;
         let generation = self.settings_text_save_generation;
@@ -25,7 +25,7 @@ impl FrontendDriver {
 
     /// Writes a pending text-field edit immediately. Blur and leaving
     /// Settings use this so the draft is not waiting on the debounce.
-    pub(crate) fn flush_settings_text_save(&mut self, out: &mut Vec<Effect>) {
+    pub fn flush_settings_text_save(&mut self, out: &mut Vec<Effect>) {
         if !self.settings_text_save_pending {
             return;
         }
@@ -37,7 +37,7 @@ impl FrontendDriver {
     /// Writes a settings edit that arrived while a save was in flight.
     /// A pending text debounce keeps its timer so a half-typed User-Agent
     /// is not flushed early.
-    pub(crate) fn continue_settings_save(&mut self, out: &mut Vec<Effect>) {
+    pub fn continue_settings_save(&mut self, out: &mut Vec<Effect>) {
         if self.settings_text_save_pending {
             return;
         }
@@ -45,7 +45,7 @@ impl FrontendDriver {
     }
 
     /// Persists the settings document under CAS when local edits exist.
-    pub(crate) fn save_settings(&mut self, out: &mut Vec<Effect>) {
+    pub fn save_settings(&mut self, out: &mut Vec<Effect>) {
         let Some((document, edit_epoch, revision)) = self
             .vm
             .settings
@@ -218,7 +218,7 @@ impl FrontendDriver {
 
     /// Dispatches the tools probe that gates an enable switch: the row is
     /// marked connecting until the reply lands `enabled` or the error.
-    pub(crate) fn probe_mcp_for_enable(&mut self, server_id: &str, out: &mut Vec<Effect>) {
+    pub fn probe_mcp_for_enable(&mut self, server_id: &str, out: &mut Vec<Effect>) {
         let Some(server) = self
             .vm
             .settings

@@ -445,7 +445,7 @@ impl FrontendDriver {
     }
 
     /// The open conversation's session id.
-    pub(crate) fn open_session_id(&self) -> Option<String> {
+    pub fn open_session_id(&self) -> Option<String> {
         self.vm
             .active
             .as_ref()
@@ -455,7 +455,7 @@ impl FrontendDriver {
     /// Session, branch, and head of the open conversation, read without
     /// cloning its transcript. `None` without an open chat or when its ids
     /// do not parse.
-    pub(crate) fn open_turn_target(
+    pub fn open_turn_target(
         &self,
     ) -> Option<(SessionId, BranchId, HeadStamp)> {
         let active = self.vm.active.as_ref()?;
@@ -514,16 +514,27 @@ impl FrontendDriver {
         self.import_confirm.as_deref()
     }
 
+    /// The question row the ask card is showing.
+    pub fn ask_index(&self) -> usize {
+        self.ask_index
+    }
+
+    /// Escape's first level: close whichever floating menu is open. Returns
+    /// true when something closed so the caller stops dismissing.
+    pub fn dismiss_floating(&mut self) -> bool {
+        crate::view_model::close_floating_menus(&mut self.vm)
+    }
+
     /// Enqueues one command immediately; its reply lands on the inbox
     /// tagged with its scope.
-    pub fn dispatch(&mut self, command: BridgeCommand) {
+    pub fn dispatch(&self, command: BridgeCommand) {
         let scope = ReplyScope::for_command(&command);
         self.dispatch_scoped(command, scope);
     }
 
     /// Dispatch with an explicit scope — the recall page walk tags its
     /// `LoadOlder` replies so they resolve the rewind instead of prepending.
-    pub(crate) fn dispatch_scoped(&mut self, command: BridgeCommand, scope: ReplyScope) {
+    pub(crate) fn dispatch_scoped(&self, command: BridgeCommand, scope: ReplyScope) {
         let request = self.bridge.request(command);
         let tx = self.inbox_tx.clone();
         let wake = self.wake.clone();
@@ -777,6 +788,13 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::GetCatalog);
     }
 
+    /// A manual catalog reload; the reply is marked by
+    /// `pending_catalog_refresh` so it can surface a refreshed toast.
+    pub fn refresh_catalog(&mut self) {
+        self.pending_catalog_refresh = true;
+        self.dispatch(BridgeCommand::RefreshCatalog);
+    }
+
     /// Whether an open surface reads the provider catalog document.
     fn catalog_needed(&self) -> bool {
         let vm = &self.vm;
@@ -794,7 +812,7 @@ impl FrontendDriver {
 
     /// Records documents reset at startup and toasts their names once the
     /// settings and UI replies have had a chance to arrive.
-    pub(crate) fn note_config_repairs(
+    pub fn note_config_repairs(
         &mut self,
         repairs: &[mycode_config::DocumentRepair],
     ) {

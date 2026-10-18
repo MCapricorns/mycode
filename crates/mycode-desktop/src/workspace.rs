@@ -9,15 +9,16 @@ use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext as _, Bounds, Context, Entity, Pixels, Window, WindowBounds};
 use gpui_kit::{px, size};
-use mycode_app::{HeadStamp, SessionEventId};
+use mycode_app::BridgeEvent;
+use mycode_app::BridgeCommand;
 use mycode_config::HomeLayout;
+use mycode_frontend::driver::{Effect, FrontendDriver};
+use mycode_frontend::stream;
 
 use crate::ui::{McpForm, ProviderForm};
-use crate::view_model::{FrontendAction, MainView, WorkspaceState, reduce};
-use mycode_app::{BridgeCommand, BridgeEventRx, CoreBridge};
+use crate::view_model::{FrontendAction, MainView, WorkspaceState};
 
 mod appearance;
-mod bridge;
 mod composer_send;
 mod conversation;
 mod git;
@@ -27,7 +28,6 @@ mod model_menu;
 mod palette;
 mod projects;
 mod settings_editor;
-mod stream_frame;
 mod toasts;
 mod updates_data;
 
@@ -129,7 +129,13 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         crate::ui::ToggleCommandPalette,
         None,
     )]);
-    let (bridge, events) = CoreBridge::start(home.clone());
+    // The driver owns the core bridge, the view model, and every product
+    // decision. Its wake callback hands a thread-safe sender to the gpui
+    // pump, which drains replies, timers, and events on the main thread.
+    let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
+    let driver = FrontendDriver::start(home.clone(), move || {
+        let _ = wake_tx.send(());
+    });
     // Open as a regular window at the persisted (or default) bounds: the
     // maximize-on-open workaround for gpui's stale-scale sizing is retired
     // by user request (DPI edge cases accepted); the user can maximize
@@ -149,7 +155,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         Theme::change(ThemeMode::Dark, Some(window), cx);
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);
-        let workspace = Workspace::new(home, bridge, events, window, cx);
+        let workspace = Workspace::new(driver, wake_rx, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
     })
     .expect("open the MYCode window");
@@ -169,10 +175,10 @@ struct AppearanceScroll {
 }
 
 pub struct Workspace {
-    vm: WorkspaceState,
-    /// Owned home the process opened with. Role discovery reads `agents/` here.
-    home: HomeLayout,
-    bridge: CoreBridge,
+    /// Shared product driver: the view model, the bridge, replies, timers,
+    /// and every UI-agnostic decision. GPUI keeps only window state and
+    /// the effects it alone can perform.
+    driver: FrontendDriver,
     /// Root focus so key events (Escape) reach the workspace node even when
     /// no input holds focus.
     focus_handle: gpui_kit::FocusHandle,
@@ -215,61 +221,17 @@ pub struct Workspace {
     provider_endpoint_inputs: HashMap<String, Entity<InputState>>,
     /// Last base URL copied into each endpoint field from settings.
     provider_endpoint_seed: HashMap<String, String>,
-    /// Roles resolved from built-ins, the home `agents` directory, and the
-    /// open project's `.mycode/agents`. `None` until settings asks for them.
-    agent_roles: Option<mycode_config::RoleCatalog>,
-    /// Project directory the cached role catalog was built for.
-    agent_roles_project: Option<String>,
-    /// The Agents section was opened again, or the project changed.
-    agent_roles_stale: bool,
     /// The next model-step render should clear and focus the search box.
     picker_focus_pending: bool,
     ask_inputs: Vec<Entity<InputState>>,
-    /// The question the ask card is showing; answers step one at a time.
-    pub(crate) ask_index: usize,
     /// Keyboard selection and scroll handles for the composer pickers.
     menu_navigation: menus::MenuNavigation,
-    /// Invalidates asynchronous recall lookups when their conversation changes.
-    recall_generation: u64,
-    pending_project: Option<String>,
-    /// Session created to carry [`crate::view_model::WorkspaceState::pending_welcome_send`].
-    welcome_send_session: Option<String>,
-    /// Session whose conversation-open is in flight. Conversation replies
-    /// for anything else are dropped, so a parked desk stays parked.
-    pending_open: Option<String>,
-    /// Draft restored by edit-and-resend, applied on the next render (needs a window).
-    pending_composer_prefill: Option<String>,
-    /// Settings edit epoch captured when the in-flight save was dispatched.
-    settings_save_epoch: u64,
-    /// Bumped when a text-field save is scheduled or flushed, so a stale
-    /// debounce timer does not write an older draft.
-    settings_text_save_generation: u64,
-    /// A User-Agent (or similar) debounce is waiting to write `settings.json`.
-    settings_text_save_pending: bool,
-    /// Bumped on each window-size change so only the settled size persists.
-    window_size_generation: u64,
-    /// Last mention fragment already searched, to dedupe repeat lookups.
-    mention_query: Option<(crate::view_model::MentionKind, String)>,
-    /// Bumped on each composer edit so a stale mention timer does not search.
-    mention_generation: u64,
-    pending_catalog_refresh: bool,
-    /// `GetCatalog` was already sent this session. The catalog is loaded
-    /// lazily: nothing asks for it until a surface that needs the document
-    /// (a model or reasoning picker, the command palette, the Models or
-    /// About settings page) opens.
-    catalog_requested: bool,
-    /// MCP server ids whose enable switch waits on a successful tools
-    /// probe; the switch only lands `on` when the probe returns tools.
-    pending_mcp_enable: HashSet<String>,
-    /// Web backend ids whose enable switch waits on a successful search
-    /// probe; the switch only lands `on` when the probe returns `Ok`.
-    pending_web_enable: HashSet<String>,
-    /// The in-flight check was started from About, so its result may toast.
-    manual_update_check: bool,
-    /// Config files reset during this launch. Their names are toasted once.
-    repaired_configs: Vec<String>,
-    /// A single toast for [`Self::repaired_configs`] is already scheduled.
-    repair_toast_armed: bool,
+    /// Composer text + focus request handed down by `Effect::ComposerSet`;
+    /// the composer paint consumes it.
+    pending_composer_set: Option<(String, bool)>,
+    /// `Effect::RestoreFocus`: the next paint focuses the composer (chat)
+    /// or the workspace root.
+    focus_restore_pending: bool,
     /// The once-a-second repaint that keeps live subagent runtimes counting
     /// between progress events. `true` while that timer loop exists.
     job_tick_running: bool,
@@ -317,25 +279,20 @@ pub struct Workspace {
     expanded_tool_batches: HashSet<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
-    /// A user stop is unwinding: steers the turn hands back join a held
-    /// queue instead of starting a new turn. Cleared when a turn starts.
-    queue_hold_on_return: bool,
     /// Language last written into input placeholders. `u8::MAX` until the
     /// first frame, so a settings load that flips the language refreshes them.
     applied_language: u8,
-    /// Bundle of the import in flight, kept so a refusal can be confirmed.
-    import_request: Option<std::path::PathBuf>,
-    /// Bundle whose import changes MCP server commands and waits for the
-    /// user's explicit confirmation in the Data settings card.
-    import_confirm: Option<std::path::PathBuf>,
+    /// Ask rows whose free-text field should be cleared on the next paint —
+    /// `Effect::AskTextCleared` fires without a window, so the input's own
+    /// render performs the reset.
+    ask_text_cleared: HashSet<usize>,
 }
 
 impl Workspace {
     /// Builds the workspace and issues the initial core loads.
     pub fn new(
-        home: HomeLayout,
-        bridge: CoreBridge,
-        events: BridgeEventRx,
+        driver: FrontendDriver,
+        wake_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
@@ -351,9 +308,7 @@ impl Workspace {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
         let workspace = cx.new(|_| Self {
-            vm: WorkspaceState::default(),
-            home,
-            bridge,
+            driver,
             focus_handle,
             composer,
             composer_busy: false,
@@ -378,32 +333,11 @@ impl Workspace {
             provider_key_replace: HashSet::new(),
             provider_endpoint_inputs: HashMap::new(),
             provider_endpoint_seed: HashMap::new(),
-            agent_roles: None,
-            agent_roles_project: None,
-            agent_roles_stale: false,
             picker_focus_pending: false,
             ask_inputs: Vec::new(),
-            ask_index: 0,
             menu_navigation: menus::MenuNavigation::default(),
-            recall_generation: 0,
-            pending_project: None,
-            welcome_send_session: None,
-
-            pending_open: None,
-            pending_composer_prefill: None,
-            settings_save_epoch: 0,
-            settings_text_save_generation: 0,
-            settings_text_save_pending: false,
-            window_size_generation: 0,
-            mention_query: None,
-            mention_generation: 0,
-            pending_catalog_refresh: false,
-            catalog_requested: false,
-            pending_mcp_enable: HashSet::new(),
-            pending_web_enable: HashSet::new(),
-            manual_update_check: false,
-            repaired_configs: Vec::new(),
-            repair_toast_armed: false,
+            pending_composer_set: None,
+            focus_restore_pending: false,
             job_tick_running: false,
             toasts: Vec::new(),
             next_toast_id: 0,
@@ -426,9 +360,7 @@ impl Workspace {
             expanded_tool_batches: HashSet::new(),
             applied_font_size: String::new(),
             applied_language: u8::MAX,
-            queue_hold_on_return: false,
-            import_request: None,
-            import_confirm: None,
+            ask_text_cleared: HashSet::new(),
         });
         workspace.update(cx, |workspace, cx| {
             let filter = cx.new(|cx| {
@@ -448,16 +380,17 @@ impl Workspace {
                 workspace.on_composer_event(event, window, cx);
             })
             .detach();
-            workspace.spawn_event_pump(events, cx);
-            workspace.spawn_update_recheck(cx);
-            workspace.dispatch(BridgeCommand::ListSessions, cx);
-            workspace.dispatch(BridgeCommand::LoadSettings, cx);
-            workspace.dispatch(BridgeCommand::LoadUiState, cx);
+            workspace.spawn_driver_pump(wake_rx, cx);
+            {
+                let mut effects = Vec::new();
+                workspace.driver.bootstrap(&mut effects);
+                workspace.apply_effects(effects, cx);
+            }
             // Deferred startup work (catalog refresh, update check) starts
             // once the first frame painted; the catalog document itself
             // loads lazily in `ensure_catalog`.
-            cx.on_next_frame(window, |workspace, _window, cx| {
-                workspace.dispatch(BridgeCommand::UiReady, cx);
+            cx.on_next_frame(window, |workspace, _window, _cx| {
+                workspace.driver.ui_ready();
             });
             cx.observe_window_bounds(window, |workspace, window, cx| {
                 workspace.on_window_resized(window, cx);
@@ -467,75 +400,157 @@ impl Workspace {
         workspace
     }
 
-    /// Parks until the core sends, then paints streaming deltas a frame at a time.
+    /// Parks until the driver wakes, then paints streaming deltas a frame at
+    /// a time.
     ///
     /// A whole turn can already be queued when this task wakes. Applying it
     /// before the next await paints only the finished message. Each slice
     /// stops before `ChatDone` and before the character budget, then waits
     /// one frame so the bubble can grow.
-    fn spawn_event_pump(&self, mut events: BridgeEventRx, cx: &mut Context<Self>) {
+    fn spawn_driver_pump(
+        &self,
+        mut wake_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
-            let mut buffer: VecDeque<mycode_app::BridgeEvent> = VecDeque::new();
+            let mut buffer: VecDeque<BridgeEvent> = VecDeque::new();
             let mut not_before = Instant::now();
-            loop {
-                if buffer.is_empty() {
-                    match events.recv().await {
-                        Some(event) => buffer.push_back(event),
-                        None => return,
-                    }
-                }
-                while let Ok(event) = events.try_recv() {
-                    buffer.push_back(event);
-                }
-                // A queued follow-up must not wait out the typewriter. The
-                // frame budget holds `ChatDone` until every delta has been
-                // painted (~80 characters / 64ms), so a long reply kept the
-                // queue parked for the whole animation. When something is
-                // waiting, apply the burst now and let the next send start.
-                let rush = this
-                    .update(cx, |workspace, _| !workspace.vm.queued.is_empty())
-                    .unwrap_or(false);
-                if !rush
-                    && buffer.front().is_some_and(stream_frame::is_stream_delta)
-                    && let Some(wait) = not_before.checked_duration_since(Instant::now())
-                    && !wait.is_zero()
-                {
-                    cx.background_executor().timer(wait).await;
-                    while let Ok(event) = events.try_recv() {
-                        buffer.push_back(event);
-                    }
-                }
-                let (slice, rest) = if rush {
-                    let pending = std::mem::take(&mut buffer);
-                    (pending.into_iter().collect(), VecDeque::new())
-                } else {
-                    stream_frame::split_stream_frame(std::mem::take(&mut buffer))
-                };
-                buffer = rest;
-                let mut streamed = false;
-                for event in slice {
-                    streamed |= stream_frame::is_stream_delta(&event);
+            'outer: while wake_rx.recv().await.is_some() {
+                loop {
                     if this
-                        .update(cx, |workspace, cx| workspace.apply_event(event, cx))
+                        .update(cx, |workspace, cx| workspace.drain_driver(&mut buffer, cx))
                         .is_err()
                     {
                         return;
                     }
-                }
-                if streamed && !rush {
-                    not_before = Instant::now() + stream_frame::STREAM_FRAME;
-                }
-                if !buffer.is_empty() && !rush {
-                    let now = Instant::now();
-                    let wait = not_before
-                        .checked_duration_since(now)
-                        .filter(|wait| !wait.is_zero())
-                        .unwrap_or(stream_frame::STREAM_FRAME);
-                    cx.background_executor().timer(wait).await;
+                    if buffer.is_empty() {
+                        continue 'outer;
+                    }
+                    let rush = this
+                        .update(cx, |workspace, _| !workspace.vm().queued.is_empty())
+                        .unwrap_or(false);
+                    if !rush
+                        && buffer.front().is_some_and(stream::is_stream_delta)
+                        && let Some(wait) = not_before.checked_duration_since(Instant::now())
+                        && !wait.is_zero()
+                    {
+                        cx.background_executor().timer(wait).await;
+                        continue;
+                    }
+                    let (slice, rest) = if rush {
+                        let pending = std::mem::take(&mut buffer);
+                        (pending.into_iter().collect(), VecDeque::new())
+                    } else {
+                        stream::split_stream_frame(std::mem::take(&mut buffer))
+                    };
+                    buffer = rest;
+                    let mut streamed = false;
+                    for event in slice {
+                        streamed |= stream::is_stream_delta(&event);
+                        if this
+                            .update(cx, |workspace, cx| workspace.on_driver_event(event, cx))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    if streamed && !rush {
+                        not_before = Instant::now() + stream::STREAM_FRAME;
+                    }
+                    if !buffer.is_empty() && !rush {
+                        let now = Instant::now();
+                        let wait = not_before
+                            .checked_duration_since(now)
+                            .filter(|wait| !wait.is_zero())
+                            .unwrap_or(stream::STREAM_FRAME);
+                        cx.background_executor().timer(wait).await;
+                    }
                 }
             }
         })
         .detach();
+    }
+
+    /// Replies, timers, and freshly arrived core events move to the main
+    /// thread here; each driver side effect is then performed by the window.
+    fn drain_driver(&mut self, buffer: &mut VecDeque<BridgeEvent>, cx: &mut Context<Self>) {
+        let mut effects = Vec::new();
+        self.driver.poll(&mut effects);
+        while let Some(event) = self.driver.next_event() {
+            buffer.push_back(event);
+        }
+        self.apply_effects(effects, cx);
+        self.ensure_job_tick(cx);
+        cx.notify();
+    }
+
+    /// One core event through the driver; its effects land right away.
+    fn on_driver_event(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
+        let mut effects = Vec::new();
+        self.driver.on_event(event, &mut effects);
+        self.apply_effects(effects, cx);
+        self.ensure_job_tick(cx);
+        cx.notify();
+    }
+
+    /// Performs the work the driver delegated to this frontend.
+    fn apply_effects(&mut self, effects: Vec<Effect>, cx: &mut Context<Self>) {
+        for effect in effects {
+            match effect {
+                Effect::Toast { kind, text } => {
+                    let kind = match kind {
+                        mycode_frontend::driver::ToastKind::Info => ToastKind::Info,
+                        mycode_frontend::driver::ToastKind::Warning => ToastKind::Warning,
+                        mycode_frontend::driver::ToastKind::Error => ToastKind::Error,
+                    };
+                    self.push_toast(text, kind, cx);
+                }
+                Effect::ComposerSet { text, focus } => {
+                    self.pending_composer_set = Some((text, focus));
+                    cx.notify();
+                }
+                Effect::AskTextCleared { index } => {
+                    self.ask_text_cleared.insert(index);
+                }
+                Effect::AskReset => {
+                    self.ask_inputs.clear();
+                }
+                Effect::ProjectChanged => {
+                    self.rewatch_git(cx);
+                }
+                Effect::AppearanceTheme(theme) => {
+                    self.capture_appearance_scroll();
+                    self.paint_appearance(&theme, cx);
+                }
+                Effect::FontSizeChanged => {
+                    self.applied_font_size.clear();
+                }
+                Effect::LanguageChanged => {
+                    self.applied_language = u8::MAX;
+                }
+                Effect::OlderPagePrepended { .. } => {
+                    self.capture_scroll_hold();
+                }
+                Effect::ScrollToTail => {
+                    if self.vm().view == MainView::Chat {
+                        self.conversation_scroll.scroll_to_bottom();
+                    }
+                }
+                Effect::ScrollAnchorInvalidated => {
+                    self.scroll_hold = None;
+                    self.driver.note_scroll_hold(false);
+                }
+                Effect::SyncProxyField => {
+                    self.proxy_sync_pending = true;
+                }
+                Effect::RestoreFocus => {
+                    self.focus_restore_pending = true;
+                }
+                Effect::Quit => {
+                    cx.quit();
+                }
+            }
+        }
     }
 
     pub(crate) fn git(&self) -> &crate::git_status::GitSnapshot {
@@ -570,137 +585,57 @@ impl Workspace {
             InputEvent::Change => {
                 let text = self.composer.read(cx).value().to_string();
                 self.apply_action(FrontendAction::ComposerChanged(text), cx);
-                self.refresh_mention_search(cx);
             }
             InputEvent::PressEnter {
                 shift: false,
                 secondary,
             } => {
                 let draft = self.composer.read(cx).value().to_string();
-                if draft != self.vm.composer_draft {
-                    self.apply_action(FrontendAction::ComposerChanged(draft), cx);
-                }
                 if self.accept_open_mention(window, cx) {
                     return;
                 }
                 // Ctrl+Enter on a busy turn interrupts and sends right away;
-                // a plain Enter queues the follow-up inside `on_send`.
-                if *secondary && (self.vm.sending || self.vm.compacting) {
-                    self.on_interrupt_send(window, cx);
+                // a plain Enter queues the follow-up inside `submit`.
+                let sending = self.vm().sending || self.vm().compacting;
+                if *secondary && sending {
+                    self.driver_do(|d, fx| d.interrupt_send(&draft, fx), cx);
                 } else {
-                    self.on_send(window, cx);
+                    self.driver_do(|d, fx| d.submit(&draft, fx), cx);
                 }
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
         }
     }
 
+    /// Every state transition enters here so the GPUI-only bookkeeping —
+    /// menu selection, scroll-follow, subagent follow — runs beside the
+    /// shared reducer inside the driver.
     pub(crate) fn apply_action(&mut self, action: FrontendAction, cx: &mut Context<Self>) {
-        let grew = matches!(
-            action,
-            FrontendAction::MessageSent { .. }
-                | FrontendAction::TurnArmed
-                | FrontendAction::ChatDelta(_)
-                | FrontendAction::ChatThinkingDelta(_)
-                | FrontendAction::ToolStarted { .. }
-                | FrontendAction::ToolProgress { .. }
-                | FrontendAction::ToolResultAppended(_)
-                | FrontendAction::ChatDone { .. }
-                | FrontendAction::ConversationOpened(_)
-                | FrontendAction::SessionCreated(_)
-        );
-        let drop_hold = matches!(
-            action,
-            FrontendAction::ConversationOpened(_)
-                | FrontendAction::SessionCreated(_)
-                | FrontendAction::SessionDeleted
-                | FrontendAction::ConversationParked
-        );
         self.reset_menu_navigation(&action);
-        if drop_hold {
-            self.recall_generation = self.recall_generation.wrapping_add(1);
-        }
-        if drop_hold
-            || matches!(
-                action,
-                FrontendAction::AskRequested(_)
-                    | FrontendAction::ChatDone { .. }
-                    | FrontendAction::ChatFailed { .. }
-            )
-        {
-            self.ask_inputs.clear();
-            self.ask_index = 0;
-        }
-        let previous_error = self.vm.error.clone();
-        let previous_project = self.vm.project_dir.clone();
         // Decide from the scroll position before this update. New text has
         // not been laid out yet, so the handle still describes the frame the
         // user is looking at.
-        let follow_tail = grew && self.conversation_follows_tail();
+        self.driver
+            .set_conversation_at_tail(self.conversation_follows_tail());
+        self.driver.note_scroll_hold(self.scroll_hold.is_some());
         let subagent_before = self.subagent_window_mark();
-        let text_edit = matches!(
-            action,
-            FrontendAction::SettingsProxyChanged { typed: true, .. }
-        );
-        let epoch_before = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| settings.edit_epoch);
-        if matches!(action, FrontendAction::ShowMainView(view) if view != MainView::Settings)
-            && self.vm.view == MainView::Settings
-        {
-            self.flush_settings_text_save(cx);
-        }
-        if let FrontendAction::SettingsMcpRemoved(index) = &action
-            && let Some(id) = self
-                .vm
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.mcp_servers.get(*index))
-                .map(|server| server.id.clone())
-        {
-            self.pending_mcp_enable.remove(&id);
-        }
-        reduce(&mut self.vm, action);
-        if self.vm.project_dir != previous_project {
-            self.agent_roles_stale = true;
-            self.rewatch_git(cx);
-        }
-        if self.vm.error.is_some()
-            && self.vm.error != previous_error
-            && let Some(message) = self.vm.error.take()
-        {
-            self.push_toast(message, ToastKind::Error, cx);
-        }
-        if drop_hold {
-            self.scroll_hold = None;
-        }
-        // Stick to the newest line while the user is already there. A reader
-        // who scrolled up into history keeps that position. Prepending older
-        // history is not in this set: that path compensates the scroll offset.
-        if self.vm.view == MainView::Chat && follow_tail {
-            self.conversation_scroll.scroll_to_bottom();
-        }
+        let mut effects = Vec::new();
+        self.driver.act(action, &mut effects);
+        self.apply_effects(effects, cx);
         self.follow_subagent_window(subagent_before);
-        let epoch_after = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| settings.edit_epoch);
-        let edited = match (epoch_before, epoch_after) {
-            // A reload replaces the projection with epoch 0. That is not a
-            // local edit. The first real edit moves the epoch off 0.
-            (Some(before), Some(after)) => after != before && after != 0,
-            _ => false,
-        };
-        if edited {
-            if text_edit {
-                self.schedule_settings_text_save(cx);
-            } else {
-                self.on_save_settings(cx);
-            }
-        }
+        self.ensure_job_tick(cx);
+        cx.notify();
+    }
+
+    /// Runs one driver interaction and performs the effects it returns.
+    pub(crate) fn driver_do(
+        &mut self,
+        run: impl FnOnce(&mut FrontendDriver, &mut Vec<Effect>),
+        cx: &mut Context<Self>,
+    ) {
+        let mut effects = Vec::new();
+        run(&mut self.driver, &mut effects);
+        self.apply_effects(effects, cx);
         self.ensure_job_tick(cx);
         cx.notify();
     }
@@ -709,7 +644,7 @@ impl Workspace {
     /// line keeps counting between progress events. The loop retires itself
     /// as soon as the last job leaves.
     fn ensure_job_tick(&mut self, cx: &mut Context<Self>) {
-        if self.job_tick_running || self.vm.live_jobs.is_empty() {
+        if self.job_tick_running || self.vm().live_jobs.is_empty() {
             return;
         }
         self.job_tick_running = true;
@@ -720,7 +655,7 @@ impl Workspace {
                 // list, so a job starting right after still gets a tick.
                 let running = this
                     .update(cx, |workspace, cx| {
-                        if workspace.vm.live_jobs.is_empty() {
+                        if workspace.vm().live_jobs.is_empty() {
                             workspace.job_tick_running = false;
                             false
                         } else {
@@ -742,18 +677,10 @@ impl Workspace {
         self.session_filter_input.clone()
     }
 
-    fn dispatch(&self, command: BridgeCommand, cx: &mut Context<Self>) {
-        let scope = bridge::ReplyScope::for_command(&command);
-        let request = self.bridge.request(command);
-        cx.spawn(async move |this, cx| {
-            let reply = request.await;
-            let _ = this.update(cx, |workspace, cx| {
-                if scope.applies(&workspace.vm, workspace.pending_open.as_deref()) {
-                    workspace.apply_reply(reply, cx);
-                }
-            });
-        })
-        .detach();
+    /// Fire-and-forget commands through the driver's bridge. The reply is
+    /// routed by scope inside the driver when it lands.
+    fn dispatch(&self, command: BridgeCommand, _cx: &mut Context<Self>) {
+        self.driver.dispatch(command);
     }
 
     // ---- thin nav / toggle dispatchers ----
@@ -765,37 +692,22 @@ impl Workspace {
     ) {
         self.apply_action(FrontendAction::ShowSettingsSection(section), cx);
         if section == crate::view_model::SettingsSection::Skills {
-            self.refresh_skills(cx);
+            self.driver_do(|d, fx| d.reload_skills(fx), cx);
         }
         if section == crate::view_model::SettingsSection::Agents {
-            self.agent_roles_stale = true;
+            self.driver.invalidate_agent_roles();
         }
     }
 
     /// Resolves delegation roles when settings is showing them.
-    ///
-    /// Disk is read only when the cache is empty, the open project changed,
-    /// or the Agents section was opened again.
     pub(crate) fn ensure_agent_roles(&mut self) {
-        let project = self.vm.project_dir.clone();
-        if !self.agent_roles_stale
-            && self.agent_roles.is_some()
-            && self.agent_roles_project == project
-        {
-            return;
-        }
-        let root = project.as_deref().map(std::path::Path::new);
-        self.agent_roles = Some(mycode_config::discover_roles(&self.home, root));
-        self.agent_roles_project = project;
-        self.agent_roles_stale = false;
+        self.driver.ensure_agent_roles();
     }
 
     /// Role catalog last resolved for settings. Built-ins only before the
     /// first settings paint.
     pub(crate) fn agent_roles(&self) -> mycode_config::RoleCatalog {
-        self.agent_roles
-            .clone()
-            .unwrap_or_else(mycode_config::builtin_roles)
+        self.driver.agent_roles()
     }
 
     /// Switches the Models settings sub-page.
@@ -851,38 +763,36 @@ impl Workspace {
     }
 
     pub(crate) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        if crate::view_model::project_of_session(&self.vm.session_projects, session_id).is_none() {
-            self.apply_action(FrontendAction::ActiveProjectChanged(None), cx);
-        }
-        self.follow_session_project(session_id, cx);
-        self.request_open_session(session_id, cx);
+        self.driver_do(|d, fx| d.open_session(session_id, fx), cx);
     }
 
     /// Switches the main area between chat and settings.
     pub(crate) fn on_show_main_view(&mut self, view: MainView, cx: &mut Context<Self>) {
-        let entering_settings = view == MainView::Settings && self.vm.view != MainView::Settings;
-        self.apply_action(FrontendAction::ShowMainView(view), cx);
+        let entering_settings = view == MainView::Settings && self.vm().view != MainView::Settings;
+        self.driver_do(|d, fx| d.show_main_view(view, fx), cx);
         if entering_settings {
             self.settings_focus_pending = true;
-            self.refresh_skills(cx);
         }
     }
 
     /// Whether this frame should focus the workspace node so Settings Escape
     /// reaches the root key listener.
     pub(crate) fn take_settings_focus(&mut self) -> bool {
-        let pending = self.settings_focus_pending && self.vm.view == MainView::Settings;
-        if self.settings_focus_pending {
-            self.settings_focus_pending = false;
-        }
+        let pending = self.settings_focus_pending && self.vm().view == MainView::Settings;
+        self.settings_focus_pending = false;
         pending
+    }
+
+    /// Focus the driver asked for after a switch the render could not see.
+    pub(crate) fn take_focus_restore(&mut self) -> bool {
+        std::mem::take(&mut self.focus_restore_pending)
     }
 
     /// Opens, closes, or pins the inspector. Does not touch the session.
     /// The pair is persisted so a resident panel survives a restart.
     pub(crate) fn on_set_inspector(&mut self, open: bool, pinned: bool, cx: &mut Context<Self>) {
         self.apply_action(FrontendAction::InspectorChanged { open, pinned }, cx);
-        self.persist_ui_state(cx);
+        self.persist_ui_state();
     }
 
     /// Whether a tool row is showing its result body.
@@ -914,45 +824,25 @@ impl Workspace {
     /// Whether thinking traces show their full text. One switch covers
     /// every trace, live and recorded.
     pub(crate) fn thinking_open(&self) -> bool {
-        !self.vm.thinking_collapsed
+        !self.vm().thinking_collapsed
     }
 
     /// Expands or collapses every thinking trace and remembers the choice.
     pub(crate) fn on_toggle_thinking(&mut self, cx: &mut Context<Self>) {
         self.apply_action(FrontendAction::ThinkingCollapsedToggled, cx);
-        self.persist_ui_state(cx);
+        self.persist_ui_state();
     }
 
-    /// Session, branch, and head of the open conversation, read without
-    /// cloning its transcript. `None` without an open chat or when its ids
-    /// do not parse.
-    fn open_turn_target(&self) -> Option<(mycode_app::SessionId, mycode_app::BranchId, HeadStamp)> {
-        let active = self.vm.active.as_ref()?;
-        Some((
-            mycode_app::SessionId::parse(&active.session_id)?,
-            mycode_app::BranchId::parse(&active.branch_id)?,
-            parse_head(&active.head),
-        ))
-    }
-
-    /// The open conversation's session id.
-    fn open_session_id(&self) -> Option<String> {
-        self.vm
-            .active
-            .as_ref()
-            .map(|conversation| conversation.session_id.clone())
+    /// Persists the durable UI state projection (last project, selections,
+    /// inspector, window size, …) through the shared layer.
+    fn persist_ui_state(&mut self) {
+        self.driver.persist_ui_state();
     }
 
     // ---- accessors for the render layer ----
 
     pub(crate) fn vm(&self) -> &WorkspaceState {
-        &self.vm
-    }
-
-    pub(crate) fn take_manual_update_check(&mut self) -> bool {
-        let manual = self.manual_update_check;
-        self.manual_update_check = false;
-        manual
+        self.driver.vm()
     }
 
     pub(crate) fn focus_handle(&self) -> &gpui_kit::FocusHandle {
@@ -963,19 +853,15 @@ impl Workspace {
         &self.composer
     }
 
-    /// Takes the composer prefill restored by edit-and-resend.
-    pub(crate) fn take_composer_prefill(&mut self) -> Option<String> {
-        self.pending_composer_prefill.take()
+    /// The composer replacement a `ComposerSet` effect requested, with its
+    /// focus flag; consumed by the next composer paint.
+    pub(crate) fn take_composer_set(&mut self) -> Option<(String, bool)> {
+        self.pending_composer_set.take()
     }
-}
 
-fn parse_head(spelling: &str) -> HeadStamp {
-    if spelling == "empty" {
-        HeadStamp::Empty
-    } else {
-        SessionEventId::parse(spelling)
-            .map(HeadStamp::Event)
-            .unwrap_or(HeadStamp::Empty)
+    /// The question row the ask card is showing.
+    pub(crate) fn ask_index(&self) -> usize {
+        self.driver.ask_index()
     }
 }
 
@@ -1048,68 +934,17 @@ fn space_separate_env(line: &str) -> String {
 
 /// Renders the whole window; split across the `ui` submodule.
 impl Workspace {
-    /// Whether an open surface reads the provider catalog document.
-    fn catalog_needed(&self) -> bool {
-        let vm = &self.vm;
-        vm.model_menu_open
-            || vm.reasoning_menu_open
-            || vm.subagent_menu.is_some()
-            || vm.command_palette_open
-            || (vm.view == crate::view_model::MainView::Settings
-                && matches!(
-                    vm.settings_section,
-                    crate::view_model::SettingsSection::Models
-                        | crate::view_model::SettingsSection::About
-                ))
-    }
-
-    /// Persists a resized window's settled size. The observer fires on every
-    /// bounds change (moves included), so only a size difference arms the
-    /// debounce and only the last generation wins the write.
-    fn on_window_resized(&mut self, window: &Window, cx: &mut Context<Self>) {
+    /// Persists a resized window's settled size. The driver debounces; only
+    /// the last generation wins the write.
+    fn on_window_resized(&mut self, window: &Window, _cx: &mut Context<Self>) {
         let bounds = match window.window_bounds() {
             // `Maximized` still reports the restorable windowed bounds, which
             // is exactly the size to restore on the next launch.
             WindowBounds::Windowed(bounds) | WindowBounds::Maximized(bounds) => bounds,
             WindowBounds::Fullscreen(_) => return,
         };
-        let size = mycode_config::WindowSize {
-            width: f32::from(bounds.size.width).round().max(0.) as u32,
-            height: f32::from(bounds.size.height).round().max(0.) as u32,
-        };
-        if size.width == 0
-            || size.height == 0
-            || size.width > mycode_config::MAX_WINDOW_EDGE_PX
-            || size.height > mycode_config::MAX_WINDOW_EDGE_PX
-            || self.vm.window_size == Some(size)
-        {
-            return;
-        }
-        self.vm.window_size = Some(size);
-        self.window_size_generation = self.window_size_generation.wrapping_add(1);
-        let generation = self.window_size_generation;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(400))
-                .await;
-            let _ = this.update(cx, |workspace, cx| {
-                if workspace.window_size_generation == generation {
-                    workspace.persist_ui_state(cx);
-                }
-            });
-        })
-        .detach();
-    }
-
-    /// Loads the provider catalog the first time a surface needs it. The
-    /// document stays unparsed in the core until this request lands, keeping
-    /// the multi-megabyte decode off the startup path.
-    fn ensure_catalog(&mut self, cx: &mut Context<Self>) {
-        if self.catalog_requested || self.vm.catalog.is_some() || !self.catalog_needed() {
-            return;
-        }
-        self.catalog_requested = true;
-        self.dispatch(BridgeCommand::GetCatalog, cx);
+        self.driver
+            .note_window_resized(bounds.size.width.into(), bounds.size.height.into());
     }
 
     pub(crate) fn render_root(
@@ -1117,7 +952,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl gpui_kit::IntoElement {
-        self.ensure_catalog(cx);
+        self.driver.ensure_catalog();
         crate::ui::render_root(self, window, cx)
     }
 }

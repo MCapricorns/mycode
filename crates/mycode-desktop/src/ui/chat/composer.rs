@@ -13,8 +13,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    BoxShadow, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, hsla, px,
+    BoxShadow, Context, Focusable as _, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, hsla, px,
 };
 
 use crate::i18n::t;
@@ -56,8 +56,11 @@ pub(super) fn render_composer(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let composer = workspace.composer().clone();
-    if let Some(text) = workspace.take_composer_prefill() {
+    if let Some((text, focus)) = workspace.take_composer_set() {
         composer.update(cx, |state, cx| state.set_value(text, window, cx));
+        if focus {
+            composer.read(cx).focus_handle(cx).focus(window, cx);
+        }
     }
     let model_label: SharedString = model_button_label(workspace.vm()).into();
     let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();

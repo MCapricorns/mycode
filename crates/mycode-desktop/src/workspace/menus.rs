@@ -38,7 +38,7 @@ fn moved(current: usize, len: usize, down: bool) -> usize {
 impl Workspace {
     pub(super) fn reset_menu_navigation(&mut self, action: &FrontendAction) {
         match action {
-            FrontendAction::ComposerChanged(text) if text != &self.vm.composer_draft => {
+            FrontendAction::ComposerChanged(text) if text.as_str() != self.vm().composer_draft => {
                 self.menu_navigation.mention = None;
             }
             FrontendAction::MentionFiles(_) => self.menu_navigation.mention = None,
@@ -48,7 +48,7 @@ impl Workspace {
                 self.menu_navigation.provider = None;
             }
             FrontendAction::ModelMenuBrowse(_) => self.menu_navigation.model = None,
-            FrontendAction::PickerQueryChanged(query) if query != &self.vm.picker_query => {
+            FrontendAction::PickerQueryChanged(query) if query.as_str() != self.vm().picker_query => {
                 self.menu_navigation.model = None;
             }
             FrontendAction::ConversationOpened(_)
@@ -61,7 +61,7 @@ impl Workspace {
     }
 
     pub(crate) fn mention_highlight(&self) -> usize {
-        let Some(mention) = &self.vm.mention else {
+        let Some(mention) = &self.vm().mention else {
             return 0;
         };
         let preferred = if mention.kind == MentionKind::Command {
@@ -73,7 +73,7 @@ impl Workspace {
     }
 
     pub(crate) fn reasoning_highlight(&self, levels: &[String]) -> usize {
-        let selected = crate::view_model::selected_reasoning_level(&self.vm);
+        let selected = crate::view_model::selected_reasoning_level(self.vm());
         let preferred = levels
             .iter()
             .position(|level| *level == selected)
@@ -121,15 +121,15 @@ impl Workspace {
             || modifiers.alt
             || modifiers.shift
             || modifiers.function
-            || self.vm.command_palette_open
+            || self.vm().command_palette_open
             || self.project_picker.is_some()
-            || self.vm.update_dialog_open
-            || self.vm.subagent_window.is_some()
+            || self.vm().update_dialog_open
+            || self.vm().subagent_window.is_some()
         {
             return false;
         }
-        if self.vm.reasoning_menu_open {
-            let levels = crate::view_model::selected_reasoning_levels(&self.vm);
+        if self.vm().reasoning_menu_open {
+            let levels = crate::view_model::selected_reasoning_levels(self.vm());
             if levels.is_empty() {
                 return false;
             }
@@ -144,20 +144,19 @@ impl Workspace {
             }
             return true;
         }
-        let role = self
-            .vm
+        let role = self.vm()
             .subagent_menu
             .as_ref()
             .filter(|(_, field)| field == "model")
             .map(|(role, _)| role.clone());
-        if self.vm.model_menu_open || role.is_some() {
+        if self.vm().model_menu_open || role.is_some() {
             let target = role
                 .map(ModelPickerTarget::Role)
                 .unwrap_or(ModelPickerTarget::Session);
-            if let Some(provider) = self.vm.model_menu_browse.clone() {
-                let choices = crate::ui::model_picker::provider_model_choices(&self.vm, &provider);
+            if let Some(provider) = self.vm().model_menu_browse.clone() {
+                let choices = crate::ui::model_picker::provider_model_choices(self.vm(), &provider);
                 let filtered =
-                    crate::ui::model_picker::filter_model_choices(&choices, &self.vm.picker_query);
+                    crate::ui::model_picker::filter_model_choices(&choices, &self.vm().picker_query);
                 if filtered.is_empty() {
                     return true;
                 }
@@ -165,10 +164,10 @@ impl Workspace {
                     self.accept_model_search(cx);
                 } else {
                     let selected =
-                        crate::ui::model_picker::selected_in_provider(&self.vm, &target, &provider);
+                        crate::ui::model_picker::selected_in_provider(self.vm(), &target, &provider);
                     let preferred = crate::ui::model_picker::preferred_index(
                         &filtered,
-                        &self.vm.picker_query,
+                        &self.vm().picker_query,
                         selected.as_deref(),
                     );
                     let index = moved(
@@ -183,7 +182,7 @@ impl Workspace {
                     cx.notify();
                 }
             } else {
-                let choices = crate::ui::model_picker::provider_choices(&self.vm, &target);
+                let choices = crate::ui::model_picker::provider_choices(self.vm(), &target);
                 if choices.is_empty() {
                     return true;
                 }
@@ -214,15 +213,14 @@ impl Workspace {
                     let index = moved(current, choices.len(), key == "down");
                     self.menu_navigation.provider = Some(index);
                     let child =
-                        crate::ui::model_picker::provider_scroll_index(&self.vm, &target, index);
+                        crate::ui::model_picker::provider_scroll_index(self.vm(), &target, index);
                     self.menu_navigation.provider_scroll.scroll_to_item(child);
                     cx.notify();
                 }
             }
             return true;
         }
-        if self
-            .vm
+        if self.vm()
             .mention
             .as_ref()
             .is_some_and(|mention| !mention.items.is_empty())
@@ -231,21 +229,33 @@ impl Workspace {
             if key == "enter" {
                 return self.accept_open_mention(window, cx);
             }
-            let mention = self.vm.mention.as_ref().expect("visible mention");
-            let index = moved(self.mention_highlight(), mention.items.len(), key == "down");
-            self.menu_navigation.mention = Some(index);
+            let index = moved(
+                self.mention_highlight(),
+                self.vm()
+                    .mention
+                    .as_ref()
+                    .expect("visible mention")
+                    .items
+                    .len(),
+                key == "down",
+            );
             // Heading children are real scroll items, so include them when
             // selecting a command in a later group.
-            let mut headers = usize::from(mention.kind == MentionKind::File);
-            let mut previous = None;
-            if mention.kind == MentionKind::Command {
-                for item in &mention.items[..=index] {
-                    if previous != Some(item.group) {
-                        headers += 1;
-                        previous = Some(item.group);
+            let headers = {
+                let mention = self.vm().mention.as_ref().expect("visible mention");
+                let mut headers = usize::from(mention.kind == MentionKind::File);
+                let mut previous = None;
+                if mention.kind == MentionKind::Command {
+                    for item in &mention.items[..=index] {
+                        if previous != Some(item.group) {
+                            headers += 1;
+                            previous = Some(item.group);
+                        }
                     }
                 }
-            }
+                headers
+            };
+            self.menu_navigation.mention = Some(index);
             self.menu_navigation
                 .mention_scroll
                 .scroll_to_item(index + headers);

@@ -28,7 +28,7 @@ pub(crate) fn render_ask_card(
     let rows = workspace.vm().pending_ask.clone().unwrap_or_default();
     let picks = workspace.vm().ask_answers.clone();
     let total = rows.len();
-    let index = workspace.ask_index.min(total.saturating_sub(1));
+    let index = workspace.ask_index().min(total.saturating_sub(1));
     let last = index + 1 >= total;
     // `ask_input` needs `&mut cx`, so it is fetched before `theme` borrows.
     let input = rows

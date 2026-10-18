@@ -8,7 +8,7 @@
 mod chat;
 mod command_palette;
 mod models;
-mod nav;
+pub mod nav;
 mod projects;
 mod settings;
 mod state;

@@ -62,8 +62,7 @@ impl Workspace {
         }
         let input = self.proxy_input.clone().expect("proxy input");
         if self.proxy_sync_pending {
-            let target = self
-                .vm
+            let target = self.vm()
                 .settings
                 .as_ref()
                 .map(|settings| settings.proxy.clone())
@@ -87,8 +86,7 @@ impl Workspace {
     /// `custom`. Custom keeps a stored URL, or starts from Clash's default
     /// port.
     pub(crate) fn on_select_proxy_mode(&mut self, mode: &str, cx: &mut Context<Self>) {
-        let current = self
-            .vm
+        let current = self.vm()
             .settings
             .as_ref()
             .map(|settings| settings.proxy.clone())
@@ -123,30 +121,7 @@ impl Workspace {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(backend) = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.web_backends.get(index))
-            .cloned()
-        else {
-            return;
-        };
-        if !enabled {
-            self.pending_web_enable.remove(&backend.id);
-            self.apply_action(FrontendAction::SettingsBackendToggled(index, false), cx);
-            return;
-        }
-        if self.pending_web_enable.contains(&backend.id) {
-            return;
-        }
-        self.pending_web_enable.insert(backend.id.clone());
-        self.dispatch(
-            BridgeCommand::ProbeWebBackend {
-                backend: Box::new(backend),
-            },
-            cx,
-        );
+        self.driver_do(|driver, fx| driver.toggle_web_backend(index, enabled, fx), cx);
     }
 
     pub(crate) fn web_key_input(
@@ -271,8 +246,7 @@ impl Workspace {
             self.apply_action(FrontendAction::Failed("fill id".to_owned()), cx);
             return;
         }
-        if self
-            .vm
+        if self.vm()
             .settings
             .as_ref()
             .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.id == id))
@@ -338,8 +312,7 @@ impl Workspace {
                 return;
             }
         };
-        let mut existing: Vec<String> = self
-            .vm
+        let mut existing: Vec<String> = self.vm()
             .settings
             .as_ref()
             .map(|settings| {
@@ -405,7 +378,7 @@ impl Workspace {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(settings) = self.vm.settings.as_ref() else {
+        let Some(settings) = self.vm().settings.as_ref() else {
             return;
         };
         let mut next = settings.subagents.clone();
@@ -430,7 +403,7 @@ impl Workspace {
         thinking: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(settings) = self.vm.settings.as_ref() else {
+        let Some(settings) = self.vm().settings.as_ref() else {
             return;
         };
         let mut next = settings.subagents.clone();
@@ -446,7 +419,7 @@ impl Workspace {
         model: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(settings) = self.vm.settings.as_ref() else {
+        let Some(settings) = self.vm().settings.as_ref() else {
             return;
         };
         let mut next = settings.subagents.clone();
@@ -473,7 +446,7 @@ impl Workspace {
                 }
             }
         } else if let Some(model) = model {
-            let fallback = self.vm.selected_provider.clone().or_else(|| {
+            let fallback = self.vm().selected_provider.clone().or_else(|| {
                 settings
                     .providers
                     .iter()
@@ -494,103 +467,13 @@ impl Workspace {
         self.apply_action(FrontendAction::SettingsSubagentsChanged(next), cx);
     }
 
-    /// Restores each chat's working directory after startup so a later
-    /// session switch does not run tools in the last-opened project.
-    pub(super) fn restore_session_projects(&mut self, cx: &mut Context<Self>) {
-        let bindings = self.vm.session_projects.clone();
-        for (session_id, project) in bindings {
-            self.dispatch(
-                BridgeCommand::SetProjectDir {
-                    session_id,
-                    path: Some(project),
-                },
-                cx,
-            );
-        }
-    }
-
     /// Waits out the text-field debounce, then writes `settings.json`.
-    const SETTINGS_TEXT_SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
-
-    /// Writes a text field such as User-Agent about 400ms after the last
-    /// keystroke. A newer edit or a blur supersedes this timer.
-    pub(crate) fn schedule_settings_text_save(&mut self, cx: &mut Context<Self>) {
-        self.settings_text_save_generation = self.settings_text_save_generation.wrapping_add(1);
-        self.settings_text_save_pending = true;
-        let generation = self.settings_text_save_generation;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Self::SETTINGS_TEXT_SAVE_DEBOUNCE)
-                .await;
-            let _ = this.update(cx, |workspace, cx| {
-                if workspace.settings_text_save_generation != generation {
-                    return;
-                }
-                workspace.settings_text_save_pending = false;
-                workspace.on_save_settings(cx);
-            });
-        })
-        .detach();
-    }
-
     /// Writes a pending text-field edit immediately. Blur and leaving
     /// Settings use this so the draft is not waiting on the debounce.
     pub(crate) fn flush_settings_text_save(&mut self, cx: &mut Context<Self>) {
-        if !self.settings_text_save_pending {
-            return;
-        }
-        self.settings_text_save_generation = self.settings_text_save_generation.wrapping_add(1);
-        self.settings_text_save_pending = false;
-        self.on_save_settings(cx);
+        self.driver_do(|d, fx| d.flush_settings_text_save(fx), cx);
     }
 
-    /// Writes a settings edit that arrived while a save was in flight.
-    /// A pending text debounce keeps its timer so a half-typed User-Agent
-    /// is not flushed early.
-    pub(crate) fn continue_settings_save(&mut self, cx: &mut Context<Self>) {
-        if self.settings_text_save_pending {
-            return;
-        }
-        self.on_save_settings(cx);
-    }
-
-    /// Persists the settings document under CAS when local edits exist.
-    pub(crate) fn on_save_settings(&mut self, cx: &mut Context<Self>) {
-        let Some((document, edit_epoch, revision)) = self
-            .vm
-            .settings
-            .as_ref()
-            .filter(|settings| !settings.saving && settings.dirty)
-            .map(|settings| {
-                (
-                    settings.to_settings(),
-                    settings.edit_epoch,
-                    settings.revision,
-                )
-            })
-        else {
-            return;
-        };
-        if let Err(message) = document.validate() {
-            self.apply_action(
-                FrontendAction::SettingsSaveFailed(format!("invalid settings: {message}")),
-                cx,
-            );
-            return;
-        }
-        self.settings_save_epoch = edit_epoch;
-        self.vm.settings.as_mut().expect("settings").saving = true;
-        let revision = mycode_config::AuthorityRevision::new(revision)
-            .unwrap_or(mycode_config::AuthorityRevision::ABSENT);
-        cx.notify();
-        self.dispatch(
-            BridgeCommand::SaveSettings {
-                expected_revision: revision,
-                settings: document,
-            },
-            cx,
-        );
-    }
 }
 
 #[cfg(test)]

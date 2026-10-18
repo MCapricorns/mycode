@@ -17,7 +17,7 @@ impl Workspace {
 
     /// Whether this frame should move focus into the palette search field.
     pub(crate) fn take_palette_focus(&mut self) -> bool {
-        let pending = self.palette_focus_pending && self.vm.command_palette_open;
+        let pending = self.palette_focus_pending && self.vm().command_palette_open;
         if pending {
             self.palette_focus_pending = false;
         }
@@ -25,7 +25,7 @@ impl Workspace {
     }
 
     pub(crate) fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_command_palette(!self.vm.command_palette_open, window, cx);
+        self.set_command_palette(!self.vm().command_palette_open, window, cx);
     }
 
     pub(crate) fn set_command_palette(
@@ -34,7 +34,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.vm.command_palette_open == open {
+        if self.vm().command_palette_open == open {
             return;
         }
         if open {
@@ -59,7 +59,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let catalog = palette_catalog(&self.vm);
+        let catalog = palette_catalog(self.vm());
         let command = palette_item(&catalog, section, row).map(|item| item.command.clone());
         if let Some(command) = command {
             self.run_palette_command(command, cx);
@@ -84,7 +84,7 @@ impl Workspace {
         match command {
             PaletteCommand::NewSession => {
                 self.on_show_main_view(MainView::Chat, cx);
-                if !crate::view_model::has_open_folder(&self.vm) {
+                if !crate::view_model::has_open_folder(self.vm()) {
                     self.push_toast(
                         crate::i18n::t("Open a folder to get started.", "打开一个目录即可开始。"),
                         crate::workspace::ToastKind::Info,
@@ -115,7 +115,7 @@ impl Workspace {
     }
 
     fn restore_focus_after_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.vm.view == MainView::Chat {
+        if self.vm().view == MainView::Chat {
             self.composer.read(cx).focus_handle(cx).focus(window, cx);
         } else {
             self.focus_handle.focus(window, cx);
