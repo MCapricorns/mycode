@@ -203,6 +203,11 @@ pub(super) fn render_chat(
                             .child(
                                 probe.child(
                                     transcript::transcript_stack()
+                                        // Breathing room under the newest
+                                        // row so the latest reply or
+                                        // thinking trace does not sit flush
+                                        // against the composer.
+                                        .pb(px(40.))
                                         .when(show_welcome, |this| {
                                             this.child(welcome::render_welcome(workspace, cx))
                                         })

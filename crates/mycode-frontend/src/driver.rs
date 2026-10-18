@@ -637,7 +637,16 @@ impl FrontendDriver {
                 | FrontendAction::ToolStarted { .. }
                 | FrontendAction::ToolProgress { .. }
                 | FrontendAction::ToolResultAppended(_)
+                | FrontendAction::AssistantStepCommitted(_)
+                | FrontendAction::SteerCommitted { .. }
+                | FrontendAction::SteersReturned(_)
+                | FrontendAction::SummaryShown(_)
+                | FrontendAction::MessageQueued(_)
+                | FrontendAction::AskRequested(_)
+                | FrontendAction::CompactArmed
+                | FrontendAction::CompactFinished { .. }
                 | FrontendAction::ChatDone { .. }
+                | FrontendAction::ChatFailed { .. }
                 | FrontendAction::ConversationOpened(_)
                 | FrontendAction::SessionCreated(_)
         );
