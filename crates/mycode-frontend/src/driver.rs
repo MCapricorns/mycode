@@ -320,6 +320,10 @@ pub struct FrontendDriver {
     pending_web_enable: HashSet<String>,
     /// The in-flight check was started by the user, so its result may toast.
     manual_update_check: bool,
+    /// The staged payload's exit swap is already armed; staging the same
+    /// payload again (a manual install click, say) must not spawn another
+    /// helper copy.
+    update_armed: bool,
     /// A user stop is unwinding: steers the turn hands back join a held
     /// queue instead of starting a new turn. Cleared when a turn starts.
     queue_hold_on_return: bool,
@@ -408,6 +412,7 @@ impl FrontendDriver {
             pending_mcp_enable: HashSet::new(),
             pending_web_enable: HashSet::new(),
             manual_update_check: false,
+            update_armed: false,
             queue_hold_on_return: false,
             recall_generation: 0,
             repaired_configs: Vec::new(),

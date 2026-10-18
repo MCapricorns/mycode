@@ -58,6 +58,7 @@ mod updates;
 mod user_agent;
 mod web_client;
 
+pub use mycode_providers::{ProxyTestReport, ProxyTestRoute};
 pub use protocol::{
     ActiveConversation, AskPrompt, BranchId, CHAT_CANCELLED, ConversationEntry, EntryKind,
     HeadStamp, MAX_STREAMING_CHARS, OlderTranscript, SessionEventId, SessionId, SessionSummary,
@@ -66,9 +67,9 @@ pub use protocol::{
 pub use updates::apply::{parse_apply_update_args, run_apply_update_helper};
 pub use updates::{PreparedUpdate, UpdateOffer};
 pub use updates::{
-    apply_and_restart, brief_error, cleanup_previous_binary, cleanup_stale_stages, current_version,
+    arm_staged_update, brief_error, cleanup_previous_binary, cleanup_stale_stages, current_version,
+    is_cli_binary, reconcile_pending_update,
 };
-pub use mycode_providers::{ProxyTestReport, ProxyTestRoute};
 pub use user_agent::default_user_agent;
 
 use std::path::PathBuf;

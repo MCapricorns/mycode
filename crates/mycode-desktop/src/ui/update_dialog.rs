@@ -36,8 +36,8 @@ pub(super) fn render_update_dialog(
         UpdateState::Ready { version } => format!(
             "v{version} {}",
             t(
-                "is staged. Restart to finish the install.",
-                "已就绪。重启后完成安装。"
+                "is staged — it installs on quit or restart.",
+                "已就绪 — 退出或重启后完成安装。"
             )
         ),
         UpdateState::Failed(message) => format!(
@@ -56,8 +56,8 @@ pub(super) fn render_update_dialog(
             "校验通过后会弹出安装提示。",
         ),
         UpdateState::Ready { .. } => t(
-            "Restarting closes every session. Uncommitted work stays on disk.",
-            "重启会关闭所有会话。未提交的工作保留在磁盘上。",
+            "Closing the app finishes the install. Uncommitted work stays on disk.",
+            "关闭应用即完成安装。未提交的工作保留在磁盘上。",
         ),
         _ => "",
     };

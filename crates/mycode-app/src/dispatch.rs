@@ -247,7 +247,9 @@ pub(crate) fn run_core(
                     tokio::spawn(async move {
                         let outcome = match mycode_config::ProxyPreference::parse(&proxy) {
                             Some(preference) => Ok(mycode_providers::test_proxy(&preference).await),
-                            None => Err("not a proxy URL: http, https, socks5, or socks5h".to_owned()),
+                            None => {
+                                Err("not a proxy URL: http, https, socks5, or socks5h".to_owned())
+                            }
                         };
                         let _ = reply.send(BridgeReply::ProxyTested(outcome));
                     });
@@ -259,6 +261,27 @@ pub(crate) fn run_core(
                     tokio::spawn(async move {
                         let outcome =
                             crate::updates::download_update(UPDATE_USER_AGENT, &offer).await;
+                        let outcome = match outcome {
+                            Err(error) => Err(error),
+                            // Dev-tree runs never persist a pending payload:
+                            // a binary under `target/` must not self-swap.
+                            Ok(prepared) if crate::install::install_skipped() => Ok(prepared),
+                            Ok(prepared) => {
+                                let home = task_state.home.clone();
+                                let staged = prepared.clone();
+                                let persisted = tokio::task::spawn_blocking(move || {
+                                    crate::updates::persist_pending_update(&home, &staged)
+                                })
+                                .await;
+                                match persisted {
+                                    Ok(Ok(persisted)) => Ok(persisted),
+                                    // A failed durable copy still yields the
+                                    // verified temp stage; a crash then loses
+                                    // the swap, matching a non-persisted stage.
+                                    Ok(Err(_)) | Err(_) => Ok(prepared),
+                                }
+                            }
+                        };
                         let staged = outcome.is_ok();
                         let _ = reply.send(BridgeReply::UpdateDownloaded(outcome));
                         if staged {

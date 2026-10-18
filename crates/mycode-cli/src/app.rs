@@ -41,9 +41,8 @@ use mycode_config::{VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES};
 use mycode_frontend::driver::{Effect, FrontendDriver, ToastKind};
 use mycode_frontend::view_model::{
     FrontendAction, MainView, MentionKind, ProxyTestState, SettingsSection, UpdateState,
-    WorkspaceState,
-    elapsed_label, model_display_name, preferred_slash_index, provider_display_name,
-    selected_reasoning_level, selected_reasoning_levels,
+    WorkspaceState, elapsed_label, model_display_name, preferred_slash_index,
+    provider_display_name, selected_reasoning_level, selected_reasoning_levels,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -1976,7 +1975,7 @@ fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
         }
         UpdateState::Downloading { version } => format!("downloading v{version}…"),
         UpdateState::Ready { version } => {
-            format!("v{version} ready — Enter to install and restart")
+            format!("v{version} ready — installs on exit; Enter to quit and install")
         }
         UpdateState::Failed(message) => format!("failed: {message} — Enter to retry"),
     };

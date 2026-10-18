@@ -128,6 +128,7 @@ fn an_offer_found_publishes_the_offer_and_flips_available_together() {
     reduce(
         &mut state,
         FrontendAction::UpdateStaged(mycode_app::PreparedUpdate {
+            version: "9.9.9".to_owned(),
             new_binary: std::path::PathBuf::from("stage/app.exe"),
             stage_dir: std::path::PathBuf::from("stage"),
             binary_sha256: "abc123".to_owned(),

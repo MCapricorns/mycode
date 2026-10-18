@@ -42,6 +42,13 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // A pending payload a previous session staged but never swapped —
+    // a crash or a lost helper — re-arms here. The terminal keeps
+    // opening (a second window must never bounce); the swap lands when
+    // this run exits and the next `mycode-cli` is the new version.
+    if let Some(version) = mycode_app::reconcile_pending_update(&home, false) {
+        println!("mycode-cli: update v{version} is staged — it installs when this run exits.");
+    }
     let install = mycode_app::install::ensure_cli_installed(&home);
     announce_install(&install);
     std::process::exit(app::run(home, install));
