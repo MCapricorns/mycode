@@ -630,36 +630,44 @@ impl SessionCore {
         branch: &BranchId,
         meta: &EventMeta,
     ) -> Result<Vec<u8>, OpFail> {
-        let stored = StoredEvent {
-            event_id: meta.event_id.clone(),
-            digest: meta.digest.clone(),
-            bytes: meta.bytes,
-            kind: meta.kind,
-            call_id: meta.call_id.clone(),
-            offset: meta.offset,
-            record_len: meta.record_len,
-            external: meta.external,
-        };
         self.store_ref()?
-            .read_payload(session, branch, &stored)
+            .read_payload(session, branch, &stored_event(meta))
             .map_err(map_store)
     }
 
+    /// Loads a run of consecutive events with one read of the branch log.
     fn load_range(
         &self,
         session: &SessionId,
         branch: &BranchId,
         metas: &[EventMeta],
     ) -> Result<Vec<LoadedEvent>, OpFail> {
-        let mut items = Vec::with_capacity(metas.len());
-        for meta in metas {
-            let payload = self.verified_payload(session, branch, meta)?;
-            items.push(LoadedEvent {
+        let stored: Vec<StoredEvent> = metas.iter().map(stored_event).collect();
+        let payloads = self
+            .store_ref()?
+            .read_payloads(session, branch, &stored)
+            .map_err(map_store)?;
+        Ok(metas
+            .iter()
+            .zip(payloads)
+            .map(|(meta, payload)| LoadedEvent {
                 event: meta.to_session_event(),
                 payload,
-            });
-        }
-        Ok(items)
+            })
+            .collect())
+    }
+}
+
+fn stored_event(meta: &EventMeta) -> StoredEvent {
+    StoredEvent {
+        event_id: meta.event_id.clone(),
+        digest: meta.digest.clone(),
+        bytes: meta.bytes,
+        kind: meta.kind,
+        call_id: meta.call_id.clone(),
+        offset: meta.offset,
+        record_len: meta.record_len,
+        external: meta.external,
     }
 }
 

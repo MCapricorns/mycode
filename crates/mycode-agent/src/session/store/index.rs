@@ -698,57 +698,61 @@ impl SessionStore {
         branch: &BranchId,
         event: &StoredEvent,
     ) -> Result<Vec<u8>, StoreError> {
+        let mut payloads = self.read_payloads(session, branch, std::slice::from_ref(event))?;
+        payloads.pop().ok_or(StoreError::Corrupt)
+    }
+
+    /// Reads digest-checked payloads for consecutive events of one branch.
+    ///
+    /// Consecutive events sit back to back in the branch log, so the whole
+    /// span is read with one open instead of one per event. Events that are
+    /// not contiguous are read one at a time.
+    pub(crate) fn read_payloads(
+        &self,
+        session: &SessionId,
+        branch: &BranchId,
+        events: &[StoredEvent],
+    ) -> Result<Vec<Vec<u8>>, StoreError> {
+        let Some(first) = events.first() else {
+            return Ok(Vec::new());
+        };
         let paths = SessionPaths::new(&self.home, session);
         let log_path = paths
             .absolute(&paths.branch_jsonl(branch))
             .map_err(|_| StoreError::Unavailable)?;
-        let bytes = fs::read_range(&log_path, event.offset, event.record_len).map_err(|error| {
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::NotFound
-            ) {
-                StoreError::Corrupt
-            } else {
-                StoreError::Storage
+        let mut end = first.offset;
+        let mut contiguous = true;
+        for event in events {
+            if event.offset != end {
+                contiguous = false;
+                break;
             }
-        })?;
-        let decoded = jsonl::decode_line(&bytes).map_err(|()| StoreError::Corrupt)?;
-        if decoded.event_id != event.event_id.as_str()
-            || decoded.record_len != event.record_len
-            || decoded.digest != event.digest
-            || decoded.external != event.external
-            || decoded.kind != event.kind
-            || decoded.bytes != event.bytes
-            || decoded.call_id.as_deref() != event.call_id.as_ref().map(|id| id.as_str())
-        {
-            return Err(StoreError::Corrupt);
+            end = end
+                .checked_add(event.record_len)
+                .ok_or(StoreError::Corrupt)?;
         }
-        if event.external {
-            let payload_path = paths
-                .absolute(&paths.payload_file(&event.event_id))
-                .map_err(|_| StoreError::Unavailable)?;
-            let payload = fs::read_exact_file(&payload_path, event.bytes).map_err(|error| {
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::NotFound
-                ) {
-                    StoreError::Corrupt
-                } else {
-                    StoreError::Storage
-                }
-            })?;
-            if payload.len() as u64 != event.bytes {
-                return Err(StoreError::Corrupt);
-            }
-            if format_digest(&payload_digest(&payload)) != event.digest {
-                return Err(StoreError::Corrupt);
-            }
-            return Ok(payload);
+        if !contiguous {
+            return events
+                .iter()
+                .map(|event| {
+                    let line = fs::read_range(&log_path, event.offset, event.record_len)
+                        .map_err(read_error)?;
+                    verified_payload(&paths, event, &line)
+                })
+                .collect();
         }
-        if decoded.payload.len() as u64 != event.bytes {
-            return Err(StoreError::Corrupt);
-        }
-        Ok(decoded.payload)
+        let span =
+            fs::read_range(&log_path, first.offset, end - first.offset).map_err(read_error)?;
+        let mut cursor = 0_usize;
+        events
+            .iter()
+            .map(|event| {
+                let len = usize::try_from(event.record_len).map_err(|_| StoreError::Corrupt)?;
+                let line = span.get(cursor..cursor + len).ok_or(StoreError::Corrupt)?;
+                cursor += len;
+                verified_payload(&paths, event, line)
+            })
+            .collect()
     }
 
     fn load_events(
@@ -1081,4 +1085,54 @@ pub(crate) fn decode_head(value: &str) -> Option<HeadStamp> {
         return Some(HeadStamp::Empty);
     }
     SessionEventId::parse(value).map(HeadStamp::Event)
+}
+
+/// A short or missing log or payload file is corruption; anything else is
+/// a storage failure the caller may retry.
+fn read_error(error: std::io::Error) -> StoreError {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::NotFound
+    ) {
+        StoreError::Corrupt
+    } else {
+        StoreError::Storage
+    }
+}
+
+/// Decodes one log line and checks it against its index row, loading an
+/// external payload when the line points at one.
+fn verified_payload(
+    paths: &SessionPaths<'_>,
+    event: &StoredEvent,
+    line: &[u8],
+) -> Result<Vec<u8>, StoreError> {
+    let decoded = jsonl::decode_line(line).map_err(|()| StoreError::Corrupt)?;
+    if decoded.event_id != event.event_id.as_str()
+        || decoded.record_len != event.record_len
+        || decoded.digest != event.digest
+        || decoded.external != event.external
+        || decoded.kind != event.kind
+        || decoded.bytes != event.bytes
+        || decoded.call_id.as_deref() != event.call_id.as_ref().map(|id| id.as_str())
+    {
+        return Err(StoreError::Corrupt);
+    }
+    if event.external {
+        let payload_path = paths
+            .absolute(&paths.payload_file(&event.event_id))
+            .map_err(|_| StoreError::Unavailable)?;
+        let payload = fs::read_exact_file(&payload_path, event.bytes).map_err(read_error)?;
+        if payload.len() as u64 != event.bytes {
+            return Err(StoreError::Corrupt);
+        }
+        if format_digest(&payload_digest(&payload)) != event.digest {
+            return Err(StoreError::Corrupt);
+        }
+        return Ok(payload);
+    }
+    if decoded.payload.len() as u64 != event.bytes {
+        return Err(StoreError::Corrupt);
+    }
+    Ok(decoded.payload)
 }
