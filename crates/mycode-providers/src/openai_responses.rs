@@ -17,6 +17,9 @@ use crate::wire_common::{
     usage_from_value,
 };
 
+/// Separates two reasoning summary parts in the thinking text.
+const PART_BREAK: &str = "\n\n";
+
 /// Converts one provider-neutral request into a Responses body.
 #[must_use]
 pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Value {
@@ -135,6 +138,9 @@ pub(crate) struct ResponsesReducer {
     accumulated: usize,
     /// The provider cut the response off at the output-token limit.
     length_limited: bool,
+    /// The reasoning item and summary part the last thinking delta belonged
+    /// to. A new part starts a new paragraph instead of gluing sentences.
+    thinking_part: Option<(String, u64)>,
 }
 
 impl ResponsesReducer {
@@ -298,8 +304,23 @@ impl FrameReducer for ResponsesReducer {
                             "stream exceeded the output limit",
                         )];
                     }
-                    self.thinking.push_str(part);
-                    return vec![StreamEvent::ThinkingDelta(part.to_owned())];
+                    let key = (
+                        event["item_id"].as_str().unwrap_or_default().to_owned(),
+                        event["summary_index"]
+                            .as_u64()
+                            .or_else(|| event["content_index"].as_u64())
+                            .unwrap_or_default(),
+                    );
+                    let mut delta = String::new();
+                    if self.thinking_part.as_ref().is_some_and(|last| *last != key)
+                        && !self.thinking.is_empty()
+                    {
+                        delta.push_str(PART_BREAK);
+                    }
+                    self.thinking_part = Some(key);
+                    delta.push_str(part);
+                    self.thinking.push_str(&delta);
+                    return vec![StreamEvent::ThinkingDelta(delta)];
                 }
             }
             "response.output_item.added" => {
@@ -534,6 +555,36 @@ mod tests {
         assert_eq!(thinking, "consider");
         assert!(message.text().contains("server busy"));
         assert_eq!(message.stop_reason, StopReason::Error);
+    }
+
+    #[test]
+    fn summary_parts_are_separated_by_a_blank_line() {
+        let mut reducer = ResponsesReducer::new();
+        reducer.feed(
+            r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":0,"delta":"First."}"#,
+        );
+        reducer.feed(
+            r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":0,"delta":" Still first."}"#,
+        );
+        let events = reducer.feed(
+            r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":1,"delta":"Second."}"#,
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [mycode_core::StreamEvent::ThinkingDelta(delta)] if delta == "\n\nSecond."
+        ));
+        let mycode_core::StreamEvent::Done { message } = reducer.finish() else {
+            panic!("done");
+        };
+        let thinking = message
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::Thinking(thinking) => Some(thinking.text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert_eq!(thinking, "First. Still first.\n\nSecond.");
     }
 
     #[test]
