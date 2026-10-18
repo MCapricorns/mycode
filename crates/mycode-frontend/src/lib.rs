@@ -13,12 +13,16 @@
 //! providers, tools, or credentials directly.
 
 pub mod cli;
+pub mod driver;
+pub mod forms;
 pub mod git_status;
 pub mod i18n;
+pub mod picker;
+pub mod stream;
 mod theme;
 pub mod view_model;
 
-pub use theme::normalize_theme;
+pub use theme::{normalize_font_size, normalize_theme};
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
 /// when the system clock predates the epoch.
