@@ -60,6 +60,12 @@ struct Tui {
     composer: TextArea<'static>,
     /// Rows of transcript hidden below the viewport bottom; `0` pins to tail.
     scroll: usize,
+    /// Something on screen may have changed since the last frame. Painting
+    /// rebuilds the whole transcript, so an idle terminal skips it.
+    dirty: bool,
+    /// The last frame painted the transcript's first resident line while
+    /// scrolled up: the reader reached the top of what is loaded.
+    at_top: bool,
     notices: Vec<Notice>,
     /// Highlighted row of the open `/`/`@` menu; `None` follows the shared
     /// preferred row. Reset whenever the draft changes.
@@ -98,6 +104,19 @@ struct TerminalGuard(Terminal<CrosstermBackend<Stdout>>);
 
 impl TerminalGuard {
     fn enter() -> io::Result<Self> {
+        // A panic message printed while the alternate screen is up vanishes
+        // when the guard restores the screen during unwinding. Restore first,
+        // then let the previous hook print where the user can read it.
+        // Only the UI thread's panic ends the frontend; a background reply
+        // thread dying must not drop the live screen out of raw mode.
+        let ui_thread = std::thread::current().id();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if std::thread::current().id() == ui_thread {
+                restore_terminal(&mut io::stdout());
+            }
+            previous(info);
+        }));
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
@@ -112,13 +131,15 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            self.0.backend_mut(),
-            DisableBracketedPaste,
-            LeaveAlternateScreen
-        );
+        restore_terminal(self.0.backend_mut());
     }
+}
+
+/// Cooked mode, no bracketed paste, normal screen. Idempotent, so the panic
+/// hook and the guard's drop may both run it.
+fn restore_terminal(out: &mut impl io::Write) {
+    let _ = disable_raw_mode();
+    let _ = execute!(out, DisableBracketedPaste, LeaveAlternateScreen);
 }
 
 impl Tui {
@@ -127,6 +148,8 @@ impl Tui {
             driver,
             composer: new_composer(TextArea::default()),
             scroll: 0,
+            dirty: true,
+            at_top: false,
             notices: Vec::new(),
             mention_selected: None,
             startup_dir: std::env::current_dir()
@@ -148,7 +171,9 @@ impl Tui {
             // timers through `poll`, streamed core events through
             // `next_event` — a frontend that skips either never sees the
             // turn finish.
-            while wake.try_recv().is_ok() {}
+            while wake.try_recv().is_ok() {
+                self.dirty = true;
+            }
             // A reader who paged up keeps their place while the stream grows.
             self.driver.set_conversation_at_tail(self.scroll == 0);
             self.driver.poll(&mut effects);
@@ -157,28 +182,42 @@ impl Tui {
             }
             self.adopt_startup_dir(&mut effects);
             if !effects.is_empty() {
+                self.dirty = true;
                 self.apply_effects(std::mem::take(&mut effects));
             }
             // Edit-and-resend, skill inserts, and the welcome send leave
             // their draft here rather than in an effect.
             if let Some(text) = self.driver.take_composer_prefill() {
+                self.dirty = true;
                 self.set_composer_text(&text);
             }
             self.expire_notices();
-            if terminal.draw(|frame| self.draw(frame)).is_err() {
-                return 1;
+            if self.dirty {
+                self.dirty = false;
+                if terminal.draw(|frame| self.draw(frame)).is_err() {
+                    return 1;
+                }
+            }
+            // Paging up past the resident window pulls the next older page;
+            // the tail-relative offset keeps the reader on the same rows.
+            if self.at_top && self.scroll > 0 {
+                self.driver.request_older(&mut effects);
             }
             if self.quit {
                 self.driver.shutdown();
                 return 0;
             }
             match event::poll(Duration::from_millis(60)) {
-                Ok(true) => match event::read() {
-                    Ok(Event::Key(key)) => self.on_key(key),
-                    Ok(Event::Paste(text)) => self.on_paste(&text),
-                    Ok(_) => {}
-                    Err(_) => return 1,
-                },
+                Ok(true) => {
+                    // Keys, pastes, resizes, and focus changes all repaint.
+                    self.dirty = true;
+                    match event::read() {
+                        Ok(Event::Key(key)) => self.on_key(key),
+                        Ok(Event::Paste(text)) => self.on_paste(&text),
+                        Ok(_) => {}
+                        Err(_) => return 1,
+                    }
+                }
                 Ok(false) => {}
                 Err(_) => return 1,
             }
@@ -214,6 +253,9 @@ impl Tui {
                 // concerns; a terminal frame is always focused.
                 Effect::Quit => self.quit = true,
                 Effect::ScrollToTail => self.scroll = 0,
+                // The offset counts rows from the tail, so a prepended page
+                // needs no anchor; release the hold so paging can continue.
+                Effect::OlderPagePrepended { .. } => self.driver.note_scroll_hold(false),
                 _ => {}
             }
         }
@@ -222,9 +264,13 @@ impl Tui {
     /// Drops info and warning notices past their reading time. Runs every
     /// frame, not only when new effects arrive.
     fn expire_notices(&mut self) {
+        let before = self.notices.len();
         self.notices.retain(|notice| {
             notice.kind == ToastKind::Error || notice.shown.elapsed() < NOTICE_TTL
         });
+        if self.notices.len() != before {
+            self.dirty = true;
+        }
     }
 
     /// A bracketed paste lands as text, newlines included, never as Enter.
@@ -475,6 +521,7 @@ impl Tui {
         }
         // Out of history before the offset was covered: clamp to the top.
         self.scroll = self.scroll.min(rows.saturating_sub(height));
+        self.at_top = first == 0 && rows <= height + self.scroll;
         let skip = rows.saturating_sub(height + self.scroll);
         let visible = lines.split_off(first);
         frame.render_widget(
@@ -733,8 +780,14 @@ fn first_line(text: &str) -> &str {
 fn shorten_home(path: &str) -> String {
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         let home = home.to_string_lossy().replace('\\', "/");
+        let home = home.trim_end_matches('/');
         let path_unix = path.replace('\\', "/");
-        if let Some(rest) = path_unix.strip_prefix(&home) {
+        // Only a whole path component matches: `/home/al` is not `~` of
+        // `/home/alice`.
+        if let Some(rest) = path_unix.strip_prefix(home)
+            && !home.is_empty()
+            && (rest.is_empty() || rest.starts_with('/'))
+        {
             return format!("~{rest}");
         }
     }

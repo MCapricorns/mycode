@@ -22,12 +22,19 @@ impl FrontendDriver {
         if self.mention_query.as_ref() == Some(&(kind, fragment.clone())) {
             return;
         }
+        let menu_opened = self
+            .mention_query
+            .as_ref()
+            .is_none_or(|(previous, _)| *previous != kind);
         self.mention_query = Some((kind, fragment));
         if kind == MentionKind::Command {
             // Reload skills so `/` lists them even before Settings was
-            // opened. The reducer rebuilds the menu, including enabled MCP
-            // servers.
-            self.refresh_skills(&mut Vec::new());
+            // opened — once when the menu opens, not on every keystroke:
+            // discovery walks the skill directories on disk. The reducer
+            // rebuilds the menu, including enabled MCP servers.
+            if menu_opened {
+                self.refresh_skills(&mut Vec::new());
+            }
             return;
         }
         if kind != MentionKind::File || self.vm.active.is_none() {
