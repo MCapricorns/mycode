@@ -97,8 +97,8 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                 "Stdio or Streamable-HTTP tool servers. A stored key shows as a lock and \
                  is never written back into a field. Enabling a server probes it first; \
                  once enabled, its tools join the agent.",
-                "Stdio 或 Streamable-HTTP 工具服务器。已保存的密钥显示为锁形标记,且不会回填到输入框。\
-                 启用前会先探测服务器;启用后其工具随即加入代理。",
+                "Stdio 或 Streamable-HTTP 工具服务器。已保存的密钥显示为锁形标记，且不会回填到输入框。\
+                 启用前会先探测服务器；启用后其工具随即加入代理。",
             )),
             theme,
             vec![
@@ -276,7 +276,7 @@ fn render_mcp_json_page(
             Some(t(
                 "A servers map or one server object. Authorization headers are stored as \
                  the API key and are not shown again.",
-                "可以是 servers 映射或单个服务器对象。Authorization 头会作为 API 密钥保存,\
+                "可以是 servers 映射或单个服务器对象。Authorization 头会作为 API 密钥保存，\
                  之后不再显示。",
             )),
             theme,
@@ -681,14 +681,14 @@ fn render_mcp_form(
                 // command line into a single "command" that never resolved.
                 .when(is_http, |this| {
                     this.child(labeled_field(
-                        t("endpoint (https URL)", "端点(https URL)"),
+                        t("endpoint (https URL)", "端点（https URL）"),
                         endpoint_input,
                         theme,
                     ))
                     .child(labeled_field(
                         t(
                             "api key (stored in the vault, sent as Bearer)",
-                            "API 密钥(保存在凭据库,以 Bearer 发送)",
+                            "API 密钥（保存在凭据库，以 Bearer 发送）",
                         ),
                         api_key_input,
                         theme,
@@ -698,7 +698,7 @@ fn render_mcp_form(
                     this.child(labeled_field(
                         t(
                             "command line (program and arguments, quotes allowed)",
-                            "命令行(程序与参数,允许引号)",
+                            "命令行（程序与参数，允许引号）",
                         ),
                         command_input,
                         theme,
@@ -706,7 +706,7 @@ fn render_mcp_form(
                     .child(labeled_field(
                         t(
                             "environment (KEY=VALUE pairs, optional)",
-                            "环境变量(KEY=VALUE,可选)",
+                            "环境变量（KEY=VALUE，可选）",
                         ),
                         env_input,
                         theme,

@@ -201,7 +201,7 @@ impl FrontendDriver {
                 self.act(
                     FrontendAction::Failed(format!(
                         "{} {message}",
-                        crate::i18n::t("export failed:", "导出失败:")
+                        crate::i18n::t("export failed:", "导出失败：")
                     )),
                     out,
                 );
@@ -236,7 +236,7 @@ impl FrontendDriver {
                 self.act(
                     FrontendAction::Failed(format!(
                         "{} {message}",
-                        crate::i18n::t("import failed:", "导入失败:")
+                        crate::i18n::t("import failed:", "导入失败：")
                     )),
                     out,
                 );
@@ -522,11 +522,10 @@ impl FrontendDriver {
                 let message = match version {
                     Some(version) => format!(
                         "v{version} {}",
-                        crate::i18n::t("is ready to install", "已就绪,可安装")
+                        crate::i18n::t("is ready to install", "已就绪，可安装")
                     ),
-                    None => {
-                        crate::i18n::t("Update is ready to install", "更新已就绪,可安装").to_owned()
-                    }
+                    None => crate::i18n::t("Update is ready to install", "更新已就绪，可安装")
+                        .to_owned(),
                 };
                 self.toast(message, ToastKind::Info, out);
                 // Downloading runs on its own; installing never does.
