@@ -150,10 +150,9 @@ pub(crate) fn session_system_prompt(
         system_prompt.push_str("\n\n<mcp>\n");
         system_prompt.push_str(note);
         system_prompt.push_str(
-            "Built-in tools and direct MCP tools are called by name. For any other MCP tool, \
-call `search_tool` with name \"list\", then with the exact name, then `use_tool`. Do not \
-guess parameters. When the user also wants a subagent, emit `search_tool` in the same \
-response as `agent`.\n</mcp>",
+            // The note already says how to reach direct and deferred tools.
+            "When the user also wants a subagent, emit `search_tool` in the same response as \
+`agent`.\n</mcp>",
         );
     }
     let (mut roots, scratch) = split_scratch_root(extra_roots);
