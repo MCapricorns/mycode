@@ -142,6 +142,12 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // A pending payload a previous session staged but never swapped — a
+    // crash or a lost helper — re-arms here and this launch exits into it:
+    // the process that comes back up is the new version.
+    if mycode_app::reconcile_pending_update(&home, true).is_some() {
+        return;
+    }
     // Relocate a downloaded binary into the install dir: the installed copy
     // is spawned with the source path, this process exits, and the new copy
     // deletes the download and writes the desktop shortcut.

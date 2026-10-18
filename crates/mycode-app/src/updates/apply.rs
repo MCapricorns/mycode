@@ -137,8 +137,26 @@ pub(crate) fn helper_arguments(
 /// finish. A busy target is retried. A hash mismatch is not.
 pub fn run_apply_update_helper(args: &ApplyUpdateArgs) -> Result<(), String> {
     wait_for_process_exit(args.wait_pid, Duration::from_secs(60));
+    // Sibling helpers share the staged source and the target's incoming
+    // path, so a loser's replace can fail mid-flight even though the swap
+    // landed. Checking the target digest treats that as applied — the
+    // relaunch flag, not the rename win, decides who restarts the app.
+    let applied = |args: &ApplyUpdateArgs| -> Result<bool, String> {
+        if super::file_sha256(&args.target)
+            .is_ok_and(|hash| hash.eq_ignore_ascii_case(&args.sha256))
+        {
+            if args.relaunch {
+                relaunch_target(&args.target)?;
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    };
     let mut last = String::new();
     for _ in 0..30 {
+        if applied(args)? {
+            return Ok(());
+        }
         match replace_verified_executable(&args.source, &args.target, &args.sha256) {
             Ok(()) => {
                 if args.relaunch {
@@ -150,8 +168,16 @@ pub fn run_apply_update_helper(args: &ApplyUpdateArgs) -> Result<(), String> {
                 last = error.message;
                 std::thread::sleep(Duration::from_secs(1));
             }
-            Err(error) => return Err(error.message),
+            Err(error) => {
+                if applied(args)? {
+                    return Ok(());
+                }
+                return Err(error.message);
+            }
         }
+    }
+    if applied(args)? {
+        return Ok(());
     }
     Err(if last.is_empty() {
         "could not replace the current binary".to_owned()
@@ -166,10 +192,17 @@ pub(crate) fn spawn_windows_helper(
     current: &Path,
     source: &Path,
     sha256: &str,
+    relaunch: bool,
 ) -> Result<(), String> {
-    let helper = stage_dir.join("mycode-update-helper.exe");
+    // A unique name per arm: a second helper (a stage-time exit swap plus
+    // an install click, say) must not copy over a sibling already running.
+    let helper = stage_dir.join(format!(
+        "mycode-update-helper-{}-{}.exe",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
     std::fs::copy(current, &helper).map_err(|error| format!("updater helper: {error}"))?;
-    let args = helper_arguments(current, source, sha256, std::process::id(), true);
+    let args = helper_arguments(current, source, sha256, std::process::id(), relaunch);
     spawn_detached(&helper, &args)
 }
 

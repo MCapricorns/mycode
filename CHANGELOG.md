@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 自动更新改为「下载即备好」：校验通过的安装包落到 `~/.mycode/update/` 并立即挂上平台侧退出交换——Windows 由独立 helper 等进程退出后替换，macOS 由 shell 脚本原地替换；正常退出、崩溃、被杀都会完成安装，下次启动就是新版，终端无需再进设置安装。桌面上「重启并安装」仍走带 `--relaunch` 的同一个交换路径；终端二进制不重启进程（helper 无法归还控制台），下一次 `mycode-cli` 即新版。若上一次退出交换没跑成（重启了机器、helper 没了），下次启动会重新武装 pending 负载：桌面版交给 relaunch helper 后直接退出，终端重新武装后继续打开，绝不弹窗阻塞。同一安装的多个 helper 靠目标哈希收敛：已替换的目标等于「已应用」，relaunch 只跑一次。
+
+### Fixed
+
+- 修复 macOS 发布构建：`install.rs` 的 `PathBuf::as_ref()` 存在多个 `AsRef` 实现导致类型推断失败（E0282/E0277）；Windows PR CI 编不到 `#[cfg(not(windows))]` 分支所以漏掉，改用 `fs::read_to_string(&file)` 消歧。
+
 ## [0.12.0] - 2026-10-18
 
 ### Changed

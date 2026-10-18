@@ -524,21 +524,26 @@ impl FrontendDriver {
                 self.toast(brief, ToastKind::Error, out);
             }
             BridgeReply::UpdateDownloaded(Ok(prepared)) => {
-                let version = self
-                    .vm
-                    .last_offer
-                    .as_ref()
-                    .map(|offer| offer.version.clone());
+                let version = prepared.version.clone();
+                // The payload is durable under `<home>/update/`; arm the
+                // exit swap once so a quit by any route — including a
+                // crash — lands it, and the next launch is the new version.
+                // Dev-tree runs never arm a self-overwrite.
+                if !self.update_armed && !mycode_app::install::install_skipped() {
+                    self.update_armed = mycode_app::arm_staged_update(&prepared, false).is_ok();
+                }
                 self.act(FrontendAction::UpdateStaged(prepared), out);
-                let message = match version {
-                    Some(version) => format!(
+                self.toast(
+                    format!(
                         "v{version} {}",
-                        crate::i18n::t("is ready to install", "已就绪，可安装")
+                        crate::i18n::t(
+                            "is ready — installs when the app exits",
+                            "已就绪 — 退出应用后自动安装"
+                        )
                     ),
-                    None => crate::i18n::t("Update is ready to install", "更新已就绪，可安装")
-                        .to_owned(),
-                };
-                self.toast(message, ToastKind::Info, out);
+                    ToastKind::Info,
+                    out,
+                );
                 // Downloading runs on its own; installing never does.
                 self.act(FrontendAction::UpdateDialogToggled(true), out);
             }

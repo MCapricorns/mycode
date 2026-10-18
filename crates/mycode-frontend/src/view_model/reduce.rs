@@ -986,11 +986,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
         FrontendAction::UpdateStaged(prepared) => {
-            let version = state
-                .last_offer
-                .as_ref()
-                .map(|offer| offer.version.clone())
-                .unwrap_or_else(|| mycode_app::current_version().to_owned());
+            let version = prepared.version.clone();
             state.prepared_update = Some(prepared);
             state.update = UpdateState::Ready { version };
         }

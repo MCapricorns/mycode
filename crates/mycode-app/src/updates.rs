@@ -6,11 +6,17 @@
 //! `mycode-desktop` update from disjoint archives — and compares
 //! semantic versions. The
 //! installer downloads the asset plus its `.sha256` sidecar, verifies the
-//! digest, and extracts the new binary into a staging directory. macOS hands
-//! the swap to a detached shell script. Windows copies the running
-//! executable and relaunches that copy with `--mycode-apply-update` so the
-//! helper can replace the install after this process exits. Asset names and
-//! staging conventions are produced by the release jobs in
+//! digest, extracts the new binary, and persists it as the durable pending
+//! payload under `<home>/update/`. Staging arms the platform swap right
+//! away: macOS hands it to a detached shell script that replaces the binary
+//! in place, and Windows copies the running executable into a detached
+//! helper that waits for this process to leave — exit by any route
+//! (quit, crash, kill) lands the update, so the next launch is the new
+//! version. A launch that still finds a live pending payload re-arms it,
+//! which covers swaps lost to a reboot or a dead helper. The install
+//! buttons arm the same swap with `--relaunch` (or the script equivalent)
+//! and quit, so a click restarts straight into the new version. Asset
+//! names and staging conventions are produced by the release jobs in
 //! `.github/workflows/ci.yml`. Pull requests build the same archives
 //! and do not publish them. A push to main publishes when the version is new.
 
@@ -110,6 +116,8 @@ pub struct UpdateOffer {
 /// A downloaded and verified update, staged for the swap.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedUpdate {
+    /// New version (no `v` prefix), for "newer than me" checks and prompts.
+    pub version: String,
     /// Staged new binary, ready to replace the running executable.
     pub new_binary: PathBuf,
     /// Staging directory; removable on the next startup.
@@ -348,6 +356,7 @@ pub async fn download_update(
         .await
         .map_err(|error| format!("verify task: {error}"))??;
     Ok(PreparedUpdate {
+        version: offer.version.clone(),
         new_binary,
         stage_dir,
         binary_sha256,
@@ -529,22 +538,40 @@ fn extract_binary(asset: &Path, stage_dir: &Path, exe_stem: &str) -> Result<Path
     Ok(binary_path)
 }
 
-/// Arms the platform swap and returns; the caller exits the process so the
-/// updater can replace the binary and relaunch it.
+/// Arms the platform swap and returns. The caller may exit right away (an
+/// install click) or keep running (a staged download): on Windows the
+/// detached helper waits for this process to leave, on Unix the script
+/// replaces the binary in place immediately — either way the next launch
+/// is the new version, no matter how this process ends.
+///
+/// `relaunch` starts the target again after a verified replace. A terminal
+/// binary is never relaunched: it cannot get its console back, so the
+/// user's next `mycode-cli` run is simply the new version.
 ///
 /// Windows launches a copy of this executable with [`apply::APPLY_UPDATE_ARG`].
-/// macOS launches `update.sh`.
+/// macOS launches an `update-*.sh` script.
 ///
 /// # Errors
 ///
-/// Returns a failure message when the helper or its process cannot start.
-pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
-    let actual = file_sha256(&prepared.new_binary)?;
-    if !actual.eq_ignore_ascii_case(&prepared.binary_sha256) {
-        return Err("staged update binary failed its sha256 check".to_owned());
-    }
+/// Returns a failure message when the staged payload is corrupt and the
+/// target does not already carry it, or when the helper cannot start.
+pub fn arm_staged_update(prepared: &PreparedUpdate, relaunch: bool) -> Result<(), String> {
+    // A terminal binary can never relaunch: the helper cannot hand its
+    // console back, so the next `mycode-cli` run is the new version.
+    let relaunch = relaunch && !is_cli_binary();
     let current = std::env::current_exe().map_err(|error| format!("current exe: {error}"))?;
     let current = current.canonicalize().unwrap_or(current);
+    // A sibling helper may already have landed the swap: `new_binary` is
+    // moved away by the winner, so a missing staged file is fine whenever
+    // the target itself already hashes to the expected digest.
+    let applied = target_matches(&current, &prepared.binary_sha256);
+    if !applied {
+        let staged = file_sha256(&prepared.new_binary)
+            .map_err(|_| "staged update binary is unreadable".to_owned())?;
+        if !staged.eq_ignore_ascii_case(&prepared.binary_sha256) {
+            return Err("staged update binary failed its sha256 check".to_owned());
+        }
+    }
     #[cfg(windows)]
     {
         apply::spawn_windows_helper(
@@ -552,16 +579,21 @@ pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
             &current,
             &prepared.new_binary,
             &prepared.binary_sha256,
+            relaunch,
         )?;
     }
     #[cfg(not(windows))]
     {
-        let script_path = prepared.stage_dir.join("update.sh");
+        let script_path = prepared.stage_dir.join(format!(
+            "update-{}-{}.sh",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
         let script = unix_script(
             &prepared.new_binary,
             &current,
             &prepared.binary_sha256,
-            true,
+            relaunch,
         );
         std::fs::write(&script_path, script).map_err(|error| format!("updater script: {error}"))?;
         Command::new("/bin/sh")
@@ -570,6 +602,175 @@ pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
             .map_err(|error| format!("updater spawn: {error}"))?;
     }
     Ok(())
+}
+
+/// Whether `target` already hashes to `expected` — the swap is done.
+fn target_matches(target: &Path, expected: &str) -> bool {
+    file_sha256(target).is_ok_and(|hash| hash.eq_ignore_ascii_case(expected))
+}
+
+/// Durable directory for a staged update that must survive this process:
+/// `<home>/update/`. A payload here outlives crashes and reboots, so a
+/// later launch can finish a swap no exit path ever ran.
+pub fn pending_dir(home: &mycode_config::HomeLayout) -> PathBuf {
+    home.root().join("update")
+}
+
+/// Filenames inside [`pending_dir`] for one binary family: the payload,
+/// its expected digest, the pending version, and the startup-apply counter
+/// that bounds relaunch loops.
+fn pending_paths(dir: &Path, stem: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    (
+        dir.join(format!("{stem}.pending")),
+        dir.join(format!("{stem}.sha256")),
+        dir.join(format!("{stem}.version")),
+        dir.join(format!("{stem}.attempts")),
+    )
+}
+
+/// How many startups may arm one payload before it is dropped. A payload
+/// whose swap keeps failing (a lock held by a surviving instance, say)
+/// must not bounce every launch forever.
+const MAX_PENDING_ATTEMPTS: u32 = 3;
+
+/// Moves a verified stage into `<home>/update/` as this binary family's
+/// pending payload: `{stem}.pending`, `{stem}.sha256`, `{stem}.version`.
+/// The durable copy survives process exit, so a quit by any route — or
+/// the next launch when the armed helper is gone — still lands the swap.
+///
+/// # Errors
+///
+/// Returns a failure message; the running installation is untouched.
+pub fn persist_pending_update(
+    home: &mycode_config::HomeLayout,
+    prepared: &PreparedUpdate,
+) -> Result<PreparedUpdate, String> {
+    let dir = pending_dir(home);
+    std::fs::create_dir_all(&dir).map_err(|error| format!("pending dir: {error}"))?;
+    let (pending, sha_file, version_file, _) = pending_paths(&dir, &exe_stem());
+    let staging = pending.with_extension("moving");
+    std::fs::copy(&prepared.new_binary, &staging)
+        .map_err(|error| format!("pending copy: {error}"))?;
+    let actual = file_sha256(&staging)?;
+    if !actual.eq_ignore_ascii_case(&prepared.binary_sha256) {
+        let _ = std::fs::remove_file(&staging);
+        return Err("pending copy failed its sha256 check".to_owned());
+    }
+    std::fs::rename(&staging, &pending).map_err(|error| format!("pending move: {error}"))?;
+    std::fs::write(&sha_file, format!("{}\n", prepared.binary_sha256))
+        .map_err(|error| format!("pending digest: {error}"))?;
+    // The version file is written last: it is the marker reconcile needs,
+    // so a crash mid-persist leaves an incomplete payload to clean up.
+    std::fs::write(&version_file, format!("{}\n", prepared.version))
+        .map_err(|error| format!("pending version: {error}"))?;
+    // The temp stage is consumed; a reset at startup sweeps leftovers.
+    let _ = std::fs::remove_dir_all(&prepared.stage_dir);
+    Ok(PreparedUpdate {
+        version: prepared.version.clone(),
+        new_binary: pending,
+        stage_dir: dir,
+        binary_sha256: prepared.binary_sha256.clone(),
+    })
+}
+
+/// Whether the running executable updates from the `mycode-cli` asset
+/// family (vs `mycode-desktop`). The terminal binary is never relaunched
+/// by the swap: a helper cannot hand a console back to it, so the next
+/// `mycode-cli` run is the new version.
+#[must_use]
+pub fn is_cli_binary() -> bool {
+    exe_stem() == "mycode-cli"
+}
+
+/// Startup pass over this binary family's pending payload.
+///
+/// A payload left by a session that never finished its swap — a crash, a
+/// rebooted helper, a lost race — is re-armed, so it still lands when
+/// this process leaves (Unix swaps in place at once). A stale payload
+/// (already applied, or superseded) and a corrupt one are deleted, and a
+/// payload that failed too many startups is dropped so the app always
+/// opens. Returns the pending version when the swap was armed.
+pub fn reconcile_pending_update(
+    home: &mycode_config::HomeLayout,
+    relaunch: bool,
+) -> Option<String> {
+    if crate::install::install_skipped() {
+        return None;
+    }
+    let dir = pending_dir(home);
+    let stem = exe_stem();
+    let (pending, sha_file, version_file, attempts_file) = pending_paths(&dir, &stem);
+    let cleanup = |include_helpers: bool| {
+        for path in [&pending, &sha_file, &version_file, &attempts_file] {
+            let _ = std::fs::remove_file(path);
+        }
+        if include_helpers {
+            sweep_update_helpers(&dir);
+        }
+    };
+    if !pending.is_file() {
+        // No payload: drop stray sidecars and dead helpers together.
+        if version_file.exists() || sha_file.exists() || attempts_file.exists() {
+            cleanup(true);
+        }
+        return None;
+    }
+    let version = std::fs::read_to_string(&version_file)
+        .ok()
+        .map(|value| value.trim().to_owned());
+    let sha = std::fs::read_to_string(&sha_file)
+        .ok()
+        .map(|value| value.trim().to_owned());
+    let (Some(version), Some(sha)) = (version, sha) else {
+        cleanup(true);
+        return None;
+    };
+    if !is_newer(&version, current_version()) {
+        cleanup(true);
+        return None;
+    }
+    let actual = file_sha256(&pending);
+    if !actual.is_ok_and(|hash| hash.eq_ignore_ascii_case(&sha)) {
+        cleanup(true);
+        return None;
+    }
+    let attempts: u32 = std::fs::read_to_string(&attempts_file)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0);
+    if attempts >= MAX_PENDING_ATTEMPTS {
+        cleanup(true);
+        return None;
+    }
+    // Count before arming so a spawn that crashes still bounds the loop.
+    let _ = std::fs::write(&attempts_file, (attempts + 1).to_string());
+    let staged = PreparedUpdate {
+        version: version.clone(),
+        new_binary: pending,
+        stage_dir: dir,
+        binary_sha256: sha,
+    };
+    arm_staged_update(&staged, relaunch).ok().map(|()| version)
+}
+
+/// Removes dead update helpers and scripts inside [`pending_dir`]. A
+/// helper whose process still runs is locked (Windows) or mid-flight
+/// (Unix); removal failures are ignored either way.
+fn sweep_update_helpers(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let helper = name.starts_with("mycode-update-helper-") && name.ends_with(".exe");
+        let script = name.starts_with("update-") && name.ends_with(".sh");
+        // A `.moving` rename source is a persist interrupted mid-copy.
+        let moving = name.ends_with(".moving");
+        if helper || script || moving {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Removes stale staging directories left by interrupted updates.
@@ -627,6 +828,14 @@ hash_file() {
 }
 i=0
 copied=0
+actual=$(hash_file "$current")
+if [ -n "$actual" ] && [ "$actual" = "$expected" ]; then
+  # A sibling helper already landed the swap; only relaunch remains.
+  rm -f "$new" 2>/dev/null || true
+__RELAUNCH__
+  rm -f "$0"
+  exit 0
+fi
 actual=$(hash_file "$new")
 if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
   echo "updater: staged binary sha256 does not match" >&2
@@ -655,6 +864,14 @@ while [ "$j" -lt 30 ]; do
   j=$((j+1))
 done
 if [ "$replaced" -ne 1 ]; then
+  actual=$(hash_file "$current")
+  if [ -n "$actual" ] && [ "$actual" = "$expected" ]; then
+    # A sibling helper landed the swap mid-flight; only relaunch remains.
+    rm -f "$prev" 2>/dev/null || true
+__RELAUNCH__
+    rm -f "$0"
+    exit 0
+  fi
   echo "updater: could not replace the current binary" >&2
   exit 1
 fi
