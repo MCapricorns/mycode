@@ -161,7 +161,10 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
             let answers = tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
-                    return Err(mycode_tools::ToolError::Execution("cancelled".into()));
+                    return Err(mycode_tools::ToolError::Execution(format!(
+                        "cancelled{}",
+                        mycode_tools::tool::INTERRUPTED_NOTE
+                    )));
                 }
                 answers = answer => answers.map_err(|_| mycode_tools::builtin::user_dismissed())?,
             };

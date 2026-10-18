@@ -65,11 +65,19 @@ impl ToolResult {
     }
 }
 
+/// Appended to every user-interrupt error. The cancelled result is
+/// committed to the session ledger and replays verbatim on the next turn,
+/// so this note is what tells the model the interrupt did not roll back
+/// tool calls that already completed.
+pub const INTERRUPTED_NOTE: &str =
+    "; interrupted by user — completed tool calls were applied and are not rolled back";
+
 /// Failure modes of a tool invocation. The dispatcher (agent loop)
 /// converts these into `is_error` tool results for the model rather than
 /// crashing the loop. See `docs/agent.md`.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ToolError {
+
     /// Arguments failed schema validation or are semantically invalid.
     #[error("invalid arguments: {0}")]
     InvalidArgs(String),

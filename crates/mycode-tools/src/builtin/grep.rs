@@ -40,7 +40,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
-use crate::tool::{Tool, ToolError, ToolResult};
+use crate::tool::{INTERRUPTED_NOTE, Tool, ToolError, ToolResult};
 
 use super::blocking::run_blocking_until;
 use super::fs_search::{
@@ -397,7 +397,7 @@ impl Tool for GrepTool {
         run_blocking_until("search", &cancel, deadline, move |worker_cancel| {
             if worker_cancel.is_cancelled() {
                 return Err(ToolError::Execution(
-                    "search cancelled before completion".to_owned(),
+                    format!("search cancelled before completion{INTERRUPTED_NOTE}"),
                 ));
             }
             let matcher = compile_matcher(&args.pattern, args.is_regex)?;

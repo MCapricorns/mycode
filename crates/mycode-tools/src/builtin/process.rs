@@ -25,16 +25,18 @@ use tokio::sync::{Mutex, MutexGuard};
 pub(crate) use output::collect_until_exit;
 pub(crate) use output::{CapturedStream, MAX_OUTPUT_BYTES, decode_captured_text};
 
-use crate::tool::{ToolError, ToolResult};
+use crate::tool::{INTERRUPTED_NOTE, ToolError, ToolResult};
 use serde_json::json;
 
 /// Cancelled-command error shared by the shell and program launch paths.
 pub(crate) fn command_cancelled_error(teardown: Option<std::io::Error>) -> ToolError {
     match teardown {
         Some(err) => ToolError::Execution(format!(
-            "command cancelled before completion; termination failed: {err}"
+            "command cancelled before completion; termination failed: {err}{INTERRUPTED_NOTE}"
         )),
-        None => ToolError::Execution("command cancelled before completion".into()),
+        None => ToolError::Execution(format!(
+            "command cancelled before completion{INTERRUPTED_NOTE}"
+        )),
     }
 }
 
@@ -379,5 +381,18 @@ mod resume_source {
             source.contains("parent process"),
             "document which PATH CreateProcessW searches"
         );
+    }
+}
+
+#[cfg(test)]
+mod cancelled_note {
+    #[test]
+    fn a_cancelled_command_names_the_interrupt_and_keeps_prior_results() {
+        for teardown in [None, Some(std::io::Error::other("kill failed"))] {
+            let text = super::command_cancelled_error(teardown).to_string();
+            assert!(text.contains("cancelled before completion"), "{text}");
+            assert!(text.contains("interrupted by user"), "{text}");
+            assert!(text.contains("not rolled back"), "{text}");
+        }
     }
 }

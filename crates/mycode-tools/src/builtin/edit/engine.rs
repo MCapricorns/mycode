@@ -12,7 +12,7 @@ use super::{
 };
 use crate::builtin::fs_io::MAX_WRITE_BYTES;
 use crate::builtin::fs_search::{MAX_PATTERN_BYTES, REGEX_DFA_SIZE_LIMIT, REGEX_SIZE_LIMIT};
-use crate::tool::{ToolError, ToolResult};
+use crate::tool::{INTERRUPTED_NOTE, ToolError, ToolResult};
 
 mod preview;
 use self::preview::append_diff;
@@ -21,7 +21,7 @@ pub(super) use self::preview::snippet;
 pub(super) fn check_cancel(cancel: &CancellationToken) -> Result<(), ToolError> {
     if cancel.is_cancelled() {
         Err(ToolError::Execution(
-            "file operation cancelled before completion".to_owned(),
+            format!("file operation cancelled before completion{INTERRUPTED_NOTE}"),
         ))
     } else {
         Ok(())

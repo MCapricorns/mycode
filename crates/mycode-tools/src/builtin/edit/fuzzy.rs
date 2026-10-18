@@ -11,7 +11,7 @@ use super::MAX_DIFF_SUMMARY_BYTES;
 use super::engine::{Planned, reserve_planned, snippet};
 use super::line::line_location;
 use crate::builtin::fs_search::MAX_PATTERN_BYTES;
-use crate::tool::ToolError;
+use crate::tool::{INTERRUPTED_NOTE, ToolError};
 use tokio_util::sync::CancellationToken;
 
 /// Inclusive maximum `max_distance`. Values above this make short needles
@@ -229,7 +229,7 @@ fn normalize(
 fn check_cancel(cancel: Option<&CancellationToken>) -> Result<(), ToolError> {
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         Err(ToolError::Execution(
-            "file operation cancelled before completion".to_owned(),
+            format!("file operation cancelled before completion{INTERRUPTED_NOTE}"),
         ))
     } else {
         Ok(())
@@ -401,7 +401,7 @@ fn candidate_starts(
                 #[cfg(test)]
                 if tok.orig_end >= fuzzy_test_cancel_at() {
                     return Err(ToolError::Execution(
-                        "file operation cancelled before completion".to_owned(),
+                        format!("file operation cancelled before completion{INTERRUPTED_NOTE}"),
                     ));
                 }
                 next_cancel_check = tok.orig_end.saturating_add(FUZZY_CANCEL_INTERVAL);

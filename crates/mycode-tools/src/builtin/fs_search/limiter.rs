@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::tool::ToolError;
+use crate::tool::{INTERRUPTED_NOTE, ToolError};
 
 use super::*;
 
@@ -309,7 +309,7 @@ pub(crate) fn stop_reason_error(label: &str, limiter: &WalkLimiter) -> Option<To
             Some(ToolError::Execution(format!("{label} time limit reached")))
         }
         Some("cancelled") => Some(ToolError::Execution(format!(
-            "{label} cancelled before completion"
+            "{label} cancelled before completion{INTERRUPTED_NOTE}"
         ))),
         _ => None,
     }

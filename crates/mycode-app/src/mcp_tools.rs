@@ -131,7 +131,10 @@ impl ToolDyn for DynamicMcpTool {
             let result = tokio::select! {
                 biased;
                 () = ctx.cancel.cancelled() => {
-                    return Err(ToolError::Execution("MCP call cancelled".to_owned()));
+                    return Err(ToolError::Execution(format!(
+                        "MCP call cancelled{}",
+                        mycode_tools::tool::INTERRUPTED_NOTE
+                    )));
                 }
                 result = call => result,
             };

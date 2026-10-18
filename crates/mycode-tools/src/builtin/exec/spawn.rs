@@ -18,7 +18,7 @@ use crate::builtin::process::collect_until_exit;
 #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 use crate::builtin::process::combine_teardown_results;
 use crate::builtin::process::{CapturedStream, ExecutionLease, ProcessTree};
-use crate::tool::ToolError;
+use crate::tool::{INTERRUPTED_NOTE, ToolError};
 
 /// Architecture selected by the macOS kernel for a loaded image.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -311,9 +311,9 @@ impl SpawnGate {
 
     pub(super) fn check_pending(&self) -> Result<(), ToolError> {
         if self.cancelled.load(Ordering::Acquire) {
-            Err(ToolError::Execution(
-                "command cancelled before completion".into(),
-            ))
+            Err(ToolError::Execution(format!(
+                "command cancelled before completion{INTERRUPTED_NOTE}"
+            )))
         } else {
             Ok(())
         }
@@ -328,7 +328,11 @@ impl SpawnGate {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .map_err(|_| ToolError::Execution("command cancelled before completion".into()))?;
+            .map_err(|_| {
+                ToolError::Execution(format!(
+                    "command cancelled before completion{INTERRUPTED_NOTE}"
+                ))
+            })?;
         self.check_pending()
     }
 
