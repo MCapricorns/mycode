@@ -107,9 +107,12 @@ pub(super) fn render_data_section(
     let warning_row = div()
         .text_xs()
         .text_color(theme.muted_foreground)
+        .whitespace_normal()
         .child(t(
-            "The export file stores API keys as plaintext JSON; keep it somewhere safe.",
-            "导出文件以明文 JSON 存储 API 密钥，请妥善保管。",
+            "The export file stores API keys as plaintext JSON; keep it somewhere safe. \
+             Importing replaces this machine's settings, and when the file carries API \
+             keys, the whole stored key set too.",
+            "导出文件以明文 JSON 存储 API 密钥，请妥善保管。导入会覆盖本机设置；文件带有 API 密钥时，本机已存的密钥也会被整体替换。",
         ))
         .into_any_element();
     let mut rows = vec![transfer_row];
