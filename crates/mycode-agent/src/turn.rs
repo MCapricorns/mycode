@@ -84,8 +84,12 @@ pub(crate) async fn stream_assistant(
         reasoning_token: config.reasoning_token.clone(),
         prompt_cache_key: config.prompt_cache_key.clone(),
     };
-    let request = env.hooks.prepare_request(request).await;
+    let mut request = env.hooks.prepare_request(request).await;
     state.messages.clone_from(&request.messages);
+    // A replayed ledger can end a turn on calls nothing answered (a crash,
+    // a closed window). Repair the request copy only: the history keeps its
+    // ledger shape, which compaction checkpoints index into.
+    mycode_core::pair_tool_results(&mut request.messages);
 
     if token.is_cancelled() {
         return Err(TurnFailure::Aborted);
