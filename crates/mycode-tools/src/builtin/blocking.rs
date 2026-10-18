@@ -146,9 +146,7 @@ where
         _ = cancel.cancelled() => {
             worker_cancel.cancel();
             let authority_error = worker.join().await;
-            let suffix = authority_error
-                .map(|error| format!("; interrupt error: {error}"))
-                .unwrap_or_default();
+            let suffix = interrupt_suffix(authority_error);
             Err(ToolError::Execution(format!(
                 "{label} cancelled before completion{suffix}{INTERRUPTED_NOTE}"
             )))
@@ -156,9 +154,7 @@ where
         _ = &mut deadline_wait => {
             worker_cancel.cancel();
             let authority_error = worker.join().await;
-            let suffix = authority_error
-                .map(|error| format!("; interrupt error: {error}"))
-                .unwrap_or_default();
+            let suffix = interrupt_suffix(authority_error);
             Err(ToolError::Execution(format!("{label} time limit reached{suffix}")))
         },
         joined = rx => {
@@ -168,17 +164,13 @@ where
             // unique join so a late-selected result never publishes partial
             // output after an already-observed stop condition.
             if cancel.is_cancelled() {
-                let suffix = authority_error
-                    .map(|error| format!("; interrupt error: {error}"))
-                    .unwrap_or_default();
+                let suffix = interrupt_suffix(authority_error);
                 return Err(ToolError::Execution(format!(
                     "{label} cancelled before completion{suffix}{INTERRUPTED_NOTE}"
                 )));
             }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                let suffix = authority_error
-                    .map(|error| format!("; interrupt error: {error}"))
-                    .unwrap_or_default();
+                let suffix = interrupt_suffix(authority_error);
                 return Err(ToolError::Execution(format!(
                     "{label} time limit reached{suffix}"
                 )));
@@ -196,6 +188,13 @@ where
             }
         },
     }
+}
+
+/// The `; interrupt error: …` tail for a stop that also failed to interrupt.
+fn interrupt_suffix(authority_error: Option<String>) -> String {
+    authority_error
+        .map(|error| format!("; interrupt error: {error}"))
+        .unwrap_or_default()
 }
 
 #[cfg(windows)]
@@ -539,7 +538,7 @@ impl InterruptibleWorker {
                 let _ = worker.join();
             })
             .map_err(|error| {
-                ToolError::Execution(format!("search supervisor cannot start: {error}"))
+                ToolError::Execution(format!("blocking supervisor cannot start: {error}"))
             })?;
 
         match startup_rx.recv() {
@@ -548,19 +547,19 @@ impl InterruptibleWorker {
                 drop(go_tx);
                 let _ = supervisor.join();
                 return Err(ToolError::Execution(format!(
-                    "search interrupt authority cannot be established: {error}"
+                    "blocking worker interrupt authority cannot be established: {error}"
                 )));
             }
             Err(_) => {
                 drop(go_tx);
                 let _ = supervisor.join();
                 return Err(ToolError::Execution(
-                    "search interrupt startup handshake was dropped".to_owned(),
+                    "blocking worker startup handshake was dropped".to_owned(),
                 ));
             }
         }
         go_tx.send(()).map_err(|_| {
-            ToolError::Execution("search worker dropped its startup gate".to_owned())
+            ToolError::Execution("blocking worker dropped its startup gate".to_owned())
         })?;
         Ok(Self {
             cancel,

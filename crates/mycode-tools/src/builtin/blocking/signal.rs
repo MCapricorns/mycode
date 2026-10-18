@@ -62,7 +62,7 @@ pub(crate) fn acquire_interrupt_signal() -> io::Result<SignalGuard> {
             let current = current_sigurg_handler()?;
             if current != our_sigurg_handler() {
                 return Err(io::Error::other(
-                    "SIGURG handler was replaced; search interrupt cannot be established",
+                    "SIGURG handler was replaced; worker interrupt cannot be established",
                 ));
             }
             state.refs = state.refs.saturating_add(1);
@@ -72,7 +72,7 @@ pub(crate) fn acquire_interrupt_signal() -> io::Result<SignalGuard> {
             let current = current_sigurg_handler()?;
             if current != our_sigurg_handler() && !handler_is_default(current) {
                 return Err(io::Error::other(
-                    "SIGURG is owned by another handler; search interrupt cannot be established",
+                    "SIGURG is owned by another handler; worker interrupt cannot be established",
                 ));
             }
             let previous = install_our_sigurg()?;
