@@ -360,7 +360,19 @@ fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
     }
 }
 
+/// The process token's user SID. The token cannot change user for the life
+/// of the process, and every owned-path check asks for it several times, so
+/// the token query runs once.
 pub(super) fn current_user_sid_string() -> Result<String, ConfigError> {
+    static SID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(sid) = SID.get() {
+        return Ok(sid.clone());
+    }
+    let sid = query_current_user_sid()?;
+    Ok(SID.get_or_init(|| sid).clone())
+}
+
+fn query_current_user_sid() -> Result<String, ConfigError> {
     let mut raw_token = INVALID_HANDLE_VALUE;
     // SAFETY: GetCurrentProcess returns a borrowed pseudo-handle. The output
     // token is written only on success.
