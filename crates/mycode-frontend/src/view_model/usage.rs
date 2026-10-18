@@ -154,29 +154,29 @@ pub fn turn_cache_hit(turn: &TurnStats) -> Option<u64> {
     cache_percent(turn.cache.unwrap_or(0), turn.input)
 }
 
-/// Why a prompt prefix was rewritten. `Both` is two rewrites before the
-/// next usage snapshot.
+/// Why a prompt prefix was rewritten. `Both` is more than one rewrite
+/// before the next usage snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CacheBreak {
     /// Compaction replaced the head of the prompt.
     Compaction,
     /// A steer was inserted into the running turn.
     Steer,
-    /// Compaction and a steer both landed before the next prompt.
+    /// The session switched provider or model, so the next prompt starts a
+    /// fresh cache prefix.
+    Switch,
+    /// More than one kind of rewrite landed before the next prompt.
     Both,
 }
 
 impl CacheBreak {
     pub fn merge(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Compaction, Self::Compaction) => Self::Compaction,
-            (Self::Steer, Self::Steer) => Self::Steer,
-            _ => Self::Both,
-        }
+        if self == other { self } else { Self::Both }
     }
 }
 
-/// Armed after compaction or a steer until the next prompt reports a size.
+/// Armed after compaction, a steer, or a model switch until the next prompt
+/// reports a size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheWatch {
     pub cause: CacheBreak,
@@ -231,9 +231,13 @@ pub fn cache_alert_text(alert: &CacheAlert) -> String {
             "Cache hit fell from {before}% to {after}% after a steer.",
             "追加引导后缓存命中从 {before}% 降到 {after}%。",
         ),
+        CacheBreak::Switch => crate::i18n::t(
+            "Cache hit fell from {before}% to {after}% after a model switch.",
+            "切换模型后缓存命中从 {before}% 降到 {after}%。",
+        ),
         CacheBreak::Both => crate::i18n::t(
-            "Cache hit fell from {before}% to {after}% after compaction and a steer.",
-            "压缩和追加引导后缓存命中从 {before}% 降到 {after}%。",
+            "Cache hit fell from {before}% to {after}% after multiple prompt changes.",
+            "多项改动后缓存命中从 {before}% 降到 {after}%。",
         ),
     };
     template
@@ -399,10 +403,17 @@ mod tests {
         );
         assert_eq!(
             cache_alert_text(&CacheAlert {
+                cause: CacheBreak::Switch,
+                ..alert
+            }),
+            "Cache hit fell from 92% to 8% after a model switch."
+        );
+        assert_eq!(
+            cache_alert_text(&CacheAlert {
                 cause: CacheBreak::Both,
                 ..alert
             }),
-            "Cache hit fell from 92% to 8% after compaction and a steer."
+            "Cache hit fell from 92% to 8% after multiple prompt changes."
         );
         assert_eq!(
             CacheBreak::Compaction.merge(CacheBreak::Steer),
@@ -411,6 +422,14 @@ mod tests {
         assert_eq!(
             CacheBreak::Steer.merge(CacheBreak::Steer),
             CacheBreak::Steer
+        );
+        assert_eq!(
+            CacheBreak::Switch.merge(CacheBreak::Switch),
+            CacheBreak::Switch
+        );
+        assert_eq!(
+            CacheBreak::Switch.merge(CacheBreak::Compaction),
+            CacheBreak::Both
         );
     }
 }
