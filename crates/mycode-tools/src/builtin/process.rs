@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, MutexGuard};
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 pub(crate) use output::collect_until_exit;
-pub(crate) use output::{CapturedStream, MAX_OUTPUT_BYTES, decode_captured_text};
+pub(crate) use output::{CapturedStream, MAX_OUTPUT_BYTES, captured_text};
 
 use crate::tool::{INTERRUPTED_NOTE, ToolError, ToolResult};
 use serde_json::json;

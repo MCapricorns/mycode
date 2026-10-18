@@ -4,6 +4,8 @@
 //! retained size covers a UTF-16 BOM plus two raw bytes per rendered UTF-8
 //! byte so truncation remains observable after decoding.
 
+use std::fmt::Write as _;
+
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Combined stdout+stderr cap per call (~50 KiB, then a notice).
@@ -15,10 +17,17 @@ const OUTPUT_READ_CHUNK_BYTES: usize = 16 * 1024;
 /// one rendered byte beyond the output cap so truncation remains observable.
 pub(crate) const MAX_RETAINED_OUTPUT_BYTES: usize = 2 + 2 * (MAX_OUTPUT_BYTES + 1);
 
-/// A bounded stream prefix and the total bytes drained from that stream.
+/// A bounded stream prefix, the newest bytes past it, and the total bytes
+/// drained from that stream.
+///
+/// Build and test runners print their failure summary last, so a capture
+/// that kept only the prefix dropped the part worth reading.
 #[derive(Debug, Default)]
 pub(crate) struct CapturedStream {
     pub(crate) retained: Vec<u8>,
+    /// Bytes after the prefix filled, trimmed to the newest
+    /// [`MAX_RETAINED_OUTPUT_BYTES`] whenever it doubles.
+    pub(crate) tail: Vec<u8>,
     pub(crate) total_bytes: u64,
 }
 
@@ -27,9 +36,76 @@ impl CapturedStream {
     pub(crate) fn new() -> Self {
         Self {
             retained: Vec::with_capacity(MAX_RETAINED_OUTPUT_BYTES),
+            tail: Vec::new(),
             total_bytes: 0,
         }
     }
+
+    fn keep(&mut self, bytes: &[u8]) {
+        let room = MAX_RETAINED_OUTPUT_BYTES.saturating_sub(self.retained.len());
+        let (head, rest) = bytes.split_at(bytes.len().min(room));
+        self.retained.extend_from_slice(head);
+        if rest.is_empty() {
+            return;
+        }
+        self.tail.extend_from_slice(rest);
+        if self.tail.len() >= 2 * MAX_RETAINED_OUTPUT_BYTES {
+            let excess = self.tail.len() - MAX_RETAINED_OUTPUT_BYTES;
+            self.tail.drain(..excess);
+        }
+    }
+
+    /// The newest retained bytes and their offset in the stream.
+    fn newest(&self) -> (&[u8], u64) {
+        let start = self.tail.len().saturating_sub(MAX_RETAINED_OUTPUT_BYTES);
+        let tail = &self.tail[start..];
+        (tail, self.total_bytes.saturating_sub(tail.len() as u64))
+    }
+}
+
+/// Decodes one capture. A stream that outgrew its prefix renders as that
+/// prefix and its newest bytes around a marker naming the gap; the bool
+/// says whether bytes were dropped.
+pub(crate) fn captured_text(stream: &CapturedStream) -> (String, bool) {
+    let head = decode_captured_text(&stream.retained);
+    let (tail, tail_start) = stream.newest();
+    if tail.is_empty() {
+        return (head, false);
+    }
+    let omitted = tail_start.saturating_sub(stream.retained.len() as u64);
+    let mut text = head;
+    if omitted > 0 {
+        let _ = write!(text, "\n[... {omitted} bytes omitted ...]\n");
+    }
+    text.push_str(&decode_tail(&stream.retained, tail, tail_start));
+    (text, omitted > 0)
+}
+
+/// Decodes bytes cut out of the middle of a stream in the encoding its
+/// prefix chose. The cut may split a UTF-16 unit or a UTF-8 sequence, so
+/// the partial unit is dropped first.
+fn decode_tail(head: &[u8], tail: &[u8], tail_start: u64) -> String {
+    let utf16 = if head.starts_with(&[0xfe, 0xff]) {
+        Some(u16::from_be_bytes as fn([u8; 2]) -> u16)
+    } else if head.starts_with(&[0xff, 0xfe]) || decode_utf16_le_without_bom(head).is_some() {
+        Some(u16::from_le_bytes as fn([u8; 2]) -> u16)
+    } else {
+        None
+    };
+    if let Some(decode_unit) = utf16 {
+        let tail = if tail_start % 2 == 1 {
+            &tail[1..]
+        } else {
+            tail
+        };
+        return decode_utf16(tail, decode_unit);
+    }
+    let partial = tail
+        .iter()
+        .take(3)
+        .take_while(|byte| (0x80..0xc0).contains(*byte))
+        .count();
+    decode_captured_text(&tail[partial..])
 }
 
 /// How long to keep reading after the leader exits, so output it already
@@ -104,7 +180,8 @@ where
     out.and(err)
 }
 
-/// Drain one stream to EOF while retaining only the prefix needed for rendering.
+/// Drain one stream to EOF while retaining only the prefix and tail needed
+/// for rendering.
 ///
 /// Continuing to read prevents capture limits from changing the child's exit
 /// behavior, and a fixed scratch buffer bounds memory after the prefix is full.
@@ -123,7 +200,6 @@ where
     let Some(reader) = pipe.as_mut() else {
         return Ok(());
     };
-    let retained_limit = MAX_RETAINED_OUTPUT_BYTES;
     let mut chunk = [0_u8; OUTPUT_READ_CHUNK_BYTES];
     loop {
         let count = reader.read(&mut chunk).await?;
@@ -136,10 +212,7 @@ where
                 std::io::Error::other("process output read length does not fit u64")
             })?)
             .ok_or_else(|| std::io::Error::other("process output length overflowed u64"))?;
-        let retained = retained_limit.saturating_sub(captured.retained.len());
-        captured
-            .retained
-            .extend_from_slice(&chunk[..count.min(retained)]);
+        captured.keep(&chunk[..count]);
     }
     drop(pipe.take());
     Ok(())
@@ -169,8 +242,15 @@ pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
     if let Some(text) = decode_utf16_le_without_bom(bytes) {
         return text;
     }
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        return text.to_owned();
+    match std::str::from_utf8(bytes) {
+        Ok(text) => return text.to_owned(),
+        // A capped prefix can end inside a sequence. That is still UTF-8;
+        // sending it down the code-page path turned the whole buffer into
+        // mojibake.
+        Err(error) if error.error_len().is_none() => {
+            return String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned();
+        }
+        Err(_) => {}
     }
     if let Some(text) = decode_console_codepage(bytes) {
         return text;
@@ -309,7 +389,66 @@ fn decode_utf16(payload: &[u8], decode_unit: fn([u8; 2]) -> u16) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_captured_text;
+    use super::{CapturedStream, MAX_RETAINED_OUTPUT_BYTES, captured_text, decode_captured_text};
+
+    fn feed(stream: &mut CapturedStream, bytes: &[u8]) {
+        for chunk in bytes.chunks(16 * 1024) {
+            stream.total_bytes += chunk.len() as u64;
+            stream.keep(chunk);
+        }
+    }
+
+    #[test]
+    fn long_output_keeps_its_last_lines() {
+        let mut stream = CapturedStream::new();
+        let mut bytes = b"first line\n".to_vec();
+        bytes.resize(5 * MAX_RETAINED_OUTPUT_BYTES, b'.');
+        bytes.extend_from_slice(b"\ntest result: FAILED. 1 failed\n");
+        feed(&mut stream, &bytes);
+        assert!(stream.tail.len() < 2 * MAX_RETAINED_OUTPUT_BYTES);
+        let (text, cut) = captured_text(&stream);
+        assert!(cut);
+        assert!(text.starts_with("first line\n"), "{}", &text[..40]);
+        assert!(text.ends_with("test result: FAILED. 1 failed\n"));
+        let omitted = bytes.len() - 2 * MAX_RETAINED_OUTPUT_BYTES;
+        assert!(text.contains(&format!("[... {omitted} bytes omitted ...]")));
+    }
+
+    #[test]
+    fn a_short_tail_past_the_prefix_drops_nothing() {
+        let mut stream = CapturedStream::new();
+        let mut bytes = vec![b'a'; MAX_RETAINED_OUTPUT_BYTES];
+        bytes.extend_from_slice(b"end");
+        feed(&mut stream, &bytes);
+        let (text, cut) = captured_text(&stream);
+        assert!(!cut);
+        assert_eq!(text.len(), bytes.len());
+        assert!(text.ends_with("aend"));
+    }
+
+    #[test]
+    fn a_cut_tail_realigns_to_the_prefix_encoding() {
+        let mut stream = CapturedStream::new();
+        let mut bytes = utf16_le(&"ok 你好\r\n".repeat(MAX_RETAINED_OUTPUT_BYTES / 4));
+        bytes.extend(utf16_le("完成\r\n"));
+        feed(&mut stream, &bytes);
+        let (text, cut) = captured_text(&stream);
+        assert!(cut);
+        assert!(text.starts_with("ok 你好\r\n"));
+        assert!(text.ends_with("ok 你好\r\n完成\r\n"));
+
+        // The prefix ends on a lead byte and the newest window starts on a
+        // continuation byte.
+        let mut stream = CapturedStream::new();
+        let mut bytes = b"a".to_vec();
+        bytes.extend("é".repeat(2 * MAX_RETAINED_OUTPUT_BYTES).into_bytes());
+        bytes.extend_from_slice(b"done!");
+        feed(&mut stream, &bytes);
+        let (text, _) = captured_text(&stream);
+        assert!(!text.contains('\u{fffd}'), "a split sequence was decoded");
+        assert!(text.starts_with("aé"));
+        assert!(text.ends_with("éédone!"));
+    }
 
     fn utf16_le(text: &str) -> Vec<u8> {
         text.encode_utf16().flat_map(u16::to_le_bytes).collect()
