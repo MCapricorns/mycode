@@ -369,6 +369,8 @@ fn read_role_dir(dir: &Path) -> Vec<(PathBuf, String)> {
 /// runtime honors, so a role file cannot smuggle in structure the dispatcher
 /// would ignore.
 fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
+    // Windows editors often save with a byte-order mark.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let body = text
         .strip_prefix("---")
         .and_then(|rest| {
@@ -392,7 +394,8 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
         let (key, value) = line
             .split_once(':')
             .ok_or_else(|| format!("frontmatter line is not \"key: value\": {line}"))?;
-        let value = value.trim();
+        // Role files are often written as YAML, which quotes freely.
+        let value = unquote(value.trim());
         match key.trim() {
             "name" => {
                 if !crate::home::is_portable_role_name(value) {
@@ -420,9 +423,13 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
                 })?;
             }
             "tools" => {
+                let value = value
+                    .strip_prefix('[')
+                    .and_then(|rest| rest.strip_suffix(']'))
+                    .unwrap_or(value);
                 let list: Vec<String> = value
                     .split(',')
-                    .map(str::trim)
+                    .map(|entry| unquote(entry.trim()))
                     .filter(|entry| !entry.is_empty())
                     .map(str::to_owned)
                     .collect();
@@ -446,6 +453,19 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
         prompt: prompt.to_owned(),
         origin,
     })
+}
+
+/// Drops one pair of matching `"` or `'` quotes around a value.
+fn unquote(value: &str) -> &str {
+    for quote in ['"', '\''] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    value
 }
 
 /// Splits the header from the body at the first line that is exactly `---`.
@@ -621,5 +641,17 @@ mod tests {
         );
         assert!(role("writer", Some(vec!["read".into(), "edit".into()])).is_write_capable());
         assert!(role("runner", Some(vec!["powershell".into()])).is_write_capable());
+    }
+
+    #[test]
+    fn yaml_style_role_files_parse() {
+        let text = "\u{feff}---\r\nname: \"reviewer\"\r\ndescription: 'Reviews a diff.'\r\ntools: [read, \"grep\"]\r\n---\r\nLook, then stop.\r\n";
+        let parsed = super::parse_role(text, RoleOrigin::User).expect("role");
+        assert_eq!(parsed.name, "reviewer");
+        assert_eq!(parsed.description, "Reviews a diff.");
+        assert_eq!(
+            parsed.tools,
+            Some(vec!["read".to_owned(), "grep".to_owned()])
+        );
     }
 }
