@@ -21,6 +21,12 @@ pub(super) struct MenuNavigation {
     provider_scroll: ScrollHandle,
 }
 
+/// Picker-relevant state captured before a driver call.
+pub(super) struct MenuNavigationMark {
+    session: Option<String>,
+    mention_len: Option<usize>,
+}
+
 fn highlight(selected: Option<usize>, len: usize, preferred: usize) -> usize {
     selected.unwrap_or(preferred).min(len.saturating_sub(1))
 }
@@ -57,6 +63,27 @@ impl Workspace {
                 self.menu_navigation = MenuNavigation::default();
             }
             _ => {}
+        }
+    }
+
+    /// The state a picker selection depends on, captured around a driver
+    /// call whose actions the window never sees (replies and events).
+    pub(super) fn menu_navigation_mark(&self) -> MenuNavigationMark {
+        MenuNavigationMark {
+            session: self.vm().active.as_ref().map(|active| active.session_id.clone()),
+            mention_len: self.vm().mention.as_ref().map(|mention| mention.items.len()),
+        }
+    }
+
+    /// The driver-side counterpart of [`Self::reset_menu_navigation`]: a
+    /// conversation switch drops every selection, fresh mention results drop
+    /// the mention highlight.
+    pub(super) fn reset_menu_navigation_after(&mut self, before: MenuNavigationMark) {
+        let after = self.menu_navigation_mark();
+        if after.session != before.session {
+            self.menu_navigation = MenuNavigation::default();
+        } else if after.mention_len != before.mention_len {
+            self.menu_navigation.mention = None;
         }
     }
 

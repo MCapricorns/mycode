@@ -474,23 +474,20 @@ impl Workspace {
     /// Replies, timers, and freshly arrived core events move to the main
     /// thread here; each driver side effect is then performed by the window.
     fn drain_driver(&mut self, buffer: &mut VecDeque<BridgeEvent>, cx: &mut Context<Self>) {
-        let mut effects = Vec::new();
-        self.driver.poll(&mut effects);
-        while let Some(event) = self.driver.next_event() {
-            buffer.push_back(event);
-        }
-        self.apply_effects(effects, cx);
-        self.ensure_job_tick(cx);
-        cx.notify();
+        self.driver_do(
+            |driver, effects| {
+                driver.poll(effects);
+                while let Some(event) = driver.next_event() {
+                    buffer.push_back(event);
+                }
+            },
+            cx,
+        );
     }
 
     /// One core event through the driver; its effects land right away.
     fn on_driver_event(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
-        let mut effects = Vec::new();
-        self.driver.on_event(event, &mut effects);
-        self.apply_effects(effects, cx);
-        self.ensure_job_tick(cx);
-        cx.notify();
+        self.driver_do(|driver, effects| driver.on_event(event, effects), cx);
     }
 
     /// Performs the work the driver delegated to this frontend.
@@ -612,6 +609,20 @@ impl Workspace {
     /// shared reducer inside the driver.
     pub(crate) fn apply_action(&mut self, action: FrontendAction, cx: &mut Context<Self>) {
         self.reset_menu_navigation(&action);
+        self.driver_do(|d, fx| d.act(action, fx), cx);
+    }
+
+    /// Runs one driver interaction and performs the effects it returns.
+    ///
+    /// Replies and streamed events land here too, not only user actions, so
+    /// the scroll and selection bookkeeping is done around every driver
+    /// call: the driver's tail-follow decision reads the position the user
+    /// is looking at, and an open subagent window keeps following its log.
+    pub(crate) fn driver_do(
+        &mut self,
+        run: impl FnOnce(&mut FrontendDriver, &mut Vec<Effect>),
+        cx: &mut Context<Self>,
+    ) {
         // Decide from the scroll position before this update. New text has
         // not been laid out yet, so the handle still describes the frame the
         // user is looking at.
@@ -619,23 +630,12 @@ impl Workspace {
             .set_conversation_at_tail(self.conversation_follows_tail());
         self.driver.note_scroll_hold(self.scroll_hold.is_some());
         let subagent_before = self.subagent_window_mark();
-        let mut effects = Vec::new();
-        self.driver.act(action, &mut effects);
-        self.apply_effects(effects, cx);
-        self.follow_subagent_window(subagent_before);
-        self.ensure_job_tick(cx);
-        cx.notify();
-    }
-
-    /// Runs one driver interaction and performs the effects it returns.
-    pub(crate) fn driver_do(
-        &mut self,
-        run: impl FnOnce(&mut FrontendDriver, &mut Vec<Effect>),
-        cx: &mut Context<Self>,
-    ) {
+        let menus_before = self.menu_navigation_mark();
         let mut effects = Vec::new();
         run(&mut self.driver, &mut effects);
         self.apply_effects(effects, cx);
+        self.reset_menu_navigation_after(menus_before);
+        self.follow_subagent_window(subagent_before);
         self.ensure_job_tick(cx);
         cx.notify();
     }
@@ -802,8 +802,19 @@ impl Workspace {
 
     /// Toggles one tool row between a one-line summary and its result body.
     pub(crate) fn on_toggle_tool_row(&mut self, id: &str, cx: &mut Context<Self>) {
+        let pinned = self.conversation_follows_tail();
         if !self.expanded_tools.remove(id) {
             self.expanded_tools.insert(id.to_owned());
+        }
+        self.keep_tail_pinned(pinned, cx);
+    }
+
+    /// Expanding a row at the tail grows the content below the viewport,
+    /// which reads as "the reader scrolled up" and stops the tail follow.
+    /// A reader who was following keeps following.
+    fn keep_tail_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
+        if pinned && self.vm().view == MainView::Chat {
+            self.conversation_scroll.scroll_to_bottom();
         }
         cx.notify();
     }
@@ -815,10 +826,11 @@ impl Workspace {
 
     /// Toggles a one-line tool-run summary.
     pub(crate) fn on_toggle_tool_batch(&mut self, id: &str, cx: &mut Context<Self>) {
+        let pinned = self.conversation_follows_tail();
         if !self.expanded_tool_batches.remove(id) {
             self.expanded_tool_batches.insert(id.to_owned());
         }
-        cx.notify();
+        self.keep_tail_pinned(pinned, cx);
     }
 
     /// Whether thinking traces show their full text. One switch covers
@@ -829,7 +841,9 @@ impl Workspace {
 
     /// Expands or collapses every thinking trace and remembers the choice.
     pub(crate) fn on_toggle_thinking(&mut self, cx: &mut Context<Self>) {
+        let pinned = self.conversation_follows_tail();
         self.apply_action(FrontendAction::ThinkingCollapsedToggled, cx);
+        self.keep_tail_pinned(pinned, cx);
         self.persist_ui_state();
     }
 

@@ -56,20 +56,20 @@ impl Workspace {
         &self.subagent_scroll
     }
 
-    /// The open subagent window, its log length, and whether its body sits
-    /// on the newest step, read before an update lands.
+    /// The open subagent window, its log length and newest step, and
+    /// whether its body sits on the newest step, read before an update lands.
     pub(super) fn subagent_window_mark(&self) -> SubagentMark {
         let call_id = self.vm().subagent_window.clone();
-        let log_len = call_id.as_deref().map_or(0, |call_id| {
+        let job = call_id.as_deref().and_then(|call_id| {
             self.vm()
                 .live_jobs
                 .iter()
                 .find(|job| job.call_id == call_id)
-                .map_or(0, |job| job.log.len())
         });
         SubagentMark {
+            log_len: job.map_or(0, |job| job.log.len()),
+            newest: job.and_then(|job| job.log.last().cloned()),
             call_id,
-            log_len,
             at_tail: follows_tail(
                 self.subagent_scroll.offset().y,
                 self.subagent_scroll.max_offset().y,
@@ -140,13 +140,18 @@ impl Workspace {
 pub(super) struct SubagentMark {
     call_id: Option<String>,
     log_len: usize,
+    /// The log is capped: once full, a new step drops the oldest one and the
+    /// length stays put, so the newest step is what shows the log moved.
+    newest: Option<String>,
     at_tail: bool,
 }
 
 fn subagent_window_follows(before: &SubagentMark, after: &SubagentMark) -> bool {
     match (&before.call_id, &after.call_id) {
         (_, None) => false,
-        (Some(old), Some(new)) if old == new => after.log_len != before.log_len && before.at_tail,
+        (Some(old), Some(new)) if old == new => {
+            (after.log_len != before.log_len || after.newest != before.newest) && before.at_tail
+        }
         _ => true,
     }
 }
@@ -182,9 +187,10 @@ mod tests {
 
     #[test]
     fn the_subagent_window_follows_new_steps_only_from_its_tail() {
-        let mark = |call_id: Option<&str>, log_len, at_tail| SubagentMark {
+        let mark = |call_id: Option<&str>, log_len: usize, at_tail| SubagentMark {
             call_id: call_id.map(str::to_owned),
             log_len,
+            newest: Some(format!("step {log_len}")),
             at_tail,
         };
         // Opening a window, or switching to another child, starts at the end.
@@ -213,6 +219,14 @@ mod tests {
             &mark(Some("a"), 3, true),
             &mark(None, 0, true)
         ));
+        // A full (capped) log keeps its length; a new newest step still moves.
+        let full = |newest: &str| SubagentMark {
+            call_id: Some("a".to_owned()),
+            log_len: 48,
+            newest: Some(newest.to_owned()),
+            at_tail: true,
+        };
+        assert!(subagent_window_follows(&full("step 60"), &full("step 61")));
     }
 
     #[test]
