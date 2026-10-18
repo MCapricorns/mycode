@@ -18,6 +18,26 @@ fn apply(body: &str, old: &str, new: &str) -> Result<String, ToolError> {
 }
 
 #[test]
+fn trailing_spaces_the_copy_dropped_still_match() {
+    let body = "fn main() {  \n    let x = 1;\t\n}\n";
+    let updated = apply(
+        body,
+        "fn main() {\n    let x = 1;\n",
+        "fn main() {\n    let x = 2;\n",
+    )
+    .expect("edit");
+    assert_eq!(updated, "fn main() {\n    let x = 2;\n}\n");
+
+    let body = "a = 1;   \r\nb = 2;\r\n";
+    let updated = apply(body, "a = 1;\nb = 2;", "a = 3;\nb = 4;").expect("crlf edit");
+    assert_eq!(updated, "a = 3;\r\nb = 4;\r\n");
+
+    // Indentation is not trailing whitespace and still has to match.
+    let body = "if x {\n    go();\n}\n";
+    assert!(apply(body, "if x {\ngo();", "if y {\ngo();").is_err());
+}
+
+#[test]
 fn crlf_file_matches_lf_old_string_and_keeps_crlf() {
     let body = "fn main() {\r\n    let x = 1;\r\n}\r\n";
     let updated = apply(body, "    let x = 1;\n", "    let x = 2;\n").expect("edit");

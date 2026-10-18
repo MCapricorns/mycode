@@ -63,3 +63,19 @@ fn legacy_replace_still_applies_when_operations_are_omitted() {
     .expect("edit");
     assert_eq!(updated, "score += 10;\n");
 }
+
+#[test]
+fn replace_all_and_other_agents_spellings_are_accepted() {
+    let raw = crate::tool::normalize_tool_args(json!({
+        "file_path": "src/plane.rs",
+        "old_str": "a",
+        "new_str": "b",
+        "replace_all": true,
+    }));
+    assert_eq!(raw["path"], "src/plane.rs");
+    assert_eq!(apply_json("a a a", raw).expect("replace all"), "b b b");
+
+    let unique = json!({"path": "x", "old_string": "a", "new_string": "b"});
+    let error = apply_json("a a", unique).expect_err("ambiguous");
+    assert!(error.contains("replace_all"), "{error}");
+}

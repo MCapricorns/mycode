@@ -121,7 +121,11 @@ pub(super) fn normalize_args(args: &EditArgs) -> Result<Vec<PreparedOp>, ToolErr
             Ok(vec![PreparedOp::Literal {
                 patterns: vec![old.clone()],
                 replacements: vec![new.clone()],
-                pick: Pick::Unique,
+                pick: if args.replace_all {
+                    Pick::All
+                } else {
+                    Pick::Unique
+                },
             }])
         }
         (Some(_), None) => Err(ToolError::InvalidArgs(
@@ -552,9 +556,15 @@ fn literal_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolEr
     // the matched span is mapped back onto the original bytes. The
     // replacement is then rewritten to the file's dominant line ending.
     if body.contains('\r') || patterns.iter().any(|pattern| pattern.contains('\r')) {
-        return newline_insensitive_matches(body, patterns);
+        let found = newline_insensitive_matches(body, patterns, false)?;
+        if !found.is_empty() {
+            return Ok(found);
+        }
     }
-    Ok(exact)
+    // A model's copy of a line almost never keeps the spaces the file has
+    // before its newline. The last tier also ignores those; indentation and
+    // every other byte still have to match.
+    newline_insensitive_matches(body, patterns, true)
 }
 
 struct NormalizedNewlines {
@@ -563,7 +573,9 @@ struct NormalizedNewlines {
     map: Vec<usize>,
 }
 
-fn normalize_newlines(text: &str) -> NormalizedNewlines {
+/// Drops the CR of each CRLF and, with `strip_trailing`, the spaces and
+/// tabs right before a newline.
+fn normalize_newlines(text: &str, strip_trailing: bool) -> NormalizedNewlines {
     let mut out = String::with_capacity(text.len());
     let mut map = Vec::with_capacity(text.len());
     let bytes = text.as_bytes();
@@ -572,6 +584,22 @@ fn normalize_newlines(text: &str) -> NormalizedNewlines {
         if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
             index += 1;
             continue;
+        }
+        if strip_trailing && matches!(bytes[index], b' ' | b'\t') {
+            let run_end = index
+                + bytes[index..]
+                    .iter()
+                    .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                    .count();
+            let at_line_end = match bytes.get(run_end) {
+                Some(b'\n') => true,
+                Some(b'\r') => bytes.get(run_end + 1) == Some(&b'\n'),
+                _ => false,
+            };
+            if at_line_end {
+                index = run_end;
+                continue;
+            }
         }
         let start = index;
         let ch = text[index..].chars().next().unwrap_or('\u{fffd}');
@@ -585,12 +613,19 @@ fn normalize_newlines(text: &str) -> NormalizedNewlines {
     NormalizedNewlines { text: out, map }
 }
 
-fn newline_insensitive_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolError> {
-    let norm_body = normalize_newlines(body);
+fn newline_insensitive_matches(
+    body: &str,
+    patterns: &[String],
+    strip_trailing: bool,
+) -> Result<Vec<Found>, ToolError> {
+    let norm_body = normalize_newlines(body, strip_trailing);
     let norm_patterns: Vec<String> = patterns
         .iter()
-        .map(|pattern| normalize_newlines(pattern).text)
+        .map(|pattern| normalize_newlines(pattern, strip_trailing).text)
         .collect();
+    if norm_patterns.iter().any(String::is_empty) {
+        return Ok(Vec::new());
+    }
     let found = if norm_patterns.len() == 1 {
         memmem_matches(&norm_body.text, &norm_patterns[0])?
     } else {
@@ -685,12 +720,64 @@ fn match_newlines(text: &str, newline: Option<&str>) -> String {
 /// of re-reading the whole file.
 fn literal_miss_error(body: &str, patterns: &[String]) -> ToolError {
     const BASE: &str = "literal pattern not found; re-read the file and provide the exact text";
-    match whitespace_near_miss_line(body, patterns) {
-        Some(line) => ToolError::Execution(format!(
-            "{BASE}; line {line} contains similar text that differs only in whitespace/indentation"
-        )),
-        None => ToolError::Execution(BASE.to_owned()),
+    let span = patterns
+        .iter()
+        .map(|pattern| pattern.lines().count())
+        .max()
+        .unwrap_or(1);
+    if let Some(line) = whitespace_near_miss_line(body, patterns) {
+        return ToolError::Execution(format!(
+            "{BASE}; line {line} contains similar text that differs only in \
+             whitespace/indentation. The file there reads:\n{}",
+            excerpt(body, line, span + 2)
+        ));
     }
+    // A pattern whose opening line is in the file but whose later lines
+    // are not is usually a stale or misremembered copy. Showing the real
+    // lines lets the model fix the pattern without re-reading the file.
+    if let Some(line) = first_line_anchor(body, patterns) {
+        return ToolError::Execution(format!(
+            "{BASE}; the pattern's first line matches line {line}, but the lines after \
+             it differ. The file there reads:\n{}",
+            excerpt(body, line, span)
+        ));
+    }
+    ToolError::Execution(BASE.to_owned())
+}
+
+/// The first body line equal to some pattern's first non-blank line, both
+/// trimmed. Short lines (`}`, `else {`) are too common to point anywhere.
+fn first_line_anchor(body: &str, patterns: &[String]) -> Option<usize> {
+    const MIN_ANCHOR_CHARS: usize = 12;
+    patterns
+        .iter()
+        .filter(|pattern| pattern.lines().count() > 1)
+        .filter_map(|pattern| pattern.lines().map(str::trim).find(|line| !line.is_empty()))
+        .filter(|first| first.chars().count() >= MIN_ANCHOR_CHARS)
+        .filter_map(|first| {
+            body.lines()
+                .position(|line| line.trim() == first)
+                .map(|index| index + 1)
+        })
+        .min()
+}
+
+/// Up to `span` body lines from 1-based `line`, bounded so a hint cannot
+/// grow into a file dump.
+fn excerpt(body: &str, line: usize, span: usize) -> String {
+    const MAX_LINES: usize = 12;
+    const MAX_BYTES: usize = 1200;
+    let lines: Vec<&str> = body
+        .lines()
+        .skip(line.saturating_sub(1))
+        .take(span.clamp(1, MAX_LINES))
+        .collect();
+    let text = lines.join("\n");
+    let (mut text, cut) = crate::builtin::truncate_bytes(&text, MAX_BYTES);
+    if cut {
+        text.push_str("\n[excerpt truncated]");
+    }
+    text
 }
 
 fn strip_whitespace(text: &str) -> String {
@@ -792,7 +879,7 @@ fn select_matches(matches: Vec<Found>, pick: Pick, label: &str) -> Result<Vec<Fo
             ))),
             1 => Ok(matches),
             n => Err(ToolError::Execution(format!(
-                "{label} pattern occurs {n} times; include more surrounding lines to make it unique"
+                "{label} pattern occurs {n} times; include more surrounding lines to make it unique, or set replace_all (`occurrence: \"all\"` in an operation) to change every one"
             ))),
         },
         Pick::All => {
