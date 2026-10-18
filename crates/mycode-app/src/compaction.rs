@@ -327,7 +327,7 @@ pub(crate) async fn compact_history(
         Ok(Err(error)) => {
             return Compacted {
                 messages: history,
-                status: CompactStatus::Failed(format!("checkpoint write failed: {error:?}")),
+                status: CompactStatus::Failed(format!("checkpoint write failed: {error}")),
                 summary: None,
             };
         }
@@ -723,8 +723,10 @@ Write dense factual prose in first person, no preamble. Cover:\n\
 - Files and paths touched (created, edited, read)\n\
 - Commands run and their outcomes\n\
 - Current work, open tasks, and unresolved errors\n\
+- The user's latest request, quoted when it is short\n\
 - Clear next steps\n\
-Preserve names, paths, and error text. Do not invent work that did not happen.",
+Preserve names, paths, and error text. Do not invent work that did not happen. \
+Stay under about 2,500 words; drop detail that the next steps do not need.",
         )
         .with_message(Message::User(mycode_core::UserMessage::text(
             summary_user_text(transcript),
@@ -747,7 +749,7 @@ async fn request_summary(
     let mut stream = wire
         .stream(&request, cancel.child_token())
         .await
-        .map_err(|error| format!("summary request failed: {error:?}"))?;
+        .map_err(|error| format!("summary request failed: {error}"))?;
     let mut summary = String::new();
     let stop = loop {
         let Some(event) = stream.next().await else {
@@ -761,7 +763,7 @@ async fn request_summary(
                 }
                 break message.stop_reason;
             }
-            StreamEvent::Error(error) => return Err(format!("summary stream failed: {error:?}")),
+            StreamEvent::Error(error) => return Err(format!("summary stream failed: {error}")),
             _ => {}
         }
     };
