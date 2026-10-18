@@ -223,63 +223,21 @@ fn nt_open_directory(
     descriptor: Option<&SecurityDescriptor>,
     case_insensitive: bool,
 ) -> Result<NativeOpenedDirectory, ConfigError> {
-    let mut wide = wide_component(name)?;
-    let byte_length = u16::try_from(wide.len().saturating_mul(2))
-        .map_err(|_| ConfigError::new(ConfigErrorKind::PathEscape))?;
-    wide.push(0);
-    let name_string = UNICODE_STRING {
-        Length: byte_length,
-        MaximumLength: byte_length.saturating_add(2),
-        Buffer: wide.as_mut_ptr(),
-    };
-    let attributes = OBJECT_ATTRIBUTES {
-        Length: u32::try_from(size_of::<OBJECT_ATTRIBUTES>()).expect("OBJECT_ATTRIBUTES fits u32"),
-        RootDirectory: parent.as_raw_handle(),
-        ObjectName: std::ptr::addr_of!(name_string),
-        Attributes: if case_insensitive {
-            OBJ_CASE_INSENSITIVE
-        } else {
-            0
-        },
-        SecurityDescriptor: descriptor.map_or(null(), |value| value.as_ptr().cast()),
-        SecurityQualityOfService: null(),
-    };
-    let mut status_block = IO_STATUS_BLOCK::default();
-    let mut handle: HANDLE = null_mut();
-    let sharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-    // SAFETY: The object attributes borrow a live parent handle, validated
-    // single-component UTF-16 name, and optional live security descriptor for
-    // this call. A successful handle is returned with owned lifetime.
-    let status = unsafe {
-        NtCreateFile(
-            &mut handle,
-            access | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
-            &attributes,
-            &mut status_block,
-            null(),
-            FILE_ATTRIBUTE_DIRECTORY,
-            sharing,
+    nt_create_relative(
+        parent,
+        name,
+        NtCreate {
+            access: access | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
+            file_attributes: FILE_ATTRIBUTE_DIRECTORY,
             disposition,
-            FILE_DIRECTORY_FILE
+            options: FILE_DIRECTORY_FILE
                 | FILE_OPEN_FOR_BACKUP_INTENT
                 | FILE_OPEN_REPARSE_POINT
                 | FILE_SYNCHRONOUS_IO_NONALERT,
-            null(),
-            0,
-        )
-    };
-    if !nt_success(status) {
-        return Err(map_ntstatus(status));
-    }
-    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-        return Err(ConfigError::new(ConfigErrorKind::Io));
-    }
-    // SAFETY: NtCreateFile returned a fresh successful handle.
-    let file = unsafe { File::from_raw_handle(handle) };
-    Ok(NativeOpenedDirectory {
-        file,
-        created: status_block.Information == FILE_CREATED as usize,
-    })
+            descriptor,
+            case_insensitive,
+        },
+    )
 }
 
 fn nt_open_file(
@@ -289,6 +247,40 @@ fn nt_open_file(
     disposition: u32,
     descriptor: Option<&SecurityDescriptor>,
     case_insensitive: bool,
+) -> Result<NativeOpenedDirectory, ConfigError> {
+    nt_create_relative(
+        parent,
+        name,
+        NtCreate {
+            access: access | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
+            file_attributes: 0,
+            disposition,
+            options: FILE_NON_DIRECTORY_FILE
+                | FILE_OPEN_REPARSE_POINT
+                | FILE_SYNCHRONOUS_IO_NONALERT,
+            descriptor,
+            case_insensitive,
+        },
+    )
+}
+
+/// The `NtCreateFile` knobs that differ between the handle-relative opens.
+struct NtCreate<'a> {
+    access: u32,
+    file_attributes: u32,
+    disposition: u32,
+    options: u32,
+    descriptor: Option<&'a SecurityDescriptor>,
+    case_insensitive: bool,
+}
+
+/// One `NtCreateFile` anchored to `parent` with a single validated
+/// component; every share mode is granted so a concurrent reader never
+/// fails the open.
+fn nt_create_relative(
+    parent: &File,
+    name: &OsStr,
+    request: NtCreate<'_>,
 ) -> Result<NativeOpenedDirectory, ConfigError> {
     let mut wide = wide_component(name)?;
     let byte_length = u16::try_from(wide.len().saturating_mul(2))
@@ -303,30 +295,32 @@ fn nt_open_file(
         Length: u32::try_from(size_of::<OBJECT_ATTRIBUTES>()).expect("OBJECT_ATTRIBUTES fits u32"),
         RootDirectory: parent.as_raw_handle(),
         ObjectName: std::ptr::addr_of!(name_string),
-        Attributes: if case_insensitive {
+        Attributes: if request.case_insensitive {
             OBJ_CASE_INSENSITIVE
         } else {
             0
         },
-        SecurityDescriptor: descriptor.map_or(null(), |value| value.as_ptr().cast()),
+        SecurityDescriptor: request
+            .descriptor
+            .map_or(null(), |value| value.as_ptr().cast()),
         SecurityQualityOfService: null(),
     };
     let mut status_block = IO_STATUS_BLOCK::default();
     let mut handle: HANDLE = null_mut();
-    // SAFETY: The object attributes borrow a live parent, one validated UTF-16
-    // component, and an optional live descriptor. Success returns one owned
-    // regular-file handle.
+    // SAFETY: The object attributes borrow a live parent handle, one validated
+    // single-component UTF-16 name, and an optional live security descriptor
+    // for this call. A successful handle is returned with owned lifetime.
     let status = unsafe {
         NtCreateFile(
             &mut handle,
-            access | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
+            request.access,
             &attributes,
             &mut status_block,
             null(),
-            0,
+            request.file_attributes,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            disposition,
-            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+            request.disposition,
+            request.options,
             null(),
             0,
         )
@@ -366,51 +360,19 @@ pub(super) fn open_unsynchronized(
     name: &OsStr,
     access: u32,
 ) -> Result<File, ConfigError> {
-    let mut wide = wide_component(name)?;
-    let byte_length = u16::try_from(wide.len().saturating_mul(2))
-        .map_err(|_| ConfigError::new(ConfigErrorKind::PathEscape))?;
-    wide.push(0);
-    let name_string = UNICODE_STRING {
-        Length: byte_length,
-        MaximumLength: byte_length.saturating_add(2),
-        Buffer: wide.as_mut_ptr(),
-    };
-    let attributes = OBJECT_ATTRIBUTES {
-        Length: u32::try_from(size_of::<OBJECT_ATTRIBUTES>()).expect("OBJECT_ATTRIBUTES fits u32"),
-        RootDirectory: parent.as_raw_handle(),
-        ObjectName: std::ptr::addr_of!(name_string),
-        Attributes: OBJ_CASE_INSENSITIVE,
-        SecurityDescriptor: null(),
-        SecurityQualityOfService: null(),
-    };
-    let mut status_block = IO_STATUS_BLOCK::default();
-    let mut handle: HANDLE = null_mut();
-    // SAFETY: The object attributes borrow a live parent handle and one
-    // validated UTF-16 component for this call. Success returns one owned
-    // handle.
-    let status = unsafe {
-        NtCreateFile(
-            &mut handle,
+    nt_create_relative(
+        parent,
+        name,
+        NtCreate {
             access,
-            &attributes,
-            &mut status_block,
-            null(),
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            FILE_OPEN,
-            FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT,
-            null(),
-            0,
-        )
-    };
-    if !nt_success(status) {
-        return Err(map_ntstatus(status));
-    }
-    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-        return Err(ConfigError::new(ConfigErrorKind::Io));
-    }
-    // SAFETY: NtCreateFile returned a fresh successful handle.
-    Ok(unsafe { File::from_raw_handle(handle) })
+            file_attributes: 0,
+            disposition: FILE_OPEN,
+            options: FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT,
+            descriptor: None,
+            case_insensitive: true,
+        },
+    )
+    .map(|opened| opened.file)
 }
 
 /// Reports the attributes of one child under its exact spelling.
