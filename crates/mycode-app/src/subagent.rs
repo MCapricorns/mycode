@@ -666,6 +666,11 @@ fn subagent_system_prompt(
     system.push_str(&role.name);
     system.push_str("\n\n");
     system.push_str(&role.prompt);
+    // The tool list depends only on the role's registry. It goes ahead of
+    // the per-run facts (worktree cwd, folders, skills) so runs of one role
+    // share the longest cached prefix.
+    system.push_str("\n\n");
+    system.push_str(&mycode_agent::build_system_prompt(registry));
     let (workspace_roots, scratch) = crate::turn::split_scratch_root(extra_roots);
     if !workspace_roots.is_empty() {
         system.push_str("\n\nOther workspace folders (absolute paths only):\n");
@@ -704,8 +709,6 @@ path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in 
 inputSchema. Never guess parameters. A read-only role only receives MCP tools whose server set readOnlyHint.",
         );
     }
-    system.push_str("\n\n");
-    system.push_str(&mycode_agent::build_system_prompt(registry));
     system
 }
 
