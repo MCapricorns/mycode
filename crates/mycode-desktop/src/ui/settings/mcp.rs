@@ -10,7 +10,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Styled, Window, div, px,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::widgets::{DropdownSpec, dropdown_field, labeled_field, settings_card};
@@ -68,6 +68,7 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                         .find(|(id, _)| *id == server.id)
                         .map(|(_, tools)| tools.clone()),
                     probing: vm.mcp_probing.contains(&server.id),
+                    armed: workspace.delete_armed(&format!("mcp:{}", server.id)),
                 }
             })
             .collect();
@@ -337,6 +338,8 @@ struct McpRow {
     /// Tool names from the last probe, when one succeeded.
     tools: Option<Vec<String>>,
     probing: bool,
+    /// The trash was clicked once and waits for the confirming click.
+    armed: bool,
 }
 
 fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
@@ -349,6 +352,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
         index,
         tools,
         probing,
+        armed,
     } = row;
     let theme = cx.theme();
     let desk = Desk::of(theme);
@@ -471,14 +475,42 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                             })
                         }),
                 )
-                .child(crate::ui::icon_button(
-                    format!("mcp-remove-{id}"),
-                    IconName::Trash,
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.apply_action(FrontendAction::SettingsMcpRemoved(index), cx);
-                    }),
-                    cx,
-                )),
+                .map(|this| {
+                    let key = format!("mcp:{id}");
+                    let on_remove = cx.listener(move |workspace, _, _, cx| {
+                        if workspace.confirm_delete(&key, cx) {
+                            workspace.apply_action(FrontendAction::SettingsMcpRemoved(index), cx);
+                        }
+                    });
+                    if armed {
+                        this.child(
+                            div()
+                                .id(format!("mcp-remove-{id}"))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_1()
+                                .px_2()
+                                .h(px(24.))
+                                .rounded(px(4.))
+                                .flex_shrink_0()
+                                .cursor_pointer()
+                                .bg(theme.danger.opacity(0.12))
+                                .text_color(theme.danger)
+                                .text_xs()
+                                .on_click(on_remove)
+                                .child(Icon::new(IconName::Trash).xsmall())
+                                .child(t("Remove?", "移除？")),
+                        )
+                    } else {
+                        this.child(crate::ui::icon_button(
+                            format!("mcp-remove-{id}"),
+                            IconName::Trash,
+                            on_remove,
+                            cx,
+                        ))
+                    }
+                }),
         )
         .when(!tool_chips.is_empty(), |this| {
             this.child(
