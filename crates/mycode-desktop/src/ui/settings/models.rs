@@ -414,63 +414,6 @@ impl ProviderForm {
     }
 }
 
-/// Validates and builds one custom provider from form inputs before
-/// dispatching, so duplicate ids or invalid URLs cannot overwrite an existing
-/// key or leave `settings` in an unsaveable state.
-pub(crate) fn build_custom_provider(
-    existing_ids: &[String],
-    id: &str,
-    kind: &str,
-    base_url: &str,
-    model: &str,
-    context_limit: &str,
-    max_output: &str,
-) -> Result<mycode_config::ProviderSettings, String> {
-    let id = id.trim();
-    let kind = kind.trim();
-    let base_url = base_url.trim();
-    let model = model.trim();
-    if id.is_empty() || base_url.is_empty() || model.is_empty() {
-        return Err("fill id, base URL, and model".to_owned());
-    }
-    if existing_ids.iter().any(|existing| existing == id) {
-        return Err(format!("a provider named '{id}' already exists"));
-    }
-    if existing_ids.len() >= mycode_config::MAX_PROVIDERS {
-        return Err(format!(
-            "at most {} providers may be configured",
-            mycode_config::MAX_PROVIDERS
-        ));
-    }
-    let (context_limit, max_output) = match (
-        crate::workspace::parse_token_field(context_limit),
-        crate::workspace::parse_token_field(max_output),
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        _ => {
-            return Err("context window and max output must be plain numbers".to_owned());
-        }
-    };
-    let provider = mycode_config::ProviderSettings {
-        id: id.to_owned(),
-        kind: kind.to_owned(),
-        base_url: base_url.to_owned(),
-        models: vec![model.to_owned()],
-        enabled: true,
-        context_limit,
-        max_output,
-        hidden_models: Vec::new(),
-    };
-    let probe = mycode_config::AppSettings {
-        providers: vec![provider.clone()],
-        ..mycode_config::AppSettings::default()
-    };
-    probe
-        .validate()
-        .map_err(|error| format!("invalid provider: {}", error.summary()))?;
-    Ok(provider)
-}
-
 /// The custom-endpoint page: protocol dropdown, endpoint identity, and the
 /// optional model parameter overrides.
 fn render_custom_provider_page(
@@ -611,6 +554,3 @@ fn render_custom_provider_page(
         )
         .into_any_element()
 }
-
-#[cfg(test)]
-mod tests;

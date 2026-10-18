@@ -257,6 +257,7 @@ impl FrontendDriver {
 
     /// Adds the server the custom form describes from its raw field values:
     /// validation lives in [`forms::build_mcp_server`], this decides.
+    /// `true` when the row was added, so the frontend can clear its form.
     #[allow(clippy::too_many_arguments)]
     pub fn add_custom_mcp(
         &mut self,
@@ -267,11 +268,11 @@ impl FrontendDriver {
         env_line: &str,
         api_key: &str,
         out: &mut Vec<Effect>,
-    ) {
+    ) -> bool {
         let id = id.trim();
         if id.is_empty() {
             self.act(FrontendAction::Failed("fill id".to_owned()), out);
-            return;
+            return false;
         }
         if self
             .vm
@@ -283,13 +284,13 @@ impl FrontendDriver {
                 FrontendAction::Failed(format!("an MCP server named '{id}' already exists")),
                 out,
             );
-            return;
+            return false;
         }
         let server = match forms::build_mcp_server(id, transport, endpoint, command, env_line) {
             Ok(server) => server,
             Err(message) => {
                 self.act(FrontendAction::Failed(message), out);
-                return;
+                return false;
             }
         };
         self.act(FrontendAction::SettingsMcpAdded(server), out);
@@ -302,18 +303,21 @@ impl FrontendDriver {
             });
         }
         self.act(FrontendAction::ShowMcpSubview(McpSubview::List), out);
+        true
     }
 
     /// Imports every server a pasted `mcp.json`-style document describes:
     /// skips ids already configured, saves each row's key, and reports one
     /// aggregated duplicate message instead of overwriting per-row errors.
-    pub fn import_mcp_json(&mut self, raw: &str, out: &mut Vec<Effect>) {
+    /// `true` once the document parsed (even if every row was a duplicate),
+    /// so the frontend can clear the paste box.
+    pub fn import_mcp_json(&mut self, raw: &str, out: &mut Vec<Effect>) -> bool {
         let mut added = 0usize;
         let imported = match mycode_config::parse_mcp_import(raw) {
             Ok(imported) => imported,
             Err(message) => {
                 self.act(FrontendAction::Failed(message), out);
-                return;
+                return false;
             }
         };
         let mut existing: Vec<String> = self
@@ -362,6 +366,7 @@ impl FrontendDriver {
                 out,
             );
         }
+        true
     }
 
     /// Adds a catalog-listed server row (starts disabled; the key save arms
@@ -387,16 +392,6 @@ impl FrontendDriver {
         self.act(FrontendAction::ShowMcpSubview(McpSubview::List), out);
     }
 
-    // ---- skills ----
-
-    /// The Skills page switched one skill on or off.
-    pub fn toggle_skill(&mut self, slug: &str, enabled: bool, out: &mut Vec<Effect>) {
-        self.act(
-            FrontendAction::SettingsSkillToggled(slug.to_owned(), enabled),
-            out,
-        );
-    }
-
     // ---- subagent routes ----
 
     /// One role's enabled switch on the Agents page.
@@ -407,18 +402,6 @@ impl FrontendDriver {
         let mut next = settings.subagents.clone();
         next.role_mut(role).enabled = enabled;
         self.act(FrontendAction::SettingsSubagentsChanged(next), out);
-    }
-
-    /// The Agents-page model dropdown opened or closed.
-    pub fn toggle_subagent_menu(
-        &mut self,
-        role: &str,
-        field: &str,
-        open: bool,
-        out: &mut Vec<Effect>,
-    ) {
-        let next = open.then(|| (role.to_owned(), field.to_owned()));
-        self.act(FrontendAction::SubagentMenuToggled(next), out);
     }
 
     /// One role's thinking-effort override; `inherit`/`default` clears it.
@@ -499,7 +482,8 @@ impl FrontendDriver {
 
     /// Adds the provider the custom form describes from its raw field
     /// values: [`forms::build_custom_provider`] validates and refuses a
-    /// duplicate id before anything is dispatched.
+    /// duplicate id before anything is dispatched. `true` when the row was
+    /// added, so the frontend can clear its form.
     #[allow(clippy::too_many_arguments)]
     pub fn add_custom_provider(
         &mut self,
@@ -511,7 +495,7 @@ impl FrontendDriver {
         context_limit: &str,
         max_output: &str,
         out: &mut Vec<Effect>,
-    ) {
+    ) -> bool {
         let existing: Vec<String> = self
             .vm
             .settings
@@ -536,7 +520,7 @@ impl FrontendDriver {
             Ok(provider) => provider,
             Err(message) => {
                 self.act(FrontendAction::Failed(message), out);
-                return;
+                return false;
             }
         };
         let provider_id = provider.id.clone();
@@ -548,6 +532,7 @@ impl FrontendDriver {
             });
         }
         self.act(FrontendAction::ShowModelsSubview(ModelsSubview::List), out);
+        true
     }
 
     /// Removes one provider row and closes its detail page when open.
@@ -790,10 +775,5 @@ impl FrontendDriver {
         );
         out.push(Effect::LanguageChanged);
         self.save_settings(out);
-    }
-
-    /// The General-page language dropdown opened or closed.
-    pub fn toggle_language_menu(&mut self, open: bool, out: &mut Vec<Effect>) {
-        self.act(FrontendAction::LanguageMenuToggled(open), out);
     }
 }

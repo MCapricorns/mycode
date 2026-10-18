@@ -510,15 +510,4 @@ impl FrontendDriver {
             self.refresh_skills(out);
         }
     }
-
-    /// The sidebar project switcher opened or closed.
-    pub fn toggle_project_menu(&mut self, open: bool, out: &mut Vec<Effect>) {
-        self.act(FrontendAction::ProjectMenuToggled(open), out);
-    }
-
-    /// A session picked from the chat rail or palette: open it inside its
-    /// own folder so switching projects does not move another chat's work.
-    pub fn focus_session(&mut self, session_id: &str, out: &mut Vec<Effect>) {
-        self.open_session(session_id, out);
-    }
 }
