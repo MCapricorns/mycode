@@ -371,7 +371,7 @@ async fn dispatch_response_calls(
         polled.store(true, Ordering::SeqCst);
         let futures = agent_ids
             .iter()
-            .map(|index| turn::dispatch_tool_call(env, token, &calls[*index]))
+            .map(|index| turn::dispatch_tool_call(env, token, calls[*index]))
             .collect::<Vec<_>>();
         futures_util::future::join_all(futures).await
     };
@@ -380,23 +380,23 @@ async fn dispatch_response_calls(
         let mut next = 0;
         while next < other_ids.len() {
             if token.is_cancelled() {
-                messages.push(turn::fail_cancelled_call(env, &calls[other_ids[next]]));
+                messages.push(turn::fail_cancelled_call(env, calls[other_ids[next]]));
                 next += 1;
                 continue;
             }
             let batch_len = other_ids[next..]
                 .iter()
-                .take_while(|index| is_parallel_safe(env, &calls[**index]))
+                .take_while(|index| is_parallel_safe(env, calls[**index]))
                 .count();
             if batch_len > 1 {
                 let futures = other_ids[next..next + batch_len]
                     .iter()
-                    .map(|index| turn::dispatch_tool_call(env, token, &calls[*index]))
+                    .map(|index| turn::dispatch_tool_call(env, token, calls[*index]))
                     .collect::<Vec<_>>();
                 messages.extend(futures_util::future::join_all(futures).await);
                 next += batch_len;
             } else {
-                messages.push(turn::dispatch_tool_call(env, token, &calls[other_ids[next]]).await);
+                messages.push(turn::dispatch_tool_call(env, token, calls[other_ids[next]]).await);
                 next += 1;
             }
         }
@@ -440,9 +440,9 @@ async fn dispatch_response_calls(
         let discard = agent_polled.load(Ordering::SeqCst);
         for index in agent_indexes {
             slots[index] = Some(if discard {
-                turn::discard_running_call(env, &calls[index])
+                turn::discard_running_call(env, calls[index])
             } else {
-                turn::fail_cancelled_call(env, &calls[index])
+                turn::fail_cancelled_call(env, calls[index])
             });
         }
     } else {
