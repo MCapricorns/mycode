@@ -249,7 +249,10 @@ fn replace_verified_executable(
     if !source_hash.eq_ignore_ascii_case(expected) {
         return Err(fatal("staged binary sha256 does not match".to_owned()));
     }
-    if target.parent().is_none_or(|parent| parent.as_os_str().is_empty()) {
+    if target
+        .parent()
+        .is_none_or(|parent| parent.as_os_str().is_empty())
+    {
         return Err(fatal("target has no directory".to_owned()));
     }
     if target.file_name().is_none() {
