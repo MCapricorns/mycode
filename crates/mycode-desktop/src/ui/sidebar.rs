@@ -94,6 +94,7 @@ pub(super) fn render_sidebar(
     let desk = super::desk::Desk::of(theme);
     let has_folder = crate::view_model::has_open_folder(workspace.vm());
     let armed_delete = workspace.armed_session_delete().map(str::to_owned);
+    let armed_root = workspace.armed_root_delete().map(str::to_owned);
 
     div()
         .id("sidebar")
@@ -104,7 +105,12 @@ pub(super) fn render_sidebar(
         .flex_shrink_0()
         .bg(skin::glass_sidebar(theme))
         .child(action_strip(has_folder, filter_input, cx))
-        .child(folders_section(cx, &roots, cwd.as_deref()))
+        .child(folders_section(
+            cx,
+            &roots,
+            cwd.as_deref(),
+            armed_root.as_deref(),
+        ))
         .child(sessions_section(
             cx,
             &visible_sessions,
@@ -172,6 +178,7 @@ fn folders_section(
     cx: &mut Context<Workspace>,
     roots: &[String],
     cwd: Option<&str>,
+    armed_root: Option<&str>,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let empty = roots.is_empty();
@@ -237,8 +244,8 @@ fn folders_section(
                             .whitespace_normal()
                             .text_color(theme.muted_foreground)
                             .child(t(
-                                "Add the folders sessions can work in. Deleting a folder deletes its sessions.",
-                                "添加会话可以工作的目录。删除目录会同时删除其中的会话。",
+                                "Add the folders sessions can work in. Removing a folder deletes its sessions.",
+                                "添加会话可以工作的目录。移除目录会同时删除其中的会话。",
                             )),
                     )
                 })
@@ -246,7 +253,9 @@ fn folders_section(
                     roots
                         .iter()
                         .enumerate()
-                        .map(|(index, root)| root_row(index, root, cwd, cx)),
+                        .map(|(index, root)| {
+                            root_row(index, root, cwd, armed_root == Some(root.as_str()), cx)
+                        }),
                 ),
         )
 }
@@ -391,6 +400,7 @@ fn root_row(
     index: usize,
     root: &str,
     cwd: Option<&str>,
+    armed: bool,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
@@ -460,15 +470,29 @@ fn root_row(
                                 .text_color(theme.foreground)
                                 .child(label),
                         )
-                        .child(super::hover_delete_button(
-                            format!("workspace-root-remove-{index}"),
-                            IconName::X,
-                            "workspace-root",
-                            cx.listener(move |workspace, _, _, cx| {
+                        .map(|row| {
+                            let id = format!("workspace-root-remove-{index}");
+                            let on_remove = cx.listener(move |workspace, _, _, cx| {
                                 workspace.on_remove_workspace_root(&remove, cx);
-                            }),
-                            cx,
-                        )),
+                            });
+                            if armed {
+                                // Removing the folder deletes its sessions.
+                                row.child(armed_delete_button(
+                                    id,
+                                    t("Delete sessions?", "删除会话？"),
+                                    on_remove,
+                                    theme,
+                                ))
+                            } else {
+                                row.child(super::hover_delete_button(
+                                    id,
+                                    IconName::X,
+                                    "workspace-root",
+                                    on_remove,
+                                    cx,
+                                ))
+                            }
+                        }),
                 )
                 .child(
                     div()
@@ -609,7 +633,12 @@ fn session_row(
                 workspace.on_delete_session(&session_id, cx);
             });
             if armed {
-                row.child(armed_delete_button(&summary.session_id, on_delete, theme))
+                row.child(armed_delete_button(
+                    format!("session-delete-{}", summary.session_id),
+                    t("Delete?", "删除？"),
+                    on_delete,
+                    theme,
+                ))
             } else {
                 row.child(super::hover_delete_button(
                     format!("session-delete-{}", summary.session_id),
@@ -622,15 +651,16 @@ fn session_row(
         })
 }
 
-/// The trash after its first click: always visible, red, and labeled, so
-/// the second click is a choice and not a slip.
+/// A delete control after its first click: always visible, red, and
+/// labeled, so the second click is a choice and not a slip.
 fn armed_delete_button(
-    session_id: &str,
+    id: String,
+    label: &'static str,
     on_click: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
     theme: &Theme,
 ) -> impl IntoElement {
     div()
-        .id(format!("session-delete-{session_id}"))
+        .id(id)
         .flex()
         .flex_row()
         .items_center()
@@ -648,7 +678,7 @@ fn armed_delete_button(
             on_click(event, window, cx);
         })
         .child(Icon::new(IconName::Trash).xsmall())
-        .child(t("Delete?", "删除？"))
+        .child(label)
 }
 
 fn render_sidebar_footer(
