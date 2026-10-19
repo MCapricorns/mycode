@@ -50,7 +50,15 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                         let mut line = server.command.clone().unwrap_or_default();
                         for arg in &server.args {
                             line.push(' ');
-                            line.push_str(arg);
+                            // Quoted like the form accepts it, so an argument
+                            // with spaces does not read as several.
+                            if arg.contains(char::is_whitespace) {
+                                line.push('"');
+                                line.push_str(arg);
+                                line.push('"');
+                            } else {
+                                line.push_str(arg);
+                            }
                         }
                         line
                     }
