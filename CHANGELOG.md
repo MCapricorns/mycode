@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.7] - 2026-10-19
+
 ### Fixed
 
 - 撤回回合中途的插话（steer）后，不再把覆盖了被撤回步骤的压缩摘要带到新分支：回合中途写下的检查点记的是回合开始时的 head，但摘要已包含之后的步骤；现在只有检查点覆盖的消息都还在新分支上时才随之保留。
@@ -146,7 +148,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.6...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.7...HEAD
+[0.12.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.7
 [0.12.6]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.6
 [0.12.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.5
 [0.12.4]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.4
