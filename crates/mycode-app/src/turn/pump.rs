@@ -539,6 +539,10 @@ async fn emit_chat_failed(
 /// meter; nothing is persisted to the ledger.
 #[derive(Debug, Default)]
 struct TurnUsage {
+    /// Fresh (non-cache-read) prompt tokens summed over the turn. Derived
+    /// uniformly from `prompt_tokens` minus the cache read, so an
+    /// OpenAI-style `input_tokens` that already includes the cached
+    /// context does not bill every re-sent round as new input.
     input: u64,
     /// Most recent request's prompt tokens. The context meter uses this
     /// instead of `input`, which sums every tool round.
@@ -555,12 +559,14 @@ struct TurnUsage {
 impl TurnUsage {
     fn fold(&mut self, usage: &mycode_core::Usage) {
         self.requests = self.requests.saturating_add(1);
-        self.input = self.input.saturating_add(usage.input_tokens);
         let prompt = if usage.prompt_tokens > 0 {
             usage.prompt_tokens
         } else {
             usage.input_tokens
         };
+        self.input = self
+            .input
+            .saturating_add(prompt.saturating_sub(usage.cache_read_tokens.unwrap_or(0)));
         if prompt > 0 {
             self.latest_input = prompt;
             self.latest_cache = usage.cache_read_tokens.unwrap_or(0);
@@ -623,7 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn turn_usage_sums_every_request_but_meters_the_latest_prompt() {
+    fn turn_usage_sums_fresh_input_but_meters_the_latest_prompt() {
+        // OpenAI-style usage counts the cache read inside `input_tokens`,
+        // so every tool round re-reports the whole re-sent prompt. The
+        // sum keeps only the fresh part: prompt minus the cache read.
         let mut usage = super::TurnUsage::default();
         for prompt in [40_000, 52_000, 61_000] {
             usage.fold(&mycode_core::Usage {
@@ -635,12 +644,34 @@ mod tests {
             });
         }
         assert_eq!(usage.requests, 3);
-        assert_eq!(usage.input, 153_000, "billing sums every tool round");
+        assert_eq!(usage.input, 3_000, "the sum is fresh input, not cache");
         assert_eq!(
             usage.latest_input, 61_000,
             "the context meter is one prompt"
         );
         assert_eq!(usage.latest_cache, 60_000);
         assert_eq!(usage.output, 1_500);
+    }
+
+    #[test]
+    fn turn_usage_fresh_input_matches_a_cache_excluding_provider() {
+        // Anthropic- and DeepSeek-style `input_tokens` already exclude the
+        // cache read; `prompt_tokens` is input plus cache. Prompt minus
+        // cache lands on the same fresh figure the provider billed.
+        let mut usage = super::TurnUsage::default();
+        for (input, cache_read) in [(100, 11_800), (250, 12_050)] {
+            usage.fold(&mycode_core::Usage {
+                input_tokens: input,
+                output_tokens: 10,
+                cache_read_tokens: Some(cache_read),
+                cache_write_tokens: None,
+                prompt_tokens: input + cache_read,
+            });
+        }
+        assert_eq!(usage.requests, 2);
+        assert_eq!(usage.input, 350);
+        assert_eq!(usage.latest_input, 12_300);
+        assert_eq!(usage.latest_cache, 12_050);
+        assert_eq!(usage.cache, Some(23_850));
     }
 }

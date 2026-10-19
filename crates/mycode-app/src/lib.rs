@@ -387,7 +387,10 @@ pub enum BridgeEvent {
         session_id: String,
         /// Model id the turn is running on.
         model: String,
-        /// Input tokens summed so far this turn (billing).
+        /// Fresh (non-cache-read) input tokens summed so far this turn.
+        /// Derived from `prompt_tokens` minus the cache read, so an
+        /// OpenAI-style count that includes the cached context does not
+        /// bill every re-sent round as new input.
         input: u64,
         /// Latest prompt size, not the sum of tool rounds.
         context: u64,
@@ -398,8 +401,8 @@ pub enum BridgeEvent {
         /// Prompt tokens served from the provider cache, when reported.
         cache: Option<u64>,
         /// Model requests (response cycles) the sums cover. A turn that
-        /// calls tools sends one request per round, so `input` grows far
-        /// past the window while `context` stays one prompt.
+        /// calls tools sends one request per round, so the sums cover
+        /// every round while `context` stays one prompt.
         requests: u32,
         /// Elapsed milliseconds since the turn started.
         elapsed_ms: u64,

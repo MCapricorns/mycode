@@ -70,7 +70,7 @@
 
 `UsageSnapshot` 字段：
 
-- `input`、`output`、`cache` 是整回合累加，计费看这三个。
+- `input`、`output`、`cache` 是整回合累加，计费看这三个。`input` 只累加新鲜输入，即 `prompt_tokens` 减去缓存读：OpenAI 系 `input_tokens` 已含缓存读，直接累加会把重发的上下文重复计成输入。
 - `context` 是最近一次请求的提示大小：`prompt_tokens`，缺失时用 `input_tokens`。
 - `context_cache` 是这次请求的缓存读。上下文条和输入框的环用 `context`，不和本轮命中率混用。
 
