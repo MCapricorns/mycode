@@ -137,3 +137,52 @@ fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_repair_after_the_startup_toast_still_toasts_once() {
+    let root = std::env::temp_dir().join(format!(
+        "mycode-driver-repairs-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).expect("root");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    }
+    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let mut driver = super::FrontendDriver::start(home, || {});
+    let repair = |path: &'static str| mycode_config::DocumentRepair {
+        path,
+        backup: format!("{path}.bak"),
+    };
+    let toasts = |driver: &mut super::FrontendDriver| {
+        driver
+            .inbox_tx
+            .send(super::DriverMsg::RepairToastTick)
+            .expect("tick");
+        let mut out = Vec::new();
+        driver.poll(&mut out);
+        out.into_iter()
+            .filter_map(|effect| match effect {
+                super::Effect::Toast { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    driver.note_config_repairs(&[repair("settings.json")]);
+    let first = toasts(&mut driver);
+    assert!(first[0].contains("settings.json"), "{first:?}");
+    // Later loads repeat the startup list and add a new reset.
+    driver.note_config_repairs(&[repair("settings.json"), repair("ui.json")]);
+    assert!(
+        driver.repair_toast_armed,
+        "the new reset must schedule a toast"
+    );
+    let second = toasts(&mut driver);
+    assert!(second[0].contains("ui.json"), "{second:?}");
+    assert!(!second[0].contains("settings.json"), "{second:?}");
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
