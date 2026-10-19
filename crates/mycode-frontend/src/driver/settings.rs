@@ -241,25 +241,20 @@ impl FrontendDriver {
     /// Dispatches the tools probe that gates an enable switch: the row is
     /// marked connecting until the reply lands `enabled` or the error.
     pub fn probe_mcp_for_enable(&mut self, server_id: &str, out: &mut Vec<Effect>) {
-        let Some(server) = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.mcp_servers.iter().find(|s| s.id == server_id))
-            .cloned()
-        else {
+        if !self.dispatch_mcp_probe(server_id, out) {
             self.pending_mcp_enable.remove(server_id);
-            return;
-        };
-        self.act(FrontendAction::McpProbeStarted(server_id.to_owned()), out);
-        self.dispatch(BridgeCommand::McpListTools {
-            server: Box::new(server),
-        });
+        }
     }
 
     /// Probes one MCP server as the editor currently shows it (saved or
     /// not) and marks the row as connecting until the reply lands.
     pub fn list_mcp_tools(&mut self, server_id: &str, out: &mut Vec<Effect>) {
+        self.dispatch_mcp_probe(server_id, out);
+    }
+
+    /// Sends one tools probe for the row on screen. `false` when the row is
+    /// gone.
+    fn dispatch_mcp_probe(&mut self, server_id: &str, out: &mut Vec<Effect>) -> bool {
         let Some(server) = self
             .vm
             .settings
@@ -267,12 +262,13 @@ impl FrontendDriver {
             .and_then(|settings| settings.mcp_servers.iter().find(|s| s.id == server_id))
             .cloned()
         else {
-            return;
+            return false;
         };
         self.act(FrontendAction::McpProbeStarted(server_id.to_owned()), out);
         self.dispatch(BridgeCommand::McpListTools {
             server: Box::new(server),
         });
+        true
     }
 
     /// Adds the server the custom form describes from its raw field values:
