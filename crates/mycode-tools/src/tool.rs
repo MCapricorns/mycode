@@ -6,8 +6,13 @@
 //! `Args`, used both for the LLM tool spec (`ToolSpec::params_schema`) and
 //! for runtime argument validation in [`ToolDyn::execute_dyn`].
 
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, LazyLock};
+
+use parking_lot::RwLock;
 
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -277,21 +282,58 @@ fn normalize_tool_schema(value: &mut Value) {
     }
 }
 
-/// Validate raw `args` against an arbitrary JSON Schema value.
-pub(crate) fn validate_args_with_schema(schema: &Value, args: &Value) -> Result<(), ToolError> {
-    let mut normalized = schema.clone();
-    normalize_tool_schema(&mut normalized);
-    let validator = jsonschema::validator_for(&normalized)
-        .map_err(|err| ToolError::Execution(format!("failed to compile argument schema: {err}")))?;
-    let errors: Vec<String> = validator
-        .iter_errors(args)
-        .map(|err| render_schema_error(&err, &normalized))
-        .collect();
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(ToolError::InvalidArgs(errors.join("; ")))
+/// A normalized argument schema and its compiled validator.
+struct ArgsCheck {
+    schema: Value,
+    validator: jsonschema::Validator,
+}
+
+impl ArgsCheck {
+    fn compile(schema: &Value) -> Result<Self, ToolError> {
+        let mut schema = schema.clone();
+        normalize_tool_schema(&mut schema);
+        let validator = jsonschema::validator_for(&schema).map_err(|err| {
+            ToolError::Execution(format!("failed to compile argument schema: {err}"))
+        })?;
+        Ok(Self { schema, validator })
     }
+
+    fn validate(&self, args: &Value) -> Result<(), ToolError> {
+        let errors: Vec<String> = self
+            .validator
+            .iter_errors(args)
+            .map(|err| render_schema_error(&err, &self.schema))
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ToolError::InvalidArgs(errors.join("; ")))
+        }
+    }
+}
+
+/// Compiled argument checks of [`Tool`] implementors, keyed by type and
+/// name. A tool's `params_schema` is fixed by those two (the shell tool's
+/// schema follows the shell its name names), so each schema is generated
+/// and compiled once per process instead of on every call.
+static ARGS_CHECKS: LazyLock<RwLock<ArgsChecks>> = LazyLock::new(Default::default);
+
+type ArgsChecks = HashMap<(TypeId, String), Arc<ArgsCheck>>;
+
+fn args_check<T: Tool>(tool: &T) -> Result<Arc<ArgsCheck>, ToolError> {
+    let key = (TypeId::of::<T>(), tool.name().to_owned());
+    if let Some(check) = ARGS_CHECKS.read().get(&key) {
+        return Ok(Arc::clone(check));
+    }
+    // Compiled outside the lock; a racing caller's copy is identical.
+    let check = Arc::new(ArgsCheck::compile(&tool.params_schema())?);
+    Ok(Arc::clone(ARGS_CHECKS.write().entry(key).or_insert(check)))
+}
+
+/// Validate raw `args` against an arbitrary JSON Schema value.
+#[cfg(test)]
+pub(crate) fn validate_args_with_schema(schema: &Value, args: &Value) -> Result<(), ToolError> {
+    ArgsCheck::compile(schema)?.validate(args)
 }
 
 /// One validation failure rendered for the model. The stock Display of a
@@ -439,9 +481,9 @@ impl<T: Tool> ToolDyn for T {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
         Box::pin(async move {
             let mut args = self.prepare_args(normalize_tool_args(args));
-            let schema = self.params_schema();
-            coerce_scalar_strings(&mut args, &schema);
-            validate_args_with_schema(&schema, &args)?;
+            let check = args_check(self)?;
+            coerce_scalar_strings(&mut args, &check.schema);
+            check.validate(&args)?;
             let typed = serde_json::from_value(args)
                 .map_err(|err| ToolError::InvalidArgs(err.to_string()))?;
             self.execute(typed, ctx, out).await
@@ -640,6 +682,16 @@ mod tests {
         assert_eq!(args, json!({"mode": {"mode": "program", "x": 1}}));
         let args = normalize_tool_args(json!({"questions": [{"question": "Go?"}]}));
         assert_eq!(args, json!({"questions": [{"question": "Go?"}]}));
+    }
+
+    #[test]
+    fn argument_checks_compile_once_per_tool() {
+        let tool = crate::builtin::read::ReadTool;
+        let first = super::args_check(&tool).unwrap();
+        let second = super::args_check(&tool).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(first.validate(&json!({"path": "a.rs"})).is_ok());
+        assert!(first.validate(&json!({})).is_err());
     }
 
     #[test]
