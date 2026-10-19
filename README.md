@@ -86,7 +86,7 @@ cargo build --release -p mycode-desktop -p mycode-cli
 ## 架构
 
 <p align="center">
-  <img src="docs/images/architecture.svg" alt="七个 crate 的分层架构" width="100%">
+  <img src="docs/images/architecture.svg" alt="九个 crate 的分层架构" width="100%">
 </p>
 
 <p align="center">
