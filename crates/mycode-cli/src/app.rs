@@ -305,6 +305,9 @@ impl Tui {
             while let Some(event) = self.driver.next_event() {
                 self.driver.on_event(event, &mut effects);
             }
+            // The status line's ctx% meter and model label read the catalog
+            // on every chat paint, so it is a surface that needs the load.
+            self.driver.ensure_catalog();
             self.adopt_startup_dir(&mut effects);
             if !effects.is_empty() {
                 self.dirty = true;

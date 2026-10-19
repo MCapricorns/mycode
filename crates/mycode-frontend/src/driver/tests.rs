@@ -186,3 +186,49 @@ fn a_repair_after_the_startup_toast_still_toasts_once() {
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn ensure_catalog_loads_once_the_composer_has_a_model() {
+    let root = std::env::temp_dir().join(format!(
+        "mycode-driver-catalog-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).expect("root");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    }
+    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let mut driver = super::FrontendDriver::start(home, || {});
+    // Nothing selected on a fresh launch: no surface reads the catalog, so
+    // the document stays a lazy load.
+    driver.ensure_catalog();
+    assert!(
+        !driver.catalog_requested,
+        "no selection must not fetch the catalog"
+    );
+    // The composer's model chip and context ring resolve through the
+    // catalog once the open conversation has a model.
+    driver.vm.selected_provider = Some("openai-codex".to_owned());
+    driver.vm.selected_model = Some("gpt-5".to_owned());
+    driver.vm.active = Some(conversation("a", "branch"));
+    driver.ensure_catalog();
+    assert!(
+        driver.catalog_requested,
+        "the composer surfaces need the catalog once a model is selected"
+    );
+    let mut out = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while driver.vm.catalog.is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the GetCatalog reply never populated vm.catalog"
+        );
+        driver.poll(&mut out);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
