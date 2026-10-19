@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-10-19
+
 ### Fixed
 
 - 长会话（超过 256 条账本事件）发送新提示或撤回重发后不再回退到早期中断的回合：`for_each_event` 分页游标不再在首满页末尾提前终止，完整历史与最新用户提示都能被读取；撤回消息时若压缩检查点覆盖的 head 仍在新分支上，检查点会随新分支保留。
@@ -139,7 +141,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.5...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.6...HEAD
+[0.12.6]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.6
 [0.12.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.5
 [0.12.4]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.4
 [0.12.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.3
