@@ -339,7 +339,7 @@ fn is_agent_call(call: &ToolCall) -> bool {
 fn is_parallel_safe(env: &TurnEnv<'_>, call: &ToolCall) -> bool {
     env.tools
         .get(&call.name)
-        .is_some_and(|tool| tool.parallel_safe())
+        .is_some_and(|tool| tool.parallel_safe_call(&call.arguments))
 }
 
 /// Runs one response's tool calls.

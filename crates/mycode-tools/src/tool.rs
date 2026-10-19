@@ -233,6 +233,13 @@ pub trait ToolDyn: Send + Sync {
     fn parallel_safe(&self) -> bool {
         false
     }
+    /// Whether this one call may run alongside other parallel-safe calls.
+    /// A tool that routes to another tool decides from `args`; every other
+    /// tool answers [`ToolDyn::parallel_safe`].
+    fn parallel_safe_call(&self, args: &Value) -> bool {
+        let _ = args;
+        self.parallel_safe()
+    }
     /// Validate `args` against the tool's schema (`Self::spec().params_schema`),
     /// deserialize, and execute. Wrong-shaped arguments fail with
     /// [`ToolError::InvalidArgs`].

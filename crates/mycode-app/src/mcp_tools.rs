@@ -668,6 +668,35 @@ inputSchema, then `use_tool`. Do not guess parameters.\n",
     }
 }
 
+impl McpCatalog {
+    /// One schema block per requested exact name, in request order. A name
+    /// that resolves to nothing gets an error line instead of failing the
+    /// whole batch.
+    fn schemas_text(&self, names: &[String]) -> String {
+        let mut blocks: Vec<String> = names
+            .iter()
+            .take(MAX_BATCH_NAMES)
+            .map(|name| match self.get(name) {
+                Some((key, tool)) => schema_text(key, tool),
+                None => format!(
+                    "name: {name}
+error: no MCP tool has this name; call search_tool with keywords"
+                ),
+            })
+            .collect();
+        if names.len() > MAX_BATCH_NAMES {
+            blocks.push(format!(
+                "(only the first {MAX_BATCH_NAMES} names were loaded; call again for the rest)"
+            ));
+        }
+        blocks.join(
+            "
+
+",
+        )
+    }
+}
+
 /// `search_tool`'s answer for one tool: its catalog key and full schema.
 fn schema_text(key: &str, tool: &DynamicMcpTool) -> String {
     format!(
@@ -683,6 +712,25 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
         "required": required,
         "additionalProperties": false
     })
+}
+
+/// Most exact names one `search_tool` call resolves.
+const MAX_BATCH_NAMES: usize = 10;
+
+/// The `names` batch of a `search_tool` call: trimmed, non-empty entries.
+fn arg_names(args: &Value) -> Vec<String> {
+    args.get("names")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn arg_name(args: &Value) -> Result<String, ToolError> {
@@ -730,19 +778,25 @@ impl ToolDyn for SearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "search_tool".to_owned(),
-            description: "Find MCP tools that are not registered directly and load their schemas. Pass an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Never guess parameters.".to_owned(),
+            description: "Find MCP tools that are not registered directly and load their schemas. Pass `name`: an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Pass `names` instead to load several exact names' inputSchemas in one call. Never guess parameters.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
-                    "name": {"type": "string", "description": "An exact tool name, keywords, or \"list\"."}
+                    "name": {"type": "string", "description": "An exact tool name, keywords, or \"list\"."},
+                    "names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": MAX_BATCH_NAMES,
+                        "description": "Several exact tool names; returns each inputSchema."
+                    }
                 }),
-                &["name"],
+                &[],
             ),
         }
     }
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
         Some(
-            "search_tool: find MCP tools by keyword or load one inputSchema by exact name before use_tool. Never guess parameters.",
+            "search_tool: find MCP tools by keyword, or load inputSchemas by exact name (`names` for several), before use_tool. Never guess parameters.",
         )
     }
 
@@ -757,7 +811,12 @@ impl ToolDyn for SearchTool {
         _out: &'a mut ToolStream,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
         Box::pin(async move {
-            let name = arg_name(&args)?;
+            let names = arg_names(&args);
+            if !names.is_empty() {
+                return Ok(ToolResult::text(self.catalog.schemas_text(&names)));
+            }
+            let name = arg_name(&args)
+                .map_err(|_| ToolError::InvalidArgs("name or names is required".to_owned()))?;
             if name == "list" {
                 return Ok(ToolResult::text(self.catalog.list_text()));
             }
@@ -819,6 +878,15 @@ impl ToolDyn for UseTool {
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
         Some("use_tool: call an MCP tool only after search_tool returned its schema.")
+    }
+
+    /// A call to a tool that declares `readOnlyHint` runs beside other
+    /// reads, exactly as that tool would if it were registered directly.
+    fn parallel_safe_call(&self, args: &Value) -> bool {
+        arg_name(args)
+            .ok()
+            .and_then(|name| self.catalog.get(&name).map(|(_, tool)| tool.read_only))
+            .unwrap_or(false)
     }
 
     fn execute_dyn<'a>(
