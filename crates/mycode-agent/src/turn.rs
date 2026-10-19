@@ -16,7 +16,7 @@ use std::task::{Context, Poll};
 use mycode_core::events::{AgentEvent, MessageDelta};
 use mycode_core::message::{AssistantMessage, ContentBlock, Message, ToolCall, ToolResultMessage};
 use mycode_core::{CallId, MycodeError};
-use mycode_core::{ProviderError, ProviderErrorKind, Request, StreamEvent};
+use mycode_core::{Request, StreamEvent};
 use mycode_tools::{ToolError, ToolResult, ToolStream, ToolStreamItem, prepare_tool_ctx};
 use tokio_util::sync::CancellationToken;
 
@@ -116,153 +116,89 @@ pub(crate) async fn stream_assistant(
 
     // One request gets a child token: dropping its receiver must stop that
     // producer without cancelling later response cycles in the same turn.
-    // Retries mint a fresh child each attempt — a token the failed attempt
-    // cancelled cannot strangle the retry.
+    let request_cancel = token.child_token();
     let mut draft_text = String::new();
     let mut draft_thinking = String::new();
-    let mut attempt = 0_usize;
-    'attempt: loop {
-        let request_cancel = token.child_token();
-        let mut stream = match env.provider.stream(&request, request_cancel).await {
-            Ok(stream) => stream,
-            Err(error) if error.is_cancelled() => return Err(TurnFailure::Aborted),
-            Err(error) => {
-                if retryable(&error)
-                    && attempt < PROVIDER_RETRIES
-                    && retry_backoff(token, attempt).await
-                {
-                    attempt += 1;
-                    continue 'attempt;
-                }
-                if token.is_cancelled() {
-                    return Err(TurnFailure::Aborted);
-                }
-                // Nothing has streamed. Keep a visible assistant line instead
-                // of dropping the turn.
-                return Ok(commit_interrupted(
+    let mut stream = match env.provider.stream(&request, request_cancel).await {
+        Ok(stream) => stream,
+        Err(error) if error.is_cancelled() => return Err(TurnFailure::Aborted),
+        // Nothing has streamed. Keep a visible assistant line instead of
+        // dropping the turn.
+        Err(error) => {
+            return Ok(commit_interrupted(
+                env,
+                state,
+                String::new(),
+                String::new(),
+                &error.to_string(),
+            ));
+        }
+    };
+    while let Some(event) = stream.next().await {
+        match event {
+            StreamEvent::TextDelta(delta) => {
+                draft_text.push_str(&delta);
+                emit(
                     env,
-                    state,
-                    String::new(),
-                    String::new(),
-                    &error.to_string(),
-                ));
+                    AgentEvent::MessageDelta(MessageDelta::TextDelta(delta)),
+                );
             }
-        };
-        while let Some(event) = stream.next().await {
-            match event {
-                StreamEvent::TextDelta(delta) => {
-                    draft_text.push_str(&delta);
-                    emit(
-                        env,
-                        AgentEvent::MessageDelta(MessageDelta::TextDelta(delta)),
-                    );
-                }
-                StreamEvent::ThinkingDelta(delta) => {
-                    draft_thinking.push_str(&delta);
-                    emit(
-                        env,
-                        AgentEvent::MessageDelta(MessageDelta::ThinkingDelta(delta)),
-                    );
-                }
-                StreamEvent::ToolCallDelta { id, partial_json } => {
-                    emit(
-                        env,
-                        AgentEvent::MessageDelta(MessageDelta::ToolCallDelta { id, partial_json }),
-                    );
-                }
-                StreamEvent::Done { message } => {
-                    let message = merge_draft(message, &draft_thinking, &draft_text);
-                    let shared = Arc::new(Message::Assistant(message.clone()));
-                    state.messages.push(Arc::clone(&shared));
-                    emit(env, AgentEvent::MessageAdded(shared));
-                    return Ok(message);
-                }
-                StreamEvent::Error(error) => {
-                    if error.is_cancelled() {
-                        return Err(keep_cancelled_partial(
-                            env,
-                            state,
-                            draft_thinking,
-                            draft_text,
-                        ));
-                    }
-                    if retryable(&error)
-                        && attempt < PROVIDER_RETRIES
-                        && retry_backoff(token, attempt).await
-                    {
-                        // The partial deltas stay on the wire; the retried
-                        // response is what commits. Resetting the drafts keeps
-                        // the partial out of the merged message.
-                        draft_text.clear();
-                        draft_thinking.clear();
-                        attempt += 1;
-                        continue 'attempt;
-                    }
-                    if token.is_cancelled() {
-                        return Err(keep_cancelled_partial(
-                            env,
-                            state,
-                            draft_thinking,
-                            draft_text,
-                        ));
-                    }
-                    return Ok(commit_interrupted(
+            StreamEvent::ThinkingDelta(delta) => {
+                draft_thinking.push_str(&delta);
+                emit(
+                    env,
+                    AgentEvent::MessageDelta(MessageDelta::ThinkingDelta(delta)),
+                );
+            }
+            StreamEvent::ToolCallDelta { id, partial_json } => {
+                emit(
+                    env,
+                    AgentEvent::MessageDelta(MessageDelta::ToolCallDelta { id, partial_json }),
+                );
+            }
+            StreamEvent::Done { message } => {
+                let message = merge_draft(message, &draft_thinking, &draft_text);
+                let shared = Arc::new(Message::Assistant(message.clone()));
+                state.messages.push(Arc::clone(&shared));
+                emit(env, AgentEvent::MessageAdded(shared));
+                return Ok(message);
+            }
+            StreamEvent::Error(error) => {
+                if error.is_cancelled() {
+                    return Err(keep_cancelled_partial(
                         env,
                         state,
                         draft_thinking,
                         draft_text,
-                        &error.to_string(),
                     ));
                 }
+                return Ok(commit_interrupted(
+                    env,
+                    state,
+                    draft_thinking,
+                    draft_text,
+                    &error.to_string(),
+                ));
             }
         }
-        // EventStream itself synthesizes a terminal for cancellation and
-        // producer drop. Keep a fail-closed guard in case its contract is
-        // ever violated.
-        if token.is_cancelled() {
-            return Err(keep_cancelled_partial(
-                env,
-                state,
-                draft_thinking,
-                draft_text,
-            ));
-        }
-        return Ok(commit_interrupted(
+    }
+    // EventStream itself synthesizes a terminal for cancellation and producer
+    // drop. Keep a fail-closed guard in case its contract is ever violated.
+    if token.is_cancelled() {
+        return Err(keep_cancelled_partial(
             env,
             state,
             draft_thinking,
             draft_text,
-            "provider stream ended without a terminal event",
         ));
     }
-}
-
-/// Extra attempts after a transient provider failure. Connect resets,
-/// timeouts, 408/429, and 5xx answers are transient by definition; a
-/// rejected or malformed request never retries.
-const PROVIDER_RETRIES: usize = 3;
-/// Backoff between retries, indexed by the attempt about to wait.
-const RETRY_BACKOFFS: [std::time::Duration; PROVIDER_RETRIES] = [
-    std::time::Duration::from_millis(250),
-    std::time::Duration::from_millis(500),
-    std::time::Duration::from_millis(1_000),
-];
-
-fn retryable(error: &ProviderError) -> bool {
-    matches!(
-        error.kind(),
-        ProviderErrorKind::Unavailable | ProviderErrorKind::Timeout
-    )
-}
-
-/// Sleeps out the retry backoff; `false` means the turn was cancelled.
-async fn retry_backoff(token: &CancellationToken, attempt: usize) -> bool {
-    let delay = RETRY_BACKOFFS[attempt.min(RETRY_BACKOFFS.len() - 1)];
-    tokio::select! {
-        biased;
-        () = token.cancelled() => false,
-        () = tokio::time::sleep(delay) => true,
-    }
+    Ok(commit_interrupted(
+        env,
+        state,
+        draft_thinking,
+        draft_text,
+        "provider stream ended without a terminal event",
+    ))
 }
 
 /// User cancel: keep what already arrived, mark it interrupted, and abort.
