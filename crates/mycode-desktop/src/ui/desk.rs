@@ -52,14 +52,7 @@ pub fn theme_mode(theme: &str) -> ThemeMode {
     }
 }
 
-/// Canonical font-size id. Unknown values fall back to medium.
-#[must_use]
-pub fn normalize_font_size(id: &str) -> &'static str {
-    mycode_config::VALID_FONT_SIZES
-        .into_iter()
-        .find(|item| *item == id)
-        .unwrap_or("m")
-}
+pub use mycode_frontend::normalize_font_size;
 
 /// Body size in pixels. `.text_sm()` is 0.875rem, so the window rem is chosen
 /// to land `text_sm` on this value.
