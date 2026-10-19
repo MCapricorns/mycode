@@ -2005,6 +2005,15 @@ fn welcome_lines(version: &str) -> Vec<Line<'static>> {
 fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     match entry.kind {
+        // A compaction summary rides a user message but is not the user's
+        // words; one dim line marks where earlier context was folded.
+        EntryKind::UserMessage if mycode_app::is_compaction_summary(&entry.text) => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ≡ earlier context compacted into a summary",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
         EntryKind::UserMessage => {
             lines.push(Line::from(""));
             push_wrapped(
