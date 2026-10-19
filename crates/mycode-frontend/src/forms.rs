@@ -27,7 +27,15 @@ pub fn parse_token_field(raw: &str) -> Result<Option<u64>, String> {
     trimmed
         .parse::<u64>()
         .map(Some)
-        .map_err(|_| "context window and max output must be plain numbers".to_owned())
+        .map_err(|_| token_fields_error())
+}
+
+fn token_fields_error() -> String {
+    crate::i18n::t(
+        "Context window and max output must be plain numbers.",
+        "上下文窗口和最大输出必须是纯数字。",
+    )
+    .to_owned()
 }
 
 /// Parses the stdio form's environment line: `KEY=VALUE` pairs separated by
@@ -36,17 +44,31 @@ pub fn parse_env_line(line: &str) -> Result<BTreeMap<String, String>, String> {
     let mut env = BTreeMap::new();
     for word in mycode_config::split_command_line(&space_separate_env(line)) {
         let Some((key, value)) = word.split_once('=') else {
-            return Err(format!("env entry '{word}' must look like KEY=VALUE"));
+            return Err(format!(
+                "{} '{word}'",
+                crate::i18n::t(
+                    "Env entries must look like KEY=VALUE:",
+                    "环境变量必须写成 KEY=VALUE：",
+                )
+            ));
         };
         let key = key.trim();
         if key.is_empty() {
-            return Err("env entry has an empty variable name".to_owned());
+            return Err(crate::i18n::t(
+                "An env entry has an empty variable name.",
+                "有一个环境变量名为空。",
+            )
+            .to_owned());
         }
         env.insert(key.to_owned(), value.to_owned());
     }
     if env.len() > mycode_config::MAX_MCP_ENV_VARS {
         return Err(format!(
-            "at most {} env entries per server",
+            "{} {}",
+            crate::i18n::t(
+                "Env entries per server, at most:",
+                "每个服务器的环境变量上限："
+            ),
             mycode_config::MAX_MCP_ENV_VARS
         ));
     }
@@ -172,14 +194,22 @@ pub fn build_custom_provider(
     let base_url = base_url.trim();
     let model = model.trim();
     if id.is_empty() || base_url.is_empty() || model.is_empty() {
-        return Err("fill id, base URL, and model".to_owned());
+        return Err(crate::i18n::t(
+            "Fill in the id, base URL, and model.",
+            "请填写 ID、Base URL 和模型。",
+        )
+        .to_owned());
     }
     if existing_ids.iter().any(|existing| existing == id) {
-        return Err(format!("a provider named '{id}' already exists"));
+        return Err(format!(
+            "{} '{id}'",
+            crate::i18n::t("A provider already uses the id", "已有服务商使用此 ID：")
+        ));
     }
     if existing_ids.len() >= mycode_config::MAX_PROVIDERS {
         return Err(format!(
-            "at most {} providers may be configured",
+            "{} {}",
+            crate::i18n::t("Providers, at most:", "服务商数量上限："),
             mycode_config::MAX_PROVIDERS
         ));
     }
@@ -188,9 +218,7 @@ pub fn build_custom_provider(
         parse_token_field(max_output),
     ) {
         (Ok(a), Ok(b)) => (a, b),
-        _ => {
-            return Err("context window and max output must be plain numbers".to_owned());
-        }
+        _ => return Err(token_fields_error()),
     };
     let provider = mycode_config::ProviderSettings {
         id: id.to_owned(),
@@ -346,7 +374,7 @@ mod tests {
             "",
         )
         .expect_err("duplicate id must be refused");
-        assert!(dupe.contains("already exists"), "{dupe}");
+        assert!(dupe.contains("already uses the id 'acme'"), "{dupe}");
 
         let bad_url = build_custom_provider(
             &[],
