@@ -117,13 +117,14 @@ impl LedgerPump {
                     // open-call map no longer holds is a straggler from a call
                     // that already closed — forwarding it would resurrect a
                     // finished job under an id no result can drop.
-                    let Some(identity) = self.writer.call_identity(&call_id.to_string()).await
-                    else {
+                    let provider_call_id = call_id.to_string();
+                    let Some(identity) = self.writer.call_identity(&provider_call_id).await else {
                         continue;
                     };
                     self.send(BridgeEvent::ToolProgress {
                         session_id: self.session_id.clone(),
                         call_id: identity,
+                        provider_call_id,
                         name: String::new(),
                         message,
                     });

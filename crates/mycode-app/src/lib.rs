@@ -428,6 +428,9 @@ pub enum BridgeEvent {
         session_id: String,
         /// Ledger call identity while the call is open.
         call_id: String,
+        /// Provider-assigned call id. A job first seen through progress (a
+        /// reopen after switching sessions) needs it for `CancelSubagent`.
+        provider_call_id: String,
         /// Tool name when known; empty for a nested progress line.
         name: String,
         /// One-line progress.

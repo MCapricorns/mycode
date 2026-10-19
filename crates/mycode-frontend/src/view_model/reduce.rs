@@ -426,13 +426,14 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::ToolProgress {
             call_id,
+            provider_call_id,
             name,
             message,
         } => {
             // Same guard: a late progress line must not repopulate
             // `live_jobs` and the status line once the turn has ended.
             if state.sending {
-                tool_progress(state, call_id, name, message);
+                tool_progress(state, call_id, provider_call_id, name, message);
             }
         }
         FrontendAction::ToolResultAppended(entry) => {

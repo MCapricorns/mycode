@@ -22,13 +22,7 @@ pub(super) fn tool_started(
     let label = tool_call_label(&name, &target);
     if name == AGENT_PROGRESS_PREFIX {
         upsert_live_job(state, &call_id, "", "starting");
-        // A progress line may have claimed the job first; either way the
-        // cancel path needs the provider id the core's token map uses.
-        if let Some(job) = live_job_mut(state, &call_id)
-            && job.provider_call_id.is_empty()
-        {
-            job.provider_call_id = provider_call_id;
-        }
+        claim_provider_call_id(state, &call_id, provider_call_id);
         refresh_subagent_status(state);
     } else {
         set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
@@ -49,11 +43,13 @@ pub(super) fn tool_started(
 pub(super) fn tool_progress(
     state: &mut WorkspaceState,
     call_id: String,
+    provider_call_id: String,
     name: String,
     message: String,
 ) {
     let agent_event = is_agent_event(&name, &message);
     apply_live_job_progress(state, &call_id, &name, &message);
+    claim_provider_call_id(state, &call_id, provider_call_id);
     if agent_event || !state.live_jobs.is_empty() {
         refresh_subagent_status(state);
         return;
@@ -241,6 +237,20 @@ fn cap_step(detail: &str) -> String {
     }
 }
 
+/// Records the provider id the core's cancel map uses on the job keyed by
+/// `call_id`. A progress line may create the job before (or, after a session
+/// switch, instead of) its `ToolStarted`, so either event can fill it.
+fn claim_provider_call_id(state: &mut WorkspaceState, call_id: &str, provider_call_id: String) {
+    if call_id.is_empty() || provider_call_id.is_empty() {
+        return;
+    }
+    if let Some(job) = live_job_mut(state, call_id)
+        && job.provider_call_id.is_empty()
+    {
+        job.provider_call_id = provider_call_id;
+    }
+}
+
 fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a mut LiveJob> {
     if call_id.is_empty() {
         return state.live_jobs.last_mut();
@@ -363,6 +373,7 @@ mod tests {
             &mut state,
             FrontendAction::ToolProgress {
                 call_id: "c1".to_owned(),
+                provider_call_id: String::new(),
                 name: "agent".to_owned(),
                 message: "agent|scout|tool|read src/lib.rs".to_owned(),
             },
@@ -460,6 +471,7 @@ mod tests {
             &mut state,
             FrontendAction::ToolProgress {
                 call_id: "c1".to_owned(),
+                provider_call_id: String::new(),
                 name: String::new(),
                 message: "agent|scout|queued|map tokio".to_owned(),
             },
@@ -468,6 +480,7 @@ mod tests {
             &mut state,
             FrontendAction::ToolProgress {
                 call_id: "c2".to_owned(),
+                provider_call_id: String::new(),
                 name: String::new(),
                 message: "agent|artisan|capped|4".to_owned(),
             },
@@ -476,6 +489,7 @@ mod tests {
             &mut state,
             FrontendAction::ToolProgress {
                 call_id: "c3".to_owned(),
+                provider_call_id: String::new(),
                 name: String::new(),
                 message: "agent|scout|capped|4".to_owned(),
             },
@@ -516,6 +530,7 @@ mod tests {
             &mut state,
             FrontendAction::ToolProgress {
                 call_id: "c2".to_owned(),
+                provider_call_id: String::new(),
                 name: String::new(),
                 message: "agent|artisan|path|/tmp/wt".to_owned(),
             },

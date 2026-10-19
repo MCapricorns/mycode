@@ -412,6 +412,7 @@ pub enum FrontendAction {
     /// Incremental tool or subagent progress for the live status line.
     ToolProgress {
         call_id: String,
+        provider_call_id: String,
         name: String,
         message: String,
     },
