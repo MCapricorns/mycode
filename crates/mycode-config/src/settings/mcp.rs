@@ -14,6 +14,13 @@ use crate::ConfigError;
 pub const MAX_MCP_SERVERS: usize = 64;
 /// Maximum extra environment variables per stdio server.
 pub const MAX_MCP_ENV_VARS: usize = 32;
+/// Maximum arguments per stdio server.
+pub(crate) const MAX_MCP_ARGS: usize = 64;
+
+/// Whether `key` can name a child-process environment variable.
+pub(crate) fn is_env_var_name(key: &str) -> bool {
+    !key.is_empty() && !key.contains('=') && !key.chars().any(char::is_control)
+}
 
 /// One configured MCP server binding.
 ///
@@ -170,7 +177,7 @@ impl AppSettings {
                     "{field}.id: must be 1-128 lowercase letters, digits, dash, dot, or underscore"
                 )));
             }
-            if server.args.len() > 64 {
+            if server.args.len() > MAX_MCP_ARGS {
                 return Err(invalid(&format!("{field}.args: too many entries")));
             }
             for (arg_index, arg) in server.args.iter().enumerate() {
@@ -204,10 +211,7 @@ impl AppSettings {
                         return Err(invalid(&format!("{field}.env: too many entries")));
                     }
                     for (key, value) in &server.env {
-                        if key.is_empty()
-                            || key.contains('=')
-                            || key.chars().any(|ch| ch.is_control() || ch == '\0')
-                        {
+                        if !is_env_var_name(key) {
                             return Err(invalid(&format!(
                                 "{field}.env: variable names must be nonempty and free of '='"
                             )));

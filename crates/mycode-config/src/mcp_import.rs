@@ -246,7 +246,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
             "server '{id}' command must be an executable path, not a shell string"
         ));
     }
-    if args.len() > 64
+    if args.len() > crate::settings::MAX_MCP_ARGS
         || args.iter().any(|arg| {
             crate::settings::bounded_text(arg, crate::settings::MAX_FIELD_BYTES).is_err()
         })
@@ -255,9 +255,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
     }
     if env.len() > crate::settings::MAX_MCP_ENV_VARS
         || env.iter().any(|(key, value)| {
-            key.is_empty()
-                || key.contains('=')
-                || key.chars().any(|ch| ch.is_control() || ch == '\0')
+            !crate::settings::is_env_var_name(key)
                 || crate::settings::bounded_text(value, crate::settings::MAX_FIELD_BYTES).is_err()
         })
     {

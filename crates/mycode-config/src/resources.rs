@@ -271,7 +271,15 @@ fn skill_frontmatter(text: &str) -> (Option<String>, Option<String>) {
 /// byte cap, or is not UTF-8. A read failure is an authority rejection so a
 /// prompt resource never surfaces a raw operating-system error.
 pub(crate) fn read_resource(path: &Path) -> Result<String, ConfigError> {
-    let bytes = std::fs::read(path).map_err(|_| ConfigError::authority_rejection())?;
+    use std::io::Read as _;
+
+    // Read one byte past the cap so an oversized file is detected without
+    // pulling all of it into memory.
+    let file = std::fs::File::open(path).map_err(|_| ConfigError::authority_rejection())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_RESOURCE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ConfigError::authority_rejection())?;
     if bytes.len() > MAX_RESOURCE_BYTES {
         return Err(ConfigError::new(crate::ConfigErrorKind::Oversized));
     }
