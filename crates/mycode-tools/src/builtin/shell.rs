@@ -863,9 +863,9 @@ fn powershell_unix_command_advice(word: &str) -> Option<&'static str> {
         "apt" | "apt-get" | "yum" | "dnf" | "brew" => Some(
             "Unix package managers (`apt`, `yum`, `dnf`, `brew`) do not exist on Windows; use `winget` or `scoop`",
         ),
-        "man" => {
-            Some("`man` is not a standard PowerShell alias on Windows; use `Get-Help <cmdlet>`")
-        }
+        // Windows PowerShell aliases `man` to `help`, which pipes through a
+        // pager; the captured, input-less process has nobody to page it.
+        "man" => Some("`man` runs the paging `help` function; use `Get-Help <cmdlet>`"),
         _ => None,
     }
 }
