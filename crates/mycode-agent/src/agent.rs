@@ -236,11 +236,11 @@ async fn agent_loop(
                 Err(TurnFailure::Error(err)) => return Err(err),
             };
 
-        let calls: Vec<ToolCall> = assistant
+        let calls: Vec<&ToolCall> = assistant
             .blocks
             .iter()
             .filter_map(|block| match block {
-                ContentBlock::ToolCall(call) => Some(call.clone()),
+                ContentBlock::ToolCall(call) => Some(call),
                 _ => None,
             })
             .collect();
@@ -282,7 +282,7 @@ async fn agent_loop(
             // and another tool requested together actually run together.
             // Adjacent read-only calls run as one batch; every other tool
             // runs alone, in model order. Results go back in call order.
-            let valid_calls: Vec<ToolCall> = calls
+            let valid_calls: Vec<&ToolCall> = calls
                 .into_iter()
                 .filter(|call| !call.id.is_empty() && !call.name.is_empty())
                 .collect();
@@ -347,7 +347,7 @@ fn is_parallel_safe(env: &TurnEnv<'_>, call: &ToolCall) -> bool {
 async fn dispatch_response_calls(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
-    calls: &[ToolCall],
+    calls: &[&ToolCall],
 ) -> Vec<ToolResultMessage> {
     let agent_indexes: Vec<usize> = calls
         .iter()

@@ -151,8 +151,8 @@ pub(crate) fn session_system_prompt(
         system_prompt.push_str(note);
         system_prompt.push_str(
             // The note already says how to reach direct and deferred tools.
-            "When the user also wants a subagent, emit `search_tool` in the same response as \
-`agent`.\n</mcp>",
+            "`search_tool` is a read: emit it in the same response as other independent \
+calls, `agent` included, instead of waiting for them.\n</mcp>",
         );
     }
     let (mut roots, scratch) = split_scratch_root(extra_roots);
