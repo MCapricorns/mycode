@@ -64,7 +64,7 @@ prompt(user_message)
 - 注册了进程工具时追加 `<tool_calling>`。进程工具只有一个，名字是 `powershell`、`bash`、`zsh`、`sh` 或 `cmd`；PowerShell 5.1 和 7 都用 `powershell`。规则是：`find` 列目录和找文件，`grep` 搜内容，`read` 读文件，`write` / `edit` 改文件；shell 只做构建、测试、git、包管理、运行程序；命令会等到退出，不要起 dev server；批量或生成式改写用 `mode` `script`；`mode` `program` 直接传 argv，不做 shell 解析。
 - 注册表不变时，生成的字节不变。发给模型的工具 spec 是注册表里的全部工具，按名字排序。
 
-`AgentConfig.system_prompt` 非空时完全替换默认提示。`mycode-app` 把默认提示拼在自己的身份、环境、skills 和 MCP 片段里，并另加 `<environment>` 和 `<shell>`。工具的具体规则还来自各工具的 prompt snippet，例如 `agent` 工具的 scout 说明。
+`AgentConfig.system_prompt` 非空时完全替换默认提示。`mycode-app` 把默认提示拼在自己的身份、环境、skills 和 MCP 片段里，并另加 `<environment>` 和 `<shell>`。工具的具体规则还来自各工具的 prompt snippet；`agent` 的 snippet 只指向 `<dispatch>`，角色说明由 `mycode-app` 按启用的角色生成。
 
 `HookRunner` 只有一个请求前钩子 `with_before_request`，应用层用它做自动压缩。没有工具前观察者。
 

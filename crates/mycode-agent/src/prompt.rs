@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn scout_guidance_appears_when_agent_is_registered() {
+    fn agent_snippet_defers_role_names_to_the_dispatch_section() {
         struct Host;
 
         impl mycode_tools::builtin::AgentHost for Host {
@@ -259,9 +259,12 @@ mod tests {
         ))));
         let prompt = build_system_prompt(&registry);
         assert!(
-            prompt.contains("agent: scout for read-only research"),
-            "the agent snippet must point broad research at scout:\n{prompt}"
+            prompt.contains("agent: hand one self-contained brief to a role from <dispatch>"),
+            "the agent snippet must point at the dispatch section:\n{prompt}"
         );
-        assert!(prompt.contains("scout"), "{prompt}");
+        assert!(
+            !prompt.contains("scout"),
+            "role names come from the dispatch section only:\n{prompt}"
+        );
     }
 }

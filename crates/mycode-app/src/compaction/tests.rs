@@ -735,7 +735,7 @@ fn a_conversation_ending_in_a_tool_result_is_wrapped_and_the_instruction_is_repe
         "{after}"
     );
     assert!(
-        after.contains("Output only the summary in the required format."),
+        after.contains("Output only the summary, covering the points the instructions list."),
         "{after}"
     );
     assert_eq!(request.reasoning, Some(mycode_core::ReasoningLevel::Off));

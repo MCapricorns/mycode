@@ -324,8 +324,10 @@ pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
     let mut out = String::from(
         "<skills>\nSkills (on demand). Scan this list before you act. When a \
 task matches one, read the matching SKILL.md by path with `read` and follow \
-it before building or answering. Do not wait for the user to name the skill. \
-Do not paste skill bodies into the prompt.",
+it before building or answering. Do not wait for the user to name the skill; a \
+message that starts with `/slug` asks for that skill. Read a skill once per task, and \
+open the files it references only when a step needs them. Do not paste skill bodies \
+into the prompt.",
     );
     for skill in files {
         let _ = write!(
