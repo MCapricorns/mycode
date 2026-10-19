@@ -1028,20 +1028,27 @@ fn trim_resident_entries(state: &mut WorkspaceState) {
 
 /// Rebuilds the open `/` menu from the catalogs this action may have changed.
 fn fill_open_slash(state: &mut WorkspaceState) {
-    let Some(fragment) = state.mention.as_ref().and_then(|mention| {
-        (mention.kind == MentionKind::Command).then(|| mention.fragment.clone())
-    }) else {
+    let Some(mention) = state
+        .mention
+        .as_ref()
+        .filter(|mention| mention.kind == MentionKind::Command)
+    else {
         return;
     };
-    let skills = state.enabled_skills();
+    // Built from borrows, then stored: this runs on every keystroke while
+    // the menu is open, so the server and tool lists are not copied.
     let servers = state
         .settings
         .as_ref()
-        .map(|settings| settings.mcp_servers.clone())
-        .unwrap_or_default();
-    let tools = state.mcp_tools.clone();
+        .map_or(&[][..], |settings| settings.mcp_servers.as_slice());
+    let items = slash_items(
+        &mention.fragment,
+        &state.enabled_skills(),
+        servers,
+        &state.mcp_tools,
+    );
     if let Some(mention) = state.mention.as_mut() {
-        mention.items = slash_items(&fragment, &skills, &servers, &tools);
+        mention.items = items;
     }
 }
 
