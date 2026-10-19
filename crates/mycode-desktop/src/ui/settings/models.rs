@@ -437,7 +437,12 @@ impl ProviderForm {
         let model = make(t("model id", "模型 id"));
         let context_limit = make(t("optional, e.g. 200000", "可选，例如 200000"));
         let max_output = make(t("optional, e.g. 8192", "可选，例如 8192"));
-        let api_key = make(t("api key (leave empty to skip)", "API 密钥（留空则跳过）"));
+        // Masked like the MCP form's key: a pasted secret never shows.
+        let api_key = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("api key (leave empty to skip)", "API 密钥（留空则跳过）"))
+                .masked(true)
+        });
         cx.new(|_| Self {
             id,
             kind: "openai-completions".to_owned(),
