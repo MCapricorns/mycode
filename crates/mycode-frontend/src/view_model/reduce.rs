@@ -87,6 +87,7 @@ fn reset_turn_view(state: &mut WorkspaceState) {
     state.pending_steers.clear();
     state.turn_alert = None;
     retire_live_jobs(state);
+    drop_preparing_rows(state);
     // The conversation leaving the screen takes its runtime bookkeeping
     // with it; the restored transcript has no clocks to show.
     state.job_elapsed.clear();

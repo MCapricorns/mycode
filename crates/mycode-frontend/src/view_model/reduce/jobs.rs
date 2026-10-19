@@ -29,18 +29,18 @@ pub(super) fn tool_preparing(
     name: &str,
     target: &str,
 ) {
+    if state.active.is_none() {
+        return;
+    }
     let event_id = format!("{PREPARING_ROW_PREFIX}{provider_call_id}");
     let label = tool_call_label(name, target);
-    let Some(conversation) = state.active.as_mut() else {
-        return;
-    };
-    match conversation
-        .entries
+    match state
+        .preparing_calls
         .iter_mut()
         .find(|entry| entry.event_id == event_id)
     {
         Some(row) => row.text = label.into(),
-        None => conversation.entries.push(ConversationEntry {
+        None => state.preparing_calls.push(ConversationEntry {
             event_id,
             kind: EntryKind::ToolCall,
             text: label.into(),
@@ -48,11 +48,7 @@ pub(super) fn tool_preparing(
             thinking: String::new(),
         }),
     }
-    let count = conversation
-        .entries
-        .iter()
-        .filter(|entry| is_preparing_row(entry))
-        .count();
+    let count = state.preparing_calls.len();
     let status = if crate::i18n::is_chinese() {
         format!("正在准备 {count} 个子代理")
     } else if count == 1 {
@@ -65,11 +61,7 @@ pub(super) fn tool_preparing(
 
 /// Removes every placeholder row; the turn ended before those calls ran.
 pub(super) fn drop_preparing_rows(state: &mut WorkspaceState) {
-    if let Some(conversation) = state.active.as_mut() {
-        conversation
-            .entries
-            .retain(|entry| !is_preparing_row(entry));
-    }
+    state.preparing_calls.clear();
 }
 
 /// The `ToolStarted` transition: one tool call (or nested subagent) began.
@@ -81,13 +73,12 @@ pub(super) fn tool_started(
     target: String,
 ) {
     let label = tool_call_label(&name, &target);
-    // The started call replaces its placeholder, if it had one.
+    // The started call replaces its placeholder, if it had one, and joins
+    // the transcript after the step that issued it.
     let placeholder = format!("{PREPARING_ROW_PREFIX}{provider_call_id}");
-    if let Some(conversation) = state.active.as_mut() {
-        conversation
-            .entries
-            .retain(|entry| entry.event_id != placeholder);
-    }
+    state
+        .preparing_calls
+        .retain(|entry| entry.event_id != placeholder);
     if name == AGENT_PROGRESS_PREFIX {
         upsert_live_job(state, &call_id, "", "starting");
         claim_provider_call_id(state, &call_id, provider_call_id);
@@ -623,7 +614,9 @@ mod tests {
 
     #[test]
     fn a_streaming_agent_call_shows_a_placeholder_until_it_starts() {
-        use crate::view_model::{ActiveConversation, FrontendAction, WorkspaceState};
+        use crate::view_model::{
+            ActiveConversation, ConversationEntry, EntryKind, FrontendAction, WorkspaceState,
+        };
 
         let mut state = WorkspaceState {
             sending: true,
@@ -640,19 +633,10 @@ mod tests {
             }),
             ..WorkspaceState::default()
         };
-        let rows = |state: &WorkspaceState| -> Vec<(String, String)> {
-            state
-                .active
-                .as_ref()
-                .map(|conversation| {
-                    conversation
-                        .entries
-                        .iter()
-                        .map(|entry| (entry.event_id.clone(), entry.text.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default()
+        let ids = |rows: &[ConversationEntry]| -> Vec<String> {
+            rows.iter().map(|entry| entry.event_id.clone()).collect()
         };
+        let entries = |state: &WorkspaceState| ids(&state.active.as_ref().unwrap().entries);
         let prepare = |state: &mut WorkspaceState, id: &str, target: &str| {
             super::super::reduce(
                 state,
@@ -666,16 +650,30 @@ mod tests {
         prepare(&mut state, "p1", "");
         prepare(&mut state, "p1", "scout map the crate");
         prepare(&mut state, "p2", "artisan");
+        let labels: Vec<String> = state
+            .preparing_calls
+            .iter()
+            .map(|entry| entry.text.to_string())
+            .collect();
         assert_eq!(
-            rows(&state),
-            [
-                (
-                    "prep-p1".to_owned(),
-                    "agent  scout map the crate".to_owned()
-                ),
-                ("prep-p2".to_owned(), "agent  artisan".to_owned()),
-            ],
+            labels,
+            ["agent  scout map the crate", "agent  artisan"],
             "one row per call, relabelled in place"
+        );
+        assert!(
+            entries(&state).is_empty(),
+            "placeholders stay out of the transcript"
+        );
+        // The step that issued the calls commits before they start.
+        super::super::reduce(
+            &mut state,
+            FrontendAction::AssistantStepCommitted(ConversationEntry {
+                event_id: "evt-step".to_owned(),
+                kind: EntryKind::AssistantMessage,
+                text: "dispatching".into(),
+                call_id: None,
+                thinking: String::new(),
+            }),
         );
         super::super::reduce(
             &mut state,
@@ -686,10 +684,8 @@ mod tests {
                 target: "scout map the crate".to_owned(),
             },
         );
-        let after = rows(&state);
-        assert!(after.iter().all(|(id, _)| id != "prep-p1"), "{after:?}");
-        assert!(after.iter().any(|(id, _)| id == "prep-p2"), "{after:?}");
-        assert!(after.iter().any(|(id, _)| id == "call-c1"), "{after:?}");
+        assert_eq!(entries(&state), ["evt-step", "call-c1"]);
+        assert_eq!(ids(&state.preparing_calls), ["prep-p2"]);
         super::super::reduce(
             &mut state,
             FrontendAction::ChatFailed {
@@ -698,7 +694,7 @@ mod tests {
             },
         );
         assert!(
-            rows(&state).iter().all(|(id, _)| !id.starts_with("prep-")),
+            state.preparing_calls.is_empty(),
             "a call that never started leaves no row behind"
         );
     }

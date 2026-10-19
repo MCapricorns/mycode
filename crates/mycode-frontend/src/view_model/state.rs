@@ -117,6 +117,12 @@ pub struct WorkspaceState {
     pub resources: Vec<(String, String)>,
     /// Slash-command skills from the project and user `.agents` trees.
     pub skills: Vec<SkillEntry>,
+    /// Placeholder rows for `agent` calls the model is still writing, in the
+    /// order it opened them. Kept out of the transcript entries: frontends
+    /// draw them after the streaming reply, and each one leaves when its
+    /// call starts (the started row then follows the committed step) or the
+    /// turn ends.
+    pub preparing_calls: Vec<ConversationEntry>,
     /// Live `agent` runs for the inspector panel.
     pub live_jobs: Vec<LiveJob>,
     /// Final runtimes of finished subagent calls, `(call_id, ms)`. A row
