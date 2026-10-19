@@ -388,11 +388,7 @@ impl Tui {
     fn apply_effects(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
-                Effect::Toast { kind, text } => self.notices.push(Notice {
-                    kind,
-                    text,
-                    shown: Instant::now(),
-                }),
+                Effect::Toast { kind, text } => self.push_notice(kind, text),
                 Effect::ComposerSet { text, focus: _ } => self.set_composer_text(&text),
                 // Focus, window chrome, and paging anchors are GPUI
                 // concerns; a terminal frame is always focused.
@@ -474,13 +470,16 @@ impl Tui {
         }
         match (key.code, ctrl, alt) {
             (KeyCode::Char('c'), true, false) => self.interrupt_or_quit(&mut effects),
+            // Innermost first: an ask card, then an open `/`/`@` menu, and
+            // only then the running turn, so closing a menu mid-turn never
+            // stops the agent.
             (KeyCode::Esc, false, false) => {
                 if self.driver.vm().pending_ask.is_some() {
                     self.driver.dismiss_ask(&mut effects);
-                } else if self.driver.vm().sending || self.driver.vm().compacting {
-                    self.driver.cancel_chat(&mut effects);
                 } else if self.driver.dismiss_floating() {
                     self.mention_selected = None;
+                } else if self.turn_busy() {
+                    self.driver.cancel_chat(&mut effects);
                 } else if !self.notices.is_empty() {
                     // Errors never expire on their own.
                     self.notices.clear();
@@ -1556,10 +1555,20 @@ impl Tui {
             .map(shorten_home)
             .unwrap_or_else(|| "no folder".to_owned());
         let window = mycode_frontend::view_model::model_context_window(vm);
-        let ctx = mycode_frontend::view_model::context_remaining_percent(vm.context_used, window)
-            .map(|percent| format!("ctx {percent}%"))
-            .unwrap_or_default();
-        let status = format!(" {model} · {dir} · {ctx} · Enter send · Esc stop · ^C quit ");
+        let mut segments = vec![model.to_owned(), dir];
+        // An unknown window or usage leaves the segment out, not blank.
+        if let Some(percent) =
+            mycode_frontend::view_model::context_remaining_percent(vm.context_used, window)
+        {
+            segments.push(format!("ctx {percent}%"));
+        }
+        // Hints follow what the keys do right now: Esc only stops a turn.
+        segments.push(if self.turn_busy() {
+            "Enter queue · Esc stop".to_owned()
+        } else {
+            "Enter send · ^C quit".to_owned()
+        });
+        let status = format!(" {} ", segments.join(" · "));
         frame.render_widget(
             Paragraph::new(Span::styled(status, Style::default().fg(Color::DarkGray))),
             area,
@@ -1825,15 +1834,10 @@ fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
         value: model,
         dim: false,
     });
-    let thinking = selected_reasoning_level(vm);
     rows.push(SettingRow::Item {
         item: SettingItem::Thinking,
         label: "Thinking".to_owned(),
-        value: if thinking == "default" {
-            "default".to_owned()
-        } else {
-            thinking
-        },
+        value: selected_reasoning_level(vm),
         dim: false,
     });
 
