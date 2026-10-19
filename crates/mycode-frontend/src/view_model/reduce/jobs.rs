@@ -80,7 +80,16 @@ pub(super) fn tool_started(
         .preparing_calls
         .retain(|entry| entry.event_id != placeholder);
     if name == AGENT_PROGRESS_PREFIX {
-        upsert_live_job(state, &call_id, "", "starting");
+        // The call's target is `{role} {short goal}` — durable text the
+        // transcript row carries too — so the job names itself even when
+        // the one-shot `queued`/`prompt` lines never arrive.
+        let (role, goal) = agent_target_parts(&target);
+        upsert_live_job(state, &call_id, role, "starting");
+        if let Some(job) = live_job_mut(state, &call_id)
+            && job.label.is_empty()
+        {
+            job.label = goal.to_owned();
+        }
         claim_provider_call_id(state, &call_id, provider_call_id);
         refresh_subagent_status(state);
     } else {
@@ -145,6 +154,56 @@ fn parse_agent_progress(message: &str) -> Option<(&str, &str, &str)> {
     Some((parts.next()?, parts.next()?, parts.next().unwrap_or("")))
 }
 
+/// The `agent` call's target is `{role} {short goal}` (`tool_target` joins
+/// them with a single space); a target holding only the role yields an
+/// empty goal.
+fn agent_target_parts(target: &str) -> (&str, &str) {
+    match target.trim().split_once(' ') {
+        Some((role, goal)) => (role, goal.trim()),
+        None => (target.trim(), ""),
+    }
+}
+
+/// A job recreated from a later `tool`/`step` line — a reopened session
+/// replays the call row but never re-sends `queued` — still finds its role
+/// and goal on the transcript row the ledger holds for the same call.
+fn backfill_job_from_transcript(state: &mut WorkspaceState, call_id: &str) {
+    if call_id.is_empty()
+        || !state
+            .live_jobs
+            .iter()
+            .any(|job| job.call_id == call_id && (job.role.is_empty() || job.label.is_empty()))
+    {
+        return;
+    }
+    let row_text = state
+        .active
+        .as_ref()
+        .and_then(|active| {
+            active.entries.iter().find(|entry| {
+                entry.kind == EntryKind::ToolCall && entry.call_id.as_deref() == Some(call_id)
+            })
+        })
+        .map(|entry| entry.text.to_string());
+    // Rows render as `agent  {role} {goal}` (tool_label's name + target).
+    let Some((role, goal)) = row_text
+        .as_deref()
+        .and_then(|text| text.strip_prefix(AGENT_PROGRESS_PREFIX))
+        .map(str::trim)
+        .map(agent_target_parts)
+    else {
+        return;
+    };
+    if let Some(job) = live_job_mut(state, call_id) {
+        if job.role.is_empty() {
+            job.role = role.to_owned();
+        }
+        if job.label.is_empty() {
+            job.label = goal.to_owned();
+        }
+    }
+}
+
 fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: &str) {
     if let Some(job) = state
         .live_jobs
@@ -177,6 +236,7 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         if !step.is_empty() {
             push_job_step(job, step);
         }
+        backfill_job_from_transcript(state, call_id);
         return;
     }
     let step = if step.is_empty() {
@@ -196,6 +256,7 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         capped: false,
         started_ms: crate::unix_now().as_millis() as u64,
     });
+    backfill_job_from_transcript(state, call_id);
 }
 
 fn push_job_step(job: &mut LiveJob, step: &str) {
@@ -243,6 +304,21 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
                 if let Some(job) = live_job_mut(state, call_id) {
                     job.path = detail.to_owned();
                     job.capped = false;
+                }
+            }
+            // `goal`/`task` are the run-live re-arms of `queued`/`prompt`:
+            // they only refill the fields so a replay never pushes a stale
+            // "queued" step over the job's real progress.
+            "goal" => {
+                upsert_live_job(state, call_id, role, "");
+                if let Some(job) = live_job_mut(state, call_id) {
+                    job.label = detail.to_owned();
+                }
+            }
+            "task" => {
+                upsert_live_job(state, call_id, role, "");
+                if let Some(job) = live_job_mut(state, call_id) {
+                    job.prompt = detail.chars().take(8_000).collect();
                 }
             }
             "done" => {
@@ -697,5 +773,98 @@ mod tests {
             state.preparing_calls.is_empty(),
             "a call that never started leaves no row behind"
         );
+    }
+
+    #[test]
+    fn an_agent_job_takes_its_goal_from_the_call_target() {
+        use crate::view_model::{ActiveConversation, FrontendAction, WorkspaceState};
+
+        let mut state = WorkspaceState {
+            sending: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+                running: false,
+                context_used: 0,
+                context_cache: 0,
+            }),
+            ..WorkspaceState::default()
+        };
+        // The `queued`/`prompt` lines never arrive: the durable target on
+        // `ToolStarted` still names the role and the short goal.
+        super::super::reduce(
+            &mut state,
+            FrontendAction::ToolStarted {
+                call_id: "c1".to_owned(),
+                provider_call_id: "p1".to_owned(),
+                name: "agent".to_owned(),
+                target: "scout Audit Rust client crate".to_owned(),
+            },
+        );
+        let job = state.live_jobs.first().expect("job");
+        assert_eq!(job.role, "scout");
+        assert_eq!(job.label, "Audit Rust client crate");
+        // A `task` re-arm fills the brief without touching the step log.
+        let steps = job.log.len();
+        super::super::reduce(
+            &mut state,
+            FrontendAction::ToolProgress {
+                call_id: "c1".to_owned(),
+                provider_call_id: "p1".to_owned(),
+                name: String::new(),
+                message: "agent|scout|task|read the crate".to_owned(),
+            },
+        );
+        let job = state.live_jobs.first().expect("job");
+        assert_eq!(job.prompt, "read the crate");
+        assert_eq!(job.log.len(), steps, "a re-arm adds no log line");
+    }
+
+    #[test]
+    fn a_reopened_job_backfills_its_goal_from_the_replayed_row() {
+        use crate::view_model::{
+            ActiveConversation, ConversationEntry, EntryKind, FrontendAction, WorkspaceState,
+        };
+
+        let mut state = WorkspaceState {
+            sending: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt".to_owned(),
+                entries: vec![ConversationEntry {
+                    event_id: "call-c1".to_owned(),
+                    kind: EntryKind::ToolCall,
+                    text: "agent  scout Audit Rust client crate".into(),
+                    call_id: Some("c1".to_owned()),
+                    thinking: String::new(),
+                }],
+                older_before: None,
+                streaming: None,
+                running: true,
+                context_used: 0,
+                context_cache: 0,
+            }),
+            ..WorkspaceState::default()
+        };
+        // A mid-turn reopen rebuilds the job from a `tool` progress line;
+        // the goal comes back from the replayed call row.
+        super::super::reduce(
+            &mut state,
+            FrontendAction::ToolProgress {
+                call_id: "c1".to_owned(),
+                provider_call_id: "p1".to_owned(),
+                name: String::new(),
+                message: "agent|scout|tool|read src/lib.rs".to_owned(),
+            },
+        );
+        let job = state.live_jobs.first().expect("job");
+        assert_eq!(job.role, "scout");
+        assert_eq!(job.label, "Audit Rust client crate");
+        assert!(job.step.ends_with("read src/lib.rs"), "{}", job.step);
     }
 }
