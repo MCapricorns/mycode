@@ -73,7 +73,7 @@ prompt(user_message)
 ### 布局
 
 - 索引：`<home>/sessions.db`，SQLite，WAL，`synchronous=NORMAL`。它是提交权威：分支头、事件条数、已提交字节数、标题、当前分支。
-- 事件：`sessions/<ses1-id>/<br1-id>.jsonl`，一行一个 JSON 对象。行里有事件 id、kind、call id、时间戳、digest、字节数，以及载荷：可读文本、base64，或外部文件名。
+- 事件：`sessions/<项目键>/<sess-id>/<br1-id>.jsonl`，一行一个 JSON 对象。行里有事件 id、kind、call id、时间戳、digest、字节数，以及载荷：可读文本、base64，或外部文件名。
 - 载荷达到 64 KiB 时写到 `payloads/<evt1-id>.bin`，JSONL 行只留 digest 和文件名；载荷不进 SQLite BLOB。
 - `compaction.json` 由 `mycode-config` 管理，不属于账本。
 
@@ -104,7 +104,7 @@ prompt(user_message)
 
 账本只有一个写者，由会话 actor 串行化。应用层的普通发送遇到 `Conflict` 会在实际的头上重新预留并提交；撤回和分叉直接以「会话已经向前走了」失败，不在别的快照上截断。
 
-标题取第一条非助手、非压缩摘要的 `Message` 载荷，折叠空白后取前 60 字符；同时写一个供人看的 `title.txt`，重命名会更新它。
+标题取第一条非助手、非压缩摘要的 `Message` 载荷，折叠空白后取前 60 字符，只存在索引里。会话目录名本身带创建时间，不再写 `title.txt`。
 
 ### 分支与读取
 

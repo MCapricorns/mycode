@@ -46,6 +46,7 @@ impl SessionCore {
         &mut self,
         session: &SessionId,
         branch: &BranchId,
+        dir: &str,
     ) -> Result<SessionPull, OpFail> {
         let Some(activity) = self.fence.enter() else {
             return Err(OpFail::Domain(SessionError::Unavailable));
@@ -53,7 +54,7 @@ impl SessionCore {
         let commit = activity
             .begin_commit()
             .map_err(|_| OpFail::Domain(SessionError::Unavailable))?;
-        let created = self.store_mut()?.create_session(session, branch);
+        let created = self.store_mut()?.create_session(session, branch, dir);
         drop(commit);
         created.map_err(map_store)?;
         let mut ledger = SessionLedger {

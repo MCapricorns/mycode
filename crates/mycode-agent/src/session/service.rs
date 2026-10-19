@@ -71,14 +71,16 @@ impl SessionService {
         &self.inner.client
     }
 
-    /// Creates a fresh session with a Host-minted root branch.
+    /// Creates a fresh session with a Host-minted root branch, filed under
+    /// `project`'s folder in `sessions/`.
     ///
     /// # Errors
     ///
     /// Returns the actor's terminal error; `Unavailable` when the storage
     /// substrate or the generation fence rejects the publication.
-    pub async fn create(&self) -> Result<CreatedResult, SessionError> {
-        match self.run(SessionRequest::Create).await? {
+    pub async fn create(&self, project: Option<&str>) -> Result<CreatedResult, SessionError> {
+        let project = project.map(str::to_owned);
+        match self.run(SessionRequest::Create { project }).await? {
             SessionResult::Created(created) => Ok(created),
             _ => Err(SessionError::Unavailable),
         }

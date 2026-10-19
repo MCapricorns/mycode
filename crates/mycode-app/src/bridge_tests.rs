@@ -10,7 +10,7 @@ use mycode_providers::catalog::store::{
 use crate::{BranchId, BridgeCommand, BridgeReply, CoreBridge, HeadStamp, SessionId};
 
 const WAIT: Duration = Duration::from_secs(5);
-const SESSION: &str = "ses1-0123456789abcdef0123456789abcdef";
+const SESSION: &str = "sess-20261019-120000-0123abcd";
 
 struct TestHome(HomeLayout);
 
@@ -90,7 +90,7 @@ fn shutdown_in_background(mut bridge: CoreBridge) -> (mpsc::Receiver<()>, JoinHa
 fn retained_unpolled_reply_does_not_block_shutdown() {
     let home = TestHome::new("unpolled");
     let (bridge, start) = gated_bridge(home.0.clone());
-    let reply = bridge.request(BridgeCommand::CreateSession);
+    let reply = bridge.request(BridgeCommand::CreateSession { project: None });
     let (done, shutdown) = shutdown_in_background(bridge);
     start.send(()).expect("start worker");
 
@@ -133,7 +133,7 @@ fn shutdown_drains_persistent_commands_when_reply_waits_are_dropped() {
         selected_model: Some("durable-marker".to_owned()),
         ..UiState::default()
     };
-    drop(bridge.request(BridgeCommand::CreateSession));
+    drop(bridge.request(BridgeCommand::CreateSession { project: None }));
     drop(bridge.request(BridgeCommand::SaveUiState {
         state: expected_ui.clone(),
     }));
@@ -204,7 +204,7 @@ async fn assert_failure_routes(failure: Failure) {
         Failure::StoppedBridge => "core bridge stopped",
         Failure::ClosedCommands | Failure::DroppedReply => "core thread stopped",
     };
-    let reply = failed_request(BridgeCommand::CreateSession, failure).await;
+    let reply = failed_request(BridgeCommand::CreateSession { project: None }, failure).await;
     assert!(
         matches!(&reply, BridgeReply::Created(Err(message)) if message == expected),
         "wrong create reply: {reply:?}"

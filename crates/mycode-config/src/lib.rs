@@ -38,7 +38,10 @@ pub use compaction::{
 };
 pub use document_repair::{DocumentRepair, quarantine_owned_bytes};
 pub use error::{ConfigError, ConfigErrorKind};
-pub use home::{HomeEnv, HomeLayout, SCRATCH_DIR, SESSIONS_DIR};
+pub use home::{
+    HomeEnv, HomeLayout, NO_PROJECT_DIR, SCRATCH_DIR, SESSIONS_DIR, locate_session_dir,
+    new_session_dir, project_dir_key,
+};
 pub use mcp_import::{normalize_api_key, parse_mcp_import};
 pub use project_mcp::project_mcp_servers;
 #[doc(inline)]

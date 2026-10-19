@@ -158,7 +158,11 @@ pub struct BranchReservationView {
 #[derive(Debug, Clone)]
 pub enum SessionRequest {
     /// Creates a fresh session; both root identifiers are Host-minted.
-    Create,
+    Create {
+        /// Project folder the session starts in; its directory is filed
+        /// under that folder's key and never moves.
+        project: Option<String>,
+    },
     /// Recovers one session and returns every branch head.
     Open {
         /// The session to recover.

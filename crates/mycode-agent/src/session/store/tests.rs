@@ -58,6 +58,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 fn jsonl_path(home: &HomeLayout, session: &str, branch: &str) -> PathBuf {
     home.root()
         .join("sessions")
+        .join(mycode_config::NO_PROJECT_DIR)
         .join(session)
         .join(format!("{branch}.jsonl"))
 }
@@ -85,7 +86,7 @@ fn append_lists_title_without_reading_payloads() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         let assistant = serde_json::to_vec(&AssistantMessage {
             blocks: Vec::new(),
             usage: None,
@@ -134,7 +135,7 @@ fn stale_head_append_conflicts_and_reservation_is_spent() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         let first = service
             .reserve_event(
                 &created.session_id,
@@ -185,7 +186,7 @@ fn rewind_keeps_the_prefix_and_window_pages_backward() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         let mut head = HeadStamp::Empty;
         for text in ["one", "two", "three", "four", "five"] {
             head = append_text(
@@ -265,7 +266,7 @@ fn reopening_after_a_rewind_lands_on_the_new_branch() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         let mut head = HeadStamp::Empty;
         for text in ["one", "two", "three"] {
             head = append_text(
@@ -331,7 +332,7 @@ fn external_payload_bytes_stay_out_of_sqlite() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         let marker = b"UNIQUE_MARKER_XY";
         let mut payload = vec![0xAB; 64 * 1024];
         payload[..marker.len()].copy_from_slice(marker);
@@ -385,7 +386,7 @@ fn torn_tail_is_truncated_and_unindexed_directories_are_ignored() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         append_text(
             &service,
             &created.session_id,
@@ -434,7 +435,7 @@ fn reading_an_evicted_session_reloads_from_the_store() {
         // One more session than the residency cap, each with its own events.
         let mut sessions = Vec::new();
         for index in 0..(crate::session::actor::MAX_RESIDENT_SESSIONS + 1) {
-            let created = service.create().await.expect("create");
+            let created = service.create(None).await.expect("create");
             let head = append_text(
                 &service,
                 &created.session_id,
@@ -489,7 +490,7 @@ fn a_reserved_event_survives_other_sessions_churning() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         let reservation = service
             .reserve_event(
                 &created.session_id,
@@ -501,7 +502,7 @@ fn a_reserved_event_survives_other_sessions_churning() {
             .await
             .expect("reserve");
         for _ in 0..(crate::session::actor::MAX_RESIDENT_SESSIONS + 2) {
-            service.create().await.expect("create");
+            service.create(None).await.expect("create");
         }
         let appended = service
             .append(
@@ -525,7 +526,7 @@ fn missing_or_lengthened_external_payload_and_bad_index_rows_report_corrupt() {
     let scratch = Scratch::new();
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
-        let created = service.create().await.expect("create");
+        let created = service.create(None).await.expect("create");
         let payload = vec![b'x'; 64 * 1024];
         let reservation = service
             .reserve_event(
@@ -554,6 +555,7 @@ fn missing_or_lengthened_external_payload_and_bad_index_rows_report_corrupt() {
             .home
             .root()
             .join("sessions")
+            .join(mycode_config::NO_PROJECT_DIR)
             .join(created.session_id.as_str())
             .join("payloads")
             .join(format!("{}.bin", event_id.as_str()));
@@ -618,7 +620,7 @@ fn missing_or_lengthened_external_payload_and_bad_index_rows_report_corrupt() {
         );
 
         // Compaction summary payloads must not become the session title.
-        let summary_session = service.create().await.expect("create summary session");
+        let summary_session = service.create(None).await.expect("create summary session");
         let summary_head = append_text(
             &service,
             &summary_session.session_id,
@@ -672,4 +674,66 @@ fn missing_or_lengthened_external_payload_and_bad_index_rows_report_corrupt() {
         listing.corrupt.contains(&bad_session.as_str().to_owned()),
         "corrupt row should be isolated in listing.corrupt: {listing:?}"
     );
+}
+
+#[test]
+fn a_session_lives_in_its_project_folder_under_a_timestamped_name() {
+    let scratch = Scratch::new();
+    runtime().block_on(async {
+        let service = SessionService::new(&scratch.home);
+        let created = service
+            .create(Some(r"D:\work\my app\"))
+            .await
+            .expect("create");
+        let id = created.session_id.as_str();
+        assert!(
+            crate::session::SessionId::parse(id).is_some_and(|parsed| parsed == created.session_id)
+        );
+        let stamp = id.strip_prefix("sess-").expect("sess- prefix");
+        assert_eq!(stamp.len(), "20261019-153012-0123abcd".len(), "{id}");
+        let dir = scratch
+            .home
+            .root()
+            .join("sessions")
+            .join("D--work-my-app")
+            .join(id);
+        assert!(
+            dir.is_dir(),
+            "created under the project key: {}",
+            dir.display()
+        );
+        assert_eq!(
+            mycode_config::locate_session_dir(&scratch.home, id).expect("locate"),
+            Some(format!("sessions/D--work-my-app/{id}"))
+        );
+        let head = append_text(
+            &service,
+            &created.session_id,
+            &created.branch_id,
+            &HeadStamp::Empty,
+            "first",
+        )
+        .await;
+        // A cold store finds the directory again without being told.
+        service.forget(&created.session_id).await.expect("forget");
+        service.open(&created.session_id).await.expect("reopen");
+        append_text(
+            &service,
+            &created.session_id,
+            &created.branch_id,
+            &head,
+            "second",
+        )
+        .await;
+        assert!(
+            dir.join(format!("{}.jsonl", created.branch_id.as_str()))
+                .is_file()
+        );
+        assert!(!dir.join("title.txt").exists(), "no title marker");
+        assert_eq!(
+            inspect_sessions(&scratch.home).expect("list").sessions[0].event_count,
+            2
+        );
+        service.shutdown().await;
+    });
 }

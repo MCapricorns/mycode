@@ -130,6 +130,7 @@ enum Action {
     Create {
         session: SessionId,
         branch: BranchId,
+        dir: String,
     },
     Heads {
         session: SessionId,
@@ -289,10 +290,21 @@ impl SessionCore {
         }
         let admission = Some(self.mint_admission()?);
         let stage = match request {
-            SessionRequest::Create => match (SessionId::generate(), BranchId::generate()) {
-                (Some(session), Some(branch)) => Stage::Run(Action::Create { session, branch }),
-                _ => return failed(admission, SessionError::Unavailable),
-            },
+            SessionRequest::Create { project } => {
+                let (Some(session), Some(branch)) = (SessionId::generate(), BranchId::generate())
+                else {
+                    return failed(admission, SessionError::Unavailable);
+                };
+                let Ok(dir) = mycode_config::new_session_dir(project.as_deref(), session.as_str())
+                else {
+                    return failed(admission, SessionError::Unavailable);
+                };
+                Stage::Run(Action::Create {
+                    session,
+                    branch,
+                    dir,
+                })
+            }
             SessionRequest::Open { session } => {
                 self.stage_for(session.clone(), Action::Heads { session })?
             }
@@ -531,7 +543,11 @@ impl SessionCore {
 
     fn run(&mut self, action: Action) -> Result<SessionPull, OpFail> {
         match action {
-            Action::Create { session, branch } => self.action_create(&session, &branch),
+            Action::Create {
+                session,
+                branch,
+                dir,
+            } => self.action_create(&session, &branch, &dir),
             Action::Heads { session } => self.action_heads(&session),
             Action::Evict { session } => self.action_evict(&session),
             Action::ReserveEvent {

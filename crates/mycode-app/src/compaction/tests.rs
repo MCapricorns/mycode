@@ -206,6 +206,21 @@ fn scratch_home() -> (std::path::PathBuf, mycode_config::HomeLayout) {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
     }
+    // A checkpoint lives in its session's directory, which session creation
+    // makes; these tests name sessions without creating them.
+    for session in [
+        "parent-session",
+        "session-a",
+        "session-b",
+        "session-c",
+        "session-cut",
+        "session-empty",
+        "session-glm",
+        "session-short",
+    ] {
+        let dir = mycode_config::new_session_dir(None, session).expect("session dir");
+        std::fs::create_dir_all(root.join(dir)).expect("session dir");
+    }
     let home = mycode_config::HomeLayout::from_root(&root).expect("home");
     (root, home)
 }

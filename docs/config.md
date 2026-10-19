@@ -13,7 +13,7 @@
 | `settings.json` | `AppSettings`：外观、代理、提供商、网页、MCP、子代理、技能 | 256 KiB |
 | `secrets.json` | `providerKeys`：provider id → API key，按 id 排序 | 64 KiB |
 | `ui.json` | 最近项目、工作区、会话绑定、模型钉选、窗口和面板状态 | 256 KiB |
-| `sessions/<id>/compaction.json` | 压缩检查点 | 256 KiB |
+| `sessions/<项目键>/<id>/compaction.json` | 压缩检查点 | 256 KiB |
 | `catalog-cache.json` | models.dev 目录快照，`mycode-providers` 读写 | 32 MiB |
 | `agents/*.md` | 用户角色定义 | 每份 32 KiB |
 
@@ -104,7 +104,7 @@
 
 ## 压缩检查点
 
-每个会话一份 `sessions/<id>/compaction.json`，记录 `sessionId`、`branchId`、`coveredHead`、`coveredMessages`、`summary`、`model`、`createdAtUnix`。`summary` 最多 24000 字符；应用层在写检查点前截断，config 层对超长文档直接校验失败。各 id 最多 128 字符。读取时只采用 `branchId` 与当前分支一致的检查点。检查点只缩小发给模型的请求，不改写会话账本。
+每个会话一份 `compaction.json`，放在会话目录里（由 `locate_session_dir` 找到；目录不存在时读取返回空、写入失败），记录 `sessionId`、`branchId`、`coveredHead`、`coveredMessages`、`summary`、`model`、`createdAtUnix`。`summary` 最多 24000 字符；应用层在写检查点前截断，config 层对超长文档直接校验失败。各 id 最多 128 字符。读取时只采用 `branchId` 与当前分支一致的检查点。检查点只缩小发给模型的请求，不改写会话账本。
 
 ## 角色与提示资源
 

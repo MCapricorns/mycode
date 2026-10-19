@@ -92,7 +92,11 @@ pub enum BridgeCommand {
     /// Refresh the sidebar session list.
     ListSessions,
     /// Create and open a fresh session.
-    CreateSession,
+    CreateSession {
+        /// Project folder the session starts in; its directory is filed
+        /// under `sessions/<project key>/` for good.
+        project: Option<String>,
+    },
     /// Recover and open one session's root conversation.
     OpenSession(SessionId),
     /// Commit one user message on the open branch.

@@ -132,7 +132,7 @@ async fn hook_compaction_waits_until_the_turn_commits() {
 
     let catalog = mycode_providers::catalog::current(&home);
     let state = CoreState::new(home, catalog, Vec::new());
-    let created = state.service.create().await.expect("session");
+    let created = state.service.create(None).await.expect("session");
     let mut head = HeadStamp::Empty;
     for text in ["prior work", &"P".repeat(78_000)] {
         let reservation = state
@@ -345,7 +345,7 @@ async fn manual_compact_rejects_a_moved_branch_head() {
     let (root, home) = scratch();
     let catalog = mycode_providers::catalog::current(&home);
     let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
-    let created = state.service.create().await.expect("session");
+    let created = state.service.create(None).await.expect("session");
     let (head, _) = crate::ledger::send_message(
         &state.service,
         &created.session_id,
@@ -539,7 +539,7 @@ async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes
 
     let catalog = mycode_providers::catalog::current(&home);
     let state = CoreState::new(home.clone(), catalog, Vec::new());
-    let created = state.service.create().await.expect("session");
+    let created = state.service.create(None).await.expect("session");
     let (session, branch) = (created.session_id.clone(), created.branch_id.clone());
     crate::ledger::send_message(
         &state.service,
