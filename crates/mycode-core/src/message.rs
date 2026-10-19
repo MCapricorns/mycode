@@ -369,6 +369,10 @@ pub fn strip_user_interruption(text: &mut String) {
     }
     text.truncate(text.len() - note.len());
     text.truncate(text.trim_end().len());
+    // A reply that was only the marker leaves whitespace, not an empty row.
+    if text.trim().is_empty() {
+        text.clear();
+    }
 }
 
 /// Result text for a call the history never answered.
