@@ -798,3 +798,119 @@ async fn a_steer_after_the_last_request_is_returned_not_dropped() {
     assert!(control.retire_steers().is_empty());
     let _ = std::fs::remove_dir_all(&fixture.root);
 }
+
+/// Answers the first request with a `read` tool call, the second with text.
+struct CallTransport {
+    bodies: Mutex<Vec<String>>,
+}
+
+fn tool_call_sse() -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "delta": {"tool_calls": [{
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "read", "arguments": "{\"path\":\"a.txt\"}"}
+            }]},
+            "finish_reason": "tool_calls"
+        }]
+    });
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+}
+
+impl SseTransport for CallTransport {
+    fn post<'a>(
+        &'a self,
+        call: TransportCall,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let body = String::from_utf8_lossy(&call.body).into_owned();
+            let count = {
+                let mut bodies = self.bodies.lock().expect("bodies");
+                bodies.push(body);
+                bodies.len()
+            };
+            let sse = if count == 1 {
+                tool_call_sse()
+            } else {
+                reply_sse("REPLY done")
+            };
+            let (sender, stream) = tokio::sync::mpsc::channel(1);
+            sender
+                .send(Ok(bytes::Bytes::from(sse)))
+                .await
+                .expect("queue reply body");
+            Ok(stream)
+        })
+    }
+}
+
+/// Live transcript rows and replayed rows pair on the ledger call identity:
+/// a mid-turn reopen swaps live rows for replayed ones, so a result that
+/// lands after the reopen must still match its call.
+#[tokio::test]
+async fn live_tool_rows_key_on_the_ledger_call_identity() {
+    let fixture = turn_fixture().await;
+    let transport = Arc::new(CallTransport {
+        bodies: Mutex::new(Vec::new()),
+    });
+    crate::ledger::send_message(
+        &fixture.state.service,
+        &fixture.session,
+        &fixture.branch,
+        &HeadStamp::Empty,
+        PROMPT_A,
+    )
+    .await
+    .expect("prompt");
+    let (outcome, events) = run_scripted_turn(&fixture, transport).await;
+    outcome.expect("turn");
+    let (call_id, provider_call_id) = events
+        .iter()
+        .find_map(|event| match event {
+            crate::BridgeEvent::ToolStarted {
+                call_id,
+                provider_call_id,
+                name,
+                ..
+            } if name == "read" => Some((call_id.clone(), provider_call_id.clone())),
+            _ => None,
+        })
+        .expect("ToolStarted for read");
+    assert_eq!(provider_call_id, "call_a");
+    assert!(call_id.starts_with("call1-"), "{call_id}");
+    let result_id = events
+        .iter()
+        .find_map(|event| match event {
+            crate::BridgeEvent::ToolCompleted { entry, .. } => entry.call_id.clone(),
+            _ => None,
+        })
+        .expect("ToolCompleted");
+    assert_eq!(result_id, call_id);
+    // The replayed projection keys the same rows the same way.
+    let conversation = crate::ledger::open_conversation(&fixture.state.service, &fixture.session)
+        .await
+        .expect("reopen");
+    let replayed_call = conversation
+        .entries
+        .iter()
+        .find(|entry| entry.kind == crate::EntryKind::ToolCall)
+        .expect("replayed call row");
+    let replayed_result = conversation
+        .entries
+        .iter()
+        .find(|entry| entry.kind == crate::EntryKind::ToolResult)
+        .expect("replayed result row");
+    assert_eq!(replayed_call.call_id.as_deref(), Some(call_id.as_str()));
+    assert_eq!(replayed_result.call_id.as_deref(), Some(call_id.as_str()));
+    let _ = std::fs::remove_dir_all(&fixture.root);
+}

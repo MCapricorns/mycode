@@ -416,11 +416,12 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::ToolStarted {
             call_id,
+            provider_call_id,
             name,
             target,
         } => {
             if state.sending {
-                tool_started(state, call_id, name, target);
+                tool_started(state, call_id, provider_call_id, name, target);
             }
         }
         FrontendAction::ToolProgress {

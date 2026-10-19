@@ -148,6 +148,7 @@ impl FrontendDriver {
             BridgeEvent::ToolStarted {
                 session_id,
                 call_id,
+                provider_call_id,
                 name,
                 target,
             } => {
@@ -156,6 +157,7 @@ impl FrontendDriver {
                 }
                 FrontendAction::ToolStarted {
                     call_id,
+                    provider_call_id,
                     name,
                     target,
                 }

@@ -403,6 +403,7 @@ pub enum FrontendAction {
     /// A tool call started on the open conversation.
     ToolStarted {
         call_id: String,
+        provider_call_id: String,
         name: String,
         target: String,
     },

@@ -132,6 +132,7 @@ mod tests {
         BridgeEvent::ToolStarted {
             session_id: "s".into(),
             call_id: "c".into(),
+            provider_call_id: "p".into(),
             name: "read".into(),
             target: "a.rs".into(),
         }

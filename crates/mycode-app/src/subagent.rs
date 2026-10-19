@@ -462,6 +462,7 @@ impl BridgeAgentHost {
         }
         let mut agent = Agent::new(config);
         let prompt = Message::User(mycode_core::UserMessage::text(request.prompt.clone()));
+        let role_label = role.name.clone();
         let mut run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
                 .with_cancel(run_cancel)
@@ -471,26 +472,7 @@ impl BridgeAgentHost {
                 .with_read_roots(read_roots);
             let outcome = agent.prompt(prompt, &env).await;
             forwarder.abort();
-            if let Err(error) = outcome {
-                return Err(fail(format!("subagent failed: {error}")));
-            }
-            let answer = agent
-                .state()
-                .messages()
-                .iter()
-                .rev()
-                .find_map(|message| match message.as_ref() {
-                    Message::Assistant(assistant) => {
-                        let text = assistant.text();
-                        (!text.trim().is_empty()).then_some(text)
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if answer.trim().is_empty() {
-                return Err(fail("subagent returned no answer".to_owned()));
-            }
-            Ok(answer)
+            subagent_answer(outcome, agent.state().messages(), &role_label)
         });
         // Also covers this future being dropped mid-await by a parent cancel.
         let _stop_run = AbortOnDrop {
@@ -547,6 +529,39 @@ impl BridgeAgentHost {
         .map_err(|error| format!("role '{role}' provider setup failed: {error}"))?;
         resolved.headers.extend(extra_headers);
         Ok(resolved)
+    }
+}
+
+/// Reads a finished child run's answer: a completed turn answers with its
+/// last assistant text. An interrupted or aborted run is a tool error —
+/// its partial must never pass for a successful result.
+fn subagent_answer(
+    outcome: Result<mycode_core::TurnOutcome, mycode_core::MycodeError>,
+    messages: &[Arc<Message>],
+    role: &str,
+) -> Result<String, mycode_tools::ToolError> {
+    let fail = |message: String| mycode_tools::ToolError::Execution(message);
+    match outcome {
+        Err(error) => return Err(fail(format!("subagent failed: {error}"))),
+        Ok(mycode_core::TurnOutcome::Aborted) => {
+            return Err(fail(format!("subagent {role} cancelled")));
+        }
+        Ok(mycode_core::TurnOutcome::Completed) => {}
+    }
+    let answer = messages
+        .iter()
+        .rev()
+        .find_map(|message| match message.as_ref() {
+            Message::Assistant(assistant) => {
+                let text = assistant.text();
+                (!text.trim().is_empty()).then_some((text, assistant.stop_reason))
+            }
+            _ => None,
+        });
+    match answer {
+        Some((text, mycode_core::StopReason::Error)) => Err(fail(text)),
+        Some((text, _)) => Ok(text),
+        None => Err(fail("subagent returned no answer".to_owned())),
     }
 }
 

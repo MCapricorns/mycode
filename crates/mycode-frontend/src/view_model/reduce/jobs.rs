@@ -15,12 +15,20 @@ use super::streaming::{set_streaming_status, tool_call_label};
 pub(super) fn tool_started(
     state: &mut WorkspaceState,
     call_id: String,
+    provider_call_id: String,
     name: String,
     target: String,
 ) {
     let label = tool_call_label(&name, &target);
     if name == AGENT_PROGRESS_PREFIX {
         upsert_live_job(state, &call_id, "", "starting");
+        // A progress line may have claimed the job first; either way the
+        // cancel path needs the provider id the core's token map uses.
+        if let Some(job) = live_job_mut(state, &call_id)
+            && job.provider_call_id.is_empty()
+        {
+            job.provider_call_id = provider_call_id;
+        }
         refresh_subagent_status(state);
     } else {
         set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
@@ -123,6 +131,7 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
     };
     state.live_jobs.push(LiveJob {
         call_id: call_id.to_owned(),
+        provider_call_id: String::new(),
         role: role.to_owned(),
         label: String::new(),
         prompt: String::new(),
@@ -341,6 +350,7 @@ mod tests {
             &mut state,
             FrontendAction::ToolStarted {
                 call_id: "c1".to_owned(),
+                provider_call_id: "call_1".to_owned(),
                 name: "agent".to_owned(),
                 target: "scout map tokio".to_owned(),
             },
@@ -400,6 +410,7 @@ mod tests {
                 &mut state,
                 FrontendAction::ToolStarted {
                     call_id: call_id.to_owned(),
+                    provider_call_id: String::new(),
                     name: "agent".to_owned(),
                     target: "scout".to_owned(),
                 },

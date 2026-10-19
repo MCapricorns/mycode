@@ -41,8 +41,11 @@ pub enum MentionGroup {
 /// they complete.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveJob {
-    /// Provider-assigned call id.
+    /// Ledger call identity; transcript rows and results pair on it.
     pub call_id: String,
+    /// Provider-assigned call id, carried so a cancel can resolve the child
+    /// token the core publishes under that spelling.
+    pub provider_call_id: String,
     /// Catalog role when known (`scout`, `artisan`, …).
     pub role: String,
     /// Human-facing brief from the parent turn.

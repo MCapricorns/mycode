@@ -411,8 +411,12 @@ pub enum BridgeEvent {
     ToolStarted {
         /// Session identity spelling.
         session_id: String,
-        /// Provider-assigned call id.
+        /// Ledger call identity. Transcript rows and results pair on it, and
+        /// it is the same id a mid-turn reopen replays — so a live row, its
+        /// replayed copy, and its result always match.
         call_id: String,
+        /// Provider-assigned call id. `CancelSubagent` resolves against it.
+        provider_call_id: String,
         /// Tool name.
         name: String,
         /// Path, query, or command. Empty when the call has no target.
@@ -422,7 +426,7 @@ pub enum BridgeEvent {
     ToolProgress {
         /// Session identity spelling.
         session_id: String,
-        /// Provider-assigned call id when known.
+        /// Ledger call identity while the call is open.
         call_id: String,
         /// Tool name when known; empty for a nested progress line.
         name: String,
