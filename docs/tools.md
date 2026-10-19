@@ -1,98 +1,119 @@
 # mycode-tools
 
-模型直接调用注册表里的工具：`read`、`write`、`edit`、`grep`、`find`、当前平台的一个 shell 工具，以及宿主装配的 `ask_user`、`agent`、网页和 MCP 工具。本 crate 定义 trait、注册表和这些内置实现；宿主（`AskChannel`、`AgentHost`、`WebHost`）和 MCP 在 `mycode-app`，在每个回合注册进去。
+`mycode-tools` 实现模型直接调用的工具：`read`、`write`、`edit`、`grep`、`find`、当前平台的一个进程工具，以及本 crate 定义、宿主提供实现的 `ask_user`、`agent`、`web_search`、`fetch_content`。MCP 工具由 app 装配。`content` 回到模型；`details` 只给界面（diff、字节数、退出码），不进上下文。
 
 ```text
-模型的 tool_call
+tool_call
     → ToolRegistry 按名字取出 ToolDyn
-    → JSON Schema 校验、路径锚定
-    → ToolResult
-         content  回到模型
-         details  只给界面（diff、字节数），不进上下文
+    → 参数归一化、JSON Schema 校验
+    → 文件或搜索根 preflight
+    → 执行 → ToolResult(content, is_error, details)
 ```
 
-## 设计思路
+## 调用与注册
 
-一份 schema 两处用。`schemars` 从参数结构体生成 JSON Schema，既放进 `ToolSpec` 给模型，也在 `execute_dyn` 里校验。模型看见的和运行时接受的是同一份（发给服务商前 `$ref` 会被展开，见 providers.md）。
-
-注册表按名字最后写入者生效。注册的工具全部直接出现在模型的工具列表里；`prompt_entries` 另外给 system prompt 列名字和一句说明。未知工具、参数错误和执行错误作为工具错误结果回到模型，回合循环不因此停掉。没有「先问用户准不准」的回调。
-
-文件发现和内容搜索在进程内完成（自己的句柄相对遍历加 ripgrep 的搜索核心），不依赖外部的 `fd` 或 `rg`。这样工具机器上没有这些二进制也可以用，还少一次进程启动。
-
-## 模块
-
-| 模块 | 干什么 |
-| --- | --- |
-| `tool` | `Tool` / `ToolDyn`、`ToolResult`、`ToolError` |
-| `registry` | 名字 → 工具。`prompt_entries` 给 system prompt 列名字和一句说明 |
-| `ctx` | 一次调用的上下文 `ToolCtx`：会话工作目录、取消令牌、调用 id，以及派发前绑定好的搜索根 / 文件句柄 |
-| `roots` | `anchor_tool_path`：落在额外工作区根下的绝对路径改锚到那个根（多个命中取最深的），其余路径留在工作目录，逃出根的照样被拒 |
-| `stream` | 进度事件，然后恰好一个终止事件 |
-| `builtin` | 上面这六个内置工具，以及 `ask_user`、`agent` 和两个网页工具 |
-
-`ToolStream` 的终止标记在发送成功后才置位：多个克隆里只有一个能写下终止，终止之后的进度被静默丢弃；接收端已经关闭时发送失败、不置位，之后的条目因为通道断开而失败，而不是被一个从没送达的终止吞掉。
+- 一份 schema 两处用：`schemars` 从参数结构体生成 JSON Schema，既发给模型，也在 `execute_dyn` 里校验。`$schema`、`$id`、`$ref` 在发出和校验前都会被处理掉。
+- 注册表按名字 last-wins；`specs()` 按名字排序。注册的工具全部出现在模型工具列表里，`prompt_entries()` 另外给 system prompt 提供名字和一句说明。
+- 参数先归一化：camelCase 转 snake_case；`timeout`→`timeout_secs`、`cmd`→`command`、`file_path`/`filepath`→`path`、`old_str`/`new_str`；字符串形式的数字和布尔按 schema 转成标量。
+- 未知工具、schema 不合法、执行错误都变成 `is_error` 的工具结果，回合继续。没有“先问用户是否允许”的回调。
+- `prepare_tool_ctx` 在执行前绑定文件或搜索句柄并改锚路径。只有不改变东西的工具可以并行：`read`、`grep`、`find`、网页工具、`search_tool`、声明 `readOnlyHint` 的 MCP 工具；写、进程、`ask_user` 按模型顺序单独执行。同一条回复里的 `agent` 调用会一起启动。
+- `ToolStream` 保证任意条进度后恰好一个终止事件；终止发送成功后，后续进度被静默丢弃。
 
 ## 内置工具
 
 | 工具 | 行为 |
 | --- | --- |
-| `read` | 带行号读 UTF-8 文件（去掉 BOM），返回不透明的 revision。`offset` 是从 1 开始的行号，schema 写着 `minimum: 1`，传 `0` 在校验阶段就被拒，内核里也再挡一次，不会当成第一行；省略时从第一行读。`limit` 是行数。每次最多 2000 行或 50 KiB，超出时附说明让模型用 offset / limit 再读。文件超过 32 MiB 直接拒绝 |
-| `write` | 创建或整文件替换，最多 8 MiB。新文件原子创建（缺的父目录一并建）；已有文件必须带上次 `read` 的 `expected_revision`，或显式 `overwrite: true`，两者不能同用 |
-| `edit` | 一个快照上的一批操作（最多 32 个），一次发布：`literal`（memmem / Aho-Corasick）、`fuzzy`（归一化后的 Levenshtein，只接受唯一且领先足够的最佳匹配）、有界 `regex`、行范围。也接受旧的 `{old_string, new_string}` 唯一替换。返回 revision 和有界 diff 摘要，不回整个文件。模糊匹配在分词和扫描候选窗口时每约 4 KiB 原文检查一次取消 |
-| `find` | 按 glob 找文件和目录，限制在搜索根内，遵守 `.gitignore`，跳过隐藏和被忽略的路径。`*` 会跨过 `/`；`max_depth` 限制报告和下钻的层数（`1` 是根下的直接子项），所以 `*` 加 `max_depth` 1 就是列一个目录。目录条目以 `/` 结尾。默认最多报告 1000 条，排序后用 `/` 分隔。取消或超时返回错误，不给半截结果 |
-| `grep` | 进程内的内容搜索，默认字面量，`is_regex` 开正则，支持 include / exclude glob。默认最多报告 200 行 `path:line:text`，每行最多 500 字节。跳过隐藏和被忽略的文件 |
-| `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程启动工具。注册表里的名字跟启动时解析到的解释器走，整个会话不变：PowerShell 是 `powershell`，bash 是 `bash`，zsh 是 `zsh`，POSIX sh 是 `sh`，只有 Windows 上两种 PowerShell 都没有时才是 `cmd`。`mode` `script` 把 `command` 交给这个解释器（管道、重定向、展开、脚本，以及用 Python 改文件）。`mode` `program` 用显式 `args` 启动，不解析 shell 命令字符串。PE / ELF / Mach-O 直接运行。直接 shebang 包装（一个解释器、最多一个参数，例如 `#!/bin/bash` 或 `#!/usr/bin/env python3`）改为执行那个解释器，脚本路径和 `args` 跟在后面。批处理和 shebang 参数 `-c` / `env -S` 被拒，错误里写下一步 |
+| `read` | 读 UTF-8 文本，返回行窗口和 revision |
+| `write` | 整文件创建或替换，带 revision / overwrite 保护 |
+| `edit` | 同一快照上的批量替换，一次发布 |
+| `find` | 按 glob 找文件和目录 |
+| `grep` | 按行搜索文件内容 |
+| `powershell` / `bash` / `zsh` / `sh` / `cmd` | 唯一的进程工具，名字跟解析到的解释器 |
 
-进程工具的两条模式共用启动路径：钉住程序身份、限制参数和环境变量、截断约 50 KiB 输出、默认 120 秒超时（`timeout_secs` 可改）。超时和取消时终止并回收整棵进程树，包括 `setsid` 脱离进程组的子孙，以及子 shell 退出后仍留在原进程组里的后台进程。shell 自己退出后工具就返回，不等后台子进程关掉继承的管道。丢掉 future 也会把清理交出去。非零退出码是 `is_error` 结果，不是循环故障。环境变量白名单不是隔离，进程以当前用户权限运行。每次 `script` 都是新进程，`cd` 和变量赋值不会留到下一次调用。
+### read
 
-Windows 上脚本模式按层侦查，命中一层就停：PowerShell 7（`pwsh`），然后 Windows PowerShell 5.1（`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`）。`pwsh` 的候选顺序是 PATH 里的 `pwsh.exe`、`Program Files\PowerShell\7`、预览版、WindowsApps 里的 `Microsoft.PowerShell_*` 包、WinGet 和 scoop。常规映像优先。`WindowsApps\pwsh.exe` 这种直接放在 `WindowsApps` 目录下的商店执行别名只在没有常规 `pwsh` 时使用，并且按路径形状识别，不看文件大小；包目录里的 `pwsh.exe` 仍算常规映像。不选择 Git Bash、MSYS2、Cygwin，也不选 WSL 的 `System32\bash.exe` / `SysWOW64\bash.exe`：会话 cwd 是 Windows 路径。SysWOW64 里的 32 位 `powershell.exe` 也不选。两层都没有时，运行时退到 `%SystemRoot%\System32\cmd.exe`（`/d /s /c`），工具名变成 `cmd`，这个退路不写入设置。Windows 自带的是 5.1，不是 5.0；它和 PowerShell 7 的 `&&` 不通用，所以只有没找到 `pwsh` 时才用它，提示词也改成 5.1 的语法。这和 Codex、Gemini CLI 的 Windows 顺序一致；pi 和 Claude Code 在 Windows 上以 bash 为先，这里不跟，因为要优先 PowerShell 7。
+只接受 UTF-8；UTF-16、UTF-32 和非法 UTF-8 直接报错。BOM 只从显示内容去掉，revision 按原始字节计算。隐藏文件可读。
 
-macOS 先看 `$SHELL`。它是绝对路径且文件名是 bash、zsh 或 sh 时就用它。否则依次试 `/bin/zsh`、`/bin/bash`、PATH 里的 zsh 和 bash，再试 `sh`。`$SHELL` 若是 pwsh、fish 或其他家族，就跳过。macOS 上不选择 pwsh 或 cmd。工具名跟实际解释器走。
+`offset` 是 1-based 行号，schema 和运行时都要求 ≥1，`0` 不会当成第一行；省略时从第一行开始。`limit` 是行数。
 
-`MYCODE_SHELL` 和设置里的 `tools.shell` 都不再切换解释器。`MYCODE_SHELL` 有具体取值时提示一次并忽略；旧 `settings.json` 里的 `tools` 字段是未知字段，会让整份文档备份后重置（见 config.md），抢救时丢弃。
+每次最多返回 2000 行或 50 KiB，哪个先到就截断，并附说明让模型用 `offset`/`limit` 继续；单行超过 50 KiB 时只显示该行开头。文件超过 32 MiB 直接拒绝。
 
-PowerShell（7 和 5.1）不用 `-Command` 拼接用户字符串，也不把 bash 改写成 cmdlet。脚本先留下 PowerShell 要求放在最前的空行、注释、`using` 和 `param (...)` 块，再插入一段把管道编码设成 UTF-8 的前奏（主机禁止改编码时这段被跳过，用户脚本照常跑），然后整段按 UTF-16LE 做 Base64，用 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动。空脚本会补一行注释，避免空的 `-EncodedCommand` 被拒绝。命令行按 UTF-16 码元计，上限 32767。bash、zsh 和 sh 用 `-c`。用户命令原样执行。
+返回的是纯文本行，不加行号，末尾追加 `[revision mycode-rev1-…]`。revision 覆盖文件身份、大小、mtime 和原始字节 hash。
 
-进程工具出现在模型的工具列表里，名字就是当前解释器（`powershell`、`bash`、`zsh`、`sh` 或 `cmd`）。描述和 `<environment>` / `<shell>` 按当前解释器来写：PowerShell 7 可以用 `&&`；Windows PowerShell 5.1 上 `&&` 和 `||` 是语法错误，要用 `;` 和 `$LASTEXITCODE`。提示词不提 bash 到 PowerShell 的翻译。子代理用同一套解析：白名单里的 `shell` / `bash` / `powershell` / `cmd` 都变成这一个工具，提示词里的语法说明跟它一致。scout 不注册进程工具。
+### write
 
-进程输出先认 BOM，再认没有 BOM 的 UTF-16LE（PowerShell 往管道写中文时经常这样，这些字节有时也是合法 UTF-8），然后才是严格 UTF-8。还不行时，Windows 依次试 OEM 代码页、ANSI 代码页和控制台输出代码页（中文 Windows 上 `cmd` 的 `dir` 往往是 GBK）。标准输出和标准错误都会再整理一次：有 `#< CLIXML` 时抽出 `Error` 和 `Warning` 节点，`_xHHHH_`（包括 `_x001B_`）还原成字符，ANSI / VT 序列去掉。没有这些标记的普通文本保持原样。
+创建或整文件替换，内容最多 8 MiB。新文件不需要 revision，原子创建，缺的父目录一并创建；创建前目标若已被别人创建则拒绝。隐藏文件可写。
 
-`program` 模式的实现按平台拆开（Windows x64 与 Windows ARM64 共用 `CreateProcessW`、macOS Apple Silicon）。发布包只覆盖这三个平台。摘要复查和参数组装共用。其它目标不支持直接启动映像。背后只有当前这一个解释器，没有 `exec`，也不会同时有 `bash` 和 `powershell`。角色白名单里的 `shell` 仍表示这个进程工具。
+替换已有文件必须给 `expected_revision`（上次 `read`/`edit`/`write` 返回的 `[revision …]`）或 `overwrite: true`，两者不能同时给；目标不存在时不能给 `expected_revision`。
 
-## 搜索的边界
+写入走临时文件 + rename，保留原文件的 mode/DACL 和属性，发布后重新读取并校验内容。已存在的硬链接会被替换成新 inode，结果里标 `detached_hardlink=true`。不跟随符号链接或重解析点。文件内容不会写进 `details`。
 
-搜索有独立的预算：60 秒截止、每次 grep 最多读 512 MiB、结果最多存 10000 条、输出最多 100 KiB、I/O 错误样本 5 条。到顶就停并说明停因，而不是把目录树读完。
+### edit
 
-`grep` 和 `find` 只解析一次工作目录，之后所有打开都相对保留的根句柄，不再按路径名重新解析，也不跟随符号链接。不跨挂载点：
+两种用法：`{path, old_string, new_string}` 做唯一替换（`replace_all: true` 替换全部）；或 `{path, operations: [...]}` 做一批操作。`operations` 出现时，`old_string`/`new_string`/`replace_all` 全部忽略。一次最多 32 个操作。
 
-- **macOS**：`openat(O_NOFOLLOW)` 后比较父子的 `st_dev`，那里 `st_dev` 就是挂载身份。`fs_io/unix.rs` 里 `read` / `write` / `edit` 的打开用同一规则
-- **Windows**：每个分量相对保留的目录句柄用 `NtOpenFile` 打开，拒绝重解析点
+- `literal`：`pattern`+`replacement`，或最多 32 组 `patterns`+`replacements`；`occurrence` 为 `unique`（默认）、`all` 或 `nth`。先精确匹配；失败时按文件主导换行重试；最后忽略行尾空格/制表符再试。缩进不忽略。替换文本的换行会改成文件的主导换行。
+- `fuzzy`：按 token 归一化后算 Levenshtein，`max_distance` 必须是 1–3；只接受唯一最佳，且领先第二名的距离至少为 `1 + 归一化字符数/8`。归一化 needle 最多 256 字符，haystack 最多 262,144 个 token、8,192 个候选窗口；分词和扫描每约 4 KiB 检查一次取消。
+- `regex`：Rust `regex`，`occurrence` 只支持 `unique`/`all`，不支持 `nth`；不支持 lookaround 和反向引用；嵌套上限 32，正则和 DFA 大小上限各 1 MiB；零宽匹配拒绝；捕获展开每次最多 1 MiB。
+- `line_range`：1-based 闭区间。必须给 `expected_text` 和/或 `expected_hash`（Blake3 hex，包含最后一行换行）；`expected_text` 可省略最后一个行尾。空 `replacement` 删除这些行，缺行尾的替换会继承被替换行的行尾。
 
-搜索时链接数不为 1 的普通文件被拒，避免工作目录里的硬链接暴露根外的 inode（文件工具允许硬链接，写入时发布新 inode）。向上找祖先目录的 ignore 文件时碰到挂载边界就停，这不算失败，搜索照常返回结果。
+所有操作都基于同一个快照，按字节范围排序；重叠、同一位置、非法 UTF-8 边界都会拒绝。任何一个操作失败，整次调用不修改文件。总匹配数最多 32,768，结果最多 8 MiB。写入用快照 revision 做 compare-and-swap；给了 `expected_revision` 就必须与快照一致。返回 replacement 数量、字节数和 revision；diff 摘要最多 4096 字节，只放在 `details`。BOM 会保留。超过 8 MiB 的文件不能编辑。
 
-## 宿主工具（定义在本 crate，装配在 app）
+## 搜索
 
-| 工具 | 宿主提供什么 |
+`find` 按 glob 找路径，搜索根默认是 cwd，`path` 可以是目录或单个文件。`*` 跨 `/`；不含 `/` 的 pattern 还会匹配任意深度的文件名。`max_depth` 从搜索根算，`1` 是直接子项，`0` 被拒绝；到达深度上限的目录仍会报告，但不再下钻。目录以 `/` 结尾。默认最多 1000 条，硬上限 10,000 条，结果按路径排序。隐藏和 `.gitignore`/`.ignore` 跳过；显式 `path` 命中隐藏或忽略路径时返回说明，而不是空结果。
+
+`grep` 默认按字面量搜索，`is_regex` 打开正则。全小写 pattern 忽略大小写，含大写则精确匹配。pattern 含 `|`、`.*`、`\s+`、`\(` 等正则特征但没开 `is_regex` 时，如果正则能编译且不匹配空串，会同时按字面量和正则匹配并说明；否则只按字面量。`include`/`exclude` 是 glob，不含 `/` 时匹配任意深度的文件名，逗号列表按 `{a,b}` 处理。按行返回 `path:line:text`，默认 200 行，`max_results` 可调，硬上限 10,000 行；每行最多 500 字节。跳过二进制（含 NUL）以及隐藏、忽略文件。
+
+搜索预算：60 秒、单个 grep 最多读 512 MiB、匹配回调最多 100,000 次、结果最多存 10,000 条、结果堆最多 4 MiB、输出最多 100 KiB、pattern/glob 最多 16 KiB、I/O 错误样本 5 条。遍历另有 100,000 个条目、256 层深度、16,384 的目录宽度、512 个活句柄和 ignore 文件预算。时间或取消返回错误，不给半截结果；条目/宽度/结果等预算到顶会停止并在结果里写 `stopped_early` 和停因；普通逐路径 I/O 错误返回带 lower-bound 说明的结果。
+
+## 搜索根与路径
+
+- 相对路径相对会话 cwd。绝对路径落在额外工作区根下时，改锚到最深的那个根；不在任何根下的绝对路径直接拒绝。
+- `read` 还允许宿主发布的只读技能根（`~/.agents`、`~/.agents/skills`）；`write`、`edit`、`grep`、`find` 不会改锚到这些根，所以技能目录只可读。
+- cwd 和搜索根只解析一次，之后用保留的目录句柄相对打开；不跟随符号链接或重解析点，不跨挂载点。Unix 比较 `st_dev`，Windows 每个分量用 `NtOpenFile` 并拒绝重解析点。
+- Unix 上搜索拒绝 `nlink != 1` 的普通文件，避免硬链接把根外的 inode 带进来。文件工具允许硬链接；`write`/`edit` 发布新 inode。
+- 向上查找 ignore 文件时碰到挂载边界就停，这不算搜索失败。
+
+## 进程工具
+
+模型只看到一个进程工具，名字由启动时解析到的解释器决定，整个进程不变：PowerShell 7 和 5.1 都叫 `powershell`，其余是 `bash`、`zsh`、`sh`；只有 Windows 上两种 PowerShell 都找不到时才叫 `cmd`。
+
+`mode` 默认 `script`：`command` 交给解释器执行。`mode` `program`：用 `program` + `args` 直接启动，不解析 shell 字符串。`script` 拒绝 `program`/`args`，`program` 拒绝 `command`。`timeout_secs` 默认 120，小于 1 按 1 算。
+
+脚本模式：PowerShell 不拼 `-Command`，脚本按 UTF-16LE Base64 走 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand`；UTF-8 管道编码前奏插在 PowerShell 要求的开头语句（注释、`using`、`param`）之后，空脚本补一行注释。命令行按 UTF-16 码元计，上限 32,767。bash/zsh/sh 用 `-c`，cmd 用 `/d /s /c`。用户命令原样执行，不做 bash→PowerShell 翻译。
+
+程序模式：PE、ELF、Mach-O 直接启动。直接 shebang 包装只跟一层：解释器加最多一个参数，脚本路径和 `args` 追加在后面；`#!/usr/bin/env name` 要求 `name` 是单个程序名。批处理、`-c`/`--command`/`env -S` 拒绝。裸 `program` 只在绝对 PATH 项里查找；路径型 `program` 相对 cwd 解析，结果必须是绝对路径。`program` 最多 32,767 字节；`args` 最多 4096 个、单个 64 KiB、合计 1 MiB；映像最多 256 MiB。程序直启只实现了 Windows x64/ARM64 和 macOS Apple Silicon。
+
+解释器选择：Windows 先找常规 `pwsh`（PATH、`Program Files\PowerShell\7`、预览版、WinGet、scoop 等），再找 Windows PowerShell 5.1（`System32`，PATH 里排除 SysWOW64）；`WindowsApps\pwsh.exe` 商店执行别名只在没有常规 `pwsh` 时使用。不选 Git Bash、MSYS2、Cygwin 或 WSL。两者都没有时退到 `%SystemRoot%\System32\cmd.exe`。Unix 上 `$SHELL` 是绝对路径的 bash/zsh/sh 就用它，否则依次试 `/bin/zsh`、`/bin/bash`、PATH 里的 zsh/bash、`/bin/sh`、PATH 里的 sh。`MYCODE_SHELL` 不再切换解释器；有非空且非 `auto` 的值时提示一次并忽略。
+
+执行与清理：环境变量按白名单重建，PATH 只保留绝对项；这只是过滤，不是隔离。超时或取消会终止并回收进程树：macOS 先按父子关系杀子孙（包括 `setsid` 出去的），再 `killpg` 清同组孤儿，重复 3 轮；Windows 用不允许 breakaway 的 kill-on-close Job，进程创建后先挂 Job 再恢复主线程。shell 自己退出后最多再等 50 ms 让输出离开管道，然后返回，不等后台子进程关闭继承的写端。丢掉 future 会把清理交给监督线程。每次 `script` 都是新进程，`cd` 和变量赋值不会保留到下一次调用。
+
+输出：stdout 和 stderr 各保留头尾，合并后最多 50 KiB，截断处标出省略字节。非零退出是 `is_error` 结果，不是回合故障；超时和取消也返回错误结果并附说明。解码顺序是 BOM（UTF-8/UTF-16）→ 无 BOM 的 UTF-16LE 启发式 → 严格 UTF-8（截断的合法前缀按 UTF-8）→ Windows OEM/ANSI/控制台输出代码页。随后抽取 CLIXML 的 `Error`/`Warning`、还原 `_xHHHH_`、去掉 ANSI/VT。提示词和 `<environment>`/`<shell>` 跟当前解释器一致：PowerShell 7 可用 `&&`，5.1 用 `;` 和 `$LASTEXITCODE`。
+
+## 宿主工具
+
+| 工具 | 行为 |
 | --- | --- |
-| `ask_user` | 把 1–4 个问题送到界面，等用户答完再继续。用户拒绝回答时是一次可捕获的错误结果，程序继续；停止整个回合会中止调用。工具名是 `ask_user` |
-| `agent` | 按角色再跑一个有白名单的子循环。一块工作能独立完成、留在主对话里会塞满搜索和阅读时就委派；小改动、手上已有上下文、或下一步马上要用结果时自己做。scout 只读：只能搜代码（`read`、`grep`、`find`）和查网络资料、文档、API（`web_search`、`fetch_content`），没有 shell 也不能写文件，不跑命令、不构建、不测试；artisan 在自己的 worktree 里做一个边界清楚的改动。工具名是 `agent`，没有 `task` 别名。同一条回复里的多个 `agent` 并行；能写的角色用 worktree，不共用会话目录。同时最多跑 8 个，固定值，不是设置项。内置角色只有 scout 和 artisan，也可以用 `agents/*.md` 里的自定义角色。子代理不能问用户。子代理没有墙钟超时，一直运行到给出答案；用户取消这一回合、在详情面板里停止它、或删除对话时都会结束它，排队等名额的也一样。 |
-| `web_search` / `fetch_content` | 有界 HTTP：每次最多 8 条结果 / 8 个 URL。搜索结果是标题、URL 和最多 240 字符的摘要，重复 URL 丢掉，相同查询缓存 10 分钟。`fetch_content` 带 `goal` 时只返回匹配摘录（每页约 1200 字符）；不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)` |
+| `ask_user` | 一次 1–4 个问题，等用户回答；用户关闭问题是一次可捕获的错误结果，程序继续；停止整个回合会中止调用。答案渲染最多 4096 字符；`multiple` 允许复选。 |
+| `agent` | 按角色跑一个子循环。`prompt` 最多 16,000 字符，答案最多 24,000 字符。内置角色只有 `scout` 和 `artisan`，也可用 `agents/*.md` 自定义。子代理不能问用户，也不能再调 `agent`；没有墙钟超时，只能由答案、取消、停止或删除对话结束。 |
+| `web_search` / `fetch_content` | 有界 HTTP。搜索最多 8 条（默认 5），摘要最多 240 字符，重复 URL 丢弃，相同查询缓存 600 秒。抓取一次 1–8 个 URL。 |
 
-网页后端由设置决定：启用的那个优先；都没启用时用第一个有钥匙（环境变量或 `web-<id>`）的后端。Querit 走 `POST {endpoint}/v1/search` 与 `/v1/contents`，AnySearch 走 `/v1/search` 与 `/v1/extract`，Exa 走 `/search`（带 highlights 当摘要）与 `/contents`。设置页只列 Querit / AnySearch / Exa 三家厂商行；旧设置里的 `custom` 行在加载时丢弃，不再显示或使用。Querit、Exa 没钥匙时调用失败并提示去设置页粘贴或设对应环境变量；已启用的 AnySearch 没钥匙时匿名访问。
+`scout` 只读：工具限制为 `read`、`grep`、`find`、`web_search`、`fetch_content`，MCP 也只给 `readOnlyHint: true` 的工具。`artisan` 默认在独立 git worktree 中改文件，结束时把最多 256 KiB 的 diff 附在答案后并删除 worktree；改动不会自动合回主工作区，也不提交。`isolation` 可选 `shared`/`worktree`，只读角色强制 `shared`。每个父回合最多同时跑 8 个子代理，多出的排队；同一条回复里的多个 `agent` 都会启动。
 
-MCP 工具按原始工具名注册。小服务直接进工具列表；大服务仍走 `search_tool` 和 `use_tool`。调用远端时用原来的工具名。scout 只拿到带 `readOnlyHint: true` 的 MCP 工具，没有这个标注的不给。技能目录在 system prompt 的 `<skills>` 里，正文不进提示；匹配时用 `read` 按目录里的路径读取对应的 `SKILL.md`。子代理（含 scout）用同一份目录。
+网页后端：有启用的 backend 就用它；都没启用时用第一个有 key 的。Querit 和 Exa 必须有 key，AnySearch 可匿名。`fetch_content` 带 `goal` 时按目标选 1200 字符的摘录；如果命中的是标题，会返回该标题下的整节，最多 48,000 字符。不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)`。
 
-## 改文件
+## MCP 与技能
 
-`write` 和 `edit` 直接改文件。进程工具的 `mode` `script` 也可以改文件：bash 里用 Python（`python3` 或 `python`）的引号 heredoc 或短脚本，PowerShell 里用 here-string 管道给 `python`。`mode` `program` 不解析 shell 命令字符串。可加载映像直接启动；直接 shebang 包装改由它的解释器执行。这些路径都不做文件快照。撤回或编辑一条对话不会把工作区文件恢复或删掉。
+MCP 在回合开始时连接启用的服务器，连接池随后复用。单个服务器的工具不超过 4 个、且每个输入 schema 编码后不超过 2048 字节时，直接注册成普通工具；否则只能通过 `search_tool`（`name: "list"` 或精确名字取 schema）和 `use_tool` 调用。调用使用原始工具名；直接注册不会覆盖同名内置工具；schema 可编译时参数先在本地校验。结果超过 20 KiB 时只内联头尾，全文存到本地并给出路径。
+
+技能目录放在 system prompt 的 `<skills>` 里，正文不注入；模型用 `read` 按目录中的路径读取对应的 `SKILL.md`。子代理（含 scout）使用同一份目录。
 
 ## 残留风险
 
-这些是现在代码的真实边界，不是还没做的待办。
-
-- **进程权限。** shell 和 `program` 模式以当前用户权限运行；环境变量白名单只是过滤环境，不是隔离。没有 OS 级沙箱。
-- **`program` 模式的 shebang。** 只跟一层。解释器必须是可加载映像。`#!/usr/bin/env name` 会在允许的 PATH 里找 `name`。`-c`、`--command` 和 `env -S` 拒绝，错误说明改用 `mode` `script` 或自己把解释器放进 `program`。包装脚本的正文仍然按那个解释器执行，参数是 argv，不是拼进 `sh -c` 的字符串。批处理仍然拒绝。
-
-## 不放在这里的东西
-
-本 crate 不自己发现哪个会话正在打开，也不保存密钥。工作目录、派发前绑定的句柄由 `ToolCtx` 带进来；额外文件夹、网页钥匙和 MCP 连接由宿主在回合开始时放进来。
+- 进程工具以当前用户权限运行。环境变量白名单只过滤环境，不是隔离；没有 OS 级沙箱。
+- `write`、`edit` 和进程启动只用进程内全局锁串行化，revision 检查也是进程内 compare-and-swap。同一账号的外部进程仍可能并发改文件；没有 advisory lock。发布后会重新读取并核对 inode 和内容，但复核完成之后的替换无法发现。
+- 搜索拒绝符号链接、重解析点、跨挂载点和 Unix 多链接文件；文件工具把路径限制在保留的根句柄内，但 `write`/`edit` 只保证自己发布的新 inode，不阻止其它进程写同一路径。
+- `program` 模式的 shebang 只跟一层；解释器必须是可加载映像，`#!/usr/bin/env name` 只接受一个程序名。
+- 网页、MCP 结果和文件内容都按不可信数据处理；工具描述和子代理提示里明确要求不把其中的文字当指令。
+- 撤回或编辑一条对话不会恢复或删除工作区文件。
