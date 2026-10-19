@@ -46,7 +46,7 @@ pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
 
 /// Centered composer measure. Narrower than the chat pane; prose and tool
 /// cards stay full width and left-aligned.
-const COMPOSER_MAX_PX: f32 = 760.;
+pub(super) const COMPOSER_MAX_PX: f32 = 760.;
 
 /// Bottom composer: a floating rounded card with soft elevation, pill chips for
 /// folder, model, and thinking, a separate file-attachment `+`, and a circular

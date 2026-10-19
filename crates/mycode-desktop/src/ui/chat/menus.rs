@@ -12,7 +12,7 @@ use gpui_kit::{
 
 use crate::i18n::t;
 use crate::ui::skin::{self, menu_panel};
-use crate::view_model::{MentionGroup, MentionKind, selected_reasoning_level};
+use crate::view_model::{MentionGroup, selected_reasoning_level};
 use crate::workspace::Workspace;
 
 #[cfg(all(test, feature = "test-support"))]
@@ -20,6 +20,13 @@ mod layout_tests;
 
 /// Fixed row height that keeps the menu rows visually uniform.
 const MENU_ROW_HEIGHT: gpui_kit::Pixels = px(34.);
+/// Maximum rows visible at once in the `@`/`/` autocomplete menu; longer lists
+/// scroll by arrow keys or the mouse wheel.
+const MENTION_VISIBLE_ROWS: usize = 3;
+/// Height cap for [`MENTION_VISIBLE_ROWS`] rows (`34px` each), two `gap_1`
+/// gaps (`4px`), `p_1` padding (`8px`), and the `1px` top/bottom border.
+pub(super) const MENTION_MENU_MAX_H: f32 =
+    MENTION_VISIBLE_ROWS as f32 * 34. + (MENTION_VISIBLE_ROWS - 1) as f32 * 4. + 8. + 2.;
 
 /// The model picker, anchored above the model chip. Same provider step
 /// and search list the settings page uses.
@@ -184,6 +191,7 @@ fn menu_row(
     div()
         .id(id)
         .h(MENU_ROW_HEIGHT)
+        .flex_shrink_0()
         .flex()
         .flex_row()
         .items_center()
@@ -193,7 +201,7 @@ fn menu_row(
         .rounded(skin::radius_control())
         .text_sm()
         .cursor_pointer()
-        .when(highlighted, |this| this.bg(skin::frost(theme)))
+        .when(highlighted, |this| this.bg(skin::frost_hover(theme)))
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)
         .child(div().min_w_0().truncate().child(label))
@@ -226,11 +234,11 @@ pub(crate) fn reasoning_row_label(level: &str) -> String {
 }
 
 /// The `@` file and `/` command autocomplete panel, docked in-flow above
-/// the composer like the model menu. Slash rows stay one flat list: group
-/// headings only added divisions to scroll past.
+/// the composer and sharing its horizontal measure. Capped at three rows so
+/// longer lists scroll via arrow keys or the mouse wheel.
 pub(super) fn render_mention_layer(
     workspace: &mut Workspace,
-    window: &Window,
+    _window: &Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
@@ -239,10 +247,6 @@ pub(super) fn render_mention_layer(
         .mention
         .as_ref()
         .expect("caller checks the menu is open");
-    let heading = match mention.kind {
-        MentionKind::File => Some(t("FILES", "文件")),
-        MentionKind::Command => None,
-    };
     let preferred = workspace.mention_highlight();
     let scroll = workspace.mention_scroll().clone();
     let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
@@ -271,29 +275,23 @@ pub(super) fn render_mention_layer(
         .flex()
         .justify_center()
         .child(
-            div().w_full().child(
-                menu_panel("mention-menu", theme)
-                    .w_full()
-                    .max_h(menu_height_cap(window, 400.))
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll)
-                    .p_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .when_some(heading, |this, heading| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                                .opacity(0.6)
-                                .px_2()
-                                .pt_1()
-                                .child(heading),
-                        )
-                    })
-                    .children(rows),
-            ),
+            div()
+                .w_full()
+                .max_w(px(super::composer::COMPOSER_MAX_PX))
+                .min_w_0()
+                .child(
+                    menu_panel("mention-menu", theme)
+                        .occlude()
+                        .w_full()
+                        .max_h(px(MENTION_MENU_MAX_H))
+                        .overflow_y_scroll()
+                        .track_scroll(&scroll)
+                        .p_1()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(rows),
+                ),
         )
         .into_any_element()
 }
@@ -326,9 +324,18 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMPOSER_MENU_CLEARANCE, JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MenuAnchor,
-        model_menu_anchor, thinking_menu_anchor,
+        COMPOSER_MENU_CLEARANCE, JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MENTION_MENU_MAX_H,
+        MENTION_VISIBLE_ROWS, MenuAnchor, model_menu_anchor, thinking_menu_anchor,
     };
+
+    #[test]
+    fn mention_menu_caps_at_three_rows_and_composer_width() {
+        const {
+            assert!(MENTION_VISIBLE_ROWS == 3);
+            assert!(MENTION_MENU_MAX_H == 120.);
+            assert!(super::super::composer::COMPOSER_MAX_PX == 760.);
+        }
+    }
 
     #[test]
     fn builtin_and_skill_rows_with_the_same_slug_have_distinct_ids() {

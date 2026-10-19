@@ -84,32 +84,49 @@ pub(super) fn slash_items(
     servers: &[mycode_config::McpServerSettings],
     tools: &[(String, Vec<String>)],
 ) -> Vec<MentionItem> {
-    let fragment = fragment.to_ascii_lowercase();
+    let fragment = fragment.to_lowercase();
     let mut items = Vec::new();
+    let mut fallback = Vec::new();
     for (name, english, chinese) in COMPOSER_COMMANDS {
         let slug = &name[1..];
+        let label = crate::i18n::t(english, chinese);
+        let item = || MentionItem {
+            insert: (*name).to_owned(),
+            label: label.to_owned(),
+            group: MentionGroup::Command,
+        };
         if fragment.is_empty() || slug.starts_with(&fragment) {
-            items.push(MentionItem {
-                insert: (*name).to_owned(),
-                label: crate::i18n::t(english, chinese).to_owned(),
-                group: MentionGroup::Command,
-            });
+            items.push(item());
+        } else if slug.contains(&fragment)
+            || english.to_ascii_lowercase().contains(&fragment)
+            || chinese.contains(&fragment)
+        {
+            fallback.push(item());
         }
     }
     for skill in skills {
-        if fragment.is_empty() || skill.slug.to_ascii_lowercase().starts_with(&fragment) {
-            items.push(MentionItem {
-                insert: format!("/{}", skill.slug),
-                label: skill.title.clone(),
-                group: MentionGroup::Skill,
-            });
+        let slug = skill.slug.to_lowercase();
+        let item = || MentionItem {
+            insert: format!("/{}", skill.slug),
+            label: skill.title.clone(),
+            group: MentionGroup::Skill,
+        };
+        if fragment.is_empty() || slug.starts_with(&fragment) {
+            items.push(item());
+        } else if slug.contains(&fragment) || skill.title.to_lowercase().contains(&fragment) {
+            fallback.push(item());
         }
     }
     for server in servers.iter().filter(|server| server.enabled) {
-        let id = server.id.to_ascii_lowercase();
-        let server_hit = fragment.is_empty() || id.starts_with(&fragment);
-        if server_hit {
+        let id = server.id.to_lowercase();
+        if fragment.is_empty() || id.starts_with(&fragment) {
             items.push(MentionItem {
+                insert: format!("mcp:{}", server.id),
+                label: server.id.clone(),
+                group: MentionGroup::Mcp,
+            });
+        } else if id.contains(&fragment) {
+            fallback.push(MentionItem {
                 insert: format!("mcp:{}", server.id),
                 label: server.id.clone(),
                 group: MentionGroup::Mcp,
@@ -123,22 +140,28 @@ pub(super) fn slash_items(
             continue;
         };
         for tool in names {
-            let tool_key = tool.to_ascii_lowercase();
+            let tool_key = tool.to_lowercase();
             let qualified = format!("{id}/{tool_key}");
-            let tool_hit = !fragment.is_empty()
+            if !fragment.is_empty()
                 && (tool_key.starts_with(&fragment)
                     || qualified.starts_with(&fragment)
-                    || id.starts_with(&fragment));
-            if !tool_hit {
-                continue;
+                    || id.starts_with(&fragment))
+            {
+                items.push(MentionItem {
+                    insert: format!("mcp:{}/{}", server.id, tool),
+                    label: format!("{} / {tool}", server.id),
+                    group: MentionGroup::Mcp,
+                });
+            } else if !fragment.is_empty() && qualified.contains(&fragment) {
+                fallback.push(MentionItem {
+                    insert: format!("mcp:{}/{}", server.id, tool),
+                    label: format!("{} / {tool}", server.id),
+                    group: MentionGroup::Mcp,
+                });
             }
-            items.push(MentionItem {
-                insert: format!("mcp:{}/{}", server.id, tool),
-                label: format!("{} / {tool}", server.id),
-                group: MentionGroup::Mcp,
-            });
         }
     }
+    items.extend(fallback);
     items.truncate(MAX_SLASH_ROWS);
     items
 }
@@ -232,5 +255,18 @@ mod tests {
                 .position(|item| item.insert == "/settings")
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn slash_matches_substrings_after_prefix_hits() {
+        let skills = vec![
+            skill("ferris-git", "Git Repair and History"),
+            skill("ferris-windows", "Windows Engineering"),
+            skill("git-helper", "Git Helper"),
+        ];
+        let items = slash_items("git", &skills, &[], &[]);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].insert, "/git-helper", "prefix match comes first");
+        assert_eq!(items[1].insert, "/ferris-git", "substring match follows");
     }
 }
