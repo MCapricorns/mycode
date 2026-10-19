@@ -6,6 +6,7 @@
 //! application and is not shown here.
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled,
@@ -52,6 +53,21 @@ pub(super) fn render_general_section(
         .collect::<Vec<_>>();
     let theme_row = appearance_theme_field(theme_id, cx);
     let font_row = font_size_field(font_size, cx);
+    let thinking_row = settings_row(
+        "thinking-traces",
+        t("Thinking traces", "思考记录"),
+        Some(t(
+            "Fold every thinking trace to one line, or show the full text.",
+            "把每条思考折叠成一行，或显示完整内容。",
+        )),
+        Switch::new("thinking-traces-toggle")
+            .checked(!workspace.vm().thinking_collapsed)
+            .on_click(cx.listener(|workspace, checked: &bool, _, cx| {
+                workspace.on_set_thinking_collapsed(!checked, cx);
+            }))
+            .into_any_element(),
+        cx.theme(),
+    );
     let language_row = dropdown_field(
         DropdownSpec {
             id: "language",
@@ -90,7 +106,7 @@ pub(super) fn render_general_section(
                 "立即生效并写入设置。",
             )),
             theme,
-            vec![theme_row, font_row, language_row],
+            vec![theme_row, font_row, language_row, thinking_row],
         ))
         .child(settings_card(
             "network",

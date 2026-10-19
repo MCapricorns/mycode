@@ -15,7 +15,8 @@
 //! `Alt+Enter`/`Ctrl+J` inserts a newline, `Up`/`Down` move through an open
 //! `/`/`@` menu or the settings list, `Esc` dismisses the topmost layer,
 //! closes the settings page, or cancels a running turn, `Ctrl+C` cancels
-//! the turn and quits when idle, `Ctrl+N` starts a new task,
+//! the turn and quits when idle, `Ctrl+N` starts a new task, `Ctrl+O`
+//! folds or expands every thinking trace,
 //! `PageUp`/`PageDown` scroll.
 //!
 //! The terminal's working directory is the project: once the remembered UI
@@ -97,6 +98,8 @@ enum SettingItem {
     Model,
     /// Cycles the session's reasoning effort.
     Thinking,
+    /// Folds every thinking trace to one line, or shows the full text.
+    ThinkingTrace,
     /// Cycles `dark`/`light`.
     Theme,
     /// Cycles `auto`/`en`/`zh`.
@@ -518,6 +521,9 @@ impl Tui {
             (KeyCode::Char('n'), true, false) => {
                 self.driver.new_session(&mut effects);
             }
+            (KeyCode::Char('o'), true, false) => {
+                self.driver.toggle_thinking_collapsed(&mut effects);
+            }
             _ => {
                 self.composer.input(Input::from(key));
                 self.sync_draft(&mut effects);
@@ -631,6 +637,7 @@ impl Tui {
         let items = settings_items(self.driver.vm());
         match (key.code, ctrl) {
             (KeyCode::Char('c'), true) => self.interrupt_or_quit(effects),
+            (KeyCode::Char('o'), true) => self.driver.toggle_thinking_collapsed(effects),
             (KeyCode::Char('q'), false) if !self.turn_busy() => self.quit = true,
             (KeyCode::Esc, false) => {
                 self.driver.show_main_view(MainView::Chat, effects);
@@ -1036,6 +1043,10 @@ impl Tui {
                 self.driver.select_proxy_mode(mode, effects);
             }
             SettingItem::ProxyTest => self.driver.test_proxy(effects),
+            SettingItem::ThinkingTrace => {
+                let next = !self.driver.vm().thinking_collapsed;
+                self.driver.set_thinking_collapsed(next, effects);
+            }
             SettingItem::AutoUpdate => {
                 let next = !self.driver.vm().auto_update;
                 self.driver.toggle_auto_update(next, effects);
@@ -1172,7 +1183,7 @@ impl Tui {
         let mut lines: Vec<Line> = Vec::new();
         if let Some(active) = &vm.active {
             for entry in &active.entries {
-                render_entry(entry, &mut lines);
+                render_entry(entry, &mut lines, vm.thinking_collapsed);
                 // A running subagent says what it is doing under its call;
                 // only jobs still in `live_jobs` are running.
                 if entry.kind == EntryKind::ToolCall
@@ -1197,12 +1208,17 @@ impl Tui {
                 // newest thinking line does the same for its content.
                 let elapsed = elapsed_suffix(vm);
                 if !stream.thinking.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        format!("  ✻ {}{elapsed}", thinking_tail(&stream.thinking)),
-                        Style::default()
-                            .fg(Color::Magenta)
-                            .add_modifier(Modifier::ITALIC),
-                    )));
+                    let thinking = Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::ITALIC);
+                    if vm.thinking_collapsed {
+                        lines.push(Line::from(Span::styled(
+                            format!("  ✻ {}{elapsed}", thinking_tail(&stream.thinking)),
+                            thinking,
+                        )));
+                    } else {
+                        push_wrapped(&mut lines, "  ✻ ", thinking, &stream.thinking, thinking);
+                    }
                 }
                 if !stream.text.is_empty() {
                     push_wrapped(
@@ -1841,6 +1857,16 @@ fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
         dim: false,
     });
     rows.push(SettingRow::Item {
+        item: SettingItem::ThinkingTrace,
+        label: "Show thinking".to_owned(),
+        value: if vm.thinking_collapsed {
+            "off".to_owned()
+        } else {
+            "on".to_owned()
+        },
+        dim: false,
+    });
+    rows.push(SettingRow::Item {
         item: SettingItem::Proxy,
         label: "Proxy".to_owned(),
         value: match manual_proxy(vm) {
@@ -2002,7 +2028,7 @@ fn welcome_lines(version: &str) -> Vec<Line<'static>> {
     ]
 }
 
-fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
+fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>, collapsed: bool) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     match entry.kind {
         // A compaction summary rides a user message but is not the user's
@@ -2031,7 +2057,17 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::ITALIC);
             if !entry.thinking.is_empty() {
-                push_wrapped(lines, "  ✻ ", thinking, &entry.thinking, thinking);
+                if collapsed {
+                    let tail = thinking_tail(&entry.thinking);
+                    let headline = if tail.is_empty() {
+                        "thinking ▸".to_owned()
+                    } else {
+                        format!("thinking · {tail} ▸")
+                    };
+                    push_wrapped(lines, "  ✻ ", thinking, &headline, thinking);
+                } else {
+                    push_wrapped(lines, "  ✻ ", thinking, &entry.thinking, thinking);
+                }
             }
             // Interruption lines the agent committed (`[error] …`) stay
             // visible but read as errors, not as answer text.

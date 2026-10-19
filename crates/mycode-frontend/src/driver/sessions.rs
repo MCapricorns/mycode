@@ -50,6 +50,21 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::SaveUiState { state });
     }
 
+    /// The global thinking-trace switch: every trace in every session
+    /// follows it. Persisted with the durable UI state.
+    pub fn set_thinking_collapsed(&mut self, collapsed: bool, out: &mut Vec<Effect>) {
+        if self.vm.thinking_collapsed != collapsed {
+            self.act(FrontendAction::ThinkingCollapsedToggled, out);
+        }
+        self.persist_ui_state();
+    }
+
+    /// Flips the global thinking-trace switch; see
+    /// [`Self::set_thinking_collapsed`].
+    pub fn toggle_thinking_collapsed(&mut self, out: &mut Vec<Effect>) {
+        self.set_thinking_collapsed(!self.vm.thinking_collapsed, out);
+    }
+
     /// Starts a fresh task (the New-task affordance). `false` when no folder
     /// is open — the only case that drops a held welcome draft.
     pub fn new_session(&mut self, out: &mut Vec<Effect>) -> bool {
