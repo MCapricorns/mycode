@@ -144,6 +144,78 @@ fn parent_dispatch_names_scout_and_artisan_only() {
     assert!(!text.contains("sentinel"));
     assert!(!text.contains("`exec`"));
     assert!(!text.contains("`task`"));
+    assert!(
+        text.contains("run beside every other call in it, edits and shell commands included"),
+        "agent calls overlap edits in the same response:\n{text}"
+    );
+}
+
+#[test]
+fn parent_dispatch_never_names_a_role_switched_off_in_settings() {
+    let mut settings = SubagentSettings::default();
+    settings.role_mut("artisan").enabled = false;
+    let text = super::delegation_directive(&builtin_roles(), &settings);
+    assert!(text.contains("`scout`"), "{text}");
+    assert!(!text.contains("artisan"), "{text}");
+
+    let mut settings = SubagentSettings::default();
+    settings.role_mut("scout").enabled = false;
+    let text = super::delegation_directive(&builtin_roles(), &settings);
+    assert!(text.contains("`artisan`"), "{text}");
+    assert!(!text.contains("scout"), "{text}");
+
+    settings.role_mut("artisan").enabled = false;
+    assert!(super::delegation_directive(&builtin_roles(), &settings).is_empty());
+}
+
+#[test]
+fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
+    let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-agents")).unwrap();
+    let scout = builtin_roles().role("scout").expect("scout").clone();
+    let allowed = scout.resolve_tools(super::PARENT_TOOL_NAMES);
+    let shell = mycode_tools::DetectedShell {
+        kind: mycode_tools::ShellKind::Bash,
+        program: std::path::PathBuf::from("/bin/bash"),
+    };
+    let registry = super::child_registry_with(
+        &home,
+        &allowed,
+        mycode_tools::ShellTool::forcing(shell.clone()),
+    );
+    let workspace = super::ChildWorkspace {
+        resources: vec!["# AGENTS.md (workspace)\n\nRun `just check` before reporting.".to_owned()],
+        mcp_note: Some(super::child_mcp_note(
+            "Other MCP tools are connected but not preloaded. Call `search_tool` with name \"list\".\n",
+            scout.is_write_capable(),
+        )),
+        ..Default::default()
+    };
+    let prompt = super::subagent_system_prompt(
+        &scout,
+        &registry,
+        std::path::Path::new("/work"),
+        &[],
+        "linux",
+        "x86_64",
+        &shell,
+        &workspace,
+    );
+    assert!(
+        prompt.contains("Run `just check` before reporting."),
+        "{prompt}"
+    );
+    assert!(prompt.contains("standing instructions"), "{prompt}");
+    assert!(prompt.contains("<mcp>\nOther MCP tools"), "{prompt}");
+    assert!(prompt.contains("name \"list\""), "{prompt}");
+    assert!(prompt.contains("declare readOnlyHint"), "{prompt}");
+    assert!(!prompt.contains("whose server set"), "{prompt}");
+    assert!(
+        prompt.find("AGENTS.md (workspace)") > prompt.find("<environment>"),
+        "per-workspace text stays after the cached fixed prefix:\n{prompt}"
+    );
+
+    let note = super::child_mcp_note("Direct MCP tools: a. Call them directly by name.\n", true);
+    assert!(!note.contains("readOnlyHint"), "{note}");
 }
 
 fn shell_tool(kind: mycode_tools::ShellKind, program: &str) -> mycode_tools::ShellTool {

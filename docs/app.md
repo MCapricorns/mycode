@@ -77,13 +77,14 @@
 
 ## 子代理
 
-角色来自内置、`<home>/agents/` 和项目 `.mycode/agents/`，同名时项目覆盖用户覆盖内置。父提示只在角色启用时出现；没有可独立、边界清楚且值得委派的工作就不要派。
+角色来自内置、`<home>/agents/` 和项目 `.mycode/agents/`，同名时项目覆盖用户覆盖内置。父提示只在角色启用时出现，而且只介绍启用的角色：关掉 scout 或 artisan 后，`<dispatch>` 不再提它；`agent` 工具的描述本身不写角色名，只指向 `<dispatch>`。没有可独立、边界清楚且值得委派的工作就不要派。
 
 - 每个父回合最多 8 个子代理，多出的排队；artisan 排队时发一条 `capped` 进度，scout 只排队。
 - 没有墙钟超时。父回合取消、`CancelSubagent`、删除会话都会结束它，排队中的也一样。
 - 工具取角色白名单和父级工具的交集。角色没写时继承 `read`、`write`、`edit`、`shell`、`grep`、`find`、`web_search`、`fetch_content`。`shell`/`bash`/`powershell`/`cmd` 都映射到当前进程实际的那个解释器。
 - scout 强制只读：不注册写工具和 shell，MCP 只拿 `readOnlyHint` 为 true 的工具。
-- 连上的 MCP 会注册；子代理不能 `ask_user`，不能再调 `agent`，没有压缩钩子。
+- 子代理的 system prompt 带上会话工作区的 `AGENTS.md` / `MYCODE.md` 资源（按会话 cwd 发现，worktree 里看不到未提交的改动），并把它们和匹配的 `SKILL.md` 当作用户的常驻指令；其它文件、工具输出和网页仍是数据。
+- 连上的 MCP 会注册，`<mcp>` 说明与父回合共用同一份目录文本，只读角色另注明只拿 `readOnlyHint` 工具；子代理不能 `ask_user`，不能再调 `agent`，没有压缩钩子。
 - provider/model 只有设置里两项都填了才覆盖，否则用父回合的 provider；思考档位取设置覆盖或角色定义，默认交给提供商，不继承父回合的档位。换提供商走 `resolve_request_auth`，共用 Copilot bearer 缓存。
 - 只有能写的角色能用 worktree：在 `<home>/agent-worktrees/` 建分离 checkout，结束时把 diff（最多 256 KiB）附在答案或错误后面，再删掉 worktree。
 
@@ -121,6 +122,7 @@
 摘要请求：
 
 - 头部转录放在 `<conversation>` 里，后面再提醒只输出摘要；思考设为关闭。
+- 摘要要求覆盖用户目标与中途的纠正、决定、文件、命令及哪些检查通过/失败/未跑、子代理结论、未完成的工作和下一步；用用户的语言写，代码、路径、命令和报错原样保留，不抄入密钥。
 - 每条消息截到 4000 字符；整段最多 300000 字符；思考块和开头的 `<think>` 不进转录。
 - 输出上限 8192；`keeps_thinking_when_off` 为真的模型用 32768。截断时用 65536 重试一次；摘要短于 200 字符时重试一次；再失败就放弃。整次请求 180 秒超时。
 - 成功的摘要最多 24000 字符，写入该会话的 `compaction.json`。发给模型的消息和界面卡片都以 `COMPACTION SUMMARY` 开头。

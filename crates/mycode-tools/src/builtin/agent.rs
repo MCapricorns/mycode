@@ -77,8 +77,8 @@ impl AgentTool {
 /// Wire shape of the tool arguments.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct AgentArgs {
-    /// Catalog role to invoke: `scout`, `artisan`, or a user/project role
-    /// from `agents/<name>.md`.
+    /// Role to invoke: one of the enabled roles the system prompt's
+    /// `<dispatch>` section lists.
     pub agent: String,
     /// Complete, self-contained instructions for the subagent. Include the
     /// goal, relevant paths, and the expected form of the answer.
@@ -102,21 +102,18 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate one self-contained unit of work to a listed role and get \
-         back its answer. `scout` is read-only: it searches the code and the \
-         web (docs, API references, changelogs) and returns a short map with \
-         paths, lines, and URLs; it cannot run commands, build, test, or edit. \
-         `artisan` implements one bounded change in its own worktree and \
-         returns the outcome and changed paths. Independent calls in one \
-         response run together. The brief must stand alone: the child cannot \
-         see this conversation or ask the user. Custom roles from \
-         agents/*.md are valid."
+        "Delegate one self-contained unit of work to a role listed in the \
+         system prompt's <dispatch> section and get back its answer. Only \
+         those roles are enabled. Independent calls in one response run \
+         together, and beside the other calls in that response. The brief \
+         must stand alone: the child cannot see this conversation or ask the \
+         user."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "agent: scout for read-only research (code search, web, docs, APIs) \
-             returned as a short map; artisan for one bounded change. Several \
+            "agent: hand one self-contained brief to a role from <dispatch> \
+             (research or a bounded change) and get its answer. Several \
              independent calls in one response run together.",
         )
     }
@@ -219,14 +216,18 @@ mod tests {
         assert!(!schema.contains("\"task\""));
         let snippet = tool.prompt_snippet().expect("snippet");
         assert!(snippet.starts_with("agent:"));
-        assert!(snippet.contains("scout"));
-        assert!(snippet.contains("artisan"));
+        // Role names live in the dispatch section, which lists only the
+        // enabled roles; the tool copy must not advertise a disabled one.
+        assert!(snippet.contains("<dispatch>"));
+        assert!(!snippet.contains("scout"));
+        assert!(!snippet.contains("artisan"));
         assert!(!snippet.contains("task"));
         assert!(!snippet.contains("steward"));
         assert!(!snippet.contains("sentinel"));
         assert!(!snippet.contains("exec"));
-        assert!(spec.description.contains("`scout`"));
-        assert!(spec.description.contains("`artisan`"));
+        assert!(spec.description.contains("<dispatch>"));
+        assert!(!spec.description.contains("scout"));
+        assert!(!spec.description.contains("artisan"));
         assert!(!spec.description.contains("`task`"));
         assert!(!spec.description.contains("steward"));
         assert!(!spec.description.contains("sentinel"));

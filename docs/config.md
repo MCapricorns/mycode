@@ -119,7 +119,7 @@
 
 提示资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，然后是 `MYCODE_HOME/AGENTS.md`，最后是 OS 用户主目录（`USERPROFILE`，否则 `HOME`）的 `.agents/AGENTS.md`。重复路径合并；每份最多 64 KiB，最多 16 份，合计进入 prompt 最多 96K 字符；读不了或超限的文件跳过。
 
-技能从 `.agents` 和 `.agents/skills` 下发现：平铺的 `*.md`（扩展名不分大小写）或 `<目录>/SKILL.md`。工作区和 OS 用户主目录各扫一遍，同名 slug 工作区优先；发现不设上限，进入 system prompt 时最多 32 个。目录里列 slug、标题、描述和路径；描述取自 frontmatter，最多 300 字符（超出截断）。模型匹配后用 `read` 按路径读正文。OS 用户主目录的 `.agents` 和 `.agents/skills` 存在时是只读锚定根：`read` 可以按绝对路径读取，`edit` / `write` 拒绝。子代理（含 scout）拿到同一份技能目录。设置里的 `skills.disabled` 记录关闭的 slug（最多 256 个，不能重复）；关闭的技能先被过滤，不占 32 个名额；列表为空时不写入 `settings.json`。
+技能从 `.agents` 和 `.agents/skills` 下发现：平铺的 `*.md`（扩展名不分大小写）或 `<目录>/SKILL.md`。工作区和 OS 用户主目录各扫一遍（会话 prompt 另扫用户添加的工作区文件夹，不含临时目录），同名 slug 工作区优先；发现不设上限，进入 system prompt 时最多 32 个。目录里列 slug、标题、描述和路径；描述取自 frontmatter，最多 300 字符（超出截断）。模型匹配后用 `read` 按路径读正文。OS 用户主目录的 `.agents` 和 `.agents/skills` 存在时是只读锚定根：`read` 可以按绝对路径读取，`edit` / `write` 拒绝。子代理（含 scout）拿到同一份技能目录。设置里的 `skills.disabled` 记录关闭的 slug（最多 256 个，不能重复）；关闭的技能先被过滤，不占 32 个名额；列表为空时不写入 `settings.json`。
 
 ## 不在这里
 
