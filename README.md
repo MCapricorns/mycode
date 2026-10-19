@@ -24,7 +24,7 @@
 
 MYCode 是一个本地编码代理，有桌面版和终端版。两个前端共用同一套会话、模型、工具和设置实现，所以换前端不会换行为。
 
-支持 Windows x64、Windows ARM64 和 macOS Apple Silicon。没有 Linux 包，也没有 Intel macOS 包。
+支持 Windows x64、Windows ARM64 和 macOS Apple Silicon，暂无 Intel macOS 和 Linux 包。
 
 ## 功能
 
