@@ -132,7 +132,7 @@ pub(crate) async fn drive(
                             TransportCall {
                                 endpoint: call.endpoint.clone(),
                                 headers: call.headers.clone(),
-                                body: stripped,
+                                body: stripped.into(),
                             },
                             cancel.clone(),
                         )
@@ -304,7 +304,7 @@ mod tests {
             _cancel: CancellationToken,
         ) -> Pin<Box<dyn Future<Output = Result<ByteStream, ProviderError>> + Send + 'a>> {
             Box::pin(async move {
-                self.bodies.lock().expect("bodies").push(call.body);
+                self.bodies.lock().expect("bodies").push(call.body.to_vec());
                 self.steps.lock().expect("steps").remove(0)
             })
         }
@@ -334,7 +334,7 @@ mod tests {
         TransportCall {
             endpoint: endpoint.to_owned(),
             headers: Vec::new(),
-            body: br#"{"model":"x","prompt_cache_key":"session-1"}"#.to_vec(),
+            body: br#"{"model":"x","prompt_cache_key":"session-1"}"#.to_vec().into(),
         }
     }
 
@@ -403,7 +403,7 @@ mod tests {
             TransportCall {
                 endpoint: "https://api.anthropic.com/v1/messages".to_owned(),
                 headers: Vec::new(),
-                body: serde_json::to_vec(&body).unwrap(),
+                body: serde_json::to_vec(&body).unwrap().into(),
             },
             crate::anthropic_messages::replays_thinking(&body),
             || Box::new(crate::anthropic_messages::MessagesReducer::new()),

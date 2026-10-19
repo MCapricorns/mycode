@@ -199,7 +199,7 @@ impl WireProvider {
         let call = TransportCall {
             endpoint: self.resolved.endpoint.clone(),
             headers,
-            body: serde_json::to_vec(&body).unwrap_or_default(),
+            body: serde_json::to_vec(&body).unwrap_or_default().into(),
         };
         (call, retryable)
     }
