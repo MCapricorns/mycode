@@ -18,6 +18,7 @@ mod skills;
 mod subagent_roles;
 mod web;
 
+pub(crate) use mcp::{MAX_MCP_ARGS, is_env_var_name};
 pub use mcp::{
     MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, builtin_mcp_servers, is_mcp_executable,
     split_command_line,
@@ -492,13 +493,8 @@ pub(crate) fn is_https_url(value: &str) -> bool {
         return false;
     };
     let host = rest.split('/').next().unwrap_or_default();
-    !host.is_empty()
-        && !host
-            .bytes()
-            .any(|byte| byte.is_ascii_whitespace() || byte == 0)
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic() || byte == b'-')
+    // Graphic ASCII already excludes whitespace, NUL, and other controls.
+    !host.is_empty() && host.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
 #[cfg(test)]

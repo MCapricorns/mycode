@@ -84,16 +84,14 @@ pub fn quarantine_owned_bytes(
     relative: &'static str,
     bytes: &[u8],
 ) -> Result<DocumentRepair, ConfigError> {
-    let payload = bytes.to_vec();
-    let limit = payload.len().max(1);
+    let limit = bytes.len().max(1);
     let backup = publish_unique_backup(relative, crate::unix_now().as_nanos(), |backup| {
-        let payload = payload.clone();
         locked_update_owned_file(home, backup, limit, |current| {
             if current.is_some() {
                 return Err(ConfigError::new(ConfigErrorKind::Io)
                     .with_io_kind(io::ErrorKind::AlreadyExists));
             }
-            Ok(payload)
+            Ok(bytes.to_vec())
         })
     })?;
     Ok(DocumentRepair {
@@ -246,7 +244,7 @@ pub(crate) fn salvage_field<T: serde::de::DeserializeOwned>(
 ) -> Option<T> {
     object
         .get(name)
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .and_then(|value| T::deserialize(value).ok())
 }
 
 /// Decodes every element of `object[name]` that is a valid `T`. A list with
@@ -260,7 +258,7 @@ pub(crate) fn salvage_list<T: serde::de::DeserializeOwned>(
         .and_then(serde_json::Value::as_array)
         .map(|rows| {
             rows.iter()
-                .filter_map(|row| serde_json::from_value(row.clone()).ok())
+                .filter_map(|row| T::deserialize(row).ok())
                 .collect()
         })
         .unwrap_or_default()

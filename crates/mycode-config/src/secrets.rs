@@ -5,7 +5,7 @@
 //! revision CAS discipline as settings. Debug output is redacted so keys can
 //! never leak into logs.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::authority::AuthorityRevision;
 use crate::secure_fs::owned_file::locked_update_owned_file;
@@ -82,16 +82,16 @@ impl ProviderSecrets {
             return Err(ConfigError::authority_rejection());
         }
         for (id, key) in &self.provider_keys {
-            if !crate::home::is_valid_portable_id(id)
-                || key.is_empty()
-                || key.len() > MAX_KEY_BYTES
-                || key.contains(['\0', '\r', '\n'])
-            {
+            if !crate::home::is_valid_portable_id(id) || !is_valid_key(key) {
                 return Err(ConfigError::authority_rejection());
             }
         }
         Ok(())
     }
+}
+
+fn is_valid_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= MAX_KEY_BYTES && !key.contains(['\0', '\r', '\n'])
 }
 
 impl std::fmt::Debug for ProviderSecrets {
@@ -150,15 +150,16 @@ fn encode_secrets(
     secrets: &ProviderSecrets,
     revision: AuthorityRevision,
 ) -> Result<Vec<u8>, ConfigError> {
-    let mut document = serde_json::Map::new();
-    document.insert("formatVersion".into(), SECRETS_FORMAT_VERSION.into());
-    document.insert("kind".into(), SECRETS_KIND.into());
-    document.insert("revision".into(), revision.get().into());
-    let mut keys = serde_json::Map::new();
-    for (id, key) in &secrets.provider_keys {
-        keys.insert(id.clone(), key.clone().into());
-    }
-    document.insert("providerKeys".into(), keys.into());
+    let document = SerializedSecrets {
+        format_version: SECRETS_FORMAT_VERSION,
+        kind: SECRETS_KIND,
+        revision: revision.get(),
+        provider_keys: secrets
+            .provider_keys
+            .iter()
+            .map(|(id, key)| (id.as_str(), key.as_str()))
+            .collect(),
+    };
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
     bytes.push(b'\n');
@@ -177,8 +178,11 @@ pub fn salvage_provider_secrets(document: &serde_json::Value) -> Option<Provider
     let mut secrets = ProviderSecrets::new();
     for (id, key) in keys {
         let Some(key) = key.as_str() else { continue };
-        if !crate::home::is_valid_portable_id(id) {
+        if !crate::home::is_valid_portable_id(id) || !is_valid_key(key) {
             continue;
+        }
+        if secrets.provider_keys.len() >= MAX_SECRET_PROVIDERS {
+            break;
         }
         secrets = secrets.with_key(id, Some(key));
     }
@@ -248,6 +252,15 @@ pub fn update_provider_key(
         Ok(bytes)
     })?;
     published.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SerializedSecrets<'a> {
+    format_version: u32,
+    kind: &'static str,
+    revision: u64,
+    provider_keys: std::collections::BTreeMap<&'a str, &'a str>,
 }
 
 #[derive(Deserialize)]
@@ -374,7 +387,7 @@ mod tests {
         // Valid JSON that the strict decode rejects (a non-string key and a
         // retired field) plus two healthy entries: the read resets the file
         // but keeps the keys that still decode and validate.
-        let body = br#"{"formatVersion":1,"kind":"mycode-provider-secrets","revision":3,"providers":{},"providerKeys":{"openai":"sk-ok","bad id!":"sk-drop","zai":7}}"#;
+        let body = br#"{"formatVersion":1,"kind":"mycode-provider-secrets","revision":3,"providers":{},"providerKeys":{"openai":"sk-ok","bad id!":"sk-drop","kimi":"sk\nsplit","zai":7}}"#;
         // The fixture goes through the secure transaction: a plain fs::write
         // file inherits the temp directory's DACL and the Windows read path
         // rejects it before the revision check this test exercises.

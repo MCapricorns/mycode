@@ -291,7 +291,7 @@ impl UiState {
         let mut roots = std::mem::take(&mut self.workspace_roots);
         for workspace in std::mem::take(&mut self.workspaces) {
             for folder in workspace.folders {
-                if valid_project_path(&folder).is_some()
+                if valid_project_path(&folder)
                     && !roots.iter().any(|root| same_project_path(root, &folder))
                 {
                     roots.push(folder);
@@ -315,12 +315,12 @@ impl UiState {
             return Err(invalid());
         }
         for project in &self.recent_projects {
-            if valid_project_path(project).is_none() {
+            if !valid_project_path(project) {
                 return Err(invalid());
             }
         }
         if let Some(project) = &self.last_project
-            && valid_project_path(project).is_none()
+            && !valid_project_path(project)
         {
             return Err(invalid());
         }
@@ -328,7 +328,7 @@ impl UiState {
             return Err(invalid());
         }
         for (session_id, project) in &self.session_projects {
-            if !valid_session_id(session_id) || valid_project_path(project).is_none() {
+            if !valid_session_id(session_id) || !valid_project_path(project) {
                 return Err(invalid());
             }
         }
@@ -338,7 +338,7 @@ impl UiState {
             return Err(invalid());
         }
         for root in &self.workspace_roots {
-            if valid_project_path(root).is_none() {
+            if !valid_project_path(root) {
                 return Err(invalid());
             }
         }
@@ -406,15 +406,11 @@ fn valid_pin_part(value: &str) -> bool {
     (1..=MAX_MODEL_PIN_CHARS).contains(&len) && !value.chars().any(char::is_control)
 }
 
-fn valid_project_path(value: &str) -> Option<String> {
-    if value.is_empty()
-        || value.len() > MAX_PROJECT_PATH_BYTES
-        || value.chars().any(char::is_control)
-        || !std::path::Path::new(value).is_absolute()
-    {
-        return None;
-    }
-    Some(value.to_owned())
+fn valid_project_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_PROJECT_PATH_BYTES
+        && !value.chars().any(char::is_control)
+        && std::path::Path::new(value).is_absolute()
 }
 
 /// Canonical project path for sidebar comparison.
@@ -523,20 +519,20 @@ pub fn update_ui_state(
     })
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SerializedUiState {
+struct SerializedUiState<'a> {
     format_version: u32,
     kind: &'static str,
     #[serde(flatten)]
-    state: UiState,
+    state: &'a UiState,
 }
 
 fn replace_bytes(state: &UiState) -> Result<Vec<u8>, ConfigError> {
     let document = SerializedUiState {
         format_version: UI_STATE_FORMAT_VERSION,
         kind: UI_STATE_KIND,
-        state: state.clone(),
+        state,
     };
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
