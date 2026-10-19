@@ -559,19 +559,27 @@ impl Tui {
     /// a draft the driver refuses (no folder yet, a full queue) stays put.
     fn submit_current(&mut self, effects: &mut Vec<Effect>) {
         let text = self.composer.lines().join("\n");
-        if let Some(asks) = self.driver.vm().pending_ask.clone() {
+        if let Some(asks) = &self.driver.vm().pending_ask {
             let index = self.driver.ask_index().min(asks.len().saturating_sub(1));
-            let row = &asks[index];
             // Choice numbers pick those choices (several, `1,3`, on a
             // multi-select row); anything else is free text.
-            match choice_numbers(&text, row.choices.len()) {
-                Some(numbers) if row.multiple || numbers.len() == 1 => {
-                    for number in numbers {
-                        let answer = row.choices[number - 1].clone();
+            let picks = asks.get(index).and_then(|row| {
+                choice_numbers(&text, row.choices.len())
+                    .filter(|numbers| row.multiple || numbers.len() == 1)
+                    .map(|numbers| {
+                        numbers
+                            .into_iter()
+                            .map(|number| row.choices[number - 1].clone())
+                            .collect::<Vec<_>>()
+                    })
+            });
+            match picks {
+                Some(answers) => {
+                    for answer in answers {
                         self.driver.pick_ask_choice(index, answer, false, effects);
                     }
                 }
-                _ => self.driver.ask_text_typed(index, text, effects),
+                None => self.driver.ask_text_typed(index, text, effects),
             }
             self.driver.ask_next(effects);
             self.clear_composer();
@@ -1219,7 +1227,7 @@ impl Tui {
         let mut first = lines.len();
         while first > 0 && rows < wanted {
             first -= 1;
-            rows += Paragraph::new(lines[first].clone())
+            rows += Paragraph::new(borrowed_line(&lines[first]))
                 .wrap(Wrap { trim: false })
                 .line_count(area.width)
                 .max(1);
@@ -1579,7 +1587,8 @@ impl Tui {
 
     /// Ask card: centered overlay listing the current question and choices.
     fn draw_ask(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(asks) = self.driver.vm().pending_ask.clone() else {
+        let vm = self.driver.vm();
+        let Some(asks) = &vm.pending_ask else {
             return;
         };
         if asks.is_empty() {
@@ -1587,13 +1596,7 @@ impl Tui {
         }
         let index = self.driver.ask_index().min(asks.len() - 1);
         let ask = &asks[index];
-        let picked = self
-            .driver
-            .vm()
-            .ask_answers
-            .get(index)
-            .cloned()
-            .unwrap_or_default();
+        let picked = vm.ask_answers.get(index).map_or("", String::as_str);
         let mut lines = vec![
             Line::from(Span::styled(
                 format!("? {}", ask.question),
@@ -2104,6 +2107,20 @@ fn choice_numbers(text: &str, choices: usize) -> Option<Vec<usize>> {
         }
     }
     (!numbers.is_empty()).then_some(numbers)
+}
+
+/// A copy of `line` whose spans borrow its text, for measuring wrapped
+/// height without copying every string.
+fn borrowed_line<'a>(line: &'a Line<'_>) -> Line<'a> {
+    Line {
+        spans: line
+            .spans
+            .iter()
+            .map(|span| Span::styled(span.content.as_ref(), span.style))
+            .collect(),
+        style: line.style,
+        alignment: line.alignment,
+    }
 }
 
 fn first_line(text: &str) -> &str {
