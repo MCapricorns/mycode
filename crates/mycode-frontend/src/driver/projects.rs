@@ -13,15 +13,20 @@ impl FrontendDriver {
     /// Called from `act` after every `ComposerChanged`.
     pub(crate) fn refresh_mention_search(&mut self) {
         let (kind, fragment) = match self.vm.mention.as_ref() {
-            Some(mention) => (mention.kind, mention.fragment.clone()),
+            Some(mention) => (mention.kind, mention.fragment.as_str()),
             None => {
                 self.mention_query = None;
                 return;
             }
         };
-        if self.mention_query.as_ref() == Some(&(kind, fragment.clone())) {
+        if self
+            .mention_query
+            .as_ref()
+            .is_some_and(|(previous, query)| *previous == kind && query == fragment)
+        {
             return;
         }
+        let fragment = fragment.to_owned();
         let menu_opened = self
             .mention_query
             .as_ref()
