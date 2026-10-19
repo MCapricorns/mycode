@@ -509,19 +509,31 @@ fn mcp_fingerprint(
     hasher.finish()
 }
 
-/// Connected MCP tools, addressed by name. Schemas stay here until
+/// Connected MCP tools, addressed by catalog key. Schemas stay here until
 /// `search_tool` is called.
+///
+/// The key is the server's tool name, or `server__tool` when an earlier
+/// server already took that name, so two servers never hide each other.
 pub(crate) struct McpCatalog {
     by_name: HashMap<String, Arc<DynamicMcpTool>>,
     direct: Vec<String>,
+    /// Catalog key and one-line summary of each tool `search_tool` serves.
     deferred: Vec<(String, String)>,
     warning: Option<String>,
 }
 
+/// Most tools one keyword search lists before it asks for a narrower query.
+const MAX_SEARCH_MATCHES: usize = 25;
+
 impl McpCatalog {
+    /// Builds the catalog in server order. `taken` names the tools already
+    /// on the registry: a small server's tool with one of those names is
+    /// served through `search_tool` instead, since registering it directly
+    /// would leave the model calling the other tool.
     pub(crate) fn from_tools_with_warning(
         tools: Vec<Arc<DynamicMcpTool>>,
         warning: Option<String>,
+        taken: &dyn Fn(&str) -> bool,
     ) -> Option<Arc<Self>> {
         if tools.is_empty() && warning.is_none() {
             return None;
@@ -530,18 +542,22 @@ impl McpCatalog {
         let mut direct = Vec::new();
         let mut deferred = Vec::new();
         for tool in tools {
-            let name = tool.spec.name.clone();
-            if tool.direct {
-                direct.push(name.clone());
-            } else {
-                deferred.push((name.clone(), tool.spec.description.clone()));
+            let mut key = tool.spec.name.clone();
+            if by_name.contains_key(&key) {
+                key = format!("{}__{}", tool.server_id, tool.spec.name);
+                if by_name.contains_key(&key) {
+                    continue;
+                }
             }
-            by_name.insert(name, tool);
+            if tool.direct && key == tool.spec.name && !taken(&key) {
+                direct.push(key.clone());
+            } else {
+                deferred.push((key.clone(), tool.snippet.clone()));
+            }
+            by_name.insert(key, tool);
         }
         direct.sort();
-        direct.dedup();
         deferred.sort_by(|left, right| left.0.cmp(&right.0));
-        deferred.dedup_by(|left, right| left.0 == right.0);
         Some(Arc::new(Self {
             by_name,
             direct,
@@ -573,9 +589,9 @@ impl McpCatalog {
         }
         if !self.deferred.is_empty() {
             note.push_str(
-                "Other MCP tools are connected but not preloaded. Call `search_tool` with name \
-\"list\" for names and descriptions, then with an exact name for the inputSchema, then \
-`use_tool`. Do not guess parameters.\n",
+                "Other MCP tools are connected but not preloaded. Call `search_tool` with \
+keywords (or name \"list\") to find them, one line each, then with an exact name for its \
+inputSchema, then `use_tool`. Do not guess parameters.\n",
             );
         }
         note
@@ -587,31 +603,77 @@ impl McpCatalog {
         }
         self.deferred
             .iter()
-            .map(|(name, description)| format!("{name} — {description}"))
+            .map(|(name, summary)| format!("{name} — {summary}"))
             .collect::<Vec<_>>()
             .join("\n")
     }
 
-    /// Exact name first. Models also send a different case or prefix the
+    /// Exact key first. Models also send a different case or prefix the
     /// server (`server.tool`, `server:tool`, `server/tool`, `server__tool`);
-    /// those resolve when exactly one tool matches.
-    fn get(&self, name: &str) -> Option<&Arc<DynamicMcpTool>> {
-        if let Some(tool) = self.by_name.get(name) {
-            return Some(tool);
+    /// those resolve when exactly one tool matches, preferring the tool on
+    /// the named server.
+    fn get(&self, name: &str) -> Option<(&str, &Arc<DynamicMcpTool>)> {
+        if let Some((key, tool)) = self.by_name.get_key_value(name) {
+            return Some((key.as_str(), tool));
         }
-        let bare = name
+        let (prefix, bare) = name
             .rsplit_once("__")
-            .map(|(_, tail)| tail)
-            .or_else(|| name.rsplit_once(['.', ':', '/']).map(|(_, tail)| tail))
-            .unwrap_or(name);
-        let mut found = self.by_name.iter().filter(|(candidate, _)| {
-            candidate.eq_ignore_ascii_case(name) || candidate.eq_ignore_ascii_case(bare)
-        });
-        match (found.next(), found.next()) {
-            (Some((_, tool)), None) => Some(tool),
-            _ => None,
-        }
+            .or_else(|| name.rsplit_once(['.', ':', '/']))
+            .map_or((None, name), |(head, tail)| (Some(head), tail));
+        // `mcp__docs__lookup` names the server as the last prefix segment.
+        let server = prefix.and_then(|head| head.rsplit("__").next());
+        let unique = |on_server: bool| {
+            let mut found = self.by_name.iter().filter(|(key, tool)| {
+                key.eq_ignore_ascii_case(name)
+                    || (tool.tool_name.eq_ignore_ascii_case(bare)
+                        && (!on_server
+                            || server
+                                .is_some_and(|server| tool.server_id.eq_ignore_ascii_case(server))))
+            });
+            match (found.next(), found.next()) {
+                (Some((key, tool)), None) => Some((key.as_str(), tool)),
+                _ => None,
+            }
+        };
+        unique(true).or_else(|| unique(false))
     }
+
+    /// Tools whose key, server, or description contains every keyword
+    /// (case-insensitive), sorted by key.
+    fn search(&self, query: &str) -> Vec<(&str, &Arc<DynamicMcpTool>)> {
+        let terms: Vec<String> = query
+            .split(|ch: char| ch.is_whitespace() || ch == ',')
+            .filter(|term| !term.is_empty())
+            .map(str::to_lowercase)
+            .collect();
+        if terms.is_empty() {
+            return Vec::new();
+        }
+        let mut found: Vec<_> = self
+            .by_name
+            .iter()
+            .filter(|(key, tool)| {
+                let haystack = format!(
+                    "{} {} {}",
+                    key.to_lowercase(),
+                    tool.server_id.to_lowercase(),
+                    tool.spec.description.to_lowercase()
+                );
+                terms.iter().all(|term| haystack.contains(term.as_str()))
+            })
+            .map(|(key, tool)| (key.as_str(), tool))
+            .collect();
+        found.sort_by_key(|(key, _)| *key);
+        found
+    }
+}
+
+/// `search_tool`'s answer for one tool: its catalog key and full schema.
+fn schema_text(key: &str, tool: &DynamicMcpTool) -> String {
+    format!(
+        "name: {key}\nserver: {}\ndescription: {}\ninputSchema: {}",
+        tool.server_id, tool.spec.description, tool.spec.params_schema
+    )
 }
 
 fn object_schema(properties: Value, required: &[&str]) -> Value {
@@ -641,7 +703,8 @@ pub(crate) fn register_mcp_tools(
     tools: Vec<Arc<DynamicMcpTool>>,
     warning: Option<String>,
 ) -> Option<Arc<McpCatalog>> {
-    let catalog = McpCatalog::from_tools_with_warning(tools, warning)?;
+    let catalog =
+        McpCatalog::from_tools_with_warning(tools, warning, &|name| registry.get(name).is_some())?;
     for tool in catalog.direct_tools() {
         if registry.get(tool.spec().name.as_str()).is_none() {
             registry.register(tool);
@@ -667,10 +730,10 @@ impl ToolDyn for SearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "search_tool".to_owned(),
-            description: "Look up MCP tools that are not registered directly. Pass name \"list\" for names and descriptions, or an exact tool name for its inputSchema. Never guess parameters.".to_owned(),
+            description: "Find MCP tools that are not registered directly and load their schemas. Pass an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Never guess parameters.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
-                    "name": {"type": "string", "description": "Exact tool name from the connected list."}
+                    "name": {"type": "string", "description": "An exact tool name, keywords, or \"list\"."}
                 }),
                 &["name"],
             ),
@@ -678,7 +741,9 @@ impl ToolDyn for SearchTool {
     }
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
-        Some("search_tool: fetch one MCP inputSchema before use_tool. Never guess parameters.")
+        Some(
+            "search_tool: find MCP tools by keyword or load one inputSchema by exact name before use_tool. Never guess parameters.",
+        )
     }
 
     fn parallel_safe(&self) -> bool {
@@ -696,16 +761,29 @@ impl ToolDyn for SearchTool {
             if name == "list" {
                 return Ok(ToolResult::text(self.catalog.list_text()));
             }
-            let Some(tool) = self.catalog.get(&name) else {
-                return Err(ToolError::InvalidArgs(format!(
-                    "no MCP tool named {name}. Call search_tool with name \"list\"."
-                )));
-            };
-            let spec = tool.spec();
-            Ok(ToolResult::text(format!(
-                "name: {}\nserver: {}\ndescription: {}\ninputSchema: {}",
-                spec.name, tool.server_id, spec.description, spec.params_schema
-            )))
+            if let Some((key, tool)) = self.catalog.get(&name) {
+                return Ok(ToolResult::text(schema_text(key, tool)));
+            }
+            let found = self.catalog.search(&name);
+            match found.as_slice() {
+                [] => Err(ToolError::InvalidArgs(format!(
+                    "no MCP tool matches {name}. Call search_tool with other keywords or name \"list\"."
+                ))),
+                [(key, tool)] => Ok(ToolResult::text(schema_text(key, tool))),
+                many => {
+                    let mut text = format!(
+                        "{} tools match \"{name}\". Call search_tool with one exact name for its inputSchema:",
+                        many.len()
+                    );
+                    for (key, tool) in many.iter().take(MAX_SEARCH_MATCHES) {
+                        text.push_str(&format!("\n{key} — {}", tool.snippet));
+                    }
+                    if many.len() > MAX_SEARCH_MATCHES {
+                        text.push_str("\n(more match; narrow the keywords)");
+                    }
+                    Ok(ToolResult::text(text))
+                }
+            }
         })
     }
 }
@@ -731,7 +809,7 @@ impl ToolDyn for UseTool {
             description: "Call a connected MCP tool. Arguments must match the inputSchema returned by search_tool for that name. Do not call this before search_tool.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
-                    "name": {"type": "string"},
+                    "name": {"type": "string", "description": "The exact name search_tool returned."},
                     "arguments": {"type": "object", "description": "Arguments matching search_tool's inputSchema."}
                 }),
                 &["name", "arguments"],
@@ -751,7 +829,7 @@ impl ToolDyn for UseTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
         Box::pin(async move {
             let name = arg_name(&args)?;
-            let Some(tool) = self.catalog.get(&name) else {
+            let Some((_, tool)) = self.catalog.get(&name) else {
                 return Err(ToolError::InvalidArgs(format!(
                     "no MCP tool named {name}. Call search_tool with name \"list\"."
                 )));
@@ -1182,7 +1260,8 @@ mod tests {
         drop(calls);
         let _ = std::fs::remove_dir_all(&root);
 
-        let catalog = super::McpCatalog::from_tools_with_warning(tools, None).expect("catalog");
+        let catalog =
+            super::McpCatalog::from_tools_with_warning(tools, None, &|_| false).expect("catalog");
         for spelling in [
             "lookup",
             "LOOKUP",
@@ -1191,11 +1270,95 @@ mod tests {
             "mcp__docs__lookup",
         ] {
             assert_eq!(
-                catalog.get(spelling).map(|tool| tool.spec().name),
+                catalog.get(spelling).map(|(key, _)| key.to_owned()),
                 Some("lookup".to_owned()),
                 "{spelling}"
             );
         }
         assert!(catalog.get("docs.missing").is_none());
+    }
+
+    fn catalog_tool(
+        server: &str,
+        name: &str,
+        description: &str,
+        direct: bool,
+    ) -> std::sync::Arc<super::DynamicMcpTool> {
+        let channel = std::sync::Arc::new(ScriptedMcp {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let client = crate::mcp_client::McpClient::new(channel);
+        std::sync::Arc::new(super::DynamicMcpTool::new(
+            server.to_owned(),
+            McpTool {
+                name: name.to_owned(),
+                description: Some(description.to_owned()),
+                input_schema: serde_json::json!({"type": "object"}),
+                read_only: true,
+            },
+            std::sync::Arc::new(tokio::sync::Mutex::new(client)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            direct,
+            std::sync::Arc::new(std::env::temp_dir()),
+        ))
+    }
+
+    #[test]
+    fn same_named_tools_on_two_servers_both_stay_reachable() {
+        let tools = vec![
+            catalog_tool("alpha", "search", "Search alpha issues.", false),
+            catalog_tool("beta", "search", "Search beta wiki pages.", false),
+        ];
+        let catalog = McpCatalog::from_tools_with_warning(tools, None, &|_| false).unwrap();
+        assert_eq!(catalog.get("search").map(|(key, _)| key), Some("search"));
+        let (key, tool) = catalog.get("beta__search").expect("second server");
+        assert_eq!((key, tool.server_id.as_str()), ("beta__search", "beta"));
+        let (_, tool) = catalog
+            .get("beta.search")
+            .expect("server-prefixed spelling");
+        assert_eq!(tool.server_id, "beta");
+        let listed = catalog.list_text();
+        assert!(
+            listed.contains("beta__search — Search beta wiki pages."),
+            "{listed}"
+        );
+    }
+
+    #[test]
+    fn a_direct_tool_named_like_a_builtin_is_served_by_search_tool() {
+        let tools = vec![
+            catalog_tool("files", "read", "Read a remote file.", true),
+            catalog_tool("files", "stat", "Stat a remote file.", true),
+        ];
+        let catalog =
+            McpCatalog::from_tools_with_warning(tools, None, &|name| name == "read").unwrap();
+        let note = catalog.prompt_note();
+        assert!(note.contains("Direct MCP tools: stat."), "{note}");
+        assert!(note.contains("search_tool"), "{note}");
+        assert_eq!(catalog.direct_tools().len(), 1);
+        assert!(catalog.list_text().contains("read — Read a remote file."));
+        assert!(catalog.get("read").is_some());
+    }
+
+    #[test]
+    fn keyword_search_matches_names_servers_and_descriptions() {
+        let tools = vec![
+            catalog_tool("github", "create_issue", "Open a new GitHub issue.", false),
+            catalog_tool("github", "list_pulls", "List pull requests.", false),
+            catalog_tool("linear", "create_ticket", "Open a Linear issue.", false),
+        ];
+        let catalog = McpCatalog::from_tools_with_warning(tools, None, &|_| false).unwrap();
+        let keys = |query: &str| -> Vec<String> {
+            catalog
+                .search(query)
+                .into_iter()
+                .map(|(key, _)| key.to_owned())
+                .collect()
+        };
+        assert_eq!(keys("github issue"), ["create_issue"]);
+        assert_eq!(keys("ISSUE"), ["create_issue", "create_ticket"]);
+        assert_eq!(keys("pull, github"), ["list_pulls"]);
+        assert!(keys("deploy").is_empty());
+        assert!(keys("  ").is_empty());
     }
 }
