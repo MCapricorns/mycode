@@ -2,6 +2,7 @@
 use gpui_kit::{Context, Window};
 
 use super::Workspace;
+use crate::ui::model_picker::{ModelPickerTarget, filter_model_choices, provider_model_choices};
 use crate::view_model::FrontendAction;
 
 impl Workspace {
@@ -43,48 +44,43 @@ impl Workspace {
         pending
     }
 
-    /// Enter in the model search box selects the preferred row.
+    /// Which choice the open model picker sets: a subagent role's model
+    /// while that menu is open, else the session model. `None` when no
+    /// model picker is open.
+    pub(super) fn open_model_picker(&self) -> Option<ModelPickerTarget> {
+        if let Some((role, _)) = self
+            .vm()
+            .subagent_menu
+            .as_ref()
+            .filter(|(_, field)| field == "model")
+        {
+            return Some(ModelPickerTarget::Role(role.clone()));
+        }
+        self.vm()
+            .model_menu_open
+            .then_some(ModelPickerTarget::Session)
+    }
+
+    /// Enter in the model search box selects the highlighted row.
     pub(crate) fn accept_model_search(&mut self, cx: &mut Context<Self>) {
         let Some(provider) = self.vm().model_menu_browse.clone() else {
             return;
         };
-        let choices = crate::ui::model_picker::provider_model_choices(self.vm(), &provider);
-        let filtered =
-            crate::ui::model_picker::filter_model_choices(&choices, &self.vm().picker_query);
-        if filtered.is_empty() {
+        let Some(target) = self.open_model_picker() else {
             return;
-        }
-        let role = self
-            .vm()
-            .subagent_menu
-            .clone()
-            .filter(|(_, field)| field == "model");
-        let selected = if let Some((role, _)) = &role {
-            self.vm()
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.subagents.role(role))
-                .filter(|entry| entry.provider.as_deref() == Some(provider.as_str()))
-                .and_then(|entry| entry.model.clone())
-        } else if self.vm().selected_provider.as_deref() == Some(provider.as_str()) {
-            self.vm().selected_model.clone()
-        } else {
-            None
         };
-        let preferred = crate::ui::model_picker::preferred_index(
-            &filtered,
-            &self.vm().picker_query,
-            selected.as_deref(),
-        );
-        let index = self.model_highlight(filtered.len(), preferred);
+        let choices = provider_model_choices(self.vm(), &provider);
+        let filtered = filter_model_choices(&choices, &self.vm().picker_query);
+        let index = self.model_highlight(&target, &provider, &filtered);
         let Some(model) = filtered.get(index).map(|choice| choice.id.clone()) else {
             return;
         };
-        if let Some((role, _)) = role {
-            self.on_set_subagent_route(&role, Some(provider), Some(model), cx);
-            self.apply_action(FrontendAction::SubagentMenuToggled(None), cx);
-        } else if self.vm().model_menu_open {
-            self.on_select_model_on(&provider, &model, cx);
+        match target {
+            ModelPickerTarget::Role(role) => {
+                self.on_set_subagent_route(&role, Some(provider), Some(model), cx);
+                self.apply_action(FrontendAction::SubagentMenuToggled(None), cx);
+            }
+            ModelPickerTarget::Session => self.on_select_model_on(&provider, &model, cx),
         }
     }
 

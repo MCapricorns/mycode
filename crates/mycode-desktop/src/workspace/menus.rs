@@ -4,8 +4,11 @@ use gpui_kit::{
     Context, Focusable as _, KeyDownEvent, ScrollHandle, UniformListScrollHandle, Window,
 };
 
-use crate::ui::model_picker::{ModelPickerTarget, ProviderChoice};
+use crate::ui::model_picker::{
+    ModelPickerTarget, ProviderChoice, preferred_index, selected_in_provider,
+};
 use crate::view_model::{FrontendAction, MentionKind};
+use mycode_frontend::picker::ModelChoice;
 
 use super::Workspace;
 
@@ -118,8 +121,17 @@ impl Workspace {
         highlight(self.menu_navigation.reasoning, levels.len(), preferred)
     }
 
-    pub(crate) fn model_highlight(&self, len: usize, preferred: usize) -> usize {
-        highlight(self.menu_navigation.model, len, preferred)
+    /// The row the model step highlights in `filtered`: the keyboard
+    /// selection, else the target's current model, else the first match.
+    pub(crate) fn model_highlight(
+        &self,
+        target: &ModelPickerTarget,
+        provider: &str,
+        filtered: &[ModelChoice],
+    ) -> usize {
+        let selected = selected_in_provider(self.vm(), target, provider);
+        let preferred = preferred_index(filtered, &self.vm().picker_query, selected.as_deref());
+        highlight(self.menu_navigation.model, filtered.len(), preferred)
     }
 
     pub(crate) fn provider_highlight(&self, len: usize) -> usize {
@@ -181,16 +193,7 @@ impl Workspace {
             }
             return true;
         }
-        let role = self
-            .vm()
-            .subagent_menu
-            .as_ref()
-            .filter(|(_, field)| field == "model")
-            .map(|(role, _)| role.clone());
-        if self.vm().model_menu_open || role.is_some() {
-            let target = role
-                .map(ModelPickerTarget::Role)
-                .unwrap_or(ModelPickerTarget::Session);
+        if let Some(target) = self.open_model_picker() {
             if let Some(provider) = self.vm().model_menu_browse.clone() {
                 let choices = crate::ui::model_picker::provider_model_choices(self.vm(), &provider);
                 let filtered = crate::ui::model_picker::filter_model_choices(
@@ -203,18 +206,8 @@ impl Workspace {
                 if key == "enter" {
                     self.accept_model_search(cx);
                 } else {
-                    let selected = crate::ui::model_picker::selected_in_provider(
-                        self.vm(),
-                        &target,
-                        &provider,
-                    );
-                    let preferred = crate::ui::model_picker::preferred_index(
-                        &filtered,
-                        &self.vm().picker_query,
-                        selected.as_deref(),
-                    );
                     let index = moved(
-                        self.model_highlight(filtered.len(), preferred),
+                        self.model_highlight(&target, &provider, &filtered),
                         filtered.len(),
                         key == "down",
                     );
