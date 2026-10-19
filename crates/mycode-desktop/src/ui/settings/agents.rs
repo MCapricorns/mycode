@@ -26,7 +26,7 @@ pub(super) fn render_agents_section(
     if workspace.vm().settings.is_none() {
         return div().into_any_element();
     }
-    let theme = cx.theme().clone();
+    let muted = cx.theme().muted_foreground;
     let catalog = workspace.agent_roles();
     let (primary, additional) = group_settings_roles(&catalog);
     let mut cards: Vec<AnyElement> = Vec::new();
@@ -50,7 +50,7 @@ pub(super) fn render_agents_section(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_color(muted)
                         .whitespace_normal()
                         .child(t(
                             "From your MYCode home agents directory, or this project's .mycode/agents. \

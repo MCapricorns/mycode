@@ -332,7 +332,12 @@ fn render_settings_nav(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let badges = nav_badges(workspace, cx);
-    let role_names = workspace.agent_roles().names();
+    // Role names only matter to a search; skip the catalog read otherwise.
+    let role_names = if query.trim().is_empty() {
+        Vec::new()
+    } else {
+        workspace.agent_roles().names()
+    };
     let dirty = workspace.vm().settings.as_ref().is_some_and(|s| s.dirty);
     let saving = workspace.vm().settings.as_ref().is_some_and(|s| s.saving);
     let theme = cx.theme();

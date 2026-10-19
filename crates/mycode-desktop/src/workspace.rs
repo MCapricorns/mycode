@@ -709,7 +709,7 @@ impl Workspace {
 
     /// Role catalog last resolved for settings. Built-ins only before the
     /// first settings paint.
-    pub(crate) fn agent_roles(&self) -> mycode_config::RoleCatalog {
+    pub(crate) fn agent_roles(&self) -> std::sync::Arc<mycode_config::RoleCatalog> {
         self.driver.agent_roles()
     }
 
