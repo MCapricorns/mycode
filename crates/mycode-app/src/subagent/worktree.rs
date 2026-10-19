@@ -138,24 +138,21 @@ pub(crate) fn capture_worktree_diff(path: &Path) -> String {
             let _ = writeln!(out, "worktree diff failed: {error}");
         }
     }
-    // `core.quotepath=off` keeps non-ASCII file names as raw UTF-8 instead
-    // of octal escapes; the escaped spelling would fail the `path.join`
-    // lookup below on Windows and any non-ASCII path.
+    // `-z` prints raw NUL-terminated paths. The line format quotes names
+    // with spaces or non-ASCII bytes, and the quoted spelling failed the
+    // `path.join` lookup below.
     match git_command()
-        .arg("-c")
-        .arg("core.quotepath=off")
         .arg("-C")
         .arg(path)
-        .args(["status", "--porcelain", "-uall"])
+        .args(["status", "--porcelain", "-z", "-uall"])
         .output()
     {
         Ok(output) if output.status.success() => {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                let Some(name) = line.strip_prefix("?? ") else {
+            for record in String::from_utf8_lossy(&output.stdout).split('\0') {
+                let Some(name) = record.strip_prefix("?? ") else {
                     continue;
                 };
-                let name = name.trim();
-                if name.is_empty() || name.contains("..") {
+                if name.is_empty() || name.split('/').any(|part| part == "..") {
                     continue;
                 }
                 let file = path.join(name);

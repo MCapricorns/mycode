@@ -43,9 +43,11 @@ fn handoff_includes_diff_before_the_worktree_is_removed() {
     let path = lease.path.clone();
     std::fs::write(path.join("tracked.txt"), "new\n").unwrap();
     std::fs::write(path.join("created.txt"), "created-body\n").unwrap();
+    std::fs::write(path.join("with space.txt"), "spaced-body\n").unwrap();
     let text = handoff_worktree(lease, Ok("answer".to_owned())).unwrap();
     assert!(text.contains("answer"), "{text}");
     assert!(text.contains("created-body"), "{text}");
+    assert!(text.contains("spaced-body"), "{text}");
     assert!(text.contains("new"), "{text}");
     assert!(
         !path.exists(),
