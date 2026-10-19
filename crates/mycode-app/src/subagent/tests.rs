@@ -891,3 +891,67 @@ fn a_stopped_child_answers_with_its_last_text() {
             .contains("no answer")
     );
 }
+
+#[test]
+fn a_child_sizes_its_window_from_its_own_model() {
+    use std::sync::Arc;
+
+    use mycode_config::{AppSettings, ProviderSettings, SubagentRoleSettings};
+
+    let provider = |id: &str, model: &str, limit: u64| ProviderSettings {
+        id: id.to_owned(),
+        kind: "openai-completions".to_owned(),
+        base_url: format!("https://{id}.example.com/v1"),
+        models: vec![model.to_owned()],
+        enabled: true,
+        context_limit: Some(limit),
+        max_output: None,
+        hidden_models: Vec::new(),
+    };
+    let parent = provider("parent", "parent-model", 100_000);
+    let mut settings = AppSettings {
+        providers: vec![parent.clone(), provider("wide", "wide-model", 400_000)],
+        ..AppSettings::default()
+    };
+    settings.subagents.roles.push(SubagentRoleSettings {
+        role: "scout".to_owned(),
+        enabled: true,
+        provider: Some("wide".to_owned()),
+        model: Some("wide-model".to_owned()),
+        thinking: None,
+    });
+    let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-window")).unwrap();
+    let catalog = Arc::new(std::sync::RwLock::new(mycode_providers::catalog::current(
+        &home,
+    )));
+    let resolved = mycode_providers::ResolvedProvider::resolve(&parent, "parent-model", "k", "ua")
+        .expect("resolve");
+    let host = || {
+        super::BridgeAgentHost::new(
+            resolved.clone(),
+            home.clone(),
+            std::path::PathBuf::from("/tmp"),
+            &settings,
+            "session".to_owned(),
+            Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            Arc::new(tokio::sync::Mutex::new(None)),
+            Arc::new(tokio::sync::Mutex::new(None)),
+        )
+    };
+    let sized = host().with_context(
+        Arc::clone(&catalog),
+        parent.clone(),
+        "parent-model".to_owned(),
+    );
+    assert_eq!(
+        sized.child_window("scout"),
+        ("wide-model".to_owned(), 400_000),
+        "a routed role compacts against its own model's window"
+    );
+    assert_eq!(
+        sized.child_window("artisan"),
+        ("parent-model".to_owned(), 100_000),
+        "an unrouted role runs on the parent turn's model"
+    );
+    assert_eq!(host().child_window("scout"), (String::new(), 0));
+}

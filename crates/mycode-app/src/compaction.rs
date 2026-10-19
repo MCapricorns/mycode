@@ -94,12 +94,12 @@ pub(crate) fn compaction_threshold(context_window: u64) -> usize {
 
 /// Inputs that stay constant for one turn's compaction attempts.
 pub(crate) struct CompactScope<'a> {
-    pub home: &'a mycode_config::HomeLayout,
     pub wire: &'a WireProvider,
     pub model: &'a str,
-    pub session_id: &'a str,
-    pub branch_id: &'a str,
-    pub head: &'a str,
+    /// The session checkpoint this history is filed under. A subagent has
+    /// none: the same compaction runs on its history in memory, and its
+    /// parent's checkpoint is never read or written.
+    pub checkpoint: Option<CheckpointSlot<'a>>,
     pub context_window: u64,
     /// Tokens already consumed by the system prompt and tool schemas.
     ///
@@ -111,11 +111,25 @@ pub(crate) struct CompactScope<'a> {
     pub cancel: &'a CancellationToken,
 }
 
+/// Where one session branch keeps its checkpoint, and the ledger head the
+/// history was read at.
+#[derive(Clone, Copy)]
+pub(crate) struct CheckpointSlot<'a> {
+    pub home: &'a mycode_config::HomeLayout,
+    pub session_id: &'a str,
+    pub branch_id: &'a str,
+    pub head: &'a str,
+}
+
 /// What a compaction attempt did with the checkpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CompactStatus {
     /// A new checkpoint was written.
     Wrote,
+    /// The history was summarized in memory only: it already opened with a
+    /// summary, so its indexes are not ledger indexes, or it has no
+    /// checkpoint slot at all.
+    Replaced,
     /// No checkpoint was written.
     Unchanged,
     /// A checkpoint already covers this exact head.
@@ -128,8 +142,9 @@ pub(crate) enum CompactStatus {
 pub(crate) struct Compacted {
     pub messages: Vec<Arc<Message>>,
     pub status: CompactStatus,
-    /// Summary text when this attempt wrote a new checkpoint. Manual and
-    /// automatic compaction both surface this in the transcript.
+    /// Summary text when this attempt summarized ([`CompactStatus::Wrote`]
+    /// or [`CompactStatus::Replaced`]). Manual and automatic compaction both
+    /// surface this in the transcript.
     pub summary: Option<String>,
 }
 
@@ -142,18 +157,24 @@ pub(crate) async fn compact_history(
 ) -> Compacted {
     let auto_threshold = compaction_threshold(scope.context_window);
     let threshold = if force { 0 } else { auto_threshold };
-    let read_home = scope.home.clone();
-    let read_session = scope.session_id.to_owned();
-    let read_branch = scope.branch_id.to_owned();
-    let prior = tokio::task::spawn_blocking(move || {
-        mycode_config::read_compaction(&read_home, &read_session)
+    let head = scope.checkpoint.map_or("", |slot| slot.head);
+    let prior = match scope.checkpoint {
+        Some(slot) => {
+            let read_home = slot.home.clone();
+            let read_session = slot.session_id.to_owned();
+            let read_branch = slot.branch_id.to_owned();
+            tokio::task::spawn_blocking(move || {
+                mycode_config::read_compaction(&read_home, &read_session)
+                    .ok()
+                    .flatten()
+                    .filter(|checkpoint| checkpoint.branch_id == read_branch)
+            })
+            .await
             .ok()
             .flatten()
-            .filter(|checkpoint| checkpoint.branch_id == read_branch)
-    })
-    .await
-    .ok()
-    .flatten();
+        }
+        None => None,
+    };
     // `/compact` writes a checkpoint the next request must use even while the
     // raw ledger is still under the auto threshold. Apply that checkpoint
     // before the threshold check, then judge the threshold on the stitched
@@ -168,7 +189,7 @@ pub(crate) async fn compact_history(
         && checkpoint_matches(
             &history,
             checkpoint,
-            scope.head,
+            head,
             auto_threshold,
             scope.overhead_tokens,
         )
@@ -231,7 +252,7 @@ pub(crate) async fn compact_history(
     // tail is summarized in full below.
     if force
         && let Some(checkpoint) = prior.as_ref()
-        && checkpoint.covered_head == scope.head
+        && checkpoint.covered_head == head
         && checkpoint.covered_messages > 0
     {
         return Compacted {
@@ -291,13 +312,18 @@ pub(crate) async fn compact_history(
     // A history that already starts with a summary is not the ledger
     // replay. Persisting `head_end` would store an index into that shorter
     // vector, and the next open of this head would slice the ledger with it.
-    if already_summarized {
-        return Compacted {
-            messages: compacted,
-            status: CompactStatus::Unchanged,
-            summary: None,
-        };
-    }
+    // A turn files that summary once its ledger is complete
+    // ([`persist_turn_summary`]).
+    let slot = match scope.checkpoint {
+        Some(slot) if !already_summarized => slot,
+        _ => {
+            return Compacted {
+                messages: compacted,
+                status: CompactStatus::Replaced,
+                summary: Some(summary),
+            };
+        }
+    };
     if scope.cancel.is_cancelled() {
         return Compacted {
             messages: history,
@@ -309,16 +335,16 @@ pub(crate) async fn compact_history(
     let checkpoint = mycode_config::CompactionCheckpoint {
         format_version: mycode_config::COMPACTION_FORMAT_VERSION,
         kind: mycode_config::COMPACTION_KIND.to_owned(),
-        session_id: scope.session_id.to_owned(),
-        branch_id: scope.branch_id.to_owned(),
-        covered_head: scope.head.to_owned(),
+        session_id: slot.session_id.to_owned(),
+        branch_id: slot.branch_id.to_owned(),
+        covered_head: slot.head.to_owned(),
         covered_messages: head_end,
         summary,
         model: scope.model.to_owned(),
         created_at_unix: crate::unix_now().as_secs(),
     };
-    let write_home = scope.home.clone();
-    let write_session = scope.session_id.to_owned();
+    let write_home = slot.home.clone();
+    let write_session = slot.session_id.to_owned();
     let written = tokio::task::spawn_blocking(move || {
         mycode_config::write_compaction(&write_home, &write_session, &checkpoint)
     })
@@ -372,6 +398,78 @@ fn request_summary_text(summary: &str) -> String {
          the summary claims is missing.\n\n\
          {summary}"
     )
+}
+
+/// After a turn, writes the summary its request hook produced in memory, so
+/// the next turn resumes from it instead of re-summarizing the ledger.
+///
+/// That summary was cut from a stitched history, whose indexes are not
+/// ledger indexes. It is stored only when every message after it matches
+/// the end of the ledger replay, role and text alike; `covered_messages` is
+/// then the ledger length minus that tail. Any mismatch keeps the older
+/// checkpoint, which stays correct, just less recent.
+pub(crate) fn persist_turn_summary(
+    home: &mycode_config::HomeLayout,
+    target: &TurnCheckpoint<'_>,
+    ledger: &[Arc<Message>],
+    memory: &[Arc<Message>],
+) -> bool {
+    let Some(summary) = leading_summary(memory) else {
+        return false;
+    };
+    let prior = mycode_config::read_compaction(home, target.session_id)
+        .ok()
+        .flatten()
+        .filter(|checkpoint| checkpoint.branch_id == target.branch_id);
+    if prior
+        .as_ref()
+        .is_some_and(|checkpoint| checkpoint.summary == summary)
+    {
+        return false;
+    }
+    let tail = &memory[1..];
+    let Some(covered) = ledger.len().checked_sub(tail.len()) else {
+        return false;
+    };
+    if covered == 0
+        || ledger
+            .get(covered)
+            .is_some_and(|message| is_tool_result(message))
+    {
+        return false;
+    }
+    let same = |left: &Message, right: &Message| {
+        std::mem::discriminant(left) == std::mem::discriminant(right)
+            && message_text(left) == message_text(right)
+    };
+    if !tail
+        .iter()
+        .zip(&ledger[covered..])
+        .all(|(left, right)| same(left, right))
+    {
+        return false;
+    }
+    let checkpoint = mycode_config::CompactionCheckpoint {
+        format_version: mycode_config::COMPACTION_FORMAT_VERSION,
+        kind: mycode_config::COMPACTION_KIND.to_owned(),
+        session_id: target.session_id.to_owned(),
+        branch_id: target.branch_id.to_owned(),
+        covered_head: target.head.to_owned(),
+        covered_messages: covered,
+        summary,
+        model: target.model.to_owned(),
+        created_at_unix: crate::unix_now().as_secs(),
+    };
+    mycode_config::write_compaction(home, target.session_id, &checkpoint).is_ok()
+}
+
+/// Where [`persist_turn_summary`] files its checkpoint: the session branch
+/// and the ledger head it was checked against.
+pub(crate) struct TurnCheckpoint<'a> {
+    pub session_id: &'a str,
+    pub branch_id: &'a str,
+    pub head: &'a str,
+    pub model: &'a str,
 }
 
 /// The summary a history opens with, without its wire frame, or `None`
@@ -550,7 +648,7 @@ fn checkpoint_matches(
     checkpoint.covered_head == head || tail_tokens.saturating_add(overhead) <= auto_threshold
 }
 
-fn is_summary_message(message: &Message) -> bool {
+pub(crate) fn is_summary_message(message: &Message) -> bool {
     // The marker opens the first text block; joining the whole message just
     // to test its prefix copied the summary on every request.
     let Message::User(user) = message else {

@@ -241,10 +241,20 @@ pub(crate) fn model_context_window(
     provider: &ProviderSettings,
     model: &str,
 ) -> u64 {
+    catalog_context_window(&state.catalog, provider, model)
+}
+
+/// [`model_context_window`] against a catalog handle, for callers (a
+/// subagent host) that hold the catalog but not the whole core state.
+pub(crate) fn catalog_context_window(
+    catalog: &RwLock<CachedCatalog>,
+    provider: &ProviderSettings,
+    model: &str,
+) -> u64 {
     if let Some(limit) = provider.context_limit.filter(|tokens| *tokens > 0) {
         return limit;
     }
-    let Ok(catalog) = state.catalog.read() else {
+    let Ok(catalog) = catalog.read() else {
         return 0;
     };
     catalog

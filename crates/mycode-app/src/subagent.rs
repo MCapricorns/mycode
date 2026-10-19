@@ -64,6 +64,16 @@ pub(crate) struct BridgeAgentHost {
     /// Whether the parent turn registered the web tools; a child gets them
     /// only then, so it never calls a backend that cannot answer.
     web_ready: bool,
+    /// Model catalog plus the parent turn's provider and model, so a child
+    /// learns its own context window and compacts like the parent does.
+    context: Option<ChildContext>,
+}
+
+/// What a child needs to size its context window.
+struct ChildContext {
+    catalog: Arc<std::sync::RwLock<mycode_providers::catalog::CachedCatalog>>,
+    provider: mycode_config::ProviderSettings,
+    model: String,
 }
 
 impl BridgeAgentHost {
@@ -91,6 +101,7 @@ impl BridgeAgentHost {
             mcp_pool,
             copilot,
             web_ready: true,
+            context: None,
         }
     }
 
@@ -99,6 +110,46 @@ impl BridgeAgentHost {
     pub(crate) fn with_web(mut self, ready: bool) -> Self {
         self.web_ready = ready;
         self
+    }
+
+    /// Lets each child size its context window from the catalog.
+    #[must_use]
+    pub(crate) fn with_context(
+        mut self,
+        catalog: Arc<std::sync::RwLock<mycode_providers::catalog::CachedCatalog>>,
+        provider: mycode_config::ProviderSettings,
+        model: String,
+    ) -> Self {
+        self.context = Some(ChildContext {
+            catalog,
+            provider,
+            model,
+        });
+        self
+    }
+
+    /// The model `role` runs on and its context window: the role's route
+    /// when settings give one, otherwise the parent turn's model. `0` (the
+    /// compaction fallback) when nothing is known.
+    fn child_window(&self, role: &str) -> (String, u64) {
+        let Some(context) = &self.context else {
+            return (String::new(), 0);
+        };
+        let routed = self.settings.subagents.role(role).and_then(|entry| {
+            let (Some(provider_id), Some(model)) =
+                (entry.provider.as_deref(), entry.model.as_deref())
+            else {
+                return None;
+            };
+            self.settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id && provider.enabled)
+                .map(|provider| (provider, model))
+        });
+        let (provider, model) = routed.unwrap_or((&context.provider, context.model.as_str()));
+        let window = crate::state::catalog_context_window(&context.catalog, provider, model);
+        (model.to_owned(), window)
     }
 
     fn cancel_key(session_id: &str, call_id: &str) -> String {
@@ -417,7 +468,46 @@ impl BridgeAgentHost {
         let mcp_note = crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning)
             .map(|catalog| child_mcp_note(&catalog.prompt_note(), role.is_write_capable()));
         let registry = Arc::new(registry);
-        let hooks = HookRunner::default();
+        // The same compaction the parent turn runs, on this child's history
+        // only: no checkpoint slot, so the parent's file is never touched.
+        let (child_model, context_window) = self.child_window(&role.name);
+        let hooks = {
+            let wire = wire.clone();
+            let cancel = child_cancel.clone();
+            let progress = progress.clone();
+            let role_name = role.name.clone();
+            HookRunner::default().with_before_request(move |mut request| {
+                let wire = wire.clone();
+                let model = child_model.clone();
+                let cancel = cancel.clone();
+                let progress = progress.clone();
+                let role_name = role_name.clone();
+                async move {
+                    let scope = crate::compaction::CompactScope {
+                        wire: &wire,
+                        model: &model,
+                        checkpoint: None,
+                        context_window,
+                        overhead_tokens: crate::compaction::estimate_prefix_tokens(
+                            &request.system_prompt,
+                            &request.tools,
+                        ),
+                        cancel: &cancel,
+                    };
+                    let compacted =
+                        crate::compaction::compact_history(&scope, request.messages, false).await;
+                    if compacted.summary.is_some() {
+                        let _ = progress.progress(agent_progress(
+                            &role_name,
+                            "step",
+                            mycode_tools::builtin::AGENT_COMPACTED_STEP,
+                        ));
+                    }
+                    request.messages = compacted.messages;
+                    request
+                }
+            })
+        };
 
         let run_cancel = child_cancel.clone();
         let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
