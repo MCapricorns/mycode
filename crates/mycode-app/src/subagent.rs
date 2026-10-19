@@ -539,6 +539,12 @@ impl BridgeAgentHost {
 
         let path = run_dir.display().to_string();
         let _ = progress.progress(agent_progress(&role.name, "path", &path));
+        // The `queued`/`prompt` pair at dispatch is one-shot: a frontend
+        // that was mid-reopen or mid-switch then never saw the goal or the
+        // brief, and nothing else re-sends them. `goal`/`task` re-arm the
+        // same fields without touching the step log.
+        let _ = progress.progress(agent_progress(&role.name, "goal", &request.description));
+        let _ = progress.progress(agent_progress(&role.name, "task", &request.prompt));
         let (extra_roots, system) = {
             let has_worktree = worktree.is_some();
             let home = self.home.clone();
