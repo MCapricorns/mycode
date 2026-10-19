@@ -15,14 +15,24 @@ pub struct ReqwestWebTransport;
 impl ReqwestWebTransport {
     /// Checks that the TLS backend starts. Requests pin addresses themselves.
     ///
+    /// Every web tool call builds a transport, so the probe runs once per
+    /// process: loading the TLS roots again per search bought nothing.
+    ///
     /// # Errors
     ///
     /// Returns [`WebError::Unavailable`] when the TLS backend fails.
     pub fn new() -> Result<Self, WebError> {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| WebError::unavailable(format!("http client unavailable: {error}")))?;
+        static PROBE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+        PROBE
+            .get_or_init(|| {
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map(|_| ())
+                    .map_err(|error| format!("http client unavailable: {error}"))
+            })
+            .clone()
+            .map_err(WebError::unavailable)?;
         Ok(Self)
     }
 }
