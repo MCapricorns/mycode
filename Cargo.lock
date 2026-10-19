@@ -4565,7 +4565,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "mycode-agent"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -4586,7 +4586,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-app"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "bytes",
  "futures-util",
@@ -4613,7 +4613,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-cli"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "crossterm",
  "mycode-app",
@@ -4626,7 +4626,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-config"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "rustix 1.1.5",
  "serde",
@@ -4639,7 +4639,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-core"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "mimalloc",
  "serde",
@@ -4652,7 +4652,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -4671,7 +4671,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-frontend"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "mycode-app",
  "mycode-config",
@@ -4683,7 +4683,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-providers"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "bytes",
  "http",
@@ -4700,7 +4700,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-tools"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "aho-corasick",
  "base64 0.23.1",
