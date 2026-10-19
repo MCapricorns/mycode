@@ -17,6 +17,7 @@ use crate::i18n::t;
 use crate::ui::skin;
 use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
+use mycode_frontend::picker::query_matches;
 
 /// The catalog picker page: search + every provider from models.dev; picking
 /// one opens the preset configuration form.
@@ -36,7 +37,7 @@ pub(super) fn render_models_catalog_page(
         .map(|preset_id| render_preset_form(workspace, preset_id, window, cx))
         .unwrap_or_else(|| div().into_any_element());
 
-    let preset_search_text = workspace.vm().preset_search.to_lowercase();
+    let preset_search_text = workspace.vm().preset_search.clone();
     let mut preset_rows: Vec<(String, String, String, usize)> = Vec::new();
     for provider in &catalog.providers {
         // Device-OAuth vendors sign in on the shared OAuth page; they are
@@ -44,10 +45,7 @@ pub(super) fn render_models_catalog_page(
         if mycode_providers::catalog::uses_device_code_login(&provider.auth) {
             continue;
         }
-        if !preset_search_text.is_empty()
-            && !provider.name.to_lowercase().contains(&preset_search_text)
-            && !provider.id.to_lowercase().contains(&preset_search_text)
-        {
+        if !query_matches(&preset_search_text, &[&provider.name, &provider.id]) {
             continue;
         }
         preset_rows.push((
@@ -246,8 +244,8 @@ fn oauth_card(
             t("Sign in with GitHub", "使用 GitHub 登录"),
         ),
     };
-    let settings = workspace.vm().settings.clone();
-    let keyed = settings.as_ref().is_some_and(|settings| {
+    let settings = workspace.vm().settings.as_ref();
+    let keyed = settings.is_some_and(|settings| {
         settings
             .providers_with_keys
             .iter()
@@ -471,16 +469,12 @@ fn render_preset_form(
     };
     let model_search = workspace.preset_model_search_input(window, cx);
     let name = preset.name.clone();
-    let query = workspace.vm().preset_model_query.to_lowercase();
-    let models: Vec<(String, String)> = preset
+    let query = &workspace.vm().preset_model_query;
+    let models: Vec<String> = preset
         .models
         .iter()
-        .filter(|model| {
-            query.is_empty()
-                || model.id.to_lowercase().contains(&query)
-                || model.name.to_lowercase().contains(&query)
-        })
-        .map(|model| (model.id.clone(), model.name.clone()))
+        .filter(|model| query_matches(query, &[&model.id, &model.name]))
+        .map(|model| model.id.clone())
         .collect();
     let checked: Vec<String> = workspace.vm().preset_models.clone();
     let selected_count = preset
@@ -533,11 +527,11 @@ fn render_preset_form(
                 .child(div().h(px(32.)).text_sm().child(Input::new(&model_search)))
                 .child({
                     let weak = cx.weak_entity();
-                    let list_models = models.clone();
+                    let empty = models.is_empty();
+                    let list_models = models;
                     let list_checked = checked;
                     let shown = list_models.len().clamp(1, 8);
                     let list_height = px((shown as f32) * 28. + 2.);
-                    let empty = models.is_empty();
                     div()
                         .id("preset-model-list")
                         .w_full()
@@ -568,7 +562,7 @@ fn render_preset_form(
                                         let theme = cx.theme().clone();
                                         range
                                             .map(|index| {
-                                                let (model, _name) = &list_models[index];
+                                                let model = &list_models[index];
                                                 preset_model_row(
                                                     model,
                                                     list_checked.contains(model),
