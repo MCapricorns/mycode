@@ -45,20 +45,23 @@ pub(super) fn render_provider_detail(
             .any(|id| id == &provider.id);
         (provider, keyed, index)
     };
-    let catalog = workspace
-        .vm()
-        .catalog
-        .as_ref()
-        .and_then(|catalog| catalog.provider(&provider.id))
-        .cloned();
+    // Two flags from the catalog row, read in place: the row carries the
+    // provider's whole model list.
+    let (oauth, show_key) = {
+        let entry = workspace
+            .vm()
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.provider(&provider.id));
+        (
+            entry.is_some_and(|entry| {
+                mycode_providers::catalog::uses_device_code_login(&entry.auth)
+                    && matches!(entry.id.as_str(), "github-copilot" | "openai-codex")
+            }),
+            entry.is_none_or(|entry| entry.auth != mycode_providers::catalog::AUTH_DEVICE_CODE),
+        )
+    };
     let replacing = workspace.provider_key_replacing(&provider.id);
-    let oauth = catalog.as_ref().is_some_and(|entry| {
-        mycode_providers::catalog::uses_device_code_login(&entry.auth)
-            && matches!(entry.id.as_str(), "github-copilot" | "openai-codex")
-    });
-    let show_key = catalog
-        .as_ref()
-        .is_none_or(|entry| entry.auth != mycode_providers::catalog::AUTH_DEVICE_CODE);
     let key_input = (show_key && (!keyed || replacing))
         .then(|| workspace.provider_key_input(&provider.id, window, cx));
     let endpoint_input =
