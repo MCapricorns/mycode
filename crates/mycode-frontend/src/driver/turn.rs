@@ -123,7 +123,11 @@ impl FrontendDriver {
         let Some((provider_id, provider_models)) = provider_id else {
             self.act(
                 failed_start(
-                    "no enabled provider — add one with its API key in Settings".to_owned(),
+                    crate::i18n::t(
+                        "No enabled provider. Add one with its API key in Settings.",
+                        "没有启用的服务商。请在设置中添加服务商和 API 密钥。",
+                    )
+                    .to_owned(),
                 ),
                 out,
             );
@@ -134,7 +138,13 @@ impl FrontendDriver {
             .or_else(|| provider_models.first().cloned());
         let Some(model) = model else {
             self.act(
-                failed_start("the provider has no models configured".to_owned()),
+                failed_start(
+                    crate::i18n::t(
+                        "The provider has no models configured.",
+                        "该服务商没有配置模型。",
+                    )
+                    .to_owned(),
+                ),
                 out,
             );
             return;
