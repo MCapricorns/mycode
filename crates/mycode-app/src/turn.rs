@@ -265,7 +265,14 @@ async fn run_chat_turn_on(
     let (role_catalog, extra_roots) = {
         let home = home.clone();
         let cwd = cwd.clone();
+        let catalog = Arc::clone(&state.catalog);
         tokio::task::spawn_blocking(move || {
+            // The context-window and output-limit lookups below read the
+            // catalog on the core thread; a still-lazy cache pays its
+            // multi-megabyte parse here instead.
+            if let Ok(cache) = catalog.read() {
+                drop(cache.document());
+            }
             (
                 mycode_config::discover_roles(&home, Some(&cwd)),
                 workspace_extra_roots(&home, &cwd),
@@ -498,11 +505,13 @@ fn split_latest_user(
     ) else {
         return Err("the turn has no user message to answer".to_owned());
     };
-    let prompt = match Arc::unwrap_or_clone(Arc::clone(&history[index])) {
-        Message::User(user) => user,
-        _ => return Err("the turn has no user message to answer".to_owned()),
+    let mut prior = history;
+    // The split-off tail owns the prompt, so an unshared message moves out
+    // without a copy.
+    let prompt = prior.split_off(index).swap_remove(0);
+    let Message::User(prompt) = Arc::unwrap_or_clone(prompt) else {
+        return Err("the turn has no user message to answer".to_owned());
     };
-    let prior = history.into_iter().take(index).collect();
     Ok((prior, prompt))
 }
 
