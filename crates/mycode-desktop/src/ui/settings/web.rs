@@ -41,15 +41,65 @@ fn vendor_title(backend: &mycode_config::WebBackendSettings) -> String {
     }
 }
 
+/// Where the backend's key comes from, in the order the runtime looks.
+#[derive(Clone, Copy)]
+enum KeySource {
+    /// The environment variable; the runtime reads it before the vault.
+    Env(&'static str),
+    /// A key pasted into the vault.
+    Vault,
+    /// No key, and the vendor answers anonymous requests.
+    Anonymous,
+    /// No key anywhere.
+    Missing,
+}
+
+impl KeySource {
+    fn of(backend: &mycode_config::WebBackendSettings, vault_keyed: bool) -> Self {
+        let env = mycode_config::web_key_env(&backend.kind);
+        if let Some(name) = env
+            && std::env::var_os(name).is_some_and(|value| !value.is_empty())
+        {
+            Self::Env(name)
+        } else if vault_keyed {
+            Self::Vault
+        } else if backend.kind == "anysearch" {
+            Self::Anonymous
+        } else {
+            Self::Missing
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Env(name) => format!("{} {name}", t("Key from", "密钥来自")),
+            Self::Vault => t("Connected", "已连接").to_owned(),
+            Self::Anonymous => t("Anonymous", "匿名访问").to_owned(),
+            Self::Missing => t("Not connected", "未连接").to_owned(),
+        }
+    }
+
+    fn has_key(self) -> bool {
+        matches!(self, Self::Env(_) | Self::Vault)
+    }
+}
+
+fn vault_keyed(settings: &crate::view_model::SettingsState, backend_id: &str) -> bool {
+    settings
+        .providers_with_keys
+        .iter()
+        .any(|id| id.strip_prefix("web-") == Some(backend_id))
+}
+
 fn render_web_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
     let Some(settings) = workspace.vm().settings.as_ref() else {
         return div().into_any_element();
     };
-    let keyed = &settings.providers_with_keys;
     let is_vendor = |backend: &mycode_config::WebBackendSettings| {
         mycode_config::web_key_env(&backend.kind).is_some() && backend.id == backend.kind
     };
-    let theme = cx.theme().clone();
+    let cx: &Context<Workspace> = cx;
+    let theme = cx.theme();
     let mut rows: Vec<AnyElement> = Vec::new();
     for (index, backend) in settings.web_backends.iter().enumerate() {
         if is_vendor(backend) {
@@ -57,11 +107,9 @@ fn render_web_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                 index,
                 vendor_title(backend),
                 backend.endpoint.clone(),
-                keyed
-                    .iter()
-                    .any(|id| id.strip_prefix("web-") == Some(backend.id.as_str())),
+                KeySource::of(backend, vault_keyed(settings, &backend.id)),
                 backend.enabled,
-                &theme,
+                theme,
                 cx,
             ));
         }
@@ -83,7 +131,7 @@ fn render_web_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                  QUERIT_API_KEY / ANYSEARCH_API_KEY / EXA_API_KEY。最多启用一个后端，\
                  启用前会先做真实搜索探测。",
             )),
-            &theme,
+            theme,
             vec![
                 div()
                     .flex()
@@ -102,12 +150,13 @@ fn vendor_row(
     index: usize,
     title: String,
     endpoint: String,
-    keyed: bool,
+    source: KeySource,
     enabled: bool,
     theme: &Theme,
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let desk = crate::ui::desk::Desk::of(theme);
+    let keyed = source.has_key();
     div()
         .id(format!("web-backend-{index}"))
         .w_full()
@@ -161,11 +210,7 @@ fn vendor_row(
                         } else {
                             desk.faint
                         }))
-                        .child(if keyed {
-                            t("Connected", "已连接")
-                        } else {
-                            t("Not connected", "未连接")
-                        }),
+                        .child(source.label()),
                 )
                 .child(
                     Icon::new(IconName::ChevronRight)
@@ -192,7 +237,7 @@ fn render_web_detail(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let (title, endpoint, enabled, env, anonymous, keyed, index) = {
+    let (title, endpoint, enabled, env, anonymous, keyed, source, index) = {
         let Some(settings) = workspace.vm().settings.as_ref() else {
             return div().into_any_element();
         };
@@ -204,16 +249,15 @@ fn render_web_detail(
             return missing_backend(cx);
         };
         let backend = &settings.web_backends[index];
+        let keyed = vault_keyed(settings, backend_id);
         (
             vendor_title(backend),
             backend.endpoint.clone(),
             backend.enabled,
             mycode_config::web_key_env(&backend.kind),
             backend.kind == "anysearch",
-            settings
-                .providers_with_keys
-                .iter()
-                .any(|id| id.strip_prefix("web-") == Some(backend_id)),
+            keyed,
+            KeySource::of(backend, keyed),
             index,
         )
     };
@@ -222,11 +266,7 @@ fn render_web_detail(
     let can_save_key = key_input.as_ref().is_some_and(|input| {
         crate::workspace::normalized_key_input(&input.read(cx).value()).is_some()
     });
-    let status = if keyed {
-        t("Connected", "已连接")
-    } else {
-        t("Not connected", "未连接")
-    };
+    let status = source.label();
     let hint = match (env, anonymous) {
         (Some(env), true) => format!(
             "{} {env}. {}",
@@ -254,7 +294,7 @@ fn render_web_detail(
         .child(super::subview_header(
             t("Web search", "网页搜索"),
             &title,
-            Some(status),
+            Some(&status),
             |workspace, cx| workspace.on_close_web_detail(cx),
             cx,
         ))
