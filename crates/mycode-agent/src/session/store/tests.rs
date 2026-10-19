@@ -757,7 +757,10 @@ fn rows_from_the_old_id_format_leave_the_index() {
     )
     .expect("legacy row");
     drop(conn);
-    assert_eq!(inspect_sessions(&scratch.home).expect("list").corrupt.len(), 1);
+    assert_eq!(
+        inspect_sessions(&scratch.home).expect("list").corrupt.len(),
+        1
+    );
     runtime().block_on(async {
         let service = SessionService::new(&scratch.home);
         let listing = inspect_sessions(&scratch.home).expect("list");
