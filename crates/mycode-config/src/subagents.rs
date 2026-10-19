@@ -573,8 +573,10 @@ mod tests {
             .join("\n");
         assert!(blob.contains("then stop"));
         assert!(blob.contains("Do not stop at a first draft"));
-        assert!(blob.contains("`bash`"));
-        assert!(blob.contains("`powershell`"));
+        // The environment block names the one interpreter; the role does not
+        // hard-code a shell.
+        assert!(blob.contains("the shell tool the environment block names"));
+        assert!(!blob.contains("`bash`"));
         assert!(!blob.contains("steward"));
         assert!(!blob.contains("sentinel"));
         assert!(!blob.contains("`exec`"));
