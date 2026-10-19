@@ -560,12 +560,15 @@ impl Tui {
         let text = self.composer.lines().join("\n");
         if let Some(asks) = self.driver.vm().pending_ask.clone() {
             let index = self.driver.ask_index().min(asks.len().saturating_sub(1));
-            let choices = &asks[index].choices;
-            // A bare number picks that choice; anything else is free text.
-            match text.trim().parse::<usize>() {
-                Ok(number) if (1..=choices.len()).contains(&number) => {
-                    let answer = choices[number - 1].clone();
-                    self.driver.pick_ask_choice(index, answer, false, effects);
+            let row = &asks[index];
+            // Choice numbers pick those choices (several, `1,3`, on a
+            // multi-select row); anything else is free text.
+            match choice_numbers(&text, row.choices.len()) {
+                Some(numbers) if row.multiple || numbers.len() == 1 => {
+                    for number in numbers {
+                        let answer = row.choices[number - 1].clone();
+                        self.driver.pick_ask_choice(index, answer, false, effects);
+                    }
                 }
                 _ => self.driver.ask_text_typed(index, text, effects),
             }
@@ -1661,6 +1664,8 @@ impl Tui {
         }
         let hint = if ask.choices.is_empty() {
             "  (type an answer, Enter continues, Esc dismisses)"
+        } else if ask.multiple {
+            "  (type numbers like 1,3 or an answer, Enter continues, Esc dismisses)"
         } else {
             "  (type a number or an answer, Enter continues, Esc dismisses)"
         };
@@ -2145,6 +2150,22 @@ fn edit_line(key: &KeyEvent, buffer: &mut String) -> LineKey {
     }
 }
 
+/// The distinct 1-based choice numbers in `text` (comma or space
+/// separated), or `None` when any word is not a choice number.
+fn choice_numbers(text: &str, choices: usize) -> Option<Vec<usize>> {
+    let mut numbers = Vec::new();
+    for word in text.split([',', ' ']).filter(|word| !word.is_empty()) {
+        let number = word.parse::<usize>().ok()?;
+        if !(1..=choices).contains(&number) {
+            return None;
+        }
+        if !numbers.contains(&number) {
+            numbers.push(number);
+        }
+    }
+    (!numbers.is_empty()).then_some(numbers)
+}
+
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
 }
@@ -2192,4 +2213,19 @@ fn shorten_home(path: &str) -> String {
         }
     }
     path.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::choice_numbers;
+
+    #[test]
+    fn choice_numbers_accept_lists_and_reject_free_text() {
+        assert_eq!(choice_numbers("2", 3), Some(vec![2]));
+        assert_eq!(choice_numbers(" 1, 3 3", 3), Some(vec![1, 3]));
+        assert_eq!(choice_numbers("4", 3), None);
+        assert_eq!(choice_numbers("0", 3), None);
+        assert_eq!(choice_numbers("1 and 2", 3), None);
+        assert_eq!(choice_numbers("", 3), None);
+    }
 }
