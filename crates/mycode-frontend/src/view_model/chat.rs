@@ -18,7 +18,7 @@ pub struct ComposerMention {
 pub struct MentionItem {
     /// Token passed to accept: `/new`, `/slug`, `mcp:<server>`, or a file path.
     pub insert: String,
-    /// Secondary label. Command labels are English ids resolved at render.
+    /// Secondary label, already in the interface language.
     pub label: String,
     /// Which section the row belongs to.
     pub group: MentionGroup,
@@ -190,11 +190,12 @@ pub enum MentionKind {
     Command,
 }
 
-/// Built-in slash commands offered by the composer menu.
-pub const COMPOSER_COMMANDS: &[(&str, &str)] = &[
-    ("/new", "new chat"),
-    ("/compact", "compact context"),
-    ("/settings", "settings"),
+/// Built-in slash commands offered by the composer menu and the palette:
+/// token, English label, Chinese label.
+pub const COMPOSER_COMMANDS: &[(&str, &str, &str)] = &[
+    ("/new", "new chat", "新对话"),
+    ("/compact", "compact context", "压缩上下文"),
+    ("/settings", "settings", "设置"),
 ];
 
 /// Whether `title` matches a sidebar filter. An empty filter matches every

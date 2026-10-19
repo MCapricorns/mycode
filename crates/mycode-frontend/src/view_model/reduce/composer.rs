@@ -86,12 +86,12 @@ pub(super) fn slash_items(
 ) -> Vec<MentionItem> {
     let fragment = fragment.to_ascii_lowercase();
     let mut items = Vec::new();
-    for (name, label) in COMPOSER_COMMANDS {
+    for (name, english, chinese) in COMPOSER_COMMANDS {
         let slug = &name[1..];
         if fragment.is_empty() || slug.starts_with(&fragment) {
             items.push(MentionItem {
                 insert: (*name).to_owned(),
-                label: (*label).to_owned(),
+                label: crate::i18n::t(english, chinese).to_owned(),
                 group: MentionGroup::Command,
             });
         }

@@ -209,8 +209,7 @@ fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
 
 fn command_items(state: &WorkspaceState) -> Vec<PaletteItem> {
     let mut items = Vec::new();
-    for (name, _) in COMPOSER_COMMANDS {
-        let (english, chinese) = command_copy(name);
+    for (name, english, chinese) in COMPOSER_COMMANDS {
         let mut keywords = words(&["command", "命令", english, chinese]);
         keywords.push(name.trim_start_matches('/').to_owned());
         items.push(PaletteItem {
@@ -290,15 +289,6 @@ fn settings_items(state: &WorkspaceState) -> Vec<PaletteItem> {
         }
     }
     items
-}
-
-fn command_copy(name: &str) -> (&'static str, &'static str) {
-    match name {
-        "/new" => ("new chat", "新对话"),
-        "/compact" => ("compact context", "压缩上下文"),
-        "/settings" => ("settings", "设置"),
-        _ => ("command", "命令"),
-    }
 }
 
 fn section_keywords(section: SettingsSection) -> &'static [&'static str] {

@@ -304,13 +304,9 @@ fn mention_row_id(index: usize, item: &crate::view_model::MentionItem) -> String
 
 fn mention_label(item: &crate::view_model::MentionItem) -> String {
     match item.group {
-        MentionGroup::Command => match item.insert.as_str() {
-            "/new" => format!("/new · {}", t("new chat", "新对话")),
-            "/compact" => format!("/compact · {}", t("compact context", "压缩上下文")),
-            "/settings" => format!("/settings · {}", t("settings", "设置")),
-            _ => format!("{} · {}", item.insert, item.label),
-        },
-        MentionGroup::Skill => format!("{} · {}", item.insert, item.label),
+        MentionGroup::Command | MentionGroup::Skill => {
+            format!("{} · {}", item.insert, item.label)
+        }
         MentionGroup::Mcp => {
             if let Some((server, tool)) = item
                 .insert
