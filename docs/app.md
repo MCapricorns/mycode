@@ -47,7 +47,7 @@
 4. 重新读该分支的持久头，从账本回放整段分支。界面专用的 `COMPACTION SUMMARY` 行跳过；并行工具结果按调用顺序重排。
 5. 取最后一条有文字的用户消息作为本次 prompt；它后面的助手消息或工具结果只在本次请求里省略，账本不动。
 6. 连接 MCP，发现角色与工作区额外文件夹。
-7. 建工具表：内置工具、`ask_user`、`web_search`、`fetch_content`；至少一个角色启用时加 `agent`；连上的 MCP 按直连/延迟规则注册。
+7. 建工具表：内置工具、`ask_user`；网页后端可用（`web_backend_ready`：有可用后端，需要 key 的已有 key）时才加 `web_search`、`fetch_content`；至少一个角色启用时加 `agent`；连上的 MCP 按直连/延迟规则注册。
 8. 拼 system prompt：固定身份和 `<working_style>` + `build_system_prompt` 的工具说明 + 子代理委派表；然后是 `<environment>` / `<shell>`、资源文件（`AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`）、skill 目录、MCP 说明、其它工作区文件夹和临时目录。skill 和文件夹排序，保证同样的文件得到相同字节。
 9. 跑一次回合前压缩；写出检查点就立刻写摘要卡片并发 `SummaryShown`。
 10. `AgentConfig` 带 system prompt、`prompt_cache_key` = 会话 id、输出上限（设置 `maxOutput` → 目录 `limit.output` → 32000）、会话自己的思考档位（`ChatTurn.reasoning`）。装压缩钩子，`Agent::prompt`。不保存文件快照。
@@ -57,6 +57,7 @@
 事件泵拥有分支头：
 
 - `ToolStarted` 先提交 `ToolCall` 事件，`ToolCompleted` 提交结果。
+- 模型还在流式写 `agent` 调用时（`ToolCallStarted` 之后的 `ToolCallDelta`），泵从不完整的 JSON 里读出 `agent` 和 `description`，发 `ToolPreparing`；同一个服务商调用 id 的 `ToolStarted` 到达时替换它。前端先显示占位卡片（行 id 以 `prep-` 开头），回合结束时清掉没启动的占位。
 - 带工具调用的中间助手消息到达即提交并发 `AssistantStep`；纯文本回复先攒着。
 - 每条带 usage 的助手消息累加并立即发一次 `UsageSnapshot`。用量不写账本。
 - 回合中的 steer 先提交攒着的助手消息，再写用户消息并发 `SteerCommitted`，随后发 `PromptCacheWatch(Steer)`。
@@ -84,7 +85,7 @@
 - 工具取角色白名单和父级工具的交集。角色没写时继承 `read`、`write`、`edit`、`shell`、`grep`、`find`、`web_search`、`fetch_content`。`shell`/`bash`/`powershell`/`cmd` 都映射到当前进程实际的那个解释器。
 - scout 强制只读：不注册写工具和 shell，MCP 只拿 `readOnlyHint` 为 true 的工具。
 - 子代理的 system prompt 带上会话工作区的 `AGENTS.md` / `MYCODE.md` 资源（按会话 cwd 发现，worktree 里看不到未提交的改动），并把它们和匹配的 `SKILL.md` 当作用户的常驻指令；其它文件、工具输出和网页仍是数据。
-- 连上的 MCP 会注册，`<mcp>` 说明与父回合共用同一份目录文本，只读角色另注明只拿 `readOnlyHint` 工具；子代理不能 `ask_user`，不能再调 `agent`，没有压缩钩子。
+- 连上的 MCP 会注册，`<mcp>` 说明与父回合共用同一份目录文本，只读角色另注明只拿 `readOnlyHint` 工具；子代理不能 `ask_user`，不能再调 `agent`；父回合没注册网页工具时子代理也拿不到。子代理有自己的压缩钩子（见「历史压缩」）。
 - provider/model 只有设置里两项都填了才覆盖，否则用父回合的 provider；思考档位取设置覆盖或角色定义，默认交给提供商，不继承父回合的档位。换提供商走 `resolve_request_auth`，共用 Copilot bearer 缓存。
 - 只有能写的角色能用 worktree：在 `<home>/agent-worktrees/` 建分离 checkout，结束时把 diff（最多 256 KiB）附在答案或错误后面，再删掉 worktree。
 
@@ -133,7 +134,8 @@
 - 摘要失败、太短或写检查点失败时，这次请求仍用完整历史，回合继续。账本不改写。
 - 检查点仍匹配且“摘要 + 未覆盖尾部”没超阈值时，直接用拼接结果，不再请求模型。
 - 拼接结果超阈值但原始账本还能切分时，重新摘要并写新检查点；只有拼接结果超阈值时，在内存里再压一次，不把更短数组的下标写回检查点。
-- 历史已经以摘要开头、工具输出又把窗口撑过阈值时，只在内存里再压一次，不持久化。
+- 历史已经以摘要开头、工具输出又把窗口撑过阈值时，先在内存里再压一次（新摘要把旧摘要当前文）。回合结束、事件泵排空后，若内存历史仍以摘要开头，就核对它的未压缩尾部与账本末尾逐条一致（角色和文本），且切点不落在工具结果上，再按账本下标写成检查点；与旧检查点相同就不写。所以一个回合里压缩多次，下一回合也直接从最新摘要继续。
+- 子代理用同一个 `compact_history`，只是不带检查点槽（`checkpoint: None`）：只在内存里压缩，不读写父会话的检查点。窗口按子代理实际的模型计算：设置给角色指定了已启用的服务商和模型就用它，否则用父回合的模型。压缩后发一条 `step` 进度 `compacted`，卡片显示「已压缩上下文」。
 - 回合前压缩写出卡片时立刻发布；before-request 钩子里产生的卡片先攒着，等最后一条消息提交后再写，避免插在工具调用和结果中间。
 - 手动 `/compact` 忽略阈值，在当前头上强制摘要。`compacted`、`covered`、`empty` 算成功；会话打不开、提供商失败、摘要卡片没写进去都是 `ok: false`。`CompactFinished` 带回新的头。
 

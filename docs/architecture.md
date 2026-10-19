@@ -46,7 +46,7 @@ mycode-core      （叶子）
 4. `turn_credentials` 读 settings 和 secrets，短暂重试以避开并发保存；`resolve_request_auth` 处理 Copilot bearer 缓存和 Codex refresh。
 5. `ResolvedProvider` 解析 endpoint、协议和 headers；`ReqwestTransport` 建立 SSE 传输。
 6. 重新读分支头，按账本回放整条分支为 `Message` 列表。最后一条非空 user message 作为本回合 prompt；它后面的 assistant/tool 结果留在账本里，但这次请求不带。
-7. 连接 MCP（复用池，只重连失败或新加的 server），组装注册表：`read`、`write`、`edit`、`grep`、`find`、当前平台的 shell、`ask_user`、`web_search`、`fetch_content`、按需注册的 `agent`，以及 MCP 工具。
+7. 连接 MCP（复用池，只重连失败或新加的 server），组装注册表：`read`、`write`、`edit`、`grep`、`find`、当前平台的 shell、`ask_user`、网页后端可用时的 `web_search`/`fetch_content`、按需注册的 `agent`，以及 MCP 工具。
 8. 拼 system prompt：固定身份、工具说明、`AGENTS.md` 资源、skills 目录、MCP 提示、额外工作区目录、环境块。
 9. 回合前检查压缩：可用窗口是模型窗口的 95%，到其中 90% 触发；保留约 20k token 的尾部；到阈值时写 `compaction.json` 和一张摘要卡。
 10. `AgentConfig` 带 system prompt、会话 id 作 `prompt_cache_key`、输出上限和推理档位；启动 `LedgerPump`，`seed_history` 后调用 `Agent::prompt`。
@@ -123,7 +123,7 @@ mycode-core      （叶子）
 
 **MCP。** 支持 stdio 和 Streamable-HTTP。配置来自 `settings.json` 的 `mcpServers` 和工作区的 `.mycode/mcp.json`。单条消息最大 1 MiB，每个 server 最多 128 个工具。工具数不超过 4 且每个 schema 不超过 2048 字节的 server 直接按原始工具名注册，但不会覆盖已有的同名工具；其余工具不直接注册，模型用 `search_tool` 查 schema、用 `use_tool` 调用。客户端按 server 复用，settings 指纹变化时重建；单个握手最多等 20 秒，连接失败的 server 跳过，不会让回合失败。
 
-**子代理。** 角色来自内置的 `scout`、`artisan`，`<home>/agents/*.md` 和工作区 `.mycode/agents/*.md`；后一层覆盖前一层。`scout` 是硬只读，只能拿 `read`/`grep`/`find`/`web_search`/`fetch_content`。`artisan` 默认 `worktree` 隔离：在一个 detached git worktree 里工作，结束时把 diff（最多 256 KiB）附在结果后面并删除 worktree，不会合回主工作区，也不提交。只有可写角色能拿 worktree。单回合最多 8 个并发子代理。子代理不能再调用 `agent` 或 `ask_user`，也没有压缩钩子；只读角色的 MCP 工具按 `readOnlyHint` 过滤。子代理的提示同样带上会话工作区的 `AGENTS.md` 资源。
+**子代理。** 角色来自内置的 `scout`、`artisan`，`<home>/agents/*.md` 和工作区 `.mycode/agents/*.md`；后一层覆盖前一层。`scout` 是硬只读，只能拿 `read`/`grep`/`find`/`web_search`/`fetch_content`。`artisan` 默认 `worktree` 隔离：在一个 detached git worktree 里工作，结束时把 diff（最多 256 KiB）附在结果后面并删除 worktree，不会合回主工作区，也不提交。只有可写角色能拿 worktree。单回合最多 8 个并发子代理。子代理不能再调用 `agent` 或 `ask_user`；它和主会话走同一套压缩，只在内存里进行，窗口按子代理自己的模型计算；只读角色的 MCP 工具按 `readOnlyHint` 过滤。子代理的提示同样带上会话工作区的 `AGENTS.md` 资源。
 
 **模型与缓存。** provider 的地址、协议和模型来自 settings。endpoint 按协议补 `/v1/messages`、`/chat/completions` 或 `/responses`，base 已带路径时不重复；未知协议和 provider 未列出的 model 直接拒绝。请求体差异（thinking 开关、`cache_control`、`prompt_cache_key`）在 `family.rs` 的表里按主机/模型匹配，最后一行是通用兜底。会话 id 作为 `prompt_cache_key`（截到 64 个标量）；明确拒绝该字段的主机会在进程内被记住并跳过。OAuth refresh 用全局锁串行，避免 refresh token 被并发消耗。system prompt 在文件不变时保持字节稳定，所以同一会话的请求能命中前缀缓存。用量按 response cycle 累加，上下文表只取最近一次 prompt。
 
