@@ -61,6 +61,9 @@ pub(crate) struct BridgeAgentHost {
     /// Shared Copilot bearer cache. A role routed at Copilot refreshes
     /// through the same slot as the parent turn.
     copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
+    /// Whether the parent turn registered the web tools; a child gets them
+    /// only then, so it never calls a backend that cannot answer.
+    web_ready: bool,
 }
 
 impl BridgeAgentHost {
@@ -87,7 +90,15 @@ impl BridgeAgentHost {
             cancels,
             mcp_pool,
             copilot,
+            web_ready: true,
         }
+    }
+
+    /// Records whether the web tools are usable this turn.
+    #[must_use]
+    pub(crate) fn with_web(mut self, ready: bool) -> Self {
+        self.web_ready = ready;
+        self
     }
 
     fn cancel_key(session_id: &str, call_id: &str) -> String {
@@ -373,7 +384,10 @@ impl BridgeAgentHost {
         let transport = ReqwestTransport::new()
             .map_err(|error| fail(format!("HTTP transport unavailable: {error}")))?;
         let wire = WireProvider::new(resolved, Arc::new(transport));
-        let allowed = role.resolve_tools(PARENT_TOOL_NAMES);
+        let mut allowed = role.resolve_tools(PARENT_TOOL_NAMES);
+        if !self.web_ready {
+            allowed.retain(|name| !matches!(name.as_str(), "web_search" | "fetch_content"));
+        }
         // Stdio servers are spawned kill-on-drop, so a stop may abandon a
         // slow handshake.
         let (mcp_tools, mcp_warning) = tokio::select! {

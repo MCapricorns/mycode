@@ -263,10 +263,11 @@ async fn run_chat_turn_on(
         .await?;
     // Keep role discovery and workspace extra-root reads off the single
     // core runtime thread.
-    let (role_catalog, extra_roots) = {
+    let (role_catalog, extra_roots, web_ready) = {
         let home = home.clone();
         let cwd = cwd.clone();
         let catalog = Arc::clone(&state.catalog);
+        let web_settings = settings.clone();
         tokio::task::spawn_blocking(move || {
             // The context-window and output-limit lookups below read the
             // catalog on the core thread; a still-lazy cache pays its
@@ -277,6 +278,7 @@ async fn run_chat_turn_on(
             (
                 mycode_config::discover_roles(&home, Some(&cwd)),
                 workspace_extra_roots(&home, &cwd),
+                crate::tool_hosts::web_backend_ready(&home, &web_settings),
             )
         })
         .await
@@ -305,18 +307,22 @@ async fn run_chat_turn_on(
                     state.subagent_cancels.clone(),
                     state.mcp_pool.clone(),
                     state.copilot.clone(),
-                ),
+                )
+                .with_web(web_ready),
             ))));
         }
-        // The model's web tools ride the same settings-configured backend.
-        let web_host: Arc<dyn mycode_tools::builtin::WebHost> =
-            Arc::new(BridgeWebHost { home: home.clone() });
-        registry.register(Arc::new(mycode_tools::builtin::WebSearchTool::new(
-            web_host.clone(),
-        )));
-        registry.register(Arc::new(mycode_tools::builtin::FetchContentTool::new(
-            web_host,
-        )));
+        // The model's web tools ride the same settings-configured backend,
+        // and appear only when that backend can answer.
+        if web_ready {
+            let web_host: Arc<dyn mycode_tools::builtin::WebHost> =
+                Arc::new(BridgeWebHost { home: home.clone() });
+            registry.register(Arc::new(mycode_tools::builtin::WebSearchTool::new(
+                web_host.clone(),
+            )));
+            registry.register(Arc::new(mycode_tools::builtin::FetchContentTool::new(
+                web_host,
+            )));
+        }
         registry
     });
     let mcp_catalog = crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning);
