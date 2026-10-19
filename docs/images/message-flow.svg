@@ -39,7 +39,7 @@
 
       <rect x="992" y="140" width="184" height="92" rx="14" fill="#1b2238" stroke="#7c8cff" stroke-opacity="0.6"/>
       <text x="1084" y="178" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑤ 模型流式</text>
-      <text x="1084" y="206" fill="#aab3e0" text-anchor="middle">带 prompt cache key</text>
+      <text x="1084" y="206" fill="#aab3e0" text-anchor="middle">支持的端点带 prompt cache key</text>
 
       <rect x="752" y="290" width="200" height="92" rx="14" fill="#1b2238" stroke="#ffffff" stroke-opacity="0.14"/>
       <text x="852" y="328" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑥ 工具调用</text>
@@ -55,12 +55,12 @@
 
       <rect x="48" y="290" width="184" height="92" rx="14" fill="#13261c" stroke="#3fb950" stroke-opacity="0.7"/>
       <text x="140" y="328" fill="#ffffff" font-size="18" font-weight="700" text-anchor="middle">⑨ ChatDone</text>
-      <text x="140" y="356" fill="#aab3e0" text-anchor="middle">回复与用量入账</text>
+      <text x="140" y="356" fill="#aab3e0" text-anchor="middle">回复入账，用量只发实时事件</text>
     </g>
 
     <g font-size="15" fill="#8b95c9">
       <rect x="48" y="420" width="1128" height="64" rx="14" fill="#ffffff" fill-opacity="0.03" stroke="#ffffff" stroke-opacity="0.08"/>
-      <text x="72" y="458">中途打断：已到达的思考、正文和完成的工具调用照样入账并标记为被打断；回合中另发的文字作为 Steer 注入，不取消子代理。</text>
+      <text x="72" y="458">中途打断：已到达的思考和正文入账，部分回复标为被打断；已完成的工具调用按原记录保留。回合进行中按 Enter 排队，Ctrl+Enter（macOS 为 Cmd+Enter）打断并发送。</text>
     </g>
   </g>
 </svg>
