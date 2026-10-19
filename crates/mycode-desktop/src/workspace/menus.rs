@@ -276,26 +276,18 @@ impl Workspace {
                     .len(),
                 key == "down",
             );
-            // Heading children are real scroll items, so include them when
-            // selecting a command in a later group.
-            let headers = {
-                let mention = self.vm().mention.as_ref().expect("visible mention");
-                let mut headers = usize::from(mention.kind == MentionKind::File);
-                let mut previous = None;
-                if mention.kind == MentionKind::Command {
-                    for item in &mention.items[..=index] {
-                        if previous != Some(item.group) {
-                            headers += 1;
-                            previous = Some(item.group);
-                        }
-                    }
-                }
-                headers
-            };
+            // The file list's FILES heading is the panel's first scroll
+            // child; the flat slash menu has no headings.
+            let heading = usize::from(
+                self.vm()
+                    .mention
+                    .as_ref()
+                    .is_some_and(|mention| mention.kind == MentionKind::File),
+            );
             self.menu_navigation.mention = Some(index);
             self.menu_navigation
                 .mention_scroll
-                .scroll_to_item(index + headers);
+                .scroll_to_item(index + heading);
             cx.notify();
             return true;
         }
