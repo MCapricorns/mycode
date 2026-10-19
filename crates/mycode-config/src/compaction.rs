@@ -77,11 +77,12 @@ pub fn estimate_token_count(chars: usize) -> usize {
     chars / 4 + 8
 }
 
-fn compaction_path(session_id: &str) -> Result<String, ConfigError> {
-    crate::home::session_relative(session_id, "compaction.json")
+fn compaction_path(home: &HomeLayout, session_id: &str) -> Result<Option<String>, ConfigError> {
+    crate::home::session_file(home, session_id, "compaction.json")
 }
 
-/// Reads one session's checkpoint; a missing file yields `None`.
+/// Reads one session's checkpoint; a missing file or session directory
+/// yields `None`.
 ///
 /// # Errors
 ///
@@ -91,7 +92,9 @@ pub fn read_compaction(
     home: &HomeLayout,
     session_id: &str,
 ) -> Result<Option<CompactionCheckpoint>, ConfigError> {
-    let path = compaction_path(session_id)?;
+    let Some(path) = compaction_path(home, session_id)? else {
+        return Ok(None);
+    };
     let Some(bytes) = read_owned_file(home, &path, MAX_AUTHORITY_DOCUMENT_BYTES)? else {
         return Ok(None);
     };
@@ -105,8 +108,9 @@ pub fn read_compaction(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] for validation or owned-file failures; a failed
-/// write leaves any previous checkpoint untouched.
+/// Returns [`ConfigError`] for validation or owned-file failures, or when
+/// the session has no directory; a failed write leaves any previous
+/// checkpoint untouched.
 pub fn write_compaction(
     home: &HomeLayout,
     session_id: &str,
@@ -116,7 +120,7 @@ pub fn write_compaction(
     if checkpoint.session_id != session_id {
         return Err(ConfigError::authority_rejection());
     }
-    let path = compaction_path(session_id)?;
+    let path = compaction_path(home, session_id)?.ok_or_else(ConfigError::authority_rejection)?;
     let mut wire = serde_json::to_vec_pretty(checkpoint)
         .map_err(|_| ConfigError::new(crate::ConfigErrorKind::Serialization))?;
     wire.push(b'\n');

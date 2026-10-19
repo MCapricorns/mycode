@@ -330,7 +330,9 @@ impl FrontendDriver {
         let Some(session_id) = self.open_session_id() else {
             self.pending_open = None;
             self.pending_project = Some(project.to_owned());
-            self.dispatch(BridgeCommand::CreateSession);
+            self.dispatch(BridgeCommand::CreateSession {
+                project: Some(project.to_owned()),
+            });
             self.refresh_skills(out);
             self.persist_ui_state();
             return;
@@ -395,7 +397,9 @@ impl FrontendDriver {
         } else if create {
             self.park_conversation(out);
             self.pending_project = Some(project.to_owned());
-            self.dispatch(BridgeCommand::CreateSession);
+            self.dispatch(BridgeCommand::CreateSession {
+                project: Some(project.to_owned()),
+            });
         } else if !self.active_is_project(project) {
             self.park_conversation(out);
         }

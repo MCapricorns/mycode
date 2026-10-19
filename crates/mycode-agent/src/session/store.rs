@@ -1,8 +1,10 @@
 //! SQLite session index and JSONL event logs.
 //!
 //! `<home>/sessions.db` (SQLite, WAL) is the commit authority for titles,
-//! branch heads, event counts, and byte offsets. `<home>/sessions/<id>/<branch>.jsonl`
-//! is the event source of truth: one JSON object per line. Payloads at or
+//! branch heads, event counts, and byte offsets.
+//! `<home>/sessions/<project key>/<id>/<branch>.jsonl` is the event source of
+//! truth: one JSON object per line. The project key is the folder the
+//! session was created in ([`mycode_config::project_dir_key`]). Payloads at or
 //! above [`EXTERNAL_PAYLOAD_THRESHOLD`] live in `payloads/<event-id>.bin`;
 //! the line names the file and carries its digest. They are never stored as
 //! SQLite blobs.
@@ -22,8 +24,6 @@ pub(crate) use index::{
 };
 pub(crate) use jsonl::{charge, encoded_record_len};
 
-/// Session family data root below the owned home.
-const SESSIONS_RELATIVE_DIR: &str = mycode_config::SESSIONS_DIR;
 /// SQLite index file name at the owned home root.
 pub(crate) const SESSIONS_DB_FILE: &str = "sessions.db";
 /// Maximum committed charge across one session: 512 MiB.
@@ -46,17 +46,31 @@ use super::ids::{BranchId, SessionEventId, SessionId};
 /// Constructs validated owned paths below one session directory.
 pub(crate) struct SessionPaths<'a> {
     home: &'a HomeLayout,
-    session: &'a SessionId,
+    /// Relative owned path of the session directory.
+    dir: String,
 }
 
 impl<'a> SessionPaths<'a> {
-    /// Binds one session's path namespace.
-    pub(crate) const fn new(home: &'a HomeLayout, session: &'a SessionId) -> Self {
-        Self { home, session }
+    /// Binds one session directory, given as a relative owned path.
+    pub(crate) const fn at(home: &'a HomeLayout, dir: String) -> Self {
+        Self { home, dir }
+    }
+
+    /// Binds the directory `session` already has. A session whose directory
+    /// is gone gets a fresh one under [`mycode_config::NO_PROJECT_DIR`], so
+    /// an empty session can still take its first write.
+    pub(crate) fn locate(home: &'a HomeLayout, session: &SessionId) -> Result<Self, StoreError> {
+        let dir = match mycode_config::locate_session_dir(home, session.as_str()) {
+            Ok(Some(dir)) => dir,
+            Ok(None) => mycode_config::new_session_dir(None, session.as_str())
+                .map_err(|_| StoreError::Unavailable)?,
+            Err(_) => return Err(StoreError::Storage),
+        };
+        Ok(Self::at(home, dir))
     }
 
     fn relative(&self, tail: &str) -> String {
-        format!("{SESSIONS_RELATIVE_DIR}/{}{tail}", self.session.as_str())
+        format!("{}{tail}", self.dir)
     }
 
     /// Relative owned path of the session directory.
@@ -72,14 +86,6 @@ impl<'a> SessionPaths<'a> {
     /// Relative owned path of the external payload directory.
     pub(crate) fn payloads_dir(&self) -> String {
         self.relative(&format!("/{PAYLOADS_DIR}"))
-    }
-
-    /// Relative owned path of the human-readable title marker.
-    ///
-    /// Session directory names are random ids; `title.txt` is what a human
-    /// debugging `sessions/` reads to tell one session from another.
-    pub(crate) fn title_txt(&self) -> String {
-        self.relative("/title.txt")
     }
 
     /// Relative owned path of one externalized payload.

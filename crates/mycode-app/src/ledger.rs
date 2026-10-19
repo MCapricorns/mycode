@@ -422,20 +422,30 @@ pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), 
     {
         return Err("invalid session id".to_owned());
     }
+    // Find the directory before the row goes: it sits under the project the
+    // session started in, which only the directory tree still records.
+    let session_dir = mycode_config::locate_session_dir(home, session_id)
+        .map_err(|error| format!("delete: {error}"))?
+        .map(|relative| home.owned_join(relative))
+        .transpose()
+        .map_err(|error| format!("delete: {error}"))?;
     session::delete_session_index(home, session_id)
         .map_err(|_| "session index unavailable".to_owned())?;
     let roots = [
-        home.root()
-            .join(mycode_config::SESSIONS_DIR)
-            .join(session_id),
-        home.root().join(CHECKPOINTS_DIR).join(session_id),
+        session_dir.clone(),
+        Some(home.root().join(CHECKPOINTS_DIR).join(session_id)),
     ];
-    for root in roots {
+    for root in roots.into_iter().flatten() {
         match std::fs::remove_dir_all(&root) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("delete: {error}")),
         }
+    }
+    // The project folder goes with its last session; a folder that still
+    // holds others refuses the removal.
+    if let Some(project) = session_dir.as_deref().and_then(std::path::Path::parent) {
+        let _ = std::fs::remove_dir(project);
     }
     Ok(())
 }
@@ -687,7 +697,7 @@ mod tests {
             .expect("runtime");
         runtime.block_on(async {
             let service = SessionService::new(&home);
-            let created = service.create().await.expect("create");
+            let created = service.create(None).await.expect("create");
             let mut head = HeadStamp::Empty;
             let total = usize::from(VISIBLE_EVENTS) + 5;
             for index in 0..total {
@@ -746,7 +756,7 @@ mod tests {
             .expect("runtime");
         runtime.block_on(async {
             let service = SessionService::new(&home);
-            let created = service.create().await.expect("create");
+            let created = service.create(None).await.expect("create");
             let mut head = HeadStamp::Empty;
             let assistant = mycode_core::AssistantMessage {
                 blocks: vec![mycode_core::ContentBlock::Text(
@@ -792,6 +802,31 @@ mod tests {
             assert_eq!(opened.entries.len(), 1, "the usage event stays off the transcript");
             service.shutdown().await;
         });
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deleting_the_last_session_of_a_project_removes_its_folder() {
+        let (root, home) = scratch();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (kept, gone) = runtime.block_on(async {
+            let service = SessionService::new(&home);
+            let kept = service.create(Some("/work/a")).await.expect("create a");
+            let gone = service.create(Some("/work/b")).await.expect("create b");
+            service.shutdown().await;
+            (kept.session_id, gone.session_id)
+        });
+        let sessions = root.join(mycode_config::SESSIONS_DIR);
+        assert!(sessions.join("-work-b").join(gone.as_str()).is_dir());
+        super::delete_session(&home, gone.as_str()).expect("delete");
+        assert!(
+            !sessions.join("-work-b").exists(),
+            "empty project folder removed"
+        );
+        assert!(sessions.join("-work-a").join(kept.as_str()).is_dir());
         let _ = std::fs::remove_dir_all(root);
     }
 }

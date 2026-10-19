@@ -72,7 +72,9 @@ impl FrontendDriver {
         if self.vm.project_dir.is_some() {
             self.pending_project = self.vm.project_dir.clone();
         }
-        self.dispatch(BridgeCommand::CreateSession);
+        self.dispatch(BridgeCommand::CreateSession {
+            project: self.pending_project.clone(),
+        });
         let _ = out;
         true
     }

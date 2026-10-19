@@ -153,7 +153,7 @@ async fn turn_fixture() -> TurnFixture {
     std::fs::create_dir_all(&cwd).expect("cwd");
     let catalog = mycode_providers::catalog::current(&home);
     let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
-    let created = state.service.create().await.expect("session");
+    let created = state.service.create(None).await.expect("session");
     let provider = settings.providers[0].clone();
     let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
         .expect("resolve");
@@ -547,7 +547,7 @@ async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
     std::fs::create_dir_all(&cwd).expect("cwd");
     let catalog = mycode_providers::catalog::current(&home);
     let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
-    let created = state.service.create().await.expect("session");
+    let created = state.service.create(None).await.expect("session");
     let mut head = HeadStamp::Empty;
     for text in ["prior work", &"P".repeat(120_000)] {
         let reservation = state

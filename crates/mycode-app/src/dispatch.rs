@@ -349,7 +349,7 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
     let message = message.to_owned();
     match command {
         BridgeCommand::ListSessions => BridgeReply::Sessions(Err(message)),
-        BridgeCommand::CreateSession => BridgeReply::Created(Err(message)),
+        BridgeCommand::CreateSession { .. } => BridgeReply::Created(Err(message)),
         BridgeCommand::OpenSession(_) => BridgeReply::Conversation(Err(message)),
         BridgeCommand::LoadOlder { .. } => BridgeReply::Older(Err(message)),
         BridgeCommand::SendMessage { session, .. } => BridgeReply::Sent {
@@ -448,20 +448,22 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
                 .await
                 .map_err(render_error),
         ),
-        BridgeCommand::CreateSession => match state.service.create().await {
-            Ok(created) => BridgeReply::Created(Ok(SessionSummary {
-                session_id: created.session_id.as_str().to_owned(),
-                root_branch_id: created.branch_id.as_str().to_owned(),
-                title: String::new(),
-                updated_at_ms: u64::try_from(crate::unix_now().as_millis())
-                    .ok()
-                    .filter(|&ms| ms > 0),
-                event_count: 0,
-                active: true,
-                corrupt: false,
-            })),
-            Err(error) => BridgeReply::Created(Err(render_error(error))),
-        },
+        BridgeCommand::CreateSession { project } => {
+            match state.service.create(project.as_deref()).await {
+                Ok(created) => BridgeReply::Created(Ok(SessionSummary {
+                    session_id: created.session_id.as_str().to_owned(),
+                    root_branch_id: created.branch_id.as_str().to_owned(),
+                    title: String::new(),
+                    updated_at_ms: u64::try_from(crate::unix_now().as_millis())
+                        .ok()
+                        .filter(|&ms| ms > 0),
+                    event_count: 0,
+                    active: true,
+                    corrupt: false,
+                })),
+                Err(error) => BridgeReply::Created(Err(render_error(error))),
+            }
+        }
         BridgeCommand::OpenSession(session) => BridgeReply::Conversation(
             open_conversation(&state.service, &session)
                 .await

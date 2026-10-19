@@ -20,21 +20,117 @@ pub const SESSIONS_DIR: &str = "sessions";
 /// Tool working directory when no project folder is bound.
 pub const SCRATCH_DIR: &str = "scratch";
 
-/// Relative owned path of one file inside a session directory.
+/// Project folder name for sessions that have no project.
+pub const NO_PROJECT_DIR: &str = "no-project";
+/// Longest project folder name before it is shortened and hashed.
+const MAX_PROJECT_KEY_CHARS: usize = 96;
+
+/// Folder name that groups one project's sessions under `sessions/`.
+///
+/// The project path is spelled with every character other than ASCII
+/// letters, digits, `-`, and `_` turned into `-`, so `D:\work\app` becomes
+/// `D--work-app`. A name longer than [`MAX_PROJECT_KEY_CHARS`] keeps its
+/// tail (the most specific part) behind a hash of the whole path.
+#[must_use]
+pub fn project_dir_key(project: Option<&str>) -> String {
+    let Some(project) = project
+        .map(|path| path.trim().trim_end_matches(['/', '\\']))
+        .filter(|path| !path.is_empty())
+    else {
+        return NO_PROJECT_DIR.to_owned();
+    };
+    let key: String = project
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if key.len() <= MAX_PROJECT_KEY_CHARS {
+        return key;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    project.hash(&mut hasher);
+    let tail = &key[key.len() - (MAX_PROJECT_KEY_CHARS - 9)..];
+    format!("{:08x}-{tail}", hasher.finish() as u32)
+}
+
+/// Relative owned path of a new session directory:
+/// `sessions/<project key>/<session id>`.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigErrorKind::AuthorityValidation`] when `session_id` or
-/// `file` is empty, contains a path separator, or contains NUL.
-pub(crate) fn session_relative(session_id: &str, file: &str) -> Result<String, ConfigError> {
-    if session_id.is_empty()
-        || session_id.contains(['/', '\\', '\0'])
-        || file.is_empty()
-        || file.contains(['/', '\\', '\0'])
-    {
+/// Returns [`ConfigErrorKind::AuthorityValidation`] when `session_id` is not
+/// one safe path component.
+pub fn new_session_dir(project: Option<&str>, session_id: &str) -> Result<String, ConfigError> {
+    if !is_safe_path_component(OsStr::new(session_id)) {
         return Err(ConfigError::authority_rejection());
     }
-    Ok(format!("{SESSIONS_DIR}/{session_id}/{file}"))
+    Ok(format!(
+        "{SESSIONS_DIR}/{}/{session_id}",
+        project_dir_key(project)
+    ))
+}
+
+/// Finds the directory of an existing session: the one project folder under
+/// `sessions/` that holds a `<session id>` directory. The folder is never
+/// derived from the session's current project, since a chat can move to
+/// another folder after it was created; the directory stays where it began.
+///
+/// # Errors
+///
+/// Returns [`ConfigErrorKind::AuthorityValidation`] for an unsafe id and
+/// [`ConfigErrorKind::Io`] when `sessions/` cannot be listed.
+pub fn locate_session_dir(
+    home: &HomeLayout,
+    session_id: &str,
+) -> Result<Option<String>, ConfigError> {
+    if !is_safe_path_component(OsStr::new(session_id)) {
+        return Err(ConfigError::authority_rejection());
+    }
+    let root = home.owned_join(SESSIONS_DIR)?;
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ConfigError::for_path(ConfigErrorKind::Io, &root)),
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(project) = name.to_str().filter(|_| is_safe_path_component(&name)) else {
+            continue;
+        };
+        let found = std::fs::symlink_metadata(entry.path().join(session_id))
+            .is_ok_and(|meta| meta.is_dir());
+        if found {
+            return Ok(Some(format!("{SESSIONS_DIR}/{project}/{session_id}")));
+        }
+    }
+    Ok(None)
+}
+
+/// Relative owned path of one file inside an existing session directory;
+/// `None` when the session has no directory.
+///
+/// # Errors
+///
+/// As [`locate_session_dir`], plus [`ConfigErrorKind::AuthorityValidation`]
+/// when `file` is not one safe path component.
+pub(crate) fn session_file(
+    home: &HomeLayout,
+    session_id: &str,
+    file: &str,
+) -> Result<Option<String>, ConfigError> {
+    if !is_safe_path_component(OsStr::new(file)) {
+        return Err(ConfigError::authority_rejection());
+    }
+    Ok(locate_session_dir(home, session_id)?.map(|dir| format!("{dir}/{file}")))
 }
 
 /// Contains caller-supplied values used to resolve the owned home.
@@ -308,4 +404,27 @@ fn matches_dos_device_unit(unit: &str) -> bool {
         || unit == "\u{00B9}"
         || unit == "\u{00B2}"
         || unit == "\u{00B3}"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NO_PROJECT_DIR, new_session_dir, project_dir_key};
+
+    #[test]
+    fn a_project_folder_name_spells_its_path() {
+        assert_eq!(project_dir_key(Some(r"D:\my_pro\MCode")), "D--my_pro-MCode");
+        assert_eq!(project_dir_key(Some("/home/me/app/")), "-home-me-app");
+        assert_eq!(project_dir_key(Some("  ")), NO_PROJECT_DIR);
+        assert_eq!(project_dir_key(None), NO_PROJECT_DIR);
+        let deep = format!("/{}", "segment/".repeat(40));
+        let key = project_dir_key(Some(&deep));
+        assert!(key.len() <= super::MAX_PROJECT_KEY_CHARS, "{key}");
+        assert!(key.ends_with("-segment-segment"), "{key}");
+        assert_ne!(key, project_dir_key(Some(&format!("/x{deep}"))));
+        assert_eq!(
+            new_session_dir(Some("/srv/app"), "sess-1").expect("dir"),
+            "sessions/-srv-app/sess-1"
+        );
+        assert!(new_session_dir(None, "../escape").is_err());
+    }
 }

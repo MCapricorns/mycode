@@ -70,11 +70,10 @@ mycode-core      （叶子）
 ├─ catalog-cache.json      models.dev 目录缓存（最大 32 MiB；启动只校验信封，首次使用时才解析）
 ├─ AGENTS.md               可选的全局指令
 ├─ sessions.db             SQLite WAL 索引：标题、分支头、事件数、JSONL 偏移
-├─ sessions/<ses1-…>/
+├─ sessions/<项目键>/sess-YYYYMMDD-HHMMSS-<8 hex>/
 │  ├─ <br1-…>.jsonl        分支事件；一行一个 JSON
 │  ├─ payloads/<evt1-…>.bin  ≥64 KiB 的 payload
-│  ├─ compaction.json      每会话一份压缩检查点
-│  └─ title.txt            给人看的标题副本
+│  └─ compaction.json      每会话一份压缩检查点
 ├─ agents/<name>.md        用户自定义子代理角色
 ├─ agent-worktrees/        子代理 worktree 租约，启动时回收（旧版 `task-worktrees/` 也回收）
 ├─ mcp-results/            截断的 MCP 结果全文，7 天后清理
@@ -90,7 +89,7 @@ mycode-core      （叶子）
 
 提示词资源按固定位置发现：工作区的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，MYCODE_HOME 的 `AGENTS.md`，以及 OS 用户主目录的 `.agents/AGENTS.md`。skills 从工作区 `.agents`（含 `skills/`）和 OS 用户主目录的 `.agents` 发现；每个提示词最多列 32 个。提示词只放 skill 的路径和描述，正文由模型用 `read` 加载。
 
-首条用户消息写入时，索引标题取折叠空白后的前 60 个字符。第一次发送还会异步发 `SummarizeTitle`；成功时把索引标题换成模型生成的短标题（最多 72 字符），失败则保留前 60 个字符。侧栏没有标题时显示项目目录名，再没有就显示 New task。发送队列只在内存里，不写 `ui.json`。`ses1-`、`br1-`、`evt1-`、`call1-` 是内部 ID。
+首条用户消息写入时，索引标题取折叠空白后的前 60 个字符。第一次发送还会异步发 `SummarizeTitle`；成功时把索引标题换成模型生成的短标题（最多 72 字符），失败则保留前 60 个字符。侧栏没有标题时显示项目目录名，再没有就显示 New task。发送队列只在内存里，不写 `ui.json`。会话 ID 形如 `sess-20261019-153012-0123abcd`，是本地创建时间加 8 位随机十六进制，也是会话目录名。目录放在创建时所在项目的文件夹下：项目路径里字母、数字、`-`、`_` 以外的字符都换成 `-`（`D:\work\app` → `D--work-app`），没有项目的会话放在 `no-project/`。之后切换工作目录不会移动会话目录，按 ID 定位时扫描 `sessions/*/`。`br1-`、`evt1-`、`call1-` 是内部 ID。
 
 ## 会话账本
 
@@ -102,7 +101,7 @@ mycode-core      （叶子）
 
 一个会话最多 64 个分支。回放从分支头开始，一页最多读 256 条事件；tool call/result 用 `call1-` 身份配对，结果按模型给出的 call 顺序重排。fork 和 rewind 把源分支的 JSONL 前缀复制到新分支。
 
-删除顺序是：先取消该会话的回合和子代理，`service.forget` 赶出内存账本，再删索引行、`sessions/<id>/` 和旧的 `checkpoints/<id>/`，最后清 `ui.json` 里的绑定。索引里校验失败的会话作为 `corrupt` 行返回，侧栏仍能显示并删除，不会让整个列表失败。
+删除顺序是：先取消该会话的回合和子代理，`service.forget` 赶出内存账本，再删索引行、会话目录和旧的 `checkpoints/<id>/`，项目文件夹空了也一并删掉，最后清 `ui.json` 里的绑定。索引里校验失败的会话作为 `corrupt` 行返回，侧栏仍能显示并删除，不会让整个列表失败。
 
 压缩检查点只影响发往模型的历史，不重写账本已有事件。摘要请求超时、被截断、太短或检查点写失败时，本次请求用原历史。摘要被截断或太短时最多重试一次。手动 `/compact` 走 `CompactSession`，强制压缩并先取消正在跑的回合。
 

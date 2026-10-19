@@ -67,7 +67,8 @@ fn unwrap_complete(pull: Result<SessionPull, OpFail>) -> SessionResult {
 /// Creates one session and returns its ids.
 fn create(core: &mut SessionCore) -> (SessionId, BranchId) {
     let (session, branch) = mint().expect("ids");
-    match unwrap_complete(core.action_create(&session, &branch)) {
+    let dir = mycode_config::new_session_dir(None, session.as_str()).expect("dir");
+    match unwrap_complete(core.action_create(&session, &branch, &dir)) {
         SessionResult::Created(_) => (session, branch),
         other => panic!("create returned {other:?}"),
     }
@@ -185,7 +186,7 @@ async fn new_and_reloaded_session_remain_available_when_the_cache_is_pinned() {
     let service = SessionService::new(&scratch.home);
     let mut pinned = Vec::new();
     for _ in 0..MAX_RESIDENT_SESSIONS {
-        let created = service.create().await.expect("create pinned session");
+        let created = service.create(None).await.expect("create pinned session");
         let reservation = service
             .reserve_event(
                 &created.session_id,
@@ -199,7 +200,10 @@ async fn new_and_reloaded_session_remain_available_when_the_cache_is_pinned() {
         pinned.push((created, reservation));
     }
 
-    let created = service.create().await.expect("create beyond residency cap");
+    let created = service
+        .create(None)
+        .await
+        .expect("create beyond residency cap");
     let reservation = service
         .reserve_event(
             &created.session_id,

@@ -1,5 +1,6 @@
 //! SQLite index for session titles, branch heads, and JSONL byte offsets.
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use mycode_config::HomeLayout;
@@ -213,6 +214,9 @@ pub(crate) struct BranchCommitRequest<'a> {
 pub(crate) struct SessionStore {
     home: HomeLayout,
     conn: Connection,
+    /// Session directories already found or created, so each write does not
+    /// list `sessions/` again.
+    dirs: RefCell<HashMap<SessionId, String>>,
 }
 
 impl SessionStore {
@@ -223,14 +227,30 @@ impl SessionStore {
         Ok(Self {
             home: home.clone(),
             conn,
+            dirs: RefCell::new(HashMap::new()),
         })
     }
 
-    /// Inserts an empty root session. A duplicate id is [`StoreError::Unavailable`].
+    /// Paths below `session`'s directory.
+    fn paths(&self, session: &SessionId) -> Result<SessionPaths<'_>, StoreError> {
+        if let Some(dir) = self.dirs.borrow().get(session) {
+            return Ok(SessionPaths::at(&self.home, dir.clone()));
+        }
+        let paths = SessionPaths::locate(&self.home, session)?;
+        self.dirs
+            .borrow_mut()
+            .insert(session.clone(), paths.session_dir());
+        Ok(paths)
+    }
+
+    /// Inserts an empty root session whose directory is `dir`, a relative
+    /// owned path ([`mycode_config::new_session_dir`]). A duplicate id is
+    /// [`StoreError::Unavailable`].
     pub(crate) fn create_session(
         &mut self,
         session: &SessionId,
         branch: &BranchId,
+        dir: &str,
     ) -> Result<(), StoreError> {
         let now = now_ms()?;
         let tx = self.conn.transaction().map_err(|_| StoreError::Storage)?;
@@ -261,11 +281,14 @@ impl SessionStore {
         )
         .map_err(|_| StoreError::Storage)?;
         tx.commit().map_err(|_| StoreError::Storage)?;
-        let paths = SessionPaths::new(&self.home, session);
-        let dir = paths
+        let paths = SessionPaths::at(&self.home, dir.to_owned());
+        let absolute = paths
             .absolute(&paths.session_dir())
             .map_err(|_| StoreError::Unavailable)?;
-        std::fs::create_dir_all(dir).map_err(|_| StoreError::Storage)?;
+        std::fs::create_dir_all(absolute).map_err(|_| StoreError::Storage)?;
+        self.dirs
+            .borrow_mut()
+            .insert(session.clone(), dir.to_owned());
         Ok(())
     }
 
@@ -274,7 +297,7 @@ impl SessionStore {
         &mut self,
         request: &AppendRequest<'_>,
     ) -> Result<AppendedLocation, StoreError> {
-        let paths = SessionPaths::new(&self.home, request.session);
+        let paths = self.paths(request.session)?;
         let log_path = paths
             .absolute(&paths.branch_jsonl(request.branch))
             .map_err(|_| StoreError::Unavailable)?;
@@ -334,10 +357,6 @@ impl SessionStore {
         }
 
         let title = jsonl::message_title(request.kind, request.payload).unwrap_or_default();
-        // Resolve before `commit_append`: `paths` borrows `&self.home`.
-        let title_marker = (!title.is_empty())
-            .then(|| paths.absolute(&paths.title_txt()).ok())
-            .flatten();
         let committed = self.commit_append(
             request,
             record_len,
@@ -346,24 +365,12 @@ impl SessionStore {
             event_charge,
             &title,
         );
-        match committed {
-            Ok(location) => {
-                if let Some(marker) = title_marker
-                    && !marker.exists()
-                {
-                    // A human debugging `sessions/` reads this file to tell
-                    // the randomly-named directories apart.
-                    let _ = fs::create_exclusive(&marker, title.as_bytes());
-                }
-                Ok(location)
-            }
-            Err(error) => {
-                if let Some(path) = payload_path {
-                    fs::remove(&path);
-                }
-                Err(error)
-            }
+        if committed.is_err()
+            && let Some(path) = payload_path
+        {
+            fs::remove(&path);
         }
+        committed
     }
 
     fn commit_append(
@@ -470,7 +477,7 @@ impl SessionStore {
         &mut self,
         request: &BranchCommitRequest<'_>,
     ) -> Result<u64, StoreError> {
-        let paths = SessionPaths::new(&self.home, request.session);
+        let paths = self.paths(request.session)?;
         let source_log = paths
             .absolute(&paths.branch_jsonl(request.source))
             .map_err(|_| StoreError::Unavailable)?;
@@ -716,7 +723,7 @@ impl SessionStore {
         let Some(first) = events.first() else {
             return Ok(Vec::new());
         };
-        let paths = SessionPaths::new(&self.home, session);
+        let paths = self.paths(session)?;
         let log_path = paths
             .absolute(&paths.branch_jsonl(branch))
             .map_err(|_| StoreError::Unavailable)?;
@@ -826,7 +833,7 @@ impl SessionStore {
         branch: &BranchId,
         committed_bytes: u64,
     ) -> Result<(), StoreError> {
-        let paths = SessionPaths::new(&self.home, session);
+        let paths = self.paths(session)?;
         let log_path = paths
             .absolute(&paths.branch_jsonl(branch))
             .map_err(|_| StoreError::Unavailable)?;
@@ -983,17 +990,6 @@ pub(crate) fn rename_indexed_session(
         params![title, session_id],
     )
     .map_err(|_| StoreError::Storage)?;
-    // Refresh the human-readable marker beside the branch logs; the fallback
-    // title written at first append may still be sitting there.
-    if !title.is_empty()
-        && let Some(id) = SessionId::parse(session_id)
-    {
-        let paths = SessionPaths::new(home, &id);
-        if let Ok(marker) = paths.absolute(&paths.title_txt()) {
-            fs::remove(&marker);
-            let _ = fs::create_exclusive(&marker, title.as_bytes());
-        }
-    }
     Ok(())
 }
 
