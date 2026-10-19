@@ -37,13 +37,13 @@
 - `ToolStarted { call_id, name, target }`、`ToolProgress { call_id, message }`、`ToolCompleted { call_id, result }`
 - `CacheDisrupted`、`Error(MycodeError)`
 
-`CacheDisrupted` 表示下一次请求的前缀已被压缩改写。它必须和普通事件走同一条总线：走旁路时，慢消费者会把警告配到上一条提示。`MessageDelta` 是 `TextDelta`、`ThinkingDelta`、`ToolCallDelta { id, partial_json }`；`partial_json` 本身不保证是合法 JSON。
+`CacheDisrupted` 表示下一次请求的前缀已被压缩改写。它必须和普通事件走同一条总线：走旁路时，慢消费者会把警告配到上一条提示。`MessageDelta` 是 `TextDelta`、`ThinkingDelta`、`ToolCallStarted { id, name }`（一个工具调用开始流式输出时发一次，在它的参数之前）、`ToolCallDelta { id, partial_json }`；`partial_json` 本身不保证是合法 JSON。
 
 `CallId` 是透明的字符串 newtype，用在 `ToolStarted`、`ToolProgress`、`ToolCompleted` 事件上。消息里的 `ToolCall.id` 和 `ToolResultMessage.tool_call_id` 是普通 `String`，因为它们是厂商给的不透明值。
 
 ## Provider 端口
 
-`Provider::stream(&Request, CancellationToken)` 返回 `EventStream`。流里是 `TextDelta`、`ThinkingDelta`、`ToolCallDelta`，最后恰好一个终止事件：`Done { message }`（完整助手消息，用量和停止原因都在里面）或 `Error(ProviderError)`。生产端必须响应取消，并在 `send` 返回 `false` 后停止。
+`Provider::stream(&Request, CancellationToken)` 返回 `EventStream`。流里是 `TextDelta`、`ThinkingDelta`、`ToolCallStarted`、`ToolCallDelta`，最后恰好一个终止事件：`Done { message }`（完整助手消息，用量和停止原因都在里面）或 `Error(ProviderError)`。生产端必须响应取消，并在 `send` 返回 `false` 后停止。
 
 `Request` 字段：
 

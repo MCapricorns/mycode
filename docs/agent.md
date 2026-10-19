@@ -51,7 +51,7 @@ prompt(user_message)
 - `prepare_tool_ctx` 为声明了文件或搜索能力的工具绑定路径；失败变成该调用的错误结果。
 - 工具通过 `ToolStream` 发进度，派发时转成 `ToolProgress`。每次调用都会发 `ToolStarted` 和 `ToolCompleted`。
 - 工具的 poll 和析构都在 `catch_unwind` 里；panic 变成该调用的错误结果，不会冲垮回合任务。未知 panic 载荷只留下通用文本。
-- 同一回复里所有 `agent` 调用一起启动，并与其余调用并行。其余调用中，相邻的 `parallel_safe()` 工具合成一批并发执行；不可并行的工具等前一批结束，再按模型顺序单独执行。`Tool` 的默认 `parallel_safe()` 是 `reads_only()` 或声明了 `search_access()`：内置 `read`、`grep`、`find`，网页工具，`search_tool`，以及标了 `readOnlyHint` 的 MCP 工具可并行；`write`、`edit`、shell、`ask_user` 不并行。
+- 同一回复里所有 `agent` 调用一起启动，并与其余调用并行。其余调用中，相邻的 `parallel_safe()` 工具合成一批并发执行；不可并行的工具等前一批结束，再按模型顺序单独执行。`Tool` 的默认 `parallel_safe()` 是 `reads_only()` 或声明了 `search_access()`：内置 `read`、`grep`、`find`，网页工具，`search_tool`，以及标了 `readOnlyHint` 的 MCP 工具可并行；`write`、`edit`、shell、`ask_user` 不并行。判断按单次调用走 `parallel_safe_call(args)`，默认等于 `parallel_safe()`；`use_tool` 按参数里目标工具的 `readOnlyHint` 决定。
 - 写回历史的结果按模型给出的调用顺序排列；`ToolCompleted` 事件则在每次调用实际完成时立即到达，所以并行批次的事件顺序可能和调用顺序不同。
 - 工具失败、未知工具、参数错误都只是 `is_error` 结果，不会结束回合。回合也不会在工具前给文件做快照。
 

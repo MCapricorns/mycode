@@ -16,7 +16,7 @@ tool_call
 - 注册表按名字 last-wins；`specs()` 按名字排序。注册的工具全部出现在模型工具列表里，`prompt_entries()` 另外给 system prompt 提供名字和一句说明。
 - 参数先归一化：camelCase 转 snake_case；`timeout`→`timeout_secs`、`cmd`→`command`、`file_path`/`filepath`→`path`、`old_str`/`new_str`；字符串形式的数字和布尔按 schema 转成标量。
 - 未知工具、schema 不合法、执行错误都变成 `is_error` 的工具结果，回合继续。没有“先问用户是否允许”的回调。
-- `prepare_tool_ctx` 在执行前绑定文件或搜索句柄并改锚路径。只有不改变东西的工具可以并行：`read`、`grep`、`find`、网页工具、`search_tool`、声明 `readOnlyHint` 的 MCP 工具；写、进程、`ask_user` 按模型顺序单独执行。同一条回复里的 `agent` 调用会一起启动。
+- `prepare_tool_ctx` 在执行前绑定文件或搜索句柄并改锚路径。只有不改变东西的工具可以并行：`read`、`grep`、`find`、网页工具、`search_tool`、声明 `readOnlyHint` 的 MCP 工具，以及目标是这类工具的 `use_tool`；写、进程、`ask_user` 按模型顺序单独执行。同一条回复里的 `agent` 调用会一起启动。
 - `ToolStream` 保证任意条进度后恰好一个终止事件；终止发送成功后，后续进度被静默丢弃。
 
 ## 内置工具
@@ -101,11 +101,11 @@ tool_call
 
 `scout` 只读：工具限制为 `read`、`grep`、`find`、`web_search`、`fetch_content`，MCP 也只给 `readOnlyHint: true` 的工具。`artisan` 默认在独立 git worktree 中改文件，结束时把最多 256 KiB 的 diff 附在答案后并删除 worktree；改动不会自动合回主工作区，也不提交。`isolation` 可选 `shared`/`worktree`，只读角色强制 `shared`。每个父回合最多同时跑 8 个子代理，多出的排队；同一条回复里的多个 `agent` 都会启动。
 
-网页后端：有启用的 backend 就用它；都没启用时用第一个有 key 的。Querit 和 Exa 必须有 key，AnySearch 可匿名。`fetch_content` 带 `goal` 时按目标选 1200 字符的摘录；如果命中的是标题，会返回该标题下的整节，最多 48,000 字符。不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)`。
+网页后端：有启用的 backend 就用它；都没启用时用第一个有 key 的。一个可用的都没有时，`web_search` 和 `fetch_content` 不注册，模型看不到它们。Querit 和 Exa 必须有 key，AnySearch 可匿名。`fetch_content` 带 `goal` 时按目标选 1200 字符的摘录；如果命中的是标题，会返回该标题下的整节，最多 48,000 字符。不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)`。
 
 ## MCP 与技能
 
-MCP 在回合开始时连接启用的服务器，连接池随后复用。单个服务器的工具不超过 4 个、且每个输入 schema 编码后不超过 2048 字节时，直接注册成普通工具；否则只能通过 `search_tool` 和 `use_tool` 调用：`search_tool` 传精确名字返回 schema，传关键词返回匹配的工具（每个一行摘要，最多 25 个；只匹配一个时直接给 schema），传 `"list"` 列出全部。两个服务器有同名工具时，后一个的名字变成 `server__tool`，两个都能调用；小服务器的工具和已注册的工具（内置工具等）重名时不直接注册，改由 `search_tool` 提供。调用使用原始工具名；直接注册不会覆盖同名内置工具；schema 可编译时参数先在本地校验。结果超过 20 KiB 时只内联头尾，全文存到本地并给出路径。
+MCP 在回合开始时连接启用的服务器，连接池随后复用。单个服务器的工具不超过 4 个、且每个输入 schema 编码后不超过 2048 字节时，直接注册成普通工具；否则只能通过 `search_tool` 和 `use_tool` 调用：`search_tool` 传精确名字返回 schema，传关键词返回匹配的工具（每个一行摘要，最多 25 个；只匹配一个时直接给 schema），传 `"list"` 列出全部；`names` 一次最多取 10 个工具的 schema。`use_tool` 的目标声明了 `readOnlyHint` 时，这次调用和其它只读调用一起并行。两个服务器有同名工具时，后一个的名字变成 `server__tool`，两个都能调用；小服务器的工具和已注册的工具（内置工具等）重名时不直接注册，改由 `search_tool` 提供。调用使用原始工具名；直接注册不会覆盖同名内置工具；schema 可编译时参数先在本地校验。结果超过 20 KiB 时只内联头尾，全文存到本地并给出路径。
 
 技能目录放在 system prompt 的 `<skills>` 里，正文不注入；模型用 `read` 按目录中的路径读取对应的 `SKILL.md`，用户消息以 `/slug` 开头时也读取对应技能。目录来自会话 cwd、用户主目录的 `.agents` 和用户添加的其它工作区文件夹（不含临时目录）；子代理（含 scout）用同一个函数生成目录。
 
