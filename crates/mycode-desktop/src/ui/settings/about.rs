@@ -18,7 +18,7 @@ pub(super) fn render_about_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let vm = workspace.vm();
-    let current = mycode_app::current_version().to_owned();
+    let current = mycode_app::current_version();
     let catalog_line = match vm.catalog_fetched_at {
         0 => t("built-in providers", "内置服务商").to_owned(),
         seconds => {
@@ -131,7 +131,8 @@ pub(super) fn render_about_section(
                         })
                         .small()
                         .ghost()
-                        .disabled(checking)
+                        // A check mid-download would restart the offer it is fetching.
+                        .disabled(checking || downloading)
                         .on_click(cx.listener(|workspace, _, _, cx| {
                             workspace.on_check_update(true, cx);
                         })),
