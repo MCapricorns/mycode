@@ -276,18 +276,8 @@ impl Workspace {
                     .len(),
                 key == "down",
             );
-            // The file list's FILES heading is the panel's first scroll
-            // child; the flat slash menu has no headings.
-            let heading = usize::from(
-                self.vm()
-                    .mention
-                    .as_ref()
-                    .is_some_and(|mention| mention.kind == MentionKind::File),
-            );
             self.menu_navigation.mention = Some(index);
-            self.menu_navigation
-                .mention_scroll
-                .scroll_to_item(index + heading);
+            self.menu_navigation.mention_scroll.scroll_to_item(index);
             cx.notify();
             return true;
         }
