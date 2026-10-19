@@ -350,6 +350,12 @@ impl FrameReducer for ResponsesReducer {
                         name: name.to_owned(),
                         arguments: String::new(),
                     });
+                    if !id.is_empty() && !name.is_empty() {
+                        return vec![StreamEvent::ToolCallStarted {
+                            id: id.to_owned(),
+                            name: name.to_owned(),
+                        }];
+                    }
                 }
             }
             "response.function_call_arguments.delta" => {
@@ -457,6 +463,28 @@ mod tests {
             &mycode_core::Request::new(),
         );
         assert_eq!(body["store"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn a_function_call_item_announces_its_name_when_it_is_added() {
+        let mut reducer = ResponsesReducer::new();
+        let mut events = reducer.feed(
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"agent"}}"#,
+        );
+        events.extend(reducer.feed(
+            r#"{"type":"response.function_call_arguments.delta","delta":"{\"agent\":\"scout\"}"}"#,
+        ));
+        let names: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                mycode_core::StreamEvent::ToolCallStarted { id, name } => {
+                    Some(format!("started {id} {name}"))
+                }
+                mycode_core::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["started call_1 agent", "delta call_1"]);
     }
 
     #[test]

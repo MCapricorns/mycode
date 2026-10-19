@@ -659,6 +659,7 @@ impl FrontendDriver {
                 | FrontendAction::TurnArmed
                 | FrontendAction::ChatDelta(_)
                 | FrontendAction::ChatThinkingDelta(_)
+                | FrontendAction::ToolPreparing { .. }
                 | FrontendAction::ToolStarted { .. }
                 | FrontendAction::ToolProgress { .. }
                 | FrontendAction::ToolResultAppended(_)

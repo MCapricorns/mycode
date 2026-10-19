@@ -409,15 +409,26 @@ fn render_one_tool(
     let cancellable = tool_cancellable(tool, workspace, turn_running);
     // The running clock lives on the job; once it leaves `live_jobs` its
     // final runtime was parked on the state.
-    let elapsed_ms = tool.call.call_id.as_deref().and_then(|call_id| {
+    let live_job = tool.call.call_id.as_deref().and_then(|call_id| {
         workspace
             .vm()
             .live_jobs
             .iter()
             .find(|job| job.call_id == call_id)
-            .map(crate::view_model::LiveJob::elapsed_ms)
-            .or_else(|| workspace.vm().job_elapsed(call_id))
     });
+    let elapsed_ms = live_job
+        .map(crate::view_model::LiveJob::elapsed_ms)
+        .or_else(|| {
+            tool.call
+                .call_id
+                .as_deref()
+                .and_then(|call_id| workspace.vm().job_elapsed(call_id))
+        });
+    // Only a job still in `live_jobs` is running; a finished row shows its
+    // runtime alone.
+    let activity = live_job
+        .filter(|_| tool.result.is_none() && turn_running)
+        .map(crate::view_model::LiveJob::step_label);
     div()
         .w_full()
         .min_w_0()
@@ -432,6 +443,7 @@ fn render_one_tool(
                 cancellable,
                 reduce_motion,
                 elapsed_ms,
+                activity,
             },
             cx,
         ))

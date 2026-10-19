@@ -399,6 +399,25 @@ struct ToolCallAccumulator {
     arguments: String,
     /// Argument bytes held while the call id is still unknown.
     pending: String,
+    /// `ToolCallStarted` went out. The wire sends the name before the
+    /// arguments, so the first argument bytes mark a complete name.
+    announced: bool,
+}
+
+impl ToolCallAccumulator {
+    /// The one `ToolCallStarted` for this call, once id and name are known.
+    fn announce(&mut self, events: &mut Vec<StreamEvent>) {
+        if self.announced || self.name.is_empty() {
+            return;
+        }
+        if let Some(id) = &self.id {
+            self.announced = true;
+            events.push(StreamEvent::ToolCallStarted {
+                id: id.clone(),
+                name: self.name.clone(),
+            });
+        }
+    }
 }
 
 /// Accumulates Chat Completions stream chunks.
@@ -642,6 +661,10 @@ impl CompletionsReducer {
                 crate::xml_tool_calls::XmlPiece::ToolCall { name, arguments } => {
                     self.xml_calls += 1;
                     let id = format!("call-xml-{}", self.xml_calls);
+                    events.push(StreamEvent::ToolCallStarted {
+                        id: id.clone(),
+                        name: name.clone(),
+                    });
                     events.push(StreamEvent::ToolCallDelta {
                         id: id.clone(),
                         partial_json: arguments.clone(),
@@ -651,6 +674,7 @@ impl CompletionsReducer {
                         name,
                         arguments,
                         pending: String::new(),
+                        announced: true,
                     });
                 }
             }
@@ -814,6 +838,7 @@ impl CompletionsReducer {
             let call = &mut self.tool_calls[index];
             call.id = Some(id.to_owned());
             if !call.pending.is_empty() {
+                call.announce(events);
                 let pending = std::mem::take(&mut call.pending);
                 call.arguments.push_str(&pending);
                 events.push(StreamEvent::ToolCallDelta {
@@ -847,6 +872,7 @@ impl CompletionsReducer {
                 return Err("stream exceeded the output limit");
             }
             let call = &mut self.tool_calls[index];
+            call.announce(events);
             match &call.id {
                 Some(id) => {
                     let id = id.clone();

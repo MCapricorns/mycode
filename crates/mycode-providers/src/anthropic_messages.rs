@@ -499,9 +499,18 @@ impl MessagesReducer {
                 position
             }
         };
+        let started = match &accumulator {
+            BlockAccumulator::ToolUse { id, name, .. } if !id.is_empty() && !name.is_empty() => {
+                vec![StreamEvent::ToolCallStarted {
+                    id: id.clone(),
+                    name: name.clone(),
+                }]
+            }
+            _ => Vec::new(),
+        };
         self.blocks[position] = accumulator;
         self.current = position;
-        Vec::new()
+        started
     }
 
     /// Resolves the slot in `blocks` for `event`'s wire `index`, or returns
@@ -587,6 +596,10 @@ impl MessagesReducer {
                 crate::xml_tool_calls::XmlPiece::ToolCall { name, arguments } => {
                     self.xml_calls += 1;
                     let id = format!("toolu-xml-{}", self.xml_calls);
+                    events.push(StreamEvent::ToolCallStarted {
+                        id: id.clone(),
+                        name: name.clone(),
+                    });
                     events.push(StreamEvent::ToolCallDelta {
                         id: id.clone(),
                         partial_json: arguments.clone(),

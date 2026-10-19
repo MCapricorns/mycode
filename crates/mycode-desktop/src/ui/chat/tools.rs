@@ -29,6 +29,9 @@ pub(super) struct ToolRowFlags {
     /// Runtime of an `agent` call, in milliseconds. `Some` while it runs
     /// and after it finishes — the line ticks on the once-a-second repaint.
     pub elapsed_ms: Option<u64>,
+    /// What the subagent behind a running `agent` call is doing now, so the
+    /// transcript row says it without opening the panel.
+    pub activity: Option<String>,
 }
 
 /// One tool row. Clicking it reveals the result without changing the call.
@@ -51,9 +54,20 @@ pub(super) fn render_tool_block(
     // an `agent` failure gets.
     let alert = failed || (unfinished && !turn_running);
     let tool = tool_name(call.text.as_ref());
+    let preparing = crate::view_model::is_preparing_row(call);
     let (verb, target) =
         tool_call_parts(call.text.as_ref(), result.is_some(), turn_running, failed);
-    let status = tool_status(tool, result, turn_running);
+    // A placeholder for a call the model is still writing has not started.
+    let verb = if preparing {
+        t("Preparing agent", "正在准备子代理").to_owned()
+    } else {
+        verb
+    };
+    let status = if preparing {
+        String::new()
+    } else {
+        tool_status(tool, result, turn_running)
+    };
     let event_id = call.event_id.clone();
     let elapsed = flags.elapsed_ms.map(crate::view_model::elapsed_label);
     let live_call = flags
@@ -142,19 +156,30 @@ pub(super) fn render_tool_block(
                 )
                 .children(cancel),
         );
-    // A running time gets its own line under an `agent` row, so a ticking
-    // value never squeezes the target text.
-    if let Some(elapsed) = elapsed {
+    // A running time and the child's current step get their own line under
+    // an `agent` row, so a ticking value never squeezes the target text.
+    let detail = match (elapsed, flags.activity.as_deref()) {
+        (Some(elapsed), Some(activity)) => {
+            Some(format!("{} {elapsed} · {activity}", t("for", "耗时")))
+        }
+        (Some(elapsed), None) => Some(format!("{} {elapsed}", t("for", "耗时"))),
+        (None, Some(activity)) => Some(activity.to_owned()),
+        (None, None) => None,
+    };
+    if let Some(detail) = detail {
         row = row.child(
             div()
                 .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .truncate()
                 .px(skin::space(2))
                 .pb(px(3.))
                 .pl(px(46.))
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
                 .text_color(theme.muted_foreground)
-                .child(format!("{} {elapsed}", t("for", "耗时"))),
+                .child(detail),
         );
     }
     if flags.expanded

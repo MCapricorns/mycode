@@ -517,3 +517,41 @@ fn distinct_detail_items_are_charged_against_the_stream_cap() {
         "distinct-id detail frames must hit the accumulation cap"
     );
 }
+
+/// Event names in order, so a test can pin where `ToolCallStarted` lands.
+fn started_then_deltas(events: &[mycode_core::StreamEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            mycode_core::StreamEvent::ToolCallStarted { id, name } => {
+                Some(format!("started {id} {name}"))
+            }
+            mycode_core::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn each_streamed_call_announces_its_name_once_before_its_arguments() {
+    let mut reducer = CompletionsReducer::new();
+    let mut events = Vec::new();
+    for frame in [
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"agent","arguments":""}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"agent\":"}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"scout\"}"}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_b","function":{"name":"read","arguments":"{}"}}]}}]}"#,
+    ] {
+        events.extend(reducer.feed(frame));
+    }
+    assert_eq!(
+        started_then_deltas(&events),
+        [
+            "started call_a agent",
+            "delta call_a",
+            "delta call_a",
+            "started call_b read",
+            "delta call_b"
+        ]
+    );
+}

@@ -145,6 +145,21 @@ impl FrontendDriver {
                 }
                 FrontendAction::AskRequested(questions)
             }
+            BridgeEvent::ToolPreparing {
+                session_id,
+                provider_call_id,
+                name,
+                target,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                FrontendAction::ToolPreparing {
+                    provider_call_id,
+                    name,
+                    target,
+                }
+            }
             BridgeEvent::ToolStarted {
                 session_id,
                 call_id,
