@@ -250,7 +250,7 @@ pub fn cache_alert_text(alert: &CacheAlert) -> String {
 pub struct TurnStats {
     /// Model id the turn ran on.
     pub model: String,
-    /// Input (prompt) tokens reported by the provider.
+    /// Fresh (non-cache-read) input tokens summed over the turn's requests.
     pub input: u64,
     /// Output (completion) tokens reported by the provider.
     pub output: u64,
