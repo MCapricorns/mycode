@@ -237,7 +237,7 @@ pub(super) fn render_mention_layer(
     let mention = workspace
         .vm()
         .mention
-        .clone()
+        .as_ref()
         .expect("caller checks the menu is open");
     let heading = match mention.kind {
         MentionKind::File => Some(t("FILES", "文件")),

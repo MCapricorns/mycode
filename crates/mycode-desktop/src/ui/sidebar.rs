@@ -120,7 +120,7 @@ pub(super) fn render_sidebar(
             desk.faint,
             armed_delete.as_deref(),
         ))
-        .child(render_sidebar_footer(workspace, view, cx))
+        .child(render_sidebar_footer(view, cx))
 }
 
 /// New task and session search. A strip, not rows in the session list.
@@ -681,11 +681,7 @@ fn armed_delete_button(
         .child(label)
 }
 
-fn render_sidebar_footer(
-    _workspace: &mut Workspace,
-    view: MainView,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement {
+fn render_sidebar_footer(view: MainView, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     div()
         .id("sidebar-footer")
