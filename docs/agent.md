@@ -30,13 +30,13 @@ prompt(user_message)
 
 `TurnStarted` 每个回合只发一次；用户消息在它之后才广播 `MessageAdded`。取消发生在 `TurnStarted` 之前时，历史同样回滚，且不会出现 `TurnEnded`。
 
-### 流式与重试
+### 流式
 
-`Unavailable` 和 `Timeout` 会重试，最多再试 3 次，退避 250 ms、500 ms、1 s；退避期间取消则直接中止。重试会清空本次尝试已累积的思考和正文，只提交成功那次的响应；已经广播出去的增量不会撤回。
+循环本身不重试。瞬时失败的重试只在 `mycode-providers` 的 driver 里做，而且只在还没有发出任何事件时重试（见 [providers.md](providers.md)）；一旦有输出，再重放请求会重复已经流出的内容。
 
 - `Done` 到达后，完整助手消息进入历史。如果 provider 的最终消息漏了已经流出的思考或正文，用草稿补上。
 - 用户取消：流以 `Cancelled` 结束时，已收到的思考和正文连同 `interrupted by user` 一行留在历史里；两者都为空时不产生消息。这条流没有产出 `Done`，所以本次响应没有成形工具调用。`prompt` 返回 `Aborted`。
-- 提供方或传输失败：重试耗尽后保留同样的半截消息，中断说明用提供方的原因，`stop_reason` 是 `Error`，回合以 `Completed` 结束。
+- 提供方或传输失败：保留同样的半截消息，中断说明用提供方的原因，`stop_reason` 是 `Error`，回合以 `Completed` 结束。
 - `stop_reason` 是 `Error` 时，消息上带 id 和 name 的工具调用不执行，逐个补 `is_error` 结果。
 - `stop_reason` 是 `Length` 时，所有工具调用都不执行（参数可能被截断），逐个补错误结果让模型重发。
 - id 或 name 为空的工具调用无法配对，直接从消息里丢掉。

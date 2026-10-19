@@ -11,7 +11,7 @@
 | [config.md](config.md) | 家目录、设置、密钥、界面状态、角色和提示资源怎么读写 |
 | [providers.md](providers.md) | 三种线协议、流式传输、思考强度、提示缓存、模型目录和 OAuth |
 | [tools.md](tools.md) | 内置工具、搜索预算、进程工具、宿主工具和 MCP 的接入方式 |
-| [agent.md](agent.md) | 回合循环、重试与取消、工具分发、可恢复的会话账本 |
+| [agent.md](agent.md) | 回合循环、流式与取消、工具分发、可恢复的会话账本 |
 | [app.md](app.md) | 桥和线程、回合装配、压缩、子代理、MCP、OAuth、更新 |
 | [desktop.md](desktop.md) | 桌面和终端界面、共享视图模型、和核心的交互节拍 |
 | [model-catalog-updates.md](model-catalog-updates.md) | Codex 和 OpenDesign 模型表的维护、验证与已删除的旧机制 |
