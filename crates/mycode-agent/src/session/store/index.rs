@@ -55,6 +55,9 @@ CREATE INDEX IF NOT EXISTS events_by_id
     ON events (session_id, branch_id, event_id);
 ";
 
+/// `LIKE` pattern of session ids from before the `sess-<timestamp>` format.
+const LEGACY_SESSION_ID_PATTERN: &str = "ses1-%";
+
 /// Why an index or JSONL operation failed.
 #[derive(Debug)]
 pub(crate) enum StoreError {
@@ -224,6 +227,14 @@ impl SessionStore {
     pub(crate) fn open(home: &HomeLayout) -> Result<Self, StoreError> {
         let path = database_path(home).map_err(|_| StoreError::Unavailable)?;
         let conn = open_connection(&path, true)?;
+        // Rows from before session ids carried their creation time can no
+        // longer be opened or deleted by id; drop them (branches and events
+        // cascade). Their old directories are left on disk untouched.
+        conn.execute(
+            "DELETE FROM sessions WHERE id LIKE ?1",
+            params![LEGACY_SESSION_ID_PATTERN],
+        )
+        .map_err(|_| StoreError::Storage)?;
         Ok(Self {
             home: home.clone(),
             conn,

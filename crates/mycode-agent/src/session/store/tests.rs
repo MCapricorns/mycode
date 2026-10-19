@@ -737,3 +737,32 @@ fn a_session_lives_in_its_project_folder_under_a_timestamped_name() {
         service.shutdown().await;
     });
 }
+
+#[test]
+fn rows_from_the_old_id_format_leave_the_index() {
+    let scratch = Scratch::new();
+    runtime().block_on(async {
+        let service = SessionService::new(&scratch.home);
+        service.create(None).await.expect("create");
+        service.shutdown().await;
+    });
+    let db = scratch.home.root().join("sessions.db");
+    let conn = rusqlite::Connection::open(&db).expect("db");
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON;
+         INSERT INTO sessions (id, title, updated_at, root_branch, event_count, corrupt)
+         VALUES ('ses1-0123456789abcdef0123456789abcdef', 'old', 1, 'br1-0123456789abcdef0123456789abcdef', 0, 0);
+         INSERT INTO branches (session_id, branch_id, head, event_count, committed_bytes, parent_kind)
+         VALUES ('ses1-0123456789abcdef0123456789abcdef', 'br1-0123456789abcdef0123456789abcdef', 'empty', 0, 0, 'root');",
+    )
+    .expect("legacy row");
+    drop(conn);
+    assert_eq!(inspect_sessions(&scratch.home).expect("list").corrupt.len(), 1);
+    runtime().block_on(async {
+        let service = SessionService::new(&scratch.home);
+        let listing = inspect_sessions(&scratch.home).expect("list");
+        assert!(listing.corrupt.is_empty(), "{:?}", listing.corrupt);
+        assert_eq!(listing.sessions.len(), 1);
+        service.shutdown().await;
+    });
+}
