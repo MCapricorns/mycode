@@ -281,8 +281,7 @@ impl Workspace {
 
     /// Probes one MCP server for its tool list.
     pub(crate) fn on_list_mcp_tools(&mut self, server_id: &str, cx: &mut Context<Self>) {
-        let server_id = server_id.to_owned();
-        self.driver_do(|d, fx| d.list_mcp_tools(&server_id, fx), cx);
+        self.driver_do(|d, fx| d.list_mcp_tools(server_id, fx), cx);
     }
 
     /// Adds a catalog-listed MCP server; a pasted key arms the enable probe.
@@ -292,7 +291,6 @@ impl Workspace {
         api_key: &str,
         cx: &mut Context<Self>,
     ) {
-        let api_key = api_key.to_owned();
-        self.driver_do(|d, fx| d.add_builtin_mcp(server, &api_key, fx), cx);
+        self.driver_do(|d, fx| d.add_builtin_mcp(server, api_key, fx), cx);
     }
 }
