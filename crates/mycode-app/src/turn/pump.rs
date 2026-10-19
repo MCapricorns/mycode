@@ -129,17 +129,17 @@ impl LedgerPump {
                         message,
                     });
                 }
-                AgentEvent::ToolCompleted {
-                    call_id,
-                    result: tool_result,
-                } => {
-                    let Ok(payload) = serde_json::to_vec(&tool_result) else {
+                AgentEvent::ToolCompleted { call_id, result } => {
+                    let Message::ToolResult(tool_result) = result.as_ref() else {
+                        continue;
+                    };
+                    let Ok(payload) = serde_json::to_vec(tool_result) else {
                         self.fail("tool result could not be encoded").await;
                         return;
                     };
                     match self.writer.close_call(call_id.as_str(), &payload).await {
                         Ok((event_id, identity)) => {
-                            let mut entry = project_tool_result_message(&event_id, &tool_result);
+                            let mut entry = project_tool_result_message(&event_id, tool_result);
                             // The payload's tool_call_id is the provider id;
                             // live rows pair on the ledger identity the way
                             // replayed rows do.

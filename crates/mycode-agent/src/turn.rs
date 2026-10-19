@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use mycode_core::events::{AgentEvent, MessageDelta};
-use mycode_core::message::{AssistantMessage, ContentBlock, Message, ToolCall, ToolResultMessage};
+use mycode_core::message::{
+    AssistantMessage, ContentBlock, Message, SharedMessage, ToolCall, ToolResultMessage,
+};
 use mycode_core::{CallId, MycodeError};
 use mycode_core::{Request, StreamEvent};
 use mycode_tools::{ToolError, ToolResult, ToolStream, ToolStreamItem, prepare_tool_ctx};
@@ -44,7 +46,12 @@ pub(crate) fn emit(env: &TurnEnv<'_>, event: AgentEvent) {
 
 /// Append a message to the history and announce it.
 pub(crate) fn push_message(env: &TurnEnv<'_>, state: &mut AgentState, msg: Message) {
-    let msg = Arc::new(msg);
+    push_shared(env, state, Arc::new(msg));
+}
+
+/// [`push_message`] for a message that is already shared, such as a tool
+/// result its `ToolCompleted` event carried.
+pub(crate) fn push_shared(env: &TurnEnv<'_>, state: &mut AgentState, msg: SharedMessage) {
     state.messages.push(Arc::clone(&msg));
     emit(env, AgentEvent::MessageAdded(msg));
 }
@@ -294,7 +301,7 @@ fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> Ass
 /// it: streamed arguments that parse may still be silently incomplete,
 /// so none of them are safe to run (pi parity). The model re-issues the
 /// call with complete arguments.
-pub(crate) fn fail_truncated_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
+pub(crate) fn fail_truncated_call(env: &TurnEnv<'_>, call: &ToolCall) -> SharedMessage {
     unexecuted_call(
         env,
         call,
@@ -307,7 +314,7 @@ pub(crate) fn fail_truncated_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
 /// Synthesize an `is_error` tool result for a call that arrived on a
 /// failed provider turn. The call is not executed. The result keeps the
 /// assistant `tool_call` id paired for the next request.
-pub(crate) fn fail_interrupted_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
+pub(crate) fn fail_interrupted_call(env: &TurnEnv<'_>, call: &ToolCall) -> SharedMessage {
     unexecuted_call(
         env,
         call,
@@ -322,7 +329,7 @@ pub(crate) fn fail_interrupted_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolR
 /// response. The assistant message carrying every call is already in
 /// history, and the wire format requires every assistant `tool_call` id
 /// to be answered, so the loop writes these results before unwinding.
-pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
+pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> SharedMessage {
     unexecuted_call(
         env,
         call,
@@ -336,7 +343,7 @@ pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
 ///
 /// Dispatch already emitted [`AgentEvent::ToolStarted`]. This emits only
 /// [`AgentEvent::ToolCompleted`] so the nested answer cannot be appended.
-pub(crate) fn discard_running_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolResultMessage {
+pub(crate) fn discard_running_call(env: &TurnEnv<'_>, call: &ToolCall) -> SharedMessage {
     let call_id = CallId::from(call.id.as_str());
     completed_error(
         env,
@@ -346,7 +353,7 @@ pub(crate) fn discard_running_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRe
     )
 }
 
-fn unexecuted_call(env: &TurnEnv<'_>, call: &ToolCall, reason: String) -> ToolResultMessage {
+fn unexecuted_call(env: &TurnEnv<'_>, call: &ToolCall, reason: String) -> SharedMessage {
     let call_id = CallId::from(call.id.as_str());
     emit(
         env,
@@ -383,7 +390,7 @@ pub(crate) async fn dispatch_tool_call(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
     call: &ToolCall,
-) -> ToolResultMessage {
+) -> SharedMessage {
     let call_id = CallId::from(call.id.as_str());
     emit(
         env,
@@ -485,17 +492,17 @@ pub(crate) async fn dispatch_tool_call(
         .or(exec_result)
         .unwrap_or_else(|| ToolResult::error("tool task ended without a result".to_owned()));
 
-    let message = ToolResultMessage {
+    let message = Arc::new(Message::ToolResult(ToolResultMessage {
         tool_call_id: call.id.clone(),
         content: result.content,
         is_error: result.is_error,
         details: result.details,
-    };
+    }));
     emit(
         env,
         AgentEvent::ToolCompleted {
             call_id,
-            result: message.clone(),
+            result: Arc::clone(&message),
         },
     );
     // Yield so a ToolCompleted subscriber can commit the result before the
@@ -511,18 +518,18 @@ fn completed_error(
     call_id: &CallId,
     call: &ToolCall,
     reason: String,
-) -> ToolResultMessage {
-    let message = ToolResultMessage {
+) -> SharedMessage {
+    let message = Arc::new(Message::ToolResult(ToolResultMessage {
         tool_call_id: call.id.clone(),
         content: vec![ContentBlock::Text(reason.into())],
         is_error: true,
         details: None,
-    };
+    }));
     emit(
         env,
         AgentEvent::ToolCompleted {
             call_id: call_id.clone(),
-            result: message.clone(),
+            result: Arc::clone(&message),
         },
     );
     message

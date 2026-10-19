@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use mycode_core::MycodeError;
 use mycode_core::events::{AgentEvent, TurnOutcome};
-use mycode_core::message::{ContentBlock, Message, StopReason, ToolCall, ToolResultMessage};
+use mycode_core::message::{ContentBlock, Message, SharedMessage, StopReason, ToolCall};
 use tokio_util::sync::CancellationToken;
 
 use crate::env::TurnEnv;
@@ -255,7 +255,7 @@ async fn agent_loop(
                     .filter(|call| !call.id.is_empty() && !call.name.is_empty())
                 {
                     let message = turn::fail_interrupted_call(env, call);
-                    turn::push_message(env, state, Message::ToolResult(message));
+                    turn::push_shared(env, state, message);
                 }
             }
             // No further tool calls: this response would end the turn.
@@ -273,7 +273,7 @@ async fn agent_loop(
                 .filter(|call| !call.id.is_empty() && !call.name.is_empty())
             {
                 let message = turn::fail_truncated_call(env, call);
-                turn::push_message(env, state, Message::ToolResult(message));
+                turn::push_shared(env, state, message);
                 answered = true;
             }
             has_tool_calls = answered || drain_steers(env, state);
@@ -293,14 +293,14 @@ async fn agent_loop(
             if token.is_cancelled() {
                 for call in &valid_calls {
                     let message = turn::fail_cancelled_call(env, call);
-                    turn::push_message(env, state, Message::ToolResult(message));
+                    turn::push_shared(env, state, message);
                 }
                 aborted = true;
                 break;
             }
             let results = dispatch_response_calls(env, token, &valid_calls).await;
             for message in results {
-                turn::push_message(env, state, Message::ToolResult(message));
+                turn::push_shared(env, state, message);
             }
             if token.is_cancelled() {
                 aborted = true;
@@ -348,7 +348,7 @@ async fn dispatch_response_calls(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
     calls: &[&ToolCall],
-) -> Vec<ToolResultMessage> {
+) -> Vec<SharedMessage> {
     let agent_indexes: Vec<usize> = calls
         .iter()
         .enumerate()
@@ -404,8 +404,8 @@ async fn dispatch_response_calls(
     };
     tokio::pin!(agents);
     tokio::pin!(others);
-    let mut agent_messages: Option<Vec<ToolResultMessage>> = None;
-    let mut other_messages: Option<Vec<ToolResultMessage>> = None;
+    let mut agent_messages: Option<Vec<SharedMessage>> = None;
+    let mut other_messages: Option<Vec<SharedMessage>> = None;
     let mut abandoned = false;
     loop {
         tokio::select! {
@@ -434,7 +434,7 @@ async fn dispatch_response_calls(
         }
     }
     let other_messages = other_messages.unwrap_or_default();
-    let mut slots: Vec<Option<ToolResultMessage>> = Vec::with_capacity(calls.len());
+    let mut slots: Vec<Option<SharedMessage>> = Vec::with_capacity(calls.len());
     slots.resize_with(calls.len(), || None);
     if abandoned {
         let discard = agent_polled.load(Ordering::SeqCst);
