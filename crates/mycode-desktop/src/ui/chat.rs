@@ -460,7 +460,13 @@ fn render_one_tool(
     // runtime alone.
     let activity = live_job
         .filter(|_| tool.result.is_none() && turn_running)
-        .map(crate::view_model::LiveJob::step_label);
+        .map(|job| {
+            job.step_label()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        });
     div()
         .w_full()
         .min_w_0()
