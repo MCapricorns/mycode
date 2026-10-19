@@ -17,7 +17,7 @@ use mycode_core::{ProviderError, ProviderErrorKind};
 /// Default ceiling for establishing a connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Idle ceiling between response body chunks.
+/// Idle ceiling while waiting for response headers and between body chunks.
 ///
 /// A peer that connects and then stops sending must not pin a turn until
 /// the user notices. Models that keep streaming reset the timer on every
@@ -69,11 +69,11 @@ pub trait SseTransport: Send + Sync + 'static {
 
 /// reqwest-backed production transport.
 ///
-/// Each request builds a client that does not follow redirects; a direct
-/// hop pins the resolved addresses while a proxied one lets the proxy
-/// resolve the host. [`ReqwestTransport::new`] checks once per process that
-/// TLS can start. The stored value is the idle ceiling between
-/// body chunks, not a total-request deadline.
+/// Pinned clients are cached and built without automatic redirects; a direct
+/// hop pins the resolved addresses while a proxied one lets the proxy resolve
+/// the host. [`ReqwestTransport::new`] checks once per process that TLS can
+/// start. The stored value is the idle ceiling for response headers and
+/// between body chunks, not a total-request deadline.
 #[derive(Clone)]
 pub struct ReqwestTransport {
     read_timeout: Duration,
@@ -82,7 +82,7 @@ pub struct ReqwestTransport {
 impl ReqwestTransport {
     /// Checks that the TLS backend can initialize.
     ///
-    /// Uses [`READ_TIMEOUT`] as the idle ceiling between body chunks.
+    /// Uses [`READ_TIMEOUT`] as the idle ceiling for headers and body chunks.
     ///
     /// # Errors
     ///

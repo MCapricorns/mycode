@@ -326,7 +326,8 @@ struct ListedName {
 }
 
 /// Per-directory listing. Names are collected up to the width cap, then
-/// sorted so match-budget truncation is a deterministic global prefix.
+/// sorted so the best-first frontier and budget stops use one deterministic
+/// global path order.
 struct DirListing {
     #[cfg(unix)]
     dirp: Option<UnixDirOwner>,

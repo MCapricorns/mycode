@@ -21,8 +21,9 @@ use crate::{BridgeEvent, BridgeReply, CopilotSignInInfo};
 /// deadline mirrors the documented lifetime.
 const CODEX_FLOW_LIFETIME_SECS: u64 = 15 * 60;
 
-/// Consecutive failed polls a device flow tolerates. A flow polls for up to
-/// fifteen minutes, so one dropped request must not end the sign-in.
+/// Consecutive failed polls before a device flow gives up: the third error
+/// ends the sign-in. A flow polls for up to fifteen minutes, so one dropped
+/// request must not end the sign-in.
 const MAX_POLL_FAILURES: u32 = 3;
 
 fn oauth_call() -> PinnedCall {

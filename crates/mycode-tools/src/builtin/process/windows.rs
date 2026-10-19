@@ -214,14 +214,14 @@ impl WindowsStdioProcess {
     /// `PATHEXT` extension in `PATHEXT` order (default `.com`, `.exe`, `.bat`,
     /// `.cmd`) in each directory before the next, so `npx` resolves to
     /// `npx.cmd`.
-    /// A hit is passed as `lpApplicationName`. When neither search finds a
-    /// file, `lpApplicationName` is null and `CreateProcessW` searches the
-    /// parent process `PATH`, not the environment block. A program that
-    /// already contains a directory is passed as `lpApplicationName` and is
-    /// not searched. `.bat` and `.cmd` files are launched through `cmd.exe`
-    /// with batch escaping, including `%` in the script path. Only the
-    /// child's stdio handles are inheritable. stdout and stderr are pipes.
-    /// `stdin_piped` selects a pipe or the NUL device.
+    /// A non-batch hit is passed as `lpApplicationName`. When neither search
+    /// finds a file, `lpApplicationName` is null and `CreateProcessW` searches
+    /// the parent process `PATH`, not the environment block. A non-batch
+    /// program that already contains a directory is passed as
+    /// `lpApplicationName` and is not searched. `.bat` and `.cmd` files are
+    /// launched through `cmd.exe` with batch escaping, including `%` in the
+    /// script path. Only the child's stdio handles are inheritable. stdout and
+    /// stderr are pipes. `stdin_piped` selects a pipe or the NUL device.
     ///
     /// # Errors
     ///
@@ -777,8 +777,8 @@ fn command_prompt() -> io::Result<Vec<u16>> {
 /// First existing file for a bare program name.
 ///
 /// Child `PATH` from `env` is searched before the parent process `PATH`.
-/// A name with no `.` is tried as `name.com`, `name.exe`, `name.bat`, and
-/// `name.cmd` (the launchable `PATHEXT` order), so `npx` resolves to
+/// A name with no `.` is tried with each launchable extension in `PATHEXT`
+/// order (default `.com`, `.exe`, `.bat`, `.cmd`), so `npx` resolves to
 /// `npx.cmd` when that is the file on disk.
 fn resolve_bare_program(
     program: &Path,

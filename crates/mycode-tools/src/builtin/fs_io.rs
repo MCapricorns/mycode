@@ -12,7 +12,8 @@ use std::sync::Mutex;
 pub enum FileAccess {
     /// Existing regular file opened for content read.
     ExistingContent,
-    /// Existing regular file, or a missing leaf under a retained parent.
+    /// Existing regular file, or a missing leaf or intermediate directories
+    /// under a retained parent.
     ExistingOrMissing,
 }
 
@@ -47,7 +48,7 @@ pub struct FileRead {
     pub returned_lines: usize,
     /// Opaque revision covering identity, size, mtime, and raw-byte hash.
     pub revision: FileRevision,
-    /// Cwd-relative on-disk spelling used as the path key.
+    /// Anchor-root-relative on-disk spelling used as the path key.
     pub path_key: String,
 }
 
@@ -60,7 +61,7 @@ pub(crate) struct FileWrite {
     pub revision: FileRevision,
     /// True when an existing hardlinked directory entry was replaced by a new inode.
     pub detached_hardlink: bool,
-    /// Cwd-relative on-disk spelling used as the path key.
+    /// Anchor-root-relative on-disk spelling used as the path key.
     pub path_key: String,
 }
 
@@ -84,7 +85,7 @@ pub struct FileSnapshot {
     pub text: String,
     /// Opaque revision covering identity, size, mtime, and raw-byte hash.
     pub revision: FileRevision,
-    /// Cwd-relative on-disk spelling used as the path key.
+    /// Anchor-root-relative on-disk spelling used as the path key.
     pub path_key: String,
 }
 
@@ -170,7 +171,8 @@ impl std::fmt::Debug for PreparedFile {
 }
 
 impl PreparedFile {
-    /// Returns the cwd-relative on-disk spelling bound to this capability.
+    /// Returns the anchor-root-relative on-disk spelling bound to this
+    /// capability.
     #[must_use]
     pub fn key(&self) -> &str {
         &self.key

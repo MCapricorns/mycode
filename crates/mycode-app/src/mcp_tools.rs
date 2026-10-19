@@ -298,8 +298,8 @@ impl McpPool {
 ///
 /// Servers that connected stay live across turns while the settings
 /// fingerprint holds and no connection broke. A server that fails to spawn,
-/// handshake, or list tools is skipped for this turn and retried on the
-/// next one, without restarting the servers that are already up. Runs
+/// handshake, or list tools is skipped for this turn and retried after a
+/// 120-second cooldown, without restarting the servers that are already up. Runs
 /// inside the spawned turn task on the single-threaded core runtime —
 /// plain `.await` only, never `block_on`.
 pub(crate) async fn connect_mcp_tools(

@@ -33,7 +33,7 @@ pub enum EventKind {
     /// A completed tool result; `call_id` is `Some`.
     ToolResult,
     /// Legacy durable usage record. This build writes none; existing ledgers
-    /// still decode, and replay skips the payload.
+    /// still decode, and replay never surfaces it as conversation content.
     Usage,
     /// Legacy wire tag 4. Existing ledgers still open; replay skips the
     /// payload. New reservations of this kind are rejected.
@@ -258,10 +258,10 @@ pub enum SessionRequest {
         /// Page size (`1..=256`).
         limit: u16,
     },
-    /// Reads the newest `limit` events at or before `before`.
+    /// Reads the newest `limit` events strictly before `before`.
     ///
-    /// `before` absent means the snapshot head. `older` on the result names
-    /// the first returned event when still-earlier events exist.
+    /// `before` absent ends the window at the snapshot head. `older` on the
+    /// result names the first returned event when still-earlier events exist.
     ReadPayloadWindow {
         /// The session to read.
         session: SessionId,

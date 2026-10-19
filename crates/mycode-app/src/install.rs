@@ -11,10 +11,10 @@
 //! drags to `/Applications`). Launched from anywhere but `<home>/bin`, it
 //! copies itself there, spawns the installed copy with the same arguments,
 //! and exits. The installed copy deletes the old exe it replaced (the
-//! launcher holds the file until it exits, so deletion retries briefly on a
-//! background thread) and drops a desktop shortcut. Sweeping `~/Downloads`
-//! and `~/Desktop` removes loose MYCode binaries and release archives of
-//! the self-installing families.
+//! launcher holds the file until it exits, so deletion retries for up to 30
+//! seconds on a background thread) and drops a desktop shortcut. Sweeping
+//! `~/Downloads` and `~/Desktop` removes loose MYCode binaries and release
+//! archives of the self-installing families.
 //!
 //! Debug builds and `MYCODE_NO_INSTALL=1` skip the whole dance so
 //! `cargo run` stays in `target/`.
@@ -67,7 +67,7 @@ pub struct InstallReport {
     pub target: PathBuf,
     /// The running binary was copied into `target` during this call.
     pub copied: bool,
-    /// This process already runs `target`.
+    /// This process already runs `target`, or installation was skipped.
     pub running_installed: bool,
     /// A PATH entry for the install dir was added during this call.
     pub path_added: bool,
@@ -263,7 +263,7 @@ pub fn ensure_desktop_installed(home: &HomeLayout) -> DesktopInstall {
 }
 
 /// Deletes the old executable an installed copy replaced. The launcher
-/// holds its exe until it exits, so this retries for a few seconds — spawn
+/// holds its exe until it exits, so this retries for up to 30 seconds — spawn
 /// it on a thread, never block the UI on it.
 pub fn cleanup_installed_source(source: PathBuf) {
     if install_skipped() || !is_replaced_desktop_exe(&source) {
@@ -325,10 +325,10 @@ pub fn sweep_downloaded_binaries() {
 }
 
 /// Whether a loose filename in Downloads/Desktop is one of our release
-/// artifacts: a shipped binary or a `*-v*` archive. Binary names match
-/// exactly. The desktop family counts only on Windows, where the desktop
-/// installs itself; on macOS the user may run it from a download or keep
-/// the dmg, so the CLI leaves those alone.
+/// artifacts: a shipped binary, a `*-v*` archive, or its `.sha256` sidecar.
+/// Binary names match exactly. The desktop family counts only on Windows,
+/// where the desktop installs itself; on macOS the user may run it from a
+/// download or keep the dmg, so the CLI leaves those alone.
 fn is_download_artifact(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     let mut bare = vec!["mycode", "mycode.exe", "mycode-cli", "mycode-cli.exe"];
@@ -469,7 +469,8 @@ fn profile_mentions(text: &str, dir: &Path) -> bool {
 /// The shell profile files we add the PATH export to. Writing
 /// `.bash_profile` unconditionally would shadow a user's `.profile`, so the
 /// set is: every existing startup file among the usual suspects, plus
-/// `.zprofile` when nothing exists yet (macOS's default login shell).
+/// `.zprofile` and `.profile` when nothing exists yet (macOS's default login
+/// shell).
 #[cfg(not(windows))]
 fn profile_files() -> Vec<PathBuf> {
     let Some(home) = user_home() else {

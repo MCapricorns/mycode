@@ -228,7 +228,7 @@ impl SubagentRole {
 /// A resolved catalog of delegation roles.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoleCatalog {
-    /// Roles in stable name order.
+    /// Roles in a stable order.
     pub roles: Vec<SubagentRole>,
 }
 

@@ -331,7 +331,8 @@ pub(crate) fn normalize_anchored_relative(path: &Path) -> Result<PathBuf, ()> {
     Ok(out)
 }
 
-/// Returns a forward-slash relative path, or the full path for a root file.
+/// Returns a forward-slash path relative to `root`, or the full path when
+/// `path` is not under `root` (including when it equals `root`).
 pub(crate) fn rel_posix(root: &Path, path: &Path) -> String {
     let relative = path.strip_prefix(root).unwrap_or(path);
     if relative.as_os_str().is_empty() {

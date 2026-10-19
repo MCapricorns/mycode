@@ -35,7 +35,7 @@ impl FrontendDriver {
     }
 
     /// Writes a settings edit that arrived while a save was in flight.
-    /// A pending text debounce keeps its timer so a half-typed User-Agent
+    /// A pending text debounce keeps its timer so a half-typed proxy URL
     /// is not flushed early.
     pub fn continue_settings_save(&mut self, out: &mut Vec<Effect>) {
         if self.settings_text_save_pending {

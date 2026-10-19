@@ -86,7 +86,7 @@ pub struct SkillFile {
     /// Command slug without the leading `/`.
     pub slug: String,
     /// One-line title from the first heading, the frontmatter `name`, or
-    /// the file stem.
+    /// the slug derived from the file name.
     pub title: String,
     /// Frontmatter `description`: when to use the skill. Empty when absent.
     pub description: String,
@@ -305,8 +305,9 @@ pub fn render_resource_prompt(files: &[ResourceFile]) -> Vec<String> {
 
 /// Compact on-demand skill catalog for the system prompt.
 ///
-/// Lists slug, title, and path only. Skill bodies stay on disk until the
-/// model reads the named file or the user inserts a `/slug` pointer.
+/// Lists slug, title, description when present, and path. Skill bodies stay
+/// on disk until the model reads the named file or the user inserts a `/slug`
+/// pointer.
 #[must_use]
 pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
     if files.is_empty() {

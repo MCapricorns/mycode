@@ -279,8 +279,8 @@ pub struct Workspace {
     /// Recorded thinking traces shown opposite the remembered default,
     /// keyed by event id.
     flipped_thinking: HashSet<String>,
-    /// Row delete (`session:<id>`, `provider:<id>`) clicked once and
-    /// waiting for the confirming click.
+    /// Row-delete key clicked once and waiting for the confirming click.
+    /// Session, provider, MCP-server, and folder-root rows all share it.
     armed_delete: Option<String>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,

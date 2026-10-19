@@ -40,8 +40,8 @@ pub(crate) struct StableHandle {
     /// When set, `file` is the parent directory, `identity` is the child's,
     /// and this string is the on-disk spelling.
     ///
-    /// Used on Unix platforms without `O_PATH` so find can retain a
-    /// metadata-only capability for a mode-`000` file.
+    /// Used on Unix so find can retain a metadata-only capability for a
+    /// mode-`000` file without `O_PATH`.
     #[cfg(unix)]
     pub(crate) named_child: Option<OsString>,
     #[cfg(windows)]

@@ -16,7 +16,8 @@ pub struct ComposerMention {
 /// One autocomplete row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionItem {
-    /// Token passed to accept: `/new`, `/slug`, `mcp:<server>`, or a file path.
+    /// Token passed to accept: `/new`, `/slug`, `mcp:<server>`,
+    /// `mcp:<server>/<tool>`, or a file path.
     pub insert: String,
     /// Secondary label, already in the interface language.
     pub label: String,

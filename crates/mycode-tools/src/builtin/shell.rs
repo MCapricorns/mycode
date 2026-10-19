@@ -7,7 +7,8 @@
 //!   PowerShell 7 (`pwsh`), then Windows PowerShell 5.1 (`powershell.exe`).
 //!   `cmd.exe` is the runtime fallback when neither exists. Git Bash, MSYS2,
 //!   Cygwin, and WSL are not selected. macOS uses `$SHELL` when it is bash,
-//!   zsh, or sh, then `zsh`. Commands are not rewritten between shells.
+//!   zsh, or sh, then falls back to `zsh`, `bash`, then `sh`. Commands are
+//!   not rewritten between shells.
 //! * `program` spawns `program` with an explicit `args` vector and does not
 //!   parse a shell command string. A PE, ELF, or Mach-O image runs directly.
 //!   A direct shebang wrapper runs its interpreter with the script path and

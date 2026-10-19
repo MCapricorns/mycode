@@ -6,7 +6,7 @@
 //!
 //! Search hits are rendered as a short title, URL, and snippet. Fetches that
 //! pass `goal` return matching excerpts instead of the page. Identical
-//! queries and URLs are cached for a few minutes so a turn
+//! queries and URLs are cached for ten minutes so a turn
 //! can search, then fetch, without paying the raw page twice.
 
 use parking_lot::Mutex;
@@ -32,7 +32,8 @@ pub const MAX_FETCH_URLS: usize = 8;
 const MAX_PAGE_EXCERPT_CHARS: usize = 8_000;
 /// Snippet characters kept on a search hit.
 const MAX_SNIPPET_CHARS: usize = 240;
-/// Excerpt budget for one page when `goal` is set.
+/// Default excerpt budget for goal-matched windows. A matching heading may
+/// return up to `SECTION_EXCERPT_CHARS` instead.
 const GOAL_EXCERPT_CHARS: usize = 1_200;
 /// A goal that names a heading returns that whole section, including
 /// subsections, up to this cap. A Rust release section is larger than the
@@ -275,10 +276,10 @@ fn render_pages(pages: &[WebPage], goal: Option<&str>) -> String {
 
 /// Selects short windows that share terms with `goal`.
 ///
-/// ASCII words of length >= 3 are terms. A run of CJK characters is one
-/// term, or overlapping pairs when the run is long, so a Chinese goal
-/// still selects a paragraph. Windows with no shared term fall back to
-/// the leading excerpt.
+/// ASCII words of length >= 3, and shorter tokens containing a dot, are
+/// terms. A run of CJK characters is one term, or overlapping pairs when the
+/// run is long, so a Chinese goal still selects a paragraph. Windows with no
+/// shared term fall back to the leading excerpt.
 pub(crate) fn excerpt_for_goal(content: &str, goal: &str, budget: usize) -> String {
     let terms = goal_terms(goal);
     if terms.is_empty() || budget == 0 {

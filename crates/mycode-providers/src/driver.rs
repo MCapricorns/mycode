@@ -2,8 +2,9 @@
 //!
 //! One spawned task owns the whole request lifetime. It feeds SSE frames to
 //! a protocol-specific [`FrameReducer`], forwards every produced event through
-//! the bounded sender, and stops at the first terminal, cancellation, or
-//! transport failure. The consumer synthesizes the cancellation terminal.
+//! the bounded sender, and stops at the first terminal or cancellation, after
+//! bounded retries of failures that produced no output. The consumer
+//! synthesizes the cancellation terminal.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,8 +52,9 @@ const RATE_LIMIT_DELAYS_MS: [u64; 3] = [5, 5, 5];
 /// transient 5xx answers are worth a bounded retry. A 404 (wrong route or
 /// model) and the Cloudflare origin faults (520, 524, and family) describe
 /// failures a retry cannot fix: the turn must stop and report them.
-/// Mid-stream failures never reach this — by then partial output is already
-/// reduced, so replaying the request would duplicate it.
+/// Failures after output has been emitted never reach this: replaying the
+/// request would duplicate it. A stream error before any event retries like
+/// a refused POST.
 fn retry_delay_for(error: &ProviderError, attempt: usize) -> Option<Duration> {
     if error.is_cancelled() {
         return None;
@@ -73,7 +75,8 @@ fn retry_delay_for(error: &ProviderError, attempt: usize) -> Option<Duration> {
 /// Drives one provider request to exactly one terminal.
 ///
 /// `retryable` says the body carries a field one of the retry rules can
-/// strip (a prompt cache key or replayed thinking); only then is a copy kept.
+/// strip (a prompt cache key or replayed thinking); when false, a rejection
+/// is reported without attempting a rewrite.
 /// `make_reducer` rebuilds the reducer for each attempt, so a retry starts
 /// from a clean protocol state.
 pub(crate) async fn drive(

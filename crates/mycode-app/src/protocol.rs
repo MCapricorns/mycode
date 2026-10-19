@@ -20,9 +20,11 @@ pub use mycode_core::tool_label;
 pub struct SessionSummary {
     /// Session identity spelling (`ses1-…`).
     pub session_id: String,
-    /// Root branch identity spelling.
+    /// Branch to open: the last-written branch for a listing row, or the
+    /// fresh root branch of a newly created session.
     pub root_branch_id: String,
-    /// Display title: the session's first user message, trimmed.
+    /// Display title from the index: the first user message until a
+    /// generated sidebar title replaces it.
     pub title: String,
     /// Last durable mutation time in Unix epoch milliseconds (`None` when
     /// unknown or corrupt).
@@ -69,7 +71,7 @@ pub struct ConversationEntry {
 pub struct ActiveConversation {
     /// Session identity spelling.
     pub session_id: String,
-    /// Root branch identity spelling.
+    /// Branch identity spelling for the loaded conversation.
     pub branch_id: String,
     /// Current committed head: `empty` or an event identity.
     pub head: String,
@@ -128,7 +130,8 @@ pub const MAX_STREAMING_CHARS: usize = 256 * 1024;
 pub struct AskPrompt {
     /// Question headline.
     pub question: String,
-    /// Candidate answers. Empty means free text only.
+    /// Candidate answers. Free text is always allowed; empty means no
+    /// candidates were offered.
     pub choices: Vec<String>,
     /// Whether the user may skip this question.
     pub optional: bool,

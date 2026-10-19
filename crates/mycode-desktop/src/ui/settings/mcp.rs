@@ -1,5 +1,6 @@
 //! The MCP settings page: configured server rows, the built-in catalog, JSON
-//! import, and the custom add-server form (plus its pure row builder).
+//! import, and the custom add-server form (plus the row builder for configured
+//! servers).
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};

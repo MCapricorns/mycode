@@ -1,7 +1,7 @@
 //! Automatic platform-shell discovery.
 //!
-//! The choice is fixed for the process. `MYCODE_SHELL` and `tools.shell` are
-//! not overrides: callers that still see them log once and ignore them.
+//! The choice is fixed for the process. `MYCODE_SHELL` is not an override: a
+//! non-`auto` value logs once and is ignored.
 //!
 //! Windows follows Codex and Gemini CLI: PowerShell 7 (`pwsh`), then Windows
 //! PowerShell 5.1, then `cmd.exe`. Git Bash, MSYS2, Cygwin, and WSL are not
@@ -286,8 +286,8 @@ pub fn active_shell() -> Option<DetectedShell> {
 
 /// Shell the tool and the system prompt agree on for this process.
 ///
-/// On Windows, when PowerShell is missing, this is `cmd.exe` and the model
-/// sees the `cmd` tool.
+/// On Windows, when PowerShell is missing and `cmd.exe` exists, this is
+/// `cmd.exe` and the model sees the `cmd` tool.
 #[must_use]
 pub fn resolved_shell() -> DetectedShell {
     cached_shell().resolved.clone()

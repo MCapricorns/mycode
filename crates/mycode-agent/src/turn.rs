@@ -267,9 +267,8 @@ async fn retry_backoff(token: &CancellationToken, attempt: usize) -> bool {
 
 /// User cancel: keep what already arrived, mark it interrupted, and abort.
 ///
-/// A cancelled stream never carries formed tool calls — they only arrive with
-/// the terminal `Done` event, which a cancelled stream does not deliver — so
-/// there is nothing to pair or fail here.
+/// A cancelling stream ends with `Error(Cancelled)`, not `Done`; formed tool
+/// calls only arrive with `Done`, so this path has nothing to pair or fail.
 fn keep_cancelled_partial(
     env: &TurnEnv<'_>,
     state: &mut AgentState,

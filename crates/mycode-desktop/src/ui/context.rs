@@ -217,7 +217,8 @@ pub(super) fn render_context_panel(
         )
 }
 
-/// Inspector as a right-hand drawer. The conversation keeps the full column.
+/// Inspector as a right-hand drawer. The chat column reserves the drawer's
+/// width on its right so the transcript and composer stop at its left edge.
 pub(super) fn render_inspector_drawer(
     workspace: &mut Workspace,
     cx: &mut Context<Workspace>,
@@ -395,8 +396,9 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
     // These are totals over every request of the turn (one per tool round),
     // so they exceed the context meter, which is the latest prompt alone;
     // the labels and the request count say so.
-    // The hit row shares the sum row's timeframe, so it is "本轮" only while
-    // the turn still runs and "上一轮" once the sums are the last turn's.
+    // The hit row shares the sum row's timeframe, so it reads "this turn"
+    // only while the turn still runs and "last turn" once the sums are the
+    // last turn's.
     let turn_row = vm
         .live_turn
         .as_ref()

@@ -48,7 +48,7 @@ where
 /// Reopens `parent` as `"."` so listing does not share the parent's offset.
 ///
 /// POSIX `fdopendir` starts at the current offset of the given descriptor.
-/// `File::try_clone` duplicates the descriptor but not the open-file
+/// `File::try_clone` duplicates the descriptor and shares the open-file
 /// description, so a cloned listing would resume after a previous scan's
 /// EOF and miss every entry. Opening `"."` creates a distinct description.
 ///

@@ -29,7 +29,7 @@ use self::time::{DateGroup, classify_session_group, format_session_relative_time
 pub(super) const WIDTH_PX: f32 = 248.;
 const WIDTH: gpui_kit::Pixels = px(WIDTH_PX);
 
-/// Matches [`super::skin::glass_button`].
+/// Height of the New task button in the action strip.
 const NEW_TASK_H: f32 = 34.;
 const SEARCH_H: f32 = 32.;
 const ACTION_PAD_Y: f32 = 8.;

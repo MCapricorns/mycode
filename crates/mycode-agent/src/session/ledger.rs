@@ -277,9 +277,10 @@ impl SessionLedger {
         Ok(PageWindow { start, end, next })
     }
 
-    /// The newest `limit` events at or before `before` (or the snapshot head
-    /// when `before` is absent). `older` names the first returned event when
-    /// still-earlier events exist, so the next call can page backward.
+    /// The newest `limit` events strictly before `before`, or ending at the
+    /// snapshot head when `before` is absent. `older` names the first returned
+    /// event when still-earlier events exist, so the next call can page
+    /// backward.
     pub(crate) fn window_before(
         &self,
         branch: &BranchId,

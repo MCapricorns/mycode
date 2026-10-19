@@ -1,5 +1,6 @@
 //! Token accounting: the live meter, per-turn cache hit, and the warning
-//! when a compaction or steer knocks a warm prompt cache cold.
+//! when a compaction, steer, or model switch knocks a warm prompt cache
+//! cold.
 
 use super::super::WorkspaceState;
 use super::super::usage::{

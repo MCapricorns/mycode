@@ -69,7 +69,7 @@ fn fresh_repo_staged_and_untracked_files_show_added_line_diffs() {
     repo.git(&["add", "staged.txt"]);
 
     // No HEAD commit exists yet, so `git diff HEAD` fails and the reader
-    // falls back to added-line diffs from the index and the worktree.
+    // falls back to added-line diffs of the worktree files.
     let staged = read_diff(&repo.0, "staged.txt");
     assert!(staged.contains("new file mode"), "{staged}");
     assert!(staged.contains("+alpha"), "{staged}");

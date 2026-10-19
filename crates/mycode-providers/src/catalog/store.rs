@@ -426,9 +426,9 @@ pub async fn refresh(
         return RefreshOutcome::Fresh(existing);
     }
 
-    // The catalog is megabytes. A total request timeout also bounds the body,
-    // so a slow link or proxy never finished one; only idle gaps are bounded
-    // per chunk, with a generous ceiling over the whole download.
+    // The catalog is megabytes. A total request timeout would also bound the
+    // body, so a slow link or proxy could never finish one; only idle gaps
+    // are bounded per chunk, with a generous ceiling over the whole download.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
     let mut headers = vec![("accept".to_owned(), "application/json".to_owned())];
     if let Some(etag) = existing.etag.clone() {

@@ -38,8 +38,9 @@ pub(super) fn render_chat(
     // builders can still take `&mut Workspace`.
     let sending = workspace.vm().sending;
     let loading_older = workspace.vm().history_loading;
-    // Off means the user asked not to see a reasoning trace. The blocks stay
-    // in the ledger; only the REASONING row is hidden while that pick is set.
+    // Off means the user asked not to see a reasoning trace. The text stays
+    // in the ledger; only the thinking header and its trace are hidden while
+    // that pick is set.
     let show_reasoning = crate::view_model::selected_reasoning_level(workspace.vm()) != "off";
     let (show_welcome, has_older, entry_elements, streaming_element) = {
         let md_cache = scroll_hold::use_markdown_cache(window);

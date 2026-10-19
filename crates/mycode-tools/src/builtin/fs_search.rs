@@ -193,9 +193,8 @@ pub(crate) struct Limits {
     /// Shared wall-clock deadline for the limiter and the outer timer.
     ///
     /// When `None`, [`WalkLimiter::new`] uses `Instant::now() + time_limit`.
-    /// Execution and preflight compute one `Instant` and pass it here so a
-    /// worker cannot publish `stopped_early` while the outer timer is still
-    /// sleeping.
+    /// Execution computes one `Instant` and passes it here so a worker cannot
+    /// publish `stopped_early` while the outer timer is still sleeping.
     pub deadline: Option<Instant>,
 }
 

@@ -149,9 +149,10 @@ impl std::fmt::Display for ResolveError {
     }
 }
 
-/// Maximum argument lengths retained in the redacted result summary.
+/// Maximum number of argument and environment entries whose lengths are
+/// retained in the redacted result summary.
 ///
-/// The full vector is represented by a length-framed digest, so increasing
+/// The full vectors are represented by length-framed digests, so increasing
 /// this limit only adds UI/session metadata and does not improve identity.
 const MAX_ARGUMENT_LENGTH_SUMMARY: usize = 64;
 
@@ -166,7 +167,8 @@ pub(crate) struct PreparedIdentity {
     pub invocation_digest: String,
     /// Native file-identity token (volume/file id or device/inode).
     pub image_identity: String,
-    /// Classified kernel image kind (`pe`, `elf`, or `mach-o`).
+    /// Classified kernel image kind (`pe`, `elf`, `mach-o`, or
+    /// `mach-o-fat`).
     pub image: &'static str,
     /// Redacted environment lengths; values are never copied here.
     pub env_summary: Value,

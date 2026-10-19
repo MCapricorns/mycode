@@ -2,8 +2,8 @@
 //!
 //! Opening a session reads branch heads and event offsets. It does not scan
 //! the JSONL log. A torn tail past the committed length is truncated; a log
-//! shorter than that length is corruption. Payload bytes are read later, one
-//! line at a time, when a caller asks for them.
+//! shorter than that length is corruption. Payload bytes are read later, on
+//! demand, when a caller asks for them.
 
 use std::collections::HashSet;
 

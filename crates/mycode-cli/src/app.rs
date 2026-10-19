@@ -19,7 +19,7 @@
 //! `PageUp`/`PageDown` scroll.
 //!
 //! The terminal's working directory is the project: once the remembered UI
-//! state has loaded, it replaces the folder a desktop session left behind,
+//! state has loaded, it replaces the folder a previous session left behind,
 //! so tools never run in a directory other than the one `mycode-cli`
 //! started in.
 
@@ -1449,7 +1449,7 @@ impl Tui {
         );
     }
 
-    /// The only bordered widget: the composer.
+    /// The main layout's only bordered widget: the composer.
     fn draw_composer(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
         let title = if vm.sending {

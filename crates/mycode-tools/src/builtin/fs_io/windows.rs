@@ -365,7 +365,7 @@ fn duplicate_delete_handle(file: &File) -> io::Result<File> {
 
 /// Clears `FILE_ATTRIBUTE_READONLY` on `file`, preserving other attributes.
 ///
-/// The handle must hold `FILE_WRITE_ATTRIBUTES`; creation-time temp handles
+/// The handle must hold `FILE_WRITE_ATTRIBUTES`; payload-temp creation handles
 /// do. Zeroed time fields in `FILE_BASIC_INFO` leave timestamps unchanged.
 ///
 /// # Errors
@@ -471,11 +471,11 @@ pub(super) fn mark_delete(file: &File) -> io::Result<()> {
 /// Requests a checked deletion of a just-created temp file unless its
 /// ownership transfers to the caller.
 ///
-/// The guard is armed on the original creation handle — which already
-/// holds `DELETE` and `FILE_WRITE_ATTRIBUTES` — from the first instant the
-/// name exists, so every post-create failure (volume check, stat, type
-/// check, `DELETE` duplication) cleans up through a handle whose access a
-/// later restrictive DACL cannot revoke.
+/// The guard is armed on the original creation handle — which already holds
+/// `DELETE` (and `FILE_WRITE_ATTRIBUTES` on the payload-temp path) — from the
+/// first instant the name exists, so every post-create failure (volume check,
+/// stat, type check, `DELETE` duplication) cleans up through a handle whose
+/// access a later restrictive DACL cannot revoke.
 struct CreatedTempGuard<'a> {
     file: &'a File,
     armed: bool,

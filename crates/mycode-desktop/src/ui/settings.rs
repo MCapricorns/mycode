@@ -240,10 +240,10 @@ fn settings_page_key(workspace: &Workspace) -> String {
     }
 }
 
-/// What the nav shows beside each section: a count or a status lamp.
+/// What the nav shows beside each section: a count and/or a status lamp.
 #[derive(Clone, Copy, Default)]
 struct NavBadge {
-    /// Right-aligned mono figure (configured providers, enabled servers).
+    /// Right-aligned count figure (configured providers, enabled servers).
     count: Option<usize>,
     /// Attention lamp (an update is waiting, a provider has no key).
     lamp: Option<gpui_kit::Hsla>,
@@ -265,7 +265,7 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     });
     let update_lamp = match vm.update {
         UpdateState::Available { .. } | UpdateState::Ready { .. } => Some(desk.amber),
-        // A failed check is the bottom-right toast. The About row stays
+        // A failed check is the top-right toast. The About row stays
         // quiet instead of painting a red lamp or the transport error.
         _ => None,
     };

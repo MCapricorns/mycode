@@ -111,8 +111,8 @@ pub(super) fn thumb_shadow(theme: &Theme) -> Vec<BoxShadow> {
     vec![BoxShadow::new(px(0.), px(1.), hsla(0., 0., 0., alpha)).blur_radius(px(2.))]
 }
 
-/// Scrim behind every modal dialog. The update dialog, the ask card, the
-/// project picker, and the command palette dim the window the same way.
+/// Scrim behind every modal dialog. The update dialog, the project picker,
+/// and the command palette dim the window the same way.
 pub(super) fn modal_scrim(theme: &Theme) -> Hsla {
     if theme.mode.is_dark() {
         hsla(0., 0., 0., 0.5)

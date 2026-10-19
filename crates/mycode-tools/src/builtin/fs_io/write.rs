@@ -169,8 +169,8 @@ impl Drop for TempName {
 /// and-swap; cooperating writers in this process are serialized on a global
 /// write mutex. Advisory locks are not claimed as protection against foreign
 /// writers. The payload inode stays private from creation through the
-/// publish rename; final modes are restored afterwards through the retained
-/// temp handle, so a mode-restoration failure is reported after the
+/// publish rename; on Unix, final modes are restored afterwards through the
+/// retained temp handle, so a mode-restoration failure is reported after the
 /// replacement already happened. A final cancel gate runs immediately before
 /// the irreversible publish rename, and the published name is verified to
 /// still be the just-published inode carrying exactly the written content.

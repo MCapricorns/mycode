@@ -8,9 +8,10 @@ const CLIXML_MARKER: &str = "#< CLIXML";
 /// PowerShell's redirected error stream is CLIXML. Control characters there
 /// are `_xHHHH_` escapes (`_x001B_` is ESC), and the message may still carry
 /// ANSI SGR codes. Escapes are decoded for every captured string, including
-/// fragments with no `#< CLIXML` marker. When the marker is present,
-/// `<S S="Error">` and `<S S="Warning">` nodes are extracted as before, then
-/// ANSI/VT sequences are stripped from that text.
+/// fragments with no `#< CLIXML` marker. When the marker is present and an
+/// `<S S="Error">` node exists, those error nodes and any warning nodes are
+/// extracted; otherwise the CLIXML header/footer is dropped and the remaining
+/// text is decoded. ANSI/VT sequences are stripped from the result.
 #[must_use]
 pub(crate) fn sanitize_captured_shell_text(text: &str) -> String {
     if !text.contains(CLIXML_MARKER) && !text.contains("_x") && !has_ansi_introducer(text) {

@@ -23,9 +23,9 @@ use tokio_util::sync::CancellationToken;
 
 /// Maximum JSON-encoded size accepted for one provider request.
 ///
-/// Eight MiB bounds the Agent-to-Host handoff while leaving room for normal
-/// conversation history and tool schemas. The agent validates this limit after
-/// hook transformation and before invoking a provider.
+/// Eight MiB bounds one encoded provider request while leaving room for
+/// normal conversation history and tool schemas. The agent validates this
+/// limit after hook transformation and before invoking a provider.
 pub const MAX_REQUEST_ENCODED_BYTES: usize = 8 * 1_024 * 1_024;
 
 /// Requested reasoning effort for models that support it.

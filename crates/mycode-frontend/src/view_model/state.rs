@@ -147,8 +147,9 @@ pub struct WorkspaceState {
     /// Cache-read tokens on the latest prompt. `0` when the provider reported
     /// none. Shown on the composer chip row and the inspector context meter.
     pub context_cache: u64,
-    /// Armed after compaction or a steer until the next prompt reports usage.
-    /// The baseline is the hit percent already on the meter.
+    /// Armed after compaction, a steer, or a model switch until the next
+    /// prompt reports usage. The baseline is the hit percent already on the
+    /// meter.
     pub cache_watch: Option<CacheWatch>,
     /// Details warning after that prompt's cache hit collapses. Cleared when
     /// a later prompt is warm again, or when the open session changes.
@@ -178,7 +179,8 @@ pub struct WorkspaceState {
     pub catalog: Option<Arc<mycode_providers::catalog::CatalogDocument>>,
     /// Unix seconds of the catalog's last successful cloud fetch.
     pub catalog_fetched_at: u64,
-    /// Project directory bound to the open session.
+    /// The active workspace folder: the open chat's working directory when it
+    /// has one, otherwise the folder the desk last opened.
     pub project_dir: Option<String>,
     /// Recent project directories, most recent first.
     pub recents: Vec<String>,
@@ -344,7 +346,7 @@ pub enum FrontendAction {
     /// The settings editor changed the proxy preference. `typed` edits come
     /// from the URL field and save on the text debounce.
     SettingsProxyChanged {
-        /// New stored value: empty, `direct`, or a valid proxy URL.
+        /// New stored value: empty (follow the system) or a valid proxy URL.
         value: String,
         /// Whether the URL field produced it.
         typed: bool,
@@ -597,7 +599,7 @@ pub enum FrontendAction {
     WorkspaceRootAdded(String),
     /// A folder was removed from the workspace list; its chats go with it.
     WorkspaceRootRemoved(String),
-    /// A project directory was bound to the open session.
+    /// A project directory became the active workspace folder.
     ProjectOpened(String),
     /// A session was bound to a project in the durable map.
     ///

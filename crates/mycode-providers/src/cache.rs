@@ -183,8 +183,8 @@ pub(crate) fn retry_body_without_prompt_cache_key(
     serde_json::to_vec(&value).ok()
 }
 
-/// Whether the request body sets a cache key, so the driver can keep a retry
-/// copy only for those requests.
+/// Whether the request body sets a cache key, so the driver only attempts a
+/// rewrite without that field for those requests.
 #[must_use]
 pub(crate) fn has_prompt_cache_key(body: &Value) -> bool {
     body.get("prompt_cache_key").is_some()

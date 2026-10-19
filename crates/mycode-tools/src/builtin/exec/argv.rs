@@ -17,8 +17,9 @@ pub(super) const WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS: usize = 32_767;
 ///
 /// # Errors
 ///
-/// Returns [`ToolError::InvalidArgs`] when an argument contains an interior
-/// NUL or the encoded command line exceeds 32,767 UTF-16 units including NUL.
+/// Returns [`ToolError::InvalidArgs`] when the program path or an argument
+/// contains an interior NUL or the encoded command line exceeds 32,767 UTF-16
+/// units including NUL.
 pub(crate) fn windows_command_line_utf16(
     argv0: &OsStr,
     args: &[String],

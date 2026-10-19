@@ -44,8 +44,9 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
         arm_cache_watch(state, CacheBreak::Switch);
     }
     // As in `model_selected`: the stored effort survives the switch. The
-    // projection falls back to Default for rungs the new provider does not
-    // advertise, and the pick returns when a supporting model comes back.
+    // projection falls back to the strongest advertised rung (or Default
+    // when the new model publishes none), and the pick returns when a
+    // supporting model comes back.
     remember_active_session_model(state);
 }
 
@@ -101,7 +102,8 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
         state.reasoning_menu_open = false;
     }
     // The stored effort is deliberately not reset here: a rung the new
-    // model does not advertise still projects as Default (see
+    // model does not advertise still projects as the strongest advertised
+    // rung (or Default when none is published; see
     // `selected_reasoning_level`), and switching back to a model that
     // supports it restores the pick without asking the user again.
     remember_active_session_model(state);
@@ -239,8 +241,8 @@ fn endpoint_base_url<'a>(state: &'a WorkspaceState, provider_id: &str) -> Option
 
 /// Thinking choices advertised for one catalog model.
 ///
-/// A missing catalog row offers Default only. The stored pick is kept so a
-/// custom endpoint does not look unset, but the menu does not invent
+/// A missing catalog row offers Default plus the stored pick, so a custom
+/// endpoint does not look unset, but the menu does not invent
 /// off/on/low/medium/high/xhigh/max.
 #[must_use]
 pub fn reasoning_levels_for(
