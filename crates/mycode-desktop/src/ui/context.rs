@@ -366,8 +366,20 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         .clone()
         .or_else(|| vm.last_turn.as_ref().map(|turn| turn.model.clone()))
         .or_else(|| vm.live_turn.as_ref().map(|turn| turn.model.clone()));
-    let model = selected_model.clone();
-    let provider = vm.selected_provider.clone().unwrap_or_default();
+    // Display names, like the composer chip: the catalog name, then the id.
+    let provider_id = vm.selected_provider.as_deref().unwrap_or_default();
+    let model = selected_model.as_deref().map(|model| {
+        if provider_id.is_empty() {
+            model.to_owned()
+        } else {
+            crate::view_model::model_display_name(vm, provider_id, model)
+        }
+    });
+    let provider = if provider_id.is_empty() {
+        String::new()
+    } else {
+        crate::view_model::provider_display_name(vm, provider_id)
+    };
     let thinking = crate::view_model::selected_reasoning_level(vm);
     let context_window = model_context_window(vm);
     let model_of = |turn: &crate::view_model::TurnStats| {
