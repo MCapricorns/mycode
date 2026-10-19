@@ -31,8 +31,9 @@ pub struct TransportCall {
     pub endpoint: String,
     /// Extra request headers (auth, protocol version, user agent).
     pub headers: Vec<(String, String)>,
-    /// Serialized JSON request body.
-    pub body: Vec<u8>,
+    /// Serialized JSON request body. Shared so a retried POST does not copy
+    /// a multi-megabyte request.
+    pub body: Bytes,
 }
 
 /// A live response body stream.
@@ -143,7 +144,7 @@ impl SseTransport for ReqwestTransport {
                 method: reqwest::Method::POST,
                 url: call.endpoint,
                 headers,
-                body: Some(crate::http_pin::PinnedBody::Bytes(call.body.into())),
+                body: Some(crate::http_pin::PinnedBody::Bytes(call.body)),
                 mode: crate::http_pin::PinMode::CheckRedirect,
                 timeout: None,
                 read_timeout: Some(self.read_timeout),
@@ -283,6 +284,8 @@ mod tests {
 
     use tokio_util::sync::CancellationToken;
 
+    use bytes::Bytes;
+
     use super::{ReqwestTransport, SseTransport, TransportCall};
 
     /// Reads the request head. The reply starts right away: waiting for the
@@ -406,7 +409,7 @@ mod tests {
                 TransportCall {
                     endpoint: url,
                     headers: Vec::new(),
-                    body: b"{}".to_vec(),
+                    body: Bytes::from_static(b"{}"),
                 },
                 CancellationToken::new(),
             )
@@ -443,7 +446,7 @@ mod tests {
             TransportCall {
                 endpoint: url,
                 headers: Vec::new(),
-                body: b"{}".to_vec(),
+                body: Bytes::from_static(b"{}"),
             },
             CancellationToken::new(),
         );
@@ -464,7 +467,7 @@ mod tests {
             TransportCall {
                 endpoint: url,
                 headers: Vec::new(),
-                body: b"{}".to_vec(),
+                body: Bytes::from_static(b"{}"),
             },
             CancellationToken::new(),
         );
