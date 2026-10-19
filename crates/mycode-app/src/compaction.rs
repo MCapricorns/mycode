@@ -635,10 +635,13 @@ fn checkpoint_matches(
     auto_threshold: usize,
     overhead: usize,
 ) -> bool {
-    if checkpoint.covered_messages == 0 || checkpoint.covered_messages >= history.len() {
+    if checkpoint.covered_messages == 0 || checkpoint.covered_messages > history.len() {
         return false;
     }
-    if is_tool_result(&history[checkpoint.covered_messages]) {
+    if history
+        .get(checkpoint.covered_messages)
+        .is_some_and(|message| is_tool_result(message))
+    {
         return false;
     }
     let tail_tokens: usize = history[checkpoint.covered_messages..]
