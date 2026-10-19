@@ -332,7 +332,9 @@ pub struct FrontendDriver {
     recall_generation: u64,
     /// Config files reset during this launch; their names toast once.
     repaired_configs: Vec<String>,
-    /// A single toast for [`Self::repaired_configs`] is already scheduled.
+    /// How many of [`Self::repaired_configs`] a toast already named.
+    repairs_toasted: usize,
+    /// A single toast for the untoasted repairs is already scheduled.
     repair_toast_armed: bool,
     /// Bundle of the import in flight, kept so a refusal can be confirmed.
     import_request: Option<PathBuf>,
@@ -416,6 +418,7 @@ impl FrontendDriver {
             queue_hold_on_return: false,
             recall_generation: 0,
             repaired_configs: Vec::new(),
+            repairs_toasted: 0,
             repair_toast_armed: false,
             import_request: None,
             import_confirm: None,
@@ -614,7 +617,11 @@ impl FrontendDriver {
                     }
                 }
                 DriverMsg::RepairToastTick => {
-                    let names = self.repaired_configs.join(", ");
+                    // Re-arm for a repair a later settings load makes; the
+                    // names already shown stay out of the next toast.
+                    self.repair_toast_armed = false;
+                    let names = self.repaired_configs[self.repairs_toasted..].join(", ");
+                    self.repairs_toasted = self.repaired_configs.len();
                     self.toast(
                         format!(
                             "{} {names}. {}",
