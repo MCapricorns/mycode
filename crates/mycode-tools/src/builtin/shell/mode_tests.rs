@@ -217,12 +217,46 @@ fn powershell_launch_keeps_the_command_and_does_not_translate_bash() {
 
     let bash = super::DetectedShell {
         kind: super::ShellKind::Bash,
-        program: std::path::PathBuf::from("bash"),
+        program: std::path::PathBuf::from("/bin/bash"),
     };
-    assert_eq!(
-        super::script_launch_args(&bash, "ls -la").unwrap(),
-        vec!["-c".to_owned(), "ls -la".to_owned()]
+    let bash_args = super::script_launch_args(&bash, "ls -la").unwrap();
+    assert_eq!(bash_args, vec!["-c".to_owned(), "ls -la".to_owned()]);
+    assert!(
+        bash_args.iter().all(|arg| !arg.contains("OutputEncoding")),
+        "bash launch must not carry the PowerShell UTF-8 prelude: {bash_args:?}"
     );
+}
+
+/// The prelude must pin every output encoding via pure property/variable
+/// assignments. A cmdlet call (even `New-Object`) in the prelude runs the
+/// first pipeline before the fix and locks the redirected stderr writer to
+/// the OEM page on Windows PowerShell 5.1, while each guarded assignment has
+/// to survive a host that refuses the others (no console, locked down).
+#[test]
+fn powershell_prelude_sets_utf8_encodings_without_cmdlets() {
+    const PRELUDE: &str = super::POWERSHELL_UTF8_PRELUDE;
+    assert!(
+        PRELUDE
+            .contains("try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }"),
+        "{PRELUDE}"
+    );
+    assert!(
+        PRELUDE.contains("try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }"),
+        "{PRELUDE}"
+    );
+    assert!(
+        PRELUDE
+            .contains("try { [Console]::InputEncoding = [System.Text.Encoding]::UTF8 } catch { }"),
+        "{PRELUDE}"
+    );
+    assert!(!PRELUDE.contains("New-Object"), "{PRELUDE}");
+
+    // The same prelude wraps every PowerShell launch (`pwsh` and 5.1 share
+    // `powershell_script_for`), including the empty-command path.
+    let script = super::powershell_script_for("Write-Output 'ok'");
+    assert!(script.contains(PRELUDE), "{script}");
+    let empty_script = super::powershell_script_for("");
+    assert!(empty_script.contains(PRELUDE), "{empty_script}");
 }
 
 #[test]

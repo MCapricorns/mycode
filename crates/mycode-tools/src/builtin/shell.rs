@@ -72,11 +72,24 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
 
 /// One executable line inserted after the script's statement-ordering
 /// prologue (leading comments, `using` statements, and `param` block): pins
-/// the hidden console's pipe encoding to UTF-8 so non-ASCII text survives on
-/// hosts whose console code page cannot encode it (CI runners, other
-/// locales). `try`/`catch` keeps locked-down hosts that forbid the .NET
-/// property assignment running the user script unchanged.
-const POWERSHELL_UTF8_PRELUDE: &str = "try { $utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8 } catch { }";
+/// the child's output encodings to UTF-8 so its own text (error records,
+/// cmdlet output, `Write-Output`) reaches the pipe as UTF-8 instead of the
+/// system OEM page (GBK on zh-CN hosts), which decodes as mojibake under a
+/// UTF-8 capture.
+///
+/// Only pure property and variable assignments may appear here. Invoking any
+/// cmdlet — even `New-Object` or `Out-Null` — runs the first pipeline,
+/// emits the first-run progress records, and locks the redirected stderr
+/// writer to the OEM page before the encoding is fixed (observed on Windows
+/// PowerShell 5.1: stdout turned UTF-8 while stderr stayed GBK). Each
+/// assignment carries its own `try`/`catch` so a host that refuses one still
+/// applies the rest: a console-less process cannot always set
+/// `[Console]::InputEncoding`, and ConstrainedLanguage may reject a property
+/// set. `pwsh` 7.4+ preserves native .exe output bytes regardless of these
+/// settings; only PowerShell's own text is covered. When the prelude cannot
+/// run at all, `decode_captured_text` still falls back to BOM, BOM-less
+/// UTF-16LE, and OEM/ANSI code-page detection.
+const POWERSHELL_UTF8_PRELUDE: &str = "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }; try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }; try { [Console]::InputEncoding = [System.Text.Encoding]::UTF8 } catch { }";
 
 /// One-line name of the shell `script` mode would launch right now.
 ///
