@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::MycodeError;
 use crate::ids::CallId;
-use crate::message::{SharedMessage, ToolResultMessage};
+use crate::message::SharedMessage;
 
 /// Events emitted by the Agent loop.
 ///
@@ -37,7 +37,10 @@ pub enum AgentEvent {
     /// A tool call finished.
     ToolCompleted {
         call_id: CallId,
-        result: ToolResultMessage,
+        /// Always a [`Message::ToolResult`](crate::message::Message): the
+        /// same allocation the history receives, so a broadcast clone does
+        /// not copy the tool output.
+        result: SharedMessage,
     },
     /// The next provider request follows a compaction that rewrote the prefix.
     ///
