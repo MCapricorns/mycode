@@ -36,6 +36,12 @@ pub(crate) use toasts::{Toast, ToastKind};
 /// Seconds a confirmed close stays armed before the next request asks again.
 const CLOSE_CONFIRM_WINDOW: Duration = Duration::from_secs(6);
 
+/// Whether the armed confirm is still inside its window. Kept as a pure
+/// helper so the timing rule is testable without a window.
+fn close_confirmed(armed: Option<Instant>, now: Instant) -> bool {
+    armed.is_some_and(|armed| now.duration_since(armed) < CLOSE_CONFIRM_WINDOW)
+}
+
 /// Preferred first-window size. The origin is computed from the primary
 /// display so the window opens in the middle of the usable area, and smaller
 /// screens shrink the request rather than clipping it.
@@ -876,17 +882,16 @@ impl Workspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self
-            .close_armed
-            .is_some_and(|armed| armed.elapsed() < CLOSE_CONFIRM_WINDOW)
-        {
+        if close_confirmed(self.close_armed, Instant::now()) {
             self.close_armed = None;
             return true;
         }
         self.close_armed = Some(Instant::now());
+        // Warning outlives the armed window: an Info toast expires a
+        // second early, leaving a quit armed with no hint on screen.
         self.push_toast(
             crate::i18n::t("Click × again to quit", "再点一次 × 退出"),
-            ToastKind::Info,
+            ToastKind::Warning,
             cx,
         );
         false
@@ -976,5 +981,20 @@ mod tests {
         assert_eq!(titlebar.traffic_light_position, Some(TRAFFIC_LIGHTS));
         assert!(f32::from(TRAFFIC_LIGHTS.x) >= 0.);
         assert!(f32::from(TRAFFIC_LIGHTS.y) >= 0.);
+    }
+
+    #[test]
+    fn a_close_request_only_confirms_inside_its_window() {
+        let now = Instant::now();
+        assert!(!close_confirmed(None, now));
+        assert!(close_confirmed(Some(now), now));
+        assert!(close_confirmed(
+            Some(now - (CLOSE_CONFIRM_WINDOW - Duration::from_secs(1))),
+            now
+        ));
+        assert!(!close_confirmed(
+            Some(now - (CLOSE_CONFIRM_WINDOW + Duration::from_secs(1))),
+            now
+        ));
     }
 }
