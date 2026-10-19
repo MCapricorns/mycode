@@ -141,6 +141,8 @@ fn padded(marker: &str, chars: usize) -> String {
 
 struct SummaryTransport {
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Request bodies, kept when a test needs to read the transcript.
+    bodies: Option<std::sync::Arc<parking_lot::Mutex<Vec<String>>>>,
 }
 
 impl mycode_providers::SseTransport for SummaryTransport {
@@ -162,6 +164,9 @@ impl mycode_providers::SseTransport for SummaryTransport {
         Box::pin(async move {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let body = String::from_utf8_lossy(&call.body);
+            if let Some(bodies) = &self.bodies {
+                bodies.lock().push(body.clone().into_owned());
+            }
             let text = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
                 PLAUSIBLE_SUMMARY
             } else {
@@ -208,6 +213,13 @@ fn scratch_home() -> (std::path::PathBuf, mycode_config::HomeLayout) {
 fn summary_wire(
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) -> mycode_providers::WireProvider {
+    summary_wire_with(calls, None)
+}
+
+fn summary_wire_with(
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    bodies: Option<std::sync::Arc<parking_lot::Mutex<Vec<String>>>>,
+) -> mycode_providers::WireProvider {
     let settings = mycode_config::ProviderSettings {
         id: "local".to_owned(),
         kind: "openai-completions".to_owned(),
@@ -221,7 +233,77 @@ fn summary_wire(
     let resolved =
         mycode_providers::ResolvedProvider::resolve(&settings, "model-a", "test-key", "test-agent")
             .expect("provider");
-    mycode_providers::WireProvider::new(resolved, std::sync::Arc::new(SummaryTransport { calls }))
+    mycode_providers::WireProvider::new(
+        resolved,
+        std::sync::Arc::new(SummaryTransport { calls, bodies }),
+    )
+}
+
+/// A turn that already compacted once sends the hook a history that opens
+/// with a summary. The disk checkpoint's `covered_messages` indexes the
+/// ledger, not this stitched vector, and the leading summary may exist only
+/// in memory. Neither may drop work from the next summary.
+#[tokio::test]
+async fn a_second_compact_in_one_turn_keeps_every_uncovered_message() {
+    let (root, home) = scratch_home();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let bodies = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let wire = summary_wire_with(calls.clone(), Some(bodies.clone()));
+    mycode_config::write_compaction(
+        &home,
+        "session-c",
+        &mycode_config::CompactionCheckpoint {
+            format_version: mycode_config::COMPACTION_FORMAT_VERSION,
+            kind: mycode_config::COMPACTION_KIND.to_owned(),
+            session_id: "session-c".to_owned(),
+            branch_id: "branch-c".to_owned(),
+            covered_head: "head-1".to_owned(),
+            covered_messages: 3,
+            summary: "DISK-SUMMARY of the first three ledger messages".to_owned(),
+            model: "model-a".to_owned(),
+            created_at_unix: 1,
+        },
+    )
+    .expect("seed checkpoint");
+    let history = vec![
+        user(&super::request_summary_text(
+            "MEM-SUMMARY of the disk checkpoint and the first hook pass",
+        )),
+        user(&padded("UNCOVERED-ONE ", 39_000)),
+        user(&padded("UNCOVERED-TWO ", 39_000)),
+        user(&padded("TAIL-A ", 39_000)),
+        user(&padded("TAIL-B ", 39_000)),
+    ];
+    let scope = super::CompactScope {
+        home: &home,
+        wire: &wire,
+        model: "model-a",
+        session_id: "session-c",
+        branch_id: "branch-c",
+        head: "head-1",
+        context_window: 30_000,
+        overhead_tokens: 0,
+        cancel: &tokio_util::sync::CancellationToken::new(),
+    };
+    let compacted = super::compact_history(&scope, history, false).await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let sent = bodies.lock().concat();
+    for marker in ["MEM-SUMMARY", "UNCOVERED-ONE", "UNCOVERED-TWO"] {
+        assert!(
+            sent.contains(marker),
+            "{marker} missing from the summary request"
+        );
+    }
+    assert!(!sent.contains("TAIL-A"), "the kept tail must stay verbatim");
+    assert!(super::is_summary_message(&compacted.messages[0]));
+    assert!(user_text(&compacted.messages[0]).contains("handoff notes"));
+    let rest: Vec<String> = compacted.messages[1..]
+        .iter()
+        .map(|message| user_text(message))
+        .collect();
+    assert_eq!(rest.len(), 2, "{rest:?}");
+    assert!(rest[0].starts_with("TAIL-A") && rest[1].starts_with("TAIL-B"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]
