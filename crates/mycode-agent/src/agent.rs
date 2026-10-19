@@ -33,8 +33,9 @@ use crate::turn::{self, TurnFailure};
 /// Static provider-neutral agent configuration.
 #[derive(Debug, Clone, Default)]
 pub struct AgentConfig {
-    /// System prompt parts, emitted in order ahead of the history.
-    pub system_prompt: Vec<String>,
+    /// System prompt parts, emitted in order ahead of the history. Shared
+    /// with every request of the session.
+    pub system_prompt: Arc<[String]>,
     /// Requested reasoning effort for providers that support it.
     pub reasoning: Option<mycode_core::ReasoningLevel>,
     /// models.dev output cap forwarded onto each provider request.
@@ -55,7 +56,12 @@ impl AgentConfig {
     /// Appends one system prompt part.
     #[must_use]
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.system_prompt.push(prompt.into());
+        self.system_prompt = self
+            .system_prompt
+            .iter()
+            .cloned()
+            .chain([prompt.into()])
+            .collect();
         self
     }
 

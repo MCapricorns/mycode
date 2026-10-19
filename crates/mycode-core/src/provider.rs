@@ -165,8 +165,9 @@ pub fn encoded_json_len<T: Serialize + ?Sized>(value: &T) -> Option<usize> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Ordered system prompt parts.
-    pub system_prompt: Vec<String>,
+    /// Ordered system prompt parts. Shared so each LLM round does not copy
+    /// the session prompt.
+    pub system_prompt: Arc<[String]>,
     /// Conversation history. Entries are shared with the agent so a request
     /// round does not deep-copy tool output.
     pub messages: Vec<SharedMessage>,
@@ -192,7 +193,7 @@ pub struct Request {
 impl Default for Request {
     fn default() -> Self {
         Self {
-            system_prompt: Vec::new(),
+            system_prompt: Arc::from([]),
             messages: Vec::new(),
             tools: Arc::from([]),
             reasoning: None,
@@ -213,7 +214,13 @@ impl Request {
     /// Appends one system prompt part.
     #[must_use]
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.system_prompt.push(prompt.into());
+        // Builders run once per part, so the copy stays off the request path.
+        self.system_prompt = self
+            .system_prompt
+            .iter()
+            .cloned()
+            .chain([prompt.into()])
+            .collect();
         self
     }
 
