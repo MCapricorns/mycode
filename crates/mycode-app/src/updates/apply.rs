@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::previous_path;
+use super::{incoming_path, previous_path};
 
 /// Flag that selects the Windows apply helper.
 pub const APPLY_UPDATE_ARG: &str = "--mycode-apply-update";
@@ -249,14 +249,13 @@ fn replace_verified_executable(
     if !source_hash.eq_ignore_ascii_case(expected) {
         return Err(fatal("staged binary sha256 does not match".to_owned()));
     }
-    let parent = target
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| fatal("target has no directory".to_owned()))?;
-    let file_name = target
-        .file_name()
-        .ok_or_else(|| fatal("target has no file name".to_owned()))?;
-    let incoming = parent.join(format!(".{}.mycode-incoming", file_name.to_string_lossy()));
+    if target.parent().is_none_or(|parent| parent.as_os_str().is_empty()) {
+        return Err(fatal("target has no directory".to_owned()));
+    }
+    if target.file_name().is_none() {
+        return Err(fatal("target has no file name".to_owned()));
+    }
+    let incoming = incoming_path(target);
     let backup = previous_path(target);
     std::fs::copy(source, &incoming).map_err(|error| {
         io_failure(
