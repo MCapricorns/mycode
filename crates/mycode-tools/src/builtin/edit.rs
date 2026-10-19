@@ -206,11 +206,8 @@ impl Tool for EditTool {
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "edit: unique replace is {path, old_string, new_string}. Batch \
-             edits are {path, operations:[...]} (literal, regex, line_range, \
-             fuzzy) with optional expected_revision. When operations is \
-             present it is the whole edit and old_string/new_string are \
-             ignored. Example: {\"path\":\"a.rs\",\"operations\":[{\"type\":\"literal\",\"pattern\":\"foo\",\"replacement\":\"bar\"}]}",
+            "edit: change an existing file: one unique {old_string, new_string} \
+             replace, or a batch of operations (literal, fuzzy, regex, line_range).",
         )
     }
 
