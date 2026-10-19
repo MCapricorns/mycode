@@ -544,7 +544,7 @@ impl BridgeAgentHost {
             &bearer,
             &crate::user_agent::default_user_agent(),
         )
-        .map_err(|error| format!("role '{role}' provider setup failed: {error:?}"))?;
+        .map_err(|error| format!("role '{role}' provider setup failed: {error}"))?;
         resolved.headers.extend(extra_headers);
         Ok(resolved)
     }

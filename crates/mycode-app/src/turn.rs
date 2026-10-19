@@ -176,7 +176,7 @@ async fn run_chat_turn(
         &bearer,
         &crate::user_agent::default_user_agent(),
     )
-    .map_err(|error| format!("provider setup failed: {error:?}"))?;
+    .map_err(|error| format!("provider setup failed: {error}"))?;
     resolved.headers.extend(extra_headers);
     let transport: Arc<dyn SseTransport> = Arc::new(
         ReqwestTransport::new().map_err(|error| format!("HTTP transport unavailable: {error}"))?,
