@@ -1173,6 +1173,24 @@ impl Tui {
         if let Some(active) = &vm.active {
             for entry in &active.entries {
                 render_entry(entry, &mut lines);
+                // A running subagent says what it is doing under its call;
+                // only jobs still in `live_jobs` are running.
+                if entry.kind == EntryKind::ToolCall
+                    && let Some(job) = entry
+                        .call_id
+                        .as_deref()
+                        .and_then(|call_id| vm.live_jobs.iter().find(|job| job.call_id == call_id))
+                {
+                    let step = job.step_label();
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "  ↳ {} · {}",
+                            first_line(&step),
+                            elapsed_label(job.elapsed_ms())
+                        ),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
             }
             if let Some(stream) = &active.streaming {
                 // The elapsed tail proves a long think is still alive; the
