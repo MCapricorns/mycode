@@ -657,10 +657,10 @@ fn result_body(
     theme: &Theme,
     desk: &Desk,
 ) -> impl IntoElement {
-    let text = result.text.to_string();
+    let text: &str = &result.text;
     let failed = text.starts_with("failed:");
     let lines: Vec<&str> = text.lines().collect();
-    if shows_diff_preview(tool, &text) {
+    if shows_diff_preview(tool, text) {
         diff_preview(&lines, theme).into_any_element()
     } else if matches!(tool, "grep" | "find" | "search") && !failed {
         search_preview(tool, &lines, theme, desk).into_any_element()
@@ -677,7 +677,7 @@ fn result_body(
             .font_family(theme.mono_font_family.clone())
             .bg(desk.screen.opacity(0.45))
             .text_color(if failed { desk.red } else { desk.screen_dim })
-            .child(ellipsis(&text, 2000))
+            .child(ellipsis(text, 2000))
             .into_any_element()
     } else {
         div()
@@ -690,7 +690,7 @@ fn result_body(
             .text_xs()
             .font_family(theme.mono_font_family.clone())
             .text_color(theme.muted_foreground)
-            .child(ellipsis(&text, 600))
+            .child(ellipsis(text, 600))
             .into_any_element()
     }
 }

@@ -147,7 +147,7 @@ pub(crate) fn render_changes_drawer(
     let theme = cx.theme();
     let git = workspace.git();
     let selected = workspace.git_diff_path();
-    let diff = workspace.git_diff().to_owned();
+    let diff_loaded = !workspace.git_diff().is_empty();
     let files = git.files.clone();
     let stopped_early = git.stopped_early;
     let viewport_width = f32::from(window.viewport_size().width);
@@ -303,7 +303,7 @@ pub(crate) fn render_changes_drawer(
                         .child(if selected.is_none() {
                             t("Pick a file to open its diff.", "选择一个文件以打开差异。")
                                 .to_owned()
-                        } else if diff.is_empty() {
+                        } else if !diff_loaded {
                             t("Opening the diff panel…", "正在打开差异面板…").to_owned()
                         } else {
                             t(
@@ -330,8 +330,7 @@ pub(crate) fn render_diff_panel(
         .git_diff_path()
         .unwrap_or(t("Diff", "差异"))
         .to_owned();
-    let diff = workspace.git_diff().to_owned();
-    let lines = diff_lines(&diff);
+    let rows = numbered_diff_rows(workspace.git_diff());
     let viewport_width = f32::from(window.viewport_size().width);
     let (_, (diff_right, diff_width)) = responsive_panel_bounds(
         viewport_width,
@@ -397,51 +396,57 @@ pub(crate) fn render_diff_panel(
                 .py_2()
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
-                .children(numbered_diff_rows(&lines).into_iter().enumerate().map(
-                    |(index, row)| {
-                        let (color, bg) = diff_line_paint(&row.text, theme);
-                        div()
-                            .id(format!("diff-line-{index}"))
-                            .flex()
-                            .flex_row()
-                            .px_2()
-                            .text_color(color)
-                            .bg(bg)
-                            .child(
-                                div()
-                                    .w(px(36.))
-                                    .flex_shrink_0()
-                                    .text_right()
-                                    .text_color(theme.muted_foreground)
-                                    .child(row.number),
-                            )
-                            .child(div().min_w_0().pl_2().child(if row.text.is_empty() {
-                                " ".to_owned()
-                            } else {
-                                row.text
-                            }))
-                    },
-                )),
+                .children(rows.into_iter().enumerate().map(|(index, row)| {
+                    let (color, bg) = diff_line_paint(row.text, theme);
+                    div()
+                        .id(format!("diff-line-{index}"))
+                        .flex()
+                        .flex_row()
+                        .px_2()
+                        .text_color(color)
+                        .bg(bg)
+                        .child(
+                            div()
+                                .w(px(36.))
+                                .flex_shrink_0()
+                                .text_right()
+                                .text_color(theme.muted_foreground)
+                                .child(row.number),
+                        )
+                        .child(div().min_w_0().pl_2().child(if row.text.is_empty() {
+                            " ".to_owned()
+                        } else {
+                            row.text.to_owned()
+                        }))
+                })),
         )
         .into_any_element()
 }
 
-struct NumberedDiffRow {
+struct NumberedDiffRow<'a> {
     number: String,
-    text: String,
+    text: &'a str,
 }
 
-fn numbered_diff_rows(lines: &[String]) -> Vec<NumberedDiffRow> {
+/// One row per diff line with its gutter number; a diff still loading is a
+/// single placeholder row.
+fn numbered_diff_rows(diff: &str) -> Vec<NumberedDiffRow<'_>> {
+    if diff.is_empty() {
+        return vec![NumberedDiffRow {
+            number: String::new(),
+            text: t("Loading diff…", "正在加载差异…"),
+        }];
+    }
     let mut old_n = 1u32;
     let mut new_n = 1u32;
-    let mut rows = Vec::with_capacity(lines.len());
-    for line in lines {
+    let mut rows = Vec::new();
+    for line in diff.lines() {
         if let Some((old, new)) = crate::ui::chat::parse_diff_hunk_header(line) {
             old_n = old;
             new_n = new;
             rows.push(NumberedDiffRow {
                 number: String::new(),
-                text: line.clone(),
+                text: line,
             });
             continue;
         }
@@ -467,19 +472,9 @@ fn numbered_diff_rows(lines: &[String]) -> Vec<NumberedDiffRow> {
             new_n += 1;
             value
         };
-        rows.push(NumberedDiffRow {
-            number,
-            text: line.clone(),
-        });
+        rows.push(NumberedDiffRow { number, text: line });
     }
     rows
-}
-
-fn diff_lines(diff: &str) -> Vec<String> {
-    if diff.is_empty() {
-        return vec![t("Loading diff…", "正在加载差异…").to_owned()];
-    }
-    diff.lines().map(str::to_owned).collect()
 }
 
 fn diff_line_paint(line: &str, theme: &Theme) -> (gpui_kit::Hsla, gpui_kit::Hsla) {
