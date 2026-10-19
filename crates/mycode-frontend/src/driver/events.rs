@@ -165,6 +165,7 @@ impl FrontendDriver {
             BridgeEvent::ToolProgress {
                 session_id,
                 call_id,
+                provider_call_id,
                 name,
                 message,
             } => {
@@ -173,6 +174,7 @@ impl FrontendDriver {
                 }
                 FrontendAction::ToolProgress {
                     call_id,
+                    provider_call_id,
                     name,
                     message,
                 }

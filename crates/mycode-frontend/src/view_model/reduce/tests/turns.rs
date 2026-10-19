@@ -561,6 +561,7 @@ fn stragglers_after_the_turn_do_not_resurrect_running_state() {
         &mut state,
         FrontendAction::ToolProgress {
             call_id: "c1".to_owned(),
+            provider_call_id: String::new(),
             name: String::new(),
             message: "agent|scout|step|still running".to_owned(),
         },
@@ -613,6 +614,7 @@ fn reopening_a_session_with_a_live_turn_restores_sending() {
         &mut state,
         FrontendAction::ToolProgress {
             call_id: "c1".to_owned(),
+            provider_call_id: String::new(),
             name: String::new(),
             message: "agent|scout|step|mapping".to_owned(),
         },
@@ -756,4 +758,41 @@ fn a_mid_turn_reopen_keeps_agent_calls_pairable() {
         .map(|streaming| streaming.status.clone())
         .unwrap_or_default();
     assert_ne!(status, waiting);
+}
+
+/// Switching to a session whose turn is still running drops the old view's
+/// jobs; the running subagent reappears through its next progress line. That
+/// line carries the provider id, so the row's stop button still reaches the
+/// core's cancel token.
+#[test]
+fn a_job_seen_only_through_progress_keeps_its_cancel_id() {
+    let mut state = open(Vec::new(), None);
+    reduce(
+        &mut state,
+        FrontendAction::ConversationOpened(ActiveConversation {
+            session_id: "ses-running".to_owned(),
+            branch_id: "br".to_owned(),
+            head: "evt-head".to_owned(),
+            entries: Vec::new(),
+            older_before: None,
+            streaming: None,
+            running: true,
+            context_used: 0,
+            context_cache: 0,
+        }),
+    );
+    assert!(state.sending);
+    assert!(state.live_jobs.is_empty());
+    reduce(
+        &mut state,
+        FrontendAction::ToolProgress {
+            call_id: "call1-a".to_owned(),
+            provider_call_id: "call_00_1".to_owned(),
+            name: String::new(),
+            message: "agent|scout|step|mapping".to_owned(),
+        },
+    );
+    assert_eq!(state.live_jobs.len(), 1);
+    assert_eq!(state.live_jobs[0].call_id, "call1-a");
+    assert_eq!(state.live_jobs[0].provider_call_id, "call_00_1");
 }
