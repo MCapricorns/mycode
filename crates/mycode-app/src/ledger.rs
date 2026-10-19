@@ -367,9 +367,11 @@ pub(crate) async fn recall_message(
         .rewind(session, branch, &target, &reservation)
         .await
         .map_err(render_error)?;
-    // A checkpoint whose covered head survives on the rewound branch still
-    // summarizes the prefix of the new branch; a rewind before that head
-    // leaves the old branch id so the discarded summary is ignored.
+    // A checkpoint whose covered messages all survive on the rewound branch
+    // still summarizes its prefix; otherwise the old branch id stays so the
+    // summary of discarded work is ignored. The covered head alone is not
+    // enough: a summary filed mid-turn covers that turn's later steps too,
+    // and a recall of a steer inside the turn keeps the head but drops them.
     if let Ok(Some(mut checkpoint)) = mycode_config::read_compaction(home, session.as_str())
         && checkpoint.branch_id == branch.as_str()
         && let Some(covered) = SessionEventId::parse(&checkpoint.covered_head)
@@ -377,6 +379,9 @@ pub(crate) async fn recall_message(
             .load_event(session, &branched.branch_id, &covered)
             .await
             .is_ok()
+        && ledger_history(service, session, &branched.branch_id, &branched.head)
+            .await
+            .is_ok_and(|history| checkpoint.covered_messages <= history.len())
     {
         checkpoint.branch_id = branched.branch_id.as_str().to_owned();
         let _ = mycode_config::write_compaction(home, session.as_str(), &checkpoint);
@@ -673,7 +678,7 @@ mod tests {
         assert_eq!(history.len(), 6);
         assert!(matches!(history[5].as_ref(), Message::User(_)));
     }
-    use mycode_agent::session::{EventKind, HeadStamp, SessionService};
+    use mycode_agent::session::{BranchId, EventKind, HeadStamp, SessionEventId, SessionService};
     use mycode_config::HomeLayout;
 
     fn scratch() -> (std::path::PathBuf, HomeLayout) {
@@ -907,6 +912,37 @@ mod tests {
                 .expect("read")
                 .expect("checkpoint");
             assert_eq!(moved.branch_id, rewound.branch_id);
+
+            // A mid-turn summary files the turn's start head but covers
+            // steps after it. When the rewind keeps that head and drops
+            // those steps, the summary must not follow the new branch.
+            let rewound_branch = BranchId::parse(&rewound.branch_id).expect("branch id");
+            let rewound_head =
+                HeadStamp::Event(SessionEventId::parse(&rewound.head).expect("head"));
+            mycode_config::write_compaction(
+                &home,
+                created.session_id.as_str(),
+                &mycode_config::CompactionCheckpoint {
+                    covered_messages: 265,
+                    ..moved
+                },
+            )
+            .expect("overlong checkpoint");
+            let again = super::recall_message(
+                &home,
+                &service,
+                &created.session_id,
+                &rewound_branch,
+                &rewound_head,
+                &event_260,
+            )
+            .await
+            .expect("second recall");
+            let kept = mycode_config::read_compaction(&home, created.session_id.as_str())
+                .expect("read")
+                .expect("checkpoint");
+            assert_ne!(kept.branch_id, again.branch_id);
+            assert_eq!(kept.branch_id, rewound.branch_id);
             service.shutdown().await;
         });
         let _ = std::fs::remove_dir_all(root);
