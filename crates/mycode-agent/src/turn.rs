@@ -72,9 +72,9 @@ pub(crate) async fn stream_assistant(
     pending_user: &mut Option<Arc<Message>>,
 ) -> Result<AssistantMessage, TurnFailure> {
     let system_prompt = if config.system_prompt.is_empty() {
-        vec![build_system_prompt(env.tools)]
+        Arc::from([build_system_prompt(env.tools)])
     } else {
-        config.system_prompt.clone()
+        Arc::clone(&config.system_prompt)
     };
     // The request carries Arc-shared history; the compaction hook rewrites
     // the request's message list and the result is written back below.
