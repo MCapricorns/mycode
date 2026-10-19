@@ -66,11 +66,11 @@ pub(super) fn render(
     if workspace.take_palette_focus() {
         state.update(cx, |palette, cx| palette.focus(window, cx));
     }
-    let theme = cx.theme().clone();
+    let theme = cx.theme();
     let catalog = palette_catalog(workspace.vm());
     let weak = cx.weak_entity();
     let command = command_element(&state, &catalog, weak);
-    let scrim = crate::ui::skin::modal_scrim(&theme);
+    let scrim = crate::ui::skin::modal_scrim(theme);
     div()
         .id("command-palette-layer")
         .absolute()
@@ -96,7 +96,7 @@ pub(super) fn render(
                 .justify_center()
                 .px_4()
                 .child(
-                    menu_panel("command-palette", &theme)
+                    menu_panel("command-palette", theme)
                         .w(px(560.))
                         .max_w_full()
                         .flex()

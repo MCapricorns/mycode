@@ -55,7 +55,7 @@ pub fn render_root(
     } else {
         0.
     };
-    let theme = cx.theme().clone();
+    let theme = cx.theme();
     let ui_font = theme.font_family.clone();
     let fg = theme.foreground;
     let focus_handle = workspace.focus_handle().clone();

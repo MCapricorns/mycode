@@ -91,7 +91,7 @@ pub(super) fn render_title_bar(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let theme = cx.theme().clone();
+    let theme = cx.theme();
     let subtitle: SharedString = match workspace.vm().view {
         MainView::Chat => workspace
             .vm()
@@ -103,7 +103,7 @@ pub(super) fn render_title_bar(
         MainView::Settings => t("Settings", "设置").into(),
     };
     // A small dot tracks the self-update pipeline. Its click opens the dialog.
-    let update_dot = update_dot_color(&workspace.vm().update, &theme);
+    let update_dot = update_dot_color(&workspace.vm().update, theme);
     div()
         .id("title-bar")
         .flex()
@@ -113,8 +113,8 @@ pub(super) fn render_title_bar(
         .w_full()
         .flex_shrink_0()
         .border_b_1()
-        .border_color(skin::glass_border(&theme))
-        .bg(skin::glass(&theme))
+        .border_color(skin::glass_border(theme))
+        .bg(skin::glass(theme))
         .child(drag_region(subtitle, window, cx))
         .child(title_controls(
             update_dot,
@@ -323,7 +323,7 @@ fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl Int
     if !cfg!(target_os = "windows") {
         return div().id("window-controls");
     }
-    let theme = cx.theme().clone();
+    let theme = cx.theme();
     let [minimize, zoom, close] = caption_buttons(window.is_maximized());
     div()
         .id("window-controls")
@@ -338,17 +338,17 @@ fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl Int
             minimize.icon,
             minimize.area,
             minimize.close,
-            &theme,
+            theme,
         ))
         .child(caption_button(
-            zoom.id, zoom.icon, zoom.area, zoom.close, &theme,
+            zoom.id, zoom.icon, zoom.area, zoom.close, theme,
         ))
         .child(caption_button(
             close.id,
             close.icon,
             close.area,
             close.close,
-            &theme,
+            theme,
         ))
 }
 
@@ -443,7 +443,7 @@ mod hit_test {
 
     impl Render for InspectorProbe {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let theme = cx.theme().clone();
+            let theme = cx.theme();
             let presses = self.presses.clone();
             let drag = presses.clone();
             let ancestor = presses.clone();

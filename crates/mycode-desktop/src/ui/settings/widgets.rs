@@ -151,9 +151,9 @@ pub(super) fn field_label(text: &str) -> impl IntoElement {
 /// A segmented control: one recessed track with the picked option raised
 /// on it. Every option is visibly part of the control, so an unpicked
 /// choice does not read as plain text. A long list wraps inside the track.
-pub(super) fn choice_chips(
+pub(super) fn choice_chips<V: AsRef<str>, L: AsRef<str>>(
     id_prefix: &str,
-    options: &[(String, String)],
+    options: &[(V, L)],
     current: &str,
     on_pick: impl Fn(&mut Workspace, &str, &mut Context<Workspace>) + Clone + 'static,
     cx: &Context<Workspace>,
@@ -182,7 +182,7 @@ pub(super) fn choice_chips(
         .border_color(crate::ui::skin::glass_border(theme))
         .bg(crate::ui::skin::segment_track(theme))
         .children(options.iter().map(|(value, label)| {
-            let value = value.clone();
+            let value = value.as_ref().to_owned();
             let selected = value == current;
             let pick = on_pick.clone();
             div()
@@ -210,7 +210,7 @@ pub(super) fn choice_chips(
                             pick(workspace, &value, cx);
                         }))
                 })
-                .child(label.clone())
+                .child(label.as_ref().to_owned())
         }))
         .into_any_element()
 }

@@ -37,24 +37,20 @@ pub(super) fn render_models_catalog_page(
         .map(|preset_id| render_preset_form(workspace, preset_id, window, cx))
         .unwrap_or_else(|| div().into_any_element());
 
-    let preset_search_text = workspace.vm().preset_search.clone();
-    let mut preset_rows: Vec<(String, String, String, usize)> = Vec::new();
-    for provider in &catalog.providers {
-        // Device-OAuth vendors sign in on the shared OAuth page; they are
-        // not pasted-key rows of the library.
-        if mycode_providers::catalog::uses_device_code_login(&provider.auth) {
-            continue;
-        }
-        if !query_matches(&preset_search_text, &[&provider.name, &provider.id]) {
-            continue;
-        }
-        preset_rows.push((
-            provider.id.clone(),
-            provider.name.clone(),
-            provider.kind.clone(),
-            provider.models.len(),
-        ));
-    }
+    // Indexes into the shared catalog; rows read their provider in place.
+    let preset_search_text = &workspace.vm().preset_search;
+    let preset_rows: Vec<usize> = catalog
+        .providers
+        .iter()
+        .enumerate()
+        .filter(|(_, provider)| {
+            // Device-OAuth vendors sign in on the shared OAuth page; they
+            // are not pasted-key rows of the library.
+            !mycode_providers::catalog::uses_device_code_login(&provider.auth)
+                && query_matches(preset_search_text, &[&provider.name, &provider.id])
+        })
+        .map(|(index, _)| index)
+        .collect();
     // Lazy rows via `uniform_list`: only the visible window of providers is
     // measured and painted per frame. The container gets a definite pixel
     // height (row count, capped) — the earlier virtualized attempt collapsed
@@ -92,17 +88,13 @@ pub(super) fn render_models_catalog_page(
                     "preset-catalog-rows",
                     preset_rows.len(),
                     move |range, _window, cx| {
-                        let theme = cx.theme().clone();
+                        let theme = cx.theme();
                         range
                             .map(|index| {
-                                let (id, name, kind, models) = &list_rows[index];
                                 preset_row(
-                                    id.clone(),
-                                    name.clone(),
-                                    kind.clone(),
-                                    *models,
+                                    &catalog.providers[list_rows[index]],
                                     &preset_list_weak,
-                                    &theme,
+                                    theme,
                                 )
                             })
                             .collect()
@@ -188,7 +180,7 @@ pub(super) fn render_oauth_page(
         cx,
     );
     let error = workspace.vm().copilot_error.clone();
-    let theme = cx.theme().clone();
+    let theme = cx.theme();
     div()
         .id("oauth-page")
         .flex()
@@ -369,14 +361,14 @@ fn oauth_card(
 /// One visible row of the virtualized preset catalog list. Fixed height via
 /// `PRESET_ROW_HEIGHT` keeps `uniform_list` measurements uniform.
 fn preset_row(
-    id: String,
-    name: String,
-    kind: String,
-    models: usize,
+    provider: &mycode_providers::catalog::CatalogProvider,
     weak: &gpui_kit::WeakEntity<Workspace>,
     theme: &Theme,
 ) -> AnyElement {
     let weak = weak.clone();
+    let id = provider.id.clone();
+    let kind = &provider.kind;
+    let models = provider.models.len();
     div()
         .id(format!("preset-row-{id}"))
         .h(PRESET_ROW_HEIGHT)
@@ -392,7 +384,7 @@ fn preset_row(
         // (headless layout tests do not reproduce this; verified on screen).
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .child(row_header(
-            &name,
+            &provider.name,
             format!("{id} · {kind} · {models} {}", t("model(s)", "个模型")),
             theme,
         ))
@@ -559,7 +551,7 @@ fn render_preset_form(
                                     "preset-model-rows",
                                     list_models.len(),
                                     move |range, _window, cx| {
-                                        let theme = cx.theme().clone();
+                                        let theme = cx.theme();
                                         range
                                             .map(|index| {
                                                 let model = &list_models[index];
@@ -567,7 +559,7 @@ fn render_preset_form(
                                                     model,
                                                     list_checked.contains(model),
                                                     &weak,
-                                                    &theme,
+                                                    theme,
                                                 )
                                             })
                                             .collect()
