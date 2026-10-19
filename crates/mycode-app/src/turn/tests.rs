@@ -2,6 +2,7 @@
 //! cancels during setup, and the published turn controls.
 
 mod compaction;
+mod prefix;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

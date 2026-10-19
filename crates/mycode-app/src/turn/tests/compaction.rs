@@ -628,5 +628,16 @@ async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes
         "the next turn did not start from the newest summary"
     );
     assert!(next_body.find(&newest) < next_body.find("NEXT-TURN what now"));
+    // The resumed prefix is the one the long turn last sent, so the
+    // provider's prompt cache still covers it.
+    let messages = |body: &str| -> Vec<serde_json::Value> {
+        let value: serde_json::Value = serde_json::from_str(body).expect("json body");
+        value["messages"].as_array().expect("messages").clone()
+    };
+    let (before, after) = (messages(final_body), messages(&next_body));
+    assert!(after.len() > before.len());
+    for (index, (old, new)) in before.iter().zip(&after).enumerate() {
+        assert_eq!(old, new, "message {index} changed across the turn boundary");
+    }
     let _ = std::fs::remove_dir_all(root);
 }
