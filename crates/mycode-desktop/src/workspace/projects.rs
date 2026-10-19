@@ -45,7 +45,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_refresh_skills(&mut self, cx: &mut Context<Self>) {
-        self.driver_do(|d, fx| d.reload_skills(fx), cx);
+        self.driver_do(|d, fx| d.refresh_skills(fx), cx);
     }
 
     pub(crate) fn on_use_skill(&mut self, slug: &str, cx: &mut Context<Self>) {

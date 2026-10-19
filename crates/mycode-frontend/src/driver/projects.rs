@@ -83,6 +83,7 @@ impl FrontendDriver {
     }
 
     /// Re-scans the skill directories and folds the result into the state.
+    /// Also backs the Skills page's refresh affordance.
     pub fn refresh_skills(&mut self, out: &mut Vec<Effect>) {
         let (workspace, user_home) = self.skill_roots();
         let skills = mycode_config::discover_skills(&workspace, user_home.as_deref())
@@ -95,12 +96,6 @@ impl FrontendDriver {
             })
             .collect();
         self.act(FrontendAction::SkillsLoaded(skills), out);
-    }
-
-    /// Public surface for "rescan skills" affordances (the Skills page's
-    /// refresh, opening that settings section).
-    pub fn reload_skills(&mut self, out: &mut Vec<Effect>) {
-        self.refresh_skills(out);
     }
 
     /// Accepts one mention row: rewrites the draft (files) or runs the

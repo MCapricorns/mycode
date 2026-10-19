@@ -695,7 +695,7 @@ impl Workspace {
     ) {
         self.apply_action(FrontendAction::ShowSettingsSection(section), cx);
         if section == crate::view_model::SettingsSection::Skills {
-            self.driver_do(|d, fx| d.reload_skills(fx), cx);
+            self.driver_do(|d, fx| d.refresh_skills(fx), cx);
         }
         if section == crate::view_model::SettingsSection::Agents {
             self.driver.invalidate_agent_roles();
