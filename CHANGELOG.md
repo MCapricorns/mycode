@@ -17,6 +17,7 @@
 
 - 思考记录的展开/折叠改为全局且持久化的开关（写入 `~/.mycode/ui.json`，桌面版与 CLI 共用）：桌面版点击任意一条「思考」或通用设置里的开关切换全部思考块，折叠标题改用洋红色斜体以区别白色正文；CLI 支持 `Ctrl+O` 快捷键与 `/settings` 开关切换。
 - 桌面版点击窗口关闭按钮（`×`）需要二次确认：首次关闭弹出「再点一次 × 退出」提示，6 秒内再次触发才退出，防止误关窗口。
+- PowerShell（`pwsh` / `powershell.exe`）工具在执行前拦截命令位置的 Unix/bash 专属命令（`touch`、`export`、`source`、`which`、`chmod`、`chown`、`sudo`、Unix 包管理器、`man`）及 `>/dev/null`、`<<` heredoc 语法，直接返回对应的 PowerShell 写法提示（字符串、here-string 与注释内的文本不受影响，macOS/POSIX shell 不受影响）；同时在 PowerShell 提示词中补充精简的 Unix→PowerShell 对照。
 
 ## [0.12.3] - 2026-10-19
 
