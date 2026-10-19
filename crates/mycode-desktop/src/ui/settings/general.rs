@@ -42,31 +42,16 @@ pub(super) fn render_general_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let proxy_row = proxy_field(workspace, window, cx);
-    let theme_id = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.theme.clone())
-        .unwrap_or_else(|| "dark".to_owned());
-    let configured_language = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.language.clone())
-        .unwrap_or_else(|| "auto".to_owned());
-    let font_size = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.font_size.clone())
-        .unwrap_or_else(|| "m".to_owned());
-    let language_label_now = language_label(&configured_language).to_owned();
+    let settings = workspace.vm().settings.as_ref();
+    let theme_id = settings.map_or("dark", |settings| settings.theme.as_str());
+    let configured_language = settings.map_or("auto", |settings| settings.language.as_str());
+    let font_size = settings.map_or("m", |settings| settings.font_size.as_str());
     let language_options = ["auto", "en", "zh"]
         .iter()
         .map(|id| language_label(id).to_owned())
         .collect::<Vec<_>>();
-    let theme_row = appearance_theme_field(&theme_id, cx);
-    let font_row = font_size_field(&font_size, cx);
+    let theme_row = appearance_theme_field(theme_id, cx);
+    let font_row = font_size_field(font_size, cx);
     let language_row = dropdown_field(
         DropdownSpec {
             id: "language",
@@ -75,7 +60,7 @@ pub(super) fn render_general_section(
                 "Interface language. English and Simplified Chinese are built in.",
                 "界面语言。内置英文与简体中文。",
             )),
-            current: &language_label_now,
+            current: language_label(configured_language),
             options: &language_options,
             open: workspace.vm().language_menu_open,
         },
@@ -180,20 +165,17 @@ fn proxy_field(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let stored = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .map(|settings| settings.proxy.clone())
-        .unwrap_or_default();
-    let mode = proxy_mode(&stored);
+    let mode = proxy_mode(
+        workspace
+            .vm()
+            .settings
+            .as_ref()
+            .map_or("", |settings| settings.proxy.as_str()),
+    );
     let options = [
         ("system", t("Follow system", "跟随系统")),
         ("manual", t("Manual", "手动填写")),
-    ]
-    .into_iter()
-    .map(|(id, label)| (id.to_owned(), label.to_owned()))
-    .collect::<Vec<_>>();
+    ];
     let hint = match mode {
         "manual" => t(
             "http, https, socks5, or socks5h. A bare host:port such as 127.0.0.1:7890 is read as http.",
@@ -301,15 +283,7 @@ fn proxy_field(
 }
 
 fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
-    let options = ["s", "m", "l", "xl"]
-        .into_iter()
-        .map(|id| {
-            (
-                id.to_owned(),
-                crate::ui::desk::font_size_label(id).to_owned(),
-            )
-        })
-        .collect::<Vec<_>>();
+    let options = ["s", "m", "l", "xl"].map(|id| (id, crate::ui::desk::font_size_label(id)));
     let chips = choice_chips(
         "font-size",
         &options,
@@ -337,10 +311,7 @@ fn font_size_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
 }
 
 fn appearance_theme_field(selected: &str, cx: &mut Context<Workspace>) -> AnyElement {
-    let options = [("dark", t("Dark", "深色")), ("light", t("Light", "浅色"))]
-        .into_iter()
-        .map(|(id, label)| (id.to_owned(), label.to_owned()))
-        .collect::<Vec<_>>();
+    let options = [("dark", t("Dark", "深色")), ("light", t("Light", "浅色"))];
     let chips = choice_chips(
         "appearance-theme",
         &options,

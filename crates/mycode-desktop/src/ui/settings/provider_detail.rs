@@ -27,7 +27,9 @@ pub(super) fn render_provider_detail(
     let Some(provider_id) = workspace.vm().provider_detail.clone() else {
         return div().into_any_element();
     };
-    let (provider, keyed, index) = {
+    // Only the fields the page needs leave the borrow; the model list is
+    // read in place by `models_card`.
+    let (base_url, enabled, keyed, index) = {
         let Some(settings) = workspace.vm().settings.as_ref() else {
             return div().into_any_element();
         };
@@ -38,12 +40,12 @@ pub(super) fn render_provider_detail(
         else {
             return missing_provider(cx);
         };
-        let provider = settings.providers[index].clone();
+        let provider = &settings.providers[index];
         let keyed = settings
             .providers_with_keys
             .iter()
-            .any(|id| id == &provider.id);
-        (provider, keyed, index)
+            .any(|id| id == &provider_id);
+        (provider.base_url.clone(), provider.enabled, keyed, index)
     };
     // Two flags from the catalog row, read in place: the row carries the
     // provider's whole model list.
@@ -52,7 +54,7 @@ pub(super) fn render_provider_detail(
             .vm()
             .catalog
             .as_ref()
-            .and_then(|catalog| catalog.provider(&provider.id));
+            .and_then(|catalog| catalog.provider(&provider_id));
         (
             entry.is_some_and(|entry| {
                 mycode_providers::catalog::uses_device_code_login(&entry.auth)
@@ -61,18 +63,17 @@ pub(super) fn render_provider_detail(
             entry.is_none_or(|entry| entry.auth != mycode_providers::catalog::AUTH_DEVICE_CODE),
         )
     };
-    let replacing = workspace.provider_key_replacing(&provider.id);
+    let replacing = workspace.provider_key_replacing(&provider_id);
     let key_input = (show_key && (!keyed || replacing))
-        .then(|| workspace.provider_key_input(&provider.id, window, cx));
-    let endpoint_input =
-        workspace.provider_endpoint_input(&provider.id, &provider.base_url, window, cx);
-    let endpoint_pending = endpoint_input.read(cx).value().trim() != provider.base_url;
+        .then(|| workspace.provider_key_input(&provider_id, window, cx));
+    let endpoint_input = workspace.provider_endpoint_input(&provider_id, &base_url, window, cx);
+    let endpoint_pending = endpoint_input.read(cx).value().trim() != base_url;
     let name = workspace
         .vm()
         .catalog
         .as_ref()
-        .map(|catalog| catalog.display_name(&provider.id))
-        .unwrap_or_else(|| provider.id.clone());
+        .map(|catalog| catalog.display_name(&provider_id))
+        .unwrap_or_else(|| provider_id.clone());
     let status = if keyed {
         t("Connected", "已连接")
     } else {
@@ -84,10 +85,9 @@ pub(super) fn render_provider_detail(
         .vm()
         .copilot_sign_in
         .clone()
-        .filter(|sign_in| sign_in.provider_id == provider.id);
+        .filter(|sign_in| sign_in.provider_id == provider_id);
     let other_in_flight = workspace.vm().copilot_sign_in.is_some() && sign_in.is_none();
     let error = workspace.vm().copilot_error.clone();
-    let enabled = provider.enabled;
     let header = super::subview_header(
         t("Providers", "服务商"),
         &name,
@@ -96,8 +96,8 @@ pub(super) fn render_provider_detail(
         cx,
     );
     let theme = cx.theme().clone();
-    let id = provider.id.clone();
-    let models = models_card(workspace, &provider, &theme, cx);
+    let id = provider_id;
+    let models = models_card(workspace, index, &theme, cx);
     div()
         .id("provider-detail")
         .flex()
@@ -131,15 +131,7 @@ pub(super) fn render_provider_detail(
                     endpoint_block(&id, endpoint_input, endpoint_pending, &theme, cx),
                     key_block(&id, keyed, replacing, show_key, key_input, &theme, cx),
                     if oauth {
-                        oauth_block(
-                            &id,
-                            &provider.id,
-                            sign_in,
-                            other_in_flight,
-                            error,
-                            &theme,
-                            cx,
-                        )
+                        oauth_block(&id, &id, sign_in, other_in_flight, error, &theme, cx)
                     } else {
                         div().into_any_element()
                     },
@@ -155,10 +147,18 @@ pub(super) fn render_provider_detail(
 /// it in the chat model picker.
 fn models_card(
     workspace: &Workspace,
-    provider: &mycode_config::ProviderSettings,
+    index: usize,
     theme: &gpui_kit::component::theme::Theme,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    let Some(provider) = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.providers.get(index))
+    else {
+        return div().into_any_element();
+    };
     let choices = crate::ui::model_picker::all_provider_model_choices(workspace.vm(), &provider.id);
     let shown = choices
         .iter()
@@ -217,6 +217,7 @@ fn models_card(
     rows.extend(choices.into_iter().enumerate().map(|(index, choice)| {
         let visible = provider.shows_model(&choice.id);
         let provider_id = provider.id.clone();
+        let named = choice.name != choice.id;
         let model = choice.id.clone();
         div()
             .id(("provider-model-row", index))
@@ -236,16 +237,16 @@ fn models_card(
                             .text_sm()
                             .truncate()
                             .when(!visible, |this| this.text_color(theme.muted_foreground))
-                            .child(choice.name.clone()),
+                            .child(choice.name),
                     )
-                    .when(choice.name != choice.id, |this| {
+                    .when(named, |this| {
                         this.child(
                             div()
                                 .text_xs()
                                 .truncate()
                                 .text_color(theme.muted_foreground)
                                 .font_family(theme.mono_font_family.clone())
-                                .child(choice.id.clone()),
+                                .child(choice.id),
                         )
                     }),
             )

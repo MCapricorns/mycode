@@ -44,7 +44,6 @@ pub(crate) fn render_model_picker(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let browse = workspace.vm().model_menu_browse.clone();
-    let theme = cx.theme().clone();
     let body = if let Some(provider_id) = browse {
         let query = workspace.vm().picker_query.clone();
         let input = workspace.model_picker_input(window, cx);
@@ -58,7 +57,7 @@ pub(crate) fn render_model_picker(
     } else {
         render_provider_step(workspace, &target, cx)
     };
-    menu_panel("model-picker", &theme)
+    menu_panel("model-picker", cx.theme())
         .w(px(340.))
         .max_w_full()
         .max_h(max_height)
@@ -77,7 +76,7 @@ fn render_provider_step(
     target: &ModelPickerTarget,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let theme = cx.theme().clone();
+    let theme = cx.theme();
     let enabled = enabled_providers(workspace.vm());
     let recent = recent_pins(workspace.vm());
     let mut rows: Vec<AnyElement> = Vec::new();
@@ -91,7 +90,7 @@ fn render_provider_step(
         rows.push(section_label(
             "model-picker-recent",
             t("Recent", "最近"),
-            &theme,
+            theme,
         ));
         for pin in &recent {
             rows.push(pin_row(workspace, pin, target, index == preferred, cx));
@@ -117,7 +116,7 @@ fn render_provider_step(
         rows.push(section_label(
             "model-picker-providers",
             t("Providers", "服务商"),
-            &theme,
+            theme,
         ));
         let current = current_provider(workspace.vm(), target);
         for (id, name) in &enabled {
@@ -135,8 +134,8 @@ fn render_provider_step(
                     .gap_2()
                     .rounded(skin::radius_control())
                     .cursor_pointer()
-                    .hover(|this| this.bg(skin::frost_hover(&theme)))
-                    .when(index == preferred, |this| this.bg(skin::frost(&theme)))
+                    .hover(|this| this.bg(skin::frost_hover(theme)))
+                    .when(index == preferred, |this| this.bg(skin::frost(theme)))
                     .on_click(cx.listener(move |workspace, _, _, cx| {
                         workspace.on_browse_model_provider(Some(&provider_id), cx);
                     }))
@@ -187,7 +186,7 @@ fn render_model_step(
     target: &ModelPickerTarget,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let theme = cx.theme().clone();
+    let theme = cx.theme();
     let provider_name = provider_display_name(workspace.vm(), provider_id);
     let choices = provider_model_choices(workspace.vm(), provider_id);
     let filtered = filter_model_choices(&choices, query);
@@ -226,7 +225,7 @@ fn render_model_step(
                     "model-picker-rows",
                     rows.len(),
                     move |range, _window, cx| {
-                        let theme = cx.theme().clone();
+                        let theme = cx.theme();
                         range
                             .map(|index| {
                                 model_row(
@@ -240,7 +239,7 @@ fn render_model_step(
                                             == Some(list_rows[index].id.as_str()),
                                     },
                                     &weak,
-                                    &theme,
+                                    theme,
                                 )
                             })
                             .collect()
@@ -267,7 +266,7 @@ fn render_model_step(
                 .gap_1()
                 .rounded(skin::radius_control())
                 .cursor_pointer()
-                .hover(|this| this.bg(skin::frost_hover(&theme)))
+                .hover(|this| this.bg(skin::frost_hover(theme)))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_browse_model_provider(None, cx);
                 }))
@@ -343,9 +342,6 @@ fn model_row(
                 .px_1()
                 .cursor_pointer()
                 .on_click(move |_, _, cx| {
-                    let model_id = model_id.clone();
-                    let provider_id = provider_id.clone();
-                    let target = target.clone();
                     let _ = weak_select.update(cx, |workspace, cx| {
                         select_model(workspace, &target, &provider_id, &model_id, cx);
                     });

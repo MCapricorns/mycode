@@ -69,7 +69,7 @@ fn render_models_list_page(
         .map(|level| (level.clone(), crate::ui::chat::reasoning_row_label(level)))
         .collect();
     let catalog = workspace.vm().catalog.clone();
-    let mut provider_rows: Vec<(usize, String, String, usize, bool, bool, bool)> = Vec::new();
+    let mut provider_rows: Vec<ProviderRow> = Vec::new();
     {
         let Some(settings) = workspace.vm().settings.as_ref() else {
             return div().into_any_element();
@@ -91,33 +91,20 @@ fn render_models_list_page(
                 .providers_with_keys
                 .iter()
                 .any(|id| id == &provider.id);
-            provider_rows.push((
+            provider_rows.push(ProviderRow {
                 index,
                 name,
                 host,
-                provider.models.len(),
+                models: provider.models.len(),
                 keyed,
-                provider.enabled,
-                workspace.provider_delete_armed(index),
-            ));
+                enabled: provider.enabled,
+                armed: workspace.provider_delete_armed(index),
+            });
         }
     }
     let provider_row_elements: Vec<AnyElement> = provider_rows
         .into_iter()
-        .map(|(index, name, host, models, keyed, enabled, armed)| {
-            provider_row(
-                ProviderRow {
-                    index,
-                    name,
-                    host,
-                    models,
-                    keyed,
-                    enabled,
-                    armed,
-                },
-                cx,
-            )
-        })
+        .map(|row| provider_row(row, cx))
         .collect();
     let theme = cx.theme();
     let providers_empty = provider_row_elements.is_empty();
