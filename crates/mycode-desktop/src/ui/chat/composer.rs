@@ -20,6 +20,9 @@ use gpui_kit::{
 use crate::i18n::t;
 use crate::ui::command_palette::shortcut_label;
 use crate::ui::{desk::Desk, ellipsis, project_label, skin};
+use crate::view_model::WorkspaceState;
+use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
+use crate::workspace::Workspace;
 
 /// Resting composer hint. The product name does not belong in the field.
 const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
@@ -39,9 +42,6 @@ pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
     };
     t(english, chinese)
 }
-use crate::view_model::WorkspaceState;
-use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
-use crate::workspace::Workspace;
 
 /// Centered composer measure. Narrower than the chat pane; prose and tool
 /// cards stay full width and left-aligned.
@@ -49,7 +49,8 @@ const COMPOSER_MAX_PX: f32 = 760.;
 
 /// Bottom composer: a floating rounded card with soft elevation, pill chips for
 /// folder, model, and thinking, a separate file-attachment `+`, and a circular
-/// send/stop action. The field soft-wraps and grows with the draft.
+/// send/stop action. The field soft-wraps inside a fixed three-row box and
+/// scrolls once the draft is longer.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
     window: &mut Window,
