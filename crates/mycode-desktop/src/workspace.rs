@@ -33,6 +33,9 @@ mod updates_data;
 pub(crate) use mycode_frontend::forms::normalized_key_input;
 pub(crate) use toasts::{Toast, ToastKind};
 
+/// Seconds a confirmed close stays armed before the next request asks again.
+const CLOSE_CONFIRM_WINDOW: Duration = Duration::from_secs(6);
+
 /// Preferred first-window size. The origin is computed from the primary
 /// display so the window opens in the middle of the usable area, and smaller
 /// screens shrink the request rather than clipping it.
@@ -155,6 +158,12 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);
         let workspace = Workspace::new(driver, wake_rx, window, cx);
+        window.on_window_should_close(cx, {
+            let workspace = workspace.clone();
+            move |window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.on_close_request(window, cx))
+            }
+        });
         cx.new(|cx| Root::new(workspace, window, cx))
     })
     .expect("open the MYCode window");
@@ -276,6 +285,9 @@ pub struct Workspace {
     /// Consecutive tool runs the transcript has expanded. Keyed by the run's
     /// first call event id.
     expanded_tool_batches: HashSet<String>,
+    /// A window-close request armed the confirm at this instant. A second
+    /// request inside [`CLOSE_CONFIRM_WINDOW`] quits; a later one asks again.
+    close_armed: Option<Instant>,
     /// Row-delete key clicked once and waiting for the confirming click.
     /// Session, provider, MCP-server, and folder-root rows all share it.
     armed_delete: Option<String>,
@@ -360,6 +372,7 @@ impl Workspace {
             git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
+            close_armed: None,
             armed_delete: None,
             applied_font_size: String::new(),
             applied_language: u8::MAX,
@@ -853,6 +866,30 @@ impl Workspace {
             |driver, fx| driver.set_thinking_collapsed(collapsed, fx),
             cx,
         );
+    }
+
+    /// A window-close request (the caption ×, Alt+F4, the taskbar button):
+    /// the first one arms a timed confirm and stays open, the second inside
+    /// [`CLOSE_CONFIRM_WINDOW`] quits. Programmatic quits never see this.
+    pub(crate) fn on_close_request(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self
+            .close_armed
+            .is_some_and(|armed| armed.elapsed() < CLOSE_CONFIRM_WINDOW)
+        {
+            self.close_armed = None;
+            return true;
+        }
+        self.close_armed = Some(Instant::now());
+        self.push_toast(
+            crate::i18n::t("Click × again to quit", "再点一次 × 退出"),
+            ToastKind::Info,
+            cx,
+        );
+        false
     }
 
     /// Persists the durable UI state projection (last project, selections,
