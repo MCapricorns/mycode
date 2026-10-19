@@ -322,6 +322,11 @@ pub enum StopReason {
     Error,
 }
 
+/// Detail spelling committed when the user stops a turn. Frontends show
+/// their own cancel banner, so display projections strip the line this
+/// detail produces while model-facing history keeps it.
+pub const USER_INTERRUPT_DETAIL: &str = "interrupted by user";
+
 /// Visible line kept with whatever thinking and text already arrived when a
 /// provider stream fails. Adapters and the agent share this spelling.
 #[must_use]
@@ -350,6 +355,20 @@ pub fn interrupted_response_text(detail: &str) -> String {
         flat
     };
     format!("[error] the response was interrupted: {detail}")
+}
+
+/// Removes a trailing [`interrupted_response_text`] line written with
+/// [`USER_INTERRUPT_DETAIL`]. The note stays in the committed message —
+/// replayed context tells the model its reply was cut — but a transcript
+/// row duplicates the frontends' cancel banner. Other interruption
+/// details stay visible: they are the only record of a real failure.
+pub fn strip_user_interruption(text: &mut String) {
+    let note = interrupted_response_text(USER_INTERRUPT_DETAIL);
+    if !text.ends_with(note.as_str()) {
+        return;
+    }
+    text.truncate(text.len() - note.len());
+    text.truncate(text.trim_end().len());
 }
 
 /// Result text for a call the history never answered.
@@ -488,7 +507,9 @@ pub struct BinaryData {
 
 #[cfg(test)]
 mod tests {
-    use super::{interrupted_response_text, tool_target};
+    use super::{
+        USER_INTERRUPT_DETAIL, interrupted_response_text, strip_user_interruption, tool_target,
+    };
     use serde_json::json;
 
     #[test]
@@ -604,5 +625,29 @@ mod tests {
         let note = interrupted_response_text(&wide);
         let expected = format!("[error] the response was interrupted: {}", "汉".repeat(240));
         assert_eq!(note, expected);
+    }
+
+    #[test]
+    fn strip_user_interruption_drops_only_the_cancel_line() {
+        let note = interrupted_response_text(USER_INTERRUPT_DETAIL);
+        // A bare marker — a cancel before any reply streamed — clears.
+        let mut bare = note.clone();
+        strip_user_interruption(&mut bare);
+        assert!(bare.is_empty());
+        // A partial reply keeps its text; the appended line goes.
+        let mut partial = format!("half an answer\n{note}");
+        strip_user_interruption(&mut partial);
+        assert_eq!(partial, "half an answer");
+        // Real failure details stay: they carry the only error record.
+        let mut failure = interrupted_response_text("the response ended early");
+        strip_user_interruption(&mut failure);
+        assert_eq!(
+            failure,
+            "[error] the response was interrupted: the response ended early"
+        );
+        // A marker mid-text (not the tail) is the model's own output.
+        let mut inline = format!("{note}\nmore after");
+        strip_user_interruption(&mut inline);
+        assert_eq!(inline, format!("{note}\nmore after"));
     }
 }
