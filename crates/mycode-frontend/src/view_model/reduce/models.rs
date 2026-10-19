@@ -16,18 +16,21 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
         state.selected_model.clone(),
     );
     state.selected_provider = Some(provider.clone());
+    // The configured row first: a turn only runs models the row lists, so
+    // a catalog-first pick the row lacks showed one model and ran another
+    // whenever the follow-up model pick was refused.
     state.selected_model = state
-        .catalog
+        .settings
         .as_ref()
-        .and_then(|catalog| catalog.provider(&provider))
-        .and_then(|provider| provider.models.first())
-        .map(|model| model.id.clone())
+        .and_then(|settings| settings.providers.iter().find(|p| p.id == provider))
+        .and_then(|provider| provider.models.first().cloned())
         .or_else(|| {
             state
-                .settings
+                .catalog
                 .as_ref()
-                .and_then(|settings| settings.providers.iter().find(|p| p.id == provider))
-                .and_then(|provider| provider.models.first().cloned())
+                .and_then(|catalog| catalog.provider(&provider))
+                .and_then(|provider| provider.models.first())
+                .map(|model| model.id.clone())
         });
     state.model_menu_open = false;
     if !selected_model_supports_reasoning(state) {
@@ -539,6 +542,17 @@ mod tests {
         assert!(levels.iter().any(|item| item == "default"));
         assert!(levels.iter().any(|item| item == "high"));
         assert!(!levels.iter().any(|item| item == "xhigh"));
+    }
+
+    #[test]
+    fn a_provider_pick_lands_on_a_model_the_row_can_run() {
+        // The catalog lists `glm` first; the row only carries `glm-air`.
+        let mut state = state_with_low_rung_model(None);
+        if let Some(settings) = state.settings.as_mut() {
+            settings.providers[0].models = vec!["glm-air".to_owned()];
+        }
+        super::provider_selected(&mut state, "zai".to_owned());
+        assert_eq!(state.selected_model.as_deref(), Some("glm-air"));
     }
 
     fn state_with_low_rung_model(default_reasoning: Option<&str>) -> WorkspaceState {
