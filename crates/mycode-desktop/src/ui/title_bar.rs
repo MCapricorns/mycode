@@ -29,10 +29,12 @@ use crate::workspace::Workspace;
 pub(super) const BAR_HEIGHT: f32 = 40.;
 /// Caption hit target on Windows.
 const CONTROL_HIT: f32 = 46.;
-/// Space between minimize, zoom, and close.
-const CONTROL_GAP: f32 = 1.;
-/// Inset from the window edge so the resize border does not cover close.
-const CAPTION_EDGE: f32 = 4.;
+/// Fixed caption glyph size. These icons are window chrome, so they stay a
+/// constant pixel size instead of tracking the UI font scale.
+const CAPTION_ICON_PX: f32 = 12.;
+/// The native Windows close-hover red and the white glyph it carries.
+const CLOSE_HOVER_BG: u32 = 0xe81123;
+const CLOSE_HOVER_FG: u32 = 0xffffff;
 const TITLE_INSET: f32 = 12.;
 /// Leading space reserved on macOS for native traffic-light window controls.
 const MACOS_TRAFFIC_LIGHT_INSET: f32 = 76.;
@@ -234,7 +236,11 @@ fn title_controls(
         .h_full()
         .flex_shrink_0()
         .gap_2()
-        .pr(px(CAPTION_EDGE))
+        // Windows caption buttons sit flush on the window's right edge;
+        // other platforms keep the usual inset on this strip.
+        .when(cfg!(not(target_os = "windows")), |this| {
+            this.pr(px(TITLE_INSET))
+        })
         // The drag strip is a sibling, and a normal hitbox does not block it.
         // On Windows the first `window_control_area` that contains the pointer
         // wins, so a Drag region under this strip becomes HTCAPTION. On macOS
@@ -275,7 +281,10 @@ fn title_controls(
                     .child(div().size(skin::space(2)).rounded_full().bg(color)),
             )
         })
-        .child(window_controls(window, cx))
+        // macOS paints native traffic lights; only Windows gets captions.
+        .when(cfg!(target_os = "windows"), |this| {
+            this.child(window_controls(window, cx))
+        })
 }
 
 /// Panel toggle in the title strip.
@@ -318,11 +327,9 @@ fn inspector_toggle_button(
         .test_support()
 }
 
+/// Windows caption buttons: contiguous and flush on the window's right
+/// edge, like the native chrome.
 fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl IntoElement {
-    // macOS paints native traffic lights; only Windows needs caption buttons.
-    if !cfg!(target_os = "windows") {
-        return div().id("window-controls");
-    }
     let theme = cx.theme();
     let [minimize, zoom, close] = caption_buttons(window.is_maximized());
     div()
@@ -332,7 +339,6 @@ fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl Int
         .items_center()
         .h_full()
         .flex_shrink_0()
-        .gap(px(CONTROL_GAP))
         .child(caption_button(
             minimize.id,
             minimize.icon,
@@ -352,6 +358,22 @@ fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl Int
         ))
 }
 
+/// Hover background and glyph color for a caption button. Close paints the
+/// Windows red with a white glyph; the others take a quiet foreground wash.
+fn caption_hover_colors(
+    close: bool,
+    theme: &gpui_kit::component::theme::Theme,
+) -> (gpui_kit::Hsla, gpui_kit::Hsla) {
+    if close {
+        (
+            gpui_kit::rgb(CLOSE_HOVER_BG).into(),
+            gpui_kit::rgb(CLOSE_HOVER_FG).into(),
+        )
+    } else {
+        (theme.foreground.opacity(0.08), theme.foreground)
+    }
+}
+
 fn caption_button(
     id: &'static str,
     icon: IconName,
@@ -359,16 +381,7 @@ fn caption_button(
     close: bool,
     theme: &gpui_kit::component::theme::Theme,
 ) -> impl IntoElement {
-    let hover_bg = if close {
-        theme.danger
-    } else {
-        theme.secondary_hover
-    };
-    let hover_fg = if close {
-        theme.danger_foreground
-    } else {
-        theme.secondary_foreground
-    };
+    let (hover_bg, hover_fg) = caption_hover_colors(close, theme);
     div()
         .id(id)
         .w(px(CONTROL_HIT))
@@ -377,10 +390,10 @@ fn caption_button(
         .items_center()
         .justify_center()
         .flex_shrink_0()
-        .text_color(theme.foreground)
+        .text_color(theme.muted_foreground)
         .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
         .window_control_area(area)
-        .child(Icon::new(icon).small())
+        .child(Icon::new(icon).with_size(px(CAPTION_ICON_PX)))
 }
 
 #[cfg(test)]
@@ -391,8 +404,10 @@ mod tests {
     fn caption_buttons_are_minimize_zoom_close_on_the_right() {
         const _: () = assert!(BAR_HEIGHT == 40.);
         const _: () = assert!(CONTROL_HIT >= 40.);
-        const _: () = assert!(CONTROL_GAP > 0. && CONTROL_GAP <= 4.);
-        const _: () = assert!(CAPTION_EDGE >= 4.);
+        // The glyph is a fixed pixel size around the native caption icon.
+        const _: () = assert!(CAPTION_ICON_PX >= 10. && CAPTION_ICON_PX <= 14.);
+        const _: () = assert!(CLOSE_HOVER_BG == 0xe81123);
+        const _: () = assert!(CLOSE_HOVER_FG == 0xffffff);
         assert_eq!(title_leading_inset(false), TITLE_INSET);
         assert_eq!(title_leading_inset(true), MACOS_TRAFFIC_LIGHT_INSET);
         assert!(title_leading_inset(true) > title_leading_inset(false));
@@ -412,6 +427,17 @@ mod tests {
                 WindowControlArea::Min | WindowControlArea::Max | WindowControlArea::Close
             )
         }));
+    }
+
+    #[test]
+    fn caption_hover_is_windows_red_only_for_close() {
+        let theme = gpui_kit::component::theme::Theme::default();
+        let (bg, fg) = caption_hover_colors(true, &theme);
+        assert_eq!(bg, gpui_kit::rgb(CLOSE_HOVER_BG).into());
+        assert_eq!(fg, gpui_kit::rgb(CLOSE_HOVER_FG).into());
+        let (bg, fg) = caption_hover_colors(false, &theme);
+        assert_eq!(bg, theme.foreground.opacity(0.08));
+        assert_eq!(fg, theme.foreground);
     }
 }
 
@@ -476,7 +502,7 @@ mod hit_test {
                         .w(px(40.))
                         .h(px(34.))
                         .occlude()
-                        .child(super::inspector_toggle_button(false, &theme, {
+                        .child(super::inspector_toggle_button(false, theme, {
                             let presses = presses.clone();
                             move |_, _, _| {
                                 let mut flags = presses.get();
