@@ -35,8 +35,8 @@ pub use events::{AgentEvent, MessageDelta, TurnOutcome};
 pub use ids::CallId;
 pub use message::{
     AssistantMessage, BinaryData, ContentBlock, Message, SharedMessage, StopReason, TextBlock,
-    ThinkingBlock, ToolCall, ToolResultMessage, Usage, UserMessage, interrupted_response_text,
-    pair_tool_results, tool_label, tool_target,
+    ThinkingBlock, ToolCall, ToolResultMessage, USER_INTERRUPT_DETAIL, Usage, UserMessage,
+    interrupted_response_text, pair_tool_results, strip_user_interruption, tool_label, tool_target,
 };
 #[doc(inline)]
 pub use provider::{

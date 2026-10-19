@@ -183,6 +183,9 @@ pub(crate) fn project_assistant_message(
             _ => {}
         }
     }
+    // A user stop already shows as the frontends' red cancel banner; the
+    // ledger keeps the marker so replayed context still records the cut.
+    mycode_core::strip_user_interruption(&mut text);
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::AssistantMessage,
@@ -215,6 +218,51 @@ mod tests {
     fn legacy_usage_events_replay_as_nothing() {
         let event = event_of_kind(mycode_agent::session::EventKind::Usage);
         assert!(project_replayed_entry(&event, b"{}").is_none());
+    }
+
+    #[test]
+    fn a_user_cancel_hides_the_marker_but_keeps_the_partial() {
+        let cancel = mycode_core::interrupted_response_text(mycode_core::USER_INTERRUPT_DETAIL);
+        // Thinking-only interrupts used to paint a bare "[error] …" row
+        // under the thinking box; the red cancel banner already says it.
+        let thinking_only = mycode_core::AssistantMessage {
+            blocks: vec![
+                mycode_core::ContentBlock::Thinking(mycode_core::ThinkingBlock::new("planning")),
+                mycode_core::ContentBlock::Text(mycode_core::TextBlock::new(cancel.clone())),
+            ],
+            usage: None,
+            stop_reason: mycode_core::StopReason::Error,
+        };
+        let entry = super::project_assistant_message("evt-x", &thinking_only);
+        assert!(
+            entry.text.is_empty(),
+            "cancel marker leaked: {}",
+            entry.text
+        );
+        assert_eq!(entry.thinking, "planning");
+        // A partial reply keeps its text; only the marker line goes.
+        let partial = mycode_core::AssistantMessage {
+            blocks: vec![mycode_core::ContentBlock::Text(
+                mycode_core::TextBlock::new(format!("half an answer\n{cancel}")),
+            )],
+            usage: None,
+            stop_reason: mycode_core::StopReason::Error,
+        };
+        let entry = super::project_assistant_message("evt-x", &partial);
+        assert_eq!(entry.text.as_ref(), "half an answer");
+        // A genuine provider failure keeps its marker: it is the only
+        // transcript record of what went wrong.
+        let failure = mycode_core::AssistantMessage {
+            blocks: vec![mycode_core::ContentBlock::Text(
+                mycode_core::TextBlock::new(mycode_core::interrupted_response_text(
+                    "the response ended early",
+                )),
+            )],
+            usage: None,
+            stop_reason: mycode_core::StopReason::Error,
+        };
+        let entry = super::project_assistant_message("evt-x", &failure);
+        assert!(entry.text.contains("[error] the response was interrupted"));
     }
 
     #[test]

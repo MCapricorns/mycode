@@ -227,7 +227,13 @@ fn keep_cancelled_partial(
     if thinking.is_empty() && text.is_empty() {
         return TurnFailure::Aborted;
     }
-    commit_interrupted(env, state, thinking, text, "interrupted by user");
+    commit_interrupted(
+        env,
+        state,
+        thinking,
+        text,
+        mycode_core::USER_INTERRUPT_DETAIL,
+    );
     TurnFailure::Aborted
 }
 
