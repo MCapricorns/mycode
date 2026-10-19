@@ -501,7 +501,10 @@ impl FrontendDriver {
                 self.focus_workspace_folder(&path.to_string_lossy(), out);
             }
             Some(_) => self.toast(
-                "The active conversation changed; its folder was not changed.",
+                crate::i18n::t(
+                    "The active conversation changed; its folder was not changed.",
+                    "当前对话已切换，没有更改它的目录。",
+                ),
                 ToastKind::Info,
                 out,
             ),

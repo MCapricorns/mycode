@@ -223,7 +223,10 @@ impl FrontendDriver {
                     self.resolve_recall_page(request, older, out);
                 } else {
                     self.toast(
-                        "The first message has no earlier event to recall to.",
+                        crate::i18n::t(
+                            "The first message has no earlier event to recall to.",
+                            "第一条消息之前没有可以回退到的位置。",
+                        ),
                         ToastKind::Info,
                         out,
                     );
