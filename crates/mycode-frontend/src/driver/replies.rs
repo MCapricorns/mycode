@@ -243,10 +243,7 @@ impl FrontendDriver {
             }
             BridgeReply::Recalled(Ok((conversation, edit))) => {
                 let session_id = conversation.session_id.clone();
-                self.act(
-                    FrontendAction::ConversationOpened((*conversation).clone()),
-                    out,
-                );
+                self.act(FrontendAction::ConversationOpened(*conversation), out);
                 self.follow_session_project(&session_id, out);
                 if let Some(text) = edit {
                     self.pending_composer_prefill = Some(text.clone());
