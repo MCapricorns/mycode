@@ -55,10 +55,11 @@ pub(crate) fn render(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme().clone();
-    let picker = workspace
-        .project_picker
-        .clone()
-        .unwrap_or_else(ProjectPicker::open);
+    // Borrowed, not cloned: a listing holds up to MAX_ENTRIES rows and the
+    // dialog repaints on every hover.
+    let Some(picker) = workspace.project_picker.as_ref() else {
+        return div().into_any_element();
+    };
     let at_roots = picker.current.is_none();
     let path_label = picker
         .current
@@ -66,9 +67,9 @@ pub(crate) fn render(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| crate::i18n::t("This computer", "此电脑").to_owned());
     let drives = filesystem_roots();
-    let current = picker.current.clone();
-    let entries = picker.entries;
-    let status = picker.status;
+    let current = picker.current.as_deref();
+    let entries = &picker.entries;
+    let status = picker.status.as_deref();
     div()
         .id("project-picker-layer")
         .absolute()
@@ -103,8 +104,8 @@ pub(crate) fn render(
                         })
                         .child(picker_header(&theme, &path_label))
                         .child(picker_nav(cx, at_roots))
-                        .child(drive_strip(cx, &drives, current.as_deref(), &theme))
-                        .child(picker_list(cx, &entries, status.as_deref(), &theme))
+                        .child(drive_strip(cx, &drives, current, &theme))
+                        .child(picker_list(cx, entries, status, &theme))
                         .child(picker_footer(cx, at_roots, &theme)),
                 ),
         )
