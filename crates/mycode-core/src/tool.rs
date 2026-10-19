@@ -31,10 +31,28 @@ const SCHEMA_REF_DEPTH: usize = 32;
 /// deeper than [`SCHEMA_REF_DEPTH`], becomes `{type: object}` so a real cycle
 /// cannot recurse.
 pub fn inline_schema_refs(schema: &mut serde_json::Value) {
+    // Builtin specs arrive already inlined; providers call this per request,
+    // so a schema with nothing to expand is left untouched instead of copied.
+    if !has_schema_refs(schema) {
+        return;
+    }
     let mut defs = serde_json::Map::new();
     collect_defs(schema, &mut defs);
     let mut stack = Vec::new();
     *schema = expand(schema, &defs, &mut stack);
+}
+
+fn has_schema_refs(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(items) => items.iter().any(has_schema_refs),
+        serde_json::Value::Object(object) => {
+            object.contains_key("$ref")
+                || object.contains_key("$defs")
+                || object.contains_key("definitions")
+                || object.values().any(has_schema_refs)
+        }
+        _ => false,
+    }
 }
 
 fn collect_defs(value: &serde_json::Value, defs: &mut serde_json::Map<String, serde_json::Value>) {
@@ -84,7 +102,7 @@ fn expand(
         }
         if let Some(target) = resolve_ref(reference, defs) {
             stack.push(reference.to_owned());
-            let mut expanded = expand(&target, defs, stack);
+            let mut expanded = expand(target, defs, stack);
             stack.pop();
             keep_description(object, &mut expanded);
             return expanded;
@@ -98,7 +116,22 @@ fn expand(
         if key == "$defs" || key == "definitions" {
             continue;
         }
-        out.insert(key.clone(), expand(value, defs, stack));
+        let expanded = match value {
+            // Keys of a property map are parameter names, not keywords: a
+            // parameter called `definitions` must survive the expansion.
+            serde_json::Value::Object(properties)
+                if key == "properties" || key == "patternProperties" =>
+            {
+                serde_json::Value::Object(
+                    properties
+                        .iter()
+                        .map(|(name, schema)| (name.clone(), expand(schema, defs, stack)))
+                        .collect(),
+                )
+            }
+            _ => expand(value, defs, stack),
+        };
+        out.insert(key.clone(), expanded);
     }
     serde_json::Value::Object(out)
 }
@@ -129,10 +162,10 @@ fn keep_description(
     }
 }
 
-fn resolve_ref(
+fn resolve_ref<'a>(
     reference: &str,
-    defs: &serde_json::Map<String, serde_json::Value>,
-) -> Option<serde_json::Value> {
+    defs: &'a serde_json::Map<String, serde_json::Value>,
+) -> Option<&'a serde_json::Value> {
     let pointer = reference.strip_prefix("#/")?;
     let mut parts = pointer.split('/');
     let bucket = parts.next()?;
@@ -140,15 +173,12 @@ fn resolve_ref(
         return None;
     }
     let name = unescape_pointer(parts.next()?);
-    let mut current = defs.get(&name)?.clone();
+    let mut current = defs.get(&name)?;
     for part in parts {
         let part = unescape_pointer(part);
         current = match current {
-            serde_json::Value::Object(map) => map.get(&part)?.clone(),
-            serde_json::Value::Array(items) => {
-                let index: usize = part.parse().ok()?;
-                items.get(index)?.clone()
-            }
+            serde_json::Value::Object(map) => map.get(&part)?,
+            serde_json::Value::Array(items) => items.get(part.parse::<usize>().ok()?)?,
             _ => return None,
         };
     }
@@ -219,6 +249,28 @@ mod tests {
             schema["properties"]["operations"]["items"]["properties"]["occurrence"]["description"],
             "which match"
         );
+    }
+
+    #[test]
+    fn a_parameter_named_like_a_def_bucket_survives() {
+        let mut schema = json!({
+            "type": "object",
+            "$defs": { "Name": { "type": "string" } },
+            "properties": {
+                "definitions": { "type": "array", "items": { "$ref": "#/$defs/Name" } }
+            }
+        });
+        inline_schema_refs(&mut schema);
+        assert_eq!(
+            schema["properties"]["definitions"]["items"]["type"],
+            "string"
+        );
+        assert!(schema.get("$defs").is_none());
+
+        let plain = json!({"type": "object", "properties": {"path": {"type": "string"}}});
+        let mut untouched = plain.clone();
+        inline_schema_refs(&mut untouched);
+        assert_eq!(untouched, plain);
     }
 
     #[test]
