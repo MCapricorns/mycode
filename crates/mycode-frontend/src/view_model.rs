@@ -44,8 +44,9 @@ pub use self::projects::{
     task_surface_visible,
 };
 pub use self::reduce::{
-    ComposerSubmit, close_floating_menus, composer_submit, preferred_slash_index, preset_pick,
-    reasoning_levels_for, reduce, selected_model_supports_reasoning, selected_reasoning_levels,
+    ComposerSubmit, PREPARING_ROW_PREFIX, close_floating_menus, composer_submit, is_preparing_row,
+    preferred_slash_index, preset_pick, reasoning_levels_for, reduce,
+    selected_model_supports_reasoning, selected_reasoning_levels,
 };
 pub use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
 pub use self::usage::{

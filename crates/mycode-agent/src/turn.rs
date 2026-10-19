@@ -157,6 +157,12 @@ pub(crate) async fn stream_assistant(
                     AgentEvent::MessageDelta(MessageDelta::ThinkingDelta(delta)),
                 );
             }
+            StreamEvent::ToolCallStarted { id, name } => {
+                emit(
+                    env,
+                    AgentEvent::MessageDelta(MessageDelta::ToolCallStarted { id, name }),
+                );
+            }
             StreamEvent::ToolCallDelta { id, partial_json } => {
                 emit(
                     env,

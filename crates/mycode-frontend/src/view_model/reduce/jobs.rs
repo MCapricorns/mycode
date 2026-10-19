@@ -11,6 +11,67 @@ use mycode_tools::builtin::AGENT_PROGRESS_PREFIX;
 
 use super::streaming::{set_streaming_status, tool_call_label};
 
+/// Event-id prefix of a placeholder row for an `agent` call the model is
+/// still writing. The row carries no call id, so nothing pairs with it.
+pub const PREPARING_ROW_PREFIX: &str = "prep-";
+
+/// Whether `entry` is a placeholder for a call that has not started yet.
+#[must_use]
+pub fn is_preparing_row(entry: &ConversationEntry) -> bool {
+    entry.event_id.starts_with(PREPARING_ROW_PREFIX)
+}
+
+/// The `ToolPreparing` transition: add the call's placeholder row, or
+/// relabel it once its role and brief are readable.
+pub(super) fn tool_preparing(
+    state: &mut WorkspaceState,
+    provider_call_id: &str,
+    name: &str,
+    target: &str,
+) {
+    let event_id = format!("{PREPARING_ROW_PREFIX}{provider_call_id}");
+    let label = tool_call_label(name, target);
+    let Some(conversation) = state.active.as_mut() else {
+        return;
+    };
+    match conversation
+        .entries
+        .iter_mut()
+        .find(|entry| entry.event_id == event_id)
+    {
+        Some(row) => row.text = label.into(),
+        None => conversation.entries.push(ConversationEntry {
+            event_id,
+            kind: EntryKind::ToolCall,
+            text: label.into(),
+            call_id: None,
+            thinking: String::new(),
+        }),
+    }
+    let count = conversation
+        .entries
+        .iter()
+        .filter(|entry| is_preparing_row(entry))
+        .count();
+    let status = if crate::i18n::is_chinese() {
+        format!("正在准备 {count} 个子代理")
+    } else if count == 1 {
+        "Preparing 1 subagent".to_owned()
+    } else {
+        format!("Preparing {count} subagents")
+    };
+    set_streaming_status(state, &status);
+}
+
+/// Removes every placeholder row; the turn ended before those calls ran.
+pub(super) fn drop_preparing_rows(state: &mut WorkspaceState) {
+    if let Some(conversation) = state.active.as_mut() {
+        conversation
+            .entries
+            .retain(|entry| !is_preparing_row(entry));
+    }
+}
+
 /// The `ToolStarted` transition: one tool call (or nested subagent) began.
 pub(super) fn tool_started(
     state: &mut WorkspaceState,
@@ -20,6 +81,13 @@ pub(super) fn tool_started(
     target: String,
 ) {
     let label = tool_call_label(&name, &target);
+    // The started call replaces its placeholder, if it had one.
+    let placeholder = format!("{PREPARING_ROW_PREFIX}{provider_call_id}");
+    if let Some(conversation) = state.active.as_mut() {
+        conversation
+            .entries
+            .retain(|entry| entry.event_id != placeholder);
+    }
     if name == AGENT_PROGRESS_PREFIX {
         upsert_live_job(state, &call_id, "", "starting");
         claim_provider_call_id(state, &call_id, provider_call_id);
@@ -551,5 +619,87 @@ mod tests {
         assert!(state.live_jobs.iter().all(|job| job.call_id != "c1"));
         // The cancel `x` stops its clock immediately, before the result lands.
         assert!(state.job_elapsed("c1").is_some());
+    }
+
+    #[test]
+    fn a_streaming_agent_call_shows_a_placeholder_until_it_starts() {
+        use crate::view_model::{ActiveConversation, FrontendAction, WorkspaceState};
+
+        let mut state = WorkspaceState {
+            sending: true,
+            active: Some(ActiveConversation {
+                session_id: "ses".to_owned(),
+                branch_id: "br".to_owned(),
+                head: "evt".to_owned(),
+                entries: Vec::new(),
+                older_before: None,
+                streaming: None,
+                running: false,
+                context_used: 0,
+                context_cache: 0,
+            }),
+            ..WorkspaceState::default()
+        };
+        let rows = |state: &WorkspaceState| -> Vec<(String, String)> {
+            state
+                .active
+                .as_ref()
+                .map(|conversation| {
+                    conversation
+                        .entries
+                        .iter()
+                        .map(|entry| (entry.event_id.clone(), entry.text.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let prepare = |state: &mut WorkspaceState, id: &str, target: &str| {
+            super::super::reduce(
+                state,
+                FrontendAction::ToolPreparing {
+                    provider_call_id: id.to_owned(),
+                    name: "agent".to_owned(),
+                    target: target.to_owned(),
+                },
+            );
+        };
+        prepare(&mut state, "p1", "");
+        prepare(&mut state, "p1", "scout map the crate");
+        prepare(&mut state, "p2", "artisan");
+        assert_eq!(
+            rows(&state),
+            [
+                (
+                    "prep-p1".to_owned(),
+                    "agent  scout map the crate".to_owned()
+                ),
+                ("prep-p2".to_owned(), "agent  artisan".to_owned()),
+            ],
+            "one row per call, relabelled in place"
+        );
+        super::super::reduce(
+            &mut state,
+            FrontendAction::ToolStarted {
+                call_id: "c1".to_owned(),
+                provider_call_id: "p1".to_owned(),
+                name: "agent".to_owned(),
+                target: "scout map the crate".to_owned(),
+            },
+        );
+        let after = rows(&state);
+        assert!(after.iter().all(|(id, _)| id != "prep-p1"), "{after:?}");
+        assert!(after.iter().any(|(id, _)| id == "prep-p2"), "{after:?}");
+        assert!(after.iter().any(|(id, _)| id == "call-c1"), "{after:?}");
+        super::super::reduce(
+            &mut state,
+            FrontendAction::ChatFailed {
+                message: crate::view_model::CHAT_CANCELLED.to_owned(),
+                head: String::new(),
+            },
+        );
+        assert!(
+            rows(&state).iter().all(|(id, _)| !id.starts_with("prep-")),
+            "a call that never started leaves no row behind"
+        );
     }
 }

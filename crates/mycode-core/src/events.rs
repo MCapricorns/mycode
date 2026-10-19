@@ -63,6 +63,8 @@ pub enum MessageDelta {
     TextDelta(String),
     /// Partial thinking content.
     ThinkingDelta(String),
+    /// A tool call began streaming; its arguments follow as deltas.
+    ToolCallStarted { id: String, name: String },
     /// Partial tool-call arguments (raw JSON fragment).
     ToolCallDelta { id: String, partial_json: String },
 }

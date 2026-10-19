@@ -46,6 +46,8 @@ impl LedgerPump {
         // The opening user message is already in the ledger. Later user
         // messages are steers injected into this same turn.
         let mut saw_opening_user = false;
+        // `agent` calls the model is still writing, by provider call id.
+        let mut preparing = PreparingCalls::default();
         loop {
             let event = match agent_rx.recv().await {
                 Some(Ok(event)) => event,
@@ -81,14 +83,24 @@ impl LedgerPump {
                         delta,
                     });
                 }
-                AgentEvent::MessageDelta(MessageDelta::ToolCallDelta { .. })
-                | AgentEvent::TurnStarted => {}
+                AgentEvent::MessageDelta(MessageDelta::ToolCallStarted { id, name }) => {
+                    if let Some(target) = preparing.open(&id, &name) {
+                        self.send_preparing(id, name, target);
+                    }
+                }
+                AgentEvent::MessageDelta(MessageDelta::ToolCallDelta { id, partial_json }) => {
+                    if let Some(target) = preparing.extend(&id, &partial_json) {
+                        self.send_preparing(id, AGENT_TOOL.to_owned(), target);
+                    }
+                }
+                AgentEvent::TurnStarted => {}
                 AgentEvent::ToolStarted {
                     call_id,
                     name,
                     target,
                 } => {
                     let provider_call_id = call_id.to_string();
+                    preparing.close(&provider_call_id);
                     // The ToolCall event must commit before its result; the
                     // ledger's ordering check rejects results for calls that
                     // were never opened.
@@ -273,6 +285,15 @@ impl LedgerPump {
         let _ = self.events.send(event);
     }
 
+    fn send_preparing(&self, provider_call_id: String, name: String, target: String) {
+        self.send(BridgeEvent::ToolPreparing {
+            session_id: self.session_id.clone(),
+            provider_call_id,
+            name,
+            target,
+        });
+    }
+
     /// Ends the turn as failed. The agent is cancelled too: a pump that
     /// stops recording (a lagged bus, a failed ledger write) must not leave
     /// the model running tools that nothing records and the UI no longer
@@ -378,6 +399,84 @@ impl LedgerPump {
     }
 }
 
+/// Name of the delegation tool, whose calls get a card while still streaming.
+const AGENT_TOOL: &str = "agent";
+
+/// `agent` calls the model is still writing. Their briefs can run to
+/// thousands of characters, so each gets a card when it opens instead of
+/// all of them appearing at once when the response ends.
+#[derive(Default)]
+struct PreparingCalls {
+    /// Arguments so far and the label last sent, by provider call id.
+    calls: std::collections::HashMap<String, (String, String)>,
+}
+
+impl PreparingCalls {
+    /// Tracks a newly opened call; returns its first (empty) label when it
+    /// is an `agent` call.
+    fn open(&mut self, id: &str, name: &str) -> Option<String> {
+        if name != AGENT_TOOL || id.is_empty() {
+            return None;
+        }
+        self.calls
+            .insert(id.to_owned(), (String::new(), String::new()));
+        Some(String::new())
+    }
+
+    /// Appends argument bytes; returns the label when it just changed.
+    fn extend(&mut self, id: &str, partial_json: &str) -> Option<String> {
+        let (arguments, shown) = self.calls.get_mut(id)?;
+        arguments.push_str(partial_json);
+        let known = serde_json::json!({
+            "agent": partial_string_field(arguments, "agent").unwrap_or_default(),
+            "description": partial_string_field(arguments, "description").unwrap_or_default(),
+        });
+        let target = mycode_core::tool_target(AGENT_TOOL, &known);
+        if target == *shown {
+            return None;
+        }
+        shown.clone_from(&target);
+        Some(target)
+    }
+
+    /// The call started for real; its card takes over.
+    fn close(&mut self, id: &str) {
+        self.calls.remove(id);
+    }
+}
+
+/// A top-level string field of a JSON object that is still streaming, once
+/// its value is complete. A key spelled inside another string is escaped
+/// there (`\"agent\"`), so the quoted key only matches a real key.
+fn partial_string_field(json: &str, key: &str) -> Option<String> {
+    let quoted = format!("\"{key}\"");
+    let mut from = 0;
+    while let Some(found) = json[from..].find(&quoted) {
+        let after = from + found + quoted.len();
+        from = after;
+        let rest = json[after..].trim_start();
+        let Some(rest) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        if !rest.starts_with('"') {
+            continue;
+        }
+        let mut escaped = false;
+        for (index, ch) in rest.char_indices().skip(1) {
+            match ch {
+                '\\' if !escaped => escaped = true,
+                '"' if !escaped => {
+                    return serde_json::from_str::<String>(&rest[..=index]).ok();
+                }
+                _ => escaped = false,
+            }
+        }
+        return None;
+    }
+    None
+}
+
 /// Moves the agent bus onto an unbounded queue as fast as it fills.
 ///
 /// The pump awaits a ledger fsync for every tool call, result, and step.
@@ -466,6 +565,40 @@ pub(super) fn plain_user_text(user: &UserMessage) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_agent_card_names_its_role_and_brief_while_the_call_streams() {
+        let mut preparing = super::PreparingCalls::default();
+        assert_eq!(preparing.open("call_1", "read"), None);
+        assert_eq!(preparing.open("call_2", "agent").as_deref(), Some(""));
+        assert_eq!(
+            preparing.extend("call_1", "{}"),
+            None,
+            "only agent calls are tracked"
+        );
+        assert_eq!(
+            preparing.extend("call_2", r#"{"prompt":"say \"agent\": \"x\""#),
+            None
+        );
+        assert_eq!(preparing.extend("call_2", r#"", "agent": "sco"#), None);
+        assert_eq!(
+            preparing
+                .extend("call_2", r#"ut", "description": "map the "#)
+                .as_deref(),
+            Some("scout")
+        );
+        assert_eq!(
+            preparing.extend("call_2", r#"crate"}"#).as_deref(),
+            Some("scout map the crate")
+        );
+        assert_eq!(
+            preparing.extend("call_2", " "),
+            None,
+            "an unchanged label is not resent"
+        );
+        preparing.close("call_2");
+        assert_eq!(preparing.extend("call_2", "x"), None);
+    }
+
     #[test]
     fn turn_usage_sums_every_request_but_meters_the_latest_prompt() {
         let mut usage = super::TurnUsage::default();

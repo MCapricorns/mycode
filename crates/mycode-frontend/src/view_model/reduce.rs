@@ -25,8 +25,10 @@ pub use self::models::{
 
 pub use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
 use self::composer::{parse_mention, slash_items};
+pub use self::jobs::{PREPARING_ROW_PREFIX, is_preparing_row};
 use self::jobs::{
-    drop_live_job, refresh_subagent_status, retire_live_jobs, tool_progress, tool_started,
+    drop_live_job, drop_preparing_rows, refresh_subagent_status, retire_live_jobs, tool_preparing,
+    tool_progress, tool_started,
 };
 use self::models::{
     active_preset_changed, apply_session_model, assign_fresh_session_model, ensure_model_selection,
@@ -98,6 +100,8 @@ fn reset_turn_view(state: &mut WorkspaceState) {
 fn end_turn(state: &mut WorkspaceState) {
     // Retire, not drop: each agent row keeps its final runtime.
     retire_live_jobs(state);
+    // A call still being written when the turn closed never started.
+    drop_preparing_rows(state);
     state.pending_ask = None;
     state.ask_answers.clear();
     state.sending = false;
@@ -124,6 +128,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             | FrontendAction::MessageSent { .. }
             | FrontendAction::SteerCommitted { .. }
             | FrontendAction::AssistantStepCommitted(_)
+            | FrontendAction::ToolPreparing { .. }
             | FrontendAction::ToolStarted { .. }
             | FrontendAction::ToolResultAppended(_)
             | FrontendAction::ChatDone { .. }
@@ -412,6 +417,15 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // resurrect a streaming bubble over a finished transcript.
             if state.sending {
                 append_streaming(state, false, delta);
+            }
+        }
+        FrontendAction::ToolPreparing {
+            provider_call_id,
+            name,
+            target,
+        } => {
+            if state.sending {
+                tool_preparing(state, &provider_call_id, &name, &target);
             }
         }
         FrontendAction::ToolStarted {

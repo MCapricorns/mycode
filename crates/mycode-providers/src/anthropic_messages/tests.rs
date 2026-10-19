@@ -343,3 +343,33 @@ fn glm_replays_unsigned_thinking() {
     );
     assert!(claude["messages"].as_array().unwrap().is_empty());
 }
+
+/// Event names in order, so a test can pin where `ToolCallStarted` lands.
+fn started_then_deltas(events: &[mycode_core::StreamEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            mycode_core::StreamEvent::ToolCallStarted { id, name } => {
+                Some(format!("started {id} {name}"))
+            }
+            mycode_core::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_tool_use_block_announces_its_name_when_it_opens() {
+    let mut reducer = MessagesReducer::new();
+    let mut events = Vec::new();
+    for frame in [
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"agent","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"agent\":\"scout\"}"}}"#,
+    ] {
+        events.extend(reducer.feed(frame));
+    }
+    assert_eq!(
+        started_then_deltas(&events),
+        ["started toolu_1 agent", "delta toolu_1"]
+    );
+}

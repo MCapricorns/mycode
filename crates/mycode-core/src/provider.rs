@@ -279,6 +279,15 @@ pub enum StreamEvent {
     TextDelta(String),
     /// Incremental model reasoning text.
     ThinkingDelta(String),
+    /// A tool call opened: its id and name are known, its arguments are
+    /// still streaming. Sent at most once per call, before that call's
+    /// first [`StreamEvent::ToolCallDelta`] when the wire allows.
+    ToolCallStarted {
+        /// Opaque tool-call identifier, the same one the deltas carry.
+        id: String,
+        /// Tool name as the model wrote it.
+        name: String,
+    },
     /// Incremental tool-call arguments.
     ToolCallDelta {
         /// Opaque tool-call identifier.

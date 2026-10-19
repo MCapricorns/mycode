@@ -407,6 +407,20 @@ pub enum BridgeEvent {
         /// Questions the user should answer, including multi-select.
         questions: Vec<crate::protocol::AskPrompt>,
     },
+    /// The model is still writing an `agent` call. Sent when the call opens
+    /// and again whenever its role or description becomes readable, so each
+    /// subagent shows up as soon as the model starts its brief. The matching
+    /// [`BridgeEvent::ToolStarted`] (same `provider_call_id`) replaces it.
+    ToolPreparing {
+        /// Session identity spelling.
+        session_id: String,
+        /// Provider-assigned call id; the later `ToolStarted` carries it too.
+        provider_call_id: String,
+        /// Tool name.
+        name: String,
+        /// Role and description so far, as `ToolStarted` would label them.
+        target: String,
+    },
     /// A tool call started executing.
     ToolStarted {
         /// Session identity spelling.

@@ -402,6 +402,13 @@ pub enum FrontendAction {
     },
     /// A server's tools probe failed; the row shows the reason inline.
     McpProbeFailed { server_id: String, message: String },
+    /// The model is still writing an `agent` call: show or relabel its
+    /// placeholder row until the call starts.
+    ToolPreparing {
+        provider_call_id: String,
+        name: String,
+        target: String,
+    },
     /// A tool call started on the open conversation.
     ToolStarted {
         call_id: String,
