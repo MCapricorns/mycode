@@ -407,8 +407,19 @@ const AGENT_TOOL: &str = "agent";
 /// all of them appearing at once when the response ends.
 #[derive(Default)]
 struct PreparingCalls {
-    /// Arguments so far and the label last sent, by provider call id.
-    calls: std::collections::HashMap<String, (String, String)>,
+    /// Calls still being written, by provider call id.
+    calls: std::collections::HashMap<String, PreparingCall>,
+}
+
+#[derive(Default)]
+struct PreparingCall {
+    /// Arguments so far; dropped once the label is final.
+    arguments: String,
+    /// The label last sent.
+    shown: String,
+    /// Role and description were both read: the rest of the brief cannot
+    /// change the label, so later bytes are neither kept nor scanned.
+    settled: bool,
 }
 
 impl PreparingCalls {
@@ -418,24 +429,32 @@ impl PreparingCalls {
         if name != AGENT_TOOL || id.is_empty() {
             return None;
         }
-        self.calls
-            .insert(id.to_owned(), (String::new(), String::new()));
+        self.calls.insert(id.to_owned(), PreparingCall::default());
         Some(String::new())
     }
 
     /// Appends argument bytes; returns the label when it just changed.
     fn extend(&mut self, id: &str, partial_json: &str) -> Option<String> {
-        let (arguments, shown) = self.calls.get_mut(id)?;
-        arguments.push_str(partial_json);
-        let known = serde_json::json!({
-            "agent": partial_string_field(arguments, "agent").unwrap_or_default(),
-            "description": partial_string_field(arguments, "description").unwrap_or_default(),
-        });
-        let target = mycode_core::tool_target(AGENT_TOOL, &known);
-        if target == *shown {
+        let call = self.calls.get_mut(id)?;
+        if call.settled {
             return None;
         }
-        shown.clone_from(&target);
+        call.arguments.push_str(partial_json);
+        let role = partial_string_field(&call.arguments, "agent");
+        let description = partial_string_field(&call.arguments, "description");
+        if role.is_some() && description.is_some() {
+            call.settled = true;
+            call.arguments = String::new();
+        }
+        let known = serde_json::json!({
+            "agent": role.unwrap_or_default(),
+            "description": description.unwrap_or_default(),
+        });
+        let target = mycode_core::tool_target(AGENT_TOOL, &known);
+        if target == call.shown {
+            return None;
+        }
+        call.shown.clone_from(&target);
         Some(target)
     }
 
@@ -594,6 +613,10 @@ mod tests {
             preparing.extend("call_2", " "),
             None,
             "an unchanged label is not resent"
+        );
+        assert!(
+            preparing.calls["call_2"].arguments.is_empty(),
+            "a settled brief is no longer buffered"
         );
         preparing.close("call_2");
         assert_eq!(preparing.extend("call_2", "x"), None);
