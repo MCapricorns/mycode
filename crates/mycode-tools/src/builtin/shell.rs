@@ -423,6 +423,7 @@ fn shell_file_name(program: &Path) -> String {
 fn script_launch_args(shell: &DetectedShell, command: &str) -> Result<Vec<String>, ToolError> {
     match shell.kind {
         ShellKind::Pwsh | ShellKind::WindowsPowerShell => {
+            lint_powershell_command(command)?;
             let script = powershell_script_for(command);
             let encoded = encode_powershell_command(&script, &shell.program)?;
             Ok(powershell_args(encoded))
@@ -674,6 +675,185 @@ fn skip_ps_quoted_string(text: &str, start: usize) -> usize {
         index += ch.len_utf8();
     }
     text.len()
+}
+
+/// Skips a PowerShell here-string (`@'\n...\n'@` or `@"\n...\n"@`) when
+/// `start` points at the leading `@`.
+fn skip_ps_here_string(text: &str, start: usize) -> Option<usize> {
+    let rest = &text[start..];
+    let (quote, after_open) = if let Some(tail) = rest.strip_prefix("@'") {
+        ('\'', tail)
+    } else {
+        ('"', rest.strip_prefix("@\"")?)
+    };
+    let line_end = if after_open.starts_with("\r\n") {
+        2
+    } else if after_open.starts_with('\n') {
+        1
+    } else {
+        return None;
+    };
+    let mut index = start + 2 + line_end;
+    let close = if quote == '\'' { "'@" } else { "\"@" };
+    while index < text.len() {
+        if text[index..].starts_with(close) {
+            return Some(index + 2);
+        }
+        index = match text[index..].find('\n') {
+            Some(nl) => index + nl + 1,
+            None => text.len(),
+        };
+    }
+    Some(text.len())
+}
+
+/// Rejects bash-only commands (`touch`, `export`, `source`, `which`, `chmod`,
+/// `chown`, `sudo`, Unix package managers, `man`) at command position and
+/// bash-only redirection/heredoc tokens (`>/dev/null`, `<<`) outside strings
+/// and comments before PowerShell runs a script halfway through.
+fn lint_powershell_command(command: &str) -> Result<(), ToolError> {
+    let mut index = 0_usize;
+    let mut at_command_start = true;
+    while index < command.len() {
+        let rest = &command[index..];
+        if let Some(comment) = rest.strip_prefix("<#") {
+            index = match comment.find("#>") {
+                Some(end) => index + 2 + end + 2,
+                None => command.len(),
+            };
+            continue;
+        }
+        let ch = rest.chars().next().expect("non-empty slice");
+        match ch {
+            ' ' | '\t' | '\u{feff}' => {
+                index += ch.len_utf8();
+                continue;
+            }
+            '\r' | '\n' | ';' => {
+                index += 1;
+                at_command_start = true;
+                continue;
+            }
+            '#' => {
+                index = match rest.find('\n') {
+                    Some(nl) => index + nl,
+                    None => command.len(),
+                };
+                continue;
+            }
+            '@' => {
+                if let Some(after_here) = skip_ps_here_string(command, index) {
+                    index = after_here;
+                    at_command_start = false;
+                    continue;
+                }
+                index += 1;
+                if matches!(command.as_bytes().get(index), Some(b'{' | b'(')) {
+                    index += 1;
+                }
+                at_command_start = false;
+                continue;
+            }
+            '\'' | '"' => {
+                index = skip_ps_quoted_string(command, index);
+                at_command_start = false;
+                continue;
+            }
+            '<' if rest.starts_with("<<") => {
+                return Err(ToolError::InvalidArgs(
+                    "`<<` heredocs are bash syntax and are rejected in PowerShell; use a here-string (`@'\\n...\\n'@`)"
+                        .into(),
+                ));
+            }
+            '>' => {
+                let after_gt = rest.trim_start_matches('>').trim_start_matches([' ', '\t']);
+                if let Some(after_null) = after_gt.strip_prefix("/dev/null")
+                    && after_null.chars().next().is_none_or(|next| {
+                        next.is_whitespace() || matches!(next, ';' | '|' | '&' | ')' | '}')
+                    })
+                {
+                    return Err(ToolError::InvalidArgs(
+                        "`/dev/null` does not exist in PowerShell; redirect to `$null` (for example `2>$null`)"
+                            .into(),
+                    ));
+                }
+                index += 1;
+                at_command_start = false;
+                continue;
+            }
+            '|' => {
+                index += if rest.starts_with("||") { 2 } else { 1 };
+                at_command_start = true;
+                continue;
+            }
+            '&' if rest.starts_with("&&") => {
+                index += 2;
+                at_command_start = true;
+                continue;
+            }
+            '{' | '(' => {
+                index += 1;
+                at_command_start = true;
+                continue;
+            }
+            _ => {}
+        }
+        if at_command_start && ch.is_ascii_alphabetic() {
+            let word_len = rest
+                .bytes()
+                .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                .count();
+            let word = &rest[..word_len];
+            let after_word = &rest[word_len..];
+            let next_char = after_word.chars().next();
+            if matches!(next_char, Some(' ' | '\t')) {
+                let after_space = after_word.trim_start_matches([' ', '\t']);
+                if let Some(arg_start) = after_space.chars().next()
+                    && !matches!(
+                        arg_start,
+                        '\r' | '\n' | ';' | '|' | '&' | '}' | ')' | '#' | '='
+                    )
+                    && let Some(advice) = powershell_unix_command_advice(word)
+                {
+                    return Err(ToolError::InvalidArgs(advice.into()));
+                }
+            }
+            index += word_len;
+            at_command_start = false;
+            continue;
+        }
+        at_command_start = false;
+        index += ch.len_utf8();
+    }
+    Ok(())
+}
+
+fn powershell_unix_command_advice(word: &str) -> Option<&'static str> {
+    match word {
+        "touch" => Some(
+            "`touch` is a Unix command and does not exist in PowerShell; use `(Get-Item <path>).LastWriteTime = Get-Date` to update a timestamp or `New-Item -ItemType File <path>` to create a file",
+        ),
+        "export" => Some(
+            "`export` is a bash builtin and does not exist in PowerShell; use `$env:NAME = \"value\"`",
+        ),
+        "source" => Some(
+            "`source` is a bash builtin and does not exist in PowerShell; dot-source scripts with `. .\\script.ps1`",
+        ),
+        "which" => Some(
+            "`which` is a Unix command and does not exist in PowerShell; use `Get-Command <name>`",
+        ),
+        "chmod" | "chown" => Some(
+            "`chmod`/`chown` are Unix commands and do not exist in PowerShell; use `icacls` or `Set-Acl` on Windows",
+        ),
+        "sudo" => Some("`sudo` is a Unix command and does not exist in PowerShell"),
+        "apt" | "apt-get" | "yum" | "dnf" | "brew" => Some(
+            "Unix package managers (`apt`, `yum`, `dnf`, `brew`) do not exist on Windows; use `winget` or `scoop`",
+        ),
+        "man" => {
+            Some("`man` is not a standard PowerShell alias on Windows; use `Get-Help <cmdlet>`")
+        }
+        _ => None,
+    }
 }
 
 fn powershell_args(encoded_command: String) -> Vec<String> {

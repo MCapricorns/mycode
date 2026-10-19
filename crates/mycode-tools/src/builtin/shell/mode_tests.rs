@@ -307,3 +307,57 @@ Write-Output \"$x $y\"";
         "{inline_using}"
     );
 }
+
+#[test]
+fn powershell_lint_rejects_unix_commands_and_bash_redirection_only_in_code() {
+    let pwsh = super::DetectedShell {
+        kind: super::ShellKind::Pwsh,
+        program: std::path::PathBuf::from("pwsh.exe"),
+    };
+    let bash = super::DetectedShell {
+        kind: super::ShellKind::Bash,
+        program: std::path::PathBuf::from("bash"),
+    };
+
+    for (bad, needle) in [
+        (
+            "$env:FERRIS_TRACE=\"off\"; cargo check\ntouch src\\lib.rs",
+            "LastWriteTime",
+        ),
+        ("export RUST_LOG=debug && cargo test", "$env:NAME"),
+        ("source .env", "dot-source"),
+        ("which cargo", "Get-Command"),
+        ("chmod +x script.ps1", "icacls"),
+        ("sudo cargo test", "sudo"),
+        ("apt-get install ripgrep", "winget"),
+        ("man Select-String", "Get-Help"),
+        ("cargo test 2>/dev/null", "2>$null"),
+        ("python - << 'EOF'\nprint(1)\nEOF", "here-string"),
+    ] {
+        let err = super::script_launch_args(&pwsh, bad)
+            .expect_err(&format!("expected PowerShell lint to reject `{bad}`"));
+        assert!(
+            err.to_string().contains(needle),
+            "expected `{needle}` in `{err}` for `{bad}`"
+        );
+        // POSIX shells accept the exact same command untouched.
+        assert!(
+            super::script_launch_args(&bash, bad).is_ok(),
+            "POSIX shell must allow `{bad}`"
+        );
+    }
+
+    for valid in [
+        "git commit -m \"touch src/lib.rs && export X=1 2>/dev/null <<EOF\"",
+        "git commit -m 'touch src/lib.rs && which cargo'",
+        "@'\ntouch src/lib.rs\nexport X=1\ncat <<EOF\n2>/dev/null\n'@ | python -",
+        "# touch src/lib.rs\n<# export X=1 2>/dev/null #>\nWrite-Output 'ok'",
+        "$m = @{ touch = 1; export = 2 }; $touch = 3; Write-Output $m.touch",
+        "ls -la; cat Cargo.toml; git diff --no-index /dev/null Cargo.toml",
+    ] {
+        assert!(
+            super::script_launch_args(&pwsh, valid).is_ok(),
+            "PowerShell lint falsely rejected `{valid}`"
+        );
+    }
+}

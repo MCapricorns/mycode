@@ -259,12 +259,14 @@ const POWERSHELL7_GUIDANCE: &str = "\
 The `powershell` tool runs PowerShell 7 (`pwsh`). Write PowerShell, not bash or cmd.
 - Each call starts a new process in the session cwd. `cd` and `$env:` assignments do not persist.
 - `&&` and `||` are allowed. Read environment variables with `$env:NAME`. Redirect errors with `2>$null`, not `2>/dev/null`.
+- Unix-only commands do not exist here: use `(Get-Item p).LastWriteTime = Get-Date` (or `New-Item -ItemType File p`) instead of `touch`, `$env:NAME = \"v\"` instead of `export`, `Get-Command` instead of `which`, and `@'...'@` instead of `<<` heredocs.
 - The path separator is `\\`. Quote paths that contain spaces. `/` is also accepted.";
 
 const POWERSHELL51_GUIDANCE: &str = "\
 The `powershell` tool runs Windows PowerShell 5.1 (`powershell.exe`), not PowerShell 7 and not bash.
 - Do not use `&&` or `||`. They are syntax errors on 5.1. Chain with `;` and test `$LASTEXITCODE`.
 - Do not use bash heredocs, `$(...)`, or `2>/dev/null`. Use `$env:NAME` and `2>$null`.
+- Unix-only commands do not exist here: use `(Get-Item p).LastWriteTime = Get-Date` (or `New-Item -ItemType File p`) instead of `touch`, `$env:NAME = \"v\"` instead of `export`, `Get-Command` instead of `which`, and `@'...'@` instead of `<<` heredocs.
 - The ternary operator and `&&` pipelines are PowerShell 7 only.
 - Each call starts a new process in the session cwd. `cd` and `$env:` assignments do not persist.
 - The path separator is `\\`. Quote paths that contain spaces.";
