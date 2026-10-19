@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-10-19
+
 ### Fixed
 
 - 新开会话或重启后输入框旁的上下文环不再消失：聊天视图在有选中模型时就会预加载模型目录，上下文窗口不再因为目录尚未加载而取到 0；CLI 状态行的 `ctx%` 同理修复。
@@ -134,7 +136,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.4...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.5...HEAD
+[0.12.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.5
 [0.12.4]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.4
 [0.12.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.3
 [0.12.2]: https://github.com/MCapricorns/mycode/compare/v0.12.1...v0.12.2
