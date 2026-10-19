@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-10-19
+
 ### Fixed
 
 - 同一回合里第二次压缩不再丢消息：历史已经以摘要开头时，不再用磁盘检查点的账本下标去切这份缝合后的历史，内存里更新的摘要也会带进下一份摘要；压缩之后的请求始终从摘要开始，回合继续执行。
@@ -106,7 +108,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.3
 [0.12.2]: https://github.com/MCapricorns/mycode/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/MCapricorns/mycode/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.0
