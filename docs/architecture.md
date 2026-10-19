@@ -2,12 +2,14 @@
 
 mycode 是跑在本机的桌面编码代理（Windows x64、Windows ARM64、macOS Apple Silicon）。对话、工具调用和会话都在你的机器上；模型请求发到你自己的 API。界面不读密钥、不写文件、不发网络请求。发布包是这三个平台，没有 Linux 包。
 
-## 七个 crate
+## 九个 crate
 
 依赖只向下。上面的 crate 可以调用下面的，下面的不知道上面的存在。`mycode-core` 和 `mycode-config` 都是叶子，互不依赖。
 
 ```text
-mycode-desktop     GPUI 窗口。渲染，并把动作交给桥           → app, config, providers, tools
+mycode-desktop     GPUI 窗口。只画状态、收集点击             → frontend, app, config, providers, tools
+mycode-cli         ratatui 终端界面，同一套驱动              → frontend, app, config
+mycode-frontend    共享产品层：驱动、视图模型、reducer、选择器 → app, config, providers, tools
 mycode-app         应用核。会话、回合、工具宿主、MCP、网页、更新 → agent, providers, tools, config, core
 mycode-agent       回合循环 + 会话账本                       → tools, config, core
 mycode-providers   三协议适配、模型目录、OAuth 协议           → config, core
@@ -24,15 +26,17 @@ mycode-core        消息、事件、工具规格、Provider 端口         （�
 | `mycode-tools` | 工具实现 | 一份 JSON Schema 同时给模型和运行时。搜索和读文件在进程内完成 |
 | `mycode-agent` | 循环和账本 | 循环可以没有磁盘。账本是另一层，用期望头把一次写入做成可恢复的提交 |
 | `mycode-app` | 把上面拼成产品 | 前端只看见命令、回复和事件。回合在这里装配 provider、工具和压缩 |
-| `mycode-desktop` | 窗口 | 视图模型是纯函数。GPUI 只画状态、收集点击 |
+| `mycode-frontend` | 共享产品层 | `FrontendDriver` 持有桥、`WorkspaceState` 和全部产品决定；reducer 是纯函数。前端把它返回的 `Effect` 按自己的方式执行。产品行为改在这里，两个前端同时生效 |
+| `mycode-desktop` | 窗口 | GPUI 只画 `driver.vm()`、收集点击，并持有输入框、滚动句柄这类只有 GPUI 能拥有的实体 |
+| `mycode-cli` | 终端 | ratatui 画同一份状态，键盘输入回到同一个驱动；可执行文件名是 `mycode-cli` |
 
-工作区成员只有这七个。配置、密钥、界面状态和角色在 `mycode-config`，会话账本在 `mycode-agent`；网页和 MCP 客户端是 `mycode-app` 里的模块，没有独立的 crate。
+工作区成员只有这九个。配置、密钥、界面状态和角色在 `mycode-config`，会话账本在 `mycode-agent`；网页和 MCP 客户端是 `mycode-app` 里的模块，没有独立的 crate。
 
 ## 一条消息怎么走完
 
 ```text
 输入框
-  → DesktopAction（纯 reducer，先改界面状态）
+  → FrontendAction（mycode-frontend 的纯 reducer，先改界面状态）
   → BridgeCommand::SendMessage（先把用户消息写入账本）
   → BridgeCommand::ChatTurn（先取消同一会话还在跑的回合）
        读 settings + secrets，解析 endpoint 和认证（OAuth 令牌按需刷新）
