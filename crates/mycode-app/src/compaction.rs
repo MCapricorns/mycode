@@ -159,7 +159,6 @@ pub(crate) async fn compact_history(
     // before the threshold check, then judge the threshold on the stitched
     // history. A forced compact still summarizes (or reports that this head
     // is already covered) instead of stopping at the previous stitch.
-    let mut stitched_over_threshold = false;
     let starts_with_summary = history
         .first()
         .is_some_and(|message| is_summary_message(message));
@@ -202,7 +201,6 @@ pub(crate) async fn compact_history(
         .is_none()
         {
             history = stitched;
-            stitched_over_threshold = true;
         }
     }
     // A manual `/compact` on a session that still fits the tail budget
@@ -244,16 +242,19 @@ pub(crate) async fn compact_history(
     }
     // `covered_messages` indexes a ledger replay, which has no summary
     // prefix. Once a summary has replaced that prefix, the same index
-    // points into the tail and would drop messages that must stay.
-    let already_summarized = history
-        .first()
-        .is_some_and(|message| is_summary_message(message));
-    let covered = if stitched_over_threshold {
+    // points into the tail and would drop messages that must stay. That
+    // leading summary is also the one to carry forward: a turn that
+    // compacted in memory holds a newer summary than the disk checkpoint.
+    let leading = leading_summary(&history);
+    let already_summarized = leading.is_some();
+    let covered = if already_summarized {
         None
     } else {
         prior.as_ref().map(|checkpoint| checkpoint.covered_messages)
     };
-    let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
+    let prior_summary = leading
+        .as_deref()
+        .or_else(|| prior.as_ref().map(|checkpoint| checkpoint.summary.as_str()));
     // The previous summary already stands in for `history[..covered]`.
     // Sending that prefix again makes a later `/compact` re-bill the same
     // leading messages on top of the old summary.
@@ -371,6 +372,20 @@ fn request_summary_text(summary: &str) -> String {
          the summary claims is missing.\n\n\
          {summary}"
     )
+}
+
+/// The summary a history opens with, without its wire frame, or `None`
+/// when the history is a plain ledger replay.
+fn leading_summary(history: &[Arc<Message>]) -> Option<String> {
+    let first = history
+        .first()
+        .filter(|message| is_summary_message(message))?;
+    let text = message_text(first);
+    let frame = request_summary_text("");
+    Some(match text.strip_prefix(frame.as_str()) {
+        Some(body) => body.to_owned(),
+        None => summary_body(&text).to_owned(),
+    })
 }
 
 fn message_tokens(message: &Message) -> usize {
