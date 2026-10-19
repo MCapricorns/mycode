@@ -57,7 +57,7 @@
 事件泵拥有分支头：
 
 - `ToolStarted` 先提交 `ToolCall` 事件，`ToolCompleted` 提交结果。
-- 模型还在流式写 `agent` 调用时（`ToolCallStarted` 之后的 `ToolCallDelta`），泵从不完整的 JSON 里读出 `agent` 和 `description`，发 `ToolPreparing`；同一个服务商调用 id 的 `ToolStarted` 到达时替换它。前端先显示占位卡片（行 id 以 `prep-` 开头），回合结束时清掉没启动的占位。
+- 模型还在流式写 `agent` 调用时（`ToolCallStarted` 之后的 `ToolCallDelta`），泵从不完整的 JSON 里读出 `agent` 和 `description`，发 `ToolPreparing`；同一个服务商调用 id 的 `ToolStarted` 到达时替换它。前端把占位卡片放在 `preparing_calls`（不进转录条目，行 id 以 `prep-` 开头），画在流式回复下面；调用开始后，正式行接在已提交的助手步骤之后，与重新打开时的账本顺序一致；回合结束时清掉没启动的占位。
 - 带工具调用的中间助手消息到达即提交并发 `AssistantStep`；纯文本回复先攒着。
 - 每条带 usage 的助手消息累加并立即发一次 `UsageSnapshot`。用量不写账本。
 - 回合中的 steer 先提交攒着的助手消息，再写用户消息并发 `SteerCommitted`，随后发 `PromptCacheWatch(Steer)`。

@@ -1201,6 +1201,16 @@ impl Tui {
                     )));
                 }
             }
+            // `agent` calls the model is still writing: dimmed until they start.
+            for call in &vm.preparing_calls {
+                push_wrapped(
+                    &mut lines,
+                    "… ",
+                    Style::default().fg(Color::DarkGray),
+                    first_line(&call.text),
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
         } else {
             lines.extend(welcome_lines(env!("CARGO_PKG_VERSION")));
         }
@@ -2017,16 +2027,6 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>) {
                 let joined = normal.join("\n");
                 push_wrapped(lines, "⏺ ", marker, &joined, Style::default());
             }
-        }
-        // An `agent` call the model is still writing: dimmed until it starts.
-        EntryKind::ToolCall if mycode_frontend::view_model::is_preparing_row(entry) => {
-            push_wrapped(
-                lines,
-                "… ",
-                Style::default().fg(Color::DarkGray),
-                first_line(&entry.text),
-                Style::default().fg(Color::DarkGray),
-            );
         }
         EntryKind::ToolCall => {
             push_wrapped(

@@ -42,7 +42,7 @@ pub(super) fn render_chat(
     // in the ledger; only the thinking header and its trace are hidden while
     // that pick is set.
     let show_reasoning = crate::view_model::selected_reasoning_level(workspace.vm()) != "off";
-    let (show_welcome, has_older, entry_elements, streaming_element) = {
+    let (show_welcome, has_older, entry_elements, streaming_element, preparing_element) = {
         let md_cache = scroll_hold::use_markdown_cache(window);
         let active = workspace.vm().active.as_ref();
         let entries: &[ConversationEntry] = active
@@ -140,7 +140,36 @@ pub(super) fn render_chat(
                     .into_any_element()
                 })
             });
-        (show_welcome, has_older, elements, streaming_element)
+        // `agent` calls the model is still writing sit under the reply that
+        // is issuing them; each moves into the transcript when it starts.
+        let preparing: Vec<ToolRow<'_>> = workspace
+            .vm()
+            .preparing_calls
+            .iter()
+            .map(|call| ToolRow { call, result: None })
+            .collect();
+        let preparing_element = (!preparing.is_empty()).then(|| {
+            let rows = preparing
+                .iter()
+                .map(|tool| render_one_tool(tool, workspace, sending, reduce_motion, cx));
+            div()
+                .w_full()
+                .min_w_0()
+                .pl(super::skin::space(2))
+                .border_l_1()
+                .border_color(cx.theme().border.opacity(0.65))
+                .flex()
+                .flex_col()
+                .children(rows)
+                .into_any_element()
+        });
+        (
+            show_welcome,
+            has_older,
+            elements,
+            streaming_element,
+            preparing_element,
+        )
     };
     let scroll_handle = workspace.conversation_scroll_handle().clone();
     let appearance = workspace
@@ -218,6 +247,9 @@ pub(super) fn render_chat(
                                         .children(entry_elements)
                                         .when_some(streaming_element, |this, streaming| {
                                             this.child(streaming)
+                                        })
+                                        .when_some(preparing_element, |this, preparing| {
+                                            this.child(preparing)
                                         })
                                         .when_some(
                                             workspace.vm().turn_alert.as_ref(),
