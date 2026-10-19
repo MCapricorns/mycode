@@ -363,6 +363,10 @@ fn powershell_lint_rejects_unix_commands_and_bash_redirection_only_in_code() {
         ("which cargo", "Get-Command"),
         ("chmod +x script.ps1", "icacls"),
         ("sudo cargo test", "sudo"),
+        // PowerShell commands are case-insensitive, so the lint is too.
+        ("EXPORT X=1", "$env:NAME"),
+        ("Sudo cargo test", "sudo"),
+        ("TOUCH src/lib.rs", "LastWriteTime"),
         ("apt-get install ripgrep", "winget"),
         ("man Select-String", "Get-Help"),
         ("cargo test 2>/dev/null", "2>$null"),

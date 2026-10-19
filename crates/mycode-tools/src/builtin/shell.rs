@@ -842,7 +842,8 @@ fn lint_powershell_command(command: &str) -> Result<(), ToolError> {
 }
 
 fn powershell_unix_command_advice(word: &str) -> Option<&'static str> {
-    match word {
+    // PowerShell commands are case-insensitive; `EXPORT` bypassed the match.
+    match word.to_ascii_lowercase().as_str() {
         "touch" => Some(
             "`touch` is a Unix command and does not exist in PowerShell; use `(Get-Item <path>).LastWriteTime = Get-Date` to update a timestamp or `New-Item -ItemType File <path>` to create a file",
         ),
