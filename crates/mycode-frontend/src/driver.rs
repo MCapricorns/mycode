@@ -826,7 +826,13 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::RefreshCatalog);
     }
 
-    /// Whether an open surface reads the provider catalog document.
+    /// Whether a mounted surface reads the provider catalog document.
+    ///
+    /// The composer chips and the context meter consult it on every chat
+    /// paint — the model label, the thinking rungs, and the window that
+    /// sizes the ring all resolve through it — so a selected model counts
+    /// as a need with no menu open. With nothing selected there is nothing
+    /// to resolve and the fetch stays lazy.
     fn catalog_needed(&self) -> bool {
         let vm = &self.vm;
         vm.model_menu_open
@@ -839,6 +845,8 @@ impl FrontendDriver {
                     crate::view_model::SettingsSection::Models
                         | crate::view_model::SettingsSection::About
                 ))
+            || (vm.view == MainView::Chat
+                && (vm.selected_provider.is_some() || vm.selected_model.is_some()))
     }
 
     /// Records documents reset at startup and toasts their names once the
