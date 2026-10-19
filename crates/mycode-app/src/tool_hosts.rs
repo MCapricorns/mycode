@@ -277,6 +277,19 @@ fn resolve_web_backend(
     Err("no search backend is ready — paste a search API key in Settings".to_owned())
 }
 
+/// Whether a web tool call could reach a backend now: the backend and key
+/// checks its first request makes, without the network. A turn registers
+/// the web tools only when this holds, so a model never spends calls on
+/// "no search backend is ready".
+pub(crate) fn web_backend_ready(home: &HomeLayout, settings: &AppSettings) -> bool {
+    let secrets = read_provider_secrets(home).ok();
+    resolve_web_backend(settings, secrets.as_ref()).is_ok_and(|backend| {
+        crate::web_client::SearchKind::parse(&backend.kind).is_some_and(|kind| {
+            !kind_requires_key(kind) || web_backend_key(&backend, secrets.as_ref()).is_some()
+        })
+    })
+}
+
 /// Host channel for the model's web tools: the same bounded client the
 /// settings page configures.
 pub(crate) struct BridgeWebHost {
