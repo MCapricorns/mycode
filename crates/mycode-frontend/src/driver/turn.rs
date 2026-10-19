@@ -365,10 +365,21 @@ impl FrontendDriver {
         if call_id.is_empty() {
             return;
         }
+        // Rows and jobs key on the ledger identity; the core publishes the
+        // child token under the provider id. Resolve before the dismiss
+        // drops the job that carries it.
+        let cancel_id = self
+            .vm
+            .live_jobs
+            .iter()
+            .find(|job| job.call_id == call_id)
+            .map(|job| job.provider_call_id.clone())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| call_id.to_owned());
         self.act(FrontendAction::SubagentDismissed(call_id.to_owned()), out);
         self.dispatch(BridgeCommand::CancelSubagent {
             session_id,
-            call_id: call_id.to_owned(),
+            call_id: cancel_id,
         });
     }
 

@@ -497,14 +497,17 @@ impl HeadWriter {
         }
     }
 
-    /// Opens the ledger call identity for one provider tool call and commits
-    /// the ToolCall event (payload carries the tool name for replay).
+    /// Opens the ledger call identity for one provider tool call, commits
+    /// the ToolCall event (payload carries the tool name for replay), and
+    /// returns the identity live rows pair on. Transcript rows and live
+    /// results both carry it, so a mid-turn reopen — which replays rows
+    /// keyed by the ledger identity — keeps calls and results pairable.
     pub(crate) async fn open_call(
         &self,
         provider_call_id: &str,
         name: &str,
         target: &str,
-    ) -> Result<(), SessionError> {
+    ) -> Result<SessionCallId, SessionError> {
         let identity = SessionCallId::generate().ok_or(SessionError::Corrupt)?;
         let payload = serde_json::json!({ "name": name, "target": target });
         let bytes = serde_json::to_vec(&payload).map_err(|_| SessionError::Corrupt)?;
@@ -513,24 +516,37 @@ impl HeadWriter {
         self.calls
             .lock()
             .await
-            .insert(provider_call_id.to_owned(), identity);
-        Ok(())
+            .insert(provider_call_id.to_owned(), identity.clone());
+        Ok(identity)
+    }
+
+    /// The ledger identity of one still-open provider call. Progress lines
+    /// arriving on the provider id ride the same transcript identity.
+    pub(crate) async fn call_identity(&self, provider_call_id: &str) -> Option<String> {
+        self.calls
+            .lock()
+            .await
+            .get(provider_call_id)
+            .map(|identity| identity.as_str().to_owned())
     }
 
     /// Commits one ToolResult under the identity opened at ToolStarted.
+    /// Returns the event id and that identity for the live transcript row.
     pub(crate) async fn close_call(
         &self,
         provider_call_id: &str,
         payload: &[u8],
-    ) -> Result<String, SessionError> {
+    ) -> Result<(String, String), SessionError> {
         let identity = self
             .calls
             .lock()
             .await
             .remove(provider_call_id)
             .ok_or(SessionError::InvalidArgument)?;
-        self.write_event(EventKind::ToolResult, Some(identity), payload)
-            .await
+        let event_id = self
+            .write_event(EventKind::ToolResult, Some(identity.clone()), payload)
+            .await?;
+        Ok((event_id, identity.as_str().to_owned()))
     }
 
     /// The current committed head spelling, for UI refresh after any

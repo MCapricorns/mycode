@@ -540,6 +540,7 @@ fn stragglers_after_the_turn_do_not_resurrect_running_state() {
         &mut state,
         FrontendAction::ToolStarted {
             call_id: "c1".to_owned(),
+            provider_call_id: "call_1".to_owned(),
             name: "agent".to_owned(),
             target: "scout map".to_owned(),
         },
@@ -680,4 +681,79 @@ fn a_failed_compact_clears_the_lock_without_moving_the_head() {
     );
     assert!(!state.compacting);
     assert_eq!(state.active.as_ref().expect("open").head, "e1");
+}
+
+/// Reopening the session mid-turn replaces live rows with ledger-replayed
+/// ones. Because live and replayed rows share the ledger call identity, the
+/// live job keeps matching the row (cancel affordance) and its result still
+/// closes the job and pairs with the row.
+#[test]
+fn a_mid_turn_reopen_keeps_agent_calls_pairable() {
+    let mut state = open(Vec::new(), None);
+    state.sending = true;
+    reduce(
+        &mut state,
+        FrontendAction::ToolStarted {
+            call_id: "call1-a".to_owned(),
+            provider_call_id: "call_00_1".to_owned(),
+            name: "agent".to_owned(),
+            target: "scout verify".to_owned(),
+        },
+    );
+    assert_eq!(state.live_jobs.len(), 1);
+    assert_eq!(state.live_jobs[0].provider_call_id, "call_00_1");
+    let waiting = state
+        .active
+        .as_ref()
+        .and_then(|active| active.streaming.as_ref())
+        .map(|streaming| streaming.status.clone())
+        .unwrap_or_default();
+    // The reopen projects the same call row with the same identity.
+    reduce(
+        &mut state,
+        FrontendAction::ConversationOpened(ActiveConversation {
+            session_id: "ses".to_owned(),
+            branch_id: "br".to_owned(),
+            head: "evt-head".to_owned(),
+            entries: vec![ConversationEntry {
+                event_id: "evt-call".to_owned(),
+                kind: EntryKind::ToolCall,
+                text: "agent scout verify".into(),
+                call_id: Some("call1-a".to_owned()),
+                thinking: String::new(),
+            }],
+            older_before: None,
+            streaming: None,
+            running: true,
+            context_used: 0,
+            context_cache: 0,
+        }),
+    );
+    assert!(
+        crate::view_model::subagent_cancellable(
+            Some("call1-a"),
+            false,
+            state.sending,
+            &state.live_jobs
+        ),
+        "the replayed row must still own the running job"
+    );
+    reduce(
+        &mut state,
+        FrontendAction::ToolResultAppended(ConversationEntry {
+            event_id: "evt-res".to_owned(),
+            kind: EntryKind::ToolResult,
+            text: "done".into(),
+            call_id: Some("call1-a".to_owned()),
+            thinking: String::new(),
+        }),
+    );
+    assert!(state.live_jobs.is_empty());
+    let status = state
+        .active
+        .as_ref()
+        .and_then(|active| active.streaming.as_ref())
+        .map(|streaming| streaming.status.clone())
+        .unwrap_or_default();
+    assert_ne!(status, waiting);
 }

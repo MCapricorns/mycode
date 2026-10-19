@@ -749,3 +749,73 @@ fn role_with_only_unknown_or_parent_tools_stays_read_only() {
         RoleIsolation::Shared
     );
 }
+
+fn assistant_msg(
+    text: &str,
+    stop: mycode_core::StopReason,
+) -> std::sync::Arc<mycode_core::Message> {
+    std::sync::Arc::new(mycode_core::Message::Assistant(
+        mycode_core::AssistantMessage {
+            blocks: vec![mycode_core::ContentBlock::Text(
+                mycode_core::TextBlock::new(text),
+            )],
+            usage: None,
+            stop_reason: stop,
+        },
+    ))
+}
+
+#[test]
+fn an_interrupted_child_answers_as_a_tool_error() {
+    let text = mycode_core::interrupted_response_text("provider unavailable: transport failed");
+    let messages = vec![
+        std::sync::Arc::new(mycode_core::Message::User(mycode_core::UserMessage::text(
+            "brief",
+        ))),
+        assistant_msg(&text, mycode_core::StopReason::Error),
+    ];
+    let result = super::subagent_answer(
+        Ok(mycode_core::TurnOutcome::Completed),
+        &messages,
+        "artisan",
+    );
+    let error = result.expect_err("the interruption line is not an answer");
+    assert!(error.to_string().contains("transport failed"), "{error}");
+    // A real answer followed by an interrupted retry still fails closed.
+    let messages = vec![
+        assistant_msg("done so far", mycode_core::StopReason::Stop),
+        assistant_msg(&text, mycode_core::StopReason::Error),
+    ];
+    assert!(
+        super::subagent_answer(
+            Ok(mycode_core::TurnOutcome::Completed),
+            &messages,
+            "artisan",
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_stopped_child_answers_with_its_last_text() {
+    let messages = vec![
+        assistant_msg("earlier", mycode_core::StopReason::ToolUse),
+        assistant_msg("the answer", mycode_core::StopReason::Stop),
+    ];
+    let answer =
+        super::subagent_answer(Ok(mycode_core::TurnOutcome::Completed), &messages, "scout")
+            .expect("answer");
+    assert_eq!(answer, "the answer");
+    assert!(
+        super::subagent_answer(Ok(mycode_core::TurnOutcome::Aborted), &messages, "scout",)
+            .expect_err("aborted")
+            .to_string()
+            .contains("scout")
+    );
+    assert!(
+        super::subagent_answer(Ok(mycode_core::TurnOutcome::Completed), &[], "scout")
+            .expect_err("empty")
+            .to_string()
+            .contains("no answer")
+    );
+}

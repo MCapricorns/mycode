@@ -88,25 +88,42 @@ impl LedgerPump {
                     name,
                     target,
                 } => {
-                    let spelling = call_id.to_string();
+                    let provider_call_id = call_id.to_string();
                     // The ToolCall event must commit before its result; the
                     // ledger's ordering check rejects results for calls that
                     // were never opened.
-                    if let Err(error) = self.writer.open_call(&spelling, &name, &target).await {
-                        self.fail(render_error(error)).await;
-                        return;
-                    }
+                    let identity = match self
+                        .writer
+                        .open_call(&provider_call_id, &name, &target)
+                        .await
+                    {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            self.fail(render_error(error)).await;
+                            return;
+                        }
+                    };
                     self.send(BridgeEvent::ToolStarted {
                         session_id: self.session_id.clone(),
-                        call_id: spelling,
+                        call_id: identity.as_str().to_owned(),
+                        provider_call_id,
                         name,
                         target,
                     });
                 }
                 AgentEvent::ToolProgress { call_id, message } => {
+                    // Progress rides the transcript's ledger identity so the
+                    // live job it updates matches its rows. A provider id the
+                    // open-call map no longer holds is a straggler from a call
+                    // that already closed — forwarding it would resurrect a
+                    // finished job under an id no result can drop.
+                    let Some(identity) = self.writer.call_identity(&call_id.to_string()).await
+                    else {
+                        continue;
+                    };
                     self.send(BridgeEvent::ToolProgress {
                         session_id: self.session_id.clone(),
-                        call_id: call_id.to_string(),
+                        call_id: identity,
                         name: String::new(),
                         message,
                     });
@@ -120,10 +137,17 @@ impl LedgerPump {
                         return;
                     };
                     match self.writer.close_call(call_id.as_str(), &payload).await {
-                        Ok(event_id) => self.send(BridgeEvent::ToolCompleted {
-                            session_id: self.session_id.clone(),
-                            entry: project_tool_result_message(&event_id, &tool_result),
-                        }),
+                        Ok((event_id, identity)) => {
+                            let mut entry = project_tool_result_message(&event_id, &tool_result);
+                            // The payload's tool_call_id is the provider id;
+                            // live rows pair on the ledger identity the way
+                            // replayed rows do.
+                            entry.call_id = Some(identity);
+                            self.send(BridgeEvent::ToolCompleted {
+                                session_id: self.session_id.clone(),
+                                entry,
+                            });
+                        }
                         Err(error) => {
                             self.fail(render_error(error)).await;
                             return;
