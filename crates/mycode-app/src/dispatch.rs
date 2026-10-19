@@ -317,7 +317,7 @@ pub(crate) fn run_core(
                     let task_state = state.clone();
                     let reply = with_reply.reply;
                     requests.spawn(async move {
-                        let outcome = handle(&task_state, &command).await;
+                        let outcome = handle(&task_state, command).await;
                         let _ = reply.send(outcome);
                     });
                 }
@@ -441,7 +441,7 @@ fn cancel_session_work(state: &CoreState, session_id: &str) {
     });
 }
 
-async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
+async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
     match command {
         BridgeCommand::ListSessions => BridgeReply::Sessions(
             inspect_summaries(state.home.clone())
@@ -463,7 +463,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             Err(error) => BridgeReply::Created(Err(render_error(error))),
         },
         BridgeCommand::OpenSession(session) => BridgeReply::Conversation(
-            open_conversation(&state.service, session)
+            open_conversation(&state.service, &session)
                 .await
                 .map(|mut conversation| {
                     // A reopen can land while the session's turn is still in
@@ -479,7 +479,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             expected_head,
             before,
         } => BridgeReply::Older(
-            load_older(&state.service, session, branch, expected_head, before).await,
+            load_older(&state.service, &session, &branch, &expected_head, &before).await,
         ),
         BridgeCommand::SendMessage {
             session,
@@ -488,7 +488,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             text,
         } => BridgeReply::Sent {
             session: session.to_string(),
-            outcome: send_message(&state.service, session, branch, expected_head, text)
+            outcome: send_message(&state.service, &session, &branch, &expected_head, &text)
                 .await
                 .map_err(render_error),
         },
@@ -517,8 +517,6 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             settings,
         } => {
             let home = state.home.clone();
-            let settings = settings.clone();
-            let expected_revision = *expected_revision;
             BridgeReply::SettingsSaved(
                 blocking(move || save_settings(&home, expected_revision, &settings)).await,
             )
@@ -528,8 +526,6 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             api_key,
         } => {
             let home = state.home.clone();
-            let provider_id = provider_id.clone();
-            let api_key = api_key.clone();
             BridgeReply::ProviderKeySaved(
                 blocking(move || save_provider_key(&home, &provider_id, &api_key)).await,
             )
@@ -553,15 +549,14 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             "subagent cancels run as concurrent tasks".to_owned(),
         )),
         BridgeCommand::SearchProjectFiles { session_id, query } => {
-            let root = state.project_dir(session_id);
-            let query = query.clone();
+            let root = state.project_dir(&session_id);
             BridgeReply::ProjectFiles(
                 blocking(move || Ok(search_project_files(&root, &query))).await,
             )
         }
         BridgeCommand::McpListTools { server } => BridgeReply::McpTools {
             server_id: server.id.clone(),
-            outcome: mcp_list_tools(&state.home, server).await,
+            outcome: mcp_list_tools(&state.home, &server).await,
         },
         BridgeCommand::RecallMessage {
             session,
@@ -570,15 +565,10 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             to_event,
             edit,
         } => {
-            let service = state.service.clone();
-            let session = session.clone();
-            let branch = branch.clone();
-            let expected_head = expected_head.clone();
-            let to_event = to_event.clone();
-            let edit = edit.clone();
             // `handle` already runs as its own task; an inner spawn only
             // added a JoinError layer the match below then unwrapped.
-            match recall_message(&service, &session, &branch, &expected_head, &to_event).await {
+            match recall_message(&state.service, &session, &branch, &expected_head, &to_event).await
+            {
                 Ok(conversation) => BridgeReply::Recalled(Ok((Box::new(conversation), edit))),
                 Err(message) => BridgeReply::Recalled(Err(message)),
             }
@@ -589,8 +579,8 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             // into a session the index no longer names. The eviction is
             // best-effort — a dead actor cannot resurrect anything either —
             // so the durable delete always runs.
-            cancel_session_work(state, session_id);
-            if let Some(id) = mycode_agent::session::SessionId::parse(session_id) {
+            cancel_session_work(state, &session_id);
+            if let Some(id) = mycode_agent::session::SessionId::parse(&session_id) {
                 let _ = state.service.forget(&id).await;
             }
             let home = state.home.clone();
@@ -610,7 +600,6 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::RemoveRecent { project } => {
             let home = state.home.clone();
-            let project = project.clone();
             BridgeReply::UiStateSaved(
                 blocking(move || {
                     // Repair first; the locked edit rejects a damaged file.
@@ -623,7 +612,6 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::ExportData { path } => {
             let home = state.home.clone();
-            let path = path.clone();
             let outcome = blocking(move || crate::export::export_to_file(&home, &path)).await;
             BridgeReply::Exported(outcome)
         }
@@ -632,15 +620,15 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             confirm_mcp_commands,
         } => {
             let home = state.home.clone();
-            let path = path.clone();
-            let confirm = *confirm_mcp_commands;
-            let outcome =
-                blocking(move || crate::export::import_from_file(&home, &path, confirm)).await;
+            let outcome = blocking(move || {
+                crate::export::import_from_file(&home, &path, confirm_mcp_commands)
+            })
+            .await;
             BridgeReply::Imported(outcome)
         }
         BridgeCommand::ListResources { session_id } => {
             let home = state.home.clone();
-            let workspace = state.project_dir(session_id);
+            let workspace = state.project_dir(&session_id);
             BridgeReply::Resources(
                 blocking(move || {
                     let files = mycode_config::discover_resources(&home, &workspace);
@@ -660,9 +648,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::AskAnswer {
             session_id,
             answers,
-        } => BridgeReply::AskAnswered(deliver_ask_answer(session_id, answers.clone())),
+        } => BridgeReply::AskAnswered(deliver_ask_answer(&session_id, answers)),
         BridgeCommand::AskDismiss { session_id } => {
-            BridgeReply::AskAnswered(dismiss_ask(session_id))
+            BridgeReply::AskAnswered(dismiss_ask(&session_id))
         }
         BridgeCommand::GetCatalog => {
             // First request for the catalog pays the lazy parse; keep the
@@ -702,7 +690,6 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::SaveUiState { state: ui_state } => {
             let home = state.home.clone();
-            let ui_state = ui_state.clone();
             // Held across the write: snapshots replace the whole document,
             // so they must land in dispatch order.
             let _ordered = state.ui_state_writes.lock().await;
@@ -714,7 +701,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             )
         }
         BridgeCommand::SetProjectDir { session_id, path } => {
-            BridgeReply::ProjectSet(set_project_dir(state, session_id, path.as_deref()))
+            BridgeReply::ProjectSet(set_project_dir(state, &session_id, path.as_deref()))
         }
         BridgeCommand::RefreshCatalog => {
             BridgeReply::Catalog(Err("this request runs as a concurrent task".to_owned()))

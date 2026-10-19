@@ -110,19 +110,20 @@ pub(crate) fn project_replayed_entry_with_meter(
 
 /// Appends the UI-only diff from tool details. The model-facing content
 /// stays unchanged; this text is what the transcript renders.
-fn attach_ui_diff(text: &str, details: Option<&serde_json::Value>) -> String {
+fn attach_ui_diff(mut text: String, details: Option<&serde_json::Value>) -> String {
     let Some(diff) = details
         .and_then(|details| details.get("diff"))
         .and_then(|diff| diff.as_str())
         .map(str::trim)
         .filter(|diff| !diff.is_empty())
     else {
-        return text.to_owned();
+        return text;
     };
-    if text.contains(diff) {
-        return text.to_owned();
+    if !text.contains(diff) {
+        text.push('\n');
+        text.push_str(diff);
     }
-    format!("{text}\n{diff}")
+    text
 }
 
 /// Projects a committed tool-result payload into a display entry.
@@ -148,15 +149,14 @@ pub(crate) fn project_tool_result_message(
             text.push_str(&block.text);
         }
     }
-    let text = attach_ui_diff(&text, result.details.as_ref());
+    let mut text = attach_ui_diff(text, result.details.as_ref());
+    if result.is_error {
+        text.insert_str(0, "failed: ");
+    }
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::ToolResult,
-        text: if result.is_error {
-            format!("failed: {text}").into()
-        } else {
-            text.into()
-        },
+        text: text.into(),
         call_id: Some(result.tool_call_id.clone()),
         thinking: String::new(),
     }

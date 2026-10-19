@@ -484,17 +484,25 @@ fn strip_leading_think(text: &str) -> &str {
 }
 
 fn blocks_text(blocks: &[mycode_core::ContentBlock]) -> String {
-    let mut parts = Vec::new();
+    let mut out = String::new();
+    let mut first = true;
     for block in blocks {
+        let separator = if first { "" } else { "\n" };
         match block {
-            mycode_core::ContentBlock::Text(text) => parts.push(text.text.clone()),
-            mycode_core::ContentBlock::ToolCall(call) => {
-                parts.push(format!("tool_call {} {}", call.name, call.arguments));
+            mycode_core::ContentBlock::Text(text) => {
+                out.push_str(separator);
+                out.push_str(&text.text);
             }
-            mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {}
+            mycode_core::ContentBlock::ToolCall(call) => {
+                let _ = write!(out, "{separator}tool_call {} {}", call.name, call.arguments);
+            }
+            mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {
+                continue;
+            }
         }
+        first = false;
     }
-    parts.join("\n")
+    out
 }
 
 fn is_tool_result(message: &Message) -> bool {
@@ -528,7 +536,18 @@ fn checkpoint_matches(
 }
 
 fn is_summary_message(message: &Message) -> bool {
-    matches!(message, Message::User(user) if is_display_only_summary(&blocks_text(&user.content)))
+    // The marker opens the first text block; joining the whole message just
+    // to test its prefix copied the summary on every request.
+    let Message::User(user) = message else {
+        return false;
+    };
+    user.content
+        .iter()
+        .find_map(|block| match block {
+            mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .is_some_and(is_display_only_summary)
 }
 
 /// Returns the split index when compaction is due: everything before it is
@@ -775,9 +794,8 @@ async fn request_summary(
     if stop == mycode_core::StopReason::Error {
         return Err("summary stream failed".to_owned());
     }
-    let chars: Vec<char> = summary.chars().collect();
-    if chars.len() > mycode_config::MAX_SUMMARY_CHARS {
-        summary = chars[..mycode_config::MAX_SUMMARY_CHARS].iter().collect();
+    if let Some((cut, _)) = summary.char_indices().nth(mycode_config::MAX_SUMMARY_CHARS) {
+        summary.truncate(cut);
     }
     let trimmed = summary.trim();
     if trimmed.is_empty() {
