@@ -12,7 +12,9 @@
 //! copies itself there, spawns the installed copy with the same arguments,
 //! and exits. The installed copy deletes the old exe it replaced (the
 //! launcher holds the file until it exits, so deletion retries for up to 30
-//! seconds on a background thread) and drops a desktop shortcut. Sweeping
+//! seconds on a background thread) and drops a desktop shortcut — written
+//! once and recorded under `<home>`, so upgrades repair a shortcut the
+//! install never dropped while a user-deleted one stays gone. Sweeping
 //! `~/Downloads` and `~/Desktop` removes loose MYCode binaries and release
 //! archives of the self-installing families.
 //!
@@ -228,12 +230,22 @@ pub fn ensure_desktop_installed(home: &HomeLayout) -> DesktopInstall {
     if is_installed_exe(&exe, &target) {
         sweep_downloaded_binaries();
         // Child processes inherit the marker; once the source is gone a
-        // later restart must not recreate a shortcut the user deleted.
+        // later restart must not spawn the cleanup thread for it again.
         let cleanup = env::var_os(INSTALLED_FROM_ENV)
             .map(PathBuf::from)
             .filter(|source| source.exists());
-        if cleanup.is_some() {
-            create_desktop_shortcut(&target);
+        // The shortcut is written once, then recorded. A missing record —
+        // an install predating the shortcut, or an upgrade that never ran
+        // the download hand-off — still gets one; a record that outlives
+        // the .lnk means the user deleted it on purpose, so it is not
+        // recreated.
+        if cleanup.is_some() || !shortcut_record_path(home).exists() {
+            if create_desktop_shortcut(&target) {
+                let _ = fs::write(
+                    shortcut_record_path(home),
+                    target.as_os_str().as_encoded_bytes(),
+                );
+            }
             let _ = ensure_path_entry(&dir);
         }
         return DesktopInstall::Run { cleanup };
@@ -523,10 +535,21 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// Writes a desktop shortcut for the installed desktop binary.
-/// Best-effort: a failed shortcut must not block the install.
+/// `<home>/mycode-desktop.shortcut` records that the desktop shortcut was
+/// written once. Missing means this install predates the shortcut or its
+/// creation failed, so a later launch still writes one; present means a
+/// missing .lnk was removed on purpose and is not recreated.
 #[cfg(windows)]
-fn create_desktop_shortcut(target: &Path) {
+fn shortcut_record_path(home: &HomeLayout) -> PathBuf {
+    home.root().join("mycode-desktop.shortcut")
+}
+
+/// Writes a desktop shortcut for the installed desktop binary.
+/// Best-effort: a failed shortcut must not block the install. Returns
+/// whether the shortcut script ran to completion; only then is the
+/// shortcut recorded, so a failure is retried on the next launch.
+#[cfg(windows)]
+fn create_desktop_shortcut(target: &Path) -> bool {
     let exe = target.to_string_lossy().replace('\'', "''");
     let script = format!(
         "$desktop=[Environment]::GetFolderPath('Desktop');\
@@ -538,11 +561,12 @@ fn create_desktop_shortcut(target: &Path) {
     use std::os::windows::process::CommandExt as _;
     // The desktop is a windowed app; without this a console flashes up.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ = Command::new("powershell")
+    Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .and_then(|mut child| child.wait());
+        .and_then(|mut child| child.wait())
+        .is_ok_and(|status| status.success())
 }
 
 #[cfg(test)]
