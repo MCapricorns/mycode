@@ -287,7 +287,12 @@ impl FrontendDriver {
     ) -> bool {
         let id = id.trim();
         if id.is_empty() {
-            self.act(FrontendAction::Failed("fill id".to_owned()), out);
+            self.act(
+                FrontendAction::Failed(
+                    crate::i18n::t("Fill in the server id.", "请填写服务器 ID。").to_owned(),
+                ),
+                out,
+            );
             return false;
         }
         if self
@@ -297,7 +302,13 @@ impl FrontendDriver {
             .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.id == id))
         {
             self.act(
-                FrontendAction::Failed(format!("an MCP server named '{id}' already exists")),
+                FrontendAction::Failed(format!(
+                    "{} '{id}'",
+                    crate::i18n::t(
+                        "An MCP server already uses the id",
+                        "已有 MCP 服务器使用此 ID："
+                    )
+                )),
                 out,
             );
             return false;
@@ -376,7 +387,8 @@ impl FrontendDriver {
             // so only the last duplicate name was ever reported.
             self.act(
                 FrontendAction::Failed(format!(
-                    "MCP servers already exist: {}",
+                    "{} {}",
+                    crate::i18n::t("MCP servers already exist:", "MCP 服务器已存在："),
                     duplicates.join(", ")
                 )),
                 out,
