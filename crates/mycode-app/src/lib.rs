@@ -285,8 +285,8 @@ pub enum BridgeCommand {
         /// One answer per asked question, in order; empty string skips.
         answers: Vec<String>,
     },
-    /// Dismiss a pending ask without answering. The script sees a catchable
-    /// tool error. This does not cancel the turn.
+    /// Dismiss a pending ask without answering. The model sees a failed
+    /// tool call. This does not cancel the turn.
     AskDismiss {
         /// Session identity spelling.
         session_id: String,
