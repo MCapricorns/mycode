@@ -569,7 +569,15 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
         } => {
             // `handle` already runs as its own task; an inner spawn only
             // added a JoinError layer the match below then unwrapped.
-            match recall_message(&state.service, &session, &branch, &expected_head, &to_event).await
+            match recall_message(
+                &state.home,
+                &state.service,
+                &session,
+                &branch,
+                &expected_head,
+                &to_event,
+            )
+            .await
             {
                 Ok(conversation) => BridgeReply::Recalled(Ok((Box::new(conversation), edit))),
                 Err(message) => BridgeReply::Recalled(Err(message)),

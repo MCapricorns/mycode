@@ -225,23 +225,15 @@ async fn for_each_event(
         if page.items.is_empty() {
             break;
         }
-        let last = page
-            .items
-            .last()
-            .expect("nonempty page")
-            .event
-            .event_id
-            .clone();
         for loaded in &page.items {
             visit(&loaded.event, &loaded.payload)?;
         }
         match page.next {
-            Some(cursor) => after = Some(cursor),
-            None => break,
-        }
-        if after.as_ref() == Some(&last) {
-            // Defensive: a cursor equal to the last returned event would loop.
-            break;
+            // `page.next` is the last returned event (`after` is exclusive);
+            // only a cursor that failed to advance from the previous `after`
+            // would stall the walk.
+            Some(cursor) if after.as_ref() != Some(&cursor) => after = Some(cursor),
+            _ => break,
         }
     }
     Ok(())
@@ -349,6 +341,7 @@ fn order_tool_results(history: &mut [Arc<Message>]) {
 /// Workspace files are left unchanged: recall does not restore or delete
 /// them.
 pub(crate) async fn recall_message(
+    home: &HomeLayout,
     service: &SessionService,
     session: &SessionId,
     branch: &BranchId,
@@ -374,6 +367,20 @@ pub(crate) async fn recall_message(
         .rewind(session, branch, &target, &reservation)
         .await
         .map_err(render_error)?;
+    // A checkpoint whose covered head survives on the rewound branch still
+    // summarizes the prefix of the new branch; a rewind before that head
+    // leaves the old branch id so the discarded summary is ignored.
+    if let Ok(Some(mut checkpoint)) = mycode_config::read_compaction(home, session.as_str())
+        && checkpoint.branch_id == branch.as_str()
+        && let Some(covered) = SessionEventId::parse(&checkpoint.covered_head)
+        && service
+            .load_event(session, &branched.branch_id, &covered)
+            .await
+            .is_ok()
+    {
+        checkpoint.branch_id = branched.branch_id.as_str().to_owned();
+        let _ = mycode_config::write_compaction(home, session.as_str(), &checkpoint);
+    }
     read_branch(service, session, &branched.branch_id, &branched.head)
         .await
         .map_err(render_error)
@@ -827,6 +834,81 @@ mod tests {
             "empty project folder removed"
         );
         assert!(sessions.join("-work-a").join(kept.as_str()).is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ledger_history_walks_past_the_first_page_and_recall_moves_checkpoint() {
+        let (root, home) = scratch();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let service = SessionService::new(&home);
+            let created = service.create(None).await.expect("create");
+            let mut head = HeadStamp::Empty;
+            let mut event_260 = String::new();
+            for index in 0..270 {
+                let text = format!("msg-{index}");
+                let reservation = service
+                    .reserve_event(
+                        &created.session_id,
+                        &created.branch_id,
+                        EventKind::Message,
+                        None,
+                        text.as_bytes(),
+                    )
+                    .await
+                    .expect("reserve");
+                head = service
+                    .append(&created.session_id, &created.branch_id, &head, &reservation)
+                    .await
+                    .expect("append")
+                    .head;
+                if index == 260 {
+                    event_260 = super::head_spelling(&head);
+                }
+            }
+            let history =
+                super::ledger_history(&service, &created.session_id, &created.branch_id, &head)
+                    .await
+                    .expect("history");
+            assert_eq!(history.len(), 270, "must walk past the 256-event page");
+
+            mycode_config::write_compaction(
+                &home,
+                created.session_id.as_str(),
+                &mycode_config::CompactionCheckpoint {
+                    format_version: mycode_config::COMPACTION_FORMAT_VERSION,
+                    kind: mycode_config::COMPACTION_KIND.to_owned(),
+                    session_id: created.session_id.as_str().to_owned(),
+                    branch_id: created.branch_id.as_str().to_owned(),
+                    covered_head: event_260.clone(),
+                    covered_messages: 200,
+                    summary: "summary".to_owned(),
+                    model: "m".to_owned(),
+                    created_at_unix: 1,
+                },
+            )
+            .expect("checkpoint");
+
+            let rewound = super::recall_message(
+                &home,
+                &service,
+                &created.session_id,
+                &created.branch_id,
+                &head,
+                &event_260,
+            )
+            .await
+            .expect("recall");
+            let moved = mycode_config::read_compaction(&home, created.session_id.as_str())
+                .expect("read")
+                .expect("checkpoint");
+            assert_eq!(moved.branch_id, rewound.branch_id);
+            service.shutdown().await;
+        });
         let _ = std::fs::remove_dir_all(root);
     }
 }
