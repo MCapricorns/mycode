@@ -345,7 +345,7 @@ pub struct FrontendDriver {
     import_confirm: Option<PathBuf>,
     /// Roles resolved from built-ins, the home `agents` directory, and the
     /// open project's `.mycode/agents`. `None` until a surface asks for them.
-    agent_roles: Option<mycode_config::RoleCatalog>,
+    agent_roles: Option<Arc<mycode_config::RoleCatalog>>,
     /// Project directory the cached role catalog was built for.
     agent_roles_project: Option<String>,
     /// The roles surface was opened again, or the project changed.
@@ -789,17 +789,18 @@ impl FrontendDriver {
             return;
         }
         let root = project.as_deref().map(Path::new);
-        self.agent_roles = Some(mycode_config::discover_roles(&self.home, root));
+        self.agent_roles = Some(Arc::new(mycode_config::discover_roles(&self.home, root)));
         self.agent_roles_project = project;
         self.agent_roles_stale = false;
     }
 
     /// Role catalog last resolved for settings. Built-ins only before the
-    /// first resolution.
-    pub fn agent_roles(&self) -> mycode_config::RoleCatalog {
+    /// first resolution. Shared, so a settings paint does not copy every
+    /// role prompt.
+    pub fn agent_roles(&self) -> Arc<mycode_config::RoleCatalog> {
         self.agent_roles
             .clone()
-            .unwrap_or_else(mycode_config::builtin_roles)
+            .unwrap_or_else(|| Arc::new(mycode_config::builtin_roles()))
     }
 
     /// Marks the roles cache dirty so the next read re-scans.
