@@ -275,12 +275,14 @@ async fn a_second_compact_in_one_turn_keeps_every_uncovered_message() {
         user(&padded("TAIL-B ", 39_000)),
     ];
     let scope = super::CompactScope {
-        home: &home,
         wire: &wire,
         model: "model-a",
-        session_id: "session-c",
-        branch_id: "branch-c",
-        head: "head-1",
+        checkpoint: Some(super::CheckpointSlot {
+            home: &home,
+            session_id: "session-c",
+            branch_id: "branch-c",
+            head: "head-1",
+        }),
         context_window: 30_000,
         overhead_tokens: 0,
         cancel: &tokio_util::sync::CancellationToken::new(),
@@ -314,12 +316,14 @@ async fn manual_compact_is_the_next_request_while_under_the_auto_threshold() {
     let head = padded("HEAD-MARKER-", 100_000);
     let history = vec![user(&head), user("TAIL-ONE"), user("TAIL-TWO")];
     let scope = super::CompactScope {
-        home: &home,
         wire: &wire,
         model: "model-a",
-        session_id: "session-a",
-        branch_id: "branch-a",
-        head: "head-1",
+        checkpoint: Some(super::CheckpointSlot {
+            home: &home,
+            session_id: "session-a",
+            branch_id: "branch-a",
+            head: "head-1",
+        }),
         // Large window: this history is over the ~20k tail, under the
         // auto threshold, which is the case that used to skip the checkpoint.
         context_window: 200_000,
@@ -344,7 +348,10 @@ async fn manual_compact_is_the_next_request_while_under_the_auto_threshold() {
     let mut later = history;
     later.push(user("NEW-TURN"));
     let next_scope = super::CompactScope {
-        head: "head-2",
+        checkpoint: scope.checkpoint.map(|slot| super::CheckpointSlot {
+            head: "head-2",
+            ..slot
+        }),
         ..scope
     };
     let next = super::compact_history(&next_scope, later, false).await;
@@ -381,12 +388,14 @@ async fn manual_compact_summarizes_a_session_that_still_fits() {
     let wire = summary_wire(calls.clone());
     let history = vec![user("hi"), user("there")];
     let scope = super::CompactScope {
-        home: &home,
         wire: &wire,
         model: "model-a",
-        session_id: "session-b",
-        branch_id: "branch-b",
-        head: "head-1",
+        checkpoint: Some(super::CheckpointSlot {
+            home: &home,
+            session_id: "session-b",
+            branch_id: "branch-b",
+            head: "head-1",
+        }),
         context_window: 200_000,
         overhead_tokens: 0,
         cancel: &tokio_util::sync::CancellationToken::new(),
@@ -564,12 +573,14 @@ async fn summary_request_disables_glm_thinking_and_retries_a_truncated_summary()
         vec![("length", "partial"), ("stop", FULL_HANDOFF)],
     );
     let scope = super::CompactScope {
-        home: &home,
         wire: &wire,
         model: "glm-5.3",
-        session_id: "session-glm",
-        branch_id: "branch-glm",
-        head: "head-1",
+        checkpoint: Some(super::CheckpointSlot {
+            home: &home,
+            session_id: "session-glm",
+            branch_id: "branch-glm",
+            head: "head-1",
+        }),
         context_window: 200_000,
         overhead_tokens: 0,
         cancel: &tokio_util::sync::CancellationToken::new(),
@@ -599,12 +610,14 @@ async fn a_still_truncated_summary_is_not_stored() {
         vec![("length", "partial"), ("length", "still partial")],
     );
     let scope = super::CompactScope {
-        home: &home,
         wire: &wire,
         model: "glm-5.3",
-        session_id: "session-cut",
-        branch_id: "branch-cut",
-        head: "head-1",
+        checkpoint: Some(super::CheckpointSlot {
+            home: &home,
+            session_id: "session-cut",
+            branch_id: "branch-cut",
+            head: "head-1",
+        }),
         context_window: 200_000,
         overhead_tokens: 0,
         cancel: &tokio_util::sync::CancellationToken::new(),
@@ -634,12 +647,14 @@ async fn an_empty_summary_is_an_error() {
         vec![("end_turn", "")],
     );
     let scope = super::CompactScope {
-        home: &home,
         wire: &wire,
         model: "glm-5.3",
-        session_id: "session-empty",
-        branch_id: "branch-empty",
-        head: "head-1",
+        checkpoint: Some(super::CheckpointSlot {
+            home: &home,
+            session_id: "session-empty",
+            branch_id: "branch-empty",
+            head: "head-1",
+        }),
         context_window: 200_000,
         overhead_tokens: 0,
         cancel: &tokio_util::sync::CancellationToken::new(),
@@ -796,12 +811,14 @@ async fn a_twelve_token_one_line_summary_is_rejected_and_history_is_kept() {
     );
     let history = large_history();
     let scope = super::CompactScope {
-        home: &home,
         wire: &wire,
         model: "MiniMax-M3",
-        session_id: "session-short",
-        branch_id: "branch-short",
-        head: "head-1",
+        checkpoint: Some(super::CheckpointSlot {
+            home: &home,
+            session_id: "session-short",
+            branch_id: "branch-short",
+            head: "head-1",
+        }),
         context_window: 200_000,
         overhead_tokens: 0,
         cancel: &tokio_util::sync::CancellationToken::new(),
@@ -879,4 +896,62 @@ fn system_prompt_and_tools_count_toward_the_auto_trigger() {
     }];
     let tokens = super::estimate_prefix_tokens(&["You are MYCode".to_owned()], &tools);
     assert!(tokens > 0, "{tokens}");
+}
+
+/// A subagent runs this same compaction with no checkpoint slot: its own
+/// summary chain only, never its parent session's checkpoint.
+#[tokio::test]
+async fn a_history_without_a_checkpoint_slot_compacts_in_memory_only() {
+    let (root, home) = scratch_home();
+    mycode_config::write_compaction(
+        &home,
+        "parent-session",
+        &mycode_config::CompactionCheckpoint {
+            format_version: mycode_config::COMPACTION_FORMAT_VERSION,
+            kind: mycode_config::COMPACTION_KIND.to_owned(),
+            session_id: "parent-session".to_owned(),
+            branch_id: "branch-p".to_owned(),
+            covered_head: "head-p".to_owned(),
+            covered_messages: 1,
+            summary: "PARENT-SUMMARY must stay out of the child".to_owned(),
+            model: "model-a".to_owned(),
+            created_at_unix: 1,
+        },
+    )
+    .expect("parent checkpoint");
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let bodies = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let wire = summary_wire_with(calls.clone(), Some(bodies.clone()));
+    let history = vec![
+        user(&padded("CHILD-HEAD ", 39_000)),
+        user(&padded("CHILD-MID ", 39_000)),
+        user(&padded("CHILD-TAIL-A ", 39_000)),
+        user(&padded("CHILD-TAIL-B ", 39_000)),
+    ];
+    let scope = super::CompactScope {
+        wire: &wire,
+        model: "model-a",
+        checkpoint: None,
+        context_window: 30_000,
+        overhead_tokens: 0,
+        cancel: &tokio_util::sync::CancellationToken::new(),
+    };
+    let compacted = super::compact_history(&scope, history, false).await;
+    assert_eq!(compacted.status, CompactStatus::Replaced);
+    assert_eq!(compacted.summary.as_deref(), Some(PLAUSIBLE_SUMMARY));
+    assert!(super::is_summary_message(&compacted.messages[0]));
+    let sent = bodies.lock().concat();
+    assert!(sent.contains("CHILD-HEAD") && sent.contains("CHILD-MID"));
+    assert!(
+        !sent.contains("PARENT-SUMMARY"),
+        "the parent checkpoint leaked in"
+    );
+    let parent = mycode_config::read_compaction(&home, "parent-session")
+        .expect("read")
+        .expect("still there");
+    assert!(
+        parent.summary.starts_with("PARENT-SUMMARY"),
+        "the parent file changed"
+    );
+    let _ = std::fs::remove_dir_all(root);
 }

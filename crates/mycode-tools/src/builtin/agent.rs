@@ -25,6 +25,9 @@ pub const MAX_AGENT_ANSWER_CHARS: usize = 24_000;
 ///
 /// Readers do not accept the previous `task|` prefix.
 pub const AGENT_PROGRESS_PREFIX: &str = "agent";
+/// `step` detail a subagent reports after compacting its own history; the
+/// frontend localizes it like the other step tokens.
+pub const AGENT_COMPACTED_STEP: &str = "compacted";
 
 /// One delegated unit of work.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

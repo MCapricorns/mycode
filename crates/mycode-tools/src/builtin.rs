@@ -19,7 +19,9 @@ pub mod shell;
 pub mod web;
 pub mod write;
 
-pub use agent::{AGENT_PROGRESS_PREFIX, AgentHost, AgentTool, SubagentRequest};
+pub use agent::{
+    AGENT_COMPACTED_STEP, AGENT_PROGRESS_PREFIX, AgentHost, AgentTool, SubagentRequest,
+};
 pub use ask::{
     AskAnswer, AskChannel, AskQuestion, AskTool, ask_choice_selected, render_ask_answers,
     toggle_ask_choice, user_dismissed,

@@ -308,7 +308,12 @@ async fn run_chat_turn_on(
                     state.mcp_pool.clone(),
                     state.copilot.clone(),
                 )
-                .with_web(web_ready),
+                .with_web(web_ready)
+                .with_context(
+                    Arc::clone(&state.catalog),
+                    provider.clone(),
+                    model.to_owned(),
+                ),
             ))));
         }
         // The model's web tools ride the same settings-configured backend,
@@ -368,12 +373,14 @@ async fn run_chat_turn_on(
     // reply commit, so a mid-turn summary cannot split a tool call from its
     // result.
     let compact_scope = crate::compaction::CompactScope {
-        home,
         wire: &wire,
         model,
-        session_id: &session_id,
-        branch_id: branch.as_str(),
-        head: &head_stamp_text,
+        checkpoint: Some(crate::compaction::CheckpointSlot {
+            home,
+            session_id: &session_id,
+            branch_id: branch.as_str(),
+            head: &head_stamp_text,
+        }),
         context_window,
         overhead_tokens,
         cancel: &control.cancel,
@@ -419,12 +426,14 @@ async fn run_chat_turn_on(
             // The turn token stops a summary the user no longer waits for;
             // the agent then sees the cancel right after this hook.
             let scope = crate::compaction::CompactScope {
-                home: &home,
                 wire: &wire,
                 model: &model,
-                session_id: &session_id,
-                branch_id: &branch_id,
-                head: &head,
+                checkpoint: Some(crate::compaction::CheckpointSlot {
+                    home: &home,
+                    session_id: &session_id,
+                    branch_id: &branch_id,
+                    head: &head,
+                }),
                 context_window,
                 overhead_tokens: crate::compaction::estimate_prefix_tokens(
                     &request.system_prompt,
@@ -492,12 +501,68 @@ async fn run_chat_turn_on(
     // Drain the pump before returning. An agent error already became
     // ChatFailed inside the pump; returning Err here would send a second one.
     let pump_ended = pump.await;
+    // The ledger is complete only once the pump drained.
+    if pump_ended.is_ok() {
+        persist_hook_summary(
+            state,
+            &session,
+            &branch,
+            &session_id,
+            model,
+            agent.state().messages(),
+        )
+        .await;
+    }
     if outcome.is_err() && pump_ended.is_ok() {
         return Ok(());
     }
     outcome.map_err(|error| format!("turn failed: {error}"))?;
     pump_ended.map_err(|error| format!("the turn pump stopped: {error}"))?;
     Ok(())
+}
+
+/// Stores a summary the request hook produced mid-turn, checked against
+/// the ledger as it stands now; see
+/// [`crate::compaction::persist_turn_summary`]. Best effort, like every
+/// compaction step: a failure keeps the older checkpoint.
+async fn persist_hook_summary(
+    state: &CoreState,
+    session: &SessionId,
+    branch: &BranchId,
+    session_id: &str,
+    model: &str,
+    memory: &[Arc<Message>],
+) {
+    if !memory
+        .first()
+        .is_some_and(|message| crate::compaction::is_summary_message(message))
+    {
+        return;
+    }
+    let Ok(head) = branch_head(&state.service, session, branch).await else {
+        return;
+    };
+    let Ok(ledger) = ledger_history(&state.service, session, branch, &head).await else {
+        return;
+    };
+    let home = state.home.clone();
+    let memory = memory.to_vec();
+    let (session_id, branch_id, head, model) = (
+        session_id.to_owned(),
+        branch.as_str().to_owned(),
+        head_spelling(&head),
+        model.to_owned(),
+    );
+    let _ = tokio::task::spawn_blocking(move || {
+        let target = crate::compaction::TurnCheckpoint {
+            session_id: &session_id,
+            branch_id: &branch_id,
+            head: &head,
+            model: &model,
+        };
+        crate::compaction::persist_turn_summary(&home, &target, &ledger, &memory)
+    })
+    .await;
 }
 
 /// Splits the latest non-empty user message off as the prompt.

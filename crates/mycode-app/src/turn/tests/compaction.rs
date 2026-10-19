@@ -378,3 +378,255 @@ async fn manual_compact_rejects_a_moved_branch_head() {
     }
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Scripted model for a long turn: `rounds` tool rounds, each reading its
+/// own large file, then a plain reply. Every summary request gets a summary
+/// with its own number, so the test can follow the chain.
+struct ChainTransport {
+    rounds: usize,
+    tool_rounds: Mutex<usize>,
+    summaries: Mutex<Vec<String>>,
+    finals: Mutex<Vec<String>>,
+}
+
+impl ChainTransport {
+    fn new(rounds: usize) -> Arc<Self> {
+        Arc::new(Self {
+            rounds,
+            tool_rounds: Mutex::new(0),
+            summaries: Mutex::new(Vec::new()),
+            finals: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl SseTransport for ChainTransport {
+    fn post<'a>(
+        &'a self,
+        call: TransportCall,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let body = String::from_utf8_lossy(&call.body).into_owned();
+            let sse = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                let mut summaries = self.summaries.lock().expect("summaries");
+                summaries.push(body);
+                text_sse(
+                    &format!(
+                        "chain-mark-{}; {}",
+                        summaries.len(),
+                        "The covered prefix is replaced by this checkpoint. ".repeat(6)
+                    ),
+                    80,
+                )
+            } else {
+                let mut done = self.tool_rounds.lock().expect("rounds");
+                if *done < self.rounds {
+                    *done += 1;
+                    read_sse(*done)
+                } else {
+                    self.finals.lock().expect("finals").push(body);
+                    text_sse("all rounds done", 3)
+                }
+            };
+            let (sender, stream) = tokio::sync::mpsc::channel(1);
+            sender
+                .send(Ok(bytes::Bytes::from(sse)))
+                .await
+                .expect("queue scripted body");
+            Ok(stream)
+        })
+    }
+}
+
+fn read_sse(round: usize) -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": format!("call_read_{round}"),
+                    "function": {
+                        "name": "read",
+                        "arguments": serde_json::json!({"path": format!("f{round}.txt")}).to_string()
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    });
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+}
+
+/// Runs one turn on `transport`, draining its bridge events.
+async fn run_scripted_turn(
+    state: &CoreState,
+    session: &SessionId,
+    branch: &BranchId,
+    cwd: &std::path::Path,
+    settings: &AppSettings,
+    transport: Arc<dyn SseTransport>,
+) -> Result<(), String> {
+    let provider = settings.providers[0].clone();
+    let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
+        .expect("resolve");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let session_id = session.as_str().to_owned();
+    let control = TurnControl::register(state, &session_id);
+    let result = run_chat_turn_on(
+        state,
+        &tx,
+        &session_id,
+        session.clone(),
+        branch.clone(),
+        "test-model",
+        None,
+        cwd.to_path_buf(),
+        resolved,
+        settings.clone(),
+        provider,
+        transport,
+        &control,
+    )
+    .await;
+    drop(tx);
+    let _ = drain.await;
+    result
+}
+
+/// One turn that compacts again and again must carry every earlier summary
+/// forward, keep every tool result somewhere the model sees, send only the
+/// newest summary, and leave a checkpoint the next turn resumes from.
+#[tokio::test]
+async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes() {
+    const ROUNDS: usize = 6;
+    let (root, home) = scratch();
+    let mut settings = AppSettings::default();
+    settings.providers.push(ProviderSettings {
+        id: "local".to_owned(),
+        kind: "openai-completions".to_owned(),
+        base_url: "https://example.com/v1".to_owned(),
+        models: vec!["test-model".to_owned()],
+        enabled: true,
+        // ~25.6k token trigger; each read adds ~12k, so from the second
+        // round on every request compacts.
+        context_limit: Some(30_000),
+        max_output: None,
+        hidden_models: Vec::new(),
+    });
+    replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
+    replace_provider_secrets(
+        &home,
+        AuthorityRevision::ABSENT,
+        &ProviderSecrets::new().with_key("local", Some("test-key")),
+    )
+    .expect("secrets");
+    let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+    std::fs::create_dir_all(&cwd).expect("cwd");
+    let line = format!("{}\n", "b".repeat(79));
+    for round in 1..=ROUNDS {
+        let body = format!("BODY-{round}\n{}", line.repeat(600));
+        std::fs::write(cwd.join(format!("f{round}.txt")), body).expect("fixture");
+    }
+
+    let catalog = mycode_providers::catalog::current(&home);
+    let state = CoreState::new(home.clone(), catalog, Vec::new());
+    let created = state.service.create().await.expect("session");
+    let (session, branch) = (created.session_id.clone(), created.branch_id.clone());
+    crate::ledger::send_message(
+        &state.service,
+        &session,
+        &branch,
+        &HeadStamp::Empty,
+        "read every file in turn",
+    )
+    .await
+    .expect("prompt");
+
+    let chain = ChainTransport::new(ROUNDS);
+    run_scripted_turn(&state, &session, &branch, &cwd, &settings, chain.clone())
+        .await
+        .expect("long turn");
+    let summaries = chain.summaries.lock().expect("summaries").clone();
+    let finals = chain.finals.lock().expect("finals").clone();
+    assert!(
+        summaries.len() >= 4,
+        "expected four or more compactions in one turn, got {}",
+        summaries.len()
+    );
+    for (index, body) in summaries.iter().enumerate().skip(1) {
+        assert!(
+            body.contains(&format!("chain-mark-{index};")),
+            "summary request {} lost summary {index}",
+            index + 1
+        );
+    }
+    let final_body = finals.last().expect("final request");
+    assert_eq!(final_body.matches("COMPACTION SUMMARY").count(), 1);
+    let newest = format!("chain-mark-{};", summaries.len());
+    assert!(
+        final_body.contains(&newest),
+        "final request lacks the newest summary"
+    );
+    for round in 1..=ROUNDS {
+        let marker = format!("BODY-{round}");
+        assert!(
+            summaries.iter().any(|body| body.contains(&marker)) || final_body.contains(&marker),
+            "{marker} never reached the model after it was read"
+        );
+    }
+
+    // The newest summary is on disk, aligned with the ledger replay.
+    let session_id = session.as_str().to_owned();
+    let checkpoint = mycode_config::read_compaction(&home, &session_id)
+        .expect("read checkpoint")
+        .expect("checkpoint written");
+    assert!(
+        checkpoint.summary.contains(&newest),
+        "the checkpoint kept an older summary"
+    );
+
+    // The next turn starts from that summary and does not summarize again.
+    let head = crate::ledger::branch_head(&state.service, &session, &branch)
+        .await
+        .expect("head");
+    crate::ledger::send_message(
+        &state.service,
+        &session,
+        &branch,
+        &head,
+        "NEXT-TURN what now",
+    )
+    .await
+    .expect("second prompt");
+    let next = ChainTransport::new(0);
+    run_scripted_turn(&state, &session, &branch, &cwd, &settings, next.clone())
+        .await
+        .expect("next turn");
+    assert!(
+        next.summaries.lock().expect("summaries").is_empty(),
+        "the next turn re-summarized instead of resuming from the checkpoint"
+    );
+    let next_body = next
+        .finals
+        .lock()
+        .expect("finals")
+        .last()
+        .cloned()
+        .expect("request");
+    assert_eq!(next_body.matches("COMPACTION SUMMARY").count(), 1);
+    assert!(
+        next_body.contains(&newest),
+        "the next turn did not start from the newest summary"
+    );
+    assert!(next_body.find(&newest) < next_body.find("NEXT-TURN what now"));
+    let _ = std::fs::remove_dir_all(root);
+}

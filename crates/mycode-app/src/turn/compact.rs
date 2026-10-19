@@ -245,19 +245,23 @@ async fn compact_session_now(
     let head_stamp_text = head_spelling(expected_head);
     let context_window = model_context_window(state, &provider, model);
     let scope = crate::compaction::CompactScope {
-        home,
         wire: &wire,
         model,
-        session_id: session.as_str(),
-        branch_id: branch.as_str(),
-        head: &head_stamp_text,
+        checkpoint: Some(crate::compaction::CheckpointSlot {
+            home,
+            session_id: session.as_str(),
+            branch_id: branch.as_str(),
+            head: &head_stamp_text,
+        }),
         context_window,
         overhead_tokens: 0,
         cancel,
     };
     let compacted = crate::compaction::compact_history(&scope, history, true).await;
     match compacted.status {
-        crate::compaction::CompactStatus::Wrote => Ok(("compacted".to_owned(), compacted.summary)),
+        crate::compaction::CompactStatus::Wrote | crate::compaction::CompactStatus::Replaced => {
+            Ok(("compacted".to_owned(), compacted.summary))
+        }
         crate::compaction::CompactStatus::Covered => Ok(("covered".to_owned(), None)),
         crate::compaction::CompactStatus::Unchanged => Ok(("empty".to_owned(), None)),
         crate::compaction::CompactStatus::Failed(message) => Err(message),
