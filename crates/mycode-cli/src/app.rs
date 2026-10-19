@@ -39,6 +39,7 @@ use mycode_app::install::InstallReport;
 use mycode_app::{ConversationEntry, EntryKind};
 use mycode_config::{VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES};
 use mycode_frontend::driver::{Effect, FrontendDriver, ToastKind};
+use mycode_frontend::picker;
 use mycode_frontend::view_model::{
     FrontendAction, MainView, MentionKind, ProxyTestState, SettingsSection, UpdateState,
     WorkspaceState, elapsed_label, model_display_name, preferred_slash_index,
@@ -818,91 +819,40 @@ impl Tui {
     /// The rows one picker step shows, filtered by the typed query.
     fn picker_rows(&self, provider: Option<&str>, filter: &str) -> Vec<PickerRow> {
         let vm = self.driver.vm();
-        let Some(settings) = vm.settings.as_ref() else {
+        if vm.settings.is_none() {
             return Vec::new();
-        };
-        match provider {
-            None => {
-                let mut rows: Vec<PickerRow> = Vec::new();
-                let mut seen_pins = std::collections::HashSet::new();
-                let mut pins = 0usize;
-                for pin in &vm.recent_models {
-                    let offered = settings.providers.iter().any(|provider| {
-                        provider.id == pin.provider
-                            && provider.enabled
-                            && provider.shows_model(&pin.model)
-                    });
-                    if !offered || !seen_pins.insert((&pin.provider, &pin.model)) {
-                        continue;
-                    }
-                    rows.push(PickerRow::Pin {
-                        provider: pin.provider.clone(),
-                        model: pin.model.clone(),
-                        label: format!(
-                            "{} · {}",
-                            model_display_name(vm, &pin.provider, &pin.model),
-                            provider_display_name(vm, &pin.provider)
-                        ),
-                    });
-                    pins += 1;
-                    if pins >= 3 {
-                        break;
-                    }
-                }
-                for provider in &settings.providers {
-                    if !provider.enabled {
-                        continue;
-                    }
-                    let id = provider.id.clone();
-                    rows.push(PickerRow::Provider {
-                        id: id.clone(),
-                        label: provider_display_name(vm, &id),
-                    });
-                }
-                filter_picker_rows(rows, filter)
-            }
-            Some(provider_id) => {
-                let row = settings
-                    .providers
-                    .iter()
-                    .find(|provider| provider.id == provider_id);
-                let catalog: Vec<(String, String)> = vm
-                    .catalog
-                    .as_ref()
-                    .and_then(|catalog| catalog.provider(provider_id))
-                    .map(|provider| {
-                        provider
-                            .models
-                            .iter()
-                            .map(|model| (model.id.clone(), model.name.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let configured = row
-                    .map(|provider| provider.models.clone())
-                    .unwrap_or_default();
-                let mut seen = std::collections::HashSet::new();
-                let mut rows = Vec::new();
-                for (id, name) in catalog
-                    .into_iter()
-                    .chain(configured.into_iter().map(|id| (id.clone(), id)))
-                {
-                    if !seen.insert(id.clone()) {
-                        continue;
-                    }
-                    // Hidden models stay out of the pick list.
-                    if row.is_some_and(|provider| !provider.shows_model(&id)) {
-                        continue;
-                    }
-                    rows.push(PickerRow::Model {
-                        provider: provider_id.to_owned(),
-                        model: id.clone(),
-                        label: if name.is_empty() { id } else { name },
-                    });
-                }
-                filter_picker_rows(rows, filter)
-            }
         }
+        // The desktop picker's rows: recent pins, then enabled providers;
+        // a provider's step lists its catalog and configured models minus
+        // the hidden ones.
+        let rows = match provider {
+            None => picker::recent_pins(vm)
+                .into_iter()
+                .map(|pin| PickerRow::Pin {
+                    label: format!(
+                        "{} · {}",
+                        model_display_name(vm, &pin.provider, &pin.model),
+                        provider_display_name(vm, &pin.provider)
+                    ),
+                    provider: pin.provider,
+                    model: pin.model,
+                })
+                .chain(
+                    picker::enabled_providers(vm)
+                        .into_iter()
+                        .map(|(id, label)| PickerRow::Provider { id, label }),
+                )
+                .collect(),
+            Some(provider_id) => picker::provider_model_choices(vm, provider_id)
+                .into_iter()
+                .map(|choice| PickerRow::Model {
+                    provider: provider_id.to_owned(),
+                    model: choice.id,
+                    label: choice.name,
+                })
+                .collect(),
+        };
+        filter_picker_rows(rows, filter)
     }
 
     /// Enter on a picker row: pins and models select, providers descend.
@@ -1735,21 +1685,11 @@ impl PickerRow {
     }
 }
 
-/// Case-insensitive substring filter on the row label and id.
+/// The shared picker filter on the row label and id: every word matches,
+/// ignoring case and separators.
 fn filter_picker_rows(rows: Vec<PickerRow>, filter: &str) -> Vec<PickerRow> {
-    let words: Vec<String> = filter
-        .split_whitespace()
-        .map(|word| word.to_ascii_lowercase())
-        .filter(|word| !word.is_empty())
-        .collect();
-    if words.is_empty() {
-        return rows;
-    }
     rows.into_iter()
-        .filter(|row| {
-            let haystack = format!("{} {}", row.label(), row.id()).to_ascii_lowercase();
-            words.iter().all(|word| haystack.contains(word.as_str()))
-        })
+        .filter(|row| picker::query_matches(filter, &[row.label(), row.id()]))
         .collect()
 }
 
