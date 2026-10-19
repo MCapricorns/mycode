@@ -118,7 +118,10 @@ impl Workspace {
     pub(crate) fn on_open_chat_folder_picker(&mut self, cx: &mut Context<Self>) {
         if self.vm().sending {
             self.push_toast(
-                "Finish or stop the current turn before changing its folder.",
+                crate::i18n::t(
+                    "Finish or stop the current turn before changing its folder.",
+                    "请先完成或停止当前轮次，再更换目录。",
+                ),
                 crate::workspace::ToastKind::Info,
                 cx,
             );
@@ -138,7 +141,7 @@ impl Workspace {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Attach file references".into()),
+            prompt: Some(crate::i18n::t("Attach file references", "附加文件引用").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = receiver.await else {
