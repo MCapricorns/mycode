@@ -10,7 +10,10 @@ use gpui_kit::{
     Window, div, px,
 };
 
-use super::{CHANGES_PREVIEW, git_status_color, responsive_panel_bounds, section_heading};
+use super::{
+    CHANGES_PREVIEW, changes_drawer_max_height, git_status_color, responsive_panel_bounds,
+    section_heading,
+};
 use crate::i18n::t;
 use crate::workspace::Workspace;
 
@@ -151,6 +154,7 @@ pub(crate) fn render_changes_drawer(
     let files = git.files.clone();
     let stopped_early = git.stopped_early;
     let viewport_width = f32::from(window.viewport_size().width);
+    let viewport_height = f32::from(window.viewport_size().height);
     let ((drawer_right, drawer_width), _) =
         responsive_panel_bounds(viewport_width, inspector_span, true);
     div()
@@ -181,7 +185,10 @@ pub(crate) fn render_changes_drawer(
                 .absolute()
                 .top(px(crate::ui::title_bar::BAR_HEIGHT + 8.))
                 .right(px(drawer_right))
-                .bottom(px(12.))
+                // Hug the content instead of stretching to the window
+                // bottom; the cap keeps the drawer inside the viewport.
+                .h_auto()
+                .max_h(px(changes_drawer_max_height(viewport_height)))
                 .w(px(drawer_width))
                 .flex()
                 .flex_col()
@@ -236,7 +243,8 @@ pub(crate) fn render_changes_drawer(
                 .child(
                     div()
                         .id("changes-drawer-files")
-                        .flex_shrink_0()
+                        .flex_shrink(1.)
+                        .min_h_0()
                         .max_h(px(220.))
                         .overflow_y_scroll()
                         .p_2()

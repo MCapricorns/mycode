@@ -123,6 +123,18 @@ pub(crate) fn responsive_panel_bounds(
     ((drawer_right, drawer_width), (diff_right, diff_width))
 }
 
+/// Maximum height for the changes drawer.
+///
+/// The drawer hugs its content instead of stretching to the window bottom,
+/// but the cap keeps it from growing past the margin the other panels keep:
+/// its top sits `BAR_HEIGHT + 8` down, and the bottom keeps [`PANEL_GAP`]
+/// clear. The floor leaves a usable drawer in a degenerate short window.
+#[must_use]
+pub(crate) fn changes_drawer_max_height(viewport_height: f32) -> f32 {
+    const MIN_DRAWER_HEIGHT: f32 = 160.;
+    (viewport_height - super::title_bar::BAR_HEIGHT - 8. - PANEL_GAP).max(MIN_DRAWER_HEIGHT)
+}
+
 const SUBAGENT_WINDOW_WIDTH: f32 = 320.;
 /// Bottom inset for the subagent window. It stops above the tallest
 /// composer (input cap, toolbar, jump row) so its occluding body never
@@ -394,8 +406,8 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
     // Usage accounting is live-only: the running turn reports through the
     // live meter, and a finished turn keeps its sums as the last-turn row.
     // These are totals over every request of the turn (one per tool round),
-    // so they exceed the context meter, which is the latest prompt alone;
-    // the labels and the request count say so.
+    // while the context meter is the latest prompt alone; the labels and
+    // the request count say so.
     // The hit row shares the sum row's timeframe, so it reads "this turn"
     // only while the turn still runs and "last turn" once the sums are the
     // last turn's.

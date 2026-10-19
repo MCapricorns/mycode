@@ -70,6 +70,21 @@ fn the_subagent_window_stacks_left_of_details_drawer_and_diff() {
 }
 
 #[test]
+fn changes_drawer_max_height_is_the_old_stretched_span_with_a_floor() {
+    let height = 900.;
+    // The cap equals the room the drawer stretched into before: below the
+    // title-bar offset and above the bottom panel margin.
+    assert_eq!(
+        super::changes_drawer_max_height(height),
+        height - crate::ui::title_bar::BAR_HEIGHT - 8. - 12.
+    );
+    // The smallest real window still leaves the drawer most of the screen.
+    assert!(super::changes_drawer_max_height(560.) >= 400.);
+    // A degenerate viewport keeps a usable, positive height.
+    assert!(super::changes_drawer_max_height(0.) >= 120.);
+}
+
+#[test]
 fn context_bar_fraction_is_zero_when_empty_and_proportional_to_window() {
     assert_eq!(super::context_bar_fraction(0, 0), 0.0);
     assert_eq!(super::context_bar_fraction(0, 200_000), 0.0);
