@@ -192,10 +192,7 @@ fn render_model_step(
     let choices = provider_model_choices(workspace.vm(), provider_id);
     let filtered = filter_model_choices(&choices, query);
     let selected = selected_in_provider(workspace.vm(), target, provider_id);
-    let preferred = workspace.model_highlight(
-        filtered.len(),
-        preferred_index(&filtered, query, selected.as_deref()),
-    );
+    let preferred = workspace.model_highlight(target, provider_id, &filtered);
     let scroll = workspace.model_scroll().clone();
     let row_id_prefix = match target {
         ModelPickerTarget::Session => format!("model-{provider_id}"),
