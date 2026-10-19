@@ -51,7 +51,8 @@ pub(crate) fn map_target_or_ignore_error(
     }
 }
 
-/// Mount-boundary refusal from no-follow opens (`NO_XDEV` / `st_dev`).
+/// Mount-boundary refusal from no-follow opens (`EXDEV`, `st_dev`, or volume
+/// identity).
 ///
 /// Ancestor ignore discovery treats this as “stop at the boundary”, not as a
 /// failed search. Callers that must stay inside the workspace still propagate

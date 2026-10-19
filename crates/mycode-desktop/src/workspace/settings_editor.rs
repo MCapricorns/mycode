@@ -191,8 +191,8 @@ impl Workspace {
             .clone()
     }
 
-    /// Adds the server the custom form currently describes: the pure builder
-    /// next to [`McpForm`] validates the fields, this method dispatches.
+    /// Adds the server the custom form currently describes: the frontend's
+    /// `forms::build_mcp_server` validates the fields, this method dispatches.
     pub(crate) fn on_add_mcp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.mcp_form.clone() else {
             return;

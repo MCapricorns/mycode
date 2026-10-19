@@ -19,7 +19,7 @@ use crate::tool::{Tool, ToolError, ToolResult};
 
 /// Maximum questions per ask.
 pub const MAX_QUESTIONS: usize = 4;
-/// Maximum characters accepted per answer.
+/// Maximum characters per answer kept in the rendered result.
 pub const MAX_ANSWER_CHARS: usize = 4 * 1024;
 
 /// One question the agent asks the user.
@@ -62,8 +62,9 @@ pub fn ask_choice_selected(answer: &str, choice: &str) -> bool {
         .any(|item| item == choice)
 }
 
-/// Toggles one choice. Single-select replaces the answer. Multi-select adds
-/// or removes that line and never collapses the others.
+/// Toggles one choice. Single-select replaces the answer, and clicking the
+/// already-selected choice clears it. Multi-select adds or removes that line
+/// and never collapses the others.
 #[must_use]
 pub fn toggle_ask_choice(answer: &str, choice: &str, multiple: bool) -> String {
     let choice = choice.trim_end_matches('\r');

@@ -116,11 +116,11 @@ pub(crate) struct CompactScope<'a> {
 pub(crate) enum CompactStatus {
     /// A new checkpoint was written.
     Wrote,
-    /// There is nothing new to summarize.
+    /// No checkpoint was written.
     Unchanged,
     /// A checkpoint already covers this exact head.
     Covered,
-    /// The summary request failed. The history is unchanged.
+    /// The attempt failed and no checkpoint was written.
     Failed(String),
 }
 
@@ -228,8 +228,9 @@ pub(crate) async fn compact_history(
     };
     // `/compact` on a head this checkpoint already covers would summarize the
     // same prefix again (same replaced count, same tail). Say so instead.
-    // A short session that fits in the tail returns above, before this, so
-    // it still reports nothing to compact.
+    // A session with fewer than two messages has nothing to summarize and
+    // already returned `Unchanged` above; a longer session that fits the
+    // tail is summarized in full below.
     if force
         && let Some(checkpoint) = prior.as_ref()
         && checkpoint.covered_head == scope.head
@@ -655,8 +656,9 @@ fn excerpt(text: &str) -> String {
 }
 
 /// Models that reject an explicit thinking disable keep thinking on for the
-/// summary. The wire `Off` mapping omits the rejected field; the summary
-/// needs a larger output cap so thinking cannot consume it all.
+/// summary. Their wire `Off` mapping omits the rejected field or substitutes
+/// an always-on shape; the summary needs a larger output cap so thinking
+/// cannot consume it all.
 fn summary_max_output(model: &str) -> u64 {
     if mycode_providers::keeps_thinking_when_off(model) {
         SUMMARY_OUTPUT_WITH_THINKING

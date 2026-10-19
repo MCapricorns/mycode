@@ -309,11 +309,11 @@ pub enum BridgeCommand {
         /// Existing directory; `None` reverts to the shared scratch directory.
         path: Option<String>,
     },
-    /// The desktop painted its first frame. Deferred startup work — the
-    /// catalog refresh and the update check — starts here, so the network
-    /// and TLS stack never races the first window paint.
+    /// The frontend is ready for deferred startup work. The catalog refresh
+    /// and the update check start here, so the network and TLS stack never
+    /// races the first UI paint.
     UiReady,
-    /// Query GitHub for a newer desktop release.
+    /// Query GitHub for a newer release of the running binary family.
     CheckUpdate,
     /// Download and verify one update offer into a staging directory.
     DownloadUpdate {
@@ -483,7 +483,7 @@ pub enum BridgeEvent {
         /// Unix seconds of the successful fetch.
         fetched_at: u64,
     },
-    /// A newer desktop release is available.
+    /// A newer release of the running binary family is available.
     UpdateAvailable {
         /// The resolved release offer.
         offer: UpdateOffer,

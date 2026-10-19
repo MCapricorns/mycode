@@ -1,14 +1,14 @@
 //! Windows self-update: a copy of the running executable applies the staged
-//! binary, then relaunches it.
+//! binary, then optionally relaunches it.
 //!
 //! The UI process spawns that helper with explicit arguments and exits. The
 //! helper waits for the UI pid, copies the staged file onto the install
 //! directory (so a download on another volume still lands), renames the old
-//! binary to `*.mycode-previous` for an in-flight restore, and starts the new
-//! binary with no updater arguments. Once the replaced binary verifies, the
-//! backup is deleted: old versions must not pile up next to the install. A
-//! detached `cmd` script is not used: it could copy a backup and then fail to
-//! replace a locked image.
+//! binary to `*.mycode-previous` for an in-flight restore, and, when asked,
+//! starts the new binary with no updater arguments. Once the replaced binary
+//! verifies, the backup is deleted: old versions must not pile up next to the
+//! install. A detached `cmd` script is not used: it could copy a backup and
+//! then fail to replace a locked image.
 //!
 //! macOS keeps the shell script in the parent module.
 
@@ -39,7 +39,8 @@ pub struct ApplyUpdateArgs {
 /// Parses a helper invocation.
 ///
 /// `Ok(None)` is a normal launch. `Ok(Some(_))` is the apply helper. `Err`
-/// means the apply flag was present but the arguments were incomplete.
+/// means the apply flag was present but the arguments were incomplete or
+/// invalid.
 pub fn parse_apply_update_args<I, S>(args: I) -> Result<Option<ApplyUpdateArgs>, String>
 where
     I: IntoIterator<Item = S>,

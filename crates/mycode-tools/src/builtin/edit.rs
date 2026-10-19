@@ -67,9 +67,9 @@ pub struct EditArgs {
     /// session cwd; writable absolute paths stay inside the session cwd,
     /// an added workspace root, or the OS temp directory.
     pub path: String,
-    /// Opaque revision from a prior `read`. When set it must match the
-    /// snapshot; the publish always compare-and-swaps the snapshot
-    /// revision.
+    /// Opaque revision from a prior `read`, `edit`, or `write`. When set it
+    /// must match the snapshot; the publish always compare-and-swaps the
+    /// snapshot revision.
     pub expected_revision: Option<String>,
     /// Exact text to replace once. Legacy unique-replace field. Used only
     /// when `operations` is omitted; ignored when `operations` is set.

@@ -70,8 +70,9 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::SearchProjectFiles { session_id, query });
     }
 
-    /// The directories skill discovery scans: the open project's
-    /// `.mycode/skills`-style root and the user's home `.agents`.
+    /// The roots skill discovery scans: the open project directory and the
+    /// user's OS home. Discovery appends `.agents` and `.agents/skills` to
+    /// each.
     fn skill_roots(&self) -> (std::path::PathBuf, Option<std::path::PathBuf>) {
         let workspace = self
             .vm

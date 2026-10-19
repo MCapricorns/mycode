@@ -73,10 +73,10 @@ pub enum Effect {
         /// Question row index.
         index: usize,
     },
-    /// Every ask-card field should reset (card answered, dismissed, or the
-    /// conversation left the screen).
+    /// Every ask-card field should reset (a new card, the card answered or
+    /// dismissed, or the conversation left the screen).
     AskReset,
-    /// `state.project_dir` changed; re-read git status / role catalogs.
+    /// `state.project_dir` changed; re-read git status for the new folder.
     ProjectChanged,
     /// A settings-loaded theme or an explicit pick should paint now.
     AppearanceTheme(String),
@@ -225,8 +225,8 @@ enum DriverMsg {
 /// Typing `@` walks the project tree. Wait until the fragment settles so
 /// each keystroke does not start another full walk.
 const MENTION_SEARCH_DEBOUNCE: Duration = Duration::from_millis(180);
-/// Writes a text field such as User-Agent about 400ms after the last
-/// keystroke. A newer edit or a blur supersedes the timer.
+/// Writes a typed settings text field (the proxy URL) about 400ms after
+/// the last keystroke. A newer edit or a blur supersedes the timer.
 const SETTINGS_TEXT_SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 /// Persists a resized window's settled size after this quiet period.
 const UI_STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -270,14 +270,15 @@ pub struct FrontendDriver {
     events: Receiver<BridgeEvent>,
     inbox: Receiver<DriverMsg>,
     inbox_tx: Sender<DriverMsg>,
-    /// Called once after every inbox deposit — a frontend's redraw hook.
+    /// Called after every inbox deposit and forwarded event — a frontend's
+    /// redraw hook.
     wake: Arc<dyn Fn() + Send + Sync>,
     /// Forwarder thread: tokio receiver → `std` channel → `wake`.
     _events_worker: JoinHandle<()>,
-    /// Whole-window state, mutated only through [`reduce`].
+    /// Whole-window state; product transitions go through [`reduce`].
     vm: WorkspaceState,
-    /// Owned home the process opened with. Skill and role discovery reads
-    /// `agents/` here.
+    /// Owned home the process opened with. Role discovery reads `agents/`
+    /// under it; skill discovery scans the open project and the OS user home.
     home: HomeLayout,
     /// Session created to carry [`WorkspaceState::pending_welcome_send`].
     welcome_send_session: Option<String>,
@@ -301,13 +302,14 @@ pub struct FrontendDriver {
     /// Bumped when a text-field save is scheduled or flushed, so a stale
     /// debounce tick does not write an older draft.
     settings_text_save_generation: u64,
-    /// A User-Agent (or similar) debounce is waiting to write `settings.json`.
+    /// A typed settings text-field debounce is waiting to write `settings.json`.
     settings_text_save_pending: bool,
     /// Bumped on each window-size change so only the settled size persists.
     ui_state_save_generation: u64,
     /// Last mention fragment already searched, to dedupe repeat lookups.
     mention_query: Option<(MentionKind, String)>,
-    /// Bumped on each composer edit so a stale mention tick does not search.
+    /// Bumped on each file-fragment change so a stale mention tick does not
+    /// search.
     mention_generation: u64,
     /// `GetCatalog` was already sent this session. The catalog is loaded
     /// lazily: nothing asks for it until a surface that needs the document

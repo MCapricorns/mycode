@@ -146,9 +146,8 @@ const CACHE_COLLAPSE_DROP: u64 = 30;
 
 /// Whole-percent cache hit for one turn's summed usage.
 ///
-/// `None` when the provider reported no cache read. A zero read is stored
-/// as `None` on [`TurnStats::cache`], same as an omitted field, so a model
-/// that never reports cache does not show a fake `0%`.
+/// `None` when the provider reported no cache read or reported a zero
+/// read, so a model that never reports cache does not show a fake `0%`.
 #[must_use]
 pub fn turn_cache_hit(turn: &TurnStats) -> Option<u64> {
     cache_percent(turn.cache.unwrap_or(0), turn.input)

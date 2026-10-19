@@ -561,8 +561,8 @@ fn literal_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolEr
             return Ok(found);
         }
     }
-    // A model's copy of a line almost never keeps the spaces the file has
-    // before its newline. The last tier also ignores those; indentation and
+    // A model's copy of a line almost never keeps the spaces and tabs the file
+    // has before its newline. The last tier also ignores those; indentation and
     // every other byte still have to match.
     newline_insensitive_matches(body, patterns, true)
 }

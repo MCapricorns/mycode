@@ -17,8 +17,9 @@
 //! buttons arm the same swap with `--relaunch` (or the script equivalent)
 //! and quit, so a click restarts straight into the new version. Asset
 //! names and staging conventions are produced by the release jobs in
-//! `.github/workflows/ci.yml`. Pull requests build the same archives
-//! and do not publish them. A push to main publishes when the version is new.
+//! `.github/workflows/ci.yml`. Pull requests run only the check job, with
+//! no packaging or publish. A push to main builds the archives and publishes
+//! when the release plan says to.
 
 pub(crate) mod apply;
 use std::io::{Read as _, Write as _};
@@ -120,7 +121,9 @@ pub struct PreparedUpdate {
     pub version: String,
     /// Staged new binary, ready to replace the running executable.
     pub new_binary: PathBuf,
-    /// Staging directory; removable on the next startup.
+    /// Directory holding the staged binary and helper files. A temporary
+    /// download stage is swept at startup; a persisted payload lives under
+    /// `<home>/update`.
     pub stage_dir: PathBuf,
     /// SHA-256 of `new_binary`. The swap refuses to run when the file differs.
     pub binary_sha256: String,
@@ -561,9 +564,9 @@ pub fn arm_staged_update(prepared: &PreparedUpdate, relaunch: bool) -> Result<()
     let relaunch = relaunch && !is_cli_binary();
     let current = std::env::current_exe().map_err(|error| format!("current exe: {error}"))?;
     let current = current.canonicalize().unwrap_or(current);
-    // A sibling helper may already have landed the swap: `new_binary` is
-    // moved away by the winner, so a missing staged file is fine whenever
-    // the target itself already hashes to the expected digest.
+    // A sibling helper may already have landed the swap, and a winner may
+    // already have consumed the staged file, so a missing staged file is
+    // fine whenever the target itself already hashes to the expected digest.
     let applied = target_matches(&current, &prepared.binary_sha256);
     if !applied {
         let staged = file_sha256(&prepared.new_binary)
@@ -913,10 +916,10 @@ fn incoming_path(current: &Path) -> PathBuf {
 
 /// Removes self-update leftovers next to the running executable.
 ///
-/// The swap deletes `*.mycode-previous` after a verified replace and the
-/// staged `*.mycode-incoming` before every rename, and only relaunches the
-/// target binary after verification has succeeded (no rollback ever runs
-/// after relaunch). An interrupted helper, an older build, or a transient
+/// The swap deletes `*.mycode-previous` after a verified replace and stages
+/// `*.mycode-incoming` before every rename, and only relaunches the target
+/// binary after verification has succeeded (no rollback ever runs after
+/// relaunch). An interrupted helper, an older build, or a transient
 /// remove lock can still leave either file behind, so normal UI startup
 /// sweeps both paths immediately.
 pub fn cleanup_previous_binary() {

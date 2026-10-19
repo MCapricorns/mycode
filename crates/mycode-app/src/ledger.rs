@@ -42,9 +42,9 @@ pub(crate) fn render_error(error: SessionError) -> String {
     }
 }
 
-/// Lists sessions from the SQLite index. Titles are the stored first user
-/// message, so the listing does not open logs or read payloads. A corrupt
-/// index row stays visible so the UI can offer deletion.
+/// Lists sessions from the SQLite index. Titles come from the index, so the
+/// listing does not open logs or read payloads. A corrupt index row stays
+/// visible so the UI can offer deletion.
 pub(crate) async fn inspect_summaries(
     home: HomeLayout,
 ) -> Result<Vec<SessionSummary>, SessionError> {
@@ -343,7 +343,8 @@ fn order_tool_results(history: &mut [Arc<Message>]) {
 }
 
 /// Rewinds the branch so everything from the recalled message onward is
-/// gone, then returns the truncated conversation plus the edited text.
+/// gone, then returns the truncated conversation. The caller pairs it with
+/// the edited text.
 ///
 /// Workspace files are left unchanged: recall does not restore or delete
 /// them.
@@ -439,7 +440,8 @@ pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), 
     Ok(())
 }
 
-/// Drops one session's remembered UI bindings (project and workspace).
+/// Drops one session's remembered UI bindings (project, workspace, and
+/// model pin).
 ///
 /// Runs right after the durable delete so the advisory maps never accumulate
 /// ids that no longer resolve to anything. The state is advisory, so a

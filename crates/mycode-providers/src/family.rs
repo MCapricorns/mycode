@@ -5,8 +5,8 @@
 //! `smallOptions`, `applyCaching`, `reasoningVariants`) after
 //! `packages/opencode/src/provider/provider.ts` `fromModelsDevModel` picks
 //! `api.npm` (unknown providers fall back to `@ai-sdk/openai-compatible`).
-//! The first matching row wins. The last row of each table is that generic
-//! fallback, so a new model on an unknown host needs no code change.
+//! The first matching row wins. Each thinking table ends with a fallback
+//! row, so a new model on an unknown host needs no code change.
 
 use serde_json::{Value, json};
 

@@ -349,10 +349,10 @@ async fn run_chat_turn_on(
     );
     // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
     // This pre-turn pass publishes its transcript card immediately. The
-    // before-request hook later in this function only rewrites the
-    // in-memory request; that card is published after the turn's tool
-    // results and final reply commit, so a mid-turn summary cannot split
-    // a tool call from its result.
+    // before-request hook later in this function does not append a ledger
+    // row; its card is published after the turn's tool results and final
+    // reply commit, so a mid-turn summary cannot split a tool call from its
+    // result.
     let compact_scope = crate::compaction::CompactScope {
         home,
         wire: &wire,
@@ -365,8 +365,8 @@ async fn run_chat_turn_on(
         cancel: &control.cancel,
     };
     let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
-    // A written checkpoint is already on disk, so its card is published even
-    // when the user cancelled during the summary.
+    // A written checkpoint is already on disk, so its card is published
+    // before the post-compaction cancel check.
     if let Some(summary) = compacted.summary.as_deref() {
         let _ = publish_visible_summary(&writer, events, &session_id, summary, true).await;
     }

@@ -3,12 +3,13 @@
 //! `<home>/sessions.db` (SQLite, WAL) is the commit authority for titles,
 //! branch heads, event counts, and byte offsets. `<home>/sessions/<id>/<branch>.jsonl`
 //! is the event source of truth: one JSON object per line. Payloads at or
-//! above [`EXTERNAL_PAYLOAD_THRESHOLD`] live in `payloads/<event>.bin` and
-//! are named from the line by digest. They are never stored as SQLite blobs.
+//! above [`EXTERNAL_PAYLOAD_THRESHOLD`] live in `payloads/<event-id>.bin`;
+//! the line names the file and carries its digest. They are never stored as
+//! SQLite blobs.
 //!
-//! Listing and title search read the index only. Opening a branch loads the
-//! offset rows, then payload reads seek one line. Appends add one line and
-//! update the index in one transaction under the session actor.
+//! Listing reads the index only. Opening a branch loads the offset rows, then
+//! payload reads seek one line. An append writes one line, then updates the
+//! index in one transaction under the session actor.
 mod index;
 mod jsonl;
 

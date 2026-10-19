@@ -67,8 +67,7 @@ pub fn task_surface_visible(state: &WorkspaceState) -> bool {
 
 /// Whether a folder is open, so a new session has a working directory.
 ///
-/// An empty folder list does not count. Fresh launch still must not offer a
-/// second action.
+/// An empty or whitespace-only path does not count.
 #[must_use]
 pub fn has_open_folder(state: &WorkspaceState) -> bool {
     path_open(state.project_dir.as_deref())

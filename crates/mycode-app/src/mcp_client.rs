@@ -62,7 +62,7 @@ pub trait JsonRpcChannel: Send + Sync + 'static {
     }
 }
 
-/// Maximum accepted response message bytes.
+/// Maximum accepted message bytes in either direction.
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// Maximum tools listed per server.
 pub const MAX_TOOLS: usize = 128;

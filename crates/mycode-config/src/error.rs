@@ -78,13 +78,10 @@ impl ConfigError {
         self
     }
 
-    /// Builds one authority-validation rejection for a Host-side storage
-    /// callback (for example a compare-and-swap that lost or a document that
-    /// failed strict revalidation).
+    /// Builds one authority-validation rejection.
     ///
-    /// Host-substrate stores reuse the hardened owned-file transaction and
-    /// signal domain-level rejections through this constructor; the stored
-    /// document is never modified when it is returned.
+    /// Returning it from a locked update callback aborts the replacement, so
+    /// the stored document is never modified.
     #[must_use]
     pub fn authority_rejection() -> Self {
         Self::new(ConfigErrorKind::AuthorityValidation)

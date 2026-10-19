@@ -51,8 +51,8 @@ pub trait AgentHost: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`ToolError::Execution`] when the subagent failed, was
-    /// cancelled, or hit the host's wall-clock limit.
+    /// Returns [`ToolError::Execution`] when the subagent failed or was
+    /// cancelled.
     fn run_subagent<'a>(
         &'a self,
         request: SubagentRequest,

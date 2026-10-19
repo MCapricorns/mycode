@@ -20,8 +20,8 @@ pub const EVENT_STREAM_CAPACITY: usize = 16;
 
 /// Maximum JSON-encoded size of one stream event.
 ///
-/// One MiB bounds every individual Host-to-Agent handoff independently of the
-/// channel capacity.
+/// One MiB bounds every individual stream event independently of the channel
+/// capacity.
 pub const MAX_EVENT_ENCODED_BYTES: usize = 1_024 * 1_024;
 
 #[derive(Debug, Default)]

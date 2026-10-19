@@ -22,8 +22,8 @@ pub(crate) const MAX_STREAM_ACCUMULATED_BYTES: usize = 8 * 1024 * 1024;
 
 /// Highest content-block or tool-call index accepted in one stream.
 ///
-/// A frame that names an enormous index would otherwise allocate that many
-/// accumulator slots in a single `feed` call.
+/// Rejecting a larger index keeps the per-index bookkeeping bounded and
+/// catches a garbled frame before it is reduced.
 pub(crate) const MAX_STREAM_INDEX: u64 = 64;
 
 /// Records a provider finish token.

@@ -1,8 +1,9 @@
-//! Strict visual-settings authority for the desktop product.
+//! Strict visual-settings authority for the MYCode frontends.
 //!
 //! [`AppSettings`] is the single settings document at `settings.json`: the
-//! desktop settings page edits it through typed APIs and it is published with
-//! revision compare-and-swap through the hardened owned-file transaction.
+//! desktop and terminal settings pages edit it through typed APIs and it is
+//! published with revision compare-and-swap through the hardened owned-file
+//! transaction.
 //! Secrets never live here; credentials stay in the secret store.
 //!
 //! A document that cannot be parsed or validated is copied aside and
@@ -152,7 +153,7 @@ impl AppSettings {
     /// Validates the complete document.
     ///
     /// Family-specific bounds, grammar, and cross-field rules live in the
-    /// owning submodule and are invoked in document order.
+    /// owning submodule and are invoked in a fixed order.
     ///
     /// # Errors
     ///

@@ -16,9 +16,9 @@ use serde_json::Value;
 pub const COPILOT_PROVIDER_ID: &str = "github-copilot";
 /// ChatGPT Plus/Pro Codex subscription.
 pub const OPENAI_CODEX_PROVIDER_ID: &str = "openai-codex";
-/// The client identity sent as `originator` on the Codex backend's
-/// `/models` and `/responses` endpoints; it gates feature rollout, so the
-/// application reports itself rather than mimicking another client.
+/// The client identity sent as `originator` on Codex backend requests; it
+/// gates feature rollout, so the application reports itself rather than
+/// mimicking another client.
 pub const ORIGINATOR: &str = "mycode";
 /// Public device-flow client id of the GitHub Copilot CLI app (no secret).
 const DEVICE_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
@@ -205,7 +205,8 @@ pub fn parse_device_start(payload: &Value) -> Option<DeviceCodeStart> {
 ///
 /// # Errors
 ///
-/// Returns a transport failure; grant states arrive as [`DeviceTokenPoll`].
+/// Returns a transport or endpoint-status failure; grant states arrive as
+/// [`DeviceTokenPoll`].
 pub async fn poll_device_token(
     call: &PinnedCall,
     device_code: &str,
@@ -255,7 +256,8 @@ pub fn classify_device_poll(payload: &Value) -> DeviceTokenPoll {
 ///
 /// # Errors
 ///
-/// Returns a transport failure or a rejection that means "sign in again".
+/// Returns a transport or endpoint-status failure, or a rejection that means
+/// "sign in again".
 pub async fn copilot_bearer(call: &PinnedCall, github_token: &str) -> Result<CopilotToken, String> {
     let authorization = format!("Bearer {github_token}");
     let mut headers = vec![
@@ -469,7 +471,7 @@ pub enum CodexDevicePoll {
 ///
 /// # Errors
 ///
-/// Returns a transport failure.
+/// Returns a transport or endpoint-status failure.
 pub async fn poll_codex_device_token(
     call: &PinnedCall,
     start: &CodexDeviceStart,
@@ -522,7 +524,7 @@ pub async fn poll_codex_device_token(
 ///
 /// # Errors
 ///
-/// Returns a transport or field-shape failure.
+/// Returns a transport, endpoint-status, or field-shape failure.
 pub async fn exchange_codex_code(
     call: &PinnedCall,
     authorization_code: &str,
@@ -557,7 +559,7 @@ pub async fn exchange_codex_code(
 ///
 /// # Errors
 ///
-/// Returns a transport or grant failure.
+/// Returns a transport, endpoint-status, or grant failure.
 pub async fn refresh_codex_token(call: &PinnedCall, refresh: &str) -> Result<OAuthSecret, String> {
     let response = pinned(
         call,

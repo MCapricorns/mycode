@@ -2,8 +2,9 @@
 //!
 //! Accepts Claude Desktop / Cursor `mcpServers` maps, VS Code `servers`
 //! maps, a single server object, or an array of those objects. HTTP
-//! `Authorization` / `x-api-key` header values are lifted into the secret
-//! store; a leading `Bearer ` is stripped so the user can paste either form.
+//! `Authorization` / `x-api-key` header values are extracted into each
+//! returned row for the caller to store; a leading `Bearer ` is stripped so
+//! the user can paste either form.
 
 use std::collections::BTreeMap;
 

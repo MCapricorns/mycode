@@ -1,5 +1,5 @@
 //! Composer submit and queue controls. The product logic — welcome-desk
-//! starts, the follow-up queue, steering a live turn, cancels — lives in the
+//! starts, the follow-up queue, interrupt-send, cancels — lives in the
 //! frontend driver (`submit`, `interrupt_send`, the queue verbs); this file
 //! keeps the gpui key handling and click propagation.
 use gpui_kit::{Context, Window};

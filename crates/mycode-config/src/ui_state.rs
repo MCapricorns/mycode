@@ -1,9 +1,9 @@
-//! Durable UI state for the desktop: advisory, disposable, never a source
+//! Durable UI state for the frontends: advisory, disposable, never a source
 //! of truth for credentials or product behavior.
 //!
 //! Holds recent projects, workspace folders, session bindings, the update
 //! preference, and the model picker's recent and per-session pins
-//! so the desktop reopens where the user left off. Missing or invalid
+//! so a frontend reopens where the user left off. Missing or invalid
 //! documents reset to defaults.
 use serde::{Deserialize, Serialize};
 
@@ -24,13 +24,14 @@ const UI_STATE_FORMAT_VERSION: u32 = 1;
 const UI_STATE_KIND: &str = "mycode-ui-state";
 /// Maximum remembered recent projects.
 pub const MAX_RECENT_PROJECTS: usize = 16;
-/// Maximum workspace folders in the flat list.
+/// Workspace folders one prompt lists and the soft cap for list growth. A
+/// document merged from legacy workspaces may hold up to
+/// `MAX_WORKSPACES * MAX_WORKSPACE_ROOTS`.
 pub const MAX_WORKSPACE_ROOTS: usize = 8;
 /// Maximum remembered session-to-project bindings.
 pub const MAX_SESSION_PROJECTS: usize = 256;
-/// Maximum legacy workspaces still decoded from old documents. Their
-/// folders migrate into `workspace_roots`; the count only bounds salvage
-/// and the merged-list validation cap.
+/// Maximum legacy workspaces kept by salvage. Their folders migrate into
+/// `workspace_roots`; the count also bounds the merged-list validation cap.
 pub const MAX_WORKSPACES: usize = 16;
 /// Maximum legacy session-to-workspace bindings decoded on repair.
 pub const MAX_SESSION_WORKSPACES: usize = 512;
@@ -176,7 +177,7 @@ pub fn is_valid_effort_token(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-/// Durable desktop UI state.
+/// Durable UI state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct UiState {
@@ -271,8 +272,8 @@ impl UiState {
         }
     }
 
-    /// Drops every remembered binding for one session (project and
-    /// workspace). Called when a session's durable data is deleted so the
+    /// Drops every remembered binding for one session (project, workspace,
+    /// and model pin). Called when a session's durable data is deleted so the
     /// lists never accumulate ids nothing resolves anymore.
     pub fn forget_session(&mut self, session_id: &str) {
         self.session_projects

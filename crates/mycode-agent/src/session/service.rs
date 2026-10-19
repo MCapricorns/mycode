@@ -22,7 +22,7 @@ use super::dto::{
 };
 use super::ids::{BranchId, SessionCallId, SessionEventId, SessionId};
 
-/// Default per-operation deadline.
+/// Default deadline for each invoke and pull round-trip.
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The first-party session service.
@@ -188,8 +188,9 @@ impl SessionService {
     /// # Errors
     ///
     /// Returns [`SessionError::Limit`] for a page size outside `1..=256`,
-    /// [`SessionError::InvalidArgument`] for stale or foreign cursors, and
-    /// the actor's terminal error otherwise.
+    /// [`SessionError::NotFound`] for an unknown session, branch, or cursor,
+    /// [`SessionError::InvalidArgument`] for a cursor beyond the snapshot
+    /// head, and the actor's terminal error otherwise.
     pub async fn read(
         &self,
         session: &SessionId,
@@ -324,9 +325,10 @@ impl SessionService {
     ///
     /// # Errors
     ///
-    /// Returns [`SessionError::NotFound`] for an unknown session or branch,
-    /// [`SessionError::Limit`] when `limit` is `0` or above [`super::dto::MAX_READ_LIMIT`],
-    /// and the actor's terminal error otherwise.
+    /// Returns [`SessionError::NotFound`] for an unknown session, branch, or
+    /// cursor, [`SessionError::InvalidArgument`] for a cursor beyond the
+    /// snapshot head, [`SessionError::Limit`] when `limit` is `0` or above
+    /// `super::dto::MAX_READ_LIMIT`, and the actor's terminal error otherwise.
     pub async fn read_payloads(
         &self,
         session: &SessionId,
@@ -350,7 +352,7 @@ impl SessionService {
         }
     }
 
-    /// Reads the newest `limit` events at or before `before`.
+    /// Reads the newest `limit` events strictly before `before`.
     ///
     /// `before` absent selects the tail ending at `snapshot_head`. The
     /// returned `older` cursor is the oldest loaded event when earlier
@@ -359,8 +361,9 @@ impl SessionService {
     /// # Errors
     ///
     /// Returns [`SessionError::NotFound`] for an unknown session, branch, or
-    /// cursor, [`SessionError::Limit`] when `limit` is `0` or above
-    /// [`super::dto::MAX_READ_LIMIT`], and the actor's terminal error otherwise.
+    /// cursor, [`SessionError::InvalidArgument`] for a cursor beyond the
+    /// snapshot head, [`SessionError::Limit`] when `limit` is `0` or above
+    /// `super::dto::MAX_READ_LIMIT`, and the actor's terminal error otherwise.
     pub async fn read_payload_window(
         &self,
         session: &SessionId,

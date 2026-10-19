@@ -72,7 +72,7 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
 }
 
 /// Whether a Messages body replays provider thinking in an assistant turn,
-/// so the driver keeps a copy for [`retry_body_without_thinking`].
+/// so the driver attempts [`retry_body_without_thinking`] on a rejection.
 #[must_use]
 pub(crate) fn replays_thinking(body: &Value) -> bool {
     body.get("messages")

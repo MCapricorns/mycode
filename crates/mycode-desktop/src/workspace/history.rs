@@ -28,7 +28,8 @@ impl Workspace {
             .map(|hold| (hold.pinned, hold.offset_y))
     }
 
-    /// True when the conversation column is within a few pixels of the bottom.
+    /// True when the conversation column is within a short distance (48 px)
+    /// of the bottom.
     ///
     /// The handle stores a positive max extent and a negative live offset, so
     /// their sum is about zero at the tail and positive after a scroll upward.
@@ -160,7 +161,7 @@ fn near_history_top(offset_y: Pixels, max_offset_y: Pixels) -> bool {
     max_offset_y > px(1.) && offset_y > px(-64.)
 }
 
-/// Slack past the bottom edge. A reader a few pixels short of the tail still
+/// Slack past the bottom edge. A reader within 48 px of the tail still
 /// follows the stream; anything further up is history.
 const TAIL_SLACK: Pixels = px(48.);
 

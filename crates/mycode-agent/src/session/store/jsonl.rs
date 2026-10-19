@@ -1,9 +1,10 @@
 //! One JSON object per line in a branch log.
 //!
 //! A line carries the event id, kind, optional call id, timestamp, payload
-//! digest, and either an inline base64 payload or a relative payload file
-//! name. The digest is over the raw payload bytes, matching the reservation
-//! the actor already checked.
+//! digest, and either an inline payload (plain text when the bytes are valid
+//! UTF-8, base64 otherwise) or a relative payload file name. The digest is
+//! over the raw payload bytes, matching the reservation the actor already
+//! checked.
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,8 @@ pub(crate) struct DecodedLine {
     pub(crate) kind: EventKind,
     /// Call identity spelling, present only for tool kinds.
     pub(crate) call_id: Option<String>,
-    /// Raw payload bytes, digest-checked.
+    /// Raw inline payload bytes, digest-checked; empty when external (the
+    /// payload file is read and digest-checked on load).
     pub(crate) payload: Vec<u8>,
     /// Canonical digest spelling.
     pub(crate) digest: String,
@@ -84,8 +86,9 @@ struct LineOwned {
 /// Bytes one committed record is expected to charge against the session cap.
 ///
 /// The figure is an upper bound used at reservation time, before the line
-/// exists. Inline payloads expand under base64; external payloads are charged
-/// as the file plus a short line.
+/// exists. Inline UTF-8 payloads are sized as the escaped JSON string, binary
+/// payloads expand under base64, and external payloads are charged as the file
+/// plus a short line.
 pub(crate) fn encoded_record_len(has_call_id: bool, payload: &[u8]) -> Option<u64> {
     let call = if has_call_id { 48 } else { 0 };
     let body = if payload.len() >= EXTERNAL_PAYLOAD_THRESHOLD {
@@ -187,7 +190,9 @@ pub(crate) fn encode_line(
     })
 }
 
-/// Decodes one JSONL line, including its trailing newline, and checks the digest.
+/// Decodes one JSONL line, including its trailing newline, and checks the
+/// digest of an inline payload. An external payload is digest-checked when it
+/// is read.
 pub(crate) fn decode_line(bytes: &[u8]) -> Result<DecodedLine, ()> {
     let Some(body) = bytes.strip_suffix(b"\n") else {
         return Err(());

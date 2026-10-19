@@ -85,7 +85,8 @@ impl GitSnapshot {
     }
 }
 
-/// `git status --porcelain=v1 -b --untracked-files=all` for one directory.
+/// `git status --porcelain=v1 -z -b --untracked-files=all` for one
+/// directory.
 ///
 /// `--no-optional-locks` keeps a refresh from taking `.git/index.lock` and
 /// opportunistically rewriting the index, which would contend with the user's
@@ -245,7 +246,8 @@ fn is_new_file(root: &Path, path: &str, allow_staged: bool) -> bool {
             })
 }
 
-/// The whole file as a new-file unified diff. Binary files stay a one-line note.
+/// The file's worktree content as a new-file unified diff, capped at
+/// [`DIFF_CAP_BYTES`]. Binary files stay a one-line note.
 fn added_file_diff(root: &Path, path: &str) -> String {
     if path.is_empty()
         || path.contains('\0')

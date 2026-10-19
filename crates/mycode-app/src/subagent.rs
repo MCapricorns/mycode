@@ -157,7 +157,7 @@ fn agent_progress(role: &str, phase: &str, detail: &str) -> String {
 /// Catalog lines are the short when-to-use descriptions. The bullets are the
 /// decision boundary: dispatch only for independent, bounded work that cuts
 /// cost or improves quality, and run one artisan at a time unless the briefs
-/// are independent. Only behavior this process implements is named.
+/// touch separate files. Only behavior this process implements is named.
 #[must_use]
 pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSettings) -> String {
     let enabled: Vec<&SubagentRole> = catalog

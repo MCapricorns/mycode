@@ -38,8 +38,8 @@ impl LedgerPump {
     /// (`ChatDone` or `ChatFailed`) so the desktop can leave the sending state.
     pub(super) async fn run(self, agent_rx: broadcast::Receiver<AgentEvent>) {
         let mut agent_rx = relay(agent_rx);
-        // A text-only reply is held until the turn ends: a later step or a
-        // steer may still follow it.
+        // A text-only reply is held until the turn ends or a steer commits
+        // it: a later step or a steer may still follow it.
         let mut pending_assistant: Option<Arc<Message>> = None;
         let mut last_step: Option<ConversationEntry> = None;
         let mut turn_usage = TurnUsage::default();

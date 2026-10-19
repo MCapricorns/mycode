@@ -2,10 +2,11 @@
 //!
 //! Model, reasoning, and folder sit as pill chips inside the bar, alongside an
 //! attach `+` button and a `⌘K` / `Ctrl+K` hint. While a turn is running the
-//! action slot is Stop: it ends the whole turn, including every subagent. Text
-//! sent during that turn is a steer to the main model and does not cancel the
-//! children. Each running scout or artisan is cancelled from its own `agent`
-//! row in the transcript.
+//! round action is Stop: it ends the whole turn, including every subagent, and
+//! holds the queue. A draft sent with Enter queues for after the turn; the
+//! arrow beside Stop queues too, and Ctrl+Enter interrupts the turn and sends
+//! the draft right away. Each running scout or artisan is cancelled from its
+//! own `agent` row in the transcript.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;

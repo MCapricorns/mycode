@@ -167,9 +167,9 @@ impl WireProvider {
         }
     }
 
-    /// Builds the wire call and whether a retry rule could rewrite it, so the
-    /// driver keeps a body copy only then. Decided from the JSON value before
-    /// serialization, not by scanning the encoded bytes.
+    /// Builds the wire call and whether a retry rule could rewrite it; the
+    /// driver consults that flag before attempting a rewrite. Decided from
+    /// the JSON value before serialization, not by scanning the encoded bytes.
     fn call_for(&self, request: &Request) -> (TransportCall, bool) {
         let model = self.resolved.model.as_str();
         let endpoint = self.resolved.endpoint.as_str();

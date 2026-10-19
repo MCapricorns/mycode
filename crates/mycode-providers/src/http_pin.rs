@@ -88,10 +88,10 @@ pub struct PinnedRequest {
     /// Overall request timeout. Streaming calls leave this unset and use
     /// [`Self::read_timeout`] so a long generation is not cut off.
     pub timeout: Option<Duration>,
-    /// Idle ceiling while waiting for headers and between body chunks.
+    /// Idle ceiling while waiting for response headers.
     ///
-    /// This is not a total-request deadline. A stream that keeps delivering
-    /// bytes resets it.
+    /// Streaming callers apply the same value between body chunks; this is
+    /// not a total-request deadline.
     pub read_timeout: Option<Duration>,
     /// User-Agent, when the caller has one.
     pub user_agent: Option<String>,
@@ -132,10 +132,12 @@ fn validate_hop(mode: PinMode, hop: u32, url: &str, addrs: &[IpAddr]) -> Result<
 
 /// Addresses this hop may connect to.
 ///
-/// GitHub release hosts drop non-public extras and keep the public ones.
-/// An answer that is entirely fake-ip (`198.18.0.0/15`) may connect, for any
-/// host. Loopback, RFC1918, link-local, and a mix that includes them are
-/// never returned.
+/// Under [`PinMode::PublicHttps`], GitHub release hosts drop non-public
+/// extras and keep the public ones, and an answer that is entirely fake-ip
+/// (`198.18.0.0/15`) may connect for any host. Loopback, RFC1918,
+/// link-local, and a mix that includes them are never returned. Under
+/// [`PinMode::CheckRedirect`], the first hop may be entirely private; later
+/// hops must be all public.
 ///
 /// # Errors
 ///
@@ -632,8 +634,8 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         return is_public_ipv4(embedded);
     }
     // Unique-local fc00::/7, link-local fe80::/10, site-local fec0::/10,
-    // discard 100::/8, documentation 2001:db8::/32, and IETF protocol
-    // assignments 2001::/28 (Teredo, benchmarking, ORCHID).
+    // discard 100::/16, documentation 2001:db8::/32, and the Teredo /
+    // benchmarking block 2001::/28.
     !(segments[0] & 0xfe00 == 0xfc00
         || segments[0] & 0xffc0 == 0xfe80
         || segments[0] & 0xffc0 == 0xfec0

@@ -259,8 +259,8 @@ pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
 }
 
 /// UTF-16LE with no BOM. PowerShell pipes often emit this for non-ASCII
-/// text. A buffer is accepted only when most units look like BMP text
-/// (ASCII, CJK, kana, fullwidth), so arbitrary binary stays on the
+/// text. A buffer is accepted only when most units are printable text
+/// (non-control, plus tab/CR/LF), so arbitrary binary stays on the
 /// code-page path.
 fn decode_utf16_le_without_bom(bytes: &[u8]) -> Option<String> {
     if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {

@@ -19,9 +19,9 @@ use crate::{ConfigError, HomeLayout};
 
 /// A startup document that could not be read, parsed, or validated.
 ///
-/// The previous bytes sit at [`Self::backup`]. The caller replaces the
-/// original path with that document's defaults. Session ledgers are never
-/// reported here.
+/// The previous bytes sit at [`Self::backup`]. The document at the original
+/// path has already been republished from the salvage result or the defaults.
+/// Session ledgers are never reported here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DocumentRepair {
     /// Owned relative path that was reset, such as `settings.json`.

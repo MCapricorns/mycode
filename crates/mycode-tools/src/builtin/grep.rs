@@ -70,7 +70,8 @@ pub struct GrepArgs {
     /// Interpret `pattern` as a regular expression.
     #[serde(default)]
     pub is_regex: bool,
-    /// File or directory to search (relative to the session cwd).
+    /// File or directory to search. Relative paths resolve against the session
+    /// cwd; absolute paths must be under a workspace root.
     pub path: Option<String>,
     /// Only search files whose relative path matches this glob.
     pub include: Option<String>,
@@ -968,9 +969,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A `|`/`.*` pattern sent without `is_regex` matches literally — and
-    /// almost always finds nothing. The report must say so, instead of
-    /// leaving a wrong "the file is empty" conclusion.
+    /// A `|`/`.*` pattern sent without `is_regex` is also tried as a regex
+    /// when that reading compiles and does not match the empty string. The
+    /// report must say so, instead of leaving a wrong "the file is empty"
+    /// conclusion.
     #[tokio::test]
     async fn a_regex_looking_literal_pattern_gets_a_hint() {
         let root = std::env::temp_dir().join(format!(

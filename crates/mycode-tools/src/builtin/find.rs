@@ -49,12 +49,14 @@ pub struct FindTool;
 pub struct FindArgs {
     /// Glob matched against each path relative to the search root.
     pub pattern: String,
-    /// Directory or single file to search, relative to the session cwd.
+    /// Directory or single file to search. Relative paths resolve against the
+    /// session cwd; absolute paths must be under a workspace root.
     pub path: Option<String>,
     /// Maximum number of paths to report.
     pub limit: Option<usize>,
-    /// Deepest level reported and walked, counted from the search root
-    /// (`1` is its direct children). Omitted searches every level.
+    /// Deepest level reported, counted from the search root (`1` is its direct
+    /// children). A directory at the cap is reported but not descended.
+    /// Omitted searches every level.
     pub max_depth: Option<usize>,
 }
 

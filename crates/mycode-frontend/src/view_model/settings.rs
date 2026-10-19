@@ -32,7 +32,8 @@ pub struct CopilotSignIn {
 pub struct SettingsState {
     /// Revision the editor loaded; `0` when absent.
     pub revision: u64,
-    /// Stored proxy preference: empty or `auto`, `direct`, or a proxy URL.
+    /// Stored proxy preference: empty or a legacy mode word (`auto`, `direct`,
+    /// `system`), or a proxy URL.
     pub proxy: String,
     /// Configured providers.
     pub providers: Vec<mycode_config::ProviderSettings>,
@@ -185,7 +186,7 @@ pub enum McpSubview {
 /// One settings navigation section (the secondary menu).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SettingsSection {
-    /// Theme and request identity.
+    /// Theme, language, and network.
     #[default]
     General,
     /// Providers, catalog presets, and custom endpoints.
