@@ -55,8 +55,8 @@ impl FrontendDriver {
     pub fn set_thinking_collapsed(&mut self, collapsed: bool, out: &mut Vec<Effect>) {
         if self.vm.thinking_collapsed != collapsed {
             self.act(FrontendAction::ThinkingCollapsedToggled, out);
+            self.persist_ui_state();
         }
-        self.persist_ui_state();
     }
 
     /// Flips the global thinking-trace switch; see
