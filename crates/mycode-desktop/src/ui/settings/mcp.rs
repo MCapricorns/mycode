@@ -639,7 +639,7 @@ fn render_mcp_form(
             label: t("Transport", "传输方式"),
             description: Some(t(
                 "HTTP servers speak Streamable-HTTP; stdio servers spawn a command.",
-                "HTTP 服务器使用 Streamable-HTTP;stdio 服务器启动一条命令。",
+                "HTTP 服务器使用 Streamable-HTTP；stdio 服务器启动一条命令。",
             )),
             current: &transport,
             options: &transport_options,
