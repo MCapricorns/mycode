@@ -1,6 +1,6 @@
 //! The live handles one turn publishes: the cancel token Escape fires and
-//! the inbox steers are pushed into, each removed from its registry when the
-//! turn ends.
+//! the inbox steers are pushed into. Both leave their registries before the
+//! turn reports how it ended.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,14 +8,14 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::protocol::CHAT_CANCELLED;
-use crate::state::CoreState;
+use crate::state::{CoreState, LiveWork, WorkKind};
 
 /// The live handles one turn publishes for the life of the turn: the cancel
 /// token Escape fires, and the inbox steers are pushed into.
 pub(crate) struct TurnControl {
     pub(super) cancel: CancellationToken,
     pub(super) steer: Arc<mycode_agent::SteerInbox>,
-    _cancel_guard: CancelGuard,
+    cancel_guard: Option<CancelGuard>,
     steer_guard: Option<SteerGuard>,
 }
 
@@ -24,7 +24,12 @@ impl TurnControl {
     /// earlier turn's entries. The caller cancels that earlier turn.
     pub(crate) fn register(state: &CoreState, session_id: &str) -> Self {
         let cancel = CancellationToken::new();
-        let cancel_guard = CancelGuard::register(state.turn_cancels.clone(), session_id, &cancel);
+        let cancel_guard = CancelGuard::register(
+            state.turn_cancels.clone(),
+            session_id,
+            &cancel,
+            WorkKind::Turn,
+        );
         let steer = Arc::new(mycode_agent::SteerInbox::new());
         let steer_guard = SteerGuard::register(
             Arc::clone(&state.steer_inboxes),
@@ -34,16 +39,23 @@ impl TurnControl {
         Self {
             cancel,
             steer,
-            _cancel_guard: cancel_guard,
+            cancel_guard: Some(cancel_guard),
             steer_guard: Some(steer_guard),
         }
     }
 
-    /// Unpublishes the steer inbox, then takes whatever is still in it.
+    /// Unpublishes the cancel token and the steer inbox, then takes whatever
+    /// is still in the inbox.
+    ///
+    /// Runs before the terminal event goes out. The UI reopens the session
+    /// when it hears the turn end, and a token still published then reads
+    /// as a turn still running: the composer stuck on Stop, every send
+    /// queued behind a turn that is gone.
     ///
     /// `Steer` pushes while holding the inbox map lock, and the guard's drop
     /// removes the entry under that lock, so no steer lands after the drain.
-    pub(super) fn retire_steers(&mut self) -> Vec<String> {
+    pub(super) fn retire(&mut self) -> Vec<String> {
+        drop(self.cancel_guard.take());
         drop(self.steer_guard.take());
         self.steer.drain()
     }
@@ -51,11 +63,16 @@ impl TurnControl {
     /// Publishes only the cancel token for `/compact` (no steer inbox).
     pub(crate) fn register_cancel_only(state: &CoreState, session_id: &str) -> Self {
         let cancel = CancellationToken::new();
-        let cancel_guard = CancelGuard::register(state.turn_cancels.clone(), session_id, &cancel);
+        let cancel_guard = CancelGuard::register(
+            state.turn_cancels.clone(),
+            session_id,
+            &cancel,
+            WorkKind::Compaction,
+        );
         Self {
             cancel,
             steer: Arc::new(mycode_agent::SteerInbox::new()),
-            _cancel_guard: cancel_guard,
+            cancel_guard: Some(cancel_guard),
             steer_guard: None,
         }
     }
@@ -85,23 +102,30 @@ impl TurnControl {
 
 /// Removes one session's turn token from the cancel registry on scope exit.
 struct CancelGuard {
-    cancels: Arc<parking_lot::Mutex<HashMap<String, Arc<CancellationToken>>>>,
+    cancels: Arc<parking_lot::Mutex<HashMap<String, LiveWork>>>,
     session_id: String,
     token: Arc<CancellationToken>,
 }
 
 impl CancelGuard {
     fn register(
-        cancels: Arc<parking_lot::Mutex<HashMap<String, Arc<CancellationToken>>>>,
+        cancels: Arc<parking_lot::Mutex<HashMap<String, LiveWork>>>,
         session_id: &str,
         token: &CancellationToken,
+        kind: WorkKind,
     ) -> Self {
         // The registry is keyed by session id only, so a second turn for the
         // same session replaces the entry; the guard keeps its own token to
         // avoid removing the successor's live token on drop.
         let token = Arc::new(token.clone());
         let mut map = cancels.lock();
-        map.insert(session_id.to_owned(), token.clone());
+        map.insert(
+            session_id.to_owned(),
+            LiveWork {
+                token: token.clone(),
+                kind,
+            },
+        );
         drop(map);
         Self {
             cancels,
@@ -117,7 +141,7 @@ impl Drop for CancelGuard {
         let mut map = self.cancels.lock();
         if map
             .get(&self.session_id)
-            .is_some_and(|live| Arc::ptr_eq(live, &self.token))
+            .is_some_and(|live| Arc::ptr_eq(&live.token, &self.token))
         {
             map.remove(&self.session_id);
         }

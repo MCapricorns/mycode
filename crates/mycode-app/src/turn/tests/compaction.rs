@@ -15,7 +15,7 @@ use super::scratch;
 use crate::protocol::EntryKind;
 use crate::state::CoreState;
 use crate::turn::compact::{DeferredSummaries, watch_prompt_cache};
-use crate::turn::{TurnControl, manual_compact, run_chat_turn_on};
+use crate::turn::{TurnControl, end_turn, manual_compact, run_chat_turn_on};
 
 struct TurnTransport {
     kinds: Mutex<Vec<&'static str>>,
@@ -179,8 +179,8 @@ async fn hook_compaction_waits_until_the_turn_commits() {
         events
     });
     let session_id = created.session_id.as_str().to_owned();
-    let control = TurnControl::register(&state, &session_id);
-    run_chat_turn_on(
+    let mut control = TurnControl::register(&state, &session_id);
+    let outcome = run_chat_turn_on(
         &state,
         &tx,
         &session_id,
@@ -194,6 +194,16 @@ async fn hook_compaction_waits_until_the_turn_commits() {
         provider,
         transport,
         &control,
+    )
+    .await;
+    end_turn(
+        &state,
+        &tx,
+        &session_id,
+        &created.session_id,
+        &created.branch_id,
+        &mut control,
+        outcome,
     )
     .await
     .expect("turn");
@@ -480,8 +490,8 @@ async fn run_scripted_turn(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
     let session_id = session.as_str().to_owned();
-    let control = TurnControl::register(state, &session_id);
-    let result = run_chat_turn_on(
+    let mut control = TurnControl::register(state, &session_id);
+    let outcome = run_chat_turn_on(
         state,
         &tx,
         &session_id,
@@ -495,6 +505,16 @@ async fn run_scripted_turn(
         provider,
         transport,
         &control,
+    )
+    .await;
+    let result = end_turn(
+        state,
+        &tx,
+        &session_id,
+        session,
+        branch,
+        &mut control,
+        outcome,
     )
     .await;
     drop(tx);

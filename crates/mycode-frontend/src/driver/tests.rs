@@ -11,6 +11,7 @@ fn conversation(session: &str, branch: &str) -> ActiveConversation {
         older_before: None,
         streaming: None,
         running: false,
+        compacting: false,
         context_used: 0,
         context_cache: 0,
     }
@@ -134,6 +135,99 @@ fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
         "the turn end reopens the chat to pick up steps the open missed"
     );
     assert!(driver.resync_on_turn_end.is_none());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A driver on a scratch home, plus that home for cleanup.
+fn scratch_driver(label: &str) -> (super::FrontendDriver, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!(
+        "mycode-driver-{label}-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).expect("root");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    }
+    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    (super::FrontendDriver::start(home, || {}), root)
+}
+
+/// A reopen during `/compact` restores the compaction, not a running turn.
+/// `CompactFinished` is the only event that ends it; a reopen that set
+/// `sending` left the composer stuck on Stop after the compaction ended.
+#[test]
+fn a_chat_opened_mid_compact_unlocks_when_the_compaction_finishes() {
+    use mycode_app::{BranchId, BridgeEvent, BridgeReply, SessionId};
+
+    let (mut driver, root) = scratch_driver("compact-reopen");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    let mut compacting = conversation(&session, &branch);
+    compacting.compacting = true;
+    let mut out = Vec::new();
+    driver.pending_open = Some(session.clone());
+    driver.on_reply(
+        ReplyScope::Open(session.clone()),
+        BridgeReply::Conversation(Ok(compacting)),
+        &mut out,
+    );
+    assert!(driver.vm.compacting, "the composer stays locked");
+    assert!(!driver.vm.sending, "a compaction is not a running turn");
+    driver.on_event(
+        BridgeEvent::CompactFinished {
+            session_id: session.clone(),
+            message: "compacted".to_owned(),
+            ok: true,
+            head: "empty".to_owned(),
+        },
+        &mut out,
+    );
+    assert!(!driver.vm.compacting);
+    assert!(!driver.vm.sending);
+    assert_eq!(
+        driver.pending_open.as_deref(),
+        Some(session.as_str()),
+        "the end reloads the rows the open may have missed"
+    );
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Stop on a turn the core no longer runs settles the composer, and the
+/// reload a mid-turn open still owed runs now instead of after the next
+/// turn, where it reopened that turn as running.
+#[test]
+fn stop_on_a_turn_that_is_gone_runs_the_owed_reload() {
+    use mycode_app::{BranchId, BridgeReply, SessionId};
+
+    let (mut driver, root) = scratch_driver("stop-settle");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    let mut running = conversation(&session, &branch);
+    running.running = true;
+    let mut out = Vec::new();
+    driver.pending_open = Some(session.clone());
+    driver.on_reply(
+        ReplyScope::Open(session.clone()),
+        BridgeReply::Conversation(Ok(running)),
+        &mut out,
+    );
+    assert!(driver.vm.sending);
+    driver.on_reply(
+        ReplyScope::Session {
+            session: session.clone(),
+            branch: None,
+        },
+        BridgeReply::ChatCancelled(Err("no turn is running for this session".to_owned())),
+        &mut out,
+    );
+    assert!(!driver.vm.sending, "Stop settles a turn the core lost");
+    assert!(driver.resync_on_turn_end.is_none());
+    assert_eq!(driver.pending_open.as_deref(), Some(session.as_str()));
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }

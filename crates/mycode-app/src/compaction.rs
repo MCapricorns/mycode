@@ -164,10 +164,7 @@ pub(crate) async fn compact_history(
             let read_session = slot.session_id.to_owned();
             let read_branch = slot.branch_id.to_owned();
             tokio::task::spawn_blocking(move || {
-                mycode_config::read_compaction(&read_home, &read_session)
-                    .ok()
-                    .flatten()
-                    .filter(|checkpoint| checkpoint.branch_id == read_branch)
+                stored_checkpoint(&read_home, &read_session, &read_branch)
             })
             .await
             .ok()
@@ -417,10 +414,7 @@ pub(crate) fn persist_turn_summary(
     let Some(summary) = leading_summary(memory) else {
         return false;
     };
-    let prior = mycode_config::read_compaction(home, target.session_id)
-        .ok()
-        .flatten()
-        .filter(|checkpoint| checkpoint.branch_id == target.branch_id);
+    let prior = stored_checkpoint(home, target.session_id, target.branch_id);
     if prior
         .as_ref()
         .is_some_and(|checkpoint| checkpoint.summary == summary)
@@ -472,13 +466,48 @@ pub(crate) struct TurnCheckpoint<'a> {
     pub model: &'a str,
 }
 
+/// Whether `first`, the opening message of a turn's memory, is a summary
+/// the session's stored checkpoint does not hold yet. Every turn of a
+/// compacted session opens with the stored summary, so this is the cheap
+/// check before [`persist_turn_summary`] replays the ledger.
+pub(crate) fn opens_with_unstored_summary(
+    home: &mycode_config::HomeLayout,
+    session_id: &str,
+    branch_id: &str,
+    first: Option<&Message>,
+) -> bool {
+    let Some(summary) = first.and_then(summary_in) else {
+        return false;
+    };
+    !stored_checkpoint(home, session_id, branch_id)
+        .is_some_and(|checkpoint| checkpoint.summary == summary)
+}
+
+/// The checkpoint stored for `session_id`, when it belongs to `branch_id`.
+fn stored_checkpoint(
+    home: &mycode_config::HomeLayout,
+    session_id: &str,
+    branch_id: &str,
+) -> Option<mycode_config::CompactionCheckpoint> {
+    mycode_config::read_compaction(home, session_id)
+        .ok()
+        .flatten()
+        .filter(|checkpoint| checkpoint.branch_id == branch_id)
+}
+
 /// The summary a history opens with, without its wire frame, or `None`
 /// when the history is a plain ledger replay.
 fn leading_summary(history: &[Arc<Message>]) -> Option<String> {
-    let first = history
-        .first()
-        .filter(|message| is_summary_message(message))?;
-    let text = message_text(first);
+    history.first().and_then(|message| summary_in(message))
+}
+
+/// The summary `message` carries, without its wire frame, or `None` when
+/// it is not a summary.
+fn summary_in(message: &Message) -> Option<String> {
+    if !is_summary_message(message) {
+        return None;
+    }
+    let text = message_text(message);
     let frame = request_summary_text("");
     Some(match text.strip_prefix(frame.as_str()) {
         Some(body) => body.to_owned(),

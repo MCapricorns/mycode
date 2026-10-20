@@ -33,7 +33,7 @@ pub(crate) fn manual_compact(
     model: String,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     let session_id = session.as_str().to_owned();
-    let control = TurnControl::register_cancel_only(&state, &session_id);
+    let mut control = TurnControl::register_cancel_only(&state, &session_id);
     async move {
         let outcome = compact_session_now(
             &state,
@@ -74,6 +74,9 @@ pub(crate) fn manual_compact(
             ),
             Err(message) => (false, message, head_spelling(&expected_head)),
         };
+        // Unpublished first: a reopen prompted by this event must not list
+        // the finished compaction as live work.
+        control.retire();
         let _ = events.send(BridgeEvent::CompactFinished {
             session_id,
             message,
