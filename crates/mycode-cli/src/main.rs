@@ -7,8 +7,6 @@
 mod app;
 mod reply;
 
-use mycode_config::{HomeEnv, HomeLayout};
-
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The self-update helper entry is shared with every `mycode*` binary.
@@ -34,10 +32,8 @@ fn main() {
         print!("{text}");
         std::process::exit(0);
     }
-    mycode_app::cleanup_stale_stages();
-    mycode_app::cleanup_previous_binary();
-    let home = match HomeLayout::from_env(HomeEnv::from_process()) {
-        Ok(home) => home,
+    let mycode_frontend::cli::Launch { home, update } = match mycode_frontend::cli::launch(false) {
+        Ok(launch) => launch,
         Err(error) => {
             eprintln!("mycode-cli: home unavailable: {error}");
             std::process::exit(1);
@@ -47,7 +43,7 @@ fn main() {
     // a crash or a lost helper — re-arms here. The terminal keeps
     // opening (a second window must never bounce); the swap lands when
     // this run exits and the next `mycode-cli` is the new version.
-    match mycode_app::reconcile_pending_update(&home, false) {
+    match update {
         mycode_app::PendingUpdate::Armed(version) => {
             println!("mycode-cli: update v{version} is staged — it installs when this run exits.");
         }

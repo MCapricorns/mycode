@@ -6,7 +6,6 @@
 
 use std::borrow::Cow;
 
-use mycode_config::{HomeEnv, HomeLayout};
 use mycode_desktop::workspace;
 
 // The global allocator lives in mycode-core's crate root: a bin target's
@@ -129,14 +128,8 @@ fn main() {
         std::process::exit(0);
     }
     install_surface_panic_hook();
-    // Remove staging directories and install-directory leftovers
-    // (`.mycode-previous`, `.mycode-incoming`) from earlier self-updates.
-    // The apply helper returns before this, so it does not delete the
-    // staged binary it is installing.
-    mycode_app::cleanup_stale_stages();
-    mycode_app::cleanup_previous_binary();
-    let home = match HomeLayout::from_env(HomeEnv::from_process()) {
-        Ok(home) => home,
+    let mycode_frontend::cli::Launch { home, update } = match mycode_frontend::cli::launch(true) {
+        Ok(launch) => launch,
         Err(error) => {
             eprintln!("mycode home unavailable: {error}");
             std::process::exit(1);
@@ -146,7 +139,7 @@ fn main() {
     // crash or a lost helper — re-arms here and this launch exits into it:
     // the process that comes back up is the new version. A payload that
     // already landed is reported once, so the swap is never silent.
-    let applied_update = match mycode_app::reconcile_pending_update(&home, true) {
+    let applied_update = match update {
         mycode_app::PendingUpdate::Armed(_) => return,
         mycode_app::PendingUpdate::Applied(version) => Some(version),
         mycode_app::PendingUpdate::None => None,
