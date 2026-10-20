@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.14] - 2026-10-20
+
 ### Changed
 
 - 去掉桌面版输入框左下角的 `+` 按钮：它弹出系统原生的文件选择框，和应用内的目录浏览器风格割裂。引用文件改为在输入框里输入 `@` 搜索项目文件。
@@ -233,7 +235,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.13...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.14...HEAD
+[0.12.14]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.14
 [0.12.13]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.13
 [0.12.12]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.12
 [0.12.11]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.11
