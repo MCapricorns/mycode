@@ -35,10 +35,11 @@ pub(crate) use toasts::{Toast, ToastKind};
 /// Seconds a confirmed close stays armed before the next request asks again.
 const CLOSE_CONFIRM_WINDOW: Duration = Duration::from_secs(6);
 
-/// Whether the armed confirm is still inside its window. Kept as a pure
-/// helper so the timing rule is testable without a window.
-fn close_confirmed(armed: Option<Instant>, now: Instant) -> bool {
-    armed.is_some_and(|armed| now.duration_since(armed) < CLOSE_CONFIRM_WINDOW)
+/// Whether a close request quits now: always when idle, and while a turn
+/// runs only when the armed confirm is still inside its window. Kept as a
+/// pure helper so the rule is testable without a window.
+fn close_allowed(busy: bool, armed: Option<Instant>, now: Instant) -> bool {
+    !busy || armed.is_some_and(|armed| now.duration_since(armed) < CLOSE_CONFIRM_WINDOW)
 }
 
 /// Preferred first-window size. The origin is computed from the primary
@@ -915,15 +916,17 @@ impl Workspace {
         );
     }
 
-    /// A window-close request (the caption ×, Alt+F4, the taskbar button):
-    /// the first one arms a timed confirm and stays open, the second inside
+    /// A window-close request (the caption ×, Alt+F4, the taskbar button).
+    /// Idle, it quits at once. While a turn or compaction runs, the first
+    /// one arms a timed confirm and stays open, and the second inside
     /// [`CLOSE_CONFIRM_WINDOW`] quits. Programmatic quits never see this.
     pub(crate) fn on_close_request(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if close_confirmed(self.close_armed, Instant::now()) {
+        let busy = self.vm().sending || self.vm().compacting;
+        if close_allowed(busy, self.close_armed, Instant::now()) {
             self.close_armed = None;
             return true;
         }
@@ -931,7 +934,10 @@ impl Workspace {
         // Warning outlives the armed window: an Info toast expires a
         // second early, leaving a quit armed with no hint on screen.
         self.push_toast(
-            crate::i18n::t("Click × again to quit", "再点一次 × 退出"),
+            crate::i18n::t(
+                "A task is running. Click × again to quit",
+                "任务运行中，再点一次 × 退出",
+            ),
             ToastKind::Warning,
             cx,
         );
@@ -1047,15 +1053,28 @@ mod tests {
     }
 
     #[test]
-    fn a_close_request_only_confirms_inside_its_window() {
+    fn a_busy_close_request_only_confirms_inside_its_window() {
         let now = Instant::now();
-        assert!(!close_confirmed(None, now));
-        assert!(close_confirmed(Some(now), now));
-        assert!(close_confirmed(
+        assert!(!close_allowed(true, None, now));
+        assert!(close_allowed(true, Some(now), now));
+        assert!(close_allowed(
+            true,
             Some(now - (CLOSE_CONFIRM_WINDOW - Duration::from_secs(1))),
             now
         ));
-        assert!(!close_confirmed(
+        assert!(!close_allowed(
+            true,
+            Some(now - (CLOSE_CONFIRM_WINDOW + Duration::from_secs(1))),
+            now
+        ));
+    }
+
+    #[test]
+    fn an_idle_close_request_quits_at_once() {
+        let now = Instant::now();
+        assert!(close_allowed(false, None, now));
+        assert!(close_allowed(
+            false,
             Some(now - (CLOSE_CONFIRM_WINDOW + Duration::from_secs(1))),
             now
         ));
