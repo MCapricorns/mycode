@@ -536,6 +536,15 @@ pub enum BridgeEvent {
         /// What rewrote the prefix.
         cause: CacheDisruption,
     },
+    /// The running turn started (`active`) or finished summarizing its
+    /// history for an automatic compaction. A summary can take minutes, and
+    /// without this the turn looked stuck on the model. Manual `/compact`
+    /// reports through its own command reply instead.
+    ContextCompacting {
+        /// Session identity spelling.
+        session_id: String,
+        active: bool,
+    },
     /// A compaction summary was written and should appear in the transcript.
     /// Manual `/compact` and automatic compaction both emit this. The text
     /// is the display copy; the model request still uses the checkpoint.

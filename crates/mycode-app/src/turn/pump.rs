@@ -216,6 +216,12 @@ impl LedgerPump {
                         crate::CacheDisruption::Compaction,
                     );
                 }
+                AgentEvent::Compacting(active) => {
+                    self.send(BridgeEvent::ContextCompacting {
+                        session_id: self.session_id.clone(),
+                        active,
+                    });
+                }
                 AgentEvent::TurnEnded(TurnOutcome::Aborted) => {
                     // A cancel keeps the partial. Write it when it has not
                     // already been committed as a tool step, then fail

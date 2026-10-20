@@ -235,6 +235,16 @@ async fn hook_compaction_waits_until_the_turn_commits() {
             .all(|event| !matches!(event, crate::BridgeEvent::ChatFailed { .. })),
         "turn failed: {events:?}"
     );
+    // The view hears the summary start and end, in order, so the turn does
+    // not look stuck on the model for the minutes a summary can take.
+    let compacting: Vec<bool> = events
+        .iter()
+        .filter_map(|event| match event {
+            crate::BridgeEvent::ContextCompacting { active, .. } => Some(*active),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(compacting, [true, false], "{events:?}");
 
     // Reopen reads the ledger, the same path a restarted session uses.
     let opened = crate::ledger::open_conversation(

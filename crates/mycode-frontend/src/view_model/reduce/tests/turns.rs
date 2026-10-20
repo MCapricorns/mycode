@@ -898,3 +898,35 @@ fn a_job_seen_only_through_progress_keeps_its_cancel_id() {
     assert_eq!(state.live_jobs[0].call_id, "call1-a");
     assert_eq!(state.live_jobs[0].provider_call_id, "call_00_1");
 }
+
+/// A summary can take minutes; the status line says the turn compacts
+/// instead of waiting on the model the whole time.
+#[test]
+fn an_auto_compaction_shows_in_the_status_line() {
+    let status = |state: &WorkspaceState| {
+        state
+            .active
+            .as_ref()
+            .and_then(|active| active.streaming.as_ref())
+            .map(|streaming| streaming.status.clone())
+    };
+    let mut state = open(Vec::new(), None);
+    reduce(&mut state, FrontendAction::ContextCompacting(true));
+    assert!(
+        !state.auto_compacting,
+        "a straggler after the turn is dropped"
+    );
+    reduce(&mut state, FrontendAction::TurnArmed);
+    reduce(&mut state, FrontendAction::ContextCompacting(true));
+    assert!(state.auto_compacting);
+    assert_eq!(
+        status(&state).as_deref(),
+        Some(crate::i18n::t("Compacting context", "正在压缩上下文"))
+    );
+    reduce(&mut state, FrontendAction::ContextCompacting(false));
+    assert!(!state.auto_compacting);
+    assert_eq!(
+        status(&state).as_deref(),
+        Some(crate::i18n::t("Waiting for the model", "等待模型响应"))
+    );
+}

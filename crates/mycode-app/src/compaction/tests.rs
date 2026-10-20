@@ -315,6 +315,7 @@ async fn a_second_compact_in_one_turn_keeps_every_uncovered_message() {
         context_window: 30_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, history, super::CompactMode::Auto).await;
@@ -366,6 +367,7 @@ async fn manual_compact_is_the_next_request_while_under_the_auto_threshold() {
         context_window: 200_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let manual = super::compact_history(&scope, history.clone(), super::CompactMode::Manual).await;
@@ -436,6 +438,7 @@ async fn manual_compact_summarizes_a_session_that_still_fits() {
         context_window: 200_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     // `/compact` no longer answers "nothing to compact" for a short
@@ -622,6 +625,7 @@ async fn summary_request_disables_glm_thinking_and_retries_a_truncated_summary()
         context_window: 200_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
@@ -661,6 +665,7 @@ async fn a_still_truncated_summary_is_not_stored() {
         context_window: 200_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
@@ -700,6 +705,7 @@ async fn an_empty_summary_is_an_error() {
         context_window: 200_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
@@ -866,6 +872,7 @@ async fn a_twelve_token_one_line_summary_is_rejected_and_history_is_kept() {
         context_window: 200_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
@@ -984,6 +991,7 @@ async fn a_history_without_a_checkpoint_slot_compacts_in_memory_only() {
         context_window: 30_000,
         overhead_tokens: 0,
         measure: super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, history, super::CompactMode::Auto).await;

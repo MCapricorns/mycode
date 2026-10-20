@@ -105,6 +105,9 @@ pub struct WorkspaceState {
     /// bubble — but it locks the composer the same way so a follow-up
     /// queues instead of racing the compaction's expected-head check.
     pub compacting: bool,
+    /// The running turn waits on an automatic compaction summary. An
+    /// interrupt holds off until it ends, so the summary is not thrown away.
+    pub auto_compacting: bool,
     /// Compaction card held until the in-flight reply is committed.
     ///
     /// A mid-turn summary arrives after the tool rows and before `ChatDone`
@@ -554,6 +557,9 @@ pub enum FrontendAction {
     /// Compaction or a steer rewrote the prompt prefix. The next usage
     /// snapshot is compared with the cache hit already on the meter.
     CacheBreakArmed(CacheBreak),
+    /// The running turn started (`true`) or finished summarizing its
+    /// history for an automatic compaction.
+    ContextCompacting(bool),
     /// A steer was committed on the active session while the turn kept running.
     SteerCommitted {
         /// Session identity spelling.

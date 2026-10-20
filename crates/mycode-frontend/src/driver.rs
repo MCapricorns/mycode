@@ -365,6 +365,9 @@ pub struct FrontendDriver {
     /// reopen's snapshot predates the message; applied after the send's
     /// reply, it would wipe the message off the screen.
     held_send: Option<BridgeCommand>,
+    /// Session whose interrupt waits for its automatic compaction to end;
+    /// see [`FrontendDriver::interrupt_send`].
+    interrupt_after_compaction: Option<String>,
     /// Free-text answers to the pending ask card, aligned with its rows.
     pub ask_texts: Vec<String>,
     /// The question the ask card is showing; answers step one at a time.
@@ -438,6 +441,7 @@ impl FrontendDriver {
             ui_state_loaded: false,
             resync_on_turn_end: None,
             held_send: None,
+            interrupt_after_compaction: None,
             ask_texts: Vec::new(),
             ask_index: 0,
         };

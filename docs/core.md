@@ -35,9 +35,9 @@
 - `TurnStarted`、`TurnEnded(Completed | Aborted)`
 - `MessageDelta`、`MessageAdded(SharedMessage)`
 - `ToolStarted { call_id, name, target }`、`ToolProgress { call_id, message }`、`ToolCompleted { call_id, result }`
-- `CacheDisrupted`、`Error(MycodeError)`
+- `CacheDisrupted`、`Compacting(bool)`、`Error(MycodeError)`
 
-`CacheDisrupted` 表示下一次请求的前缀已被压缩改写。它必须和普通事件走同一条总线：走旁路时，慢消费者会把警告配到上一条提示。`MessageDelta` 是 `TextDelta`、`ThinkingDelta`、`ToolCallStarted { id, name }`（一个工具调用开始流式输出时发一次，在它的参数之前）、`ToolCallDelta { id, partial_json }`；`partial_json` 本身不保证是合法 JSON。
+`CacheDisrupted` 表示下一次请求的前缀已被压缩改写。`Compacting(true/false)` 是请求钩子里的摘要请求开始和结束。两者都由应用层的请求钩子发出，必须和普通事件走同一条总线：走旁路时，慢消费者会把它们配到上一条提示。`MessageDelta` 是 `TextDelta`、`ThinkingDelta`、`ToolCallStarted { id, name }`（一个工具调用开始流式输出时发一次，在它的参数之前）、`ToolCallDelta { id, partial_json }`；`partial_json` 本身不保证是合法 JSON。
 
 `CallId` 是透明的字符串 newtype，用在 `ToolStarted`、`ToolProgress`、`ToolCompleted` 事件上。消息里的 `ToolCall.id` 和 `ToolResultMessage.tool_call_id` 是普通 `String`，因为它们是厂商给的不透明值。
 

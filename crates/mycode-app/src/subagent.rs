@@ -477,6 +477,7 @@ impl BridgeAgentHost {
             checkpoint: None,
             context_window,
             calibration: crate::compaction::Calibration::default(),
+            on_summarize: None,
             cancel: child_cancel.clone(),
         };
         let compact_request = {
