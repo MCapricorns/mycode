@@ -403,8 +403,9 @@ async fn run_chat_turn_on(
         std::slice::from_ref(&system_prompt),
         &registry.specs(),
     );
-    // Codex-style checkpoint: 90% of the usable window, ~20k-token tail.
-    // This pre-turn pass publishes its transcript card immediately. The
+    let calibration = crate::compaction::Calibration::new(state.token_scale(&session_id));
+    // Codex-style checkpoint: 90% of the usable window, a tail sized to the
+    // window. This pre-turn pass publishes its transcript card immediately. The
     // before-request hook later in this function does not append a ledger
     // row; its card is published after the turn's tool results and final
     // reply commit, so a mid-turn summary cannot split a tool call from its
@@ -420,6 +421,12 @@ async fn run_chat_turn_on(
         }),
         context_window,
         overhead_tokens,
+        // Nothing of this turn is measured yet; the scale is the one the
+        // session's last turn measured.
+        measure: crate::compaction::Measure {
+            scale: calibration.scale(),
+            tokens: None,
+        },
         cancel: &control.cancel,
     };
     let compacted = crate::compaction::compact_history(&compact_scope, history, false).await;
@@ -449,6 +456,7 @@ async fn run_chat_turn_on(
     let hook_deferred = deferred.clone();
     let hook_bus = agent_tx.clone();
     let hook_cancel = control.cancel.clone();
+    let hook_calibration = calibration.clone();
     let hooks = HookRunner::default().with_before_request(move |mut request| {
         let home = compact_home.clone();
         let wire = compact_wire.clone();
@@ -459,7 +467,10 @@ async fn run_chat_turn_on(
         let deferred = hook_deferred.clone();
         let bus = hook_bus.clone();
         let cancel = hook_cancel.clone();
+        let calibration = hook_calibration.clone();
         async move {
+            let overhead =
+                crate::compaction::estimate_prefix_tokens(&request.system_prompt, &request.tools);
             // The turn token stops a summary the user no longer waits for;
             // the agent then sees the cancel right after this hook.
             let scope = crate::compaction::CompactScope {
@@ -472,10 +483,8 @@ async fn run_chat_turn_on(
                     head: &head,
                 }),
                 context_window,
-                overhead_tokens: crate::compaction::estimate_prefix_tokens(
-                    &request.system_prompt,
-                    &request.tools,
-                ),
+                overhead_tokens: overhead,
+                measure: calibration.measure(&request.messages),
                 cancel: &cancel,
             };
             let compacted =
@@ -490,6 +499,13 @@ async fn run_chat_turn_on(
                 let _ = bus.send(mycode_core::events::AgentEvent::CacheDisrupted);
             }
             request.messages = compacted.messages;
+            // Its reply measures this request for the next one.
+            calibration.sent(&request.messages, overhead);
+            request.max_output_tokens = crate::compaction::fit_output(
+                request.max_output_tokens,
+                context_window,
+                compacted.tokens,
+            );
             request
         }
     });
@@ -532,6 +548,7 @@ async fn run_chat_turn_on(
         .with_steer(Some(Arc::clone(&control.steer)));
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
+    state.remember_token_scale(&session_id, calibration.scale());
     // Close the agent bus (the env and the hook each hold a sender) so a
     // turn that never started reaches the pump as a closed stream instead of
     // leaving it parked forever.

@@ -475,6 +475,160 @@ fn read_sse(round: usize) -> String {
     format!("data: {chunk}\n\ndata: [DONE]\n\n")
 }
 
+/// Answers the first request with a `read` call whose usage reports
+/// `reported` prompt tokens, a summary request with a summary, and the
+/// request carrying the tool result with a reply. Records each request's
+/// kind and the final request's output cap.
+struct MeasuredTransport {
+    reported: u64,
+    kinds: Mutex<Vec<&'static str>>,
+    final_cap: Mutex<Option<u64>>,
+}
+
+impl SseTransport for MeasuredTransport {
+    fn post<'a>(
+        &'a self,
+        call: TransportCall,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let body = String::from_utf8_lossy(&call.body);
+            let (kind, sse) = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                let summary = format!(
+                    "handoff notes. {}",
+                    "The covered prefix is replaced by this checkpoint. ".repeat(6)
+                );
+                ("summary", text_sse(&summary, 80))
+            } else if body.contains("\"role\":\"tool\"") {
+                let value: serde_json::Value = serde_json::from_str(&body).expect("json body");
+                *self.final_cap.lock().expect("cap") = value["max_tokens"].as_u64();
+                ("final", text_sse("ok", 3))
+            } else {
+                let chunk = serde_json::json!({
+                    "choices": [{
+                        "delta": {"tool_calls": [{
+                            "index": 0,
+                            "id": "call_read",
+                            "function": {
+                                "name": "read",
+                                "arguments": serde_json::json!({"path": "a.txt"}).to_string()
+                            }
+                        }]},
+                        "finish_reason": "tool_calls"
+                    }],
+                    "usage": {"prompt_tokens": self.reported, "completion_tokens": 20}
+                });
+                ("tools", format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+            };
+            self.kinds.lock().expect("kinds").push(kind);
+            let (sender, stream) = tokio::sync::mpsc::channel(1);
+            sender
+                .send(Ok(bytes::Bytes::from(sse)))
+                .await
+                .expect("queue scripted body");
+            Ok(stream)
+        })
+    }
+}
+
+/// One turn in a 100k window whose history estimates near 20k tokens,
+/// where the provider counted the first request at `reported`.
+async fn measured_turn(reported: u64) -> Arc<MeasuredTransport> {
+    let (root, home) = scratch();
+    let mut settings = AppSettings::default();
+    settings.providers.push(ProviderSettings {
+        id: "local".to_owned(),
+        kind: "openai-completions".to_owned(),
+        base_url: "https://example.com/v1".to_owned(),
+        models: vec!["test-model".to_owned()],
+        enabled: true,
+        // ~85.5k token trigger.
+        context_limit: Some(100_000),
+        max_output: Some(32_000),
+        hidden_models: Vec::new(),
+    });
+    replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
+    replace_provider_secrets(
+        &home,
+        AuthorityRevision::ABSENT,
+        &ProviderSecrets::new().with_key("local", Some("test-key")),
+    )
+    .expect("secrets");
+    let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+    std::fs::create_dir_all(&cwd).expect("cwd");
+    std::fs::write(cwd.join("a.txt"), "alpha-body").expect("a");
+    let catalog = mycode_providers::catalog::current(&home);
+    let state = CoreState::new(home, catalog, Vec::new());
+    let created = state.service.create(None).await.expect("session");
+    let mut head = HeadStamp::Empty;
+    for text in ["prior work", &"P".repeat(40_000), "read a.txt"] {
+        let reservation = state
+            .service
+            .reserve_event(
+                &created.session_id,
+                &created.branch_id,
+                EventKind::Message,
+                None,
+                text.as_bytes(),
+            )
+            .await
+            .expect("reserve");
+        head = state
+            .service
+            .append(&created.session_id, &created.branch_id, &head, &reservation)
+            .await
+            .expect("append")
+            .head;
+    }
+    let transport = Arc::new(MeasuredTransport {
+        reported,
+        kinds: Mutex::new(Vec::new()),
+        final_cap: Mutex::new(None),
+    });
+    run_scripted_turn(
+        &state,
+        &created.session_id,
+        &created.branch_id,
+        &cwd,
+        &settings,
+        transport.clone(),
+    )
+    .await
+    .expect("turn");
+    let _ = std::fs::remove_dir_all(root);
+    transport
+}
+
+/// The provider's count of the request it answered drives compaction. The
+/// estimate alone, about a fifth of it here, never reached the trigger,
+/// so a session the provider saw as full went out until it overflowed.
+#[tokio::test]
+async fn the_provider_count_of_the_last_request_triggers_compaction() {
+    let full = measured_turn(90_000).await;
+    assert_eq!(
+        *full.kinds.lock().expect("kinds"),
+        ["tools", "summary", "final"],
+        "a 90k count in a 100k window must compact before the next request"
+    );
+    let near = measured_turn(80_000).await;
+    assert_eq!(*near.kinds.lock().expect("kinds"), ["tools", "final"]);
+    // Under the trigger, the request goes out whole, but its output cap
+    // shrinks to what the window leaves: 80k in plus 32k out passes 100k.
+    let cap = near
+        .final_cap
+        .lock()
+        .expect("cap")
+        .expect("max_tokens sent");
+    assert!(cap < 20_000, "output cap {cap} overflows the window");
+}
+
 /// Runs one turn on `transport`, draining its bridge events.
 async fn run_scripted_turn(
     state: &CoreState,

@@ -679,7 +679,9 @@ async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
     let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
     let created = state.service.create(None).await.expect("session");
     let mut head = HeadStamp::Empty;
-    for text in ["prior work", &"P".repeat(120_000)] {
+    // The head before the prompt must outweigh the summary that replaces
+    // it, or the hook keeps the request whole.
+    for text in ["prior work", &"Q".repeat(40_000), &"P".repeat(60_000)] {
         let reservation = state
             .service
             .reserve_event(

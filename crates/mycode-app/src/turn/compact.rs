@@ -258,6 +258,10 @@ async fn compact_session_now(
         }),
         context_window,
         overhead_tokens: 0,
+        measure: crate::compaction::Measure {
+            scale: state.token_scale(session.as_str()),
+            tokens: None,
+        },
         cancel,
     };
     let compacted = crate::compaction::compact_history(&scope, history, true).await;
