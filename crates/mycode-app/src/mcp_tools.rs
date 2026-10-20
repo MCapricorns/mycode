@@ -131,10 +131,19 @@ impl ToolDyn for DynamicMcpTool {
         out: &'a mut ToolStream,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
         Box::pin(async move {
+            // Server schemas vary more than ours do, so repair the shapes a
+            // model typically gets wrong (required-field spellings, quoted
+            // scalars, an untagged union variant) before validating. This is
+            // schema-driven only: camelCase keys are left alone because the
+            // server may declare them that way.
+            let mut args = args;
+            mycode_tools::tool::repair_args(&mut args, &self.spec.params_schema);
             if let Some(validator) = &self.validator {
                 let errors: Vec<String> = validator
                     .iter_errors(&args)
-                    .map(|error| format!("{error} (at {})", error.instance_path()))
+                    .map(|error| {
+                        mycode_tools::tool::render_schema_error(&error, &self.spec.params_schema)
+                    })
                     .collect();
                 if !errors.is_empty() {
                     return Err(ToolError::InvalidArgs(errors.join("; ")));
@@ -1321,10 +1330,25 @@ mod tests {
             .collect::<String>();
         assert!(!result.is_error, "{text}");
         assert!(text.contains("pong"), "{text}");
+        // A required field under another framework's spelling is repaired
+        // before validation instead of costing the model a turn.
+        let (mut stream, rx) = mycode_tools::ToolStream::channel();
+        let repaired = mycode_tools::ToolDyn::execute_dyn(
+            scout[0].as_ref(),
+            serde_json::json!({"q": "repaired"}),
+            &ctx,
+            &mut stream,
+        )
+        .await
+        .expect("call the MCP tool with a repaired argument");
+        drop(stream);
+        drop(rx);
+        assert!(!repaired.is_error);
         let calls = scripted.calls.lock().expect("calls");
-        assert_eq!(calls.len(), 1);
+        assert_eq!(calls.len(), 2);
         assert_eq!(calls[0]["name"], "lookup");
         assert_eq!(calls[0]["arguments"]["query"], "direct");
+        assert_eq!(calls[1]["arguments"]["query"], "repaired");
         drop(calls);
         let _ = std::fs::remove_dir_all(&root);
 
