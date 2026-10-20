@@ -625,7 +625,11 @@ def _expect_manifests() -> None:
     cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     bumped = rewrite_workspace_version(cargo, "0.7.9")
     _expect(workspace_version(bumped) == "0.7.9", bumped)
-    _expect('jsonschema = { version = "0.58.6"' in bumped, "dependency version changed")
+    # Read the dependency pin from the live manifest so bumping a crate does
+    # not fail the self-test. The rewrite must leave it untouched.
+    dep = re.search(r'(?m)^jsonschema = .+$', cargo)
+    _expect(dep is not None, "Cargo.toml has no jsonschema dependency")
+    _expect(dep.group(0) in bumped, "dependency version changed")
     _expect(bumped.count('version = "0.7.9"') == 1, "extra workspace versions")
 
     lock = (ROOT / "Cargo.lock").read_text(encoding="utf-8")
@@ -633,9 +637,22 @@ def _expect_manifests() -> None:
     for name in WORKSPACE_PACKAGES:
         pattern = rf'name = "{name}"\nversion = "0.7.9"\n'
         _expect(re.search(pattern, rewritten) is not None, name)
+    # Pick an unrelated package from the live lock instead of pinning one.
+    unrelated = next(
+        (
+            (name, version)
+            for name, version in re.findall(
+                r'(?m)^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\n',
+                lock,
+            )
+            if name not in WORKSPACE_PACKAGES and version != "0.7.9"
+        ),
+        None,
+    )
+    _expect(unrelated is not None, "Cargo.lock has no unrelated package")
     _expect(
-        re.search(r'name = "async-broadcast"\nversion = "0.7.2"\n', rewritten) is not None,
-        "unrelated 0.7.2 package was rewritten",
+        f'name = "{unrelated[0]}"\nversion = "{unrelated[1]}"\n' in rewritten,
+        f"unrelated {unrelated[1]} package was rewritten",
     )
 
 
