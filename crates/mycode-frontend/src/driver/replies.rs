@@ -27,6 +27,14 @@ impl FrontendDriver {
                 self.resolve_recall_reply(*request, reply, out);
                 return;
             }
+            ReplyScope::Steer { session, text } => {
+                // The turn ended, or had not registered yet, before the
+                // steer arrived: it goes back to the queue, not away.
+                if matches!(reply, BridgeReply::Steered(Err(_))) {
+                    self.return_steers(&session, vec![text], out);
+                }
+                return;
+            }
             ReplyScope::DeletedSession(session_id) => {
                 self.finish_delete(&session_id, reply, out);
                 return;

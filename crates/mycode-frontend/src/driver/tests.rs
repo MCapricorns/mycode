@@ -498,3 +498,82 @@ fn the_driver_keeps_the_open_folders_git_status_fresh() {
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A steer goes to the running turn without stopping it and shows as
+/// pending; a turn that cannot take it hands it back to the queue.
+#[test]
+fn a_steer_reaches_the_running_turn_and_a_refusal_queues_it() {
+    use mycode_app::{BranchId, BridgeReply, SessionId};
+
+    let (mut driver, root) = scratch_driver("steer");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    let mut out = Vec::new();
+    driver.act(FrontendAction::TurnArmed, &mut out);
+    driver.steer_send("also check b.rs", &mut out);
+    assert!(driver.vm.sending, "the turn keeps running");
+    assert_eq!(driver.vm.pending_steers, ["also check b.rs"]);
+    assert!(driver.vm.queued.is_empty());
+    assert!(out.iter().any(|effect| matches!(
+        effect,
+        super::Effect::ComposerSet { text, .. } if text.is_empty()
+    )));
+    driver.on_reply(
+        ReplyScope::Steer {
+            session: session.clone(),
+            text: "also check b.rs".to_owned(),
+        },
+        BridgeReply::Steered(Err("no turn is running for this session".to_owned())),
+        &mut out,
+    );
+    assert!(driver.vm.pending_steers.is_empty());
+    assert_eq!(driver.vm.queued, ["also check b.rs"]);
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// With no turn running there is nothing to steer: the draft is sent.
+#[test]
+fn a_steer_with_no_turn_running_is_a_send() {
+    use mycode_app::{BranchId, SessionId};
+
+    let (mut driver, root) = scratch_driver("steer-idle");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    let mut out = Vec::new();
+    driver.steer_send("start here", &mut out);
+    assert!(driver.vm.sending, "the draft started a turn");
+    assert!(driver.vm.pending_steers.is_empty());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Steers a chat off screen did not take used to be dropped with the event.
+/// They wait in its parked queue instead.
+#[test]
+fn steers_returned_to_a_chat_off_screen_wait_in_its_queue() {
+    use mycode_app::{BranchId, BridgeEvent, SessionId};
+
+    let (mut driver, root) = scratch_driver("steer-parked");
+    let open = SessionId::generate().expect("session").as_str().to_owned();
+    let other = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&open, &branch));
+    let mut out = Vec::new();
+    driver.on_event(
+        BridgeEvent::SteersReturned {
+            session_id: other.clone(),
+            texts: vec!["late steer".to_owned()],
+        },
+        &mut out,
+    );
+    assert!(driver.vm.queued.is_empty(), "not the open chat's queue");
+    assert_eq!(
+        driver.vm.parked_queues,
+        [(other, vec!["late steer".to_owned()])]
+    );
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}

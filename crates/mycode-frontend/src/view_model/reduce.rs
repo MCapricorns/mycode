@@ -93,6 +93,29 @@ fn park_queue(state: &mut WorkspaceState) {
     }
 }
 
+/// Files steers a chat off screen did not take at the end of its parked
+/// queue, under the same cap as a queue on screen.
+fn park_steers(state: &mut WorkspaceState, session_id: String, texts: Vec<String>) {
+    let index = match state
+        .parked_queues
+        .iter()
+        .position(|(parked, _)| *parked == session_id)
+    {
+        Some(index) => index,
+        None => {
+            state.parked_queues.push((session_id, Vec::new()));
+            state.parked_queues.len() - 1
+        }
+    };
+    let queue = &mut state.parked_queues[index].1;
+    for text in texts {
+        let text = bounded_draft(text);
+        if !text.trim().is_empty() && queue.len() < super::MAX_QUEUED_MESSAGES {
+            queue.push(text);
+        }
+    }
+}
+
 /// Brings a chat's parked follow-ups back when it opens again. They wait
 /// for an explicit send unless its turn is still running; then they start
 /// when it ends, as they would have without the switch.
@@ -398,6 +421,14 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             queue_message(state, text);
             state.composer_draft.clear();
             state.mention = None;
+        }
+        FrontendAction::SteerSent(text) => {
+            state.pending_steers.push(text);
+            state.composer_draft.clear();
+            state.mention = None;
+        }
+        FrontendAction::SteersParked { session_id, texts } => {
+            park_steers(state, session_id, texts);
         }
         FrontendAction::SteersReturned(texts) => {
             for text in texts {

@@ -124,6 +124,12 @@ pub(crate) enum ReplyScope {
     DeletedSession(String),
     /// A `LoadOlder` page resolving a rewind target, not a history prepend.
     Recall(Box<RecallRequest>),
+    /// A steer: a refusal hands `text` back to its chat's queue, on screen
+    /// or parked.
+    Steer {
+        session: String,
+        text: String,
+    },
 }
 
 /// The rewind a `LoadOlder` reply is resolving. The page walk chains until
@@ -172,6 +178,10 @@ impl ReplyScope {
                 query: query.clone(),
             },
             BridgeCommand::DeleteSession { session_id } => Self::DeletedSession(session_id.clone()),
+            BridgeCommand::Steer { session_id, text } => Self::Steer {
+                session: session_id.clone(),
+                text: text.clone(),
+            },
             _ => Self::Global,
         }
     }
@@ -194,8 +204,9 @@ impl ReplyScope {
                         mention.kind == MentionKind::File && &mention.fragment == query
                     })
             }
-            // Delete and recall replies carry their own staleness checks.
-            Self::DeletedSession(_) | Self::Recall(_) => true,
+            // Delete, recall, and steer replies carry their own staleness
+            // checks.
+            Self::DeletedSession(_) | Self::Recall(_) | Self::Steer { .. } => true,
         }
     }
 }

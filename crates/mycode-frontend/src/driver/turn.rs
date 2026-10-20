@@ -250,9 +250,10 @@ impl FrontendDriver {
         self.pump_queued_send(out);
     }
 
-    /// Interrupt-submit (the desktop's Ctrl+Enter): stop the running turn
-    /// and send this draft right away. With an empty draft it behaves like
-    /// the queue's interrupt — the held queue runs after the cancel lands.
+    /// Interrupt-submit (Ctrl+Enter, Cmd+Enter on the macOS desktop): stop
+    /// the running turn and send this draft right away. With an empty draft
+    /// it behaves like the queue's interrupt — the held queue runs after the
+    /// cancel lands.
     ///
     /// While the turn waits on an automatic compaction summary, the stop
     /// waits for the summary to end. Stopping it threw the summary away,
@@ -278,6 +279,55 @@ impl FrontendDriver {
             0
         };
         self.interrupt_queued(index, out);
+    }
+
+    /// Steer-submit (Ctrl+G, Cmd+G on the macOS desktop): hands this draft
+    /// to the running turn without stopping it. The model reads it before
+    /// its next step; until the ledger has it, it shows as pending. A turn
+    /// that ends before reading it hands it back to the queue. With no turn
+    /// running it is a plain submit.
+    pub fn steer_send(&mut self, draft: &str, out: &mut Vec<Effect>) {
+        let session_id = self.open_session_id();
+        let Some(session_id) = session_id.filter(|_| self.vm.sending) else {
+            self.submit(draft, out);
+            return;
+        };
+        if draft.trim().is_empty() {
+            return;
+        }
+        let text = draft.to_owned();
+        self.act(FrontendAction::SteerSent(text.clone()), out);
+        out.push(Effect::ComposerSet {
+            text: String::new(),
+            focus: false,
+        });
+        self.dispatch(BridgeCommand::Steer { session_id, text });
+    }
+
+    /// Steers a turn did not take go back to their chat's queue: the one on
+    /// screen, or the one parked while another chat is open.
+    pub(crate) fn return_steers(
+        &mut self,
+        session_id: &str,
+        texts: Vec<String>,
+        out: &mut Vec<Effect>,
+    ) {
+        if self.open_session_id().as_deref() != Some(session_id) {
+            self.act(
+                FrontendAction::SteersParked {
+                    session_id: session_id.to_owned(),
+                    texts,
+                },
+                out,
+            );
+            return;
+        }
+        self.act(FrontendAction::SteersReturned(texts), out);
+        // Steers handed back after a user stop join a held queue.
+        if self.queue_hold_on_return {
+            self.act(FrontendAction::QueuePaused(true), out);
+        }
+        self.pump_queued_send(out);
     }
 
     /// Enter or send on the welcome desk starts a task with that text.
