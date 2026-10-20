@@ -12,8 +12,9 @@ use crate::{ConfigError, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES};
 pub const COMPACTION_FORMAT_VERSION: u32 = 1;
 /// Document kind marker; rejects foreign files at the same path.
 pub const COMPACTION_KIND: &str = "compaction";
-/// Largest accepted summary text.
-pub const MAX_SUMMARY_CHARS: usize = 24_000;
+/// Largest accepted summary text: the model's summary plus the user's
+/// messages kept verbatim after it.
+pub const MAX_SUMMARY_CHARS: usize = 48_000;
 /// Largest accepted id fields.
 const MAX_ID_CHARS: usize = 128;
 

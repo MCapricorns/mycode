@@ -29,6 +29,8 @@ const FULL_HANDOFF: &str = concat!(
     "Clear next steps: reply to the latest user message."
 );
 
+mod echo;
+
 fn user(text: &str) -> Arc<Message> {
     Arc::new(Message::User(UserMessage::text(text)))
 }
@@ -374,12 +376,11 @@ async fn manual_compact_is_the_next_request_while_under_the_auto_threshold() {
     assert!(user_text(&manual.messages[0]).contains("COMPACTION SUMMARY"));
     assert_eq!(user_text(&manual.messages[1]), "TAIL-ONE");
     assert_eq!(user_text(&manual.messages[2]), "TAIL-TWO");
-    assert!(
-        manual
-            .messages
-            .iter()
-            .all(|message| !user_text(message).contains("HEAD-MARKER-"))
-    );
+    // The user's long head message stays with the summary only as its
+    // start and end.
+    let kept = user_text(&manual.messages[0]);
+    assert!(kept.contains("HEAD-MARKER-") && kept.contains("characters omitted"));
+    assert!(kept.len() < head.len() / 4, "{} chars kept", kept.len());
 
     let mut later = history;
     later.push(user("NEW-TURN"));
@@ -409,10 +410,10 @@ async fn manual_compact_is_the_next_request_while_under_the_auto_threshold() {
     assert_eq!(user_text(&next.messages[1]), "TAIL-ONE");
     assert_eq!(user_text(&next.messages[2]), "TAIL-TWO");
     assert_eq!(user_text(&next.messages[3]), "NEW-TURN");
-    assert!(
-        next.messages
-            .iter()
-            .all(|message| !user_text(message).contains("HEAD-MARKER-"))
+    assert_eq!(
+        user_text(&next.messages[0]),
+        kept,
+        "the checkpoint keeps them too"
     );
     let _ = std::fs::remove_dir_all(root);
 }
