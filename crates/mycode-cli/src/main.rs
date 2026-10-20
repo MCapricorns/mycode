@@ -5,6 +5,7 @@
 //! `driver.vm()` and feeds terminal input back in.
 
 mod app;
+mod reply;
 
 use mycode_config::{HomeEnv, HomeLayout};
 
