@@ -361,6 +361,10 @@ pub struct FrontendDriver {
     /// dropped as belonging to another chat, so the transcript reloads from
     /// the ledger once the turn ends.
     resync_on_turn_end: Option<String>,
+    /// A `SendMessage` waiting for a reopen of the same chat to land. That
+    /// reopen's snapshot predates the message; applied after the send's
+    /// reply, it would wipe the message off the screen.
+    held_send: Option<BridgeCommand>,
     /// Free-text answers to the pending ask card, aligned with its rows.
     pub ask_texts: Vec<String>,
     /// The question the ask card is showing; answers step one at a time.
@@ -433,6 +437,7 @@ impl FrontendDriver {
             agent_roles_stale: false,
             ui_state_loaded: false,
             resync_on_turn_end: None,
+            held_send: None,
             ask_texts: Vec::new(),
             ask_index: 0,
         };
@@ -611,6 +616,9 @@ impl FrontendDriver {
                     if scope.applies(&self.vm, self.pending_open.as_deref()) {
                         self.on_reply(scope, *reply, out);
                     }
+                    // Any reply can end the reopen a held send waits on,
+                    // including one that superseded it.
+                    self.release_held_send();
                 }
                 DriverMsg::MentionSearchTick { generation } => {
                     if generation == self.mention_generation {

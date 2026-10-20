@@ -400,6 +400,11 @@ fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
     // ever clear these for the fresh chat.
     assert!(!state.sending);
     assert!(state.queued.is_empty());
+    assert_eq!(
+        state.parked_queues,
+        [("ses".to_owned(), vec!["follow up".to_owned()])],
+        "the previous chat keeps its queue"
+    );
     assert!(state.pending_steers.is_empty());
     assert!(!state.history_loading);
     assert_eq!(
@@ -408,6 +413,91 @@ fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
             .as_ref()
             .map(|active| active.session_id.as_str()),
         Some("new")
+    );
+}
+
+fn reopened(session: &str, running: bool) -> ActiveConversation {
+    ActiveConversation {
+        session_id: session.to_owned(),
+        branch_id: "br".to_owned(),
+        head: "empty".to_owned(),
+        entries: Vec::new(),
+        older_before: None,
+        streaming: None,
+        running,
+        compacting: false,
+        context_used: 0,
+        context_cache: 0,
+    }
+}
+
+/// Follow-ups queued behind a turn used to vanish when another chat took
+/// the screen. They stay with their chat and come back when it opens.
+#[test]
+fn queued_follow_ups_come_back_with_their_chat() {
+    let mut state = open(Vec::new(), None);
+    reduce(&mut state, FrontendAction::TurnArmed);
+    reduce(
+        &mut state,
+        FrontendAction::MessageQueued("follow up".to_owned()),
+    );
+    reduce(
+        &mut state,
+        FrontendAction::ConversationOpened(reopened("other", false)),
+    );
+    assert!(
+        state.queued.is_empty(),
+        "another chat never sends this queue"
+    );
+    // Back while the turn still runs: the queue starts when it ends.
+    reduce(
+        &mut state,
+        FrontendAction::ConversationOpened(reopened("ses", true)),
+    );
+    assert_eq!(state.queued, ["follow up"]);
+    assert!(!state.queue_paused);
+    // Away and back after the turn ended: the queue waits for a send.
+    reduce(&mut state, FrontendAction::ConversationParked);
+    assert!(state.queued.is_empty());
+    reduce(
+        &mut state,
+        FrontendAction::ConversationOpened(reopened("ses", false)),
+    );
+    assert_eq!(state.queued, ["follow up"]);
+    assert!(
+        state.queue_paused,
+        "a queue whose turn ended away waits for an explicit send"
+    );
+    // A deleted chat's parked queue goes with it.
+    reduce(
+        &mut state,
+        FrontendAction::ConversationOpened(reopened("other", false)),
+    );
+    assert_eq!(state.parked_queues.len(), 1);
+    reduce(
+        &mut state,
+        FrontendAction::SessionBindingsForgotten("ses".to_owned()),
+    );
+    assert!(state.parked_queues.is_empty());
+}
+
+/// A reopen of the chat on screen that lands just after a send armed the
+/// next turn keeps the waiting bubble the wire copy never carries.
+#[test]
+fn a_reopen_after_a_send_keeps_the_waiting_bubble() {
+    let mut state = open(Vec::new(), None);
+    reduce(&mut state, FrontendAction::TurnArmed);
+    reduce(
+        &mut state,
+        FrontendAction::ConversationOpened(reopened("ses", false)),
+    );
+    assert!(state.sending);
+    assert!(
+        state
+            .active
+            .as_ref()
+            .and_then(|active| active.streaming.as_ref())
+            .is_some()
     );
 }
 

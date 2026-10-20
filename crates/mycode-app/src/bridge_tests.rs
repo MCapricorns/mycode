@@ -220,8 +220,8 @@ async fn assert_failure_routes(failure: Failure) {
     )
     .await;
     assert!(
-        matches!(&reply, BridgeReply::Sent { session, outcome: Err(message) }
-            if session == SESSION && message == expected),
+        matches!(&reply, BridgeReply::Sent { session, text, outcome: Err(message) }
+            if session == SESSION && text == "unsent" && message == expected),
         "wrong send reply or lost session: {reply:?}"
     );
     let reply = failed_request(

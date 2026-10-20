@@ -84,6 +84,9 @@ pub struct WorkspaceState {
     pub pending_welcome_send: Option<String>,
     /// Follow-ups waiting for the in-flight turn to finish.
     pub queued: Vec<String>,
+    /// Queues of chats that left the screen, by session id. A chat's queue
+    /// comes back when it opens again.
+    pub parked_queues: Vec<(String, Vec<String>)>,
     /// The user stopped the turn, so the queue waits for an explicit send
     /// (or a recall into the composer) instead of starting on its own.
     pub queue_paused: bool,

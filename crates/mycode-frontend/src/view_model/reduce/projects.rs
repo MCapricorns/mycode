@@ -83,6 +83,9 @@ pub(super) fn session_bindings_forgotten(state: &mut WorkspaceState, session_id:
     state
         .sessions
         .retain(|session| session.session_id != session_id);
+    state
+        .parked_queues
+        .retain(|(parked, _)| parked != &session_id);
 }
 
 #[cfg(test)]
