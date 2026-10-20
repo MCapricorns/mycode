@@ -195,6 +195,11 @@ impl FrontendDriver {
                     out.push(Effect::SyncProxyField);
                 }
                 self.act(FrontendAction::SettingsLoaded(Box::new(state)), out);
+                self.toast_applied_update(out);
+            }
+            BridgeReply::Settings(Err(message)) => {
+                self.act(FrontendAction::Failed(message), out);
+                self.toast_applied_update(out);
             }
             BridgeReply::Exported(Ok(_summary)) => {}
             BridgeReply::Exported(Err(message)) => {
@@ -602,7 +607,6 @@ impl FrontendDriver {
                 self.act(FrontendAction::Failed(message), out);
             }
             BridgeReply::Sessions(Err(message))
-            | BridgeReply::Settings(Err(message))
             | BridgeReply::Recalled(Err(message))
             | BridgeReply::Resources(Err(message))
             | BridgeReply::AskAnswered(Err(message)) => {
@@ -619,6 +623,18 @@ impl FrontendDriver {
 
     /// A row delete reply: the core confirmed the session is gone, so the
     /// bindings and — when it was open — the conversation can be forgotten.
+    /// Announces an update the exit swap installed, once, after the first
+    /// settings reply has applied the UI language.
+    fn toast_applied_update(&mut self, out: &mut Vec<Effect>) {
+        if let Some(version) = self.applied_update.take() {
+            self.toast(
+                format!("{} v{version}", crate::i18n::t("Updated to", "已更新到")),
+                ToastKind::Info,
+                out,
+            );
+        }
+    }
+
     fn finish_delete(&mut self, session_id: &str, reply: BridgeReply, out: &mut Vec<Effect>) {
         match reply {
             BridgeReply::SessionDeleted(Ok(())) => {
