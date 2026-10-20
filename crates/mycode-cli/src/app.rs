@@ -11,13 +11,16 @@
 //! overlay state.
 //!
 //! Key map: `Enter` submits (or accepts the highlighted `/`/`@` row —
-//! a partial command like `/se` resolves to `/settings`),
-//! `Alt+Enter`/`Ctrl+J` inserts a newline, `Up`/`Down` move through an open
-//! `/`/`@` menu or the settings list, `Esc` dismisses the topmost layer,
-//! closes the settings page, or cancels a running turn, `Ctrl+C` cancels
-//! the turn and quits when idle, `Ctrl+N` starts a new task, `Ctrl+O`
-//! folds or expands every thinking trace,
-//! `PageUp`/`PageDown` scroll.
+//! a partial command like `/se` resolves to `/settings`) and queues while a
+//! turn runs, `Ctrl+Enter` stops the turn and sends now, `Ctrl+G` steers the
+//! running turn, `Shift+Enter`/`Alt+Enter`/`Ctrl+J` inserts a newline,
+//! `Up`/`Down` move through an open `/`/`@` menu or the settings list, `Esc`
+//! dismisses the topmost layer, closes the settings page, or cancels a
+//! running turn, `Ctrl+C` cancels the turn and quits when idle, `Ctrl+N`
+//! starts a new task, `Ctrl+O` folds or expands every thinking trace,
+//! `PageUp`/`PageDown` scroll. The settings page lists them from the shared
+//! table. A terminal that cannot report `Ctrl+Enter` (common outside
+//! Windows) sends `Enter` or `Ctrl+J` instead.
 //!
 //! The terminal's working directory is the project: once the remembered UI
 //! state has loaded, it replaces the folder a previous session left behind,
@@ -41,6 +44,7 @@ use mycode_app::{ConversationEntry, EntryKind};
 use mycode_config::{VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES};
 use mycode_frontend::driver::{Effect, FrontendDriver, ToastKind};
 use mycode_frontend::picker;
+use mycode_frontend::shortcuts::{Surface, shortcuts};
 use mycode_frontend::view_model::{
     FrontendAction, MainView, MentionKind, ProxyTestState, SettingsSection, UpdateState,
     WorkspaceState, elapsed_label, model_display_name, preferred_slash_index,
@@ -130,7 +134,8 @@ enum SettingItem {
     Skill(usize),
 }
 
-/// A settings line: a dim section header or a selectable item row.
+/// A settings line: a dim section header, a selectable item row, or a row
+/// that only informs (a shortcut).
 enum SettingRow {
     Header(String),
     Item {
@@ -138,6 +143,10 @@ enum SettingRow {
         label: String,
         value: String,
         dim: bool,
+    },
+    Info {
+        label: String,
+        value: String,
     },
 }
 
@@ -470,6 +479,7 @@ impl Tui {
         let mut effects = Vec::new();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         // On the settings page every key routes to the list/pickers; an open
         // ask card (a running turn's question) still wins Esc and Enter.
         if self.driver.vm().view == MainView::Settings && self.driver.vm().pending_ask.is_none() {
@@ -500,10 +510,14 @@ impl Tui {
             // A console that types a paste out as keys delivers its lines as
             // Enter presses with more input already waiting; those become
             // newlines instead of one submit per pasted line.
-            (KeyCode::Enter, false, false) if !matches!(event::poll(Duration::ZERO), Ok(true)) => {
+            (KeyCode::Enter, false, false)
+                if !shift && !matches!(event::poll(Duration::ZERO), Ok(true)) =>
+            {
                 self.submit_current(&mut effects);
             }
-            // Newline: terminals that report Alt/Ctrl+Enter land here; the
+            (KeyCode::Enter, true, false) => self.interrupt_send_current(&mut effects),
+            (KeyCode::Char('g'), true, false) => self.steer_current(&mut effects),
+            // Newline: terminals that report Shift/Alt+Enter land here; the
             // rest use Ctrl+J, which crossterm maps from LF.
             (KeyCode::Enter, _, _) | (KeyCode::Char('j'), true, false) => {
                 self.composer.input(Input {
@@ -603,6 +617,31 @@ impl Tui {
             return;
         }
         self.driver.submit(&text, effects);
+        self.scroll = 0;
+    }
+
+    /// `Ctrl+Enter`: stops the running turn and sends the draft now. With no
+    /// turn running, or an ask card or menu open, it is `Enter`.
+    fn interrupt_send_current(&mut self, effects: &mut Vec<Effect>) {
+        if !self.turn_busy() || self.driver.vm().pending_ask.is_some() || self.menu_len() > 0 {
+            self.submit_current(effects);
+            return;
+        }
+        let text = self.composer.lines().join("\n");
+        self.driver.interrupt_send(&text, effects);
+        self.scroll = 0;
+    }
+
+    /// `Ctrl+G`: hands the draft to the running turn without stopping it;
+    /// the model reads it before its next step. With no turn running, or an
+    /// ask card or menu open, it is `Enter`.
+    fn steer_current(&mut self, effects: &mut Vec<Effect>) {
+        if self.driver.vm().pending_ask.is_some() || self.menu_len() > 0 {
+            self.submit_current(effects);
+            return;
+        }
+        let text = self.composer.lines().join("\n");
+        self.driver.steer_send(&text, effects);
         self.scroll = 0;
     }
 
@@ -1247,6 +1286,12 @@ impl Tui {
         } else {
             lines.extend(welcome_lines(env!("CARGO_PKG_VERSION")));
         }
+        for steer in &vm.pending_steers {
+            lines.push(Line::from(Span::styled(
+                format!("  steering: {}", first_line(steer)),
+                Style::default().fg(Color::Magenta),
+            )));
+        }
         for queued in &vm.queued {
             lines.push(Line::from(Span::styled(
                 format!("  queued: {}", first_line(queued)),
@@ -1335,6 +1380,12 @@ impl Tui {
                         cursor_line = lines.len() - 1;
                     }
                     item_index += 1;
+                }
+                SettingRow::Info { label, value } => {
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("   {label:<24}")),
+                        Span::styled(format!(" {value}"), Style::default().fg(Color::DarkGray)),
+                    ]));
                 }
             }
         }
@@ -1504,7 +1555,7 @@ impl Tui {
     fn draw_composer(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
         let title = if vm.sending {
-            " ❯ (running — Enter queues, Esc stops) "
+            " ❯ (running — Enter queues · Ctrl+Enter interrupts · Ctrl+G steers · Esc stops) "
         } else {
             " ❯ "
         };
@@ -1568,7 +1619,7 @@ impl Tui {
         }
         // Hints follow what the keys do right now: Esc only stops a turn.
         segments.push(if self.turn_busy() {
-            "Enter queue · Esc stop".to_owned()
+            "Enter queue · ^G steer · Esc stop".to_owned()
         } else {
             "Enter send · ^C quit".to_owned()
         });
@@ -1760,7 +1811,7 @@ fn settings_items(vm: &WorkspaceState) -> Vec<SettingItem> {
         .into_iter()
         .filter_map(|row| match row {
             SettingRow::Item { item, .. } => Some(item),
-            SettingRow::Header(_) => None,
+            SettingRow::Header(_) | SettingRow::Info { .. } => None,
         })
         .collect()
 }
@@ -1965,6 +2016,14 @@ fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
                 dim: disabled,
             });
         }
+    }
+
+    rows.push(SettingRow::Header("Keyboard shortcuts".to_owned()));
+    for shortcut in shortcuts(Surface::Terminal) {
+        rows.push(SettingRow::Info {
+            label: shortcut.keys,
+            value: shortcut.action.to_owned(),
+        });
     }
 
     rows.push(SettingRow::Header(format!(
@@ -2246,7 +2305,8 @@ fn shorten_home(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::choice_numbers;
+    use super::{SettingRow, choice_numbers, settings_items, settings_rows};
+    use mycode_frontend::view_model::WorkspaceState;
 
     #[test]
     fn choice_numbers_accept_lists_and_reject_free_text() {
@@ -2256,5 +2316,25 @@ mod tests {
         assert_eq!(choice_numbers("0", 3), None);
         assert_eq!(choice_numbers("1 and 2", 3), None);
         assert_eq!(choice_numbers("", 3), None);
+    }
+
+    #[test]
+    fn settings_list_the_shortcuts_without_selecting_them() {
+        let vm = WorkspaceState::default();
+        let keys: Vec<String> = settings_rows(&vm)
+            .into_iter()
+            .filter_map(|row| match row {
+                SettingRow::Info { label, .. } => Some(label),
+                _ => None,
+            })
+            .collect();
+        assert!(keys.iter().any(|keys| keys == "Ctrl+Enter"));
+        assert!(keys.iter().any(|keys| keys == "Ctrl+G"));
+        let selectable = settings_items(&vm).len();
+        let items = settings_rows(&vm)
+            .iter()
+            .filter(|row| matches!(row, SettingRow::Item { .. }))
+            .count();
+        assert_eq!(selectable, items);
     }
 }
