@@ -202,7 +202,7 @@ pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut Ap
         // the Desk colors into Base.
         Theme::change(ThemeMode::Dark, Some(window), cx);
         crate::ui::desk::apply(Theme::global_mut(cx));
-        Theme::sync_base(cx);
+        crate::ui::syntax::sync_base(cx);
         let workspace = Workspace::new(driver, wake_rx, window, cx);
         window.on_window_should_close(cx, {
             let workspace = workspace.clone();

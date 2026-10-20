@@ -10,6 +10,7 @@ pub(crate) mod project_picker;
 mod settings;
 mod sidebar;
 mod skin;
+pub(crate) mod syntax;
 mod title_bar;
 mod update_dialog;
 

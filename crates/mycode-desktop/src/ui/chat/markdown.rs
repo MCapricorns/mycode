@@ -372,6 +372,7 @@ fn render_blocks(
     window: &Window,
 ) -> impl IntoElement {
     let last = blocks.len().saturating_sub(1);
+    let ink = crate::ui::desk::Desk::of(theme).reply;
     div()
         .id(SharedString::from(format!("reply-shell-{id}")))
         .w_full()
@@ -381,18 +382,19 @@ fn render_blocks(
         .flex()
         .flex_col()
         .gap(skin::space(2))
+        .text_color(ink)
         .test_support()
         .children(blocks.into_iter().enumerate().map(|(index, block)| {
             let fade = stream_fade && index == last;
             match block {
                 MarkdownBlock::Prose(body) => {
-                    prose_measure(text_view(format!("{id}-p{index}"), body, fade))
+                    prose_measure(text_view(format!("{id}-p{index}"), body, ink, fade))
                         .into_any_element()
                 }
                 MarkdownBlock::Code(body) => div()
                     .w_full()
                     .min_w_0()
-                    .child(text_view(format!("{id}-c{index}"), body, fade))
+                    .child(text_view(format!("{id}-c{index}"), body, ink, fade))
                     .into_any_element(),
                 MarkdownBlock::Table(table) => {
                     let widths = match cache {
@@ -421,9 +423,17 @@ pub(super) fn prose_measure(child: impl IntoElement) -> impl IntoElement {
         .child(child)
 }
 
-fn text_view(id: String, text: SharedString, stream_fade: bool) -> impl IntoElement {
+/// `ink` overrides the theme foreground the TextView root paints with, so
+/// paragraphs, headings, and code without a token color take the reply tint.
+fn text_view(
+    id: String,
+    text: SharedString,
+    ink: gpui_kit::Hsla,
+    stream_fade: bool,
+) -> impl IntoElement {
     TextView::markdown(SharedString::from(id), text)
         .style(prose_style().clone())
+        .text_color(ink)
         .selectable(true)
         .stream_fade(stream_fade)
 }
