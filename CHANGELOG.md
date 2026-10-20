@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.11] - 2026-10-20
+
 ### Changed
 
 - 桌面版的快捷键说明从「设置 → 通用」移到单独的「设置 → 快捷键」页（导航里在「通用」下方）：按「撰写与发送」「界面与导航」两张卡片分组，每行写明动作和说明，按键画成键帽。CLI `/settings` 里的快捷键也带上同样的说明。
@@ -203,7 +205,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.10...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.11...HEAD
+[0.12.11]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.11
 [0.12.10]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.10
 [0.12.9]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.9
 [0.12.8]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.8
