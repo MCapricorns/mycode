@@ -1,14 +1,15 @@
 //! The composer bar: a floating rounded card at the bottom of the conversation column.
 //!
-//! Model, reasoning, and folder sit as pill chips inside the bar, alongside an
-//! attach `+` button and a `⌘K` / `Ctrl+K` hint. While a turn is running the
-//! round action is Stop: it ends the whole turn, including every subagent, and
-//! holds the queue. A draft sent with Enter queues for after the turn; the
-//! arrow beside Stop queues too, and Ctrl+Enter interrupts the turn and sends
-//! the draft right away. Ctrl+G steers: the draft reaches the running turn
-//! before its next step without stopping it, and waits in a strip above the
-//! queue until the agent reads it. Each running scout or artisan is cancelled
-//! from its own `agent` row in the transcript.
+//! Model, reasoning, and folder sit as pill chips inside the bar, alongside a
+//! `⌘K` / `Ctrl+K` hint; typing `@` references a project file. While a turn
+//! is running the round action is Stop: it ends the whole turn, including
+//! every subagent, and holds the queue. A draft sent with Enter queues for
+//! after the turn; the arrow beside Stop queues too, and Ctrl+Enter
+//! interrupts the turn and sends the draft right away. Ctrl+G steers: the
+//! draft reaches the running turn before its next step without stopping it,
+//! and waits in a strip above the queue until the agent reads it. Each
+//! running scout or artisan is cancelled from its own `agent` row in the
+//! transcript.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -53,8 +54,7 @@ pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
 pub(super) const COMPOSER_MAX_PX: f32 = 760.;
 
 /// Bottom composer: a floating rounded card with soft elevation, pill chips for
-/// folder, model, and thinking, a separate file-attachment `+`, and a circular
-/// send/stop action. The field soft-wraps inside a fixed three-row box and
+/// folder, model, and thinking, and a circular send/stop action. The field soft-wraps inside a fixed three-row box and
 /// scrolls once the draft is longer.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
@@ -287,26 +287,6 @@ pub(super) fn render_composer(
                                 .gap(px(6.))
                                 .w_full()
                                 .min_w_0()
-                                .child(
-                                    div()
-                                        .id("composer-plus")
-                                        .size(px(28.))
-                                        .flex()
-                                        .flex_shrink_0()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .cursor_pointer()
-                                        .text_color(theme.muted_foreground)
-                                        .hover(|this| {
-                                            this.bg(theme.secondary_hover)
-                                                .text_color(theme.foreground)
-                                        })
-                                        .on_click(cx.listener(|workspace, _, window, cx| {
-                                            workspace.on_attach_file(window, cx);
-                                        }))
-                                        .child(Icon::new(IconName::Plus).xsmall()),
-                                )
                                 .child(composer_pill_chip(
                                     ComposerChip {
                                         id: "project",

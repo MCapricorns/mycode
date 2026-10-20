@@ -1,8 +1,6 @@
 //! Project- and mention-shaped driving: the `@`/`/` composer menus, skill
 //! discovery, workspace roots, and the session-to-project bindings that
 //! decide which directory a chat's tools run in.
-use std::fmt::Write as _;
-
 use mycode_app::BridgeCommand;
 
 use super::{DriverMsg, Effect, FrontendDriver, MENTION_SEARCH_DEBOUNCE, ToastKind};
@@ -218,38 +216,6 @@ impl FrontendDriver {
         };
         self.pending_composer_prefill = Some(text.clone());
         out.push(Effect::ComposerSet { text, focus: false });
-    }
-
-    /// Appends explicit `@file` references to the draft. Never silently
-    /// switches the workspace.
-    pub fn attach_file_refs(
-        &mut self,
-        session_id: &str,
-        paths: &[std::path::PathBuf],
-        out: &mut Vec<Effect>,
-    ) {
-        if self
-            .vm
-            .active
-            .as_ref()
-            .map(|active| active.session_id.as_str())
-            != Some(session_id)
-        {
-            return;
-        }
-        let mut draft = self.vm.composer_draft.clone();
-        for path in paths {
-            if !draft.is_empty() && !draft.ends_with(char::is_whitespace) {
-                draft.push(' ');
-            }
-            let _ = write!(draft, "@{} ", path.display());
-        }
-        self.pending_composer_prefill = Some(draft.clone());
-        out.push(Effect::ComposerSet {
-            text: draft.clone(),
-            focus: false,
-        });
-        self.act(FrontendAction::ComposerChanged(draft), out);
     }
 
     // ---- workspace roots and session-project bindings ----

@@ -134,29 +134,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Adds explicit file references; it never silently switches the workspace.
-    pub(crate) fn on_attach_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let session = self.driver.open_session_id();
-        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: true,
-            prompt: Some(crate::i18n::t("Attach file references", "附加文件引用").into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = receiver.await else {
-                return;
-            };
-            let Some(session) = session else {
-                return;
-            };
-            let _ = this.update(cx, |workspace, cx| {
-                workspace.driver_do(|d, fx| d.attach_file_refs(&session, &paths, fx), cx);
-            });
-        })
-        .detach();
-    }
-
     pub(crate) fn on_picker_cancel(&mut self, cx: &mut Context<Self>) {
         self.picker_chat_session = None;
         self.project_picker = None;
