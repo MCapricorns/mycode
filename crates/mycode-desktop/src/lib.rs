@@ -7,6 +7,7 @@
 //! GPUI layer in [`ui`] turns that state into elements and sends commands
 //! back. This crate still chooses folders and owns the window chrome. It
 //! does not run a model turn or a tool itself.
+pub mod instance;
 pub mod ui;
 pub mod workspace;
 

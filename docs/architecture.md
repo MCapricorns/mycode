@@ -133,7 +133,7 @@ mycode-core      （叶子）
 
 **性能与构建。** `grep`/`find` 在进程内跑；HTTP 用操作系统 TLS（Windows schannel、macOS Security.framework）。改动面板由文件系统事件触发 `git status`，以 `--no-optional-locks` 只读执行，不按固定间隔轮询。界面被事件唤醒，核心线程和界面互不阻塞。release 用 fat LTO 和单个 codegen unit；dev/test 只保留 line tables。
 
-**更新与安装。** 更新器按可执行文件名找 release 资产，下载 zip 和 `.sha256`，校验后把 `{stem}.pending`、`.sha256`、`.version` 放进 `update/`。Windows 由等待进程退出的 helper 完成替换；macOS 由 `update-*.sh` 立即替换。下次启动会重试未完成的 payload。debug 构建和 `MYCODE_NO_INSTALL` 会跳过自安装和自动暂存，手动点安装仍会替换当前二进制。`mycode-cli` 首次运行会把自身复制到 `bin/` 并把该目录补进 PATH。
+**更新与安装。** 更新器按可执行文件名找 release 资产，下载 zip 和 `.sha256`，校验后把 `{stem}.pending`、`.sha256`、`.version` 放进 `update/`。Windows 由等待进程退出的 helper 完成替换；macOS 由 `update-*.sh` 立即替换。下次启动会重试未完成的 payload。debug 构建和 `MYCODE_NO_INSTALL` 会跳过自安装和自动暂存，手动点安装仍会替换当前二进制。`mycode-cli` 首次运行会把自身复制到 `bin/` 并把该目录补进 PATH。同一个家目录只允许一个桌面进程（`<home>/mycode-desktop.instance` 上的独占锁，进程退出即释放）：会话账本每个进程只有一个写入者，两个桌面打开同一会话会互相把对方已提交的 JSONL 当残尾截掉。终端版只写自己新建的会话，可以和桌面版、其他终端同时运行。
 
 **CI。**
 
