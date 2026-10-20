@@ -27,8 +27,8 @@
 //! `projection` renders display entries, `search` backs the composer's
 //! `@` mention, `mcp_tools` bridges MCP servers, `subagent` hosts the `agent`
 //! tool, `user_agent` fixes the outbound identity, and `compaction`,
-//! `export`, `updates`, `web_client`, and `mcp_client` round out the
-//! housekeeping and I/O seams.
+//! `export`, `install`, `title`, `updates`, `web_client`, and `mcp_client`
+//! round out the housekeeping and I/O seams.
 
 #[cfg(test)]
 mod bridge_tests;

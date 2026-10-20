@@ -141,7 +141,7 @@ pub struct WorkspaceState {
     pub changes_panel_open: bool,
     /// Whether the right inspector is open. It starts closed.
     pub inspector_open: bool,
-    /// Whether a wide window docks the inspector instead of covering the chat.
+    /// Whether a pinned inspector docks beside the chat instead of covering it.
     pub inspector_pinned: bool,
     /// Pending ask rows awaiting user answers.
     pub pending_ask: Option<Vec<AskPrompt>>,
@@ -353,7 +353,7 @@ pub enum FrontendAction {
     InspectorChanged {
         /// Whether the inspector is visible.
         open: bool,
-        /// Whether a wide window docks it beside the conversation.
+        /// Whether it stays resident beside the conversation instead of floating.
         pinned: bool,
     },
     /// The settings editor changed the proxy preference. `typed` edits come

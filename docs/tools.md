@@ -81,13 +81,13 @@ tool_call
 
 `mode` 默认 `script`：`command` 交给解释器执行。`mode` `program`：用 `program` + `args` 直接启动，不解析 shell 字符串。`script` 拒绝 `program`/`args`，`program` 拒绝 `command`。`timeout_secs` 默认 120，小于 1 按 1 算。
 
-脚本模式：PowerShell 不拼 `-Command`，脚本按 UTF-16LE Base64 走 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand`；UTF-8 管道编码前奏插在 PowerShell 要求的开头语句（注释、`using`、`param`）之后，空脚本补一行注释。命令行按 UTF-16 码元计，上限 32,767。bash/zsh/sh 用 `-c`，cmd 用 `/d /s /c`。用户命令原样执行，不做 bash→PowerShell 翻译。
+脚本模式：PowerShell 不拼 `-Command`，脚本按 UTF-16LE Base64 走 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand`；UTF-8 管道编码前奏插在 PowerShell 要求的开头语句（注释、`using`、`param`）之后，空脚本补一行注释。命令行按 UTF-16 码元计，上限 32,767。bash/zsh/sh 用 `-c`，cmd 用 `/d /s /c`。命令原样执行，不做 bash→PowerShell 翻译；PowerShell 会在启动前拒绝命令位置的 Unix 专属命令（`touch`、`export`、`source`、`which`、`chmod`、`chown`、`sudo`、Unix 包管理器、`man`）以及 `>/dev/null`、`<<` heredoc，并返回 PowerShell 写法提示，字符串、here-string 和注释内的文本不受影响。
 
 程序模式：PE、ELF、Mach-O 直接启动。直接 shebang 包装只跟一层：解释器加最多一个参数，脚本路径和 `args` 追加在后面；`#!/usr/bin/env name` 要求 `name` 是单个程序名。批处理、`-c`/`--command`/`env -S` 拒绝。裸 `program` 只在绝对 PATH 项里查找；路径型 `program` 相对 cwd 解析，结果必须是绝对路径。`program` 最多 32,767 字节；`args` 最多 4096 个、单个 64 KiB、合计 1 MiB；映像最多 256 MiB。程序直启只实现了 Windows x64/ARM64 和 macOS Apple Silicon。
 
 解释器选择：Windows 先找常规 `pwsh`（PATH、`Program Files\PowerShell\7`、预览版、WinGet、scoop 等），再找 Windows PowerShell 5.1（`System32`，PATH 里排除 SysWOW64）；`WindowsApps\pwsh.exe` 商店执行别名只在没有常规 `pwsh` 时使用。不选 Git Bash、MSYS2、Cygwin 或 WSL。两者都没有时退到 `%SystemRoot%\System32\cmd.exe`。Unix 上 `$SHELL` 是绝对路径的 bash/zsh/sh 就用它，否则依次试 `/bin/zsh`、`/bin/bash`、PATH 里的 zsh/bash、`/bin/sh`、PATH 里的 sh。`MYCODE_SHELL` 不再切换解释器；有非空且非 `auto` 的值时提示一次并忽略。
 
-执行与清理：环境变量按白名单重建，PATH 只保留绝对项；这只是过滤，不是隔离。超时或取消会终止并回收进程树：macOS 先按父子关系杀子孙（包括 `setsid` 出去的），再 `killpg` 清同组孤儿，重复 3 轮；Windows 用不允许 breakaway 的 kill-on-close Job，进程创建后先挂 Job 再恢复主线程。shell 自己退出后最多再等 50 ms 让输出离开管道，然后返回，不等后台子进程关闭继承的写端。丢掉 future 会把清理交给监督线程。每次 `script` 都是新进程，`cd` 和变量赋值不会保留到下一次调用。
+执行与清理：环境变量按白名单重建，PATH 只保留绝对项；这只是过滤，不是隔离。超时或取消会终止并回收进程树：macOS 先按父子关系杀子孙（包括 `setsid` 出去的，重复 3 轮），再 `killpg` 清同组孤儿；Windows 用不允许 breakaway 的 kill-on-close Job，进程创建后先挂 Job 再恢复主线程。shell 自己退出后最多再等 50 ms 让输出离开管道，然后返回，不等后台子进程关闭继承的写端。丢掉 future 会把清理交给监督线程。每次 `script` 都是新进程，`cd` 和变量赋值不会保留到下一次调用。
 
 输出：stdout 和 stderr 各保留头尾，合并后最多 50 KiB，截断处标出省略字节。非零退出是 `is_error` 结果，不是回合故障；超时和取消也返回错误结果并附说明。解码顺序是 BOM（UTF-8/UTF-16）→ 无 BOM 的 UTF-16LE 启发式 → 严格 UTF-8（截断的合法前缀按 UTF-8）→ Windows OEM/ANSI/控制台输出代码页。随后抽取 CLIXML 的 `Error`/`Warning`、还原 `_xHHHH_`、去掉 ANSI/VT。提示词和 `<environment>`/`<shell>` 跟当前解释器一致：PowerShell 7 可用 `&&`，5.1 用 `;` 和 `$LASTEXITCODE`。
 
@@ -95,8 +95,8 @@ tool_call
 
 | 工具 | 行为 |
 | --- | --- |
-| `ask_user` | 一次 1–4 个问题，等用户回答；用户关闭问题是一次可捕获的错误结果，程序继续；停止整个回合会中止调用。答案渲染最多 4096 字符；`multiple` 允许复选。 |
-| `agent` | 按角色跑一个子循环。`prompt` 最多 16,000 字符，答案最多 24,000 字符。内置角色只有 `scout` 和 `artisan`，也可用 `agents/*.md` 自定义；工具描述不写角色名，可用角色以 system prompt 的 `<dispatch>` 为准（只列设置里启用的）。子代理不能问用户，也不能再调 `agent`；没有墙钟超时，只能由答案、取消、停止或删除对话结束。 |
+| `ask_user` | 一次 1–4 个问题，等用户回答；用户关闭问题是一次错误结果，回合继续；停止整个回合会中止调用。答案渲染最多 4096 字符；`multiple` 允许复选。 |
+| `agent` | 按角色跑一个子循环。`prompt` 最多 16,000 字符，答案最多 24,000 字符。内置角色只有 `scout` 和 `artisan`，也可用家目录 `agents/*.md` 或工作区 `.mycode/agents/*.md` 自定义；工具描述不写角色名，可用角色以 system prompt 的 `<dispatch>` 为准（只列设置里启用的）。子代理不能问用户，也不能再调 `agent`；没有墙钟超时，只能由答案、取消、停止或删除对话结束。 |
 | `web_search` / `fetch_content` | 有界 HTTP。搜索最多 8 条（默认 5），摘要最多 240 字符，重复 URL 丢弃，相同查询缓存 600 秒。抓取一次 1–8 个 URL。 |
 
 `scout` 只读：工具限制为 `read`、`grep`、`find`、`web_search`、`fetch_content`，MCP 也只给 `readOnlyHint: true` 的工具。`artisan` 默认在独立 git worktree 中改文件，结束时把最多 256 KiB 的 diff 附在答案后并删除 worktree；改动不会自动合回主工作区，也不提交。`isolation` 可选 `shared`/`worktree`，只读角色强制 `shared`。每个父回合最多同时跑 8 个子代理，多出的排队；同一条回复里的多个 `agent` 都会启动。

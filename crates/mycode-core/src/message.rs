@@ -159,7 +159,8 @@ impl ThinkingBlock {
         self
     }
 
-    /// Attaches a Chat Completions replay blob. An empty blob is ignored.
+    /// Attaches a vendor replay blob (Chat Completions reasoning details,
+    /// Anthropic redacted thinking). An empty blob is ignored.
     #[must_use]
     pub fn with_replay(mut self, replay: impl Into<String>) -> Self {
         let replay = replay.into();

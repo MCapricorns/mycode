@@ -1,4 +1,4 @@
-//! Strict visual-settings authority for the MYCode frontends.
+//! Strict product-settings authority for the MYCode frontends.
 //!
 //! [`AppSettings`] is the single settings document at `settings.json`: the
 //! desktop and terminal settings pages edit it through typed APIs and it is
