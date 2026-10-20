@@ -471,53 +471,53 @@ impl BridgeAgentHost {
         // The same compaction the parent turn runs, on this child's history
         // only: no checkpoint slot, so the parent's file is never touched.
         let (child_model, context_window) = self.child_window(&role.name);
-        let calibration = crate::compaction::Calibration::default();
-        let hooks = {
-            let wire = wire.clone();
-            let cancel = child_cancel.clone();
+        let compactor = crate::compaction::RequestCompactor {
+            wire: wire.clone(),
+            model: child_model,
+            checkpoint: None,
+            context_window,
+            calibration: crate::compaction::Calibration::default(),
+            cancel: child_cancel.clone(),
+        };
+        let compact_request = {
             let progress = progress.clone();
             let role_name = role.name.clone();
-            HookRunner::default().with_before_request(move |mut request| {
-                let wire = wire.clone();
-                let model = child_model.clone();
-                let cancel = cancel.clone();
+            move |mode: crate::compaction::CompactMode| {
+                let compactor = compactor.clone();
                 let progress = progress.clone();
                 let role_name = role_name.clone();
-                let calibration = calibration.clone();
-                async move {
-                    let overhead = crate::compaction::estimate_prefix_tokens(
-                        &request.system_prompt,
-                        &request.tools,
-                    );
-                    let scope = crate::compaction::CompactScope {
-                        wire: &wire,
-                        model: &model,
-                        checkpoint: None,
-                        context_window,
-                        overhead_tokens: overhead,
-                        measure: calibration.measure(&request.messages),
-                        cancel: &cancel,
-                    };
-                    let compacted =
-                        crate::compaction::compact_history(&scope, request.messages, false).await;
-                    if compacted.summary.is_some() {
-                        let _ = progress.progress(agent_progress(
-                            &role_name,
-                            "step",
-                            mycode_tools::builtin::AGENT_COMPACTED_STEP,
-                        ));
+                move |mut request: mycode_core::Request| {
+                    let compactor = compactor.clone();
+                    let progress = progress.clone();
+                    let role_name = role_name.clone();
+                    async move {
+                        let summarized = compactor.compact(&mut request, mode).await.is_some();
+                        if summarized {
+                            let _ = progress.progress(agent_progress(
+                                &role_name,
+                                "step",
+                                mycode_tools::builtin::AGENT_COMPACTED_STEP,
+                            ));
+                        }
+                        (request, summarized)
                     }
-                    request.messages = compacted.messages;
-                    calibration.sent(&request.messages, overhead);
-                    request.max_output_tokens = crate::compaction::fit_output(
-                        request.max_output_tokens,
-                        context_window,
-                        compacted.tokens,
-                    );
-                    request
                 }
-            })
+            }
         };
+        let before_request = compact_request(crate::compaction::CompactMode::Auto);
+        let on_overflow = compact_request(crate::compaction::CompactMode::Overflow);
+        let hooks = HookRunner::default()
+            .with_before_request(move |request| {
+                let compacted = before_request(request);
+                async move { compacted.await.0 }
+            })
+            .with_context_overflow(move |request| {
+                let compacted = on_overflow(request);
+                async move {
+                    let (request, summarized) = compacted.await;
+                    summarized.then_some(request)
+                }
+            });
 
         let run_cancel = child_cancel.clone();
         let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);

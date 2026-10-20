@@ -4,9 +4,10 @@
 //! safety margin as Codex), measured as [`sizing`] describes. The tail keeps
 //! the newest messages, up to ~20k tokens in a large window and less in a
 //! small one, without splitting a tool-call pair. The head is summarized with
-//! a handoff prompt (goals, files, decisions, errors, next steps). The
-//! session ledger is never rewritten; only the in-memory request history
-//! shrinks.
+//! a handoff prompt (goals, files, decisions, errors, next steps). A request
+//! the provider refuses as over its window is compacted at once and sent
+//! again ([`CompactMode::Overflow`]). The session ledger is never rewritten;
+//! only the in-memory request history shrinks.
 
 mod sizing;
 
@@ -72,6 +73,19 @@ pub fn summary_body(text: &str) -> &str {
         .trim_start_matches(['\n', '\r'])
 }
 
+/// Why a compaction runs, which decides how hard it tries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompactMode {
+    /// Before a request: only over the trigger, and only when the summary
+    /// frees enough to be worth it.
+    Auto,
+    /// `/compact`: summarizes now, whatever the size.
+    Manual,
+    /// The provider refused the request as over its window: summarizes
+    /// now, keeping half the usual tail.
+    Overflow,
+}
+
 /// Inputs that stay constant for one turn's compaction attempts.
 pub(crate) struct CompactScope<'a> {
     pub wire: &'a WireProvider,
@@ -102,6 +116,72 @@ pub(crate) struct CheckpointSlot<'a> {
     pub session_id: &'a str,
     pub branch_id: &'a str,
     pub head: &'a str,
+}
+
+/// [`CheckpointSlot`] with owned fields, for request hooks that outlive the
+/// turn's borrows.
+#[derive(Clone)]
+pub(crate) struct CheckpointKey {
+    pub home: mycode_config::HomeLayout,
+    pub session_id: String,
+    pub branch_id: String,
+    pub head: String,
+}
+
+impl CheckpointKey {
+    fn slot(&self) -> CheckpointSlot<'_> {
+        CheckpointSlot {
+            home: &self.home,
+            session_id: &self.session_id,
+            branch_id: &self.branch_id,
+            head: &self.head,
+        }
+    }
+}
+
+/// What a turn's request hooks need to compact the requests it sends.
+#[derive(Clone)]
+pub(crate) struct RequestCompactor {
+    pub wire: WireProvider,
+    pub model: String,
+    /// `None` for a subagent; see [`CompactScope::checkpoint`].
+    pub checkpoint: Option<CheckpointKey>,
+    pub context_window: u64,
+    pub calibration: Calibration,
+    /// The turn's token: it stops a summary the user no longer waits for,
+    /// and the agent sees the cancel right after the hook.
+    pub cancel: CancellationToken,
+}
+
+impl RequestCompactor {
+    /// Compacts `request` as `mode` says and lowers its output cap to what
+    /// the window leaves. Returns the summary when it summarized.
+    pub(crate) async fn compact(&self, request: &mut Request, mode: CompactMode) -> Option<String> {
+        if mode == CompactMode::Overflow {
+            self.calibration.overflowed(self.context_window);
+        }
+        let overhead = estimate_prefix_tokens(&request.system_prompt, &request.tools);
+        let scope = CompactScope {
+            wire: &self.wire,
+            model: &self.model,
+            checkpoint: self.checkpoint.as_ref().map(CheckpointKey::slot),
+            context_window: self.context_window,
+            overhead_tokens: overhead,
+            measure: self.calibration.measure(&request.messages),
+            cancel: &self.cancel,
+        };
+        let history = std::mem::take(&mut request.messages);
+        let compacted = compact_history(&scope, history, mode).await;
+        request.messages = compacted.messages;
+        // Its reply measures this request for the next one.
+        self.calibration.sent(&request.messages, overhead);
+        request.max_output_tokens = fit_output(
+            request.max_output_tokens,
+            self.context_window,
+            compacted.tokens,
+        );
+        compacted.summary
+    }
 }
 
 /// What a compaction attempt did with the checkpoint.
@@ -139,12 +219,19 @@ pub(crate) struct Compacted {
 pub(crate) async fn compact_history(
     scope: &CompactScope<'_>,
     mut history: Vec<Arc<Message>>,
-    force: bool,
+    mode: CompactMode,
 ) -> Compacted {
     let scale = scope.measure.scale;
     let overhead = scale.apply(scope.overhead_tokens);
-    let budget = Budget::new(scope.context_window, overhead);
-    let threshold = if force { 0 } else { budget.threshold };
+    let mut budget = Budget::new(scope.context_window, overhead);
+    let threshold = match mode {
+        CompactMode::Auto => budget.threshold,
+        CompactMode::Manual | CompactMode::Overflow => 0,
+    };
+    if mode == CompactMode::Overflow {
+        // The estimates already missed once on this request.
+        budget.tail /= 2;
+    }
     let head = scope.checkpoint.map_or("", |slot| slot.head);
     let prior = match scope.checkpoint {
         Some(slot) => {
@@ -175,12 +262,12 @@ pub(crate) async fn compact_history(
     // `/compact` writes a checkpoint the next request must use even while the
     // raw ledger is still under the auto threshold. Apply that checkpoint
     // before the threshold check, then judge the threshold on the stitched
-    // history. A forced compact still summarizes (or reports that this head
+    // history. A manual compact still summarizes (or reports that this head
     // is already covered) instead of stopping at the previous stitch.
     let starts_with_summary = history
         .first()
         .is_some_and(|message| is_summary_message(message));
-    if !force
+    if mode != CompactMode::Manual
         && !starts_with_summary
         && let Some(checkpoint) = prior.as_ref()
         && checkpoint_matches(
@@ -210,10 +297,11 @@ pub(crate) async fn compact_history(
     // summarizes everything instead of reporting nothing to compact: the
     // user asked for the shrink now, not at the auto threshold. The covered
     // range is the whole ledger, so the next request replays the summary
-    // plus whatever arrives after it.
+    // plus whatever arrives after it. A request the provider refused while
+    // it seemed to fit the tail goes the same way.
     let head_end = match compaction_split(&history, tokens, threshold, budget.tail, scale) {
         Some(head_end) => head_end,
-        None if force && history.len() >= 2 => history.len(),
+        None if mode != CompactMode::Auto && history.len() >= 2 => history.len(),
         None => return unchanged(history, tokens),
     };
     // A summary about as large as what it replaces frees nothing. In a
@@ -223,7 +311,7 @@ pub(crate) async fn compact_history(
         .iter()
         .map(|message| scale.apply(message_tokens(message)))
         .sum();
-    if !force && replaced < budget.summary_tokens() + budget.min_gain() {
+    if mode == CompactMode::Auto && replaced < budget.summary_tokens() + budget.min_gain() {
         return unchanged(history, tokens);
     }
     // `/compact` on a head this checkpoint already covers would summarize the
@@ -231,7 +319,7 @@ pub(crate) async fn compact_history(
     // A session with fewer than two messages has nothing to summarize and
     // already returned `Unchanged` above; a longer session that fits the
     // tail is summarized in full below.
-    if force
+    if mode == CompactMode::Manual
         && let Some(checkpoint) = prior.as_ref()
         && checkpoint.covered_head == head
         && checkpoint.covered_messages > 0

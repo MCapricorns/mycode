@@ -264,7 +264,9 @@ async fn compact_session_now(
         },
         cancel,
     };
-    let compacted = crate::compaction::compact_history(&scope, history, true).await;
+    let compacted =
+        crate::compaction::compact_history(&scope, history, crate::compaction::CompactMode::Manual)
+            .await;
     match compacted.status {
         crate::compaction::CompactStatus::Wrote | crate::compaction::CompactStatus::Replaced => {
             Ok(("compacted".to_owned(), compacted.summary))

@@ -541,6 +541,18 @@ impl SseTransport for MeasuredTransport {
 /// One turn in a 100k window whose history estimates near 20k tokens,
 /// where the provider counted the first request at `reported`.
 async fn measured_turn(reported: u64) -> Arc<MeasuredTransport> {
+    let transport = Arc::new(MeasuredTransport {
+        reported,
+        kinds: Mutex::new(Vec::new()),
+        final_cap: Mutex::new(None),
+    });
+    turn_in_a_100k_window(transport.clone()).await;
+    transport
+}
+
+/// Runs one turn in a 100k window on a history that estimates near 20k
+/// tokens and ends with a prompt to read `a.txt`.
+async fn turn_in_a_100k_window(transport: Arc<dyn SseTransport>) {
     let (root, home) = scratch();
     let mut settings = AppSettings::default();
     settings.providers.push(ProviderSettings {
@@ -587,23 +599,89 @@ async fn measured_turn(reported: u64) -> Arc<MeasuredTransport> {
             .expect("append")
             .head;
     }
-    let transport = Arc::new(MeasuredTransport {
-        reported,
-        kinds: Mutex::new(Vec::new()),
-        final_cap: Mutex::new(None),
-    });
     run_scripted_turn(
         &state,
         &created.session_id,
         &created.branch_id,
         &cwd,
         &settings,
-        transport.clone(),
+        transport,
     )
     .await
     .expect("turn");
     let _ = std::fs::remove_dir_all(root);
-    transport
+}
+
+/// Refuses the first turn request as over the context window, the way
+/// OpenAI-compatible servers do, and answers the rest. Records each
+/// request's kind and whether the resent request carried the summary.
+#[derive(Default)]
+struct OverflowTransport {
+    kinds: Mutex<Vec<&'static str>>,
+    resent_with_summary: Mutex<Option<bool>>,
+}
+
+impl SseTransport for OverflowTransport {
+    fn post<'a>(
+        &'a self,
+        call: TransportCall,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let body = String::from_utf8_lossy(&call.body);
+            let refused = !self.kinds.lock().expect("kinds").contains(&"refused");
+            let (kind, sse) = if body.contains("CONTEXT CHECKPOINT COMPACTION") {
+                let summary = format!(
+                    "handoff notes. {}",
+                    "The covered prefix is replaced by this checkpoint. ".repeat(6)
+                );
+                ("summary", text_sse(&summary, 80))
+            } else if refused {
+                self.kinds.lock().expect("kinds").push("refused");
+                return Err(ProviderError::with_message(
+                    mycode_core::ProviderErrorKind::Rejected,
+                    "HTTP 400 Bad Request: {\"error\":{\"message\":\"This model's maximum \
+                     context length is 100000 tokens.\",\"code\":\"context_length_exceeded\"}}",
+                )
+                .with_status(400));
+            } else {
+                *self.resent_with_summary.lock().expect("resent") =
+                    Some(body.contains("handoff notes"));
+                ("resent", text_sse("done", 3))
+            };
+            self.kinds.lock().expect("kinds").push(kind);
+            let (sender, stream) = tokio::sync::mpsc::channel(1);
+            sender
+                .send(Ok(bytes::Bytes::from(sse)))
+                .await
+                .expect("queue scripted body");
+            Ok(stream)
+        })
+    }
+}
+
+/// A request the provider refuses as over its window is compacted and sent
+/// once more. The turn used to end on the refusal, and every later turn
+/// sent the same oversized history and was refused again.
+#[tokio::test]
+async fn a_request_refused_as_too_long_is_compacted_and_sent_again() {
+    let transport = Arc::new(OverflowTransport::default());
+    turn_in_a_100k_window(transport.clone()).await;
+    assert_eq!(
+        *transport.kinds.lock().expect("kinds"),
+        ["refused", "summary", "resent"]
+    );
+    assert_eq!(
+        *transport.resent_with_summary.lock().expect("resent"),
+        Some(true)
+    );
 }
 
 /// The provider's count of the request it answered drives compaction. The
