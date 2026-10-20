@@ -12,8 +12,9 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
+use gpui_kit::component::progress::ProgressCircle;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     BoxShadow, Context, Focusable as _, InteractiveElement, IntoElement, ParentElement,
@@ -796,49 +797,27 @@ fn composer_meter_chip(
         })
 }
 
-/// A 16px ring whose stroke is the remaining share of the model's context
-/// window: a full ring is a free budget, and the stroke depletes as the
-/// latest prompt fills it. The cache-hit figure stays on the hover detail.
-fn cache_ring(percent: u64, theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
-    let svg = cache_ring_svg(
-        percent,
-        theme.muted_foreground.opacity(0.35),
-        theme.muted_foreground,
-    );
+/// The visible arc: the share of the window in use.
+fn used_percent(remaining_percent: u64) -> u64 {
+    100 - remaining_percent.min(100)
+}
+
+/// A 16px ring whose arc is the share of the model's context window in use.
+///
+/// The ring fills as the latest prompt grows, so it matches the `used /
+/// window` ratio beside it; a free-budget ring read backwards and looked
+/// nearly full at 20% used. The cache-hit figure stays on the hover detail.
+fn cache_ring(remaining_percent: u64, theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
     div()
         .id("composer-cache-ring")
         .flex_shrink_0()
         .size(skin::space(4))
         .child(
-            Icon::default()
-                .data(svg.as_bytes())
-                .with_size(skin::space(4)),
+            ProgressCircle::new("composer-cache-ring-progress")
+                .value(used_percent(remaining_percent) as f32)
+                .color(theme.primary)
+                .with_size(Size::Medium),
         )
-}
-
-fn cache_ring_svg(percent: u64, track_color: gpui_kit::Hsla, ink_color: gpui_kit::Hsla) -> String {
-    let percent = percent.min(100);
-    let radius = 6.0_f32;
-    let circumference = std::f32::consts::PI * 2. * radius;
-    let dash = circumference * (percent as f32) / 100.;
-    let gap = circumference - dash;
-    let track = hsla_hex(track_color);
-    let track_alpha = track_color.a.clamp(0., 1.);
-    let ink = hsla_hex(ink_color);
-    let ink_alpha = ink_color.a.clamp(0., 1.);
-    format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="{track}" stroke-opacity="{track_alpha:.2}" stroke-width="2"/><circle cx="8" cy="8" r="6" fill="none" stroke="{ink}" stroke-opacity="{ink_alpha:.2}" stroke-width="2" stroke-linecap="round" stroke-dasharray="{dash:.2} {gap:.2}" transform="rotate(-90 8 8)"/></svg>"#
-    )
-}
-
-fn hsla_hex(color: gpui_kit::Hsla) -> String {
-    let rgb = color.to_rgb();
-    format!(
-        "#{:02x}{:02x}{:02x}",
-        (rgb.r * 255.).round() as u8,
-        (rgb.g * 255.).round() as u8,
-        (rgb.b * 255.).round() as u8
-    )
 }
 
 /// The chip keeps the prompt/window ratio on screen; `detail` carries the
