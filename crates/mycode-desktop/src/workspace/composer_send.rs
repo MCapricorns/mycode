@@ -1,7 +1,7 @@
 //! Composer submit and queue controls. The product logic — welcome-desk
-//! starts, the follow-up queue, interrupt-send, cancels — lives in the
-//! frontend driver (`submit`, `interrupt_send`, the queue verbs); this file
-//! keeps the gpui key handling and click propagation.
+//! starts, the follow-up queue, interrupt-send, steers, cancels — lives in
+//! the frontend driver (`submit`, `interrupt_send`, `steer_send`, the queue
+//! verbs); this file keeps the gpui key handling and click propagation.
 use gpui_kit::{Context, Window};
 
 use super::Workspace;
@@ -11,6 +11,13 @@ impl Workspace {
     pub(crate) fn on_send(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.composer.read(cx).value().to_string();
         self.driver_do(|d, fx| d.submit(&draft, fx), cx);
+    }
+
+    /// Ctrl+G (Cmd+G on macOS): hands the draft to the running turn without
+    /// stopping it. With no turn running it sends like Enter.
+    pub(crate) fn on_steer_send(&mut self, cx: &mut Context<Self>) {
+        let draft = self.composer.read(cx).value().to_string();
+        self.driver_do(|d, fx| d.steer_send(&draft, fx), cx);
     }
 
     pub(crate) fn on_remove_queued(&mut self, index: usize, cx: &mut Context<Self>) {

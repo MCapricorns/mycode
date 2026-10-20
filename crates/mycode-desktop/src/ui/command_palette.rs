@@ -26,7 +26,13 @@ gpui_kit::actions!(mycode, [ToggleCommandPalette]);
 /// Cmd on macOS, Ctrl on Windows, with no other modifiers.
 #[must_use]
 pub(crate) fn is_command_palette_shortcut(keystroke: &Keystroke) -> bool {
-    if !keystroke.key.eq_ignore_ascii_case("k") {
+    is_secondary_chord(keystroke, "k")
+}
+
+/// `key` with Cmd on macOS or Ctrl elsewhere, and no other modifiers.
+#[must_use]
+pub(crate) fn is_secondary_chord(keystroke: &Keystroke, key: &str) -> bool {
+    if !keystroke.key.eq_ignore_ascii_case(key) {
         return false;
     }
     let modifiers = keystroke.modifiers;

@@ -18,8 +18,14 @@ fn composer_placeholder_asks_the_agent_without_a_product_name() {
     assert!(!COMPOSER_PLACEHOLDER.1.contains("MYCode"));
     assert!(!COMPOSER_PLACEHOLDER.0.to_ascii_lowercase().contains("chat"));
     assert!(!COMPOSER_PLACEHOLDER.1.contains("对话"));
-    assert_eq!(QUEUE_PLACEHOLDER.0, "Queue; Ctrl+Enter interrupts");
-    assert_eq!(QUEUE_PLACEHOLDER.1, "回车排队 · Ctrl+Enter 打断发送");
+    assert_eq!(
+        QUEUE_PLACEHOLDER.0,
+        "Queue; Ctrl+Enter interrupts; Ctrl+G steers"
+    );
+    assert_eq!(
+        QUEUE_PLACEHOLDER.1,
+        "回车排队 · Ctrl+Enter 打断发送 · Ctrl+G 引导"
+    );
 }
 
 #[test]

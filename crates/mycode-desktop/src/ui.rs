@@ -112,6 +112,12 @@ pub fn render_root(
             } else if command_palette::is_command_palette_shortcut(&event.keystroke) {
                 cx.stop_propagation();
                 workspace.toggle_command_palette(window, cx);
+            } else if command_palette::is_secondary_chord(&event.keystroke, "g")
+                && workspace.vm().view == MainView::Chat
+            {
+                // Capture, so the focused composer never takes the chord.
+                cx.stop_propagation();
+                workspace.on_steer_send(cx);
             } else if event.keystroke.key == "escape"
                 && (workspace.vm().command_palette_open
                     || workspace.vm().view == MainView::Settings)
