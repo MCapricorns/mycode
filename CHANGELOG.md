@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.9] - 2026-10-20
+
 ### Added
 
 - 代码块语法高亮：桌面版和 CLI 共用一个轻量词法高亮器（不引入 tree-sitter，二进制不变大），覆盖 Rust、Python、JS/TS、Go、C/C++、Java/Kotlin、C#、Swift、PHP、Ruby、Lua、Shell、PowerShell、SQL、JSON、YAML、TOML、CSS、diff、HTML/XML；关键字、类型、函数、字符串、数字、注释、键名等分色，深浅两套配色都满足 4.5:1 对比度。未标语言或未知语言的代码块保持原样，命令输出不会被误染色。
@@ -170,7 +172,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.8...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.9...HEAD
+[0.12.9]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.9
 [0.12.8]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.8
 [0.12.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.7
 [0.12.6]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.6
