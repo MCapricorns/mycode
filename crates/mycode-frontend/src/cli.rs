@@ -1,6 +1,9 @@
-//! Arguments handled before a window is created.
+//! Arguments and launch steps handled before a window is created.
 //!
-//! `--help` and `--version` print and exit.
+//! `--help` and `--version` print and exit. [`launch`] runs the steps every
+//! `mycode*` binary takes before its UI.
+
+use mycode_config::{ConfigError, HomeEnv, HomeLayout};
 
 /// What `main` should print before it exits.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +66,37 @@ pub fn apply_update_from_args(args: &[String]) -> Option<i32> {
         }
         Ok(None) => None,
     }
+}
+
+/// What the shared launch steps leave for the UI.
+#[derive(Debug)]
+pub struct Launch {
+    pub home: HomeLayout,
+    /// A staged self-update: re-armed for this run's exit, or applied since
+    /// the last one. Each binary words it its own way.
+    pub update: mycode_app::PendingUpdate,
+}
+
+/// The launch steps every `mycode*` binary runs before its UI: clears
+/// self-update leftovers, opens the home, and settles a staged update.
+///
+/// `relaunch` is [`mycode_app::reconcile_pending_update`]'s: the desktop
+/// exits into a re-armed update, the terminal keeps running and the swap
+/// lands when it exits.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the home directory cannot be resolved.
+pub fn launch(relaunch: bool) -> Result<Launch, ConfigError> {
+    // Remove staging directories and install-directory leftovers
+    // (`.mycode-previous`, `.mycode-incoming`) from earlier self-updates.
+    // The apply helper returns before this, so it does not delete the
+    // staged binary it is installing.
+    mycode_app::cleanup_stale_stages();
+    mycode_app::cleanup_previous_binary();
+    let home = HomeLayout::from_env(HomeEnv::from_process())?;
+    let update = mycode_app::reconcile_pending_update(&home, relaunch);
+    Ok(Launch { home, update })
 }
 
 /// `<bin> <version>` for `--version` and the help header.
