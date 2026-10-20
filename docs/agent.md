@@ -14,6 +14,7 @@ prompt(user_message)
     在请求副本上运行 pair_tool_results
     Request::validate；第一次通过后发 TurnStarted，再发用户消息
     provider 流式输出，增量作为 AgentEvent 广播
+    还没有输出就以超出上下文被拒：context_overflow 钩子缩小请求，写回历史，重发一次
     Done：完整助手消息进入历史
     分发工具调用，结果写回历史
     没有工具调用且没有待处理 steer 时结束
@@ -66,7 +67,7 @@ prompt(user_message)
 
 `AgentConfig.system_prompt` 非空时完全替换默认提示。`mycode-app` 把默认提示拼在自己的身份、环境、skills 和 MCP 片段里，并另加 `<environment>` 和 `<shell>`。工具的具体规则还来自各工具的 prompt snippet；`agent` 的 snippet 只指向 `<dispatch>`，角色说明由 `mycode-app` 按启用的角色生成。
 
-`HookRunner` 只有一个请求前钩子 `with_before_request`，应用层用它做自动压缩。没有工具前观察者。
+`HookRunner` 有两个请求钩子，应用层都用来压缩：`with_before_request` 在发送前改写请求；`with_context_overflow` 在 provider 以超出上下文（`ProviderError::is_context_overflow`）拒绝、且还没有任何输出时缩小请求，每个响应周期最多重发一次。钩子返回 `None` 或重发仍失败，就照常把错误写成中断的助手消息。没有工具前观察者。
 
 ## 会话账本
 

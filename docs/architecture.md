@@ -48,9 +48,9 @@ mycode-core      （叶子）
 6. 重新读分支头，按账本回放整条分支为 `Message` 列表。最后一条非空 user message 作为本回合 prompt；它后面的 assistant/tool 结果留在账本里，但这次请求不带。
 7. 连接 MCP（复用池，只重连失败或新加的 server），组装注册表：`read`、`write`、`edit`、`grep`、`find`、当前平台的 shell、`ask_user`、网页后端可用时的 `web_search`/`fetch_content`、按需注册的 `agent`，以及 MCP 工具。
 8. 拼 system prompt：固定身份、工具说明、`AGENTS.md` 资源、skills 目录、MCP 提示、额外工作区目录、环境块。
-9. 回合前检查压缩：可用窗口是模型窗口的 95%，到其中 90% 触发；保留约 20k token 的尾部；到阈值时写 `compaction.json` 和一张摘要卡。
+9. 回合前检查压缩：可用窗口是模型窗口的 95%，到其中 90% 触发；尾部随窗口变，最多约 20k token；到阈值时写 `compaction.json` 和一张摘要卡。
 10. `AgentConfig` 带 system prompt、会话 id 作 `prompt_cache_key`、输出上限和推理档位；启动 `LedgerPump`，`seed_history` 后调用 `Agent::prompt`。
-11. 每个响应周期先过 before-request 钩子（再次压缩；失败则用原历史），再发流式请求。有工具调用就派发：`agent` 调用立即并行，连续的只读/查询工具成批，其余工具按顺序单独跑；结果按模型给出的 call 顺序回填。工具失败变成 `is_error` 结果，回合继续。
+11. 每个响应周期先过 before-request 钩子（再次压缩；失败则用原历史），再发流式请求；provider 以超出上下文拒绝且还没有输出时，压缩后重发一次。有工具调用就派发：`agent` 调用立即并行，连续的只读/查询工具成批，其余工具按顺序单独跑；结果按模型给出的 call 顺序回填。工具失败变成 `is_error` 结果，回合继续。
 12. Pump 在 `ToolStarted` 写 `ToolCall`，在 `ToolCompleted` 写 `ToolResult`；带工具调用的 assistant step 在 `MessageAdded` 时写。纯文本回复先压住，回合结束才写。用量只发 `UsageSnapshot` 实时事件，不写账本；旧账本里的 `EventKind::Usage` 仍可读。
 13. 回合结束：最后一条 assistant 消息（或最后一个工具 step）提交，延迟的摘要卡发布，然后 `ChatDone { head, entry }`。
 14. 取消用本回合的子 token；子代理 token 是它的子节点，一起停。已完成的工具调用/结果和部分 thinking/text 留在账本，部分回复标 `interrupted by user`；未完成的调用不执行。Pump 发 `ChatFailed`，不发 `ChatDone`。下一条请求继续用同一会话 id 和这段历史。
@@ -109,7 +109,7 @@ mycode-core      （叶子）
 
 ## 运行时边界
 
-**权限。** 工具以当前用户权限运行，没有每次调用前的许可弹窗。schema 校验通过的调用直接执行。环境变量白名单不是沙箱。生产回合只有 before-request 压缩钩子，没有 before-tool 观察者，也不为改文件装快照。`write`、`edit` 和 shell 改过的文件没有撤销；编辑或撤回对话也不恢复工作区文件。`ask_user` 通过事件把问题送到前端，答案走 `AskAnswer`；dismiss 让工具拿到可捕获的错误，不取消回合。
+**权限。** 工具以当前用户权限运行，没有每次调用前的许可弹窗。schema 校验通过的调用直接执行。环境变量白名单不是沙箱。生产回合只有压缩用的请求钩子（发送前和超长重发），没有 before-tool 观察者，也不为改文件装快照。`write`、`edit` 和 shell 改过的文件没有撤销；编辑或撤回对话也不恢复工作区文件。`ask_user` 通过事件把问题送到前端，答案走 `AskAnswer`；dismiss 让工具拿到可捕获的错误，不取消回合。
 
 **进程工具。**
 
