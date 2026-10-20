@@ -10,6 +10,10 @@
 
 - `read`、`edit`、`write`、`grep`、`find` 的路径不再限于工作区：可以直接读写、搜索其他项目或依赖源码（例如 `~/.cargo/registry/src` 下的 crate），相对路径里的 `..` 也能走出会话目录。工作区内经过符号链接、联接点或挂载点的路径改为解析到真实位置后再访问，不再报“crosses a link”；macOS 上搜索也不再跳过有多个硬链接的文件。工作区外文件的结果显示解析后的绝对路径。之前这些路径都会被拒绝，模型只能改用 PowerShell/bash 去读。
 
+### Fixed
+
+- 桌面版里用 shell 读文件的调用（`Get-Content`、`cat`、`head`、`tail`、`sed -n` 等只输出一个文件的命令，可接 `Select-Object`/`head`/`tail` 过滤）按文件扩展名语法高亮，和 `read` 的结果一致；之前这类输出只显示纯文本。
+
 ## [0.12.15] - 2026-10-20
 
 ### Fixed
