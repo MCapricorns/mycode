@@ -45,17 +45,19 @@ fn close_allowed(busy: bool, armed: Option<Instant>, now: Instant) -> bool {
 /// Preferred first-window size. The origin is computed from the primary
 /// display so the window opens in the middle of the usable area, and smaller
 /// screens shrink the request rather than clipping it.
-const WINDOW_SIZE: gpui_kit::Size<Pixels> = size(px(1760.), px(1040.));
+const WINDOW_SIZE: gpui_kit::Size<Pixels> = size(px(1440.), px(900.));
 
-/// Smallest edge a shrunken default may reach on a screen that cannot hold
-/// [`WINDOW_SIZE`], unless the screen itself is smaller still.
-const WINDOW_FLOOR: gpui_kit::Size<Pixels> = size(px(960.), px(560.));
+/// Smallest edge the window accepts, and the floor a smaller screen may
+/// shrink the default down to. It holds the fixed sidebar, one readable chat
+/// column, and a docked Details panel; the user can drag the window smaller
+/// than the opening size, down to this.
+const WINDOW_FLOOR: gpui_kit::Size<Pixels> = size(px(960.), px(600.));
 
 /// Opening bounds plus the minimum size for the main window.
 ///
-/// The default size, fitted to the primary display's usable area, is also the
-/// minimum: the layout is tuned for it and degrades below it. A persisted
-/// windowed size wins over the default but never drops under that minimum.
+/// The default size is fitted to the primary display's usable area. A
+/// persisted windowed size wins over the default and may be smaller — the
+/// user's own resize is honored down to [`WINDOW_FLOOR`].
 fn startup_geometry(
     cx: &App,
     saved: Option<mycode_config::WindowSize>,
@@ -90,11 +92,14 @@ fn fit_window(
         ),
         None => desired,
     };
-    let min = fit(WINDOW_SIZE);
-    let window = saved.map_or(min, |saved| {
-        let fitted = fit(saved);
-        size(fitted.width.max(min.width), fitted.height.max(min.height))
-    });
+    let min = fit(WINDOW_FLOOR);
+    let window = saved.map_or_else(
+        || fit(WINDOW_SIZE),
+        |saved| {
+            let fitted = fit(saved);
+            size(fitted.width.max(min.width), fitted.height.max(min.height))
+        },
+    );
     (window, min)
 }
 
@@ -1034,22 +1039,25 @@ mod tests {
     }
 
     #[test]
-    fn the_fitted_default_size_is_the_minimum() {
+    fn the_default_size_is_fitted_and_the_floor_stays_adjustable() {
         let screen = size(px(1920.), px(1032.));
         let (window, min) = fit_window(Some(screen), None);
-        assert_eq!(min, size(px(1760.), px(968.)));
-        assert_eq!(window, min);
-        // A smaller saved size grows back to the default; a larger one stays.
-        let (window, _) = fit_window(Some(screen), Some(size(px(1000.), px(600.))));
-        assert_eq!(window, min);
+        assert_eq!(window, size(px(1440.), px(900.)));
+        assert_eq!(min, WINDOW_FLOOR);
+        // A saved size smaller than the default is honored, not grown back.
+        let (window, _) = fit_window(Some(screen), Some(size(px(1000.), px(700.))));
+        assert_eq!(window, size(px(1000.), px(700.)));
+        // Below the floor the window stops at the floor; a larger size stays.
+        let (window, _) = fit_window(Some(screen), Some(size(px(600.), px(400.))));
+        assert_eq!(window, WINDOW_FLOOR);
         let big = size(px(2400.), px(1300.));
         let (window, _) = fit_window(Some(size(px(2560.), px(1440.))), Some(big));
         assert_eq!(window, big);
         // A small screen shrinks the default instead of demanding more room.
         let (window, min) = fit_window(Some(size(px(1280.), px(720.))), None);
-        assert_eq!(min, size(px(1216.), px(656.)));
-        assert_eq!(window, min);
-        assert_eq!(fit_window(None, None), (WINDOW_SIZE, WINDOW_SIZE));
+        assert_eq!(window, size(px(1216.), px(656.)));
+        assert_eq!(min, WINDOW_FLOOR);
+        assert_eq!(fit_window(None, None), (WINDOW_SIZE, WINDOW_FLOOR));
     }
 
     #[test]
