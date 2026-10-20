@@ -12,6 +12,28 @@ const MAX_ERROR_MESSAGE_CHARS: usize = 512;
 /// Maximum raw bytes scanned while constructing a provider error.
 const MAX_ERROR_SCAN_BYTES: usize = 64 * 1_024;
 const REDACTED: &str = "[REDACTED]";
+/// Lowercase phrases providers use when a request is over the model's
+/// context window: OpenAI and compatible servers, Anthropic, Gemini,
+/// Bedrock, DashScope, Moonshot, Zhipu, vLLM, and llama.cpp.
+const CONTEXT_OVERFLOW_PHRASES: &[&str] = &[
+    "context_length_exceeded",
+    "maximum context length",
+    "context length exceeded",
+    "exceeds the context window",
+    "exceed context limit",
+    "exceeds the available context size",
+    "prompt is too long",
+    "prompt too long",
+    "prompt exceeds max length",
+    "input is too long",
+    "input token count",
+    "range of input length",
+    "exceeded model token limit",
+    "reduce the length of the messages",
+    "上下文长度",
+    "超出上下文",
+    "超过上下文",
+];
 
 /// Stable provider failure categories visible to the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +129,27 @@ impl ProviderError {
     #[must_use]
     pub const fn is_cancelled(&self) -> bool {
         matches!(self.kind, ProviderErrorKind::Cancelled)
+    }
+
+    /// Returns whether the provider refused the request as larger than the
+    /// model's context window. A smaller request can succeed where a retry
+    /// of the same one cannot.
+    #[must_use]
+    pub fn is_context_overflow(&self) -> bool {
+        if self.kind != ProviderErrorKind::Rejected
+            || self
+                .status
+                .is_some_and(|status| !matches!(status, 400 | 413 | 422))
+        {
+            return false;
+        }
+        let Some(message) = &self.message else {
+            return self.status == Some(413);
+        };
+        let message = message.to_lowercase();
+        CONTEXT_OVERFLOW_PHRASES
+            .iter()
+            .any(|phrase| message.contains(phrase))
     }
 }
 
@@ -523,6 +566,55 @@ mod tests {
             sanitized("task-123 and mask_value failed; missing bearer\n"),
             "task-123 and mask_value failed; missing bearer\n"
         );
+    }
+
+    #[test]
+    fn context_overflow_is_told_from_other_rejections() {
+        let rejected = |status, body: &str| {
+            ProviderError::with_message(ProviderErrorKind::Rejected, body).with_status(status)
+        };
+        let overflows = [
+            rejected(
+                400,
+                "HTTP 400: {\"error\":{\"message\":\"This model's maximum context length is 128000 tokens.\",\"code\":\"context_length_exceeded\"}}",
+            ),
+            rejected(
+                400,
+                "HTTP 400: prompt is too long: 208000 tokens > 200000 maximum",
+            ),
+            rejected(
+                400,
+                "HTTP 400: input length and `max_tokens` exceed context limit: 188000 + 21333 > 200000",
+            ),
+            rejected(
+                400,
+                "HTTP 400: The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).",
+            ),
+            rejected(400, "HTTP 400: Range of input length should be [1, 30720]"),
+            rejected(400, "HTTP 400: 请求的上下文长度超出模型限制"),
+            ProviderError::new(ProviderErrorKind::Rejected).with_status(413),
+            ProviderError::with_message(
+                ProviderErrorKind::Rejected,
+                "the request exceeds the available context size, try increasing it",
+            ),
+        ];
+        for error in overflows {
+            assert!(error.is_context_overflow(), "{error}");
+        }
+        let others = [
+            rejected(400, "HTTP 400: invalid tool schema"),
+            rejected(401, "HTTP 401: prompt is too long"),
+            ProviderError::with_message(
+                ProviderErrorKind::Unavailable,
+                "HTTP 429: Rate limit reached for tokens per min; maximum context length",
+            )
+            .with_status(429),
+            ProviderError::new(ProviderErrorKind::Rejected).with_status(400),
+            ProviderError::new(ProviderErrorKind::Cancelled),
+        ];
+        for error in others {
+            assert!(!error.is_context_overflow(), "{error}");
+        }
     }
 
     #[test]

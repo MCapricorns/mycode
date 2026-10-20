@@ -833,3 +833,116 @@ async fn dropping_prompt_inside_the_compaction_hook_keeps_history() {
     assert_eq!(messages.len(), 2, "history survived the dropped rewrite");
     assert!(matches!(messages[1].as_ref(), Message::User(_)));
 }
+
+/// Refuses every request holding more than `fits` messages as over the
+/// context window, in the stream's first event as most providers do, and
+/// answers the rest. Records each request's message count.
+struct WindowProvider {
+    fits: usize,
+    sizes: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+impl Provider for WindowProvider {
+    fn stream<'a>(
+        &'a self,
+        request: &'a Request,
+        cancel: CancellationToken,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            self.sizes
+                .lock()
+                .expect("sizes")
+                .push(request.messages.len());
+            let (sender, stream) = EventStream::channel(cancel);
+            let event = if request.messages.len() > self.fits {
+                StreamEvent::Error(
+                    ProviderError::with_message(
+                        ProviderErrorKind::Rejected,
+                        "HTTP 400: This model's maximum context length is 8192 tokens",
+                    )
+                    .with_status(400),
+                )
+            } else {
+                StreamEvent::Done {
+                    message: mycode_core::AssistantMessage {
+                        blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new("fits now"))],
+                        usage: None,
+                        stop_reason: StopReason::Stop,
+                    },
+                }
+            };
+            sender.send(event).await;
+            Ok(stream)
+        })
+    }
+}
+
+/// Keeps the newest `keep` messages of every refused request.
+fn shrinking_hooks(
+    keep: usize,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> HookRunner {
+    HookRunner::new().with_context_overflow(move |mut request: Request| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async move {
+            let drop = request.messages.len().saturating_sub(keep);
+            request.messages.drain(..drop);
+            Some(request)
+        }
+    })
+}
+
+fn seeded_agent(earlier: usize) -> Agent {
+    let mut agent = Agent::new(AgentConfig::new());
+    agent.seed_history((0..earlier).map(|index| {
+        std::sync::Arc::new(Message::User(UserMessage::text(format!("earlier {index}"))))
+    }));
+    agent
+}
+
+#[tokio::test]
+async fn a_request_over_the_window_is_shrunk_and_sent_again() {
+    let sizes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider = WindowProvider {
+        fits: 2,
+        sizes: std::sync::Arc::clone(&sizes),
+    };
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hooks = shrinking_hooks(2, std::sync::Arc::clone(&calls));
+    let tools = ToolRegistry::new();
+    let env = TurnEnv::new(&provider, &tools, &hooks);
+    let mut agent = seeded_agent(4);
+    agent
+        .prompt(Message::User(UserMessage::text("now")), &env)
+        .await
+        .expect("completed turn");
+    assert_eq!(*sizes.lock().expect("sizes"), [5, 2]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(assistant_text(&agent), "fits now");
+    // The shrunk history is what later requests build on.
+    assert_eq!(agent.state().messages().len(), 3);
+}
+
+#[tokio::test]
+async fn a_request_still_over_the_window_is_not_shrunk_twice() {
+    let sizes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider = WindowProvider {
+        fits: 1,
+        sizes: std::sync::Arc::clone(&sizes),
+    };
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hooks = shrinking_hooks(3, std::sync::Arc::clone(&calls));
+    let tools = ToolRegistry::new();
+    let env = TurnEnv::new(&provider, &tools, &hooks);
+    let mut agent = seeded_agent(4);
+    agent
+        .prompt(Message::User(UserMessage::text("now")), &env)
+        .await
+        .expect("completed turn");
+    assert_eq!(*sizes.lock().expect("sizes"), [5, 3]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let text = assistant_text(&agent);
+    assert!(text.contains("maximum context length"), "{text}");
+}

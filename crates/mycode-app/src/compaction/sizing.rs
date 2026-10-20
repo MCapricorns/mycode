@@ -102,7 +102,7 @@ impl Budget {
 /// How many provider tokens one estimated token turned out to be, in
 /// thousandths: the provider's count of a request over this module's
 /// estimate of it. Bounded, so one odd reading cannot swing sizing far.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TokenScale(usize);
 
 impl TokenScale {
@@ -209,6 +209,17 @@ impl Calibration {
     pub(crate) fn sent(&self, messages: &[Arc<Message>], overhead: usize) {
         let estimate = overhead.saturating_add(estimate_messages(messages));
         self.state.lock().sent = Some((messages.len(), estimate));
+    }
+
+    /// The provider refused the request sent last as over the window, so
+    /// it held at least the usable window: estimates are scaled up to say
+    /// so. The refused request has no reply to measure it.
+    pub(crate) fn overflowed(&self, context_window: u64) {
+        let mut state = self.state.lock();
+        if let Some((_, estimate)) = state.sent {
+            let floor = TokenScale::measured(usable_window(context_window), estimate);
+            state.scale = state.scale.max(floor);
+        }
     }
 
     /// The latest scale, for the session's next turn.
@@ -434,6 +445,25 @@ mod tests {
                 tokens: None
             }
         );
+    }
+
+    #[test]
+    fn an_overflow_scales_estimates_up_to_the_window() {
+        let calibration = Calibration::default();
+        let sent = vec![user(&"a".repeat(200_000))];
+        calibration.sent(&sent, 0);
+        let estimate = message_tokens(&sent[0]);
+        calibration.overflowed(100_000);
+        assert!(
+            calibration.scale().apply(estimate) >= 95_000 * 99 / 100,
+            "{:?} still sizes a refused {estimate}-token request under the window",
+            calibration.scale()
+        );
+        // A larger scale already measured is kept.
+        let calibration = Calibration::new(TokenScale(2_500));
+        calibration.sent(&sent, 0);
+        calibration.overflowed(100_000);
+        assert_eq!(calibration.scale(), TokenScale(2_500));
     }
 
     #[test]

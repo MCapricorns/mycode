@@ -121,97 +121,151 @@ pub(crate) async fn stream_assistant(
         return Err(TurnFailure::Aborted);
     }
 
-    // One request gets a child token: dropping its receiver must stop that
-    // producer without cancelling later response cycles in the same turn.
-    let request_cancel = token.child_token();
-    let mut draft_text = String::new();
-    let mut draft_thinking = String::new();
-    let mut stream = match env.provider.stream(&request, request_cancel).await {
-        Ok(stream) => stream,
-        Err(error) if error.is_cancelled() => return Err(TurnFailure::Aborted),
-        // Nothing has streamed. Keep a visible assistant line instead of
-        // dropping the turn.
-        Err(error) => {
-            return Ok(commit_interrupted(
-                env,
-                state,
-                String::new(),
-                String::new(),
-                &error.to_string(),
-            ));
-        }
-    };
-    while let Some(event) = stream.next().await {
-        match event {
-            StreamEvent::TextDelta(delta) => {
-                draft_text.push_str(&delta);
-                emit(
+    // A request the provider refused as over the context window is shrunk
+    // and sent once more, but only before any output arrived: past that, a
+    // resend would repeat what the user already saw.
+    let mut may_shrink = env.hooks.recovers_overflow();
+    'request: loop {
+        // One request gets a child token: dropping its receiver must stop that
+        // producer without cancelling later response cycles in the same turn.
+        let request_cancel = token.child_token();
+        let mut draft_text = String::new();
+        let mut draft_thinking = String::new();
+        let mut streamed = false;
+        let mut stream = match env.provider.stream(&request, request_cancel).await {
+            Ok(stream) => stream,
+            Err(error) if error.is_cancelled() => return Err(TurnFailure::Aborted),
+            Err(error) => {
+                if std::mem::take(&mut may_shrink)
+                    && error.is_context_overflow()
+                    && let Some(smaller) = shrink_overflowed(env, token, state, &request).await?
+                {
+                    request = smaller;
+                    continue 'request;
+                }
+                // Nothing has streamed. Keep a visible assistant line instead of
+                // dropping the turn.
+                return Ok(commit_interrupted(
                     env,
-                    AgentEvent::MessageDelta(MessageDelta::TextDelta(delta)),
-                );
+                    state,
+                    String::new(),
+                    String::new(),
+                    &error.to_string(),
+                ));
             }
-            StreamEvent::ThinkingDelta(delta) => {
-                draft_thinking.push_str(&delta);
-                emit(
-                    env,
-                    AgentEvent::MessageDelta(MessageDelta::ThinkingDelta(delta)),
-                );
-            }
-            StreamEvent::ToolCallStarted { id, name } => {
-                emit(
-                    env,
-                    AgentEvent::MessageDelta(MessageDelta::ToolCallStarted { id, name }),
-                );
-            }
-            StreamEvent::ToolCallDelta { id, partial_json } => {
-                emit(
-                    env,
-                    AgentEvent::MessageDelta(MessageDelta::ToolCallDelta { id, partial_json }),
-                );
-            }
-            StreamEvent::Done { message } => {
-                let message = merge_draft(message, &draft_thinking, &draft_text);
-                let shared = Arc::new(Message::Assistant(message.clone()));
-                state.messages.push(Arc::clone(&shared));
-                emit(env, AgentEvent::MessageAdded(shared));
-                return Ok(message);
-            }
-            StreamEvent::Error(error) => {
-                if error.is_cancelled() {
-                    return Err(keep_cancelled_partial(
+        };
+        while let Some(event) = stream.next().await {
+            match event {
+                StreamEvent::TextDelta(delta) => {
+                    streamed = true;
+                    draft_text.push_str(&delta);
+                    emit(
+                        env,
+                        AgentEvent::MessageDelta(MessageDelta::TextDelta(delta)),
+                    );
+                }
+                StreamEvent::ThinkingDelta(delta) => {
+                    streamed = true;
+                    draft_thinking.push_str(&delta);
+                    emit(
+                        env,
+                        AgentEvent::MessageDelta(MessageDelta::ThinkingDelta(delta)),
+                    );
+                }
+                StreamEvent::ToolCallStarted { id, name } => {
+                    streamed = true;
+                    emit(
+                        env,
+                        AgentEvent::MessageDelta(MessageDelta::ToolCallStarted { id, name }),
+                    );
+                }
+                StreamEvent::ToolCallDelta { id, partial_json } => {
+                    streamed = true;
+                    emit(
+                        env,
+                        AgentEvent::MessageDelta(MessageDelta::ToolCallDelta { id, partial_json }),
+                    );
+                }
+                StreamEvent::Done { message } => {
+                    let message = merge_draft(message, &draft_thinking, &draft_text);
+                    let shared = Arc::new(Message::Assistant(message.clone()));
+                    state.messages.push(Arc::clone(&shared));
+                    emit(env, AgentEvent::MessageAdded(shared));
+                    return Ok(message);
+                }
+                StreamEvent::Error(error) => {
+                    if error.is_cancelled() {
+                        return Err(keep_cancelled_partial(
+                            env,
+                            state,
+                            draft_thinking,
+                            draft_text,
+                        ));
+                    }
+                    // Providers refuse most requests in the stream's first
+                    // event, not at the POST.
+                    if !streamed
+                        && std::mem::take(&mut may_shrink)
+                        && error.is_context_overflow()
+                        && let Some(smaller) =
+                            shrink_overflowed(env, token, state, &request).await?
+                    {
+                        request = smaller;
+                        continue 'request;
+                    }
+                    return Ok(commit_interrupted(
                         env,
                         state,
                         draft_thinking,
                         draft_text,
+                        &error.to_string(),
                     ));
                 }
-                return Ok(commit_interrupted(
-                    env,
-                    state,
-                    draft_thinking,
-                    draft_text,
-                    &error.to_string(),
-                ));
             }
         }
-    }
-    // EventStream itself synthesizes a terminal for cancellation and producer
-    // drop. Keep a fail-closed guard in case its contract is ever violated.
-    if token.is_cancelled() {
-        return Err(keep_cancelled_partial(
+        // EventStream itself synthesizes a terminal for cancellation and producer
+        // drop. Keep a fail-closed guard in case its contract is ever violated.
+        if token.is_cancelled() {
+            return Err(keep_cancelled_partial(
+                env,
+                state,
+                draft_thinking,
+                draft_text,
+            ));
+        }
+        return Ok(commit_interrupted(
             env,
             state,
             draft_thinking,
             draft_text,
+            "provider stream ended without a terminal event",
         ));
     }
-    Ok(commit_interrupted(
-        env,
-        state,
-        draft_thinking,
-        draft_text,
-        "provider stream ended without a terminal event",
-    ))
+}
+
+/// Asks the overflow hook for a smaller request than `refused`.
+///
+/// The hook sees the history as the agent holds it, not the request copy
+/// whose unanswered calls were paired, and its messages are written back
+/// the same way the before-request rewrite's are.
+async fn shrink_overflowed(
+    env: &TurnEnv<'_>,
+    token: &CancellationToken,
+    state: &mut AgentState,
+    refused: &Request,
+) -> Result<Option<Request>, TurnFailure> {
+    let mut retry = refused.clone();
+    retry.messages = state.messages.clone();
+    let smaller = env.hooks.shrink_overflowed(retry).await;
+    if token.is_cancelled() {
+        return Err(TurnFailure::Aborted);
+    }
+    let Some(mut smaller) = smaller else {
+        return Ok(None);
+    };
+    state.messages.clone_from(&smaller.messages);
+    mycode_core::pair_tool_results(&mut smaller.messages);
+    Ok(smaller.validate().is_ok().then_some(smaller))
 }
 
 /// User cancel: keep what already arrived, mark it interrupted, and abort.
