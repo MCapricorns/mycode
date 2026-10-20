@@ -61,7 +61,8 @@ pub(super) fn render_chat(
                 TranscriptBlock::User { entry, index } => {
                     turn_has_assistant_header = false;
                     let child = if mycode_app::is_compaction_summary(&entry.text) {
-                        transcript::render_summary_entry(entry, cx.theme()).into_any_element()
+                        let open = workspace.summary_open(&entry.event_id);
+                        transcript::render_summary_entry(entry, open, cx).into_any_element()
                     } else {
                         let can_rewind = workspace.can_rewind_message(index);
                         transcript::render_user_entry(entry, can_rewind, index, cx)
