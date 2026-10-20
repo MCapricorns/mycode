@@ -328,6 +328,11 @@ pub enum StopReason {
 /// detail produces while model-facing history keeps it.
 pub const USER_INTERRUPT_DETAIL: &str = "interrupted by user";
 
+/// Start of every [`interrupted_response_text`] line. Frontends match the
+/// whole prefix, not a bare `[error]`, so build output the model quotes
+/// (sbt prints `[error] …`) stays answer text.
+pub const INTERRUPTED_RESPONSE_PREFIX: &str = "[error] the response was interrupted:";
+
 /// Visible line kept with whatever thinking and text already arrived when a
 /// provider stream fails. Adapters and the agent share this spelling.
 #[must_use]
@@ -355,7 +360,7 @@ pub fn interrupted_response_text(detail: &str) -> String {
     } else {
         flat
     };
-    format!("[error] the response was interrupted: {detail}")
+    format!("{INTERRUPTED_RESPONSE_PREFIX} {detail}")
 }
 
 /// Removes a trailing [`interrupted_response_text`] line written with

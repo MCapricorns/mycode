@@ -323,22 +323,21 @@ fn assistant_block(
 #[derive(Debug, PartialEq, Eq)]
 enum AssistantPart {
     Prose(String),
-    /// A `[error] …` line the agent appends when a stream fails.
+    /// An interruption line the agent appends when a stream fails.
     Error(String),
 }
 
-/// Splits assistant text at the `[error] …` lines the agent commits when a
+/// Splits assistant text at the interruption lines
+/// ([`mycode_app::INTERRUPTED_RESPONSE_PREFIX`]) the agent commits when a
 /// provider stream fails. Consecutive error lines merge into one alert, and
 /// prose keeps its blank lines.
 fn assistant_parts(text: &str) -> Vec<AssistantPart> {
     let mut parts = Vec::new();
     let mut prose = String::new();
     for line in text.lines() {
-        if line.starts_with("[error]") {
+        if line.starts_with(mycode_app::INTERRUPTED_RESPONSE_PREFIX) {
             if !prose.trim().is_empty() {
-                parts.push(AssistantPart::Prose(
-                    prose.trim_end().to_owned(),
-                ));
+                parts.push(AssistantPart::Prose(prose.trim_end().to_owned()));
             }
             prose.clear();
             match parts.last_mut() {
@@ -359,22 +358,21 @@ fn assistant_parts(text: &str) -> Vec<AssistantPart> {
     parts
 }
 
-/// Assistant text with error lines painted as alerts instead of prose.
+/// Assistant text with interruption lines painted as alerts instead of prose.
 ///
-/// The common case is one prose run and takes the plain Markdown path, so a
-/// normal reply keeps its single TextView.
+/// Most replies carry none and hand the shared text to one TextView, so the
+/// transcript is not copied every frame.
 fn assistant_text(
     id: String,
-    text: &str,
+    text: &std::sync::Arc<str>,
     cache: Option<&markdown::MarkdownCache>,
     theme: &Theme,
     window: &Window,
 ) -> gpui_kit::AnyElement {
-    let parts = assistant_parts(text);
-    if let [AssistantPart::Prose(body)] = parts.as_slice() {
+    if !text.contains(mycode_app::INTERRUPTED_RESPONSE_PREFIX) {
         return agent_text(
-            id.clone().into(),
-            body.clone().into(),
+            id.into(),
+            SharedString::from(text.clone()),
             cache,
             theme,
             false,
@@ -388,18 +386,23 @@ fn assistant_text(
         .gap_2()
         .w_full()
         .min_w_0()
-        .children(parts.into_iter().enumerate().map(|(index, part)| match part {
-            AssistantPart::Prose(body) => agent_text(
-                format!("{id}-p{index}").into(),
-                body.into(),
-                cache,
-                theme,
-                false,
-                window,
-            )
-            .into_any_element(),
-            AssistantPart::Error(body) => error_note(&body, theme).into_any_element(),
-        }))
+        .children(
+            assistant_parts(text)
+                .into_iter()
+                .enumerate()
+                .map(|(index, part)| match part {
+                    AssistantPart::Prose(body) => agent_text(
+                        format!("{id}-p{index}").into(),
+                        body.into(),
+                        cache,
+                        theme,
+                        false,
+                        window,
+                    )
+                    .into_any_element(),
+                    AssistantPart::Error(body) => error_note(&body, theme).into_any_element(),
+                }),
+        )
         .into_any_element()
 }
 

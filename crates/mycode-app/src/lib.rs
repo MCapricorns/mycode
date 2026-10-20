@@ -61,8 +61,8 @@ mod web_client;
 pub use mycode_providers::{ProxyTestReport, ProxyTestRoute};
 pub use protocol::{
     ActiveConversation, AskPrompt, BranchId, CHAT_CANCELLED, ConversationEntry, EntryKind,
-    HeadStamp, MAX_STREAMING_CHARS, OlderTranscript, SessionEventId, SessionId, SessionSummary,
-    StreamingReply, tool_label,
+    HeadStamp, INTERRUPTED_RESPONSE_PREFIX, MAX_STREAMING_CHARS, OlderTranscript, SessionEventId,
+    SessionId, SessionSummary, StreamingReply, tool_label,
 };
 pub use updates::apply::{parse_apply_update_args, run_apply_update_helper};
 pub use updates::{PendingUpdate, PreparedUpdate, UpdateOffer};

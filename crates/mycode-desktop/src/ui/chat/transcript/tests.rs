@@ -7,25 +7,33 @@ fn assistant_parts_split_error_lines_out_of_prose() {
         assistant_parts(text),
         vec![
             AssistantPart::Prose("before".into()),
-            AssistantPart::Error(
-                "[error] the response was interrupted: transport failed".into()
-            ),
+            AssistantPart::Error("[error] the response was interrupted: transport failed".into()),
         ]
     );
 }
 
 #[test]
 fn assistant_parts_merge_consecutive_errors_and_keep_plain_prose() {
-    let errors = "[error] first\n[error] second";
+    let errors = "[error] the response was interrupted: first\n\
+                  [error] the response was interrupted: second";
     assert_eq!(
         assistant_parts(errors),
-        vec![AssistantPart::Error(
-            "[error] first\n[error] second".into()
-        )]
+        vec![AssistantPart::Error(errors.into())]
     );
     assert_eq!(
         assistant_parts("just an answer\n\n"),
         vec![AssistantPart::Prose("just an answer".into())]
+    );
+}
+
+/// sbt prints `[error] …` lines; a quoted build log stays one Markdown run
+/// so its code fence is not cut in half.
+#[test]
+fn assistant_parts_keep_quoted_build_errors_as_prose() {
+    let text = "The build fails:\n\n```\n[error] Foo.scala:3: type mismatch\n```";
+    assert_eq!(
+        assistant_parts(text),
+        vec![AssistantPart::Prose(text.into())]
     );
 }
 
