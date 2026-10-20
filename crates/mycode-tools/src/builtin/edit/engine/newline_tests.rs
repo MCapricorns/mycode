@@ -93,3 +93,11 @@ fn multiline_lf_span_ending_at_eof_before_the_final_crlf_keeps_it() {
     let updated = apply(body, "one\ntwo", "ONE\nTWO").expect("edit");
     assert_eq!(updated, "ONE\r\nTWO\r\n");
 }
+
+#[test]
+fn lf_led_exact_match_in_a_crlf_file_takes_the_whole_newline() {
+    // `\nb` occurs verbatim inside `\r\nb`; the match must not split the pair.
+    let body = "a\r\nb\r\n";
+    assert_eq!(apply(body, "\nb", "\nc").expect("edit"), "a\r\nc\r\n");
+    assert_eq!(apply(body, "\nb", "c").expect("join"), "ac\r\n");
+}

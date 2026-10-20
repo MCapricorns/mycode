@@ -543,12 +543,20 @@ fn strip_bom(text: &str) -> (bool, &str) {
 }
 
 fn literal_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolError> {
-    let exact = if patterns.len() == 1 {
+    let mut exact = if patterns.len() == 1 {
         memmem_matches(body, &patterns[0])?
     } else {
         ac_matches(body, patterns)?
     };
     if !exact.is_empty() {
+        // A pattern that opens with LF also matches inside a CRLF. The CR
+        // belongs to the same newline, so the match takes it too; otherwise
+        // the replacement leaves it behind as a stray CR.
+        for found in &mut exact {
+            if cr_before_lf(body, found.start) {
+                found.start -= 1;
+            }
+        }
         return Ok(exact);
     }
     // Windows files are often CRLF while the model sends LF (or the reverse).
