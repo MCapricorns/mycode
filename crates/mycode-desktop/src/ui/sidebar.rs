@@ -191,7 +191,11 @@ fn folders_section(
             div()
                 .id("sidebar-folders-head")
                 .h(px(SECTION_HEAD_H))
-                .px_2()
+                // Labels line up with the row text below (list + row inset);
+                // the add button's own `px_1` brings its text to the same
+                // right edge as the session count.
+                .pl_4()
+                .pr_3()
                 .flex()
                 .flex_row()
                 .items_center()
@@ -285,7 +289,7 @@ fn sessions_section(
             div()
                 .id("sidebar-sessions-head")
                 .h(px(SECTION_HEAD_H))
-                .px_3()
+                .px_4()
                 .flex_shrink_0()
                 .flex()
                 .flex_row()
