@@ -7,6 +7,7 @@
 //! normalized match.
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::builtin::fs_io::{
     FileAccess, MAX_WRITE_BYTES, anchor_file_path, read_file_snapshot_async, write_file_with_lease,
@@ -210,6 +211,13 @@ impl Tool for EditTool {
         )
     }
 
+    /// Fills the `type` tag of an operation from its fields and removes keys
+    /// that belong to no variant, so a batch that names its operations by
+    /// shape alone still validates.
+    fn prepare_args(&self, args: Value) -> Value {
+        normalize::normalize_edit_args(args)
+    }
+
     fn file_access(&self) -> Option<FileAccess> {
         Some(FileAccess::ExistingContent)
     }
@@ -315,6 +323,7 @@ impl Tool for EditTool {
 mod engine;
 mod fuzzy;
 mod line;
+mod normalize;
 use engine::*;
 
 #[cfg(test)]
@@ -382,6 +391,45 @@ mod schema_tests {
             )
             .await
             .expect("edit in extra_roots must publish");
+        assert!(!result.is_error);
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read back"),
+            "after\n"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The shape models actually send: a batch whose entries omit `type`.
+    /// `execute_dyn` normalizes before validation, so the edit lands.
+    #[tokio::test]
+    async fn edit_accepts_operations_that_omit_the_type_tag() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-edit-untagged-ops-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("workspace");
+        let file = base.join("target.txt");
+        std::fs::write(&file, "before\n").expect("seed file");
+        let args_json = serde_json::json!({
+            "path": file.display().to_string(),
+            "operations": [{ "pattern": "before", "replacement": "after" }]
+        });
+        let ctx = crate::prepare_tool_ctx(
+            &base,
+            &[],
+            &[],
+            tokio_util::sync::CancellationToken::new(),
+            "call-2",
+            &EditTool,
+            &args_json,
+        )
+        .await
+        .expect("preflight succeeds");
+        let (mut stream, _rx) = ToolStream::channel();
+        let result = ToolDyn::execute_dyn(&EditTool, args_json, &ctx, &mut stream)
+            .await
+            .expect("untagged operations must be repaired, not rejected");
         assert!(!result.is_error);
         assert_eq!(
             std::fs::read_to_string(&file).expect("read back"),

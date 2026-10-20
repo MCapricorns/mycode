@@ -14,7 +14,9 @@ tool_call
 
 - 一份 schema 两处用：`schemars` 从参数结构体生成 JSON Schema，既发给模型，也在 `execute_dyn` 里校验。`$schema`、`$id`、`$ref` 在发出和校验前都会被处理掉。
 - 注册表按名字 last-wins；`specs()` 按名字排序。注册的工具全部出现在模型工具列表里，`prompt_entries()` 另外给 system prompt 提供名字和一句说明。
-- 参数先归一化：camelCase 转 snake_case；`timeout`→`timeout_secs`、`cmd`→`command`、`file_path`/`filepath`→`path`、`old_str`/`new_str`；字符串形式的数字和布尔按 schema 转成标量。
+- 参数先归一化：camelCase 转 snake_case；`timeout`→`timeout_secs`、`cmd`→`command`、`file_path`/`filepath`→`path`、`old_str`/`new_str`；整个参数对象被编码成字符串时先解析回来。
+- 随后按 schema 修补形状，再校验：`required` 里的字段如果模型用了别的工具的拼法（`file`/`filename`→`path`、`text`/`body`→`content`、`query`/`glob`→`pattern`、`task`/`instructions`→`prompt`、`name`/`role`→`agent` 等，且该拼法不是 schema 声明的属性）会改成 schema 名字；字符串形式的数字和布尔在任意深度按 schema 转成标量；带 `const`/单值 `enum` 标签的 `oneOf`/`anyOf` 对象缺少标签时按字段推断变体（恰好一个变体覆盖对象，或最贴合的那个；同样贴合时取声明顺序靠前的），标签拼写只差大小写/连字符时改正；推断出变体后，若该变体 `additionalProperties: false`，丢掉它没有声明的多余键（`type_note` 这类说明字段）。空对象、认不出的字段、没有标签的联合、解析失败的值都原样留给校验报错，不会被猜成某个变体。
+- MCP 工具用服务器给的 schema 做同一套修补（不做 camelCase 转 snake_case，服务器可能就声明成驼峰），校验错误也走同一套渲染：联合失败只列允许的 `type` 取值，其它消息限制在 320 字节。
 - 未知工具、schema 不合法、执行错误都变成 `is_error` 的工具结果，回合继续。没有“先问用户是否允许”的回调。
 - `prepare_tool_ctx` 在执行前绑定文件或搜索句柄并改锚路径。只有不改变东西的工具可以并行：`read`、`grep`、`find`、网页工具、`search_tool`、声明 `readOnlyHint` 的 MCP 工具，以及目标是这类工具的 `use_tool`；写、进程、`ask_user` 按模型顺序单独执行。同一条回复里的 `agent` 调用会一起启动。
 - `ToolStream` 保证任意条进度后恰好一个终止事件；终止发送成功后，后续进度被静默丢弃。
@@ -56,6 +58,8 @@ tool_call
 - `fuzzy`：按 token 归一化后算 Levenshtein，`max_distance` 必须是 1–3；只接受唯一最佳，且领先第二名的距离至少为 `1 + 归一化字符数/8`。归一化 needle 最多 256 字符，haystack 最多 262,144 个 token、8,192 个候选窗口；分词和扫描每约 4 KiB 检查一次取消。
 - `regex`：Rust `regex`，`occurrence` 只支持 `unique`/`all`，不支持 `nth`；不支持 lookaround 和反向引用；嵌套上限 32，正则和 DFA 大小上限各 1 MiB；零宽匹配拒绝；捕获展开每次最多 1 MiB。
 - `line_range`：1-based 闭区间。必须给 `expected_text` 和/或 `expected_hash`（Blake3 hex，包含最后一行换行）；`expected_text` 可省略最后一个行尾。空 `replacement` 删除这些行，缺行尾的替换会继承被替换行的行尾。
+
+`operations` 里的对象在通用修补之上还有一组 edit 专用叫法：`old_string`/`old_str`/`old`/`find`/`search`/`needle` 当作 `pattern`，`new_string`/`new_str`/`new`/`replace` 当作 `replacement`，`start`/`end` 当作 `start_line`/`end_line`，`distance` 当作 `max_distance`，`replace_all: true` 等于 `occurrence: all`，`first`/`each`/`once` 这类 `occurrence` 写法也归一。没有标签时按上面通用规则推断（`start_line`/`end_line` → `line_range`，`max_distance` → `fuzzy`，其余 → `literal`）；补全后仍按变体校验，缺 `pattern`、`pattern` 与 `patterns` 同时出现等错误照旧拒绝。
 
 所有操作都基于同一个快照，按字节范围排序；重叠、同一位置、非法 UTF-8 边界都会拒绝。任何一个操作失败，整次调用不修改文件。总匹配数最多 32,768，结果最多 8 MiB。写入用快照 revision 做 compare-and-swap；给了 `expected_revision` 就必须与快照一致。返回 replacement 数量、字节数和 revision；diff 摘要最多 4096 字节，只放在 `details`。BOM 会保留。超过 8 MiB 的文件不能编辑。
 

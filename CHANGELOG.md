@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 工具参数在 schema 校验前统一修补，不再让模型为拼写差异多花一轮：`required` 字段接受其它框架的叫法（`file`/`filename`→`path`、`text`/`body`→`content`、`query`/`glob`→`pattern`、`task`/`instructions`→`prompt`、`name`/`role`→`agent`、`q`→`query` 等，命中的拼法不是 schema 声明属性时才生效）；字符串形式的数字/布尔在任意深度按 schema 转成标量；带 `const`/单值 `enum` 标签的 `oneOf`/`anyOf` 对象缺少标签时按字段推断变体、拼写只差大小写或连字符时改正，并丢掉该变体没有声明的多余键（例如 `type_note`）；整个参数对象被编码成 JSON 字符串时先解析。空对象、认不出的字段、没有标签的联合仍然按原样报错，不会猜一个变体。MCP 工具用服务器 schema 走同一套修补与错误渲染（不做 camelCase 转换，服务器可能就声明成驼峰）。
+- `edit` 的 `operations` 不再因为缺少 `type` 标签或多出一个说明字段（例如 `type_note`）而整次拒绝：按操作里实际出现的字段推断 `literal`／`regex`／`fuzzy`／`line_range`，并只保留该变体的字段（`old_string`/`new_string`、`search`/`replace`、`start`/`end`、`replace_all`、`distance` 这些叫法也一并映射，字符串形式的行号和距离会转成数字）。缺少标签的调用之前直接返回 `invalid arguments: value at /operations/0 is missing required field type`，模型只能重发一次；现在同一批操作直接生效。字段仍然按变体校验（例如 `literal` 必须给 `pattern`+`replacement`），认不出字段的操作照旧报错。
+
 ## [0.12.16] - 2026-10-20
 
 ### Changed
