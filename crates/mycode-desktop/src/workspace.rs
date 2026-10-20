@@ -331,6 +331,8 @@ pub struct Workspace {
     /// Consecutive tool runs the transcript has expanded. Keyed by the run's
     /// first call event id.
     expanded_tool_batches: HashSet<String>,
+    /// Compaction summary cards the transcript is showing in full.
+    expanded_summaries: HashSet<String>,
     /// A window-close request armed the confirm at this instant. A second
     /// request inside [`CLOSE_CONFIRM_WINDOW`] quits; a later one asks again.
     close_armed: Option<Instant>,
@@ -418,6 +420,7 @@ impl Workspace {
             git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
+            expanded_summaries: HashSet::new(),
             close_armed: None,
             armed_delete: None,
             applied_font_size: String::new(),
@@ -887,6 +890,20 @@ impl Workspace {
         let pinned = self.conversation_follows_tail();
         if !self.expanded_tool_batches.remove(id) {
             self.expanded_tool_batches.insert(id.to_owned());
+        }
+        self.keep_tail_pinned(pinned, cx);
+    }
+
+    /// Whether a compaction summary card shows its text.
+    pub(crate) fn summary_open(&self, id: &str) -> bool {
+        self.expanded_summaries.contains(id)
+    }
+
+    /// Toggles a compaction summary card between its header and its text.
+    pub(crate) fn on_toggle_summary(&mut self, id: &str, cx: &mut Context<Self>) {
+        let pinned = self.conversation_follows_tail();
+        if !self.expanded_summaries.remove(id) {
+            self.expanded_summaries.insert(id.to_owned());
         }
         self.keep_tail_pinned(pinned, cx);
     }

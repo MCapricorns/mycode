@@ -495,9 +495,17 @@ fn agent_text(
 }
 
 /// Compaction summary card. The text is the checkpoint summary, shown after
-/// both `/compact` and automatic compaction.
-pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> impl IntoElement {
+/// both `/compact` and automatic compaction. It stays folded to its header
+/// until opened: shown whole, a long summary pushed the messages after it
+/// out of view.
+pub(super) fn render_summary_entry(
+    entry: &ConversationEntry,
+    open: bool,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
     let body = mycode_app::summary_body(&entry.text);
+    let id = entry.event_id.clone();
     div()
         .id(format!("summary-{}", entry.event_id))
         .w_full()
@@ -513,18 +521,44 @@ pub(super) fn render_summary_entry(entry: &ConversationEntry, theme: &Theme) -> 
         .py_2()
         .child(
             div()
-                .text_xs()
-                .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                .text_color(theme.primary)
-                .child(t("SUMMARY", "摘要")),
+                .id(format!("summary-header-{}", entry.event_id))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(skin::space(2))
+                .cursor_pointer()
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_toggle_summary(&id, cx);
+                }))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(if open { "▾" } else { "▸" }),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                        .text_color(theme.primary)
+                        .child(t("SUMMARY", "摘要")),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t("Earlier context was compacted", "较早的上下文已压缩")),
+                ),
         )
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme.foreground)
-                .whitespace_normal()
-                .child(body.to_owned()),
-        )
+        .when(open, |card| {
+            card.child(
+                div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .whitespace_normal()
+                    .child(body.to_owned()),
+            )
+        })
 }
 
 /// Maximum fraction of the prose column a right-aligned user bubble occupies.
