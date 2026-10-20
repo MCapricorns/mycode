@@ -794,6 +794,10 @@ fn sweep_update_helpers(dir: &Path) {
 }
 
 /// Removes stale staging directories left by interrupted updates.
+///
+/// A stage is named after the process downloading into it. The terminal and
+/// the desktop share the temp directory, so a stage whose process still runs
+/// is that instance's download in flight and is kept.
 pub fn cleanup_stale_stages() {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
         return;
@@ -803,10 +807,22 @@ pub fn cleanup_stale_stages() {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name.starts_with("mycode-update-") && entry.path().is_dir() {
+        if name.starts_with("mycode-update-")
+            && !stage_in_use(name, apply::process_is_running)
+            && entry.path().is_dir()
+        {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
+}
+
+/// Whether stage `name` (`mycode-update-{pid}-{version}`) belongs to a
+/// running process other than this one. A name without a pid is a leftover.
+fn stage_in_use(name: &str, running: impl Fn(u32) -> bool) -> bool {
+    name.strip_prefix("mycode-update-")
+        .and_then(|rest| rest.split('-').next())
+        .and_then(|pid| pid.parse::<u32>().ok())
+        .is_some_and(|pid| pid != std::process::id() && running(pid))
 }
 
 #[cfg(not(windows))]

@@ -73,6 +73,29 @@ fn published_platforms_match_release_assets() {
     );
 }
 
+#[test]
+fn stale_stage_sweep_keeps_downloads_of_running_processes() {
+    let own = std::process::id();
+    let other = own.wrapping_add(1);
+    let dead = own.wrapping_add(2);
+    let running = |pid: u32| pid == other;
+    assert!(super::stage_in_use(
+        &format!("mycode-update-{other}-0-12-14"),
+        running
+    ));
+    // A dead owner, this process (a reused pid), and a name without a pid
+    // are leftovers.
+    assert!(!super::stage_in_use(
+        &format!("mycode-update-{dead}-0-12-14"),
+        running
+    ));
+    assert!(!super::stage_in_use(
+        &format!("mycode-update-{own}-0-12-14"),
+        |_| true
+    ));
+    assert!(!super::stage_in_use("mycode-update-script-x-1-2", |_| true));
+}
+
 fn scratch(label: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "mycode-update-script-{label}-{}-{}",
