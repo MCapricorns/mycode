@@ -40,11 +40,23 @@ fn the_diff_sits_left_of_details_and_the_drawer() {
 
     let (drawer, beside_drawer) = super::panel_rights(super::INSPECTOR_DOCKED_WIDTH, true);
     assert_eq!(drawer, super::INSPECTOR_DOCKED_WIDTH + 12.);
-    assert!(beside_drawer > drawer + 480.);
+    assert!(beside_drawer > drawer + super::CHANGES_DRAWER_WIDTH);
     assert_eq!(
         beside_drawer,
-        super::INSPECTOR_DOCKED_WIDTH + 12. + 480. + 12.
+        super::INSPECTOR_DOCKED_WIDTH + 12. + super::CHANGES_DRAWER_WIDTH + 12.
     );
+}
+
+/// On a common 1440px window with Details docked, the file column and the
+/// diff open side by side at full width, neither overlapping the other.
+#[test]
+fn the_review_pair_fits_side_by_side_beside_docked_details() {
+    let ((drawer_right, drawer_width), (diff_right, diff_width)) =
+        super::responsive_panel_bounds(1440., super::INSPECTOR_DOCKED_WIDTH, true);
+    assert_eq!(drawer_width, super::CHANGES_DRAWER_WIDTH);
+    assert_eq!(diff_width, super::DIFF_PANEL_WIDTH);
+    assert!(diff_right >= drawer_right + drawer_width + 12.);
+    assert!(diff_right + diff_width <= 1440. - 12.);
 }
 
 #[test]
@@ -58,30 +70,18 @@ fn the_subagent_window_stacks_left_of_details_drawer_and_diff() {
     // With the drawer open it moves left of the drawer.
     let (right, _) =
         super::subagent_window_bounds(wide, super::INSPECTOR_OVERLAY_SPAN, true, false);
-    assert!(right > super::INSPECTOR_OVERLAY_SPAN + 480.);
+    assert!(right > super::INSPECTOR_OVERLAY_SPAN + super::CHANGES_DRAWER_WIDTH);
     // With drawer and diff open it moves left of both when the window
     // is wide enough to stack all three.
     let (right, _) =
         super::subagent_window_bounds(1920., super::INSPECTOR_OVERLAY_SPAN, true, true);
-    assert!(right > super::INSPECTOR_OVERLAY_SPAN + 480. + 560.);
+    assert!(
+        right
+            > super::INSPECTOR_OVERLAY_SPAN + super::CHANGES_DRAWER_WIDTH + super::DIFF_PANEL_WIDTH
+    );
     // When everything cannot fit, it stays inside the viewport.
     let (right, _) = super::subagent_window_bounds(700., super::INSPECTOR_OVERLAY_SPAN, true, true);
     assert!(right + super::SUBAGENT_WINDOW_WIDTH <= 700.);
-}
-
-#[test]
-fn changes_drawer_max_height_is_the_old_stretched_span_with_a_floor() {
-    let height = 900.;
-    // The cap equals the room the drawer stretched into before: below the
-    // title-bar offset and above the bottom panel margin.
-    assert_eq!(
-        super::changes_drawer_max_height(height),
-        height - crate::ui::title_bar::BAR_HEIGHT - 8. - 12.
-    );
-    // The smallest real window still leaves the drawer most of the screen.
-    assert!(super::changes_drawer_max_height(560.) >= 400.);
-    // A degenerate viewport keeps a usable, positive height.
-    assert!(super::changes_drawer_max_height(0.) >= 120.);
 }
 
 #[test]

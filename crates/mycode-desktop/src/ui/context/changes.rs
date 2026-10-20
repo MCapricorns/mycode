@@ -11,8 +11,7 @@ use gpui_kit::{
 };
 
 use super::{
-    CHANGES_PREVIEW, changes_drawer_max_height, git_status_color, responsive_panel_bounds,
-    section_heading,
+    CHANGES_PREVIEW, git_status_color, responsive_panel_bounds, review_panel, section_heading,
 };
 use crate::i18n::t;
 use crate::workspace::Workspace;
@@ -154,7 +153,12 @@ pub(crate) fn render_changes_drawer(
     let files = git.files.clone();
     let stopped_early = git.stopped_early;
     let viewport_width = f32::from(window.viewport_size().width);
-    let viewport_height = f32::from(window.viewport_size().height);
+    let file_count = format!(
+        "{}{} {}",
+        files.len(),
+        if stopped_early { "+" } else { "" },
+        t("files", "个文件")
+    );
     let ((drawer_right, drawer_width), _) =
         responsive_panel_bounds(viewport_width, inspector_span, true);
     div()
@@ -179,31 +183,8 @@ pub(crate) fn render_changes_drawer(
                 })),
         )
         .child(
-            div()
-                .id("changes-drawer")
-                .occlude()
-                .absolute()
-                .top(px(crate::ui::title_bar::BAR_HEIGHT + 8.))
-                .right(px(drawer_right))
-                // Hug the content instead of stretching to the window
-                // bottom; the cap keeps the drawer inside the viewport.
-                .h_auto()
-                .max_h(px(changes_drawer_max_height(viewport_height)))
-                .w(px(drawer_width))
-                .flex()
-                .flex_col()
-                .rounded(crate::ui::skin::radius_card())
-                .border_1()
-                .border_color(crate::ui::skin::border_strong(theme))
-                .bg(crate::ui::skin::popover(theme))
-                .shadow(crate::ui::skin::elevation_shadow(theme))
-                .overflow_hidden()
-                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(|_, _, cx| {
-                    cx.stop_propagation();
-                })
+            // Same frame as the diff panel: the pair reads as one split view.
+            review_panel("changes-drawer", drawer_right, drawer_width, theme)
                 .child(
                     div()
                         .px_3()
@@ -225,6 +206,13 @@ pub(crate) fn render_changes_drawer(
                         )))
                         .child(
                             div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(file_count),
+                        )
+                        .child(
+                            div()
                                 .id("changes-drawer-close")
                                 .px_2()
                                 .py(px(2.))
@@ -243,9 +231,8 @@ pub(crate) fn render_changes_drawer(
                 .child(
                     div()
                         .id("changes-drawer-files")
-                        .flex_shrink(1.)
+                        .flex_1()
                         .min_h_0()
-                        .max_h(px(220.))
                         .overflow_y_scroll()
                         .p_2()
                         .flex()
@@ -262,7 +249,8 @@ pub(crate) fn render_changes_drawer(
                                 .items_center()
                                 .gap_2()
                                 .px_2()
-                                .h(px(26.))
+                                .flex_shrink_0()
+                                .h(px(28.))
                                 .rounded(crate::ui::skin::radius_xs())
                                 .text_xs()
                                 .cursor_pointer()
@@ -304,8 +292,11 @@ pub(crate) fn render_changes_drawer(
                 .child(
                     div()
                         .id("changes-drawer-diff")
+                        .flex_shrink_0()
                         .px_3()
                         .py_2()
+                        .border_t_1()
+                        .border_color(theme.border)
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(if selected.is_none() {
@@ -339,34 +330,14 @@ pub(crate) fn render_diff_panel(
         .unwrap_or(t("Diff", "差异"))
         .to_owned();
     let rows = numbered_diff_rows(workspace.git_diff());
+    let (added, removed) = diff_line_counts(workspace.git_diff());
     let viewport_width = f32::from(window.viewport_size().width);
     let (_, (diff_right, diff_width)) = responsive_panel_bounds(
         viewport_width,
         inspector_span,
         workspace.vm().changes_panel_open,
     );
-    div()
-        .id("diff-panel-layer")
-        .occlude()
-        .absolute()
-        .top(px(crate::ui::title_bar::BAR_HEIGHT + 8.))
-        .right(px(diff_right))
-        .bottom(px(12.))
-        .w(px(diff_width))
-        .flex()
-        .flex_col()
-        .rounded(crate::ui::skin::radius_card())
-        .border_1()
-        .border_color(crate::ui::skin::border_strong(theme))
-        .bg(crate::ui::skin::popover(theme))
-        .shadow(crate::ui::skin::elevation_shadow(theme))
-        .overflow_hidden()
-        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .on_click(|_, _, cx| {
-            cx.stop_propagation();
-        })
+    review_panel("diff-panel-layer", diff_right, diff_width, theme)
         .child(
             div()
                 .px_3()
@@ -378,6 +349,27 @@ pub(crate) fn render_diff_panel(
                 .border_b_1()
                 .border_color(theme.border)
                 .child(div().flex_1().min_w_0().text_sm().truncate().child(path))
+                .when(added + removed > 0, |this| {
+                    this.child(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_row()
+                            .gap(px(6.))
+                            .text_xs()
+                            .font_family(theme.mono_font_family.clone())
+                            .child(
+                                div()
+                                    .text_color(crate::ui::desk::diff_ink(theme, true))
+                                    .child(format!("+{added}")),
+                            )
+                            .child(
+                                div()
+                                    .text_color(crate::ui::desk::diff_ink(theme, false))
+                                    .child(format!("−{removed}")),
+                            ),
+                    )
+                })
                 .child(
                     div()
                         .id("diff-panel-close")
@@ -483,6 +475,19 @@ fn numbered_diff_rows(diff: &str) -> Vec<NumberedDiffRow<'_>> {
         rows.push(NumberedDiffRow { number, text: line });
     }
     rows
+}
+
+/// Added and removed line counts, file headers excluded.
+fn diff_line_counts(diff: &str) -> (usize, usize) {
+    diff.lines().fold((0, 0), |(added, removed), line| {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            (added + 1, removed)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            (added, removed + 1)
+        } else {
+            (added, removed)
+        }
+    })
 }
 
 fn diff_line_paint(line: &str, theme: &Theme) -> (gpui_kit::Hsla, gpui_kit::Hsla) {

@@ -51,10 +51,15 @@ pub(crate) fn chat_right_reserve(details_open: bool, details_docked: bool, chat_
 
 const INSPECTOR_OVERLAY_MARGIN: f32 = 8.;
 const INSPECTOR_OVERLAY_WIDTH: f32 = 320.;
-const CHANGES_DRAWER_WIDTH: f32 = 480.;
-const DIFF_PANEL_WIDTH: f32 = 560.;
+/// The review pair reads as one split view: a file column the width of the
+/// Details overlay, and a diff wide enough for code beside it.
+const CHANGES_DRAWER_WIDTH: f32 = 320.;
+const DIFF_PANEL_WIDTH: f32 = 640.;
 const PANEL_GAP: f32 = 12.;
 const PANEL_MIN_WIDTH: f32 = 280.;
+
+// The diff carries code, the drawer only paths.
+const _: () = assert!(DIFF_PANEL_WIDTH > CHANGES_DRAWER_WIDTH);
 
 /// Right insets for the changes drawer and the diff panel.
 ///
@@ -123,16 +128,37 @@ pub(crate) fn responsive_panel_bounds(
     ((drawer_right, drawer_width), (diff_right, diff_width))
 }
 
-/// Maximum height for the changes drawer.
-///
-/// The drawer hugs its content instead of stretching to the window bottom,
-/// but the cap keeps it from growing past the margin the other panels keep:
-/// its top sits `BAR_HEIGHT + 8` down, and the bottom keeps [`PANEL_GAP`]
-/// clear. The floor leaves a usable drawer in a degenerate short window.
-#[must_use]
-pub(crate) fn changes_drawer_max_height(viewport_height: f32) -> f32 {
-    const MIN_DRAWER_HEIGHT: f32 = 160.;
-    (viewport_height - super::title_bar::BAR_HEIGHT - 8. - PANEL_GAP).max(MIN_DRAWER_HEIGHT)
+/// The shared frame of the changes drawer and the diff panel: the same top,
+/// bottom, corners, fill, and edge, so side by side they read as one split
+/// view instead of a short card next to a tall one.
+pub(crate) fn review_panel(
+    id: &'static str,
+    right: f32,
+    width: f32,
+    theme: &Theme,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .occlude()
+        .absolute()
+        .top(px(super::title_bar::BAR_HEIGHT + 8.))
+        .bottom(px(PANEL_GAP))
+        .right(px(right))
+        .w(px(width))
+        .flex()
+        .flex_col()
+        .rounded(crate::ui::skin::radius_card())
+        .border_1()
+        .border_color(crate::ui::skin::border_strong(theme))
+        .bg(crate::ui::skin::popover(theme))
+        .shadow(crate::ui::skin::elevation_shadow(theme))
+        .overflow_hidden()
+        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(|_, _, cx| {
+            cx.stop_propagation();
+        })
 }
 
 const SUBAGENT_WINDOW_WIDTH: f32 = 320.;
