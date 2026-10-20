@@ -307,6 +307,15 @@ fn section_keywords(section: SettingsSection) -> &'static [&'static str] {
             "font",
             "字体",
         ],
+        SettingsSection::Shortcuts => &[
+            "shortcuts",
+            "快捷键",
+            "keyboard",
+            "键盘",
+            "keys",
+            "按键",
+            "hotkeys",
+        ],
         SettingsSection::Models => &[
             "models",
             "模型",

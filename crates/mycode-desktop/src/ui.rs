@@ -429,6 +429,7 @@ pub(super) fn short_id(id: &str) -> String {
 pub(crate) fn section_icon(section: SettingsSection) -> IconName {
     match section {
         SettingsSection::General => IconName::SlidersHorizontal,
+        SettingsSection::Shortcuts => IconName::Keyboard,
         SettingsSection::Models => IconName::Bot,
         SettingsSection::Agents => IconName::Sparkles,
         SettingsSection::Skills => IconName::Terminal,

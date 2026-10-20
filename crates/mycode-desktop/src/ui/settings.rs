@@ -11,6 +11,7 @@ mod general;
 mod mcp;
 mod models;
 mod provider_detail;
+mod shortcuts;
 mod skills;
 mod web;
 mod widgets;
@@ -183,6 +184,9 @@ pub(super) fn render_settings_view(
                                         SettingsSection::General => {
                                             general::render_general_section(workspace, window, cx)
                                         }
+                                        SettingsSection::Shortcuts => {
+                                            shortcuts::render_shortcuts_section(cx)
+                                        }
                                         SettingsSection::Models => {
                                             models::render_models_section(workspace, window, cx)
                                         }
@@ -271,6 +275,7 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     };
     vec![
         (SettingsSection::General, NavBadge::default()),
+        (SettingsSection::Shortcuts, NavBadge::default()),
         (
             SettingsSection::Models,
             NavBadge {

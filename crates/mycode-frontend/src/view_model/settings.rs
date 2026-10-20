@@ -189,6 +189,8 @@ pub enum SettingsSection {
     /// Theme, language, and network.
     #[default]
     General,
+    /// The keys the window binds.
+    Shortcuts,
     /// Providers, catalog presets, and custom endpoints.
     Models,
     /// Subagent roles and per-role model routes.
@@ -210,6 +212,7 @@ impl SettingsSection {
     pub fn id(self) -> &'static str {
         match self {
             Self::General => "general",
+            Self::Shortcuts => "shortcuts",
             Self::Models => "models",
             Self::Agents => "agents",
             Self::Skills => "skills",
@@ -224,6 +227,7 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             Self::General => t("General", "通用"),
+            Self::Shortcuts => t("Keyboard shortcuts", "快捷键"),
             Self::Models => t("Models", "模型"),
             Self::Agents => t("Agents", "子代理"),
             Self::Skills => t("Skills", "技能"),
@@ -238,6 +242,10 @@ impl SettingsSection {
     pub fn hint(self) -> &'static str {
         match self {
             Self::General => t("Appearance, language, and identity", "外观、语言与身份"),
+            Self::Shortcuts => t(
+                "Keys for sending, steering, and getting around",
+                "发送、引导与界面导航的按键",
+            ),
             Self::Models => t("Default model and providers", "默认模型与服务商"),
             Self::Agents => t(
                 "Scout, Artisan, and roles you add",
@@ -264,7 +272,7 @@ impl SettingsSection {
 
     /// Nav groups in display order with their member sections.
     pub const GROUPS: &'static [(&'static str, &'static [SettingsSection])] = &[
-        ("Appearance", &[Self::General]),
+        ("Appearance", &[Self::General, Self::Shortcuts]),
         ("Models", &[Self::Models]),
         ("Agents", &[Self::Agents]),
         ("Tools", &[Self::Skills, Self::Mcp, Self::Web]),
@@ -352,6 +360,7 @@ mod tests {
             members,
             [
                 SettingsSection::General,
+                SettingsSection::Shortcuts,
                 SettingsSection::Models,
                 SettingsSection::Agents,
                 SettingsSection::Skills,

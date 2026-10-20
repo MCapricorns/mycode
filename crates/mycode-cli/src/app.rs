@@ -2020,9 +2020,10 @@ fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
 
     rows.push(SettingRow::Header("Keyboard shortcuts".to_owned()));
     for shortcut in shortcuts(Surface::Terminal) {
+        let value = shortcut.sentence();
         rows.push(SettingRow::Info {
             label: shortcut.keys,
-            value: shortcut.action.to_owned(),
+            value,
         });
     }
 
