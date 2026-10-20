@@ -5,8 +5,10 @@
 //! round action is Stop: it ends the whole turn, including every subagent, and
 //! holds the queue. A draft sent with Enter queues for after the turn; the
 //! arrow beside Stop queues too, and Ctrl+Enter interrupts the turn and sends
-//! the draft right away. Each running scout or artisan is cancelled from its
-//! own `agent` row in the transcript.
+//! the draft right away. Ctrl+G steers: the draft reaches the running turn
+//! before its next step without stopping it, and waits in a strip above the
+//! queue until the agent reads it. Each running scout or artisan is cancelled
+//! from its own `agent` row in the transcript.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -28,12 +30,13 @@ use crate::workspace::Workspace;
 /// Resting composer hint. The product name does not belong in the field.
 const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
 const QUEUE_PLACEHOLDER: (&str, &str) = (
-    "Queue; Ctrl+Enter interrupts",
-    "回车排队 · Ctrl+Enter 打断发送",
+    "Queue; Ctrl+Enter interrupts; Ctrl+G steers",
+    "回车排队 · Ctrl+Enter 打断发送 · Ctrl+G 引导",
 );
 
 /// Placeholder for the composer. While a turn is running, typed text queues
-/// for after the turn; Ctrl+Enter interrupts and sends it right away.
+/// for after the turn; Ctrl+Enter interrupts and sends it right away, and
+/// Ctrl+G hands it to the running turn.
 #[must_use]
 pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
     let (english, chinese) = if sending {
@@ -91,6 +94,8 @@ pub(super) fn render_composer(
         // missing folder with a toast instead of leaving a dead button.
         has_draft
     };
+    let steer_panel = (!workspace.vm().pending_steers.is_empty())
+        .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
     let queue_panel = if has_queue {
         let paused = workspace.vm().queue_paused;
         Some(
@@ -232,6 +237,7 @@ pub(super) fn render_composer(
                 .flex()
                 .flex_col()
                 .gap_1()
+                .when_some(steer_panel, |this, steers| this.child(steers))
                 .when_some(queue_panel, |this, queue| this.child(queue))
                 .when_some(compact_card, |this, card| this.child(card))
                 .when_some(ask_card, |this, card| this.child(card))
@@ -497,6 +503,61 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
             workspace.toggle_command_palette(window, cx);
         }))
         .child(shortcut_label())
+}
+
+/// Steers the running turn has not read yet. The agent takes them before
+/// its next step; one the turn ends without reading moves to the queue.
+fn render_pending_steers(items: &[String], cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    let desk = Desk::of(theme);
+    skin::popover_panel("composer-steers", theme)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .px_3()
+        .py_2()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(crate::ui::lamp(desk.violet))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                        .text_color(desk.faint)
+                        .child(format!("{}  {}", t("STEERING", "引导中"), items.len())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t(
+                            "The agent reads these before its next step.",
+                            "代理在下一步之前读取。",
+                        )),
+                ),
+        )
+        .children(items.iter().enumerate().map(|(index, text)| {
+            let preview: SharedString = ellipsis(text, 72).into();
+            div()
+                .id(SharedString::from(format!("steer-{index}")))
+                .min_w_0()
+                .h(px(24.))
+                .pl(px(15.))
+                .flex()
+                .items_center()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(div().min_w_0().flex_1().truncate().child(preview))
+        }))
 }
 
 /// Queued follow-ups with explicit actions: recall (back into the composer

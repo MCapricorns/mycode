@@ -1,5 +1,5 @@
-//! The General settings page: appearance, text size, language, and the
-//! network proxy.
+//! The General settings page: appearance, text size, language, the network
+//! proxy, and the keyboard shortcuts.
 //!
 //! The interface always paints the operating-system UI font; there is no
 //! typeface picker. The request identity (User-Agent) is fixed by the
@@ -90,6 +90,7 @@ pub(super) fn render_general_section(
         cx,
     );
     let theme = cx.theme();
+    let shortcut_rows = shortcut_rows(theme);
     div()
         .id("general-section")
         .w_full()
@@ -118,7 +119,40 @@ pub(super) fn render_general_section(
             theme,
             vec![proxy_row],
         ))
+        .child(settings_card(
+            "shortcuts",
+            t("Keyboard shortcuts", "快捷键"),
+            None,
+            theme,
+            shortcut_rows,
+        ))
         .into_any_element()
+}
+
+/// One row per shortcut the window binds, keys on the right.
+fn shortcut_rows(theme: &gpui_kit::component::theme::Theme) -> Vec<AnyElement> {
+    mycode_frontend::shortcuts::shortcuts(mycode_frontend::shortcuts::Surface::Desktop)
+        .into_iter()
+        .enumerate()
+        .map(|(index, shortcut)| {
+            let keys = div()
+                .px_2()
+                .py(px(2.))
+                .rounded(crate::ui::skin::radius_xs())
+                .bg(theme.secondary)
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(shortcut.keys)
+                .into_any_element();
+            settings_row(
+                &format!("shortcut-{index}"),
+                shortcut.action,
+                None,
+                keys,
+                theme,
+            )
+        })
+        .collect()
 }
 
 /// Mode chip id for one stored proxy value.
