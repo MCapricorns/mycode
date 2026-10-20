@@ -177,9 +177,12 @@ pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut Ap
     // decision. Its wake callback hands a thread-safe sender to the gpui
     // pump, which drains replies, timers, and events on the main thread.
     let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
-    let driver = FrontendDriver::start(home.clone(), move || {
+    let mut driver = FrontendDriver::start(home.clone(), move || {
         let _ = wake_tx.send(());
     });
+    if let Some(version) = applied_update {
+        driver.note_update_applied(version);
+    }
     // Open as a regular window at the persisted (or default) bounds: the
     // maximize-on-open workaround for gpui's stale-scale sizing is retired
     // by user request (DPI edge cases accepted); the user can maximize
@@ -201,15 +204,6 @@ pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut Ap
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);
         let workspace = Workspace::new(driver, wake_rx, window, cx);
-        if let Some(version) = applied_update {
-            workspace.update(cx, |workspace, cx| {
-                workspace.push_toast(
-                    format!("{} v{version}", crate::i18n::t("Updated to", "已更新到")),
-                    ToastKind::Info,
-                    cx,
-                );
-            });
-        }
         window.on_window_should_close(cx, {
             let workspace = workspace.clone();
             move |window, cx| {

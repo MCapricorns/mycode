@@ -326,6 +326,9 @@ pub struct FrontendDriver {
     /// payload again (a manual install click, say) must not spawn another
     /// helper copy.
     update_armed: bool,
+    /// Version a self-update installed since the last launch. Toasted once
+    /// the first settings reply lands, so it renders in the UI language.
+    applied_update: Option<String>,
     /// A user stop is unwinding: steers the turn hands back join a held
     /// queue instead of starting a new turn. Cleared when a turn starts.
     queue_hold_on_return: bool,
@@ -417,6 +420,7 @@ impl FrontendDriver {
             pending_web_enable: HashSet::new(),
             manual_update_check: false,
             update_armed: false,
+            applied_update: None,
             queue_hold_on_return: false,
             recall_generation: 0,
             repaired_configs: Vec::new(),
@@ -497,6 +501,12 @@ impl FrontendDriver {
     /// via [`Effect::ScrollAnchorInvalidated`].
     pub fn note_scroll_hold(&mut self, pending: bool) {
         self.scroll_hold_pending = pending;
+    }
+
+    /// Records the version a self-update installed since the last launch;
+    /// it is announced after the first settings load.
+    pub fn note_update_applied(&mut self, version: String) {
+        self.applied_update = Some(version);
     }
 
     /// Persists a resized window's settled size. The frontend reports every
