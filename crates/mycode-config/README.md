@@ -26,4 +26,4 @@ MYCode 的 home 布局与严格配置文档。会话与压缩检查点都在 `se
 - `project_dir_key(project)` 把项目路径拼成文件夹名（无项目为 `no-project`），`new_session_dir(project, id)` 生成新会话目录 `sessions/<项目键>/<id>`，`locate_session_dir(home, id)` 扫描 `sessions/*/` 找到已有会话的目录。
 - 未绑定项目时工具 cwd 是 `scratch/`，不是按会话 id 命名的目录。
 
-路径不合法或文档校验失败时拒绝读取。
+路径不合法时拒绝读取；文档校验失败时按损坏处理，备份后重置并逐项抢救。

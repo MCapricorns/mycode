@@ -18,7 +18,7 @@ pub use mycode_core::tool_label;
 /// One row of the session listing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSummary {
-    /// Session identity spelling (`ses1-…`).
+    /// Session identity spelling (`sess-YYYYMMDD-HHMMSS-[0-9a-f]{8}`).
     pub session_id: String,
     /// Branch to open: the last-written branch for a listing row, or the
     /// fresh root branch of a newly created session.

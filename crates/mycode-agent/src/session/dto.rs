@@ -1,8 +1,10 @@
 //! Typed session requests and results.
 //!
 //! `create`, `open`, `append`, `read`, `fork`, and `rewind` are the durable
-//! operations. `reserve-event`, `reserve-branch`, and `load-event` issue
-//! reservations and read payloads inside the session actor. See `docs/agent.md`.
+//! operations; `evict` drops one ledger in memory. `reserve-event` and
+//! `reserve-branch` issue single-use reservations, and `load-event`,
+//! `read-payloads`, and `read-payload-window` read payloads inside the
+//! session actor. See `docs/agent.md`.
 use super::ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
 
 /// Maximum number of branches in one session ledger.

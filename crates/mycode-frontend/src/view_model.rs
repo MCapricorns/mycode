@@ -1,4 +1,4 @@
-//! Pure desktop view-model: state, actions, and reducer.
+//! Pure frontend view-model: state, actions, and reducer.
 //!
 //! This module tree has no GPUI dependency. The render layer turns
 //! [`WorkspaceState`] into elements and feeds [`FrontendAction`]s back, so the

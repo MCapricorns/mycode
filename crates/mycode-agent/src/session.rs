@@ -2,11 +2,11 @@
 //!
 //! Event-sourced branch/resume/rewind over one durable store: a SQLite
 //! index (`sessions.db`) holds titles, branch heads, and JSONL byte
-//! offsets, and `<home>/sessions/<id>/<branch>.jsonl` holds the events.
-//! Reservations are single-use under expected-head compare-and-swap. The
-//! service runs on one session actor inside a generation fence. Opening a
-//! session loads offset rows only. The typed surface is documented in
-//! `docs/agent.md`.
+//! offsets, and `<home>/sessions/<project key>/<id>/<branch>.jsonl` holds
+//! the events. Reservations are single-use under expected-head
+//! compare-and-swap. The service runs on one session actor inside a
+//! generation fence. Opening a session loads offset rows only. The typed
+//! surface is documented in `docs/agent.md`.
 mod actor;
 mod digest;
 mod dto;

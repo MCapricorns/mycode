@@ -3,11 +3,11 @@
 //! Startup reads of `settings.json`, `secrets.json`, and `ui.json` use this
 //! so a broken file cannot blank the window: damaged content, and a file the
 //! strict checks reject for its own permissions, owner, or type, are both
-//! moved aside and replaced. The replacement keeps every field that still
-//! decodes and validates (`salvage`), so one bad section does not force the
-//! user to re-enter the rest. The previous file stays beside the original as
-//! `{name}.broken-<nanos>`. Session ledgers are not documents this module
-//! handles.
+//! moved aside and replaced. A damaged document's replacement keeps every
+//! field that still decodes and validates (`salvage`), so one bad section does
+//! not force the user to re-enter the rest. The previous file stays beside
+//! the original as `{name}.broken-<nanos>`. Session ledgers are not documents
+//! this module handles.
 
 use std::io;
 
@@ -129,10 +129,11 @@ fn backup_name_with_stamp(relative: &str, stamp: u128) -> Result<String, ConfigE
     Ok(backup)
 }
 
-/// Reads one owned document through `decode`. A damaged or unusable file is
-/// quarantined and replaced: `salvage` extracts whatever still validates from
-/// the stored bytes, and the remainder comes from `fallback`. The published
-/// value is the one returned.
+/// Reads one owned document through `decode`. A damaged document is
+/// quarantined and salvaged from its stored bytes; a file the strict checks
+/// reject is moved aside unread and rebuilt from `fallback`. In both cases the
+/// remainder comes from `fallback`, and the published value is the one
+/// returned.
 pub(crate) fn load_or_reset<T>(
     home: &HomeLayout,
     relative: &'static str,

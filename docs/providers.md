@@ -11,7 +11,7 @@
 | `anthropic_messages` | Messages 请求体、SSE 归约。签名思考块和 `redacted_thinking` 原样回放；GLM 也接受无签名思考文字 |
 | `openai_completions` | Chat Completions 请求体、SSE 归约、`<think>` 拆分、XML 工具调用回收 |
 | `openai_responses` | Responses 请求体、SSE 归约。固定 `store: false`，不向上游回放思考或图片 |
-| `family` | 思考字段、推理回放、显式缓存、`prompt_cache_key` 排除名单、用量字段名。每张表首个命中行生效，末行是通用兜底 |
+| `family` | 思考字段、推理回放、显式缓存、`prompt_cache_key` 排除名单、用量字段名。策略表首个命中行生效；思考表末行是通用兜底 |
 | `cache` | `cache_control` 断点、`prompt_cache_key` 探测与进程内拒绝记录 |
 | `wire_common` | 三种协议共用的工具 schema、用量整理、停止原因映射、消息拼装 |
 | `xml_tool_calls` | 从文本里回收 `<tool_call>` / `<minimax:tool_call>` 内的工具调用，合成 id |
@@ -45,11 +45,11 @@
 
 - 429：等待 1s / 4s / 10s。
 - 408、500–503、507、529，或没有状态码的 `Unavailable` / `Timeout`：等待 400ms / 1.2s / 3.5s。
-- 404、520–526、其它 4xx、`Rejected`、`Protocol`：不重试。
+- 404、520–526、其它 4xx、未列出的 5xx、`Rejected`、`Protocol`：不重试。
 
 流已经开始后只在还没有发出任何事件时重试；一旦有 text、thinking 或 tool delta 出去，后续失败直接终止并保留已归约内容（`StopReason::Error`）。Anthropic 在输出前的 `overloaded_error` / `rate_limit_error` / `api_error` 分别按 529 / 429 / 500 处理，因此也走同一套重试。
 
-另有两类“改 body 再试一次”的规则。它们在同一 body 的重试次数用完之后才触发，所以一次请求最多发出 5 次：
+另有两类“改 body 再试一次”的规则。它们不占用上面的同一 body 重试预算：遇到对应的 400 就立即改写重发；如果此前已经用完同一 body 的 4 次请求，一次请求最多发出 5 次：
 
 - 400 的错误文本包含 `prompt_cache_key`：删掉该字段重发，并把这个主机记入进程内拒绝集合。
 - 400 的错误文本同时包含 `signature` 和 `thinking`：删掉所有 `thinking` / `redacted_thinking` 块后重发，保留 text 和工具调用；只剩思考的 assistant 消息整条移除。
@@ -92,8 +92,8 @@ K3 识别只看路径段：`k3`、`k3-*`、`kimi-k3`、`kimi-k3-*`。`k30`、`k3
 
 `Off` 的行为：
 
-- OpenRouter 发 `reasoning.effort: none`；OpenDesign 和通用行发 `reasoning_effort: none`。
-- Z.AI、DeepSeek 发 `thinking {type: disabled}`；其它 Kimi（除 K3 和 `kimi-k2.7-code`）也发 `disabled`；DashScope/Qwen 发 `enable_thinking: false`；MiniMax 仍发 `adaptive`；K3 和 `kimi-k2.7-code` 直接省略字段。
+- OpenRouter 发 `reasoning.effort: none`；OpenDesign 和通用行在 Chat 发 `reasoning_effort: none`，在 Responses 发 `reasoning.effort: none`。
+- Z.AI、DeepSeek 发 `thinking {type: disabled}`；Chat 上的其它 Kimi（除 K3 和 `kimi-k2.7-code`）也发 `disabled`；DashScope/Qwen 发 `enable_thinking: false`；MiniMax 仍发 `adaptive`；K3 和 Chat 上的 `kimi-k2.7-code` 省略字段，Messages 上的 Kimi 一律发 `disabled`。
 - Claude 5、`fable`、`mythos` 省略 `thinking`，只给 `output_config.effort: low`；更早的 Claude 发 `thinking {type: disabled}`。
 
 `keeps_thinking_when_off` 对 Claude 5+/`fable`/`mythos`、MiniMax、K3、`kimi-k2.7-code` 返回 true，用于给输出上限留思考空间。
@@ -104,7 +104,7 @@ K3 识别只看路径段：`k3`、`k3-*`、`kimi-k3`、`kimi-k3-*`。`k30`、`k3
 
 应用层顺序：设置 `maxOutput`（>0）→ 目录 `limit.output`（>0）→ 32000。Anthropic Messages 必须带 `max_tokens`，没有传入时也用 32000；已公布的 `limit.output` 原样发送，不取厂商常量最小值。Chat Completions 用 `max_tokens`，Responses 用 `max_output_tokens`，只在有值时发送。
 
-压缩摘要用自己的上限：默认 8192；模型 `keeps_thinking_when_off` 时为 32768；遇到 `Length` 重试一次，上限 65536；摘要请求超时 180s。
+压缩摘要用自己的上限：模型上限默认 8192，`keeps_thinking_when_off` 时为 32768；实际取该上限与可用窗口的 1/4（带思考为 1/2，最少 2048）中的较小值；遇到 `Length` 重试一次，上限 65536（至少与首次相同）；摘要请求超时 180s。
 
 ## 提示缓存
 

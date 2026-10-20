@@ -10,11 +10,11 @@
 //!
 //! Firing `TurnEnv::cancel` cancels the turn's cancellation token — a
 //! child of the caller's token. The in-flight provider stream terminates
-//! with `Cancelled`. Thinking, text, and any fully formed tool calls
-//! already on that assistant message stay in history, with one visible
-//! interruption line (`interrupted by user`). Incomplete tool calls are
-//! not executed. `prompt()` returns [`TurnOutcome::Aborted`] — never a
-//! half `TurnEnded::Completed`.
+//! with `Cancelled`. Thinking and text already streamed stay in history,
+//! with one visible interruption line (`interrupted by user`); a formed
+//! tool call only arrives with `Done`, so the cancelled message carries
+//! none. `prompt()` returns [`TurnOutcome::Aborted`] — never a half
+//! `TurnEnded::Completed`.
 //!
 //! A provider or transport failure is the same shape of partial, with
 //! the provider's detail on the interruption line, but the turn completes.
@@ -99,9 +99,9 @@ impl AgentConfig {
 pub struct AgentState {
     /// Conversation history: user inputs, assistant messages, tool
     /// results. A user cancel keeps the partial assistant message
-    /// (thinking, text, fully formed tool calls, and the interruption
-    /// line). Incomplete tool calls never enter. Entries are shared
-    /// with provider requests.
+    /// (thinking, text, and the interruption line); a formed tool call
+    /// only arrives with `Done`. Incomplete tool calls never enter.
+    /// Entries are shared with provider requests.
     pub messages: Vec<Arc<Message>>,
 }
 
@@ -152,9 +152,9 @@ impl Agent {
     ///
     /// Cancellation (`env.cancel`) ends the turn with
     /// [`TurnOutcome::Aborted`] and keeps the in-flight partial
-    /// (thinking, text, fully formed tool calls, and an interruption
-    /// line). Incomplete tool calls are not executed. A provider
-    /// failure keeps the same partial and completes the turn.
+    /// (thinking, text, and an interruption line); a formed tool call
+    /// only arrives with `Done`. Incomplete tool calls are not executed.
+    /// A provider failure keeps the same partial and completes the turn.
     /// Tool-level failures never end the turn (they become `is_error`
     /// tool results the model can react to). Steers queued on
     /// [`TurnEnv::steer`] are appended at loop boundaries and do not

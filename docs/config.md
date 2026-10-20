@@ -44,6 +44,7 @@
 | `home` | 解析根、`sessions/`、`scratch/` 和会话内相对路径 |
 | `secure_fs` | 有界读取、不落盘的锁、相对句柄的原子替换和改名隔离；不含文档 schema |
 | `authority` | 文档 revision |
+| `error` | `ConfigError`、`ConfigErrorKind` |
 | `document_repair` | 把损坏或不可用的文档挪到 `.broken-*`，抢救后发布 |
 | `settings` | `settings.json` 及下面各设置族 |
 | `secrets` | `secrets.json`，每个 id 一把 key |

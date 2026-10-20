@@ -10,9 +10,10 @@ parking_lot.workspace = true
 # Sync primitives only: the git watcher and status threads hand results to
 # the gpui executor through tokio channels, which are runtime-independent.
 tokio = { workspace = true, features = ["sync"] }
-# Fenced code in TextView renders without syntax colors: the
-# `tree-sitter-languages` grammars were dropped to halve the binary. This
-# crate does not depend on tree-sitter itself. gpui-kit is the GUI framework
+# Fenced code is colored by mycode-frontend's lightweight lexer, not
+# tree-sitter: the `tree-sitter-languages` grammars were dropped to halve
+# the binary. This crate does not depend on tree-sitter itself. gpui-kit is
+# the GUI framework
 # and stays in this binary only: gpui-base 0.7.1 links the smol runtime as a
 # non-optional native dependency (no feature drops it), so the desktop
 # binary carries smol beside tokio. Every other workspace crate is tokio-only.
