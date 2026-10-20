@@ -6,14 +6,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 终端版的 `crates/mycode-cli/src/app.rs` 按职责拆成 `app.rs` 与 `app/input.rs`、`app/render.rs`、`app/settings.rs`、`app/settings_rows.rs`、`app/ui.rs`：驱动循环、按键与发送、设置页及选择器、设置行、绘制和转录行各自独立，单文件都不再超过 1000 行；行为不变。
+- 逐个 crate 复核 `docs/` 与源码注释，修正与现实不符的说明：字段类型、模块清单、重试与超时、压缩上限、会话目录、设置页数量和代码块高亮等；`mycode-config` 的 README 补上文档损坏时的备份与抢救规则，`docs/desktop.md` 补上终端版的模块划分。
+
 ## [0.12.11] - 2026-10-20
 
 ### Changed
 
 - 桌面版的快捷键说明从「设置 → 通用」移到单独的「设置 → 快捷键」页（导航里在「通用」下方）：按「撰写与发送」「界面与导航」两张卡片分组，每行写明动作和说明，按键画成键帽。CLI `/settings` 里的快捷键也带上同样的说明。
 - 桌面版没有回合或压缩在运行时，点窗口关闭按钮（`×`）、按 Alt+F4 直接退出；只有任务运行中才需要 6 秒内再点一次确认，提示改为「任务运行中，再点一次 × 退出」。
-- 终端版的 `crates/mycode-cli/src/app.rs` 按职责拆成 `app.rs` 与 `app/input.rs`、`app/render.rs`、`app/settings.rs`、`app/settings_rows.rs`、`app/ui.rs`：驱动循环、按键与发送、设置页及选择器、设置行、绘制和转录行各自独立，单文件都不再超过 1000 行；行为不变。
-- 逐个 crate 复核 `docs/` 与源码注释，修正与现实不符的说明：字段类型、模块清单、重试与超时、压缩上限、会话目录、设置页数量和代码块高亮等；`mycode-config` 的 README 补上文档损坏时的备份与抢救规则，`docs/desktop.md` 补上终端版的模块划分。
 
 ## [0.12.10] - 2026-10-20
 
