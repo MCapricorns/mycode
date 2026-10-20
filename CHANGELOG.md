@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.16] - 2026-10-20
+
 ### Changed
 
 - `read`、`edit`、`write`、`grep`、`find` 的路径不再限于工作区：可以直接读写、搜索其他项目或依赖源码（例如 `~/.cargo/registry/src` 下的 crate），相对路径里的 `..` 也能走出会话目录。工作区内经过符号链接、联接点或挂载点的路径改为解析到真实位置后再访问，不再报“crosses a link”；macOS 上搜索也不再跳过有多个硬链接的文件。工作区外文件的结果显示解析后的绝对路径。之前这些路径都会被拒绝，模型只能改用 PowerShell/bash 去读。
@@ -253,7 +255,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.15...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.16...HEAD
+[0.12.16]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.16
 [0.12.15]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.15
 [0.12.14]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.14
 [0.12.13]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.13
