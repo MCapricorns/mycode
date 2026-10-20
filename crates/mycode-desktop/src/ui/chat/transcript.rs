@@ -309,15 +309,130 @@ fn assistant_block(
             )))
         })
         .when(has_text, |this| {
-            this.child(agent_text(
-                format!("agent-md-{}", entry.event_id).into(),
-                SharedString::from(entry.text.clone()),
+            this.child(assistant_text(
+                format!("agent-md-{}", entry.event_id),
+                &entry.text,
+                cache,
+                theme,
+                window,
+            ))
+        })
+}
+
+/// One piece of a committed assistant message.
+#[derive(Debug, PartialEq, Eq)]
+enum AssistantPart {
+    Prose(String),
+    /// A `[error] …` line the agent appends when a stream fails.
+    Error(String),
+}
+
+/// Splits assistant text at the `[error] …` lines the agent commits when a
+/// provider stream fails. Consecutive error lines merge into one alert, and
+/// prose keeps its blank lines.
+fn assistant_parts(text: &str) -> Vec<AssistantPart> {
+    let mut parts = Vec::new();
+    let mut prose = String::new();
+    for line in text.lines() {
+        if line.starts_with("[error]") {
+            if !prose.trim().is_empty() {
+                parts.push(AssistantPart::Prose(
+                    prose.trim_end().to_owned(),
+                ));
+            }
+            prose.clear();
+            match parts.last_mut() {
+                Some(AssistantPart::Error(previous)) => {
+                    previous.push('\n');
+                    previous.push_str(line);
+                }
+                _ => parts.push(AssistantPart::Error(line.to_owned())),
+            }
+        } else {
+            prose.push_str(line);
+            prose.push('\n');
+        }
+    }
+    if !prose.trim().is_empty() {
+        parts.push(AssistantPart::Prose(prose.trim_end().to_owned()));
+    }
+    parts
+}
+
+/// Assistant text with error lines painted as alerts instead of prose.
+///
+/// The common case is one prose run and takes the plain Markdown path, so a
+/// normal reply keeps its single TextView.
+fn assistant_text(
+    id: String,
+    text: &str,
+    cache: Option<&markdown::MarkdownCache>,
+    theme: &Theme,
+    window: &Window,
+) -> gpui_kit::AnyElement {
+    let parts = assistant_parts(text);
+    if let [AssistantPart::Prose(body)] = parts.as_slice() {
+        return agent_text(
+            id.clone().into(),
+            body.clone().into(),
+            cache,
+            theme,
+            false,
+            window,
+        )
+        .into_any_element();
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .min_w_0()
+        .children(parts.into_iter().enumerate().map(|(index, part)| match part {
+            AssistantPart::Prose(body) => agent_text(
+                format!("{id}-p{index}").into(),
+                body.into(),
                 cache,
                 theme,
                 false,
                 window,
-            ))
-        })
+            )
+            .into_any_element(),
+            AssistantPart::Error(body) => error_note(&body, theme).into_any_element(),
+        }))
+        .into_any_element()
+}
+
+/// Red alert for an interrupted response: the row the CLI paints with `✖`.
+fn error_note(text: &str, theme: &Theme) -> impl IntoElement {
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap_2()
+        .px(skin::space(3))
+        .py(skin::space(2))
+        .rounded(skin::radius_sm())
+        .bg(theme.danger.opacity(0.10))
+        .border_1()
+        .border_color(theme.danger.opacity(0.30))
+        .child(
+            div()
+                .flex_shrink_0()
+                .pt(px(1.))
+                .text_color(theme.danger)
+                .child(Icon::new(IconName::CircleAlert).xsmall()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .whitespace_normal()
+                .text_sm()
+                .text_color(theme.danger)
+                .child(text.to_owned()),
+        )
 }
 
 /// The transcript column inside the conversation scroller. It fills the chat
