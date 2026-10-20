@@ -281,6 +281,12 @@ pub(crate) async fn compact_history(
     let starts_with_summary = history
         .first()
         .is_some_and(|message| is_summary_message(message));
+    // A checkpoint whose index does not land on this ledger replay was cut
+    // from some other history. Its index then sliced the wrong messages out
+    // of the next summary, and its summary told of work this one lacks.
+    let prior = prior.filter(|checkpoint| {
+        starts_with_summary || covers_a_prefix(&history, checkpoint.covered_messages)
+    });
     if mode != CompactMode::Manual
         && !starts_with_summary
         && let Some(checkpoint) = prior.as_ref()
@@ -704,13 +710,7 @@ fn checkpoint_matches(
     overhead: usize,
     scale: TokenScale,
 ) -> bool {
-    if checkpoint.covered_messages == 0 || checkpoint.covered_messages > history.len() {
-        return false;
-    }
-    if history
-        .get(checkpoint.covered_messages)
-        .is_some_and(|message| is_tool_result(message))
-    {
+    if !covers_a_prefix(history, checkpoint.covered_messages) {
         return false;
     }
     let tail_tokens: usize = history[checkpoint.covered_messages..]
@@ -718,6 +718,17 @@ fn checkpoint_matches(
         .map(|message| scale.apply(message_tokens(message)))
         .sum();
     checkpoint.covered_head == head || tail_tokens.saturating_add(overhead) <= auto_threshold
+}
+
+/// Whether `covered` leading messages are a prefix of `history` a summary
+/// can stand in for: at least one, no more than there are, and not cut
+/// between a tool call and its result.
+fn covers_a_prefix(history: &[Arc<Message>], covered: usize) -> bool {
+    covered > 0
+        && covered <= history.len()
+        && !history
+            .get(covered)
+            .is_some_and(|message| is_tool_result(message))
 }
 
 pub(crate) fn is_summary_message(message: &Message) -> bool {
