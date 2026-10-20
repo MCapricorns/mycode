@@ -685,6 +685,18 @@ pub fn is_cli_binary() -> bool {
     exe_stem() == "mycode-cli"
 }
 
+/// What [`reconcile_pending_update`] found in the pending-update slot.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PendingUpdate {
+    /// No payload, or one dropped as superseded, corrupt, or failing.
+    None,
+    /// The payload's version is the one running now: the swap landed since
+    /// the last launch, and the payload was cleaned up.
+    Applied(String),
+    /// The swap is armed and lands when this process exits.
+    Armed(String),
+}
+
 /// Startup pass over this binary family's pending payload.
 ///
 /// A payload left by a session that never finished its swap — a crash, a
@@ -692,13 +704,11 @@ pub fn is_cli_binary() -> bool {
 /// this process leaves (Unix swaps in place at once). A stale payload
 /// (already applied, or superseded) and a corrupt one are deleted, and a
 /// payload that failed too many startups is dropped so the app always
-/// opens. Returns the pending version when the swap was armed.
-pub fn reconcile_pending_update(
-    home: &mycode_config::HomeLayout,
-    relaunch: bool,
-) -> Option<String> {
+/// opens. The swap helper leaves the payload in place, so an applied one
+/// is how the first launch of the new version learns the update landed.
+pub fn reconcile_pending_update(home: &mycode_config::HomeLayout, relaunch: bool) -> PendingUpdate {
     if crate::install::install_skipped() {
-        return None;
+        return PendingUpdate::None;
     }
     let dir = pending_dir(home);
     let stem = exe_stem();
@@ -716,7 +726,7 @@ pub fn reconcile_pending_update(
         if version_file.exists() || sha_file.exists() || attempts_file.exists() {
             cleanup(true);
         }
-        return None;
+        return PendingUpdate::None;
     }
     let version = std::fs::read_to_string(&version_file)
         .ok()
@@ -726,16 +736,20 @@ pub fn reconcile_pending_update(
         .map(|value| value.trim().to_owned());
     let (Some(version), Some(sha)) = (version, sha) else {
         cleanup(true);
-        return None;
+        return PendingUpdate::None;
     };
     if !is_newer(&version, current_version()) {
         cleanup(true);
-        return None;
+        return if version.trim_start_matches('v') == current_version() {
+            PendingUpdate::Applied(version)
+        } else {
+            PendingUpdate::None
+        };
     }
     let actual = file_sha256(&pending);
     if !actual.is_ok_and(|hash| hash.eq_ignore_ascii_case(&sha)) {
         cleanup(true);
-        return None;
+        return PendingUpdate::None;
     }
     let attempts: u32 = std::fs::read_to_string(&attempts_file)
         .ok()
@@ -743,7 +757,7 @@ pub fn reconcile_pending_update(
         .unwrap_or(0);
     if attempts >= MAX_PENDING_ATTEMPTS {
         cleanup(true);
-        return None;
+        return PendingUpdate::None;
     }
     // Count before arming so a spawn that crashes still bounds the loop.
     let _ = std::fs::write(&attempts_file, (attempts + 1).to_string());
@@ -753,7 +767,10 @@ pub fn reconcile_pending_update(
         stage_dir: dir,
         binary_sha256: sha,
     };
-    arm_staged_update(&staged, relaunch).ok().map(|()| version)
+    match arm_staged_update(&staged, relaunch) {
+        Ok(()) => PendingUpdate::Armed(version),
+        Err(_) => PendingUpdate::None,
+    }
 }
 
 /// Removes dead update helpers and scripts inside [`pending_dir`]. A

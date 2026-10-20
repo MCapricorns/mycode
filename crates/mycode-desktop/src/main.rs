@@ -144,10 +144,13 @@ fn main() {
     };
     // A pending payload a previous session staged but never swapped — a
     // crash or a lost helper — re-arms here and this launch exits into it:
-    // the process that comes back up is the new version.
-    if mycode_app::reconcile_pending_update(&home, true).is_some() {
-        return;
-    }
+    // the process that comes back up is the new version. A payload that
+    // already landed is reported once, so the swap is never silent.
+    let applied_update = match mycode_app::reconcile_pending_update(&home, true) {
+        mycode_app::PendingUpdate::Armed(_) => return,
+        mycode_app::PendingUpdate::Applied(version) => Some(version),
+        mycode_app::PendingUpdate::None => None,
+    };
     // Relocate a downloaded binary into the install dir: the installed copy
     // is spawned with the source path, this process exits, and the new copy
     // deletes the download and writes the desktop shortcut.
@@ -164,6 +167,6 @@ fn main() {
         .with_assets(BrandAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            workspace::open_window(home, cx);
+            workspace::open_window(home, applied_update, cx);
         });
 }
