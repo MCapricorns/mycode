@@ -83,7 +83,8 @@ cargo build --release -p mycode-desktop -p mycode-cli
 | 引用文件 | 输入 `@` 搜索当前目录里的文件 |
 | 切换模型 / 思考强度 | 输入框旁的两个菜单 |
 | 命令面板 | `Ctrl-K`（Windows）/ `Cmd-K`（macOS），搜索会话、模型、命令和设置页 |
-| 回合进行中继续输入 | 按 Enter 把消息排到本轮之后（最多 8 条）。桌面版按 `Ctrl+Enter`（macOS 为 `Cmd+Enter`）停止当前回合并立即发送；终端版用 `Esc` / `Ctrl+C` 停止 |
+| 回合进行中继续输入 | `Enter` 把消息排到本轮之后（最多 8 条）；`Ctrl+Enter` 停止当前回合并立即发送；`Ctrl+G` 引导：不停止回合，模型在下一步之前读到这条消息。桌面版在 macOS 上用 `Cmd`。终端版里 `Esc` / `Ctrl+C` 停止；终端分辨不出 `Ctrl+Enter` 时（Windows 以外较常见）它按 `Enter` 或换行处理，可先 `Esc` 停止再发 |
+| 快捷键一览 | 桌面版「设置 → 通用 → 快捷键」，终端版 `/settings` 底部 |
 
 ## 数据与配置
 
