@@ -468,9 +468,12 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             open_conversation(&state.service, &session)
                 .await
                 .map(|mut conversation| {
-                    // A reopen can land while the session's turn is still in
-                    // flight; the registry only holds live turn tokens.
-                    conversation.running = state.turn_cancels.lock().contains_key(session.as_str());
+                    // A reopen can land while the session's turn or
+                    // `/compact` is still in flight; the registry only holds
+                    // live work, and drops it before the work reports its end.
+                    let live = state.live_work(session.as_str());
+                    conversation.running = live == Some(crate::state::WorkKind::Turn);
+                    conversation.compacting = live == Some(crate::state::WorkKind::Compaction);
                     conversation
                 })
                 .map_err(render_error),

@@ -146,6 +146,7 @@ pub(crate) async fn read_branch(
         older_before,
         streaming: None,
         running: false,
+        compacting: false,
         context_used,
         context_cache,
     })
@@ -578,6 +579,11 @@ impl HeadWriter {
     pub(crate) async fn head(&self) -> String {
         let guard = self.head.lock().await;
         head_spelling(&guard)
+    }
+
+    /// The current committed head.
+    pub(crate) async fn stamp(&self) -> HeadStamp {
+        self.head.lock().await.clone()
     }
 
     /// Commits one payload of `kind` and returns the new event id spelling.

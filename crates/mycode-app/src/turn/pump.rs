@@ -34,9 +34,11 @@ pub(super) struct LedgerPump {
 }
 
 impl LedgerPump {
-    /// Runs until the turn ends. Every exit sends exactly one terminal event
-    /// (`ChatDone` or `ChatFailed`) so the desktop can leave the sending state.
-    pub(super) async fn run(self, agent_rx: broadcast::Receiver<AgentEvent>) {
+    /// Runs until the turn ends and returns its one terminal event
+    /// (`ChatDone` or `ChatFailed`). The turn task sends it once the turn's
+    /// controls are unpublished, so the desktop that hears it never reopens
+    /// the session onto a turn the core still lists as running.
+    pub(super) async fn run(self, agent_rx: broadcast::Receiver<AgentEvent>) -> BridgeEvent {
         let mut agent_rx = relay(agent_rx);
         // A text-only reply is held until the turn ends or a steer commits
         // it: a later step or a steer may still follow it.
@@ -52,8 +54,7 @@ impl LedgerPump {
             let event = match agent_rx.recv().await {
                 Some(Ok(event)) => event,
                 Some(Err(RecvError::Lagged(_))) => {
-                    self.fail("agent event stream lagged").await;
-                    return;
+                    return self.fail("agent event stream lagged").await;
                 }
                 Some(Err(RecvError::Closed)) | None => {
                     // Every terminal event returns below, so a closed bus
@@ -66,8 +67,7 @@ impl LedgerPump {
                     } else {
                         "the turn ended before it started"
                     };
-                    self.fail(message).await;
-                    return;
+                    return self.fail(message).await;
                 }
             };
             match event {
@@ -110,10 +110,7 @@ impl LedgerPump {
                         .await
                     {
                         Ok(identity) => identity,
-                        Err(error) => {
-                            self.fail(render_error(error)).await;
-                            return;
-                        }
+                        Err(error) => return self.fail(render_error(error)).await,
                     };
                     self.send(BridgeEvent::ToolStarted {
                         session_id: self.session_id.clone(),
@@ -146,8 +143,7 @@ impl LedgerPump {
                         continue;
                     };
                     let Ok(payload) = serde_json::to_vec(tool_result) else {
-                        self.fail("tool result could not be encoded").await;
-                        return;
+                        return self.fail("tool result could not be encoded").await;
                     };
                     match self.writer.close_call(call_id.as_str(), &payload).await {
                         Ok((event_id, identity)) => {
@@ -161,10 +157,7 @@ impl LedgerPump {
                                 entry,
                             });
                         }
-                        Err(error) => {
-                            self.fail(render_error(error)).await;
-                            return;
-                        }
+                        Err(error) => return self.fail(render_error(error)).await,
                     }
                 }
                 AgentEvent::MessageAdded(message) => match message.as_ref() {
@@ -180,8 +173,7 @@ impl LedgerPump {
                         if let Err(failure) =
                             self.commit_steer(text, pending_assistant.take()).await
                         {
-                            self.fail(failure).await;
-                            return;
+                            return self.fail(failure).await;
                         }
                     }
                     Message::Assistant(assistant) => {
@@ -212,10 +204,7 @@ impl LedgerPump {
                                     entry,
                                 });
                             }
-                            Err(failure) => {
-                                self.fail(failure).await;
-                                return;
-                            }
+                            Err(failure) => return self.fail(failure).await,
                         }
                     }
                     Message::ToolResult(_) => {}
@@ -239,8 +228,7 @@ impl LedgerPump {
                     // A checkpoint written mid-turn is already what the next
                     // request sends; its card must not vanish with the turn.
                     self.publish_deferred().await;
-                    self.fail(message).await;
-                    return;
+                    return self.fail(message).await;
                 }
                 AgentEvent::TurnEnded(_) => {
                     let closing = match pending_assistant.take() {
@@ -256,26 +244,24 @@ impl LedgerPump {
                         // after the step was the whole turn.
                         None => Ok(last_step.take()),
                     };
-                    match closing {
+                    return match closing {
                         Ok(Some(entry)) => self.finish(entry).await,
                         Ok(None) => {
                             self.publish_deferred().await;
                             self.fail("the turn ended without an assistant message")
-                                .await;
+                                .await
                         }
                         Err(failure) => {
                             self.publish_deferred().await;
-                            self.fail(failure).await;
+                            self.fail(failure).await
                         }
-                    }
-                    return;
+                    };
                 }
                 AgentEvent::Error(error) => {
                     // Best effort: the error is the report either way.
                     let _ = self.commit_held_step(pending_assistant.take()).await;
                     self.publish_deferred().await;
-                    self.fail(format!("agent error: {error}")).await;
-                    return;
+                    return self.fail(format!("agent error: {error}")).await;
                 }
             }
         }
@@ -298,9 +284,13 @@ impl LedgerPump {
     /// stops recording (a lagged bus, a failed ledger write) must not leave
     /// the model running tools that nothing records and the UI no longer
     /// shows. After a terminal agent event the cancel is a no-op.
-    async fn fail(&self, message: impl Into<String>) {
+    async fn fail(&self, message: impl Into<String>) -> BridgeEvent {
         self.cancel.cancel();
-        emit_chat_failed(&self.events, &self.writer, &self.session_id, message).await;
+        BridgeEvent::ChatFailed {
+            session_id: self.session_id.clone(),
+            message: message.into(),
+            head: self.writer.head().await,
+        }
     }
 
     async fn publish_deferred(&self) {
@@ -389,13 +379,13 @@ impl LedgerPump {
     /// `entry`. The cards follow the closing reply, so they cannot split a
     /// tool call from its result; ChatDone then carries the head that
     /// includes them.
-    async fn finish(&self, entry: ConversationEntry) {
+    async fn finish(&self, entry: ConversationEntry) -> BridgeEvent {
         self.publish_deferred().await;
-        self.send(BridgeEvent::ChatDone {
+        BridgeEvent::ChatDone {
             session_id: self.session_id.clone(),
             head: self.writer.head().await,
             entry,
-        });
+        }
     }
 }
 
@@ -517,19 +507,6 @@ fn relay(
         }
     });
     rx
-}
-
-async fn emit_chat_failed(
-    events: &crate::BridgeEventTx,
-    writer: &HeadWriter,
-    session_id: &str,
-    message: impl Into<String>,
-) {
-    let _ = events.send(BridgeEvent::ChatFailed {
-        session_id: session_id.to_owned(),
-        message: message.into(),
-        head: writer.head().await,
-    });
 }
 
 /// Token usage summed across every response cycle of one turn.

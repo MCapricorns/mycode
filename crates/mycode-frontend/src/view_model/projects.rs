@@ -217,6 +217,7 @@ mod tests {
                 older_before: None,
                 streaming: None,
                 running: false,
+                compacting: false,
                 context_used: 0,
                 context_cache: 0,
             }),

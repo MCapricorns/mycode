@@ -15,7 +15,7 @@ use mycode_config::{
 use mycode_core::ProviderError;
 use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
 
-use super::{TurnControl, chat_turn, run_chat_turn_on};
+use super::{TurnControl, chat_turn, end_turn, run_chat_turn_on};
 use crate::state::CoreState;
 
 pub(super) fn scratch() -> (std::path::PathBuf, HomeLayout) {
@@ -182,10 +182,26 @@ async fn run_scripted_turn(
     transport: Arc<dyn SseTransport>,
 ) -> (Result<(), String>, Vec<crate::BridgeEvent>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let control = TurnControl::register(&fixture.state, fixture.session.as_str());
+    let outcome = run_turn_to_end(fixture, &tx, transport).await;
+    drop(tx);
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    (outcome, events)
+}
+
+/// What `chat_turn` does once setup resolved the provider: run the turn on
+/// `transport`, then report its end.
+async fn run_turn_to_end(
+    fixture: &TurnFixture,
+    tx: &crate::BridgeEventTx,
+    transport: Arc<dyn SseTransport>,
+) -> Result<(), String> {
+    let mut control = TurnControl::register(&fixture.state, fixture.session.as_str());
     let outcome = run_chat_turn_on(
         &fixture.state,
-        &tx,
+        tx,
         fixture.session.as_str(),
         fixture.session.clone(),
         fixture.branch.clone(),
@@ -199,12 +215,16 @@ async fn run_scripted_turn(
         &control,
     )
     .await;
-    drop(tx);
-    let mut events = Vec::new();
-    while let Ok(event) = rx.try_recv() {
-        events.push(event);
-    }
-    (outcome, events)
+    end_turn(
+        &fixture.state,
+        tx,
+        fixture.session.as_str(),
+        &fixture.session,
+        &fixture.branch,
+        &mut control,
+        outcome,
+    )
+    .await
 }
 
 fn prompt_b_body(transport: &HistoryTransport) -> String {
@@ -301,13 +321,13 @@ async fn interrupt_then_send_keeps_partial_and_cache_key() {
     let session_id = session.as_str().to_owned();
     let turn_a = tokio::spawn(async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let control = TurnControl::register(&state, &session_id);
+        let mut control = TurnControl::register(&state, &session_id);
         let outcome = run_chat_turn_on(
             &state,
             &tx,
             &session_id,
-            session,
-            branch,
+            session.clone(),
+            branch.clone(),
             "test-model",
             None,
             cwd,
@@ -316,6 +336,16 @@ async fn interrupt_then_send_keeps_partial_and_cache_key() {
             provider,
             running,
             &control,
+        )
+        .await;
+        let outcome = end_turn(
+            &state,
+            &tx,
+            &session_id,
+            &session,
+            &branch,
+            &mut control,
+            outcome,
         )
         .await;
         drop(tx);
@@ -410,6 +440,87 @@ async fn interrupt_then_send_keeps_partial_and_cache_key() {
     let _ = std::fs::remove_dir_all(&fixture.root);
 }
 
+/// The UI reopens a session when it hears the turn end. A token still
+/// published then reads as a running turn: the composer sticks on Stop and
+/// every later send queues behind a turn that is gone. So the turn leaves
+/// both registries before its terminal event and the returned steers.
+#[tokio::test]
+async fn a_turn_is_unpublished_before_its_end_is_reported() {
+    let fixture = turn_fixture().await;
+    let transport = Arc::new(HistoryTransport {
+        bodies: Mutex::new(Vec::new()),
+        hang_partial: false,
+        partial_ready: Arc::new(tokio::sync::Notify::new()),
+    });
+    crate::ledger::send_message(
+        &fixture.state.service,
+        &fixture.session,
+        &fixture.branch,
+        &HeadStamp::Empty,
+        PROMPT_A,
+    )
+    .await
+    .expect("prompt A");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let state = Arc::clone(&fixture.state);
+    let session_id = fixture.session.as_str().to_owned();
+    // Runs as soon as the terminal event is queued, before the turn task
+    // gets the thread back.
+    let watcher = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if matches!(
+                event,
+                crate::BridgeEvent::ChatDone { .. } | crate::BridgeEvent::ChatFailed { .. }
+            ) {
+                return (
+                    matches!(event, crate::BridgeEvent::ChatDone { .. }),
+                    state.live_work(&session_id),
+                    state.steer_inboxes.lock().contains_key(&session_id),
+                );
+            }
+        }
+        panic!("the turn never reported its end");
+    });
+    run_turn_to_end(&fixture, &tx, transport)
+        .await
+        .expect("turn A");
+    drop(tx);
+    let (done, live, steerable) = tokio::time::timeout(std::time::Duration::from_secs(10), watcher)
+        .await
+        .expect("watcher timed out")
+        .expect("watcher");
+    assert!(done, "the turn should have finished");
+    assert_eq!(
+        live, None,
+        "ChatDone went out while the turn was still listed"
+    );
+    assert!(!steerable, "ChatDone went out while the turn took steers");
+    let _ = std::fs::remove_dir_all(&fixture.root);
+}
+
+/// A reopen during `/compact` must show the compaction, not a running turn:
+/// `CompactFinished` ends a compaction on screen, never a chat turn.
+#[tokio::test]
+async fn live_work_tells_a_compaction_from_a_turn() {
+    let fixture = turn_fixture().await;
+    let session_id = fixture.session.as_str();
+    let mut compaction = TurnControl::register_cancel_only(&fixture.state, session_id);
+    assert_eq!(
+        fixture.state.live_work(session_id),
+        Some(crate::state::WorkKind::Compaction)
+    );
+    assert!(compaction.retire().is_empty());
+    assert_eq!(fixture.state.live_work(session_id), None);
+    let turn = TurnControl::register(&fixture.state, session_id);
+    assert_eq!(
+        fixture.state.live_work(session_id),
+        Some(crate::state::WorkKind::Turn)
+    );
+    drop(turn);
+    assert_eq!(fixture.state.live_work(session_id), None);
+    let _ = std::fs::remove_dir_all(&fixture.root);
+}
+
 #[tokio::test]
 async fn chat_turn_publishes_its_controls_before_setup_runs() {
     let fixture = turn_fixture().await;
@@ -450,8 +561,8 @@ async fn a_turn_cancelled_during_setup_never_reaches_the_model() {
     )
     .await
     .expect("prompt A");
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let control = TurnControl::register(&fixture.state, fixture.session.as_str());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut control = TurnControl::register(&fixture.state, fixture.session.as_str());
     control.cancel.cancel();
     let outcome = run_chat_turn_on(
         &fixture.state,
@@ -469,8 +580,26 @@ async fn a_turn_cancelled_during_setup_never_reaches_the_model() {
         &control,
     )
     .await;
+    let outcome = end_turn(
+        &fixture.state,
+        &tx,
+        fixture.session.as_str(),
+        &fixture.session,
+        &fixture.branch,
+        &mut control,
+        outcome,
+    )
+    .await;
     assert_eq!(outcome, Err(crate::protocol::CHAT_CANCELLED.to_owned()));
     assert!(transport.bodies.lock().expect("bodies").is_empty());
+    assert!(
+        matches!(
+            rx.try_recv(),
+            Ok(crate::BridgeEvent::ChatFailed { message, .. })
+                if message == crate::protocol::CHAT_CANCELLED
+        ),
+        "a turn cancelled during setup still ends quietly"
+    );
     let _ = std::fs::remove_dir_all(&fixture.root);
 }
 
@@ -583,13 +712,13 @@ async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
         let session_id = session_id.clone();
         async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let control = TurnControl::register(&state, &session_id);
+            let mut control = TurnControl::register(&state, &session_id);
             let outcome = run_chat_turn_on(
                 &state,
                 &tx,
                 &session_id,
-                created.session_id,
-                created.branch_id,
+                created.session_id.clone(),
+                created.branch_id.clone(),
                 "test-model",
                 None,
                 cwd,
@@ -598,6 +727,16 @@ async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
                 provider,
                 transport,
                 &control,
+            )
+            .await;
+            let outcome = end_turn(
+                &state,
+                &tx,
+                &session_id,
+                &created.session_id,
+                &created.branch_id,
+                &mut control,
+                outcome,
             )
             .await;
             drop(tx);
@@ -716,13 +855,13 @@ async fn chat_turn_fails_fast_when_the_branch_is_missing() {
     });
     let wrong_branch = mycode_agent::session::BranchId::generate().expect("branch id");
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let control = TurnControl::register(&fixture.state, fixture.session.as_str());
+    let mut control = TurnControl::register(&fixture.state, fixture.session.as_str());
     let outcome = run_chat_turn_on(
         &fixture.state,
         &tx,
         fixture.session.as_str(),
         fixture.session.clone(),
-        wrong_branch,
+        wrong_branch.clone(),
         "test-model",
         None,
         fixture.cwd.clone(),
@@ -731,6 +870,16 @@ async fn chat_turn_fails_fast_when_the_branch_is_missing() {
         fixture.provider.clone(),
         transport.clone(),
         &control,
+    )
+    .await;
+    let outcome = end_turn(
+        &fixture.state,
+        &tx,
+        fixture.session.as_str(),
+        &fixture.session,
+        &wrong_branch,
+        &mut control,
+        outcome,
     )
     .await;
     assert_eq!(outcome, Err("not found".to_owned()));
@@ -791,12 +940,16 @@ async fn a_steer_after_the_last_request_is_returned_not_dropped() {
         .get(&session_id)
         .expect("published inbox")
         .push("one more thing");
-    assert_eq!(control.retire_steers(), vec!["one more thing".to_owned()]);
+    assert_eq!(control.retire(), vec!["one more thing".to_owned()]);
     assert!(
         !fixture.state.steer_inboxes.lock().contains_key(&session_id),
         "a retired turn must not accept steers it can no longer send"
     );
-    assert!(control.retire_steers().is_empty());
+    assert!(
+        !fixture.state.turn_cancels.lock().contains_key(&session_id),
+        "a retired turn must not read as running"
+    );
+    assert!(control.retire().is_empty());
     let _ = std::fs::remove_dir_all(&fixture.root);
 }
 

@@ -88,7 +88,8 @@ impl FrontendDriver {
                 // The snapshot was read before this reply landed. Events in
                 // between were dropped (another chat was open) or applied to
                 // the entries this snapshot now replaces.
-                self.resync_on_turn_end = conversation.running.then(|| session_id.clone());
+                self.resync_on_turn_end =
+                    (conversation.running || conversation.compacting).then(|| session_id.clone());
                 let switching = self
                     .vm
                     .active
@@ -319,6 +320,11 @@ impl FrontendDriver {
                         },
                         out,
                     );
+                    // No turn is left to wait for. A reload still owed to a
+                    // mid-turn open runs now instead of after the next turn.
+                    if let Some(session_id) = self.open_session_id() {
+                        self.resync_after_turn(&session_id);
+                    }
                     self.pump_queued_send(out);
                 }
             }

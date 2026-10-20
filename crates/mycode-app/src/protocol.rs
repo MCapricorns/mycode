@@ -87,6 +87,10 @@ pub struct ActiveConversation {
     /// live work reports `true` so the frontend keeps its running affordances
     /// instead of painting the tail as interrupted.
     pub running: bool,
+    /// Whether a `/compact` is still in flight for this session. Its end is
+    /// `CompactFinished`, never a chat terminal, so a reopen must not report
+    /// it as a running turn.
+    pub compacting: bool,
     /// Latest prompt size recovered from the opened tail. Zero when that
     /// window has no usage snapshot.
     pub context_used: u64,

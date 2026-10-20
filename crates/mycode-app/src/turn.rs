@@ -12,7 +12,7 @@ mod tests;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mycode_agent::session::{BranchId, SessionId};
+use mycode_agent::session::{BranchId, HeadStamp, SessionId};
 use mycode_agent::{Agent, AgentConfig, HookRunner};
 use mycode_config::{
     AppSettings, HomeLayout, ProviderSettings, read_app_settings, read_provider_secrets,
@@ -72,35 +72,71 @@ pub(crate) fn chat_turn(
             &control,
         )
         .await;
-        if let Err(message) = outcome {
+        let _ = end_turn(
+            &state,
+            &events,
+            &session_id,
+            &head_session,
+            &head_branch,
+            &mut control,
+            outcome,
+        )
+        .await;
+    }
+}
+
+/// Reports how a turn ended: its terminal event, then any steer the agent
+/// never sent. Both go out after [`TurnControl::retire`], so a session the
+/// UI reopens on hearing the end no longer lists this turn as running.
+///
+/// `outcome` is the terminal the pump returned, or why the turn failed
+/// before the pump ran. Returns `outcome` without the event, for tests.
+async fn end_turn(
+    state: &CoreState,
+    events: &crate::BridgeEventTx,
+    session_id: &str,
+    session: &SessionId,
+    branch: &BranchId,
+    control: &mut TurnControl,
+    outcome: Result<BridgeEvent, String>,
+) -> Result<(), String> {
+    let (terminal, reported) = match outcome {
+        Ok(terminal) => (terminal, Ok(())),
+        Err(message) => {
             // A cancel that lands during setup surfaces as setup failing;
             // report it as the quiet cancel the desktop expects.
-            let message = if control.cancel.is_cancelled() {
+            let shown = if control.cancel.is_cancelled() {
                 CHAT_CANCELLED.to_owned()
             } else {
-                message
+                message.clone()
             };
             // Setup can already have written: a pre-turn compaction card
             // lands before a cancel is noticed. Report the durable head so
             // the UI's next history page, recall, or `/compact` does not
             // fail the moved-head check against its own summary row.
-            let head = branch_head(&state.service, &head_session, &head_branch)
+            let head = branch_head(&state.service, session, branch)
                 .await
                 .map(|head| head_spelling(&head))
                 .unwrap_or_default();
-            let _ = events.send(BridgeEvent::ChatFailed {
-                session_id: session_id.clone(),
-                message,
+            let terminal = BridgeEvent::ChatFailed {
+                session_id: session_id.to_owned(),
+                message: shown,
                 head,
-            });
+            };
+            (terminal, Err(message))
         }
-        // A steer accepted after the agent's last drain was never sent.
-        // Hand it back instead of dropping it with the inbox.
-        let texts = control.retire_steers();
-        if !texts.is_empty() {
-            let _ = events.send(BridgeEvent::SteersReturned { session_id, texts });
-        }
+    };
+    // A steer accepted after the agent's last drain was never sent.
+    // Hand it back instead of dropping it with the inbox.
+    let texts = control.retire();
+    let _ = events.send(terminal);
+    if !texts.is_empty() {
+        let _ = events.send(BridgeEvent::SteersReturned {
+            session_id: session_id.to_owned(),
+            texts,
+        });
     }
+    reported
 }
 
 /// Loads the provider row and its stored key for one turn. Saves dispatched
@@ -157,7 +193,7 @@ async fn run_chat_turn(
     reasoning: Option<&str>,
     cwd: PathBuf,
     control: &TurnControl,
-) -> Result<(), String> {
+) -> Result<BridgeEvent, String> {
     let home = &state.home;
     // Settings and keys are written by concurrently dispatched save
     // commands; a provider added moments ago may not have landed on disk
@@ -189,7 +225,8 @@ async fn run_chat_turn(
     .await
 }
 
-/// Runs one prepared turn on `transport`. Tests pass a scripted transport;
+/// Runs one prepared turn on `transport` and returns its terminal event
+/// unsent; [`end_turn`] reports it. Tests pass a scripted transport;
 /// production uses [`ReqwestTransport`].
 #[allow(clippy::too_many_arguments)]
 async fn run_chat_turn_on(
@@ -206,7 +243,7 @@ async fn run_chat_turn_on(
     provider: ProviderSettings,
     transport: Arc<dyn SseTransport>,
     control: &TurnControl,
-) -> Result<(), String> {
+) -> Result<BridgeEvent, String> {
     let home = &state.home;
     let wire = WireProvider::new(resolved.clone(), transport);
 
@@ -469,7 +506,9 @@ async fn run_chat_turn_on(
     }
     let mut agent = Agent::new(config);
 
-    // The ledger pump owns the branch head for the rest of the turn.
+    // The ledger pump owns the branch head for the rest of the turn. The
+    // clone shares that head, for the summary filed after the pump drains.
+    let final_head = writer.clone();
     let pump = tokio::spawn(
         pump::LedgerPump {
             events: events.clone(),
@@ -498,51 +537,66 @@ async fn run_chat_turn_on(
     // leaving it parked forever.
     drop(env);
     drop(hooks);
-    // Drain the pump before returning. An agent error already became
-    // ChatFailed inside the pump; returning Err here would send a second one.
-    let pump_ended = pump.await;
-    // The ledger is complete only once the pump drained.
-    if pump_ended.is_ok() {
-        persist_hook_summary(
-            state,
-            &session,
-            &branch,
-            &session_id,
-            model,
-            agent.state().messages(),
-        )
-        .await;
+    // Drain the pump before returning. An agent error already became the
+    // pump's ChatFailed; returning Err here would report a second one.
+    match pump.await {
+        Ok(terminal) => {
+            // The ledger is complete only once the pump drained, and the
+            // summary is filed before the turn reports its end: the next
+            // turn starts from what this one stored.
+            persist_hook_summary(
+                state,
+                &session,
+                &branch,
+                &final_head.stamp().await,
+                &session_id,
+                model,
+                agent.state().messages(),
+            )
+            .await;
+            Ok(terminal)
+        }
+        Err(error) => {
+            outcome.map_err(|error| format!("turn failed: {error}"))?;
+            Err(format!("the turn pump stopped: {error}"))
+        }
     }
-    if outcome.is_err() && pump_ended.is_ok() {
-        return Ok(());
-    }
-    outcome.map_err(|error| format!("turn failed: {error}"))?;
-    pump_ended.map_err(|error| format!("the turn pump stopped: {error}"))?;
-    Ok(())
 }
 
 /// Stores a summary the request hook produced mid-turn, checked against
-/// the ledger as it stands now; see
+/// the ledger at the pump's final `head`; see
 /// [`crate::compaction::persist_turn_summary`]. Best effort, like every
 /// compaction step: a failure keeps the older checkpoint.
 async fn persist_hook_summary(
     state: &CoreState,
     session: &SessionId,
     branch: &BranchId,
+    head: &HeadStamp,
     session_id: &str,
     model: &str,
     memory: &[Arc<Message>],
 ) {
-    if !memory
-        .first()
-        .is_some_and(|message| crate::compaction::is_summary_message(message))
-    {
+    // Every turn of a compacted session opens with the stored summary;
+    // only a newer one is worth replaying the ledger for.
+    let unstored = {
+        let home = state.home.clone();
+        let (session_id, branch_id) = (session_id.to_owned(), branch.as_str().to_owned());
+        let first = memory.first().cloned();
+        tokio::task::spawn_blocking(move || {
+            crate::compaction::opens_with_unstored_summary(
+                &home,
+                &session_id,
+                &branch_id,
+                first.as_deref(),
+            )
+        })
+        .await
+        .unwrap_or(false)
+    };
+    if !unstored {
         return;
     }
-    let Ok(head) = branch_head(&state.service, session, branch).await else {
-        return;
-    };
-    let Ok(ledger) = ledger_history(&state.service, session, branch, &head).await else {
+    let Ok(ledger) = ledger_history(&state.service, session, branch, head).await else {
         return;
     };
     let home = state.home.clone();
@@ -550,7 +604,7 @@ async fn persist_hook_summary(
     let (session_id, branch_id, head, model) = (
         session_id.to_owned(),
         branch.as_str().to_owned(),
-        head_spelling(&head),
+        head_spelling(head),
         model.to_owned(),
     );
     let _ = tokio::task::spawn_blocking(move || {

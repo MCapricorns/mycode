@@ -267,6 +267,7 @@ impl FrontendDriver {
                     return;
                 }
                 self.act(FrontendAction::CompactFinished { ok, head }, out);
+                self.resync_after_turn(&session_id);
                 // Follow-ups queued while the composer was locked start now.
                 self.pump_queued_send(out);
                 let text = match message.as_str() {
@@ -319,11 +320,11 @@ impl FrontendDriver {
         self.act(action, out);
     }
 
-    /// Reloads a chat that was opened mid-turn once that turn has ended,
-    /// so steps committed while the open was in flight show up. A queued
-    /// follow-up about to start the next turn defers the reload to that
-    /// turn's end, so the reopen never races the send.
-    fn resync_after_turn(&mut self, session_id: &str) {
+    /// Reloads a chat that was opened mid-turn (or mid-`/compact`) once
+    /// that work has ended, so rows committed while the open was in flight
+    /// show up. A queued follow-up about to start the next turn defers the
+    /// reload to that turn's end, so the reopen never races the send.
+    pub(super) fn resync_after_turn(&mut self, session_id: &str) {
         if self.resync_on_turn_end.as_deref() != Some(session_id) {
             return;
         }

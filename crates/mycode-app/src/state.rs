@@ -34,8 +34,8 @@ pub(crate) struct CoreState {
     pub(crate) projects: Arc<Mutex<HashMap<String, PathBuf>>>,
     /// Cached short-lived Copilot bearer token and its unix expiry.
     pub(crate) copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
-    /// Live turn cancellation tokens by session id; Escape targets these.
-    pub(crate) turn_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
+    /// Live turn and `/compact` tokens by session id; Escape targets these.
+    pub(crate) turn_cancels: Arc<Mutex<HashMap<String, LiveWork>>>,
     /// One token per running subagent, keyed by `session_id:call_id`.
     pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
     /// Steer inbox for the live turn of each session. Removed when the turn ends.
@@ -52,6 +52,27 @@ pub(crate) struct CoreState {
     /// Bumped by every device-flow sign-in. A poll loop whose flow was
     /// replaced stops quietly instead of reporting into the newer flow.
     pub(crate) sign_in_generation: std::sync::atomic::AtomicU64,
+}
+
+/// One session's live work in [`CoreState::turn_cancels`]: the token a
+/// cancel fires, and whether a reopen should show a turn or a `/compact`.
+#[derive(Clone)]
+pub(crate) struct LiveWork {
+    pub(crate) token: Arc<CancellationToken>,
+    pub(crate) kind: WorkKind,
+}
+
+impl LiveWork {
+    pub(crate) fn cancel(&self) {
+        self.token.cancel();
+    }
+}
+
+/// What a session's live work is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkKind {
+    Turn,
+    Compaction,
 }
 
 impl CoreState {
@@ -92,6 +113,14 @@ impl CoreState {
             ui_state_writes: tokio::sync::Mutex::new(()),
             sign_in_generation: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// What the session's live work is doing, when something is running.
+    pub(crate) fn live_work(&self, session_id: &str) -> Option<WorkKind> {
+        self.turn_cancels
+            .lock()
+            .get(session_id)
+            .map(|work| work.kind)
     }
 
     /// Copies startup repair notices. Later loads still need the same list.

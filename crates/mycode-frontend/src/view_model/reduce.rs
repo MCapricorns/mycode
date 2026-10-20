@@ -201,6 +201,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 older_before: None,
                 streaming: None,
                 running: false,
+                compacting: false,
                 context_used: 0,
                 context_cache: 0,
             });
@@ -261,6 +262,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // session already on screen mid-turn keeps the streaming buffer
             // the wire copy never carries.
             let running = conversation.running;
+            let compacting = conversation.compacting;
             let mut conversation = conversation;
             if !switched
                 && running
@@ -274,6 +276,9 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // just-armed turn by a few async hops; only the fresh-open case
             // trusts the wire value outright.
             state.sending = running || (!switched && state.sending);
+            // A `/compact` in flight ends with `CompactFinished`, never a
+            // chat terminal, so it is restored as compacting, not sending.
+            state.compacting = compacting || (!switched && state.compacting);
             if state.sending && state.turn_started_ms == 0 {
                 // The wire does not carry the real turn start; count from
                 // the reopen so the elapsed label still ticks.
