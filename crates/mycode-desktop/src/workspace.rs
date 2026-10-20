@@ -47,23 +47,55 @@ fn close_confirmed(armed: Option<Instant>, now: Instant) -> bool {
 /// screens shrink the request rather than clipping it.
 const WINDOW_SIZE: gpui_kit::Size<Pixels> = size(px(1760.), px(1040.));
 
-/// Centers the preferred size on the primary display's usable area, shrinking
-/// it when the screen is smaller than that size. A persisted windowed size
-/// wins over the default.
-fn startup_bounds(cx: &App, saved: Option<mycode_config::WindowSize>) -> Bounds<Pixels> {
-    let desired = saved
-        .map(|saved| size(px(saved.width as f32), px(saved.height as f32)))
-        .unwrap_or(WINDOW_SIZE);
+/// Smallest edge a shrunken default may reach on a screen that cannot hold
+/// [`WINDOW_SIZE`], unless the screen itself is smaller still.
+const WINDOW_FLOOR: gpui_kit::Size<Pixels> = size(px(960.), px(560.));
+
+/// Opening bounds plus the minimum size for the main window.
+///
+/// The default size, fitted to the primary display's usable area, is also the
+/// minimum: the layout is tuned for it and degrades below it. A persisted
+/// windowed size wins over the default but never drops under that minimum.
+fn startup_geometry(
+    cx: &App,
+    saved: Option<mycode_config::WindowSize>,
+) -> (Bounds<Pixels>, gpui_kit::Size<Pixels>) {
+    let saved = saved.map(|saved| size(px(saved.width as f32), px(saved.height as f32)));
     let Some(display) = cx.primary_display() else {
-        return Bounds {
-            origin: gpui_kit::point(px(80.), px(48.)),
-            size: desired,
-        };
+        let (window, min) = fit_window(None, saved);
+        let origin = gpui_kit::point(px(80.), px(48.));
+        return (
+            Bounds {
+                origin,
+                size: window,
+            },
+            min,
+        );
     };
     let screen = display.visible_bounds();
-    let width = fit_edge(screen.size.width, desired.width, px(960.));
-    let height = fit_edge(screen.size.height, desired.height, px(560.));
-    Bounds::centered_at(screen.center(), size(width, height))
+    let (window, min) = fit_window(Some(screen.size), saved);
+    (Bounds::centered_at(screen.center(), window), min)
+}
+
+/// Window size and minimum size for a usable screen area. Pure so the sizing
+/// rules are testable without a display.
+fn fit_window(
+    screen: Option<gpui_kit::Size<Pixels>>,
+    saved: Option<gpui_kit::Size<Pixels>>,
+) -> (gpui_kit::Size<Pixels>, gpui_kit::Size<Pixels>) {
+    let fit = |desired: gpui_kit::Size<Pixels>| match screen {
+        Some(screen) => size(
+            fit_edge(screen.width, desired.width, WINDOW_FLOOR.width),
+            fit_edge(screen.height, desired.height, WINDOW_FLOOR.height),
+        ),
+        None => desired,
+    };
+    let min = fit(WINDOW_SIZE);
+    let window = saved.map_or(min, |saved| {
+        let fitted = fit(saved);
+        size(fitted.width.max(min.width), fitted.height.max(min.height))
+    });
+    (window, min)
 }
 
 fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
@@ -81,10 +113,13 @@ const TRAFFIC_LIGHTS: gpui_kit::Point<Pixels> = gpui_kit::point(px(16.), px(14.)
 ///   Min, max, and close still go through `WindowControlArea`.
 /// - macOS: `appears_transparent` and `app_owns_titlebar_drag` drop the system
 ///   title bar and its drag/double-click. Native traffic lights stay visible.
-fn client_window_options(bounds: Bounds<Pixels>) -> gpui_kit::WindowOptions {
+fn client_window_options(
+    bounds: Bounds<Pixels>,
+    min_size: gpui_kit::Size<Pixels>,
+) -> gpui_kit::WindowOptions {
     let mut options = gpui_kit::component::TitleBar::window_options();
     options.window_bounds = Some(WindowBounds::Windowed(bounds));
-    options.window_min_size = Some(size(px(960.), px(560.)));
+    options.window_min_size = Some(min_size);
     options.app_owns_titlebar_drag = true;
     let titlebar = options
         .titlebar
@@ -151,7 +186,8 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     let saved_size = mycode_config::read_ui_state(&home)
         .ok()
         .and_then(|state| state.window_size);
-    let options = client_window_options(startup_bounds(cx, saved_size));
+    let (bounds, min_size) = startup_geometry(cx, saved_size);
+    let options = client_window_options(bounds, min_size);
     cx.open_window(options, |window, cx| {
         // Platform blur behind translucent chrome. GPUI has no per-element
         // backdrop filter; macOS and Windows implement this appearance, and a
@@ -970,10 +1006,13 @@ mod tests {
 
     #[test]
     fn client_chrome_hides_the_system_title_bar() {
-        let options = client_window_options(Bounds {
-            origin: gpui_kit::point(px(0.), px(0.)),
-            size: WINDOW_SIZE,
-        });
+        let options = client_window_options(
+            Bounds {
+                origin: gpui_kit::point(px(0.), px(0.)),
+                size: WINDOW_SIZE,
+            },
+            WINDOW_SIZE,
+        );
         assert!(options.app_owns_titlebar_drag);
         let titlebar = options.titlebar.expect("custom title bar");
         assert!(titlebar.appears_transparent);
@@ -981,6 +1020,25 @@ mod tests {
         assert_eq!(titlebar.traffic_light_position, Some(TRAFFIC_LIGHTS));
         assert!(f32::from(TRAFFIC_LIGHTS.x) >= 0.);
         assert!(f32::from(TRAFFIC_LIGHTS.y) >= 0.);
+    }
+
+    #[test]
+    fn the_fitted_default_size_is_the_minimum() {
+        let screen = size(px(1920.), px(1032.));
+        let (window, min) = fit_window(Some(screen), None);
+        assert_eq!(min, size(px(1760.), px(968.)));
+        assert_eq!(window, min);
+        // A smaller saved size grows back to the default; a larger one stays.
+        let (window, _) = fit_window(Some(screen), Some(size(px(1000.), px(600.))));
+        assert_eq!(window, min);
+        let big = size(px(2400.), px(1300.));
+        let (window, _) = fit_window(Some(size(px(2560.), px(1440.))), Some(big));
+        assert_eq!(window, big);
+        // A small screen shrinks the default instead of demanding more room.
+        let (window, min) = fit_window(Some(size(px(1280.), px(720.))), None);
+        assert_eq!(min, size(px(1216.), px(656.)));
+        assert_eq!(window, min);
+        assert_eq!(fit_window(None, None), (WINDOW_SIZE, WINDOW_SIZE));
     }
 
     #[test]
