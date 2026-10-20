@@ -20,7 +20,6 @@ use crate::view_model::{FrontendAction, MainView, WorkspaceState};
 mod appearance;
 mod composer_send;
 mod conversation;
-mod git;
 mod history;
 mod menus;
 mod model_menu;
@@ -180,6 +179,8 @@ pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut Ap
     let mut driver = FrontendDriver::start(home.clone(), move || {
         let _ = wake_tx.send(());
     });
+    // The changes panel and the diff panel show it.
+    driver.watch_git();
     if let Some(version) = applied_update {
         driver.note_update_applied(version);
     }
@@ -308,24 +309,6 @@ pub struct Workspace {
     scroll_hold: Option<ScrollHold>,
     /// Restored on the next conversation paint after a theme change.
     appearance_scroll: Option<AppearanceScroll>,
-    /// Latest git status for the open folder.
-    git: crate::git_status::GitSnapshot,
-    /// Platform watcher for the open folder. Dropping it stops refresh.
-    git_watcher: Option<git::Watcher>,
-    /// Bumped when the watched folder changes so a stale read is dropped.
-    git_generation: u64,
-    /// A `git status` process is running.
-    git_status_inflight: bool,
-    /// The tree changed again while a status read was in flight.
-    git_status_pending: bool,
-    /// Path whose diff is shown in the dedicated diff panel.
-    git_diff_path: Option<String>,
-    git_diff: String,
-    /// Bumped when the diff target changes so a stale diff is dropped.
-    git_diff_generation: u64,
-    /// The selected file's diff is open in its own panel, separate from the
-    /// changes list. A file click always opens it.
-    git_diff_panel_open: bool,
     /// Tool rows the transcript is showing in full. Empty means one-line summaries.
     expanded_tools: HashSet<String>,
     /// Consecutive tool runs the transcript has expanded. Keyed by the run's
@@ -409,15 +392,6 @@ impl Workspace {
             subagent_scroll: gpui_kit::ScrollHandle::new(),
             scroll_hold: None,
             appearance_scroll: None,
-            git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
-            git_watcher: None,
-            git_generation: 0,
-            git_status_inflight: false,
-            git_status_pending: false,
-            git_diff_path: None,
-            git_diff: String::new(),
-            git_diff_generation: 0,
-            git_diff_panel_open: false,
             expanded_tools: HashSet::new(),
             expanded_tool_batches: HashSet::new(),
             expanded_summaries: HashSet::new(),
@@ -577,9 +551,6 @@ impl Workspace {
                 Effect::AskReset => {
                     self.ask_inputs.clear();
                 }
-                Effect::ProjectChanged => {
-                    self.rewatch_git(cx);
-                }
                 Effect::AppearanceTheme(theme) => {
                     self.capture_appearance_scroll();
                     self.paint_appearance(&theme, cx);
@@ -616,24 +587,37 @@ impl Workspace {
     }
 
     pub(crate) fn git(&self) -> &crate::git_status::GitSnapshot {
-        &self.git
+        self.driver.git()
     }
 
     pub(crate) fn git_diff_path(&self) -> Option<&str> {
-        self.git_diff_path.as_deref()
+        self.driver.git_diff_path()
     }
 
     pub(crate) fn git_diff(&self) -> &str {
-        &self.git_diff
+        self.driver.git_diff()
     }
 
+    /// The selected file's diff is open in its own panel, separate from the
+    /// changes list.
     pub(crate) fn git_diff_panel_open(&self) -> bool {
-        self.git_diff_panel_open
+        self.driver.git_diff_open()
+    }
+
+    /// Opens one dirty path in the dedicated diff panel.
+    ///
+    /// The changes list (inspector preview or the review-all drawer) only
+    /// names files. The diff itself is a separate panel so the patch is
+    /// readable. Clicking a file always opens that panel, including when
+    /// the full changes drawer is already open.
+    pub(crate) fn on_select_git_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.driver.select_git_file(path);
+        cx.notify();
     }
 
     /// Closes the dedicated file-diff panel. The changes list stays as it was.
     pub(crate) fn on_close_git_diff_panel(&mut self, cx: &mut Context<Self>) {
-        self.git_diff_panel_open = false;
+        self.driver.close_git_diff();
         cx.notify();
     }
 
