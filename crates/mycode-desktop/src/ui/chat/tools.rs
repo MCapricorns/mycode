@@ -688,11 +688,7 @@ fn read_path(target: &str) -> &str {
     for marker in [" L", " +"] {
         if let Some(at) = target.rfind(marker) {
             let window = &target[at + marker.len()..];
-            if window
-                .chars()
-                .all(|ch| ch.is_ascii_digit() || ch == '+')
-                && !window.is_empty()
-            {
+            if window.chars().all(|ch| ch.is_ascii_digit() || ch == '+') && !window.is_empty() {
                 return target[..at].trim().trim_matches('"');
             }
         }
@@ -733,11 +729,13 @@ fn read_preview(
             .font_family(theme.mono_font_family.clone())
             .bg(desk.screen.opacity(0.45))
             .text_color(desk.screen_dim)
-            .child(StyledText::new(code).with_highlights(
-                tokens
-                    .into_iter()
-                    .map(|(range, kind)| (range, syntax::style(kind, light))),
-            ))
+            .child(
+                StyledText::new(code).with_highlights(
+                    tokens
+                        .into_iter()
+                        .map(|(range, kind)| (range, syntax::style(kind, light))),
+                ),
+            )
             .into_any_element(),
     )
 }
