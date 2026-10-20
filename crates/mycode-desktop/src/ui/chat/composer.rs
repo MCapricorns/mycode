@@ -15,7 +15,7 @@ use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
 use gpui_kit::component::progress::ProgressCircle;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     BoxShadow, Context, Focusable as _, InteractiveElement, IntoElement, ParentElement,
@@ -787,16 +787,21 @@ fn used_percent(remaining_percent: u64) -> u64 {
 /// The ring fills as the latest prompt grows, so it matches the `used /
 /// window` ratio beside it; a free-budget ring read backwards and looked
 /// nearly full at 20% used. The cache-hit figure stays on the hover detail.
-fn cache_ring(remaining_percent: u64, theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
+fn cache_ring(
+    remaining_percent: u64,
+    theme: &gpui_kit::component::theme::Theme,
+) -> impl IntoElement {
     div()
         .id("composer-cache-ring")
         .flex_shrink_0()
         .size(skin::space(4))
         .child(
+            // The kit sizes the ring in rems; fill the fixed slot so the L
+            // and XL interface scales do not push it into the label.
             ProgressCircle::new("composer-cache-ring-progress")
                 .value(used_percent(remaining_percent) as f32)
                 .color(theme.primary)
-                .with_size(Size::Medium),
+                .size_full(),
         )
 }
 
