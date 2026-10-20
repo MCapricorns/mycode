@@ -16,6 +16,7 @@ pub mod cli;
 pub mod driver;
 pub mod forms;
 pub mod git_status;
+pub mod highlight;
 pub mod i18n;
 pub mod picker;
 pub mod stream;
