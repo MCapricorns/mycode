@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.12] - 2026-10-20
+
 ### Changed
 
 - 终端版的 `crates/mycode-cli/src/app.rs` 按职责拆成 `app.rs` 与 `app/input.rs`、`app/render.rs`、`app/settings.rs`、`app/settings_rows.rs`、`app/ui.rs`：驱动循环、按键与发送、设置页及选择器、设置行、绘制和转录行各自独立，单文件都不再超过 1000 行；行为不变。
@@ -215,7 +217,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.11...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.12...HEAD
+[0.12.12]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.12
 [0.12.11]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.11
 [0.12.10]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.10
 [0.12.9]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.9
