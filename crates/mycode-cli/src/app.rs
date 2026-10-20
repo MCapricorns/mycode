@@ -54,6 +54,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use tui_textarea::{CursorMove, Input, Key as TextareaKey, TextArea};
 
+use crate::reply::push_reply;
+
 /// Wake channel payload: the driver thread signals "inbox has work".
 type WakeRx = mpsc::Receiver<()>;
 
@@ -1224,13 +1226,7 @@ impl Tui {
                     }
                 }
                 if !stream.text.is_empty() {
-                    push_wrapped(
-                        &mut lines,
-                        "⏺ ",
-                        Style::default().fg(CRAB),
-                        &stream.text,
-                        Style::default(),
-                    );
+                    push_reply(&mut lines, "⏺ ", Style::default().fg(CRAB), &stream.text);
                 } else if !stream.status.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("  {}{elapsed}", stream.status),
@@ -2081,7 +2077,7 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>, collapsed:
                 if line.starts_with("[error]") {
                     if !normal.is_empty() {
                         let joined = normal.join("\n");
-                        push_wrapped(lines, "⏺ ", marker, &joined, Style::default());
+                        push_reply(lines, "⏺ ", marker, &joined);
                         normal.clear();
                     }
                     push_wrapped(lines, "✖ ", error, line, error);
@@ -2091,7 +2087,7 @@ fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>, collapsed:
             }
             if !normal.is_empty() {
                 let joined = normal.join("\n");
-                push_wrapped(lines, "⏺ ", marker, &joined, Style::default());
+                push_reply(lines, "⏺ ", marker, &joined);
             }
         }
         EntryKind::ToolCall => {
