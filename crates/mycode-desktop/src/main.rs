@@ -128,13 +128,26 @@ fn main() {
         std::process::exit(0);
     }
     install_surface_panic_hook();
-    let mycode_frontend::cli::Launch { home, update } = match mycode_frontend::cli::launch(true) {
-        Ok(launch) => launch,
+    let home = match mycode_frontend::cli::home() {
+        Ok(home) => home,
         Err(error) => {
             eprintln!("mycode home unavailable: {error}");
             std::process::exit(1);
         }
     };
+    // One desktop per home, claimed before the launch steps clear update
+    // files a running desktop may be using. The lock lives until exit.
+    let _instance = match mycode_desktop::instance::claim(&home) {
+        mycode_desktop::instance::Claim::Run(lock) => lock,
+        mycode_desktop::instance::Claim::Running => {
+            eprintln!(
+                "mycode: MYCode is already running for {}",
+                home.root().display()
+            );
+            std::process::exit(0);
+        }
+    };
+    let mycode_frontend::cli::Launch { home, update } = mycode_frontend::cli::settle(home, true);
     // A pending payload a previous session staged but never swapped — a
     // crash or a lost helper — re-arms here and this launch exits into it:
     // the process that comes back up is the new version. A payload that

@@ -77,8 +77,17 @@ pub struct Launch {
     pub update: mycode_app::PendingUpdate,
 }
 
-/// The launch steps every `mycode*` binary runs before its UI: clears
-/// self-update leftovers, opens the home, and settles a staged update.
+/// Resolves the home every `mycode*` binary runs against.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the home directory cannot be resolved.
+pub fn home() -> Result<HomeLayout, ConfigError> {
+    HomeLayout::from_env(HomeEnv::from_process())
+}
+
+/// The launch steps every `mycode*` binary runs before its UI: opens the
+/// home, clears self-update leftovers, and settles a staged update.
 ///
 /// `relaunch` is [`mycode_app::reconcile_pending_update`]'s: the desktop
 /// exits into a re-armed update, the terminal keeps running and the swap
@@ -88,15 +97,22 @@ pub struct Launch {
 ///
 /// Returns [`ConfigError`] when the home directory cannot be resolved.
 pub fn launch(relaunch: bool) -> Result<Launch, ConfigError> {
+    Ok(settle(home()?, relaunch))
+}
+
+/// [`launch`] over a home the binary already resolved. The desktop claims
+/// its home first, so a second desktop never clears update files the
+/// running one is using.
+#[must_use]
+pub fn settle(home: HomeLayout, relaunch: bool) -> Launch {
     // Remove staging directories and install-directory leftovers
     // (`.mycode-previous`, `.mycode-incoming`) from earlier self-updates.
     // The apply helper returns before this, so it does not delete the
     // staged binary it is installing.
     mycode_app::cleanup_stale_stages();
     mycode_app::cleanup_previous_binary();
-    let home = HomeLayout::from_env(HomeEnv::from_process())?;
     let update = mycode_app::reconcile_pending_update(&home, relaunch);
-    Ok(Launch { home, update })
+    Launch { home, update }
 }
 
 /// `<bin> <version>` for `--version` and the help header.

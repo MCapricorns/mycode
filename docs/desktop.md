@@ -23,7 +23,7 @@ BridgeCommand → CoreBridge
 
 | 模块 | 干什么 |
 | --- | --- |
-| `main` | 先处理 `--mycode-apply-update`，以及 `--help` / `--version` / 未知参数；然后由 `mycode_frontend::cli::launch`（CLI 共用）清理过期的更新暂存目录、解析家目录、重放上次未完成的更新（`Armed` 直接退出换新版本，`Applied` 只报告一次），再由 `ensure_desktop_installed` 把下载的二进制搬进安装目录（需要时重启自身），最后打开窗口。发布构建在 Windows 上不分配控制台；全局分配器是 mimalloc，Windows 用 VC-LTL 链到系统 CRT |
+| `main` | 先处理 `--mycode-apply-update`，以及 `--help` / `--version` / 未知参数；解析家目录后由 `instance::claim` 独占 `<home>/mycode-desktop.instance`：同一个家目录只跑一个桌面进程，第二次启动把已打开的窗口切到前台（Windows）后退出，正在退出的旧进程（下载版交给安装副本、更新后重启）最多等 10 秒让出；然后由 `mycode_frontend::cli::settle`（CLI 经 `launch` 共用）清理过期的更新暂存目录、重放上次未完成的更新（`Armed` 直接退出换新版本，`Applied` 只报告一次），再由 `ensure_desktop_installed` 把下载的二进制搬进安装目录（需要时重启自身），最后打开窗口。发布构建在 Windows 上不分配控制台；全局分配器是 mimalloc，Windows 用 VC-LTL 链到系统 CRT |
 | `workspace` | 窗口实体：驱动轮询、`Effect` 执行（气泡、滚动、主题、退出）和流式分帧。每 64ms 一帧，每帧最多 80 字符 / 16 条增量；同一帧已有增量时，`ChatDone`/`ChatFailed`/`AssistantStep` 留到下一帧；工具结果与同一帧里先到的开始事件分开 |
 | `workspace/projects` | 应用内目录浏览器、系统文件对话框、拖放，以及 `@`、技能、目录和会话切换的入口 |
 | `workspace/conversation` | 消息撤回，以及会话、目录、服务商、MCP 共用的两次点击删除确认（3 秒） |
