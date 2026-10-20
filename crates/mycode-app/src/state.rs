@@ -40,6 +40,9 @@ pub(crate) struct CoreState {
     pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
     /// Steer inbox for the live turn of each session. Removed when the turn ends.
     pub(crate) steer_inboxes: Arc<Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
+    /// Provider tokens per estimated token, by session, as its last turn
+    /// measured them. A turn's first request has no reply of its own yet.
+    token_scales: Mutex<HashMap<String, crate::compaction::TokenScale>>,
     /// Live MCP clients, reused until settings change or a connection dies.
     pub(crate) mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     /// Documents reset before the UI asked for settings or UI state.
@@ -108,6 +111,7 @@ impl CoreState {
             turn_cancels: Arc::new(Mutex::new(HashMap::new())),
             subagent_cancels: Arc::new(Mutex::new(HashMap::new())),
             steer_inboxes: Arc::new(Mutex::new(HashMap::new())),
+            token_scales: Mutex::new(HashMap::new()),
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),
             startup_repairs: Mutex::new(startup_repairs),
             ui_state_writes: tokio::sync::Mutex::new(()),
@@ -121,6 +125,29 @@ impl CoreState {
             .lock()
             .get(session_id)
             .map(|work| work.kind)
+    }
+
+    /// The scale the session's last turn measured.
+    pub(crate) fn token_scale(&self, session_id: &str) -> crate::compaction::TokenScale {
+        self.token_scales
+            .lock()
+            .get(session_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn remember_token_scale(
+        &self,
+        session_id: &str,
+        scale: crate::compaction::TokenScale,
+    ) {
+        self.token_scales
+            .lock()
+            .insert(session_id.to_owned(), scale);
+    }
+
+    pub(crate) fn forget_token_scale(&self, session_id: &str) {
+        self.token_scales.lock().remove(session_id);
     }
 
     /// Copies startup repair notices. Later loads still need the same list.

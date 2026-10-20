@@ -1,10 +1,14 @@
 //! Auto-compaction: Codex-style checkpoint summaries before each provider request.
 //!
 //! Trigger is 90% of the usable context window (95% of the model window, same
-//! safety margin as Codex). The tail keeps the last ~20k tokens of messages
-//! without splitting a tool-call pair. The head is summarized with a handoff
-//! prompt (goals, files, decisions, errors, next steps). The session ledger
-//! is never rewritten; only the in-memory request history shrinks.
+//! safety margin as Codex), measured as [`sizing`] describes. The tail keeps
+//! the newest messages, up to ~20k tokens in a large window and less in a
+//! small one, without splitting a tool-call pair. The head is summarized with
+//! a handoff prompt (goals, files, decisions, errors, next steps). The
+//! session ledger is never rewritten; only the in-memory request history
+//! shrinks.
+
+mod sizing;
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -13,16 +17,16 @@ use mycode_core::{Message, Provider as _, Request, StreamEvent};
 use mycode_providers::WireProvider;
 use tokio_util::sync::CancellationToken;
 
-/// Fallback trigger when the catalog/settings have no context window.
-const DEFAULT_THRESHOLD_TOKENS: usize = 48_000;
-/// Codex keeps roughly this many recent tokens after the summary.
-const TAIL_TOKEN_BUDGET: usize = 20_000;
-/// Usable window as a percent of the raw model context (Codex 95%).
-const USABLE_WINDOW_PERCENT: u64 = 95;
-/// Auto-compact trigger as a percent of the usable window (Codex 90%).
-const TRIGGER_PERCENT: u64 = 90;
+use self::sizing::{Budget, Tally, message_tokens, text_tokens};
+pub(crate) use self::sizing::{
+    Calibration, Measure, TokenScale, estimate_prefix_tokens, fit_output,
+};
+
 const SUMMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
-const TRANSCRIPT_CAP_CHARS: usize = 300_000;
+/// Longest transcript a summary request carries, in tokens.
+const MAX_TRANSCRIPT_TOKENS: usize = 80_000;
+/// The summary request's instructions and framing, in tokens.
+const SUMMARY_PROMPT_TOKENS: usize = 1_000;
 const EXCERPT_CHARS: usize = 4_000;
 /// Output cap for a summary whose thinking is disabled.
 const SUMMARY_OUTPUT_TOKENS: u64 = 8_192;
@@ -30,6 +34,8 @@ const SUMMARY_OUTPUT_TOKENS: u64 = 8_192;
 const SUMMARY_OUTPUT_WITH_THINKING: u64 = 32_768;
 /// One retry after `length` / `max_tokens`. A second truncation is a failure.
 const SUMMARY_OUTPUT_RETRY_TOKENS: u64 = 65_536;
+/// Least output cap a summary request gets, however small the window.
+const MIN_SUMMARY_OUTPUT_TOKENS: u64 = 2_048;
 const SUMMARY_PREFIX: &str = "COMPACTION SUMMARY";
 /// Shortest summary that can cover the checkpoint prompt.
 ///
@@ -66,32 +72,6 @@ pub fn summary_body(text: &str) -> &str {
         .trim_start_matches(['\n', '\r'])
 }
 
-/// Token estimate for the system prompt and tool schemas sent with every request.
-#[must_use]
-pub(crate) fn estimate_prefix_tokens(system: &[String], tools: &[mycode_core::ToolSpec]) -> usize {
-    let mut chars = 0usize;
-    for part in system {
-        chars = chars.saturating_add(part.chars().count());
-    }
-    for tool in tools {
-        chars = chars.saturating_add(tool.name.chars().count());
-        chars = chars.saturating_add(tool.description.chars().count());
-        chars =
-            chars.saturating_add(mycode_core::encoded_json_len(&tool.params_schema).unwrap_or(0));
-    }
-    mycode_config::estimate_token_count(chars)
-}
-
-/// Tokens that fire auto-compaction for this model window.
-#[must_use]
-pub(crate) fn compaction_threshold(context_window: u64) -> usize {
-    if context_window == 0 {
-        return DEFAULT_THRESHOLD_TOKENS;
-    }
-    let usable = context_window.saturating_mul(USABLE_WINDOW_PERCENT) / 100;
-    (usable.saturating_mul(TRIGGER_PERCENT) / 100) as usize
-}
-
 /// Inputs that stay constant for one turn's compaction attempts.
 pub(crate) struct CompactScope<'a> {
     pub wire: &'a WireProvider,
@@ -106,6 +86,9 @@ pub(crate) struct CompactScope<'a> {
     /// The history estimate alone stays under the trigger while the real
     /// request, which always sends this prefix, is already near the window.
     pub overhead_tokens: usize,
+    /// The provider's count of this history, when the turn has one, and the
+    /// scale for estimates.
+    pub measure: Measure,
     /// Stops an in-flight summary request. A cancelled attempt fails and
     /// leaves the history unchanged.
     pub cancel: &'a CancellationToken,
@@ -146,6 +129,9 @@ pub(crate) struct Compacted {
     /// or [`CompactStatus::Replaced`]). Manual and automatic compaction both
     /// surface this in the transcript.
     pub summary: Option<String>,
+    /// Size of a request carrying `messages`, prefix included, in provider
+    /// tokens.
+    pub tokens: usize,
 }
 
 /// Compacts history before a provider request. Failures degrade to the
@@ -155,8 +141,10 @@ pub(crate) async fn compact_history(
     mut history: Vec<Arc<Message>>,
     force: bool,
 ) -> Compacted {
-    let auto_threshold = compaction_threshold(scope.context_window);
-    let threshold = if force { 0 } else { auto_threshold };
+    let scale = scope.measure.scale;
+    let overhead = scale.apply(scope.overhead_tokens);
+    let budget = Budget::new(scope.context_window, overhead);
+    let threshold = if force { 0 } else { budget.threshold };
     let head = scope.checkpoint.map_or("", |slot| slot.head);
     let prior = match scope.checkpoint {
         Some(slot) => {
@@ -171,6 +159,18 @@ pub(crate) async fn compact_history(
             .flatten()
         }
         None => None,
+    };
+    // A measured size describes `history` as given; a stitched copy is
+    // estimated.
+    let mut tokens = scope
+        .measure
+        .tokens
+        .unwrap_or_else(|| request_tokens(&history, overhead, scale));
+    let unchanged = |messages: Vec<Arc<Message>>, tokens: usize| Compacted {
+        messages,
+        status: CompactStatus::Unchanged,
+        summary: None,
+        tokens,
     };
     // `/compact` writes a checkpoint the next request must use even while the
     // raw ledger is still under the auto threshold. Apply that checkpoint
@@ -187,38 +187,23 @@ pub(crate) async fn compact_history(
             &history,
             checkpoint,
             head,
-            auto_threshold,
-            scope.overhead_tokens,
+            budget.threshold,
+            overhead,
+            scale,
         )
     {
         let stitched = with_summary(&checkpoint.summary, &history[checkpoint.covered_messages..]);
-        if compaction_split(
-            &stitched,
-            threshold,
-            TAIL_TOKEN_BUDGET,
-            scope.overhead_tokens,
-        )
-        .is_none()
-        {
-            return Compacted {
-                messages: stitched,
-                status: CompactStatus::Unchanged,
-                summary: None,
-            };
+        let stitched_tokens = request_tokens(&stitched, overhead, scale);
+        if compaction_split(&stitched, stitched_tokens, threshold, budget.tail, scale).is_none() {
+            return unchanged(stitched, stitched_tokens);
         }
         // Summary + uncovered tail is still over the window. When the raw
         // ledger itself splits, fall through and persist a new checkpoint
         // against that ledger. When only the stitched copy is over, shrink
         // it in memory: its indexes are not ledger indexes.
-        if compaction_split(
-            &history,
-            threshold,
-            TAIL_TOKEN_BUDGET,
-            scope.overhead_tokens,
-        )
-        .is_none()
-        {
+        if compaction_split(&history, tokens, threshold, budget.tail, scale).is_none() {
             history = stitched;
+            tokens = stitched_tokens;
         }
     }
     // A manual `/compact` on a session that still fits the tail budget
@@ -226,22 +211,21 @@ pub(crate) async fn compact_history(
     // user asked for the shrink now, not at the auto threshold. The covered
     // range is the whole ledger, so the next request replays the summary
     // plus whatever arrives after it.
-    let head_end = match compaction_split(
-        &history,
-        threshold,
-        TAIL_TOKEN_BUDGET,
-        scope.overhead_tokens,
-    ) {
+    let head_end = match compaction_split(&history, tokens, threshold, budget.tail, scale) {
         Some(head_end) => head_end,
         None if force && history.len() >= 2 => history.len(),
-        None => {
-            return Compacted {
-                messages: history,
-                status: CompactStatus::Unchanged,
-                summary: None,
-            };
-        }
+        None => return unchanged(history, tokens),
     };
+    // A summary about as large as what it replaces frees nothing. In a
+    // small window the next request was over the trigger again and every
+    // request summarized the summary once more.
+    let replaced: usize = history[..head_end]
+        .iter()
+        .map(|message| scale.apply(message_tokens(message)))
+        .sum();
+    if !force && replaced < budget.summary_tokens() + budget.min_gain() {
+        return unchanged(history, tokens);
+    }
     // `/compact` on a head this checkpoint already covers would summarize the
     // same prefix again (same replaced count, same tail). Say so instead.
     // A session with fewer than two messages has nothing to summarize and
@@ -256,6 +240,7 @@ pub(crate) async fn compact_history(
             messages: history,
             status: CompactStatus::Covered,
             summary: None,
+            tokens,
         };
     }
     // `covered_messages` indexes a ledger replay, which has no summary
@@ -276,8 +261,19 @@ pub(crate) async fn compact_history(
     // The previous summary already stands in for `history[..covered]`.
     // Sending that prefix again makes a later `/compact` re-bill the same
     // leading messages on top of the old summary.
-    let transcript =
-        compaction_transcript(prior_summary, transcript_head(&history, head_end, covered));
+    let spec = SummarySpec::new(scope.model, scope.context_window, budget.summary_words);
+    let transcript = compaction_transcript(
+        prior_summary,
+        transcript_head(&history, head_end, covered),
+        spec.transcript_tokens,
+        scale,
+    );
+    let failed = |messages: Vec<Arc<Message>>, message: String| Compacted {
+        messages,
+        status: CompactStatus::Failed(message),
+        summary: None,
+        tokens,
+    };
     // The summary can run for minutes. A cancel drops the attempt (and its
     // stream, which cancels the request) instead of holding the turn hostage.
     let summarized = tokio::select! {
@@ -285,27 +281,16 @@ pub(crate) async fn compact_history(
         () = scope.cancel.cancelled() => Ok(Err("compaction cancelled".to_owned())),
         summarized = tokio::time::timeout(
             SUMMARY_TIMEOUT,
-            summarize_transcript(scope.wire, scope.model, &transcript, scope.cancel),
+            summarize_transcript(scope.wire, &transcript, &spec, scope.cancel),
         ) => summarized,
     };
     let summary = match summarized {
         Ok(Ok(summary)) => summary,
-        Ok(Err(message)) => {
-            return Compacted {
-                messages: history,
-                status: CompactStatus::Failed(message),
-                summary: None,
-            };
-        }
-        Err(_) => {
-            return Compacted {
-                messages: history,
-                status: CompactStatus::Failed("summary timed out".to_owned()),
-                summary: None,
-            };
-        }
+        Ok(Err(message)) => return failed(history, message),
+        Err(_) => return failed(history, "summary timed out".to_owned()),
     };
     let compacted = with_summary(&summary, &history[head_end..]);
+    let compacted_tokens = request_tokens(&compacted, overhead, scale);
     // A history that already starts with a summary is not the ledger
     // replay. Persisting `head_end` would store an index into that shorter
     // vector, and the next open of this head would slice the ledger with it.
@@ -318,15 +303,12 @@ pub(crate) async fn compact_history(
                 messages: compacted,
                 status: CompactStatus::Replaced,
                 summary: Some(summary),
+                tokens: compacted_tokens,
             };
         }
     };
     if scope.cancel.is_cancelled() {
-        return Compacted {
-            messages: history,
-            status: CompactStatus::Failed("compaction cancelled".to_owned()),
-            summary: None,
-        };
+        return failed(history, "compaction cancelled".to_owned());
     }
     let shown = summary.clone();
     let checkpoint = mycode_config::CompactionCheckpoint {
@@ -349,26 +331,24 @@ pub(crate) async fn compact_history(
     .map_err(|error| format!("checkpoint write task failed: {error}"));
     match written {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            return Compacted {
-                messages: history,
-                status: CompactStatus::Failed(format!("checkpoint write failed: {error}")),
-                summary: None,
-            };
-        }
-        Err(message) => {
-            return Compacted {
-                messages: history,
-                status: CompactStatus::Failed(message),
-                summary: None,
-            };
-        }
+        Ok(Err(error)) => return failed(history, format!("checkpoint write failed: {error}")),
+        Err(message) => return failed(history, message),
     }
     Compacted {
         messages: compacted,
         status: CompactStatus::Wrote,
         summary: Some(shown),
+        tokens: compacted_tokens,
     }
+}
+
+/// Size of a request carrying `history` after a prefix of `overhead`
+/// provider tokens.
+fn request_tokens(history: &[Arc<Message>], overhead: usize, scale: TokenScale) -> usize {
+    history
+        .iter()
+        .map(|message| scale.apply(message_tokens(message)))
+        .fold(overhead, usize::saturating_add)
 }
 
 fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {
@@ -515,68 +495,6 @@ fn summary_in(message: &Message) -> Option<String> {
     })
 }
 
-fn message_tokens(message: &Message) -> usize {
-    mycode_config::estimate_token_count(message_chars(message))
-}
-
-fn message_chars(message: &Message) -> usize {
-    match message {
-        Message::User(user) => blocks_chars(&user.content),
-        Message::Assistant(assistant) => blocks_chars(&assistant.blocks),
-        Message::ToolResult(result) => {
-            // `tool_result {id} {body}`
-            "tool_result ".chars().count()
-                + result.tool_call_id.chars().count()
-                + 1
-                + blocks_chars(&result.content)
-        }
-    }
-}
-
-fn blocks_chars(blocks: &[mycode_core::ContentBlock]) -> usize {
-    let mut chars = 0usize;
-    let mut parts = 0usize;
-    for block in blocks {
-        match block {
-            mycode_core::ContentBlock::Text(text) => {
-                chars += text.text.chars().count();
-                parts += 1;
-            }
-            mycode_core::ContentBlock::ToolCall(call) => {
-                // `tool_call {name} {arguments}`
-                chars += "tool_call ".chars().count()
-                    + call.name.chars().count()
-                    + 1
-                    + json_chars(&call.arguments);
-                parts += 1;
-            }
-            mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {}
-        }
-    }
-    chars + parts.saturating_sub(1)
-}
-
-fn json_chars(value: &serde_json::Value) -> usize {
-    // Same length as `Display` for JSON, without allocating when the value
-    // is a string.
-    match value {
-        serde_json::Value::String(text) => json_string_chars(text),
-        other => other.to_string().chars().count(),
-    }
-}
-
-fn json_string_chars(text: &str) -> usize {
-    let mut count = 2;
-    for ch in text.chars() {
-        count += match ch {
-            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
-            control if (control as u32) < 0x20 => 6,
-            _ => 1,
-        };
-    }
-    count
-}
-
 fn message_text(message: &Message) -> String {
     match message {
         Message::User(user) => blocks_text(&user.content),
@@ -663,6 +581,7 @@ fn checkpoint_matches(
     head: &str,
     auto_threshold: usize,
     overhead: usize,
+    scale: TokenScale,
 ) -> bool {
     if checkpoint.covered_messages == 0 || checkpoint.covered_messages > history.len() {
         return false;
@@ -675,7 +594,7 @@ fn checkpoint_matches(
     }
     let tail_tokens: usize = history[checkpoint.covered_messages..]
         .iter()
-        .map(|message| message_tokens(message))
+        .map(|message| scale.apply(message_tokens(message)))
         .sum();
     checkpoint.covered_head == head || tail_tokens.saturating_add(overhead) <= auto_threshold
 }
@@ -696,28 +615,22 @@ pub(crate) fn is_summary_message(message: &Message) -> bool {
 }
 
 /// Returns the split index when compaction is due: everything before it is
-/// summarized, everything from it on stays verbatim.
+/// summarized, everything from it on stays verbatim. `tokens` is the size
+/// of the request `history` makes.
 fn compaction_split(
     history: &[Arc<Message>],
+    tokens: usize,
     threshold: usize,
     tail_budget: usize,
-    overhead: usize,
+    scale: TokenScale,
 ) -> Option<usize> {
-    if history.len() < 2 {
-        return None;
-    }
-    let estimate: usize = history
-        .iter()
-        .map(|message| message_tokens(message))
-        .sum::<usize>()
-        .saturating_add(overhead);
-    if estimate <= threshold {
+    if history.len() < 2 || tokens <= threshold {
         return None;
     }
     let mut used = 0usize;
     let mut tail_start = history.len();
     while tail_start > 0 {
-        let tokens = message_tokens(&history[tail_start - 1]);
+        let tokens = scale.apply(message_tokens(&history[tail_start - 1]));
         if used > 0 && used.saturating_add(tokens) > tail_budget {
             break;
         }
@@ -752,9 +665,14 @@ fn transcript_head(
 }
 
 /// The prior checkpoint stands in for everything before `head`, so it is
-/// kept whole; only the message log is cut to [`TRANSCRIPT_CAP_CHARS`],
+/// kept whole; only the message log is cut to `budget` provider tokens,
 /// dropping its oldest messages first.
-fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> String {
+fn compaction_transcript(
+    prior_summary: Option<&str>,
+    head: &[Arc<Message>],
+    budget: usize,
+    scale: TokenScale,
+) -> String {
     let mut prefix = String::new();
     if let Some(summary) = prior_summary {
         prefix.push_str("Previous checkpoint:\n");
@@ -774,13 +692,9 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> 
         let text = excerpt(&message_text(message));
         let _ = write!(transcript, "[{role}] {text}\n\n");
     }
-    let count = transcript.chars().count();
-    if count > TRANSCRIPT_CAP_CHARS {
-        let skip = transcript
-            .char_indices()
-            .nth(count - TRANSCRIPT_CAP_CHARS)
-            .map(|(index, _)| index)
-            .unwrap_or(0);
+    let room = budget.saturating_sub(scale.apply(text_tokens(&prefix)));
+    let skip = newest_within(&transcript, room, scale);
+    if skip > 0 {
         format!(
             "{prefix}...earlier content elided...\n{}",
             &transcript[skip..]
@@ -788,6 +702,19 @@ fn compaction_transcript(prior_summary: Option<&str>, head: &[Arc<Message>]) -> 
     } else {
         prefix + &transcript
     }
+}
+
+/// Byte index where the newest part of `text` that fits `budget` provider
+/// tokens starts; `0` when all of it fits.
+fn newest_within(text: &str, budget: usize, scale: TokenScale) -> usize {
+    let mut tally = Tally::default();
+    for (index, ch) in text.char_indices().rev() {
+        tally.char(ch);
+        if scale.apply(tally.tokens()) > budget {
+            return index + ch.len_utf8();
+        }
+    }
+    0
 }
 
 /// Keeps the first and last half of the excerpt budget.
@@ -831,6 +758,44 @@ fn summary_max_output(model: &str) -> u64 {
     }
 }
 
+/// Sizes for one summary request. It carries the transcript and asks for
+/// the summary within one window, so a small window gets a shorter
+/// transcript and lower output caps instead of a rejected request.
+struct SummarySpec {
+    /// Length the prompt asks for, in words.
+    words: usize,
+    /// Transcript the request may carry, in provider tokens.
+    transcript_tokens: usize,
+    /// Output cap of the first attempt.
+    first_output: u64,
+    /// Output cap of the one retry after a truncated summary.
+    retry_output: u64,
+}
+
+impl SummarySpec {
+    fn new(model: &str, context_window: u64, words: usize) -> Self {
+        let usable = sizing::usable_window(context_window);
+        let cap = summary_max_output(model);
+        // A model that keeps thinking on spends output on it, so it gets a
+        // larger share of the window.
+        let share = if cap > SUMMARY_OUTPUT_TOKENS { 2 } else { 4 };
+        let first_output = cap.min((usable / share).max(MIN_SUMMARY_OUTPUT_TOKENS));
+        let input = usable
+            .saturating_sub(first_output)
+            .saturating_sub(SUMMARY_PROMPT_TOKENS as u64);
+        let transcript_tokens = usize::try_from(input)
+            .unwrap_or(usize::MAX)
+            .min(MAX_TRANSCRIPT_TOKENS);
+        let retry_room = usable.saturating_sub((transcript_tokens + SUMMARY_PROMPT_TOKENS) as u64);
+        Self {
+            words,
+            transcript_tokens,
+            first_output,
+            retry_output: SUMMARY_OUTPUT_RETRY_TOKENS.min(retry_room.max(first_output)),
+        }
+    }
+}
+
 enum SummaryAttempt {
     Complete(String),
     Truncated,
@@ -839,19 +804,15 @@ enum SummaryAttempt {
 
 async fn summarize_transcript(
     wire: &WireProvider,
-    model: &str,
     transcript: &str,
+    spec: &SummarySpec,
     cancel: &CancellationToken,
 ) -> Result<String, String> {
-    let first = summary_max_output(model);
-    match request_summary(wire, transcript, first, cancel).await? {
+    let attempt = |output| request_summary(wire, transcript, spec.words, output, cancel);
+    match attempt(spec.first_output).await? {
         SummaryAttempt::Complete(summary) => Ok(summary),
-        SummaryAttempt::Truncated => finish_summary_retry(
-            request_summary(wire, transcript, SUMMARY_OUTPUT_RETRY_TOKENS, cancel).await?,
-        ),
-        SummaryAttempt::TooShort => {
-            finish_summary_retry(request_summary(wire, transcript, first, cancel).await?)
-        }
+        SummaryAttempt::Truncated => finish_summary_retry(attempt(spec.retry_output).await?),
+        SummaryAttempt::TooShort => finish_summary_retry(attempt(spec.first_output).await?),
     }
 }
 
@@ -878,9 +839,9 @@ fn summary_user_text(transcript: &str) -> String {
     )
 }
 
-fn summary_request(transcript: &str, max_output_tokens: u64) -> Request {
+fn summary_request(transcript: &str, words: usize, max_output_tokens: u64) -> Request {
     let mut request = Request::new()
-        .with_system_prompt(
+        .with_system_prompt(format!(
             "You are performing a CONTEXT CHECKPOINT COMPACTION. Summarize \
 your own work so far so you can resume it after a context reset.\n\
 Write dense factual prose in first person, no preamble. Cover:\n\
@@ -894,9 +855,9 @@ Write dense factual prose in first person, no preamble. Cover:\n\
 - Clear next steps\n\
 Preserve names, paths, commands, and error text verbatim. Do not invent work that did not \
 happen. Never copy secrets (API keys, tokens, passwords) into the summary. Write in the \
-language the user writes in. Stay under about 2,500 words; drop detail that the next steps \
-do not need.",
-        )
+language the user writes in. Stay under about {words} words; drop detail that the next steps \
+do not need."
+        ))
         .with_message(Message::User(mycode_core::UserMessage::text(
             summary_user_text(transcript),
         )));
@@ -911,10 +872,11 @@ do not need.",
 async fn request_summary(
     wire: &WireProvider,
     transcript: &str,
+    words: usize,
     max_output_tokens: u64,
     cancel: &CancellationToken,
 ) -> Result<SummaryAttempt, String> {
-    let request = summary_request(transcript, max_output_tokens);
+    let request = summary_request(transcript, words, max_output_tokens);
     let mut stream = wire
         .stream(&request, cancel.child_token())
         .await

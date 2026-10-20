@@ -6,8 +6,8 @@ use mycode_core::{
 };
 
 use super::{
-    CompactStatus, Compacted, compaction_transcript, display_summary_text, is_display_only_summary,
-    transcript_head,
+    CompactStatus, Compacted, MAX_TRANSCRIPT_TOKENS, TokenScale, compaction_transcript,
+    display_summary_text, is_display_only_summary, transcript_head,
 };
 
 /// Long enough for the short-summary gate. The opening phrase stays so
@@ -44,7 +44,12 @@ fn a_later_compact_summarizes_only_the_uncovered_head() {
         user("kept-tail"),
     ];
     let head = transcript_head(&history, 5, Some(3));
-    let transcript = compaction_transcript(Some("prior summary"), head);
+    let transcript = compaction_transcript(
+        Some("prior summary"),
+        head,
+        MAX_TRANSCRIPT_TOKENS,
+        TokenScale::ONE,
+    );
     assert!(transcript.contains("prior summary"), "{transcript}");
     assert!(transcript.contains("new-d"), "{transcript}");
     assert!(transcript.contains("new-e"), "{transcript}");
@@ -61,7 +66,12 @@ fn an_oversized_head_keeps_the_prior_checkpoint() {
         .map(|index| user(&format!("m{index} {filler}")))
         .collect();
     history.push(user("newest"));
-    let transcript = compaction_transcript(Some("prior summary"), &history);
+    let transcript = compaction_transcript(
+        Some("prior summary"),
+        &history,
+        MAX_TRANSCRIPT_TOKENS,
+        TokenScale::ONE,
+    );
     assert!(
         transcript.starts_with("Previous checkpoint:\nprior summary"),
         "{}",
@@ -77,7 +87,7 @@ fn the_first_compact_still_includes_the_whole_head() {
     let history = vec![user("one"), user("two"), user("tail")];
     let head = transcript_head(&history, 2, None);
     assert_eq!(head.len(), 2);
-    let transcript = compaction_transcript(None, head);
+    let transcript = compaction_transcript(None, head, MAX_TRANSCRIPT_TOKENS, TokenScale::ONE);
     assert!(transcript.contains("one"), "{transcript}");
     assert!(transcript.contains("two"), "{transcript}");
     assert!(!transcript.contains("tail"), "{transcript}");
@@ -90,11 +100,13 @@ fn manual_and_auto_compaction_post_the_same_summary_message() {
         messages: Vec::new(),
         status: CompactStatus::Wrote,
         summary: Some(body.to_owned()),
+        tokens: 0,
     };
     let auto = Compacted {
         messages: Vec::new(),
         status: CompactStatus::Wrote,
         summary: Some(body.to_owned()),
+        tokens: 0,
     };
     let manual_text = display_summary_text(manual.summary.as_deref().expect("manual"));
     let auto_text = display_summary_text(auto.summary.as_deref().expect("auto"));
@@ -300,26 +312,34 @@ async fn a_second_compact_in_one_turn_keeps_every_uncovered_message() {
         }),
         context_window: 30_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, history, false).await;
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     let sent = bodies.lock().concat();
-    for marker in ["MEM-SUMMARY", "UNCOVERED-ONE", "UNCOVERED-TWO"] {
+    // A 30k window keeps a ~10k tail, one of these messages: a 20k tail
+    // left the request over the trigger right after compacting.
+    for marker in ["MEM-SUMMARY", "UNCOVERED-ONE", "UNCOVERED-TWO", "TAIL-A"] {
         assert!(
             sent.contains(marker),
             "{marker} missing from the summary request"
         );
     }
-    assert!(!sent.contains("TAIL-A"), "the kept tail must stay verbatim");
+    assert!(!sent.contains("TAIL-B"), "the kept tail must stay verbatim");
     assert!(super::is_summary_message(&compacted.messages[0]));
     assert!(user_text(&compacted.messages[0]).contains("handoff notes"));
     let rest: Vec<String> = compacted.messages[1..]
         .iter()
         .map(|message| user_text(message))
         .collect();
-    assert_eq!(rest.len(), 2, "{rest:?}");
-    assert!(rest[0].starts_with("TAIL-A") && rest[1].starts_with("TAIL-B"));
+    assert_eq!(rest.len(), 1, "{rest:?}");
+    assert!(rest[0].starts_with("TAIL-B"));
+    assert!(
+        compacted.tokens < super::sizing::compaction_threshold(30_000),
+        "the compacted request is back under the trigger: {}",
+        compacted.tokens
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -343,6 +363,7 @@ async fn manual_compact_is_the_next_request_while_under_the_auto_threshold() {
         // auto threshold, which is the case that used to skip the checkpoint.
         context_window: 200_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let manual = super::compact_history(&scope, history.clone(), true).await;
@@ -413,6 +434,7 @@ async fn manual_compact_summarizes_a_session_that_still_fits() {
         }),
         context_window: 200_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     // `/compact` no longer answers "nothing to compact" for a short
@@ -598,6 +620,7 @@ async fn summary_request_disables_glm_thinking_and_retries_a_truncated_summary()
         }),
         context_window: 200_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, large_history(), true).await;
@@ -635,6 +658,7 @@ async fn a_still_truncated_summary_is_not_stored() {
         }),
         context_window: 200_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, large_history(), true).await;
@@ -672,6 +696,7 @@ async fn an_empty_summary_is_an_error() {
         }),
         context_window: 200_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, large_history(), true).await;
@@ -729,8 +754,8 @@ fn a_conversation_ending_in_a_tool_result_is_wrapped_and_the_instruction_is_repe
         ))]),
         tool_result_message("call-read", "[output truncated ...] revision 9"),
     ];
-    let transcript = compaction_transcript(None, &history);
-    let request = super::summary_request(&transcript, 8_192);
+    let transcript = compaction_transcript(None, &history, MAX_TRANSCRIPT_TOKENS, TokenScale::ONE);
+    let request = super::summary_request(&transcript, 2_500, 8_192);
     let text = request_user_text(&request);
     let open = text.find("<conversation>").expect("opening fence") + "<conversation>".len();
     let close = text.find("</conversation>").expect("closing fence");
@@ -785,7 +810,7 @@ fn think_content_is_stripped_when_the_conversation_is_serialized() {
         ]),
         tool_result_message("call-read", "file body keeps <think>not reasoning</think>"),
     ];
-    let transcript = compaction_transcript(None, &history);
+    let transcript = compaction_transcript(None, &history, MAX_TRANSCRIPT_TOKENS, TokenScale::ONE);
     assert!(
         transcript.contains("<think>keep this quote</think>"),
         "{transcript}"
@@ -836,6 +861,7 @@ async fn a_twelve_token_one_line_summary_is_rejected_and_history_is_kept() {
         }),
         context_window: 200_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, history.clone(), true).await;
@@ -896,12 +922,15 @@ fn system_prompt_and_tools_count_toward_the_auto_trigger() {
         user(&"d".repeat(8_000)),
     ];
     let threshold = 9_000;
+    let scale = TokenScale::ONE;
+    let alone = super::request_tokens(&history, 0, scale);
     assert!(
-        super::compaction_split(&history, threshold, 4_000, 0).is_none(),
+        super::compaction_split(&history, alone, threshold, 4_000, scale).is_none(),
         "history alone is under the trigger"
     );
+    let with_prefix = super::request_tokens(&history, 2_000, scale);
     assert!(
-        super::compaction_split(&history, threshold, 4_000, 2_000).is_some(),
+        super::compaction_split(&history, with_prefix, threshold, 4_000, scale).is_some(),
         "the same history plus the prompt and tools is over the trigger"
     );
     let tools = [mycode_core::ToolSpec {
@@ -949,6 +978,7 @@ async fn a_history_without_a_checkpoint_slot_compacts_in_memory_only() {
         checkpoint: None,
         context_window: 30_000,
         overhead_tokens: 0,
+        measure: super::Measure::default(),
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted = super::compact_history(&scope, history, false).await;

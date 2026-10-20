@@ -471,6 +471,7 @@ impl BridgeAgentHost {
         // The same compaction the parent turn runs, on this child's history
         // only: no checkpoint slot, so the parent's file is never touched.
         let (child_model, context_window) = self.child_window(&role.name);
+        let calibration = crate::compaction::Calibration::default();
         let hooks = {
             let wire = wire.clone();
             let cancel = child_cancel.clone();
@@ -482,16 +483,19 @@ impl BridgeAgentHost {
                 let cancel = cancel.clone();
                 let progress = progress.clone();
                 let role_name = role_name.clone();
+                let calibration = calibration.clone();
                 async move {
+                    let overhead = crate::compaction::estimate_prefix_tokens(
+                        &request.system_prompt,
+                        &request.tools,
+                    );
                     let scope = crate::compaction::CompactScope {
                         wire: &wire,
                         model: &model,
                         checkpoint: None,
                         context_window,
-                        overhead_tokens: crate::compaction::estimate_prefix_tokens(
-                            &request.system_prompt,
-                            &request.tools,
-                        ),
+                        overhead_tokens: overhead,
+                        measure: calibration.measure(&request.messages),
                         cancel: &cancel,
                     };
                     let compacted =
@@ -504,6 +508,12 @@ impl BridgeAgentHost {
                         ));
                     }
                     request.messages = compacted.messages;
+                    calibration.sent(&request.messages, overhead);
+                    request.max_output_tokens = crate::compaction::fit_output(
+                        request.max_output_tokens,
+                        context_window,
+                        compacted.tokens,
+                    );
                     request
                 }
             })

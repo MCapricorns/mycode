@@ -34,7 +34,7 @@ pub use authority::AuthorityRevision;
 #[doc(inline)]
 pub use compaction::{
     COMPACTION_FORMAT_VERSION, COMPACTION_KIND, CompactionCheckpoint, MAX_SUMMARY_CHARS,
-    estimate_token_count, read_compaction, write_compaction,
+    read_compaction, write_compaction,
 };
 pub use document_repair::{DocumentRepair, quarantine_owned_bytes};
 pub use error::{ConfigError, ConfigErrorKind};

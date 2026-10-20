@@ -598,6 +598,7 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             // best-effort — a dead actor cannot resurrect anything either —
             // so the durable delete always runs.
             cancel_session_work(state, &session_id);
+            state.forget_token_scale(&session_id);
             if let Some(id) = mycode_agent::session::SessionId::parse(&session_id) {
                 let _ = state.service.forget(&id).await;
             }
