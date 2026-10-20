@@ -108,13 +108,14 @@ pub struct WorkspaceState {
     /// The running turn waits on an automatic compaction summary. An
     /// interrupt holds off until it ends, so the summary is not thrown away.
     pub auto_compacting: bool,
-    /// Compaction card held until the in-flight reply is committed.
+    /// Compaction cards held until the in-flight reply is committed.
     ///
     /// A mid-turn summary arrives after the tool rows and before `ChatDone`
     /// appends the final reply. Inserting it immediately paints the card
-    /// above that reply; the ledger has the card after the reply. The card
-    /// stays here until the turn commits, then it is appended last.
-    pub pending_summary: Option<ConversationEntry>,
+    /// above that reply; the ledger has the card after the reply. The cards
+    /// stay here until the turn commits, then they are appended last, in
+    /// order: a turn that compacts twice files two.
+    pub pending_summaries: Vec<ConversationEntry>,
     /// Per-server tool names from the last listing, keyed by server id.
     pub mcp_tools: Vec<(String, Vec<String>)>,
     /// MCP server ids with a tools probe in flight.

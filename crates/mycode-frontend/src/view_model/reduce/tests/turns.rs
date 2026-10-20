@@ -170,6 +170,13 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
         call_id: None,
         thinking: String::new(),
     };
+    let second = ConversationEntry {
+        event_id: "sum-2".to_owned(),
+        ..summary.clone()
+    };
+    reduce(&mut state, FrontendAction::SummaryShown(summary.clone()));
+    // A turn that compacted twice files both cards; a repeat is one.
+    reduce(&mut state, FrontendAction::SummaryShown(second));
     reduce(&mut state, FrontendAction::SummaryShown(summary));
     let held = state.active.as_ref().expect("open");
     assert!(
@@ -178,13 +185,12 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
             .all(|entry| !mycode_app::is_compaction_summary(&entry.text)),
         "the card must not sit above the still-streaming reply"
     );
-    assert_eq!(
-        state
-            .pending_summary
-            .as_ref()
-            .map(|entry| entry.event_id.as_str()),
-        Some("sum-1")
-    );
+    let pending: Vec<&str> = state
+        .pending_summaries
+        .iter()
+        .map(|entry| entry.event_id.as_str())
+        .collect();
+    assert_eq!(pending, ["sum-1", "sum-2"]);
     let reply = ConversationEntry {
         event_id: "reply-1".to_owned(),
         kind: EntryKind::AssistantMessage,
@@ -200,12 +206,13 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
         },
     );
     let entries = &state.active.expect("open").entries;
-    assert_eq!(entries.len(), 4);
+    assert_eq!(entries.len(), 5);
     assert_eq!(entries[0].kind, EntryKind::ToolCall);
     assert_eq!(entries[1].kind, EntryKind::ToolResult);
     assert_eq!(entries[2].event_id, "reply-1");
-    assert!(mycode_app::is_compaction_summary(&entries[3].text));
-    assert!(state.pending_summary.is_none());
+    assert_eq!(entries[3].event_id, "sum-1");
+    assert_eq!(entries[4].event_id, "sum-2");
+    assert!(state.pending_summaries.is_empty());
     assert!(!state.sending);
 }
 
