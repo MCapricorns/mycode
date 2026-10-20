@@ -1,8 +1,9 @@
 //! Structured questions, docked right above the composer like Devin's ask
 //! card. One question shows at a time: a single-select pick advances to the
 //! next, a multi-select or free text waits for Next, and the last answer
-//! submits. The card shares the diff panel's frosted recipe; every control
-//! is a ghost — no filled buttons on the translucent card.
+//! submits. The card is accent-tinted glass over the window blur; choices
+//! are frosted rows with a radio or check mark, and the answer action uses
+//! the shared tinted primary button.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::theme::Theme;
@@ -10,11 +11,11 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    Window, div, px, relative,
 };
 
 use crate::i18n::t;
-use crate::ui::{desk::Desk, lamp, short_id, skin};
+use crate::ui::{desk::Desk, short_id, skin};
 use crate::workspace::Workspace;
 
 /// The card mounted inside the composer column while a turn is waiting on
@@ -41,16 +42,32 @@ pub(crate) fn render_ask_card(
         .w_full()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap_3()
         .px_4()
-        .py_3()
+        .pt_3()
+        .pb(skin::space(3))
+        // Matches the composer card under it, so the pair reads as one stack.
+        .rounded(px(18.))
+        .bg(skin::ask_glass(theme))
+        .border_color(crate::ui::desk::primary_edge(theme.primary).opacity(0.35))
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(lamp(desk.violet))
+                .child(
+                    div()
+                        .size(skin::space(6))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(desk.violet.opacity(0.16))
+                        .text_color(desk.violet)
+                        .child(Icon::new(IconName::MessageSquare).xsmall()),
+                )
                 .child(
                     div()
                         .text_sm()
@@ -65,30 +82,46 @@ pub(crate) fn render_ask_card(
                         total
                     )))
                 }),
-        );
+        )
+        .when(total > 1, |this| {
+            this.child(ask_progress(index, total, theme))
+        });
     let (Some(row), Some(input)) = (rows.get(index).cloned(), input) else {
         return card.into_any_element();
     };
     let picked = picks.get(index).cloned().unwrap_or_default();
+    let hint = match (row.multiple, row.optional) {
+        (true, true) => Some(t("Select any · optional", "可多选 · 可选")),
+        (true, false) => Some(t(
+            "Select more than one, then continue",
+            "可多选，选完后继续",
+        )),
+        (false, true) => Some(t("Optional", "可选")),
+        (false, false) => None,
+    };
     card.child(
         div()
             .id(format!("ask-row-{index}"))
             .flex()
             .flex_col()
-            .gap_1()
-            .child(div().text_sm().whitespace_normal().child(format!(
-                "{}. {}",
-                index + 1,
-                row.question
-            )))
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                    .whitespace_normal()
+                    .child(row.question.clone()),
+            )
+            .when_some(hint, |this, hint| {
+                this.child(div().text_xs().text_color(muted).child(hint))
+            })
             .when(!row.choices.is_empty(), |this| {
                 this.child(
                     div()
                         .id(format!("ask-choices-{index}"))
                         .flex()
                         .flex_col()
-                        .gap_1()
-                        .pt_1()
+                        .gap(px(6.))
                         .children(
                             row.choices
                                 .iter()
@@ -102,6 +135,7 @@ pub(crate) fn render_ask_card(
                                         format!("ask-{index}-{choice_index}-{}", short_id(choice)),
                                         choice.clone(),
                                         selected,
+                                        multiple,
                                         theme,
                                     )
                                     .on_click(cx.listener(
@@ -130,26 +164,12 @@ pub(crate) fn render_ask_card(
                         ),
                 )
             })
-            .when(row.multiple, |this| {
-                this.child(div().text_xs().text_color(muted).child(t(
-                    "Select more than one, then continue",
-                    "可多选，选完后继续",
-                )))
-            })
-            .when(row.optional, |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(t("Optional", "可选")),
-                )
-            })
             .child(
                 div()
                     .id(format!("ask-free-input-{index}"))
                     .w_full()
                     .min_w_0()
-                    .h(px(30.))
+                    .h(px(32.))
                     .text_sm()
                     .child(Input::new(&input)),
             ),
@@ -162,48 +182,84 @@ pub(crate) fn render_ask_card(
             .items_center()
             .gap_2()
             .w_full()
+            .pt(skin::space(3))
+            .border_t_1()
+            .border_color(skin::border_subtle(theme))
             .child(
-                ask_ghost_button("ask-decline", t("Decline", "拒绝"), false, theme).on_click(
-                    cx.listener(|workspace, _, _, cx| {
+                ask_text_button("ask-decline", t("Decline", "拒绝"), theme).on_click(cx.listener(
+                    |workspace, _, _, cx| {
                         workspace.on_dismiss_ask(cx);
-                    }),
-                ),
+                    },
+                )),
             )
             .child(div().flex_1().min_w_0())
             .when(index > 0, |this| {
                 this.child(
-                    ask_ghost_button("ask-back", t("Back", "上一题"), false, theme).on_click(
-                        cx.listener(|workspace, _, _, cx| {
+                    skin::glass_button("ask-back", false, theme)
+                        .h(px(28.))
+                        .text_xs()
+                        .child(Icon::new(IconName::ArrowLeft).xsmall())
+                        .child(t("Back", "上一题"))
+                        .on_click(cx.listener(|workspace, _, _, cx| {
                             workspace.on_ask_back(cx);
-                        }),
-                    ),
+                        })),
                 )
             })
             .child(
-                ask_ghost_button(
-                    "ask-next",
-                    if last {
+                skin::glass_button("ask-next", true, theme)
+                    .h(px(28.))
+                    .text_xs()
+                    .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                    .child(if last {
                         t("Answer", "回答")
                     } else {
                         t("Next", "下一题")
-                    },
-                    true,
-                    theme,
-                )
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.on_ask_next(cx);
-                })),
+                    })
+                    .child(
+                        Icon::new(if last {
+                            IconName::CornerDownLeft
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .xsmall(),
+                    )
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_ask_next(cx);
+                    })),
             ),
     )
     .into_any_element()
 }
 
-/// One ask choice as a full-width ghost row: a hairline border, no fill.
-/// The pick shows as an accent edge and label plus a check at the right.
+/// A thin segmented bar: answered and current questions in the accent,
+/// the rest as a faint track.
+fn ask_progress(index: usize, total: usize, theme: &Theme) -> impl IntoElement {
+    div()
+        .id("ask-progress")
+        .flex()
+        .flex_row()
+        .gap(px(4.))
+        .w_full()
+        .children((0..total).map(|step| {
+            let fill = if step == index {
+                theme.primary.opacity(0.9)
+            } else if step < index {
+                theme.primary.opacity(0.45)
+            } else {
+                skin::border_strong(theme)
+            };
+            div().flex_1().h(px(3.)).rounded_full().bg(fill)
+        }))
+}
+
+/// One ask choice as a full-width frosted row with a radio (single) or
+/// check (multiple) mark on the left. The pick takes the accent tint and
+/// edge.
 fn ask_choice_row(
     id: impl Into<gpui_kit::ElementId>,
     label: String,
     selected: bool,
+    multiple: bool,
     theme: &Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     let border = if selected {
@@ -211,50 +267,74 @@ fn ask_choice_row(
     } else {
         skin::border_subtle(theme)
     };
+    let (fill, hover) = if selected {
+        (theme.accent.opacity(0.85), theme.accent)
+    } else {
+        (skin::frost(theme), skin::frost_hover(theme))
+    };
     div()
         .id(id)
         .flex()
         .flex_row()
         .items_center()
-        .gap_2()
+        .gap(skin::space(3))
         .w_full()
-        .min_h(px(30.))
+        .min_h(px(34.))
         .px_3()
-        .py_1()
+        .py(px(6.))
         .rounded(skin::radius_sm())
         .border_1()
         .border_color(border)
-        .text_color(if selected {
-            theme.primary
-        } else {
-            theme.foreground
-        })
+        .bg(fill)
+        .text_color(theme.foreground)
         .text_sm()
         .cursor_pointer()
-        .hover(move |style| style.bg(skin::frost_hover(theme)).border_color(border))
+        .hover(move |style| style.bg(hover).border_color(border))
+        .child(choice_mark(selected, multiple, theme))
         .child(div().flex_1().min_w_0().whitespace_normal().child(label))
-        .when(selected, |this| {
-            this.child(
-                Icon::new(IconName::Check)
-                    .xsmall()
-                    .flex_shrink_0()
-                    .text_color(theme.primary),
-            )
-        })
 }
 
-/// A ghost text button: no fill ever, a border only for the primary action.
-fn ask_ghost_button(
-    id: impl Into<gpui_kit::ElementId>,
-    label: &'static str,
-    primary: bool,
-    theme: &Theme,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let ink = if primary {
+/// A radio dot or a checkbox tick in front of a choice label.
+fn choice_mark(selected: bool, multiple: bool, theme: &Theme) -> gpui_kit::AnyElement {
+    let edge = if selected {
         theme.primary
     } else {
-        theme.muted_foreground
+        skin::border_strong(theme)
     };
+    let mark = div()
+        .size(px(16.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(edge);
+    if multiple {
+        mark.rounded(px(4.))
+            .when(selected, |this| {
+                this.bg(theme.primary).child(
+                    Icon::new(IconName::Check)
+                        .xsmall()
+                        .text_color(theme.primary_foreground),
+                )
+            })
+            .into_any_element()
+    } else {
+        mark.rounded_full()
+            .when(selected, |this| {
+                this.child(div().size(relative(0.5)).rounded_full().bg(theme.primary))
+            })
+            .into_any_element()
+    }
+}
+
+/// Decline: muted text that only lifts on hover, so the card has one clear
+/// primary action.
+fn ask_text_button(
+    id: impl Into<gpui_kit::ElementId>,
+    label: &'static str,
+    theme: &Theme,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
         .flex_shrink_0()
@@ -264,12 +344,8 @@ fn ask_ghost_button(
         .items_center()
         .rounded(skin::radius_xs())
         .text_xs()
-        .text_color(ink)
+        .text_color(theme.muted_foreground)
         .cursor_pointer()
-        .when(primary, |this| {
-            this.border_1()
-                .border_color(crate::ui::desk::primary_edge(theme.primary))
-        })
         .hover(move |style| {
             style
                 .bg(skin::frost_hover(theme))
