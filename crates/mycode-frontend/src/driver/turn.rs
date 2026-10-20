@@ -324,8 +324,12 @@ impl FrontendDriver {
             None => FrontendAction::QueueCleared,
         };
         self.act(removed, out);
+        self.restore_above_draft(recalled.join("\n\n"), out);
+    }
+
+    /// Puts `text` back in the composer, above any draft already there.
+    pub(crate) fn restore_above_draft(&mut self, mut text: String, out: &mut Vec<Effect>) {
         let draft = self.vm.composer_draft.clone();
-        let mut text = recalled.join("\n\n");
         if !draft.trim().is_empty() {
             text.push_str("\n\n");
             text.push_str(&draft);
@@ -480,11 +484,34 @@ impl FrontendDriver {
                 focus: false,
             });
         }
-        self.dispatch(BridgeCommand::SendMessage {
+        let command = BridgeCommand::SendMessage {
             session,
             branch,
             expected_head,
             text: draft,
-        });
+        };
+        if self.reopen_in_flight() {
+            // That reopen's snapshot predates this message. Its reply can
+            // land after the send's and wipe the message off the screen, so
+            // the send goes out once the snapshot is on screen.
+            self.held_send = Some(command);
+        } else {
+            self.dispatch(command);
+        }
+    }
+
+    /// A reopen of the chat on screen is in flight.
+    fn reopen_in_flight(&self) -> bool {
+        self.pending_open.is_some() && self.pending_open == self.open_session_id()
+    }
+
+    /// Sends the held message once no reopen of its chat is in flight.
+    pub(crate) fn release_held_send(&mut self) {
+        if self.reopen_in_flight() {
+            return;
+        }
+        if let Some(command) = self.held_send.take() {
+            self.dispatch(command);
+        }
     }
 }

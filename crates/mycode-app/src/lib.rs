@@ -596,6 +596,9 @@ pub enum BridgeReply {
     Sent {
         /// Session the message targeted.
         session: String,
+        /// The message text. The composer was cleared when the send went
+        /// out, so a failed send hands the text back instead of losing it.
+        text: String,
         /// New head plus committed entry, or why the send failed.
         outcome: Result<(String, ConversationEntry), String>,
     },

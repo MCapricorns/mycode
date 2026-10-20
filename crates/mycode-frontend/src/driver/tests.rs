@@ -232,6 +232,75 @@ fn stop_on_a_turn_that_is_gone_runs_the_owed_reload() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A send while the chat on screen is being reopened waits for that
+/// snapshot. Applied after the send's reply, the older snapshot wiped the
+/// message off the screen.
+#[test]
+fn a_send_during_a_reopen_of_the_same_chat_waits_for_the_snapshot() {
+    use mycode_app::{BranchId, BridgeReply, SessionId};
+
+    let (mut driver, root) = scratch_driver("held-send");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    driver.pending_open = Some(session.clone());
+    let mut out = Vec::new();
+    driver.submit("next question", &mut out);
+    assert!(driver.vm.sending, "the turn arms right away");
+    assert!(driver.held_send.is_some(), "the send waits for the reopen");
+    driver.on_reply(
+        ReplyScope::Open(session.clone()),
+        BridgeReply::Conversation(Ok(conversation(&session, &branch))),
+        &mut out,
+    );
+    assert!(
+        driver.held_send.is_none(),
+        "the snapshot is in; the send left"
+    );
+    assert!(driver.vm.sending);
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The composer is cleared when a send goes out, so a send the core could
+/// not write hands its text back instead of losing it.
+#[test]
+fn a_failed_send_puts_its_text_back_in_the_composer() {
+    use mycode_app::{BranchId, BridgeReply, SessionId};
+
+    let (mut driver, root) = scratch_driver("failed-send");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    let mut out = Vec::new();
+    driver.submit("lost words", &mut out);
+    assert!(driver.vm.composer_draft.is_empty());
+    driver.act(
+        FrontendAction::ComposerChanged("typed after".to_owned()),
+        &mut out,
+    );
+    driver.on_reply(
+        ReplyScope::Session {
+            session: session.clone(),
+            branch: Some(branch.clone()),
+        },
+        BridgeReply::Sent {
+            session: session.clone(),
+            text: "lost words".to_owned(),
+            outcome: Err("disk full".to_owned()),
+        },
+        &mut out,
+    );
+    assert!(!driver.vm.sending);
+    assert_eq!(driver.vm.composer_draft, "lost words\n\ntyped after");
+    assert!(out.iter().any(|effect| matches!(
+        effect,
+        super::Effect::ComposerSet { text, .. } if text == "lost words\n\ntyped after"
+    )));
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_repair_after_the_startup_toast_still_toasts_once() {
     let root = std::env::temp_dir().join(format!(

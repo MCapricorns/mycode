@@ -110,6 +110,7 @@ impl FrontendDriver {
                 });
                 self.refresh_skills(out);
                 self.flush_welcome_send(&session_id, out);
+                self.release_held_send();
             }
             BridgeReply::Older(Ok(page)) => {
                 let applicable = self.vm.active.as_ref().is_some_and(|active| {
@@ -162,6 +163,7 @@ impl FrontendDriver {
             BridgeReply::Sent {
                 session,
                 outcome: Ok((head, entry)),
+                ..
             } => {
                 // A send that raced a session switch must not touch the
                 // conversation now open; the committed entry lives in its
@@ -583,6 +585,7 @@ impl FrontendDriver {
                 // A failed open still ends the wait: a stale pending_open
                 // would scope-drop the next explicit open's reply.
                 self.pending_open = None;
+                self.release_held_send();
                 if self.welcome_send_session.is_some() {
                     self.welcome_send_session = None;
                     self.act(FrontendAction::WelcomeSendConsumed, out);
@@ -591,6 +594,7 @@ impl FrontendDriver {
             }
             BridgeReply::Sent {
                 session,
+                text,
                 outcome: Err(message),
             } => {
                 if self
@@ -600,6 +604,9 @@ impl FrontendDriver {
                     .is_some_and(|active| active.session_id == session)
                 {
                     self.act(failed_start(message), out);
+                    // The composer was cleared when the send went out; the
+                    // text comes back instead of vanishing with the error.
+                    self.restore_above_draft(text, out);
                 }
             }
             BridgeReply::ChatStarted(Err(message)) => {

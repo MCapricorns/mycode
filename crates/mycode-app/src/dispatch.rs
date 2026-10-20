@@ -352,8 +352,9 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         BridgeCommand::CreateSession { .. } => BridgeReply::Created(Err(message)),
         BridgeCommand::OpenSession(_) => BridgeReply::Conversation(Err(message)),
         BridgeCommand::LoadOlder { .. } => BridgeReply::Older(Err(message)),
-        BridgeCommand::SendMessage { session, .. } => BridgeReply::Sent {
+        BridgeCommand::SendMessage { session, text, .. } => BridgeReply::Sent {
             session: session.to_string(),
+            text: text.clone(),
             outcome: Err(message),
         },
         BridgeCommand::LoadSettings => BridgeReply::Settings(Err(message)),
@@ -491,12 +492,16 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             branch,
             expected_head,
             text,
-        } => BridgeReply::Sent {
-            session: session.to_string(),
-            outcome: send_message(&state.service, &session, &branch, &expected_head, &text)
+        } => {
+            let outcome = send_message(&state.service, &session, &branch, &expected_head, &text)
                 .await
-                .map_err(render_error),
-        },
+                .map_err(render_error);
+            BridgeReply::Sent {
+                session: session.to_string(),
+                text,
+                outcome,
+            }
+        }
         BridgeCommand::LoadSettings => {
             let home = state.home.clone();
             let pending = state.startup_repairs_snapshot();

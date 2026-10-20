@@ -73,8 +73,44 @@ fn queue_message(state: &mut WorkspaceState, text: String) {
     }
 }
 
+/// Keeps the open chat's follow-up queue while another chat takes the
+/// screen. Events for a chat that is not open are dropped, so its queue
+/// could never send from here; clearing it lost what the user had typed.
+fn park_queue(state: &mut WorkspaceState) {
+    let Some(session_id) = state
+        .active
+        .as_ref()
+        .map(|active| active.session_id.clone())
+    else {
+        return;
+    };
+    state
+        .parked_queues
+        .retain(|(parked, _)| parked != &session_id);
+    if !state.queued.is_empty() {
+        let queue = std::mem::take(&mut state.queued);
+        state.parked_queues.push((session_id, queue));
+    }
+}
+
+/// Brings a chat's parked follow-ups back when it opens again. They wait
+/// for an explicit send unless its turn is still running; then they start
+/// when it ends, as they would have without the switch.
+fn unpark_queue(state: &mut WorkspaceState, session_id: &str, running: bool) {
+    if let Some(index) = state
+        .parked_queues
+        .iter()
+        .position(|(parked, _)| parked == session_id)
+    {
+        let (_, queue) = state.parked_queues.remove(index);
+        state.queued = queue;
+        state.queue_paused = !running;
+    }
+}
+
 /// Drops the turn-scoped view of the conversation leaving the screen: its
 /// queue, steers, live jobs, asks, held summary, and the in-flight flag.
+/// Park the queue first ([`park_queue`]) when the chat is only leaving.
 /// Events for a session that is not open are dropped, so none of this would
 /// ever be cleared once another conversation takes the screen.
 fn reset_turn_view(state: &mut WorkspaceState) {
@@ -192,6 +228,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // A turn still running in the previous chat keeps running, but
             // its events no longer reach this view; the fresh chat must not
             // inherit its in-flight flag, queue, or asks.
+            park_queue(state);
             reset_turn_view(state);
             state.active = Some(ActiveConversation {
                 session_id: summary.session_id,
@@ -219,6 +256,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             restore_live_reasoning(state);
         }
         FrontendAction::ConversationParked => {
+            park_queue(state);
             state.active = None;
             for session in &mut state.sessions {
                 session.active = false;
@@ -251,6 +289,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             };
             if switched {
                 // Queue, tasks, and asks belong to the previous session.
+                park_queue(state);
                 reset_turn_view(state);
             }
             let session_id = conversation.session_id.clone();
@@ -259,19 +298,23 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // A reopen can land while the session's turn is still in flight:
             // the live flag keeps running affordances honest, and only then
             // do turn events keep flowing into this view. Reopening the
-            // session already on screen mid-turn keeps the streaming buffer
-            // the wire copy never carries.
+            // session already on screen mid-turn, or just after a send armed
+            // the next turn, keeps the streaming buffer the wire copy never
+            // carries.
             let running = conversation.running;
             let compacting = conversation.compacting;
             let mut conversation = conversation;
             if !switched
-                && running
+                && (running || state.sending)
                 && conversation.streaming.is_none()
                 && let Some(previous) = state.active.as_mut()
             {
                 conversation.streaming = previous.streaming.take();
             }
             state.active = Some(conversation);
+            if switched {
+                unpark_queue(state, &session_id, running);
+            }
             // For the conversation already on screen, the flag may lag a
             // just-armed turn by a few async hops; only the fresh-open case
             // trusts the wire value outright.
@@ -401,7 +444,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         FrontendAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.head = head;
-                conversation.entries.push(entry);
+                push_entry_once(conversation, entry);
             }
             state.composer_draft.clear();
             state.mention = None;
