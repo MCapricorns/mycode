@@ -141,8 +141,8 @@ pub fn shortcuts(surface: Surface) -> Vec<Shortcut> {
                 "Esc".to_owned(),
                 t("Close the topmost panel", "关闭最上层面板"),
                 Some(t(
-                    "With nothing open, stops the running task",
-                    "没有打开的面板时，停止当前任务",
+                    "With nothing open, leaves a running task alone; a held queue returns to the input",
+                    "没有打开的面板时，不打断运行中的任务；暂停的队列退回输入框",
                 )),
             ),
         ]),
