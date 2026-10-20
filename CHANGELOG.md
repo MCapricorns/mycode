@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.15] - 2026-10-20
+
 ### Fixed
 
 - 桌面版不再允许对同一个家目录多开：第二次启动会把已打开的窗口切到前台（Windows）后退出。之前两个桌面进程打开同一个对话并各自发送时，后写的一方会把另一方已提交的记录当作残尾截掉，导致会话校验失败、消息丢失。终端版不受限制，仍可与桌面版同时运行。
@@ -243,7 +245,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.14...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.15...HEAD
+[0.12.15]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.15
 [0.12.14]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.14
 [0.12.13]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.13
 [0.12.12]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.12
