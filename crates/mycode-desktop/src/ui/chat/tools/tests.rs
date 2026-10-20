@@ -1,6 +1,6 @@
 use super::{
-    diff_counts, diff_line_text, shows_diff_preview, tool_batch_summary, tool_call_parts,
-    tool_dot_color, tool_status,
+    diff_counts, diff_line_text, read_path, shows_diff_preview, tool_batch_summary,
+    tool_call_parts, tool_dot_color, tool_status,
 };
 use crate::view_model::{ConversationEntry, EntryKind};
 
@@ -22,6 +22,18 @@ fn eleven_list_lines(header: &str) -> String {
         let _ = writeln!(page, "- line {n}");
     }
     page
+}
+
+/// String parsing only: the fixtures name no real file, and the test never
+/// touches the filesystem, so it runs the same on any machine.
+#[test]
+fn read_path_strips_only_a_trailing_line_window() {
+    assert_eq!(read_path("src/fluxlog.cpp"), "src/fluxlog.cpp");
+    assert_eq!(read_path("src/fluxlog.cpp L520+620"), "src/fluxlog.cpp");
+    assert_eq!(read_path("src/fluxlog.h +200"), "src/fluxlog.h");
+    assert_eq!(read_path("src/fluxlog.h L520"), "src/fluxlog.h");
+    assert_eq!(read_path("src/my file.cpp L520+620"), "src/my file.cpp");
+    assert_eq!(read_path("\"src/my file.rs\""), "src/my file.rs");
 }
 
 #[test]

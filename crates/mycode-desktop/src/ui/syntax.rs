@@ -29,7 +29,7 @@ pub(crate) fn sync_base(cx: &mut App) {
         .install(cx);
 }
 
-fn style(kind: TokenKind, light: bool) -> HighlightStyle {
+pub(crate) fn style(kind: TokenKind, light: bool) -> HighlightStyle {
     HighlightStyle {
         color: Some(color(kind, light)),
         font_style: (kind == TokenKind::Comment).then_some(FontStyle::Italic),

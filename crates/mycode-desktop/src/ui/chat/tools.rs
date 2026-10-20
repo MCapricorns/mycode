@@ -7,11 +7,13 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    div, px,
+    StyledText, div, px,
 };
+use mycode_frontend::highlight::highlight;
 
 use crate::i18n::{is_chinese, t};
 use crate::ui::skin;
+use crate::ui::syntax;
 use crate::ui::{desk::Desk, ellipsis};
 use crate::view_model::ConversationEntry;
 use crate::workspace::Workspace;
@@ -150,7 +152,7 @@ pub(super) fn render_tool_block(
                                     .text_xs()
                                     .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground)
-                                    .child(target),
+                                    .child(target.clone()),
                             )
                         }),
                 )
@@ -190,7 +192,7 @@ pub(super) fn render_tool_block(
             .min_w_0()
             .pt(skin::space(1))
             .pl(skin::space(4))
-            .child(result_body(tool, result, theme, &desk));
+            .child(result_body(tool, &target, result, theme, &desk));
         row = row.child(crate::ui::motion::fade_in(
             format!("tool-body-{}", call.event_id),
             flags.reduce_motion,
@@ -676,19 +678,93 @@ fn tool_status_node(status: &str, alert: bool, theme: &Theme) -> gpui_kit::AnyEl
         .into_any_element()
 }
 
+/// The path inside a `read` target.
+///
+/// [`mycode_core::tool_target`] appends a line window (`path L520+620` or
+/// `path +200`); the path itself may contain spaces, so only a trailing
+/// window is stripped.
+fn read_path(target: &str) -> &str {
+    let target = target.trim();
+    for marker in [" L", " +"] {
+        if let Some(at) = target.rfind(marker) {
+            let window = &target[at + marker.len()..];
+            if window
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch == '+')
+                && !window.is_empty()
+            {
+                return target[..at].trim().trim_matches('"');
+            }
+        }
+    }
+    target.trim_matches('"')
+}
+
+/// A highlighted body for a `read` result.
+///
+/// The target's file extension is the only language hint available, and the
+/// read tool returns bare file text with no fence. An unknown extension or a
+/// body without recognized tokens keeps the plain rendering, so prose and
+/// command output are never painted as code.
+fn read_preview(
+    target: &str,
+    text: &str,
+    theme: &Theme,
+    desk: &Desk,
+) -> Option<gpui_kit::AnyElement> {
+    let path = read_path(target);
+    let lang = std::path::Path::new(path).extension()?.to_str()?;
+    let code = ellipsis(text, 2000);
+    let tokens = highlight(&code, Some(lang));
+    if tokens.is_empty() {
+        return None;
+    }
+    let light = !theme.mode.is_dark();
+    Some(
+        div()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .px(skin::space(2))
+            .py(skin::space(1))
+            .rounded(skin::radius_xs())
+            .text_xs()
+            .whitespace_normal()
+            .font_family(theme.mono_font_family.clone())
+            .bg(desk.screen.opacity(0.45))
+            .text_color(desk.screen_dim)
+            .child(StyledText::new(code).with_highlights(
+                tokens
+                    .into_iter()
+                    .map(|(range, kind)| (range, syntax::style(kind, light))),
+            ))
+            .into_any_element(),
+    )
+}
+
 fn result_body(
     tool: &str,
+    target: &str,
     result: &ConversationEntry,
     theme: &Theme,
     desk: &Desk,
 ) -> impl IntoElement {
-    let text: &str = &result.text;
-    let failed = text.starts_with("failed:");
+    let raw: &str = &result.text;
+    let failed = raw.starts_with("failed:");
+    // The row already says 失败, so the projection's `failed: ` marker is not
+    // repeated in front of the first output line (`failed: True` read like a
+    // command output of its own). Keep it only to drive the status.
+    let text = raw.strip_prefix("failed: ").unwrap_or(raw);
     let lines: Vec<&str> = text.lines().collect();
     if shows_diff_preview(tool, text) {
         diff_preview(&lines, theme).into_any_element()
     } else if matches!(tool, "grep" | "find" | "search") && !failed {
         search_preview(tool, &lines, theme, desk).into_any_element()
+    } else if tool == "read"
+        && !failed
+        && let Some(preview) = read_preview(target, text, theme, desk)
+    {
+        preview
     } else if failed || text.len() > 300 || lines.len() > 6 {
         div()
             .w_full()
