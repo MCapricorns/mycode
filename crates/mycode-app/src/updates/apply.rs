@@ -362,7 +362,7 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) {
 }
 
 #[cfg(unix)]
-fn process_is_running(pid: u32) -> bool {
+pub(super) fn process_is_running(pid: u32) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return false;
     };
@@ -378,7 +378,7 @@ fn process_is_running(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn process_is_running(pid: u32) -> bool {
+pub(super) fn process_is_running(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -401,7 +401,7 @@ fn process_is_running(pid: u32) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn process_is_running(_pid: u32) -> bool {
+pub(super) fn process_is_running(_pid: u32) -> bool {
     false
 }
 
