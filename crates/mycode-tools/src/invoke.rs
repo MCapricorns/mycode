@@ -2,7 +2,7 @@
 //!
 //! The path is anchored, the file or search capability is bound, and the
 //! same tool executes. There is no separate permission prompt: a
-//! schema-valid call runs, and a path outside the workspace fails here.
+//! schema-valid call runs, and paths are not confined to the workspace.
 
 use std::path::{Path, PathBuf};
 
@@ -15,10 +15,10 @@ use crate::tool::ToolDyn;
 
 /// Builds the [`ToolCtx`] a tool executes with, including filesystem preflight.
 ///
-/// `read_roots` are host-published read-only anchor roots outside the
-/// workspace (the skills catalog). Only a tool whose whole file access is
-/// a read anchors against them; `edit` and `write` keep workspace-only
-/// anchoring, so a read root can never be written through a tool.
+/// `read_roots` are host-published anchor roots outside the workspace (the
+/// skills catalog). Only a tool whose whole file access is a read anchors
+/// against them, which keeps its path key relative to that root; any other
+/// path outside the workspace is bound from its resolved location.
 ///
 /// # Errors
 ///
@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_still_refuses_paths_outside_every_root() {
+    async fn read_reaches_paths_outside_every_root() {
         let workspace = temp("ws2");
         let home = temp("home2");
         let path = skill_file(&home.0);
@@ -157,11 +157,21 @@ mod tests {
             &args,
         )
         .await;
-        assert!(ctx.is_err(), "read without the root must fail closed");
+        let ctx = ctx.expect("read outside every root must prepare");
+        let key = ctx
+            .prepared_file
+            .as_ref()
+            .expect("prepared")
+            .key()
+            .to_owned();
+        assert!(
+            std::path::Path::new(&key).is_absolute() && key.ends_with("skills/probe/SKILL.md"),
+            "an outside read is keyed by its absolute spelling: {key}"
+        );
     }
 
     #[tokio::test]
-    async fn edit_never_anchors_on_read_roots() {
+    async fn edit_reaches_files_under_read_roots() {
         let workspace = temp("ws3");
         let home = temp("home3");
         let path = skill_file(&home.0);
@@ -180,10 +190,7 @@ mod tests {
             &args,
         )
         .await;
-        assert!(
-            ctx.is_err(),
-            "edit shares the read root spelling but must stay workspace-bound"
-        );
+        assert!(ctx.is_ok(), "edit is not confined to the workspace");
     }
 
     #[tokio::test]
@@ -234,5 +241,109 @@ mod tests {
         .await
         .expect("prepare find in extra root");
         assert_eq!(find_ctx.cwd, extra.0);
+    }
+
+    fn result_text(result: &crate::tool::ToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn run(
+        workspace: &std::path::Path,
+        tool: &dyn crate::tool::ToolDyn,
+        args: serde_json::Value,
+    ) -> String {
+        let ctx = prepare_tool_ctx(
+            workspace,
+            &[],
+            &[],
+            CancellationToken::new(),
+            "call",
+            tool,
+            &args,
+        )
+        .await
+        .expect("an outside path must prepare");
+        let mut stream = crate::stream::ToolStream::closed();
+        let result = tool
+            .execute_dyn(args, &ctx, &mut stream)
+            .await
+            .expect("an outside path must execute");
+        let text = result_text(&result);
+        assert!(!result.is_error, "{text}");
+        text
+    }
+
+    #[tokio::test]
+    async fn search_and_parent_relative_paths_reach_outside_the_workspace() {
+        let base = temp("outside");
+        let workspace = base.0.join("ws");
+        let other = base.0.join("other");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(other.join("src")).unwrap();
+        fs::write(other.join("src").join("lib.rs"), "fn probe() {}\n").unwrap();
+        let other_path = other.display().to_string();
+
+        let grep = run(
+            &workspace,
+            &crate::builtin::GrepTool,
+            json!({"pattern": "probe", "path": other_path}),
+        )
+        .await;
+        assert!(grep.contains("lib.rs:1:"), "{grep}");
+
+        let find = run(
+            &workspace,
+            &crate::builtin::FindTool,
+            json!({"pattern": "*.rs", "path": other_path}),
+        )
+        .await;
+        assert!(find.contains("lib.rs"), "{find}");
+
+        let read = run(
+            &workspace,
+            &ReadTool,
+            json!({"path": "../other/src/lib.rs"}),
+        )
+        .await;
+        assert!(read.contains("fn probe() {}"), "{read}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn read_and_grep_follow_a_junction_inside_the_workspace() {
+        let base = temp("junction");
+        let workspace = base.0.join("ws");
+        let target = base.0.join("target");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("lib.rs"), "fn probe() {}\n").unwrap();
+        let link = workspace.join("linked");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !made {
+            return;
+        }
+
+        let read = run(&workspace, &ReadTool, json!({"path": "linked/lib.rs"})).await;
+        assert!(read.contains("fn probe() {}"), "{read}");
+        let grep = run(
+            &workspace,
+            &crate::builtin::GrepTool,
+            json!({"pattern": "probe", "path": "linked"}),
+        )
+        .await;
+        assert!(grep.contains("lib.rs:1:"), "{grep}");
+        let _ = fs::remove_dir(&link);
     }
 }

@@ -154,10 +154,9 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Whether the tool only reads through the prepared file capability.
     ///
-    /// Read-only content tools may anchor absolute paths against
+    /// Read-only content tools anchor absolute paths against
     /// host-published read roots outside the workspace (the skills
-    /// catalog); `edit` and `write` never do, so those roots stay
-    /// unwritable.
+    /// catalog), which keeps their keys relative to that root.
     fn reads_only(&self) -> bool {
         false
     }

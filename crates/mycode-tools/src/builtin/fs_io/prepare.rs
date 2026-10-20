@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::builtin::blocking::run_blocking;
 use crate::builtin::fs_search::{
     SEARCH_TIME_LIMIT, map_target_kind_error, normalize_session_cwd, posix_relative_key,
-    resolve_relative_argument, validate_component_name,
+    resolve_outside_anchor, resolve_relative_argument, validate_component_name,
 };
 pub(crate) use crate::roots::anchor_file_path;
 use crate::tool::{INTERRUPTED_NOTE, ToolError};
@@ -52,11 +52,15 @@ pub(super) fn map_open_error(raw: &str, error: io::Error) -> ToolError {
 
 /// Resolves `cwd` and `path` once for retained-capability execution.
 ///
+/// A path inside `cwd` keeps a cwd-relative key. A path outside it, or one
+/// whose cwd walk crosses a link or mount, is bound from its resolved
+/// location instead and keyed by that absolute spelling.
+///
 /// # Errors
 ///
 /// Returns [`ToolError::Execution`] or [`ToolError::InvalidArgs`] when the
 /// target cannot be bound, including missing read targets, cancellation, and
-/// symlink/reparse/device/ADS/escape failures.
+/// device/ADS failures.
 pub fn prepare_file(
     cwd: &Path,
     path: &str,
@@ -65,7 +69,42 @@ pub fn prepare_file(
 ) -> Result<PreparedFile, ToolError> {
     check_cancel(cancel).map_err(|error| ToolError::Execution(error.to_string()))?;
     let absolute = normalize_session_cwd(cwd)?;
-    let allowed = sys::open_allowed_root(&absolute)
+    match prepare_in_cwd(&absolute, path, cancel, access) {
+        Err(ToolError::InvalidArgs(message)) => {
+            prepare_outside(&absolute, path, cancel, access).map_err(|error| match error {
+                // No ancestor resolved: keep the cwd walk's reason.
+                None => ToolError::InvalidArgs(message),
+                Some(error) => error,
+            })
+        }
+        other => other,
+    }
+}
+
+fn prepare_outside(
+    cwd: &Path,
+    path: &str,
+    cancel: &CancellationToken,
+    access: FileAccess,
+) -> Result<PreparedFile, Option<ToolError>> {
+    let (anchor, components) = resolve_outside_anchor(cwd, path).ok_or(None)?;
+    if components.is_empty() {
+        return Err(Some(ToolError::InvalidArgs(format!(
+            "path is not a regular file: {path}"
+        ))));
+    }
+    let allowed =
+        sys::open_allowed_root(&anchor).map_err(|error| Some(map_open_error(path, error)))?;
+    walk_prepare(allowed, anchor, components, path, cancel, access).map_err(Some)
+}
+
+fn prepare_in_cwd(
+    absolute: &Path,
+    path: &str,
+    cancel: &CancellationToken,
+    access: FileAccess,
+) -> Result<PreparedFile, ToolError> {
+    let allowed = sys::open_allowed_root(absolute)
         .map_err(|error| ToolError::Execution(format!("session cwd is not accessible: {error}")))?;
     // Windows: the session-given cwd spelling can differ from the
     // handle-proven final path through an 8.3 alias (`RUNNER~1` vs
@@ -76,10 +115,10 @@ pub fn prepare_file(
             crate::builtin::fs_search::final_path_by_handle(&allowed).map_err(|error| {
                 ToolError::Execution(format!("session cwd is not accessible: {error}"))
             })?;
-        (final_root, Some(absolute.as_path()))
+        (final_root, Some(absolute))
     };
     #[cfg(not(windows))]
-    let (allowed_root, alias_root): (PathBuf, Option<&Path>) = (absolute, None);
+    let (allowed_root, alias_root): (PathBuf, Option<&Path>) = (absolute.to_path_buf(), None);
     let relative = resolve_relative_argument(&allowed_root, alias_root, path)
         .map_err(|()| ToolError::InvalidArgs(format!("path escapes the session cwd: {path}")))?;
     let components: Vec<OsString> = relative
@@ -97,22 +136,24 @@ pub fn prepare_file(
         ));
     }
     if components.is_empty() {
-        return Err(ToolError::InvalidArgs(
-            "path must name a file inside the session cwd".to_owned(),
-        ));
+        return Err(ToolError::InvalidArgs(format!(
+            "path is not a regular file: {path}"
+        )));
     }
-    walk_prepare(allowed, components, path, cancel, access)
+    walk_prepare(allowed, PathBuf::new(), components, path, cancel, access)
 }
 
+/// Walks `components` below `allowed`. `proven` is the key prefix: empty
+/// for a cwd-relative key, the anchor path for an absolute one.
 pub(super) fn walk_prepare(
     allowed: File,
+    mut proven: PathBuf,
     components: Vec<OsString>,
     raw: &str,
     cancel: &CancellationToken,
     access: FileAccess,
 ) -> Result<PreparedFile, ToolError> {
     let mut parent = allowed;
-    let mut proven = PathBuf::new();
     let last = components.len() - 1;
     for (index, name) in components.iter().enumerate() {
         check_cancel(cancel).map_err(|error| ToolError::Execution(error.to_string()))?;
@@ -185,7 +226,7 @@ pub(super) fn walk_prepare(
         }
     }
     Err(ToolError::InvalidArgs(format!(
-        "path must name a file inside the session cwd: {raw}"
+        "path is not a regular file: {raw}"
     )))
 }
 
@@ -269,9 +310,7 @@ mod tests {
             FileAccess::ExistingContent,
         )
         .expect_err("cwd itself is not a file");
-        assert!(
-            matches!(error, ToolError::InvalidArgs(msg) if msg.contains("inside the session cwd"))
-        );
+        assert!(matches!(error, ToolError::InvalidArgs(msg) if msg.contains("not a regular file")));
     }
 
     #[cfg(windows)]

@@ -22,8 +22,7 @@ pub struct WriteTool;
 #[derive(Deserialize, JsonSchema)]
 pub struct WriteArgs {
     /// Path of the file to write. Relative paths resolve against the
-    /// session cwd; writable absolute paths stay inside the session cwd,
-    /// an added workspace root, or the OS temp directory. Missing parent
+    /// session cwd; absolute paths may point anywhere. Missing parent
     /// directories are created.
     pub path: String,
     /// The complete new content of the file.
@@ -58,14 +57,13 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write a UTF-8 text file inside the session cwd, an added workspace \
-         root, or the OS temp directory. Replacing an EXISTING file requires \
+        "Write a UTF-8 text file. Replacing an EXISTING file requires \
          either `expected_revision` (the token from the `[revision …]` line \
          of your latest read/edit/write of that file) or `overwrite: true`; \
          without one the call is refused. The two cannot be combined. New \
          files need neither and are created atomically (parents created as \
          needed). Prefer `edit` for partial changes. Hidden files are \
-         writable. Does not follow symlinks or reparse points."
+         writable."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -139,7 +137,7 @@ mod tests {
     use crate::tool::Tool;
 
     #[tokio::test]
-    async fn write_without_preflight_anchors_extra_roots_and_refuses_read_roots() {
+    async fn write_without_preflight_anchors_extra_roots_and_reaches_outside_paths() {
         let base = std::env::temp_dir().join(format!(
             "mycode-write-roots-{}-{}",
             std::process::id(),
@@ -152,7 +150,7 @@ mod tests {
         std::fs::create_dir_all(&extra).expect("extra");
         std::fs::create_dir_all(&read_only).expect("skills");
         let extra_file = extra.join("out.txt");
-        let skill_file = read_only.join("SKILL.md");
+        let outside_file = base.join("outside").join("new").join("note.txt");
 
         let ctx = ToolCtx::new(&cwd)
             .with_extra_roots(vec![PathBuf::from(&extra)])
@@ -177,11 +175,13 @@ mod tests {
             "written\n"
         );
 
-        let err = WriteTool
+        // Outside every root, with missing parents: written at its resolved
+        // location and keyed by that absolute spelling.
+        let res = WriteTool
             .execute(
                 WriteArgs {
-                    path: skill_file.display().to_string(),
-                    content: "nope\n".to_owned(),
+                    path: outside_file.display().to_string(),
+                    content: "outside\n".to_owned(),
                     expected_revision: None,
                     overwrite: false,
                 },
@@ -189,8 +189,20 @@ mod tests {
                 &mut stream,
             )
             .await
-            .expect_err("write under read_roots must fail closed");
-        assert!(err.to_string().contains("escapes the session cwd"), "{err}");
+            .expect("write outside every root");
+        assert!(!res.is_error);
+        assert_eq!(
+            std::fs::read_to_string(&outside_file).expect("read back"),
+            "outside\n"
+        );
+        let key = res.details.as_ref().expect("details")["path"]
+            .as_str()
+            .expect("path key")
+            .to_owned();
+        assert!(
+            std::path::Path::new(&key).is_absolute() && key.ends_with("outside/new/note.txt"),
+            "{key}"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

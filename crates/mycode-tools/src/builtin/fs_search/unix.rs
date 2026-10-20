@@ -350,18 +350,12 @@ pub(crate) fn unix_named_identity(
             "opened object is neither a regular file nor a directory",
         ));
     };
-    if kind == FsEntryKind::File && stat.st_nlink as u64 != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "multi-link regular files are not permitted",
-        ));
-    }
     let device = unix_device_identity(stat.st_dev)?;
     let inode = unix_identity_part(stat.st_ino, "inode")?;
     Ok((FileIdentity { device, inode }, kind))
 }
 
-/// Confirms `name` with no-follow metadata and mount/type/`nlink` proof.
+/// Confirms `name` with no-follow metadata and mount/type proof.
 ///
 /// Lookup does not open the child for reading; inability to prove
 /// containment fails closed.
@@ -430,18 +424,12 @@ pub(crate) fn confirm_named_unix_metadata(
             "walked object type or identity changed before it was opened",
         ));
     }
-    if kind == FsEntryKind::File && stat.st_nlink as u64 != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "multi-link regular files are not permitted",
-        ));
-    }
     Ok(())
 }
 
 /// Opens `name` relative to `dirfd` without following links.
 ///
-/// Uses `openat` and relies on the post-open `st_dev` / `st_nlink` check.
+/// Uses `openat` and relies on the post-open `st_dev` check.
 #[cfg(unix)]
 fn open_unix_descriptor(
     dirfd: std::os::fd::RawFd,
@@ -482,8 +470,6 @@ fn enforce_unix_child_containment(
     child: &File,
     expected: Option<FsEntryKind>,
 ) -> io::Result<()> {
-    use std::os::unix::fs::MetadataExt;
-
     // `st_dev` is the only mount identity available here: a different device
     // is a mount cross and fails closed; a bind mount that keeps `st_dev`
     // cannot be detected.
@@ -493,7 +479,6 @@ fn enforce_unix_child_containment(
             "mount traversal is not permitted",
         ));
     }
-    let child_meta = child.metadata()?;
     let (_, kind) = identity_and_kind(child)?;
     if let Some(expected) = expected
         && kind != expected
@@ -501,12 +486,6 @@ fn enforce_unix_child_containment(
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "walked object type or identity changed before it was opened",
-        ));
-    }
-    if kind == FsEntryKind::File && child_meta.nlink() != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "multi-link regular files are not permitted",
         ));
     }
     Ok(())

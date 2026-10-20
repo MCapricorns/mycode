@@ -50,7 +50,7 @@ pub struct FindArgs {
     /// Glob matched against each path relative to the search root.
     pub pattern: String,
     /// Directory or single file to search. Relative paths resolve against the
-    /// session cwd; absolute paths must be under a workspace root.
+    /// session cwd; absolute paths may point anywhere.
     pub path: Option<String>,
     /// Maximum number of paths to report.
     pub limit: Option<usize>,

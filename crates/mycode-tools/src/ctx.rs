@@ -35,8 +35,8 @@ pub struct ToolCtx {
     /// Extra workspace roots. Absolute tool paths under one of these are
     /// re-anchored the same way the agent loop anchors a direct call.
     pub extra_roots: Vec<PathBuf>,
-    /// Host-published read-only anchor roots (the skills catalog). Only
-    /// read-only file tools anchor here, so `edit` and `write` stay refused.
+    /// Host-published anchor roots (the skills catalog). Only read-only
+    /// file tools anchor here, keeping their path keys relative to it.
     pub read_roots: Vec<PathBuf>,
 }
 
