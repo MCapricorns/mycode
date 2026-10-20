@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.10] - 2026-10-20
+
 ### Added
 
 - 自动压缩生成摘要期间，桌面版和 CLI 的状态行显示「正在压缩上下文」，不再一直停在「等待模型响应」。
@@ -194,7 +196,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.9...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.10...HEAD
+[0.12.10]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.10
 [0.12.9]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.9
 [0.12.8]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.8
 [0.12.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.7
