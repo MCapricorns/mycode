@@ -122,7 +122,7 @@ impl Workspace {
         // a floating layer.
         if let Some(layer) = top_dismiss_layer(
             self.project_picker.is_some(),
-            self.git_diff_panel_open,
+            self.driver.git_diff_open(),
             self.vm().changes_panel_open,
             // The Details overlay is painted only on the desk. A leftover
             // unpinned inspector must not consume Escape while Settings is up.
@@ -132,10 +132,7 @@ impl Workspace {
         ) {
             match layer {
                 DismissLayer::Picker => self.on_picker_cancel(cx),
-                DismissLayer::Diff => {
-                    self.git_diff_panel_open = false;
-                    cx.notify();
-                }
+                DismissLayer::Diff => self.on_close_git_diff_panel(cx),
                 DismissLayer::Changes => {
                     self.apply_action(FrontendAction::ChangesPanelToggled(false), cx);
                 }

@@ -430,3 +430,71 @@ fn ensure_catalog_loads_once_the_composer_has_a_model() {
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Polls `driver` until `done` holds, for up to ten seconds.
+fn poll_until(
+    driver: &mut super::FrontendDriver,
+    done: impl Fn(&super::FrontendDriver) -> bool,
+) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        driver.poll(&mut Vec::new());
+        if done(driver) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+fn lists(driver: &super::FrontendDriver, path: &str) -> bool {
+    driver.git().files.iter().any(|file| file.path == path)
+}
+
+/// The open folder's git status belongs to the driver, so every frontend
+/// can show it: a frontend turns it on, a change in the folder is read
+/// again without the frontend, and a folder change starts over.
+#[test]
+fn the_driver_keeps_the_open_folders_git_status_fresh() {
+    let (mut driver, root) = scratch_driver("git-watch");
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).expect("repo");
+    let init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["init", "-q"])
+        .status()
+        .expect("git");
+    assert!(init.success(), "git init");
+    std::fs::write(repo.join("first.txt"), "one\n").expect("first");
+    let mut out = Vec::new();
+    driver.act(
+        FrontendAction::ActiveProjectChanged(Some(repo.display().to_string())),
+        &mut out,
+    );
+    assert!(driver.git().files.is_empty(), "off until a frontend asks");
+    driver.watch_git();
+    assert!(
+        poll_until(&mut driver, |driver| lists(driver, "first.txt")),
+        "{:?}",
+        driver.git()
+    );
+    std::fs::write(repo.join("second.txt"), "two\n").expect("second");
+    assert!(
+        poll_until(&mut driver, |driver| lists(driver, "second.txt")),
+        "a change in the folder was not read again: {:?}",
+        driver.git()
+    );
+    driver.select_git_file("first.txt");
+    assert!(driver.git_diff_open());
+    assert!(
+        poll_until(&mut driver, |driver| driver.git_diff().contains("one")),
+        "{}",
+        driver.git_diff()
+    );
+    driver.act(FrontendAction::ActiveProjectChanged(None), &mut out);
+    assert!(!driver.git_diff_open());
+    assert!(driver.git().files.is_empty());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}

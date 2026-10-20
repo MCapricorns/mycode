@@ -30,7 +30,6 @@ BridgeCommand → CoreBridge
 | `workspace/history` | 跟随底部、主题切换时保持滚动位置、靠近顶部时补更早一页 |
 | `workspace/menus`、`workspace/model_menu` | 作曲栏选择器的键盘导航，以及模型、服务商、思考强度的选择 |
 | `workspace/palette` | 命令面板的开关与执行 |
-| `workspace/git` | 文件事件监视，合并后在后台线程读 `git status` |
 | `workspace/settings_editor` | 设置表单实体与保存。密钥框保存后清空，已存的钥匙不会回填 |
 | `workspace/updates_data` | 自更新、导入导出、MCP 探测、`ask_user` 输入框、Esc 分层关闭 |
 | `view_model`（`mycode-frontend`） | `WorkspaceState` 与 `reduce`；子模块按对话、项目、模型、设置、用量拆分 |
@@ -41,6 +40,7 @@ BridgeCommand → CoreBridge
 | `ui/chat` | 欢迎页、转录、作曲栏、`@` / `/` 菜单、模型与思考菜单、提问卡 |
 | `ui/context` | 详情面板、全部改动抽屉、diff 面板和子代理小窗 |
 | `ui/settings` | 设置壳：五组导航、八个页面，以及模型库、OAuth、服务商详情等二级页 |
+| `driver/git`（`mycode-frontend`） | 打开目录的文件事件监视，合并后在后台线程读 `git status`，以及打开的 diff。桌面版启动时调用 `watch_git` 开启；没有改动视图的前端不开 |
 | `git_status`（`mycode-frontend`） | 只读执行 `git status --porcelain=v1 -z -b --untracked-files=all` 和 `git diff HEAD`；带 `--no-optional-locks`、`--no-pager`、`--literal-pathspecs`。最多保留 80 个改动文件，diff 截断在 12,000 字节，改名/复制行打开新路径的 diff |
 | `i18n`（`mycode-frontend`） | `auto` 用系统 UI 语言（Windows / macOS），其它平台回退到 `LC_ALL` / `LC_MESSAGES` / `LANG`；也可固定 `en` 或 `zh` |
 
@@ -127,7 +127,7 @@ BridgeCommand → CoreBridge
 
 核心发事件时唤醒界面任务；接收端挂起，醒来后把通道里的事件折进状态。流式文字按 64ms 一帧分片折入，每帧最多 80 字符 / 16 条增量；同一帧已有增量时，`ChatDone`/`ChatFailed`/`AssistantStep` 和工具结果留到下一帧，避免快回合只画出最终消息。流式回复缓冲上限为 256 KiB。用户消息已在排队时，界面不再分帧，直接排空事件。
 
-打开的目录由系统文件事件监视（`notify` 的默认后端：macOS 为 FSEvents，Windows 为 `ReadDirectoryChangesW`）。`.git` 下的 `objects`、`logs`、`hooks`、`info`、`worktrees` 和 `*.lock` 不触发刷新。变化合并 300ms 后在工作线程读一次 `git status`；切换目录会丢掉旧目录还在跑的读取。工作区内容变了但 porcelain 状态不变时（例如仍是 `M`），已打开的 diff 也会跟着刷新。
+打开的目录由驱动（`mycode-frontend` 的 `driver/git`）用系统文件事件监视（`notify` 的默认后端：macOS 为 FSEvents，Windows 为 `ReadDirectoryChangesW`）。`.git` 下的 `objects`、`logs`、`hooks`、`info`、`worktrees` 和 `*.lock` 不触发刷新。变化合并 300ms 后在工作线程读一次 `git status`；切换目录会丢掉旧目录还在跑的读取。工作区内容变了但 porcelain 状态不变时（例如仍是 `M`），已打开的 diff 也会跟着刷新。
 
 `SendMessage` 和 `RecallMessage` 带上界面看到的账本头。核心拒绝过期头时，界面保持原对话并提示，不本地假装已经撤回。`RecallMessage` 只截断对话；编辑会把原文填回输入框。工作区里的文件不会被恢复或删除。
 

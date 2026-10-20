@@ -30,6 +30,7 @@ use mycode_config::HomeLayout;
 use crate::view_model::{FrontendAction, MainView, MentionKind, WorkspaceState, reduce};
 
 mod events;
+mod git;
 mod projects;
 mod replies;
 mod sessions;
@@ -76,8 +77,6 @@ pub enum Effect {
     /// Every ask-card field should reset (a new card, the card answered or
     /// dismissed, or the conversation left the screen).
     AskReset,
-    /// `state.project_dir` changed; re-read git status for the new folder.
-    ProjectChanged,
     /// A settings-loaded theme or an explicit pick should paint now.
     AppearanceTheme(String),
     /// The interface scale changed; repaint the window at the new rem.
@@ -220,6 +219,20 @@ enum DriverMsg {
     RepairToastTick,
     /// A day of runtime passed; re-check for an update when allowed.
     UpdateRecheckTick,
+    /// The watched tree changed and its burst of events settled.
+    GitTreeChanged { generation: u64 },
+    /// A `git status` read finished.
+    GitStatusRead {
+        generation: u64,
+        root: String,
+        snapshot: Box<crate::git_status::GitSnapshot>,
+    },
+    /// A `git diff` read finished.
+    GitDiffRead {
+        generation: u64,
+        path: String,
+        diff: String,
+    },
 }
 
 /// Typing `@` walks the project tree. Wait until the fragment settles so
@@ -368,6 +381,8 @@ pub struct FrontendDriver {
     /// Session whose interrupt waits for its automatic compaction to end;
     /// see [`FrontendDriver::interrupt_send`].
     interrupt_after_compaction: Option<String>,
+    /// The open folder's git status and opened diff; see [`git`].
+    git: git::GitWatch,
     /// Free-text answers to the pending ask card, aligned with its rows.
     pub ask_texts: Vec<String>,
     /// The question the ask card is showing; answers step one at a time.
@@ -442,6 +457,7 @@ impl FrontendDriver {
             resync_on_turn_end: None,
             held_send: None,
             interrupt_after_compaction: None,
+            git: git::GitWatch::default(),
             ask_texts: Vec::new(),
             ask_index: 0,
         };
@@ -592,6 +608,17 @@ impl FrontendDriver {
         });
     }
 
+    /// Runs `work` on a worker thread; its message lands on this inbox.
+    fn in_background(&self, work: impl FnOnce() -> DriverMsg + Send + 'static) {
+        let tx = self.inbox_tx.clone();
+        let wake = self.wake.clone();
+        std::thread::spawn(move || {
+            if tx.send(work()).is_ok() {
+                wake();
+            }
+        });
+    }
+
     /// One timer step landing later on this same inbox.
     fn schedule(&self, after: Duration, build: impl FnOnce() -> DriverMsg + Send + 'static) {
         let tx = self.inbox_tx.clone();
@@ -667,6 +694,17 @@ impl FrontendDriver {
                     // continues for the process's whole uptime.
                     self.spawn_update_recheck();
                 }
+                DriverMsg::GitTreeChanged { generation } => self.on_git_tree_changed(generation),
+                DriverMsg::GitStatusRead {
+                    generation,
+                    root,
+                    snapshot,
+                } => self.finish_git_status(generation, &root, *snapshot),
+                DriverMsg::GitDiffRead {
+                    generation,
+                    path,
+                    diff,
+                } => self.finish_git_diff(generation, &path, diff),
             }
         }
     }
@@ -750,7 +788,7 @@ impl FrontendDriver {
         reduce(&mut self.vm, action);
         if self.vm.project_dir != previous_project {
             self.agent_roles_stale = true;
-            out.push(Effect::ProjectChanged);
+            self.rewatch_git();
         }
         if self.vm.error.is_some()
             && self.vm.error != previous_error

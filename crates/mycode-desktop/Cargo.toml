@@ -17,7 +17,6 @@ tokio = { workspace = true, features = ["sync"] }
 # non-optional native dependency (no feature drops it), so the desktop
 # binary carries smol beside tokio. Every other workspace crate is tokio-only.
 gpui-kit = "0.7.1"
-notify = "8.2.0"
 chrono.workspace = true
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }

@@ -4661,7 +4661,6 @@ dependencies = [
  "mycode-frontend",
  "mycode-providers",
  "mycode-tools",
- "notify",
  "parking_lot",
  "raw-window-handle",
  "tokio",
@@ -4677,6 +4676,7 @@ dependencies = [
  "mycode-config",
  "mycode-providers",
  "mycode-tools",
+ "notify",
  "tokio",
  "windows-sys 0.61.2",
 ]

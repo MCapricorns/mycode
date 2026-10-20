@@ -13,6 +13,8 @@ mycode-tools = { path = "../mycode-tools" }
 # Sync primitives and the executor-agnostic reply futures: this crate never
 # owns a runtime.
 tokio = { workspace = true, features = ["sync", "time"] }
+# Filesystem events that keep the open folder's git status fresh.
+notify = "8.2.0"
 # The global allocator (mimalloc) and VC-LTL link live in the leaf crates
 # mycode-core / mycode-config so every target in the workspace shares them;
 # nothing is declared here on purpose.
