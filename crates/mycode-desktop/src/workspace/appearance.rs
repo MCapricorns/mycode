@@ -21,7 +21,7 @@ impl Workspace {
         }
         crate::ui::desk::apply(Theme::global_mut(cx));
         self.applied_font_size.clear();
-        Theme::sync_base(cx);
+        crate::ui::syntax::sync_base(cx);
     }
 
     /// Applies and persists the interface font size. The next frame paints it.
@@ -52,7 +52,7 @@ impl Workspace {
             theme.mono_font_family = mono;
         }
         window.set_rem_size(px(crate::ui::desk::interface_rem_px(size_id)));
-        Theme::sync_base(cx);
+        crate::ui::syntax::sync_base(cx);
         self.applied_font_size = size_id.to_owned();
     }
 

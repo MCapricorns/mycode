@@ -22,6 +22,12 @@ pub struct SemanticTokens {
     pub text_1: Hsla,
     pub text_2: Hsla,
     pub text_3: Hsla,
+    /// Assistant reply body. A cool tint instead of the chrome's near-white,
+    /// so a long answer reads as prose rather than glare.
+    pub reply: Hsla,
+    /// Thinking trace body. A muted lavender that pairs with the violet
+    /// "Thinking" header and stays a step quieter than the reply.
+    pub thinking: Hsla,
     pub accent: Hsla,
     pub accent_soft: Hsla,
     pub accent_ink: Hsla,
@@ -217,6 +223,8 @@ struct Spec {
     ink: u32,
     dim: u32,
     faint: u32,
+    reply: u32,
+    thinking: u32,
     line: u32,
     line_strong: u32,
     accent: u32,
@@ -244,6 +252,8 @@ pub fn semantic_tokens(light: bool) -> SemanticTokens {
         text_1: hex(spec.ink),
         text_2: hex(spec.dim),
         text_3: hex(spec.faint),
+        reply: hex(spec.reply),
+        thinking: hex(spec.thinking),
         accent: hex(spec.accent),
         accent_soft: hex(spec.tint),
         accent_ink: hex(spec.accent_ink),
@@ -265,6 +275,8 @@ fn dark_spec() -> Spec {
         ink: 0xECEDEE,
         dim: 0xA1A4AB,
         faint: 0x6B6F78,
+        reply: 0xCDD5E4,
+        thinking: 0xA59FCB,
         line: 0x22252B,
         line_strong: 0x2E323B,
         accent: 0x7C8CFF,
@@ -288,6 +300,8 @@ fn light_spec() -> Spec {
         ink: 0x18181B,
         dim: 0x52525B,
         faint: 0x71717A,
+        reply: 0x283044,
+        thinking: 0x625A93,
         line: 0xE4E4E2,
         line_strong: 0xD4D4D0,
         accent: 0x4353D8,
@@ -469,19 +483,23 @@ pub struct Desk {
     pub red: Hsla,
     pub violet: Hsla,
     pub faint: Hsla,
+    pub reply: Hsla,
+    pub thinking: Hsla,
     pub screen: Hsla,
     pub screen_dim: Hsla,
 }
 
 impl Desk {
     pub fn of(theme: &Theme) -> Self {
-        let faint = semantic_tokens(!theme.mode.is_dark()).text_3;
+        let tokens = semantic_tokens(!theme.mode.is_dark());
         Self {
             amber: theme.warning,
             green: theme.green,
             red: theme.red,
             violet: theme.magenta,
-            faint,
+            faint: tokens.text_3,
+            reply: tokens.reply,
+            thinking: tokens.thinking,
             screen: theme.background,
             screen_dim: theme.muted_foreground,
         }
@@ -613,6 +631,46 @@ mod tests {
             light.warning, light.accent,
             "light warning must not collapse onto accent"
         );
+    }
+
+    /// The reply and thinking inks are tinted, not white or black, and stay
+    /// readable; the thinking trace sits a step quieter than the reply.
+    #[test]
+    fn reading_inks_are_tinted_readable_and_ordered() {
+        for (mode, tokens) in [
+            ("dark", super::semantic_tokens(false)),
+            ("light", super::semantic_tokens(true)),
+        ] {
+            let reply = contrast(tokens.reply, tokens.bg);
+            let thinking = contrast(tokens.thinking, tokens.bg);
+            assert!(reply >= 7.0, "{mode} reply ink is {reply:.2}, want >= 7");
+            assert!(
+                thinking >= 4.5,
+                "{mode} thinking ink is {thinking:.2}, want >= 4.5"
+            );
+            assert!(thinking < reply, "{mode} thinking must be quieter");
+            assert!(tokens.reply.s >= 0.15 && tokens.thinking.s >= 0.15);
+            assert_ne!(tokens.reply, tokens.text_1);
+        }
+    }
+
+    /// Code tokens hold 4.5:1 on the code-block fill (`muted` is the card);
+    /// comments may drop to 3.5:1 because they are meant to recede.
+    #[test]
+    fn syntax_colors_stay_readable_on_the_code_fill() {
+        use crate::ui::syntax::{KINDS, color};
+        use mycode_frontend::highlight::TokenKind;
+        for (mode, light) in [("dark", false), ("light", true)] {
+            let fill = super::semantic_tokens(light).surface_2;
+            for kind in KINDS {
+                let ratio = contrast(color(kind, light), fill);
+                let floor = if kind == TokenKind::Comment { 3.5 } else { 4.5 };
+                assert!(
+                    ratio >= floor,
+                    "{mode} {kind:?} on the code fill is {ratio:.2}, want >= {floor}"
+                );
+            }
+        }
     }
 
     fn contrast(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> f32 {

@@ -431,7 +431,7 @@ fn thinking_box(
                     .border_color(theme.border.opacity(0.55))
                     .whitespace_normal()
                     .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_color(Desk::of(theme).thinking)
                     .child(text.to_owned())
                     .test_support(),
             )
@@ -466,10 +466,10 @@ fn thinking_line(
     }
 }
 
-/// Assistant reply bubble: Markdown via gpui-kit's TextView.
-///
-/// Fenced code renders in a single default style: the tree-sitter grammars
-/// were dropped to halve the binary. The id must be unique per entry —
+/// Assistant reply bubble: Markdown via gpui-kit's TextView, in the reply
+/// ink. Fenced code is colored by the lexical highlighter `ui::syntax`
+/// installs (the tree-sitter grammars were dropped to halve the binary).
+/// The id must be unique per entry —
 /// `ElementId::CodeLocation` would collide across blocks since all bubbles
 /// render from the same call site.
 fn agent_text(
