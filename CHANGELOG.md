@@ -6,10 +6,6 @@
 
 ## [Unreleased]
 
-### Changed
-
-- 去掉桌面版输入框左下角的 `+` 按钮：它弹出系统原生的文件选择框，和应用内的目录浏览器风格割裂。引用文件改为在输入框里输入 `@` 搜索项目文件。
-
 ### Fixed
 
 - 桌面版不再允许对同一个家目录多开：第二次启动会把已打开的窗口切到前台（Windows）后退出。之前两个桌面进程打开同一个对话并各自发送时，后写的一方会把另一方已提交的记录当作残尾截掉，导致会话校验失败、消息丢失。终端版不受限制，仍可与桌面版同时运行。
@@ -17,6 +13,15 @@
 - 启动时清理更新临时目录不再删掉另一个仍在运行的 MYCode 进程的下载目录。之前桌面版下载更新期间打开终端版（或反过来），正在下载的文件会被删掉，更新下载失败。
 - 启动时回收子代理 worktree 不再删掉另一个仍在运行的 MYCode 进程正在使用的 worktree。之前桌面版的子代理在 worktree 里改代码时打开终端版（或再开一个终端版），那个 worktree 会被强制删除，子代理的改动随之丢失。
 - `edit` 在 CRLF 文件里替换以换行开头的 `old_string`（例如 `\n    fn foo`）时连同 `\r` 一起替换；之前只替换了 `\n`，会留下一个孤立的 `\r`。
+
+## [0.12.14] - 2026-10-20
+
+### Changed
+
+- 去掉桌面版输入框左下角的 `+` 按钮：它弹出系统原生的文件选择框，和应用内的目录浏览器风格割裂。引用文件改为在输入框里输入 `@` 搜索项目文件。
+
+### Fixed
+
 - 桌面版的供应商中断行（`[error] the response was interrupted: …`）改为红色提示框，不再作为普通回答正文显示；回答里引用的构建日志（如 sbt 的 `[error] …` 行）仍按正文显示。
 - 终端版只把代理写入的中断行标成 `✖` 错误行；之前任何以 `[error]` 开头的行都会被标红，引用 sbt 构建日志时会把代码块拆开。
 - 输入框的上下文圆环改为按已用比例填充（`200k / 1.0M` 约 20% 的弧），与旁边的用量数字一致，并用主题强调色让弧清晰可见；之前按剩余比例反向绘制，看起来几乎是一整圈。
@@ -238,7 +243,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.13...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.14...HEAD
+[0.12.14]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.14
 [0.12.13]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.13
 [0.12.12]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.12
 [0.12.11]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.11
