@@ -30,12 +30,12 @@ serde = { version = "1.0.229", features = ["derive", "rc"] }
 # schemas and settings documents render their fields in a stable order, and
 # gpui-pre only carried this feature into builds that linked the desktop UI
 # toolkit.
-serde_json = { version = "1.0.151", features = ["preserve_order", "raw_value"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "raw_value"] }
 base64 = "0.23.1"
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["rt", "macros", "sync", "time"] }
-schemars = "1.2.2"
-uuid = { version = "1.27.0", features = ["v4", "serde"] }
+tokio = { version = "1.54.0", features = ["rt", "macros", "sync", "time"] }
+schemars = "1.2.3"
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
 # OS TLS (schannel on Windows, Security.framework on macOS). reqwest's
 # default `rustls` feature also builds aws-lc-sys, a second full crypto
@@ -68,14 +68,14 @@ grep-matcher = "0.1.9"
 regex = "1.13.1"
 aho-corasick = "1.1.5"
 memchr = "2.8.3"
-jsonschema = { version = "0.58.6", default-features = false }
+jsonschema = { version = "0.59.0", default-features = false }
 blake3 = "1.8.7"
-libc = "0.2.190"
+libc = "0.2.191"
 rustix = "1.1.5"
 windows-sys = "0.61.2"
-sha2 = "0.11.0"
+sha2 = "0.11.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-zip = { version = "9.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1.0.28", features = ["serde"] }
 # Session grouping follows the user's local calendar, including DST boundaries.
 chrono = "0.4.45"

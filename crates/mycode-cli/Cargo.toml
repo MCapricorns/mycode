@@ -9,15 +9,17 @@ license.workspace = true
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
 mycode-frontend = { path = "../mycode-frontend" }
-ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
-crossterm = "0.28"
-tui-textarea = "0.7"
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+crossterm = "0.29"
+# Maintained fork with the same API that tracks ratatui 0.30; the dependency
+# key stays `tui-textarea` so `use tui_textarea::…` is unchanged.
+tui-textarea = { package = "tui-textarea-2", version = "0.13.2" }
 # The global allocator (mimalloc) and VC-LTL link live in the leaf crates
 # mycode-core / mycode-config so every target in the workspace shares them;
 # nothing is declared here on purpose.
 
 [target.'cfg(windows)'.build-dependencies]
-winresource = "0.1.31"
+winresource = "0.1.34"
 
 [[bin]]
 name = "mycode-cli"
