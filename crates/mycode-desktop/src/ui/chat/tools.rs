@@ -696,19 +696,19 @@ fn read_path(target: &str) -> &str {
     target.trim_matches('"')
 }
 
-/// A highlighted body for a `read` result.
+/// A highlighted body for file text printed by `read` or a read-only shell
+/// command.
 ///
-/// The target's file extension is the only language hint available, and the
-/// read tool returns bare file text with no fence. An unknown extension or a
-/// body without recognized tokens keeps the plain rendering, so prose and
+/// The file extension in `path` is the only language hint available, and
+/// the text arrives bare with no fence. An unknown extension or a body
+/// without recognized tokens keeps the plain rendering, so prose and
 /// command output are never painted as code.
-fn read_preview(
-    target: &str,
+fn file_preview(
+    path: &str,
     text: &str,
     theme: &Theme,
     desk: &Desk,
 ) -> Option<gpui_kit::AnyElement> {
-    let path = read_path(target);
     let lang = std::path::Path::new(path).extension()?.to_str()?;
     let code = ellipsis(text, 2000);
     let tokens = highlight(&code, Some(lang));
@@ -760,7 +760,13 @@ fn result_body(
         search_preview(tool, &lines, theme, desk).into_any_element()
     } else if tool == "read"
         && !failed
-        && let Some(preview) = read_preview(target, text, theme, desk)
+        && let Some(preview) = file_preview(read_path(target), text, theme, desk)
+    {
+        preview
+    } else if is_shell_tool(tool)
+        && !failed
+        && let Some(path) = shell_read::shell_read_path(target)
+        && let Some(preview) = file_preview(&path, text, theme, desk)
     {
         preview
     } else if failed || text.len() > 300 || lines.len() > 6 {
@@ -1049,5 +1055,6 @@ fn preview_caption(label: &str, theme: &Theme) -> impl IntoElement {
         .font_family(theme.mono_font_family.clone())
 }
 
+mod shell_read;
 #[cfg(test)]
 mod tests;
