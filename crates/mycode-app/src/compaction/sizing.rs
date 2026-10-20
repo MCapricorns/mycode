@@ -62,6 +62,9 @@ pub(super) struct Budget {
     pub(super) threshold: usize,
     /// Newest tokens kept verbatim after the summary.
     pub(super) tail: usize,
+    /// Most tokens of the summarized head's user messages kept verbatim in
+    /// the summary.
+    pub(super) echo: usize,
     /// Length the summary prompt asks for, in words.
     pub(super) summary_words: usize,
 }
@@ -73,6 +76,8 @@ impl Budget {
     /// compacting, so every request summarized again. The room under the
     /// trigger is split instead: the summary first, then half of what is
     /// left for the tail and half free for the conversation to grow into.
+    /// The user's own words from the summarized head take a quarter of the
+    /// tail's share out of that free half.
     pub(super) fn new(context_window: u64, overhead: usize) -> Self {
         let threshold = compaction_threshold(context_window);
         let room = threshold.saturating_sub(overhead);
@@ -82,6 +87,7 @@ impl Budget {
         Self {
             threshold,
             tail,
+            echo: tail / 4,
             summary_words,
         }
     }
@@ -509,7 +515,8 @@ mod tests {
         // land well under the trigger, or the next request compacts again.
         let small = Budget::new(32_000, 10_000);
         assert!(
-            10_000 + small.summary_tokens() + small.tail + small.min_gain() <= small.threshold,
+            10_000 + small.summary_tokens() + small.tail + small.echo + small.min_gain()
+                <= small.threshold,
             "{small:?}"
         );
         let tiny = Budget::new(16_000, 10_000);

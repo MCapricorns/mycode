@@ -1,14 +1,18 @@
-//! Auto-compaction: Codex-style checkpoint summaries before each provider request.
+//! Auto-compaction: checkpoint summaries before each provider request.
 //!
 //! Trigger is 90% of the usable context window (95% of the model window, same
 //! safety margin as Codex), measured as [`sizing`] describes. The tail keeps
 //! the newest messages, up to ~20k tokens in a large window and less in a
 //! small one, without splitting a tool-call pair. The head is summarized with
-//! a handoff prompt (goals, files, decisions, errors, next steps). A request
+//! a handoff prompt (goals, files, decisions, errors, next steps), and the
+//! user's own messages from it follow the summary word for word, the newest
+//! that fit, as Codex keeps them: in a long tool run the tail is all tool
+//! output, and a summary alone retold the user's requests. A request
 //! the provider refuses as over its window is compacted at once and sent
 //! again ([`CompactMode::Overflow`]). The session ledger is never rewritten;
 //! only the in-memory request history shrinks.
 
+mod echo;
 mod sizing;
 
 use std::fmt::Write as _;
@@ -18,6 +22,7 @@ use mycode_core::{Message, Provider as _, Request, StreamEvent};
 use mycode_providers::WireProvider;
 use tokio_util::sync::CancellationToken;
 
+use self::echo::{split_echo, user_echo, with_echo};
 use self::sizing::{Budget, Tally, message_tokens, text_tokens};
 pub(crate) use self::sizing::{
     Calibration, Measure, TokenScale, estimate_prefix_tokens, fit_output,
@@ -38,6 +43,9 @@ const SUMMARY_OUTPUT_RETRY_TOKENS: u64 = 65_536;
 /// Least output cap a summary request gets, however small the window.
 const MIN_SUMMARY_OUTPUT_TOKENS: u64 = 2_048;
 const SUMMARY_PREFIX: &str = "COMPACTION SUMMARY";
+/// Longest model summary kept. A longer one loses its middle, not the next
+/// steps at its end.
+const MAX_MODEL_SUMMARY_CHARS: usize = 24_000;
 /// Shortest summary that can cover the checkpoint prompt.
 ///
 /// The prompt asks for dense prose (goals, decisions, files, commands, open
@@ -304,6 +312,33 @@ pub(crate) async fn compact_history(
         None if mode != CompactMode::Auto && history.len() >= 2 => history.len(),
         None => return unchanged(history, tokens),
     };
+    // `covered_messages` indexes a ledger replay, which has no summary
+    // prefix. Once a summary has replaced that prefix, the same index
+    // points into the tail and would drop messages that must stay. That
+    // leading summary is also the one to carry forward: a turn that
+    // compacted in memory holds a newer summary than the disk checkpoint.
+    let leading = leading_summary(&history);
+    let already_summarized = leading.is_some();
+    let covered = if already_summarized {
+        None
+    } else {
+        prior.as_ref().map(|checkpoint| checkpoint.covered_messages)
+    };
+    let prior_summary = leading
+        .as_deref()
+        .or_else(|| prior.as_ref().map(|checkpoint| checkpoint.summary.as_str()));
+    // The previous summary already stands in for `history[..covered]`.
+    // Sending that prefix again makes a later `/compact` re-bill the same
+    // leading messages on top of the old summary.
+    let head_messages = transcript_head(&history, head_end, covered);
+    let (prior_summary, prior_echo) = match prior_summary {
+        Some(text) => {
+            let (summary, echo) = split_echo(text);
+            (Some(summary), echo)
+        }
+        None => (None, Vec::new()),
+    };
+    let echo = user_echo(&prior_echo, head_messages, budget.echo, scale);
     // A summary about as large as what it replaces frees nothing. In a
     // small window the next request was over the trigger again and every
     // request summarized the summary once more.
@@ -311,7 +346,9 @@ pub(crate) async fn compact_history(
         .iter()
         .map(|message| scale.apply(message_tokens(message)))
         .sum();
-    if mode == CompactMode::Auto && replaced < budget.summary_tokens() + budget.min_gain() {
+    let echoed: usize = echo.iter().map(|text| scale.apply(text_tokens(text))).sum();
+    if mode == CompactMode::Auto && replaced < budget.summary_tokens() + echoed + budget.min_gain()
+    {
         return unchanged(history, tokens);
     }
     // `/compact` on a head this checkpoint already covers would summarize the
@@ -331,31 +368,12 @@ pub(crate) async fn compact_history(
             tokens,
         };
     }
-    // `covered_messages` indexes a ledger replay, which has no summary
-    // prefix. Once a summary has replaced that prefix, the same index
-    // points into the tail and would drop messages that must stay. That
-    // leading summary is also the one to carry forward: a turn that
-    // compacted in memory holds a newer summary than the disk checkpoint.
-    let leading = leading_summary(&history);
-    let already_summarized = leading.is_some();
-    let covered = if already_summarized {
-        None
-    } else {
-        prior.as_ref().map(|checkpoint| checkpoint.covered_messages)
-    };
-    let prior_summary = leading
-        .as_deref()
-        .or_else(|| prior.as_ref().map(|checkpoint| checkpoint.summary.as_str()));
-    // The previous summary already stands in for `history[..covered]`.
-    // Sending that prefix again makes a later `/compact` re-bill the same
-    // leading messages on top of the old summary.
     let spec = SummarySpec::new(scope.model, scope.context_window, budget.summary_words);
-    let transcript = compaction_transcript(
-        prior_summary,
-        transcript_head(&history, head_end, covered),
-        spec.transcript_tokens,
-        scale,
-    );
+    // The previous summary goes to the summarizer without the user messages
+    // kept after it: those stay with the new summary as they are, and the
+    // old summary already tells what came of them.
+    let transcript =
+        compaction_transcript(prior_summary, head_messages, spec.transcript_tokens, scale);
     let failed = |messages: Vec<Arc<Message>>, message: String| Compacted {
         messages,
         status: CompactStatus::Failed(message),
@@ -377,6 +395,10 @@ pub(crate) async fn compact_history(
         Ok(Err(message)) => return failed(history, message),
         Err(_) => return failed(history, "summary timed out".to_owned()),
     };
+    // The card shows the model's summary; the request and the checkpoint
+    // also carry the user's words.
+    let shown = summary;
+    let summary = with_echo(&shown, &echo);
     let compacted = with_summary(&summary, &history[head_end..]);
     let compacted_tokens = request_tokens(&compacted, overhead, scale);
     // A history that already starts with a summary is not the ledger
@@ -390,7 +412,7 @@ pub(crate) async fn compact_history(
             return Compacted {
                 messages: compacted,
                 status: CompactStatus::Replaced,
-                summary: Some(summary),
+                summary: Some(shown),
                 tokens: compacted_tokens,
             };
         }
@@ -398,7 +420,6 @@ pub(crate) async fn compact_history(
     if scope.cancel.is_cancelled() {
         return failed(history, "compaction cancelled".to_owned());
     }
-    let shown = summary.clone();
     let checkpoint = mycode_config::CompactionCheckpoint {
         format_version: mycode_config::COMPACTION_FORMAT_VERSION,
         kind: mycode_config::COMPACTION_KIND.to_owned(),
@@ -810,12 +831,18 @@ fn newest_within(text: &str, budget: usize, scale: TokenScale) -> usize {
 /// The kept text is still [`EXCERPT_CHARS`] characters. A longer message
 /// records how many characters were dropped between the two halves.
 fn excerpt(text: &str) -> String {
+    elide(text, EXCERPT_CHARS)
+}
+
+/// `text` cut to its first and last `keep / 2` characters, with the count
+/// of the ones dropped between them.
+fn elide(text: &str, keep: usize) -> String {
     let count = text.chars().count();
-    if count <= EXCERPT_CHARS {
+    if count <= keep {
         return text.to_owned();
     }
-    let head_chars = EXCERPT_CHARS / 2;
-    let tail_chars = EXCERPT_CHARS - head_chars;
+    let head_chars = keep / 2;
+    let tail_chars = keep - head_chars;
     let head_end = text
         .char_indices()
         .nth(head_chars)
@@ -992,9 +1019,7 @@ async fn request_summary(
     if stop == mycode_core::StopReason::Error {
         return Err("summary stream failed".to_owned());
     }
-    if let Some((cut, _)) = summary.char_indices().nth(mycode_config::MAX_SUMMARY_CHARS) {
-        summary.truncate(cut);
-    }
+    let summary = elide(&summary, MAX_MODEL_SUMMARY_CHARS);
     let trimmed = summary.trim();
     if trimmed.is_empty() {
         return Err("summary was empty".to_owned());
