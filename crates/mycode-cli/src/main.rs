@@ -46,8 +46,14 @@ fn main() {
     // a crash or a lost helper — re-arms here. The terminal keeps
     // opening (a second window must never bounce); the swap lands when
     // this run exits and the next `mycode-cli` is the new version.
-    if let Some(version) = mycode_app::reconcile_pending_update(&home, false) {
-        println!("mycode-cli: update v{version} is staged — it installs when this run exits.");
+    match mycode_app::reconcile_pending_update(&home, false) {
+        mycode_app::PendingUpdate::Armed(version) => {
+            println!("mycode-cli: update v{version} is staged — it installs when this run exits.");
+        }
+        mycode_app::PendingUpdate::Applied(version) => {
+            println!("mycode-cli: updated to v{version}.");
+        }
+        mycode_app::PendingUpdate::None => {}
     }
     let install = mycode_app::install::ensure_cli_installed(&home);
     announce_install(&install);

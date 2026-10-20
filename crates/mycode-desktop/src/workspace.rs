@@ -160,13 +160,14 @@ fn strip_dwm_border(window: &gpui_kit::Window) {
 #[cfg(not(windows))]
 fn strip_dwm_border(_: &gpui_kit::Window) {}
 
-/// Opens the main window over one owned home.
+/// Opens the main window over one owned home. `applied_update` is the
+/// version a self-update just installed; it is announced with a toast.
 ///
 /// # Panics
 ///
 /// Panics when the window cannot open; the process has no useful headless
 /// fallback by design.
-pub fn open_window(home: HomeLayout, cx: &mut App) {
+pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut App) {
     cx.bind_keys([gpui_kit::KeyBinding::new(
         "secondary-k",
         crate::ui::ToggleCommandPalette,
@@ -200,6 +201,15 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         crate::ui::desk::apply(Theme::global_mut(cx));
         Theme::sync_base(cx);
         let workspace = Workspace::new(driver, wake_rx, window, cx);
+        if let Some(version) = applied_update {
+            workspace.update(cx, |workspace, cx| {
+                workspace.push_toast(
+                    format!("{} v{version}", crate::i18n::t("Updated to", "已更新到")),
+                    ToastKind::Info,
+                    cx,
+                );
+            });
+        }
         window.on_window_should_close(cx, {
             let workspace = workspace.clone();
             move |window, cx| {
