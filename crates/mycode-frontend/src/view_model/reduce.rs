@@ -118,7 +118,7 @@ fn reset_turn_view(state: &mut WorkspaceState) {
     state.turn_started_ms = 0;
     state.compacting = false;
     state.auto_compacting = false;
-    state.pending_summary = None;
+    state.pending_summaries.clear();
     state.queued.clear();
     state.queue_paused = false;
     state.pending_steers.clear();
@@ -593,11 +593,11 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         FrontendAction::SummaryShown(entry) => {
             if summary_waits_for_the_reply(state) {
                 if state
-                    .pending_summary
-                    .as_ref()
-                    .is_none_or(|pending| pending.event_id != entry.event_id)
+                    .pending_summaries
+                    .iter()
+                    .all(|pending| pending.event_id != entry.event_id)
                 {
-                    state.pending_summary = Some(entry);
+                    state.pending_summaries.push(entry);
                 }
             } else if let Some(conversation) = state.active.as_mut() {
                 push_entry_once(conversation, entry);
@@ -638,15 +638,15 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         FrontendAction::ChatDone { head, entry } => {
             // Steers that did not commit come back as `SteersReturned`.
             state.pending_steers.clear();
-            let summary = state.pending_summary.take();
+            let summaries = std::mem::take(&mut state.pending_summaries);
             if let Some(conversation) = state.active.as_mut() {
                 conversation.head = head;
                 // A turn that ended on a committed tool step reports that
                 // step again as its last message; it is already listed.
                 push_entry_once(conversation, entry);
-                // The summary follows the reply, matching the ledger order
+                // The summaries follow the reply, matching the ledger order
                 // a reopen projects.
-                if let Some(summary) = summary {
+                for summary in summaries {
                     push_entry_once(conversation, summary);
                 }
                 conversation.streaming = None;
@@ -658,12 +658,12 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::ChatFailed { message, head } => {
             state.pending_steers.clear();
-            let summary = state.pending_summary.take();
+            let summaries = std::mem::take(&mut state.pending_summaries);
             if let Some(conversation) = state.active.as_mut() {
                 if !head.is_empty() {
                     conversation.head = head;
                 }
-                if let Some(summary) = summary {
+                for summary in summaries {
                     push_entry_once(conversation, summary);
                 }
                 conversation.streaming = None;
