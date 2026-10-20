@@ -101,6 +101,58 @@ async fn a_dropped_run_still_releases_its_worktree() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+fn recovery_keeps_the_leases_of_running_processes() {
+    let root = std::env::temp_dir().join(format!(
+        "mycode-wt-live-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    let repo = root.join("repo");
+    let leases = root.join("home").join("agent-worktrees");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&leases).unwrap();
+    git(&repo, &["init"]);
+    let home = HomeLayout::from_root(root.join("home")).unwrap();
+    // `cat-file --batch` waits on stdin: a running process other than this one.
+    let mut owner = git_command()
+        .arg("-C")
+        .arg(&repo)
+        .args(["cat-file", "--batch"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("git cat-file");
+    let live = format!("agent-{}-1", owner.id());
+    // This process has no leases before its core starts, so a lease under
+    // its pid is a leftover of an earlier process that had the same pid.
+    let stale = format!("agent-{}-1", std::process::id());
+    for id in [&live, &stale] {
+        let path = leases.join(id);
+        std::fs::create_dir_all(&path).unwrap();
+        let record = serde_json::json!({
+            "repo": repo.to_string_lossy(),
+            "path": path.to_string_lossy(),
+        });
+        std::fs::write(leases.join(format!("{id}.json")), record.to_string()).unwrap();
+    }
+    super::recover_agent_worktrees(&home);
+    let kept = (
+        leases.join(&live).is_dir(),
+        leases.join(format!("{live}.json")).is_file(),
+    );
+    let removed = (
+        !leases.join(&stale).exists(),
+        !leases.join(format!("{stale}.json")).exists(),
+    );
+    drop(owner.stdin.take());
+    let _ = owner.wait();
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(kept, (true, true), "a running process lost its lease");
+    assert_eq!(removed, (true, true), "a leftover lease survived");
+}
+
 #[tokio::test]
 async fn a_dropped_driver_stops_its_child_and_unpublishes_the_cancel() {
     let cancels = parking_lot::Mutex::new(std::collections::HashMap::new());
