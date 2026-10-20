@@ -11,10 +11,12 @@
 - 终端版的 `crates/mycode-cli/src/app.rs` 按职责拆成 `app.rs` 与 `app/input.rs`、`app/render.rs`、`app/settings.rs`、`app/settings_rows.rs`、`app/ui.rs`：驱动循环、按键与发送、设置页及选择器、设置行、绘制和转录行各自独立，单文件都不再超过 1000 行；行为不变。
 - 逐个 crate 复核 `docs/` 与源码注释，修正与现实不符的说明：字段类型、模块清单、重试与超时、压缩上限、会话目录、设置页数量和代码块高亮等；`mycode-config` 的 README 补上文档损坏时的备份与抢救规则，`docs/desktop.md` 补上终端版的模块划分。
 - 文档把工作目录上限写成软上限：正常最多 8 个，从旧版合并的列表可能暂时更多，新增目录时保持现有数量。
+- 依赖升级到当前最新版本：ratatui 0.30 / crossterm 0.29 / tui-textarea-2 0.13、gpui-kit 0.8、jsonschema 0.59、zip 9.0.5、tokio 1.54、serde_json 1.0.154、uuid 1.28、sha2 0.11.1 等；现有接口无需改写，工作区测试与 clippy 全绿。
 
 ### Fixed
 
 - 桌面版「设置 → 快捷键」里 Esc 的说明改为实际行为：运行中不会停止任务（Stop 按钮才取消），没有回合时把暂停的队列退回输入框。
+- 升级 ratatui 0.30 后 `lru` 由 0.12 升到 0.18.5，不再受 `LruCache::iter_mut` 的 Stacked Borrows 告警影响。
 
 ## [0.12.11] - 2026-10-20
 
