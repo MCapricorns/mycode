@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.8] - 2026-10-20
+
 ### Changed
 
 - 桌面版窗口的最小尺寸改为默认尺寸（按主屏可用区域缩放后的大小）：窗口只能放大，不再能缩小到布局错乱；上次保存的较小窗口尺寸会恢复为默认大小。
@@ -158,7 +160,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.7...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.8...HEAD
+[0.12.8]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.8
 [0.12.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.7
 [0.12.6]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.6
 [0.12.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.5
