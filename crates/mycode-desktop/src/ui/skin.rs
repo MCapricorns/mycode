@@ -41,6 +41,21 @@ pub(super) fn ambient(theme: &Theme) -> Background {
     )
 }
 
+/// Ask-card glass: an accent-tinted frost at the top that settles into the
+/// overlay fill, so the card reads as a raised pane over the window blur
+/// rather than another flat menu.
+pub(super) fn ask_glass(theme: &Theme) -> Background {
+    linear_gradient(
+        180.,
+        linear_color_stop(with_alpha(theme.accent, ASK_GLASS_ALPHA), 0.),
+        linear_color_stop(lifted(theme.popover, 0.03, ASK_GLASS_ALPHA), 1.),
+    )
+}
+
+/// Ask-card translucency. Between the card and overlay fills: the card sits
+/// in the composer column over the page, never over transcript text.
+const ASK_GLASS_ALPHA: f32 = 0.78;
+
 /// Translucent rail fill for the title bar, the settings header, and the
 /// preset sign-in code card.
 pub(super) fn glass(theme: &Theme) -> Hsla {
