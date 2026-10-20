@@ -347,6 +347,113 @@ async fn cancelled_nested_agent_result_does_not_enter_history() {
     release.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// `agent` children: a call with `wait` runs until the turn is cancelled,
+/// any other call answers at once.
+struct SplitAgents;
+
+impl mycode_tools::ToolDyn for SplitAgents {
+    fn spec(&self) -> mycode_core::ToolSpec {
+        mycode_core::ToolSpec {
+            name: "agent".to_owned(),
+            description: "nested test agents".to_owned(),
+            params_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn execute_dyn<'a>(
+        &'a self,
+        args: serde_json::Value,
+        ctx: &'a mycode_tools::ToolCtx,
+        _out: &'a mut mycode_tools::ToolStream,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            if args.get("wait").and_then(serde_json::Value::as_bool) == Some(true) {
+                ctx.cancel.cancelled().await;
+                return Err(mycode_tools::ToolError::Execution("cancelled".to_owned()));
+            }
+            Ok(mycode_tools::ToolResult::text("FAST_ANSWER"))
+        })
+    }
+}
+
+/// A child that already answered keeps its answer when the turn is stopped
+/// under a sibling, and every call completes exactly once: the ledger pump
+/// closes a call per completion, and a second one fails the turn.
+#[tokio::test]
+async fn cancelling_parallel_agents_completes_each_call_once() {
+    use mycode_core::events::{AgentEvent, TurnOutcome};
+    use std::time::Duration;
+
+    let (events, mut bus) = tokio::sync::broadcast::channel(256);
+    let cancel = CancellationToken::new();
+    let cancel_for_task = cancel.clone();
+    let handle = tokio::spawn(async move {
+        let call = |id: &str, args: serde_json::Value| {
+            ContentBlock::ToolCall(mycode_core::ToolCall::new(id, "agent", args))
+        };
+        let provider = Scripted {
+            events: vec![StreamEvent::Done {
+                message: mycode_core::AssistantMessage {
+                    blocks: vec![
+                        call("call-fast", serde_json::json!({})),
+                        call("call-slow", serde_json::json!({"wait": true})),
+                    ],
+                    usage: None,
+                    stop_reason: StopReason::ToolUse,
+                },
+            }],
+        };
+        let tools = ToolRegistry::new();
+        tools.register(std::sync::Arc::new(SplitAgents));
+        let hooks = HookRunner::new();
+        let env = TurnEnv::new(&provider, &tools, &hooks)
+            .with_cancel(cancel_for_task)
+            .with_events(events);
+        let mut agent = Agent::new(AgentConfig::new());
+        let outcome = agent
+            .prompt(Message::User(UserMessage::text("delegate")), &env)
+            .await;
+        (outcome, history_text(&agent))
+    });
+    let mut completed = Vec::new();
+    let mut cancelled = false;
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), bus.recv())
+            .await
+            .expect("the turn stalled");
+        match event {
+            Ok(AgentEvent::ToolCompleted { call_id, .. }) => {
+                completed.push(call_id.to_string());
+                // Stop the turn once the fast child answered.
+                if !cancelled && call_id.as_str() == "call-fast" {
+                    cancelled = true;
+                    cancel.cancel();
+                }
+            }
+            Ok(AgentEvent::TurnEnded(_)) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+    let (outcome, history) = handle.await.expect("task");
+    assert!(matches!(outcome.expect("aborted"), TurnOutcome::Aborted));
+    for id in ["call-fast", "call-slow"] {
+        assert_eq!(
+            completed.iter().filter(|done| *done == id).count(),
+            1,
+            "{id} must complete once: {completed:?}"
+        );
+    }
+    assert!(history.contains("FAST_ANSWER"), "{history}");
+    assert!(history.contains("discarded"), "{history}");
+}
+
 struct StepProvider {
     seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }

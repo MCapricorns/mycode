@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use mycode_core::MycodeError;
 use mycode_core::events::{AgentEvent, TurnOutcome};
 use mycode_core::message::{ContentBlock, Message, SharedMessage, StopReason, ToolCall};
+use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::env::TurnEnv;
@@ -371,15 +372,27 @@ async fn dispatch_response_calls(
     // before its first await, so a polled batch must not emit ToolStarted again.
     let agent_polled = Arc::new(AtomicBool::new(false));
     let polled = Arc::clone(&agent_polled);
+    // Each `agent` result, stored in the poll that emits its ToolCompleted.
+    // A cancel can stop the batch right after that poll; the call keeps its
+    // result then, because completing it again closes its ledger call twice.
+    let agent_results: Mutex<Vec<Option<SharedMessage>>> =
+        Mutex::new(vec![None; agent_indexes.len()]);
+    let results = &agent_results;
     let agent_ids = agent_indexes.clone();
     let other_ids = other_indexes.clone();
     let agents = async move {
         polled.store(true, Ordering::SeqCst);
         let futures = agent_ids
             .iter()
-            .map(|index| turn::dispatch_tool_call(env, token, calls[*index]))
+            .enumerate()
+            .map(|(slot, index)| async move {
+                let message = turn::run_tool_call(env, token, calls[*index]).await;
+                results.lock()[slot] = Some(message);
+                // The yield `dispatch_tool_call` ends with.
+                tokio::task::yield_now().await;
+            })
             .collect::<Vec<_>>();
-        futures_util::future::join_all(futures).await
+        futures_util::future::join_all(futures).await;
     };
     let others = async move {
         let mut messages = Vec::with_capacity(other_ids.len());
@@ -410,30 +423,30 @@ async fn dispatch_response_calls(
     };
     tokio::pin!(agents);
     tokio::pin!(others);
-    let mut agent_messages: Option<Vec<SharedMessage>> = None;
+    let mut agents_done = false;
     let mut other_messages: Option<Vec<SharedMessage>> = None;
     let mut abandoned = false;
     loop {
         tokio::select! {
             biased;
-            () = token.cancelled(), if !abandoned && agent_messages.is_none() => {
+            () = token.cancelled(), if !abandoned && !agents_done => {
                 // Stop polling nested agent calls. Dropping `agents` when this
-                // function returns aborts work that ignores the token. Their
-                // real answers are not used.
+                // function returns aborts work that ignores the token. Answers
+                // that have not arrived yet are not used.
                 abandoned = true;
                 if other_messages.is_some() {
                     break;
                 }
             }
-            messages = &mut agents, if !abandoned && agent_messages.is_none() => {
-                agent_messages = Some(messages);
+            () = &mut agents, if !abandoned && !agents_done => {
+                agents_done = true;
                 if other_messages.is_some() {
                     break;
                 }
             }
             messages = &mut others, if other_messages.is_none() => {
                 other_messages = Some(messages);
-                if abandoned || agent_messages.is_some() {
+                if abandoned || agents_done {
                     break;
                 }
             }
@@ -442,22 +455,15 @@ async fn dispatch_response_calls(
     let other_messages = other_messages.unwrap_or_default();
     let mut slots: Vec<Option<SharedMessage>> = Vec::with_capacity(calls.len());
     slots.resize_with(calls.len(), || None);
-    if abandoned {
-        let discard = agent_polled.load(Ordering::SeqCst);
-        for index in agent_indexes {
-            slots[index] = Some(if discard {
-                turn::discard_running_call(env, calls[index])
-            } else {
-                turn::fail_cancelled_call(env, calls[index])
-            });
-        }
-    } else {
-        for (index, message) in agent_indexes
-            .into_iter()
-            .zip(agent_messages.unwrap_or_default())
-        {
-            slots[index] = Some(message);
-        }
+    // A finished batch filled every result; only an abandoned one has gaps.
+    let discard = agent_polled.load(Ordering::SeqCst);
+    let finished = std::mem::take(&mut *agent_results.lock());
+    for (index, result) in agent_indexes.into_iter().zip(finished) {
+        slots[index] = Some(match result {
+            Some(message) => message,
+            None if discard => turn::discard_running_call(env, calls[index]),
+            None => turn::fail_cancelled_call(env, calls[index]),
+        });
     }
     for (index, message) in other_indexes.into_iter().zip(other_messages) {
         slots[index] = Some(message);

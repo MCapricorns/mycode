@@ -405,7 +405,8 @@ pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> SharedM
     )
 }
 
-/// An `agent` call that already started, then the turn cancelled.
+/// An `agent` call that started but had not completed when the turn
+/// cancelled.
 ///
 /// Dispatch already emitted [`AgentEvent::ToolStarted`]. This emits only
 /// [`AgentEvent::ToolCompleted`] so the nested answer cannot be appended.
@@ -453,6 +454,21 @@ fn canonical_tool_name(name: &str) -> &str {
 /// to execution and never re-resolved. Same-name plugin overrides remain
 /// unbound unless they explicitly declare a search or file access mode.
 pub(crate) async fn dispatch_tool_call(
+    env: &TurnEnv<'_>,
+    token: &CancellationToken,
+    call: &ToolCall,
+) -> SharedMessage {
+    let message = run_tool_call(env, token, call).await;
+    // Yield so a ToolCompleted subscriber can commit the result before the
+    // next call in this response is dispatched.
+    tokio::task::yield_now().await;
+    message
+}
+
+/// [`dispatch_tool_call`] without its closing yield: the result returns in
+/// the same poll that emits [`AgentEvent::ToolCompleted`], so the caller can
+/// record it before a cancel stops polling.
+pub(crate) async fn run_tool_call(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
     call: &ToolCall,
@@ -571,9 +587,6 @@ pub(crate) async fn dispatch_tool_call(
             result: Arc::clone(&message),
         },
     );
-    // Yield so a ToolCompleted subscriber can commit the result before the
-    // next call in this response is dispatched.
-    tokio::task::yield_now().await;
     message
 }
 
