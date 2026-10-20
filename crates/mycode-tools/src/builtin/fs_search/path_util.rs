@@ -314,6 +314,35 @@ fn long_spelling(_path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The directory to open for a target the session-cwd walk cannot reach,
+/// and the names still to walk below it.
+///
+/// Tool paths are not confined to the workspace: a path outside it, or one
+/// that crosses a link or mount inside it, is re-anchored here. The longest
+/// existing ancestor of the normalized target is resolved by the file
+/// system, so links, 8.3 aliases, and case all settle before the no-follow
+/// walk, which then only opens names that do not exist yet or the final
+/// entry. An existing directory is its own anchor; an existing file anchors
+/// at its parent. `None` when no ancestor resolves.
+pub(crate) fn resolve_outside_anchor(cwd: &Path, raw: &str) -> Option<(PathBuf, Vec<OsString>)> {
+    let target = lexical_normalize(&cwd.join(strip_verbatim_prefix(Path::new(raw))));
+    let mut existing = target.as_path();
+    let mut rest: Vec<OsString> = Vec::new();
+    let resolved = loop {
+        if let Ok(resolved) = std::fs::canonicalize(existing) {
+            break strip_verbatim_prefix(&resolved);
+        }
+        rest.push(existing.file_name()?.to_os_string());
+        existing = existing.parent()?;
+    };
+    rest.reverse();
+    if !rest.is_empty() || resolved.is_dir() {
+        return Some((resolved, rest));
+    }
+    let name = resolved.file_name()?.to_os_string();
+    Some((resolved.parent()?.to_path_buf(), vec![name]))
+}
+
 pub(crate) fn normalize_anchored_relative(path: &Path) -> Result<PathBuf, ()> {
     let mut out = PathBuf::new();
     for component in path.components() {

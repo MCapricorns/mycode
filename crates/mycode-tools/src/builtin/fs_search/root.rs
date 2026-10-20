@@ -335,7 +335,7 @@ impl ResolvedRoot {
     ///
     /// Find reports names the caller can list even when file contents are
     /// unreadable. macOS confirms with no-follow metadata and the current
-    /// mount / type / `nlink` checks, and fails closed when that proof is
+    /// mount / type checks, and fails closed when that proof is
     /// unavailable. Windows opens with `FILE_READ_ATTRIBUTES` rather than
     /// `FILE_GENERIC_READ`.
     ///

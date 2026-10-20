@@ -28,8 +28,8 @@ use super::*;
 ///
 /// # Errors
 ///
-/// Returns [`ToolError::InvalidArgs`] for lexical escapes, symlink/reparse
-/// targets, or handle-proven containment failures. Missing or inaccessible
+/// Returns [`ToolError::InvalidArgs`] when neither the cwd walk nor the
+/// resolved outside location can bind the target. Missing or inaccessible
 /// roots, cancelled or overdue ignore reads, oversized ignore files, and
 /// deadline expiry return [`ToolError::Execution`].
 pub(crate) fn resolve_search_root_with_access(
@@ -40,7 +40,33 @@ pub(crate) fn resolve_search_root_with_access(
     access: SearchAccess,
 ) -> Result<ResolvedRoot, ToolError> {
     let absolute_cwd = normalize_session_cwd(cwd)?;
+    let contained = resolve_in_root(&absolute_cwd, path_arg, cancel, limits, access);
+    // Search paths are not confined to the cwd: an escaping path, or one
+    // whose cwd walk crosses a link or mount, searches from its resolved
+    // location instead.
+    let (Err(ToolError::InvalidArgs(message)), Some(raw)) = (&contained, path_arg) else {
+        return contained;
+    };
+    // The target is passed in its absolute resolved spelling so errors name
+    // the whole path, not just the part below the anchor.
+    let resolved = resolve_outside_anchor(&absolute_cwd, raw).and_then(|(anchor, components)| {
+        let target = anchor.join(components.iter().collect::<PathBuf>());
+        Some((anchor, target.to_str()?.to_owned()))
+    });
+    let Some((anchor, target)) = resolved else {
+        return Err(ToolError::InvalidArgs(message.clone()));
+    };
+    resolve_in_root(&anchor, Some(&target), cancel, limits, access)
+}
 
+fn resolve_in_root(
+    absolute_cwd: &Path,
+    path_arg: Option<&str>,
+    cancel: &CancellationToken,
+    limits: &Limits,
+    access: SearchAccess,
+) -> Result<ResolvedRoot, ToolError> {
+    let absolute_cwd = absolute_cwd.to_path_buf();
     let allowed = open_allowed_root(&absolute_cwd)
         .map_err(|error| ToolError::Execution(format!("session cwd is not accessible: {error}")))?;
     if allowed.kind != FsEntryKind::Directory {

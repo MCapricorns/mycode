@@ -24,10 +24,8 @@
 //!
 //! macOS descent uses `openat(O_NOFOLLOW)` plus `st_dev`, which is the mount
 //! identity on Darwin. Find confirmation uses no-follow metadata (`fstatat`)
-//! and the same `st_dev` / type / `nlink` checks, and fails closed when that
-//! proof is unavailable. Platforms without handle-relative open fail closed. Regular
-//! files with a link count other than one are refused so a cwd-visible
-//! hardlink cannot expose an inode that also lives outside the allowed root.
+//! and the same `st_dev` / type checks, and fails closed when that proof is
+//! unavailable. Platforms without handle-relative open fail closed.
 //! Directory listings are collected up to a width cap, decorated once with
 //! the lossy rendered component key the frontier and top-N heaps use, sorted
 //! with the original `OsString` as the complete tie-break, and visited best-first

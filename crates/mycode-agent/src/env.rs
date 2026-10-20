@@ -76,9 +76,9 @@ pub struct TurnEnv<'a> {
     /// Additional workspace folders. Absolute tool paths under one of
     /// these roots are prepared against that root instead of `cwd`.
     pub extra_roots: Vec<PathBuf>,
-    /// Host-published read-only anchor roots outside the workspace (the
-    /// skills catalog). Only read-only file tools anchor here; `edit` and
-    /// `write` refuse them.
+    /// Host-published anchor roots outside the workspace (the skills
+    /// catalog). Only read-only file tools anchor here, keeping their path
+    /// keys relative to that root.
     pub read_roots: Vec<PathBuf>,
     /// Steers to fold into this turn at the next loop boundary.
     /// `None` for a turn that does not accept them (a nested agent).

@@ -71,7 +71,7 @@ pub struct GrepArgs {
     #[serde(default)]
     pub is_regex: bool,
     /// File or directory to search. Relative paths resolve against the session
-    /// cwd; absolute paths must be under a workspace root.
+    /// cwd; absolute paths may point anywhere.
     pub path: Option<String>,
     /// Only search files whose relative path matches this glob.
     pub include: Option<String>,
