@@ -29,6 +29,7 @@ const FULL_HANDOFF: &str = concat!(
     "Clear next steps: reply to the latest user message."
 );
 
+mod checkpoints;
 mod echo;
 
 fn user(text: &str) -> Arc<Message> {
