@@ -13,7 +13,9 @@ use std::sync::Arc;
 // the identity vocabulary is part of the protocol. Re-exported here so a
 // frontend depends on this crate alone and never on the session substrate.
 pub use mycode_agent::session::{BranchId, HeadStamp, SessionEventId, SessionId};
-pub use mycode_core::tool_label;
+// Assistant entry text can end in an interruption line that frontends paint
+// as an error; the prefix is how they find it.
+pub use mycode_core::{INTERRUPTED_RESPONSE_PREFIX, tool_label};
 
 /// One row of the session listing.
 #[derive(Clone, Debug, PartialEq, Eq)]

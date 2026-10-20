@@ -1,6 +1,37 @@
 use super::input::choice_numbers;
+use super::render::render_entry;
 use super::settings_rows::{SettingRow, settings_items, settings_rows};
+use mycode_app::{ConversationEntry, EntryKind};
 use mycode_frontend::view_model::WorkspaceState;
+
+/// A quoted sbt `[error]` line is answer text; only the agent's
+/// interruption line becomes a `✖` error row.
+#[test]
+fn only_the_interruption_line_renders_as_an_error_row() {
+    let entry = ConversationEntry {
+        event_id: "evt-1".into(),
+        kind: EntryKind::AssistantMessage,
+        text: "```\n[error] Foo.scala:3: type mismatch\n```\n\
+               [error] the response was interrupted: transport failed"
+            .into(),
+        call_id: None,
+        thinking: String::new(),
+    };
+    let mut lines = Vec::new();
+    render_entry(&entry, &mut lines, false);
+    let rows: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    let errors: Vec<&String> = rows.iter().filter(|row| row.starts_with('✖')).collect();
+    assert_eq!(errors.len(), 1, "{rows:#?}");
+    assert!(errors[0].contains("the response was interrupted: transport failed"));
+}
 
 #[test]
 fn choice_numbers_accept_lists_and_reject_free_text() {

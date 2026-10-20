@@ -85,13 +85,14 @@ pub(super) fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>,
                     push_wrapped(lines, "  ✻ ", thinking, &entry.thinking, thinking);
                 }
             }
-            // Interruption lines the agent committed (`[error] …`) stay
-            // visible but read as errors, not as answer text.
+            // Interruption lines the agent committed stay visible but read
+            // as errors, not as answer text. A quoted `[error]` build line
+            // is not one of them.
             let marker = Style::default().fg(CRAB);
             let error = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
             let mut normal: Vec<&str> = Vec::new();
             for line in entry.text.lines() {
-                if line.starts_with("[error]") {
+                if line.starts_with(mycode_app::INTERRUPTED_RESPONSE_PREFIX) {
                     if !normal.is_empty() {
                         let joined = normal.join("\n");
                         push_reply(lines, "⏺ ", marker, &joined);
