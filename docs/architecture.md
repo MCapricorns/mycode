@@ -54,7 +54,7 @@ mycode-core      （叶子）
 12. Pump 在 `ToolStarted` 写 `ToolCall`，在 `ToolCompleted` 写 `ToolResult`；带工具调用的 assistant step 在 `MessageAdded` 时写。纯文本回复先压住，回合结束才写。用量只发 `UsageSnapshot` 实时事件，不写账本；旧账本里的 `EventKind::Usage` 仍可读。
 13. 回合结束：最后一条 assistant 消息（或最后一个工具 step）提交，延迟的摘要卡发布，然后 `ChatDone { head, entry }`。
 14. 取消用本回合的子 token；子代理 token 是它的子节点，一起停。已完成的工具调用/结果和部分 thinking/text 留在账本，部分回复标 `interrupted by user`；未完成的调用不执行。Pump 发 `ChatFailed`，不发 `ChatDone`。下一条请求继续用同一会话 id 和这段历史。
-15. 核心仍保留 `BridgeCommand::Steer` 和在回合边界注入 steer 的实现。当前桌面和 CLI 都不发它：回合中的普通发送进入最多 8 条的队列，等当前回合自然结束；Ctrl+Enter / 打断发送先取消，再立即发。
+15. 回合进行中有三种发法，桌面和 CLI 都走 `FrontendDriver`：Enter 进入最多 8 条的队列，等当前回合自然结束；Ctrl+Enter（打断发送）先取消，再立即发；Ctrl+G（引导）发 `BridgeCommand::Steer`，回合不停，核心在下一个循环边界把文本作为用户消息追加进历史，账本写入后界面上的「引导中」消失。回合在读到它之前就结束（`Steered(Err)` 或 `SteersReturned`）时，文本退回该会话的队列；那个会话不在屏幕上时进入它的暂存队列。
 
 一次 `Agent::prompt` 是一个 turn，内部可以有多个响应周期。`TurnStarted` 只在请求通过校验后发。provider 失败保留同样的部分消息并正常结束 turn；用户取消才是 `TurnOutcome::Aborted`。`StopReason::Length` 截断的工具调用不执行，模型需要重发。
 

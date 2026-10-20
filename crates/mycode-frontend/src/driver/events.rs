@@ -74,15 +74,7 @@ impl FrontendDriver {
                 return;
             }
             BridgeEvent::SteersReturned { session_id, texts } => {
-                if !matches_active(&session_id) {
-                    return;
-                }
-                self.act(FrontendAction::SteersReturned(texts), out);
-                // Steers handed back after a user stop join a held queue.
-                if self.queue_hold_on_return {
-                    self.act(FrontendAction::QueuePaused(true), out);
-                }
-                self.pump_queued_send(out);
+                self.return_steers(&session_id, texts, out);
                 return;
             }
             BridgeEvent::SteerCommitted {
