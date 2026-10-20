@@ -253,12 +253,16 @@ impl FrontendDriver {
     /// Interrupt-submit (the desktop's Ctrl+Enter): stop the running turn
     /// and send this draft right away. With an empty draft it behaves like
     /// the queue's interrupt — the held queue runs after the cancel lands.
+    ///
+    /// While the turn waits on an automatic compaction summary, the stop
+    /// waits for the summary to end. Stopping it threw the summary away,
+    /// and the send that followed summarized the same history again.
     pub fn interrupt_send(&mut self, draft: &str, out: &mut Vec<Effect>) {
         if draft.trim().is_empty() {
             self.queue_hold_on_return = false;
             self.act(FrontendAction::QueuePaused(false), out);
             if self.vm.sending || self.vm.compacting {
-                self.cancel_turn(out);
+                self.interrupt_turn(out);
             } else {
                 self.pump_queued_send(out);
             }
@@ -355,10 +359,20 @@ impl FrontendDriver {
         self.act(FrontendAction::QueuedMessagePromoted(index), out);
         self.act(FrontendAction::QueuePaused(false), out);
         if self.vm.sending || self.vm.compacting {
-            self.cancel_turn(out);
+            self.interrupt_turn(out);
             return;
         }
         self.pump_queued_send(out);
+    }
+
+    /// Stops the running turn for an interrupt, or once its automatic
+    /// compaction ends when it is summarizing now.
+    fn interrupt_turn(&mut self, out: &mut Vec<Effect>) {
+        if self.vm.auto_compacting {
+            self.interrupt_after_compaction = self.open_session_id();
+            return;
+        }
+        self.cancel_turn(out);
     }
 
     /// Stops one running subagent. The parent turn and the other children stay.
@@ -401,7 +415,7 @@ impl FrontendDriver {
         self.cancel_turn(out);
     }
 
-    fn cancel_turn(&mut self, out: &mut Vec<Effect>) {
+    pub(super) fn cancel_turn(&mut self, out: &mut Vec<Effect>) {
         let Some(conversation) = self.vm.active.as_ref() else {
             return;
         };

@@ -262,6 +262,8 @@ async fn compact_session_now(
             scale: state.token_scale(session.as_str()),
             tokens: None,
         },
+        // `/compact` reports through its own reply.
+        on_summarize: None,
         cancel,
     };
     let compacted =

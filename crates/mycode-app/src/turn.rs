@@ -427,6 +427,13 @@ async fn run_chat_turn_on(
             scale: calibration.scale(),
             tokens: None,
         },
+        // No agent bus yet; nothing else of this turn is on the wire.
+        on_summarize: Some(&|active| {
+            let _ = events.send(BridgeEvent::ContextCompacting {
+                session_id: session_id.clone(),
+                active,
+            });
+        }),
         cancel: &control.cancel,
     };
     let compacted = crate::compaction::compact_history(
@@ -451,57 +458,70 @@ async fn run_chat_turn_on(
 
     let turn_started = std::time::Instant::now();
     let (agent_tx, agent_rx) = tokio::sync::broadcast::channel(256);
-    let compactor = crate::compaction::RequestCompactor {
-        wire: wire.clone(),
-        model: model.to_owned(),
-        checkpoint: Some(crate::compaction::CheckpointKey {
-            home: home.clone(),
-            session_id: session_id.clone(),
-            branch_id: branch.as_str().to_owned(),
-            head: head_stamp_text.clone(),
-        }),
-        context_window,
-        calibration: calibration.clone(),
-        cancel: control.cancel.clone(),
-    };
     let deferred = DeferredSummaries::default();
-    // Stash only. A ledger append here sits between this turn's tool calls
-    // and their results. Bus order: the previous response is already
-    // queued, and this request's deltas come after. The pump turns
-    // CacheDisrupted into PromptCacheWatch, so the warning attaches to the
-    // prompt that actually lost the prefix.
-    let compact_request = |mode: crate::compaction::CompactMode| {
-        let compactor = compactor.clone();
+    // Built in a block so no clone of the agent bus outlives the hooks: a
+    // cancel inside the first request's hook ends the prompt without
+    // TurnEnded, and the pump then stops only when the bus closes.
+    let hooks = {
+        let compactor = crate::compaction::RequestCompactor {
+            wire: wire.clone(),
+            model: model.to_owned(),
+            checkpoint: Some(crate::compaction::CheckpointKey {
+                home: home.clone(),
+                session_id: session_id.clone(),
+                branch_id: branch.as_str().to_owned(),
+                head: head_stamp_text.clone(),
+            }),
+            context_window,
+            calibration: calibration.clone(),
+            on_summarize: Some({
+                let bus = agent_tx.clone();
+                Arc::new(move |active| {
+                    let _ = bus.send(mycode_core::events::AgentEvent::Compacting(active));
+                })
+            }),
+            cancel: control.cancel.clone(),
+        };
         let deferred = deferred.clone();
         let bus = agent_tx.clone();
-        move |mut request: mycode_core::Request| {
+        // Stash only. A ledger append here sits between this turn's tool
+        // calls and their results. Bus order: the previous response is
+        // already queued, and this request's deltas come after. The pump
+        // turns CacheDisrupted into PromptCacheWatch, so the warning
+        // attaches to the prompt that actually lost the prefix.
+        let compact_request = move |mode: crate::compaction::CompactMode| {
             let compactor = compactor.clone();
             let deferred = deferred.clone();
             let bus = bus.clone();
-            async move {
-                let summary = compactor.compact(&mut request, mode).await;
-                let summarized = summary.is_some();
-                if deferred.stash(summary).await {
-                    let _ = bus.send(mycode_core::events::AgentEvent::CacheDisrupted);
+            move |mut request: mycode_core::Request| {
+                let compactor = compactor.clone();
+                let deferred = deferred.clone();
+                let bus = bus.clone();
+                async move {
+                    let summary = compactor.compact(&mut request, mode).await;
+                    let summarized = summary.is_some();
+                    if deferred.stash(summary).await {
+                        let _ = bus.send(mycode_core::events::AgentEvent::CacheDisrupted);
+                    }
+                    (request, summarized)
                 }
-                (request, summarized)
             }
-        }
+        };
+        let before_request = compact_request(crate::compaction::CompactMode::Auto);
+        let on_overflow = compact_request(crate::compaction::CompactMode::Overflow);
+        HookRunner::default()
+            .with_before_request(move |request| {
+                let compacted = before_request(request);
+                async move { compacted.await.0 }
+            })
+            .with_context_overflow(move |request| {
+                let compacted = on_overflow(request);
+                async move {
+                    let (request, summarized) = compacted.await;
+                    summarized.then_some(request)
+                }
+            })
     };
-    let before_request = compact_request(crate::compaction::CompactMode::Auto);
-    let on_overflow = compact_request(crate::compaction::CompactMode::Overflow);
-    let hooks = HookRunner::default()
-        .with_before_request(move |request| {
-            let compacted = before_request(request);
-            async move { compacted.await.0 }
-        })
-        .with_context_overflow(move |request| {
-            let compacted = on_overflow(request);
-            async move {
-                let (request, summarized) = compacted.await;
-                summarized.then_some(request)
-            }
-        });
     let mut config = AgentConfig::new()
         .with_system_prompt(system_prompt)
         .with_prompt_cache_key(Some(session_id.clone()))

@@ -13,6 +13,14 @@ impl FrontendDriver {
     pub fn on_event(&mut self, event: BridgeEvent, out: &mut Vec<Effect>) {
         let active_session = self.open_session_id();
         let matches_active = |session_id: &str| active_session.as_deref() == Some(session_id);
+        // A held interrupt belongs to one turn and ends with it, on screen
+        // or not.
+        if let BridgeEvent::ChatDone { session_id, .. } | BridgeEvent::ChatFailed { session_id, .. } =
+            &event
+            && self.interrupt_after_compaction.as_ref() == Some(session_id)
+        {
+            self.interrupt_after_compaction = None;
+        }
         let action = match event {
             BridgeEvent::ChatText { session_id, delta } => {
                 if !matches_active(&session_id) {
@@ -123,6 +131,21 @@ impl FrontendDriver {
                     && let Some(alert) = self.vm.cache_alert
                 {
                     self.toast(cache_alert_text(&alert), ToastKind::Warning, out);
+                }
+                return;
+            }
+            BridgeEvent::ContextCompacting { session_id, active } => {
+                let interrupt =
+                    !active && self.interrupt_after_compaction.as_ref() == Some(&session_id);
+                if interrupt {
+                    self.interrupt_after_compaction = None;
+                }
+                if !matches_active(&session_id) {
+                    return;
+                }
+                self.act(FrontendAction::ContextCompacting(active), out);
+                if interrupt {
+                    self.cancel_turn(out);
                 }
                 return;
             }

@@ -87,6 +87,7 @@ async fn the_users_words_outlive_the_summary_that_replaces_them() {
         context_window: 60_000,
         overhead_tokens: 0,
         measure: super::super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
@@ -164,6 +165,7 @@ async fn an_overlong_summary_keeps_its_next_steps() {
         context_window: 200_000,
         overhead_tokens: 0,
         measure: super::super::Measure::default(),
+        on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =

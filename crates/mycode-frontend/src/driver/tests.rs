@@ -301,6 +301,41 @@ fn a_failed_send_puts_its_text_back_in_the_composer() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// An interrupt while the turn summarizes for an automatic compaction stops
+/// the turn once the summary ends, not before: stopping it threw the
+/// summary away, and the send after it summarized the same history again.
+#[test]
+fn an_interrupt_during_auto_compaction_waits_for_the_summary() {
+    use mycode_app::{BranchId, BridgeEvent, SessionId};
+
+    let (mut driver, root) = scratch_driver("compact-interrupt");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    let mut out = Vec::new();
+    driver.act(FrontendAction::TurnArmed, &mut out);
+    let compacting = |active| BridgeEvent::ContextCompacting {
+        session_id: session.clone(),
+        active,
+    };
+    driver.on_event(compacting(true), &mut out);
+    driver.interrupt_send("change of plan", &mut out);
+    assert_eq!(driver.vm.queued, ["change of plan"]);
+    assert_eq!(
+        driver.interrupt_after_compaction.as_deref(),
+        Some(session.as_str()),
+        "the stop waits for the summary"
+    );
+    driver.on_event(compacting(false), &mut out);
+    assert!(
+        driver.interrupt_after_compaction.is_none(),
+        "the stop went out"
+    );
+    assert!(!driver.vm.auto_compacting);
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_repair_after_the_startup_toast_still_toasts_once() {
     let root = std::env::temp_dir().join(format!(

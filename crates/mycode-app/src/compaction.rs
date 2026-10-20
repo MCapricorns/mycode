@@ -111,6 +111,9 @@ pub(crate) struct CompactScope<'a> {
     /// The provider's count of this history, when the turn has one, and the
     /// scale for estimates.
     pub measure: Measure,
+    /// Told `true` just before a summary request goes out and `false` once
+    /// it ends, so a view can say what the turn waits on.
+    pub on_summarize: Option<&'a (dyn Fn(bool) + Send + Sync)>,
     /// Stops an in-flight summary request. A cancelled attempt fails and
     /// leaves the history unchanged.
     pub cancel: &'a CancellationToken,
@@ -156,6 +159,8 @@ pub(crate) struct RequestCompactor {
     pub checkpoint: Option<CheckpointKey>,
     pub context_window: u64,
     pub calibration: Calibration,
+    /// See [`CompactScope::on_summarize`].
+    pub on_summarize: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     /// The turn's token: it stops a summary the user no longer waits for,
     /// and the agent sees the cancel right after the hook.
     pub cancel: CancellationToken,
@@ -176,6 +181,7 @@ impl RequestCompactor {
             context_window: self.context_window,
             overhead_tokens: overhead,
             measure: self.calibration.measure(&request.messages),
+            on_summarize: self.on_summarize.as_deref(),
             cancel: &self.cancel,
         };
         let history = std::mem::take(&mut request.messages);
@@ -382,6 +388,9 @@ pub(crate) async fn compact_history(
     };
     // The summary can run for minutes. A cancel drops the attempt (and its
     // stream, which cancels the request) instead of holding the turn hostage.
+    if let Some(notify) = scope.on_summarize {
+        notify(true);
+    }
     let summarized = tokio::select! {
         biased;
         () = scope.cancel.cancelled() => Ok(Err("compaction cancelled".to_owned())),
@@ -390,6 +399,9 @@ pub(crate) async fn compact_history(
             summarize_transcript(scope.wire, &transcript, &spec, scope.cancel),
         ) => summarized,
     };
+    if let Some(notify) = scope.on_summarize {
+        notify(false);
+    }
     let summary = match summarized {
         Ok(Ok(summary)) => summary,
         Ok(Err(message)) => return failed(history, message),

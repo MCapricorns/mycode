@@ -49,6 +49,12 @@ pub enum AgentEvent {
     /// about it on a side channel: a slow consumer would otherwise pair the
     /// warning with the previous prompt.
     CacheDisrupted,
+    /// A compaction summary request started (`true`) or ended (`false`).
+    ///
+    /// Sent from the request hook on this bus, like
+    /// [`AgentEvent::CacheDisrupted`], so it lands after the previous
+    /// response and before the next request's deltas.
+    Compacting(bool),
     /// The current turn ended.
     TurnEnded(TurnOutcome),
     /// An error occurred within the Agent loop.

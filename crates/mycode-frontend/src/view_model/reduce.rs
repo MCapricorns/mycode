@@ -117,6 +117,7 @@ fn reset_turn_view(state: &mut WorkspaceState) {
     state.sending = false;
     state.turn_started_ms = 0;
     state.compacting = false;
+    state.auto_compacting = false;
     state.pending_summary = None;
     state.queued.clear();
     state.queue_paused = false;
@@ -142,6 +143,7 @@ fn end_turn(state: &mut WorkspaceState) {
     state.pending_ask = None;
     state.ask_answers.clear();
     state.sending = false;
+    state.auto_compacting = false;
     state.turn_started_ms = 0;
 }
 
@@ -452,6 +454,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::TurnArmed => {
             state.sending = true;
+            state.auto_compacting = false;
             state.turn_started_ms = crate::unix_now().as_millis() as u64;
             state.error = None;
             state.turn_alert = None;
@@ -683,6 +686,18 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.live_turn = None;
         }
         FrontendAction::CacheBreakArmed(cause) => arm_cache_watch(state, cause),
+        FrontendAction::ContextCompacting(active) => {
+            if !state.sending {
+                return;
+            }
+            state.auto_compacting = active;
+            let status = if active {
+                crate::i18n::t("Compacting context", "正在压缩上下文")
+            } else {
+                crate::i18n::t("Waiting for the model", "等待模型响应")
+            };
+            set_streaming_status(state, status);
+        }
         FrontendAction::SteerCommitted {
             session_id,
             head,
