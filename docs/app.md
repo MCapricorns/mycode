@@ -11,7 +11,7 @@
 - `ChatTurn`、`CompactSession`、标题、OAuth、目录刷新、更新、探测各自 spawn。`CancelChat`、`Steer`、`CancelSubagent`、`UiReady` 在命令循环上同步处理。其余存储/配置命令进 `JoinSet`，关闭时先排空，再关 `SessionService`。
 - 文件锁、原子写、目录遍历都在 `spawn_blocking` 里，阻塞池上限 32。
 
-启动顺序：回收上次崩溃留下的子代理 worktree（`agent-worktrees/`，以及旧版 `task-worktrees/`）；在阻塞池读取并校验目录缓存信封；建 `CoreState`（同时从 `ui.json` 恢复会话到文件夹的绑定）。目录刷新和更新检查等首帧 `UiReady` 后才开始；`ui.json` 的 `auto_update` 关闭时不做更新检查。
+启动顺序：回收上次崩溃留下的子代理 worktree（`agent-worktrees/`，以及旧版 `task-worktrees/`；租约按进程号命名，仍在运行的其他进程的租约保留）；在阻塞池读取并校验目录缓存信封；建 `CoreState`（同时从 `ui.json` 恢复会话到文件夹的绑定）。目录刷新和更新检查等首帧 `UiReady` 后才开始；`ui.json` 的 `auto_update` 关闭时不做更新检查。
 
 ## 模块
 

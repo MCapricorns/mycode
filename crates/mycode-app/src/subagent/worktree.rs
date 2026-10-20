@@ -231,6 +231,10 @@ const LEGACY_WORKTREE_LEASE_DIR: &str = "task-worktrees";
 /// Removes leases left behind by a crashed process. Best-effort: a lease
 /// whose repo is gone is simply deleted from disk.
 ///
+/// A lease is named after the process that took it. The terminal and the
+/// desktop share the home, so a lease whose process still runs is that
+/// instance's subagent at work and is kept.
+///
 /// Older builds stored leases under [`LEGACY_WORKTREE_LEASE_DIR`]. Both
 /// directories are reclaimed so a rename does not orphan a checkout.
 pub(crate) fn recover_agent_worktrees(home: &HomeLayout) {
@@ -244,6 +248,12 @@ fn recover_worktree_lease_dir(home: &HomeLayout, directory: &str) {
         return;
     };
     for entry in entries.flatten() {
+        if lease_in_use(
+            &entry.file_name(),
+            crate::updates::apply::process_is_running,
+        ) {
+            continue;
+        }
         let path = entry.path();
         if path
             .extension()
@@ -265,4 +275,13 @@ fn recover_worktree_lease_dir(home: &HomeLayout, directory: &str) {
             let _ = std::fs::remove_dir_all(&path);
         }
     }
+}
+
+/// Whether lease entry `name` (`agent-{pid}-{stamp}` or its `.json`
+/// manifest) belongs to a running process other than this one.
+fn lease_in_use(name: &std::ffi::OsStr, running: impl Fn(u32) -> bool) -> bool {
+    name.to_str()
+        .and_then(|name| name.split('-').nth(1))
+        .and_then(|pid| pid.parse::<u32>().ok())
+        .is_some_and(|pid| pid != std::process::id() && running(pid))
 }
