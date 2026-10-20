@@ -12,9 +12,15 @@
 
 ### Fixed
 
-- 桌面版的供应商中断行（`[error] the response was interrupted: …`）改为红色提示框，不再作为普通回答正文显示；回答里引用的构建日志（如 sbt 的 `[error] …` 行）仍按正文显示。展开 `read` 结果时按文件扩展名给代码着色，失败结果不再在正文重复 `failed:` 标记。
+- 桌面版的供应商中断行（`[error] the response was interrupted: …`）改为红色提示框，不再作为普通回答正文显示；回答里引用的构建日志（如 sbt 的 `[error] …` 行）仍按正文显示。
 - 终端版只把代理写入的中断行标成 `✖` 错误行；之前任何以 `[error]` 开头的行都会被标红，引用 sbt 构建日志时会把代码块拆开。
 - 输入框的上下文圆环改为按已用比例填充（`200k / 1.0M` 约 20% 的弧），与旁边的用量数字一致，并用主题强调色让弧清晰可见；之前按剩余比例反向绘制，看起来几乎是一整圈。
+
+## [0.12.13] - 2026-10-20
+
+### Fixed
+
+- 桌面版展开 `read` 结果时按文件扩展名给代码着色，扩展名未知时保持纯文本；失败结果不再在正文重复 `failed:` 标记。
 
 ## [0.12.12] - 2026-10-20
 
@@ -227,7 +233,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.12...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.13...HEAD
+[0.12.13]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.13
 [0.12.12]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.12
 [0.12.11]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.11
 [0.12.10]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.10
