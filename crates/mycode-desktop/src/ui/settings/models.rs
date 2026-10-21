@@ -13,7 +13,8 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, Window, div, px,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::widgets::settings_card;
@@ -62,11 +63,18 @@ pub(crate) fn render_models_section(
     };
     let status_color = if connected { desk.green } else { desk.amber };
 
-    let current = if magpie.model.is_empty() {
+    // The detail row and the dropdown both name the model the way the model
+    // list does, instead of showing the raw id here and a display name there.
+    let current_name = if magpie.model.is_empty() {
         t("No model picked in magpie", "magpie 里还没选模型").to_owned()
     } else {
-        magpie.model.clone()
+        crate::view_model::model_display_name(
+            workspace.vm(),
+            mycode_config::MAGPIE_PROVIDER_ID,
+            &magpie.model,
+        )
     };
+    let current = current_name.clone();
     let base_url = if magpie.base_url.is_empty() {
         t("No gateway address", "没有网关地址").to_owned()
     } else {
@@ -139,6 +147,54 @@ pub(crate) fn render_models_section(
             )
         });
 
+    // One collapsed dropdown row instead of an always-visible list of every
+    // gateway model: the row names the model magpie picked and expands to the
+    // full list, matching the default-model dropdown the Models page used
+    // before the gateway.
+    let models_open = workspace.magpie_models_open;
+    let toggle = div()
+        .id("magpie-model-toggle")
+        .w_full()
+        .min_w_0()
+        .h(px(36.))
+        .px_2()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .rounded(crate::ui::skin::radius_control())
+        .border_1()
+        .border_color(crate::ui::skin::glass_border(&theme))
+        .bg(crate::ui::skin::frost(&theme))
+        .cursor_pointer()
+        .hover(|this| this.bg(crate::ui::skin::frost_hover(&theme)))
+        .on_click(cx.listener(|workspace, _, _, cx| {
+            workspace.magpie_models_open = !workspace.magpie_models_open;
+            cx.notify();
+        }))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_sm()
+                .child(current_name),
+        )
+        .child(
+            Icon::new(if models_open {
+                IconName::ChevronUp
+            } else {
+                IconName::ChevronDown
+            })
+            .xsmall()
+            .text_color(theme.muted_foreground),
+        )
+        .into_any_element();
+
+    let has_rows = !rows.is_empty();
+    let list = models_open.then(|| div().flex().flex_col().children(rows).into_any_element());
+
     div()
         .id("magpie-section")
         .flex()
@@ -204,18 +260,21 @@ pub(crate) fn render_models_section(
                             })),
                     )
                     .into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                            .child(t("Models", "模型")),
+                    )
+                    .child(toggle)
+                    .when_some(list, |this, list| this.child(list))
+                    .when(!has_rows, |this| this.child(empty.into_any_element()))
+                    .into_any_element(),
             ],
-        ))
-        .child(settings_card(
-            "magpie-models",
-            t("Models", "模型"),
-            None,
-            &theme,
-            vec![if rows.is_empty() {
-                empty.into_any_element()
-            } else {
-                div().flex().flex_col().children(rows).into_any_element()
-            }],
         ))
         .into_any_element()
 }
