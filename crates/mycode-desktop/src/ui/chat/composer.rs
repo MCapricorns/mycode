@@ -70,13 +70,10 @@ pub(super) fn render_composer(
     }
     let model_label: SharedString = model_button_label(workspace.vm()).into();
     let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();
-    // The chip truncates a long label; the tooltip keeps the whole
-    // `Provider · Model` string visible once a model is picked.
-    let model_tooltip: Option<SharedString> = workspace
-        .vm()
-        .selected_provider
-        .as_deref()
-        .map(|_| model_label.clone());
+    // A long `Provider · Model` keeps its model end: the chip clips from the
+    // left, so "…DeepSeek V4.1 Flash" stays readable, and the picker lists
+    // the full name. No hover tooltip here: it covered the thinking chip
+    // beside it without saying more than the picker already does.
     let show_thinking = selected_model_supports_reasoning(workspace.vm());
     let has_session = workspace.vm().active.is_some();
     // A manual compact is not a turn, but it locks the composer the same
@@ -125,6 +122,7 @@ pub(super) fn render_composer(
                     icon: None,
                     label: thinking_label.clone(),
                     tooltip: None,
+                    clip_start: false,
                     open: workspace.vm().reasoning_menu_open,
                     max_w: px(116.),
                 },
@@ -149,9 +147,10 @@ pub(super) fn render_composer(
                     id: "model",
                     icon: None,
                     label: model_label,
-                    tooltip: model_tooltip,
+                    tooltip: None,
+                    clip_start: true,
                     open: workspace.vm().model_menu_open,
-                    max_w: px(176.),
+                    max_w: px(240.),
                 },
                 |workspace, window, cx| {
                     let open = !workspace.vm().model_menu_open;
@@ -302,6 +301,7 @@ pub(super) fn render_composer(
                                         icon: Some(IconName::Folder),
                                         label: project_chip_label,
                                         tooltip: project_tooltip,
+                                        clip_start: false,
                                         open: false,
                                         max_w: px(148.),
                                     },
@@ -422,12 +422,14 @@ fn composer_send_button(cx: &Context<Workspace>) -> impl IntoElement {
 
 /// One pill chip in the composer row (folder, model, thinking). The label
 /// truncates at `max_w`; when `tooltip` is set, hovering shows the
-/// untruncated text.
+/// untruncated text. `clip_start` drops the label's head instead of its
+/// tail, so a `Provider · Model` keeps the model visible.
 struct ComposerChip {
     id: &'static str,
     icon: Option<IconName>,
     label: SharedString,
     tooltip: Option<SharedString>,
+    clip_start: bool,
     open: bool,
     max_w: gpui_kit::Pixels,
 }
@@ -442,6 +444,16 @@ fn composer_pill_chip(
         theme.foreground
     } else {
         theme.muted_foreground
+    };
+    let label = if chip.clip_start {
+        div()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis_start()
+            .child(chip.label)
+    } else {
+        div().min_w_0().truncate().child(chip.label)
     };
     div()
         .id(format!("composer-{}-chip", chip.id))
@@ -469,7 +481,7 @@ fn composer_pill_chip(
         .when_some(chip.icon, |this, icon| {
             this.child(Icon::new(icon).xsmall().flex_shrink_0())
         })
-        .child(div().min_w_0().truncate().child(chip.label))
+        .child(label)
         .child(Icon::new(IconName::ChevronDown).xsmall().flex_shrink_0())
 }
 

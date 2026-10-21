@@ -12,7 +12,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::{element_id, project_label, skin};
@@ -37,8 +37,19 @@ const ACTION_GAP: f32 = 6.;
 /// Label row of the Folders and Sessions sections. Add folder lives in the
 /// Folders one, not in the session list.
 const SECTION_HEAD_H: f32 = 28.;
-/// Cap the folder block so a long list cannot push sessions off screen.
-const FOLDERS_BODY_MAX_H: f32 = 148.;
+/// Share of the space left between the fixed rows that the folder block may
+/// take. The list only uses what its rows need, so a short list leaves the
+/// space to sessions; a long one scrolls inside this share instead of pushing
+/// sessions off screen.
+const FOLDERS_BODY_SHARE: f32 = 0.5;
+/// Never shrink the folder block below the old fixed cap, for a window too
+/// short to divide.
+const FOLDERS_BODY_MIN_H: f32 = 148.;
+/// Settings and version row at the bottom of the sidebar, its top border
+/// included.
+const SIDEBAR_FOOTER_H: f32 = 47.;
+/// Borders under the action strip and above the sessions block.
+const SIDEBAR_ROW_BORDERS: f32 = 2.;
 
 fn action_strip_h(has_folder: bool, has_search: bool) -> f32 {
     let mut fields = 0.;
@@ -64,8 +75,23 @@ fn project_menu_top(has_folder: bool, has_search: bool) -> gpui_kit::Pixels {
     px(super::title_bar::BAR_HEIGHT + action_strip_h(has_folder, has_search) + SECTION_HEAD_H + 4.)
 }
 
+/// Height the folder list may use in a window of `window_h` logical pixels.
+///
+/// The cap follows the space left between the fixed rows (action strip, two
+/// section headings, footer), so the folder block shows more rows in a taller
+/// window while the session list keeps the other half below it.
+fn folders_body_max_h(window_h: f32, has_folder: bool, has_search: bool) -> f32 {
+    let sidebar = (window_h - super::title_bar::BAR_HEIGHT).max(0.);
+    let fixed = action_strip_h(has_folder, has_search)
+        + SECTION_HEAD_H * 2.
+        + SIDEBAR_FOOTER_H
+        + SIDEBAR_ROW_BORDERS;
+    ((sidebar - fixed).max(0.) * FOLDERS_BODY_SHARE).max(FOLDERS_BODY_MIN_H)
+}
+
 pub(super) fn render_sidebar(
     workspace: &mut Workspace,
+    window: &Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let roots = workspace.vm().workspace_roots.clone();
@@ -90,11 +116,17 @@ pub(super) fn render_sidebar(
         .collect();
     let filter_miss = !filter.trim().is_empty() && visible_sessions.is_empty() && session_count > 0;
     let filter_input = workspace.session_filter_input();
+    let has_search = filter_input.is_some();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let has_folder = crate::view_model::has_open_folder(workspace.vm());
     let armed_delete = workspace.armed_session_delete().map(str::to_owned);
     let armed_root = workspace.armed_root_delete().map(str::to_owned);
+    let folders_max_h = folders_body_max_h(
+        f32::from(window.viewport_size().height),
+        has_folder,
+        has_search,
+    );
 
     div()
         .id("sidebar")
@@ -110,6 +142,7 @@ pub(super) fn render_sidebar(
             &roots,
             cwd.as_deref(),
             armed_root.as_deref(),
+            folders_max_h,
         ))
         .child(sessions_section(
             cx,
@@ -179,6 +212,7 @@ fn folders_section(
     roots: &[String],
     cwd: Option<&str>,
     armed_root: Option<&str>,
+    max_h: f32,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let empty = roots.is_empty();
@@ -237,7 +271,7 @@ fn folders_section(
                 .px_2()
                 .pb_2()
                 .when(!empty, |list| {
-                    list.max_h(px(FOLDERS_BODY_MAX_H)).overflow_y_scroll()
+                    list.max_h(px(max_h)).overflow_y_scroll()
                 })
                 .when(empty, |list| {
                     list.child(
@@ -719,4 +753,55 @@ fn render_sidebar_footer(view: MainView, cx: &mut Context<Workspace>) -> impl In
                     .child(format!("v{}", mycode_app::current_version())),
             ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FOLDERS_BODY_MIN_H, FOLDERS_BODY_SHARE, SECTION_HEAD_H, SIDEBAR_FOOTER_H,
+        SIDEBAR_ROW_BORDERS, action_strip_h, folders_body_max_h,
+    };
+
+    /// The old fixed 148 px cap clipped the third folder row. The block now
+    /// follows the leftover space, half each with sessions.
+    #[test]
+    fn the_folder_block_follows_the_window_and_shares_with_sessions() {
+        let available = |window: f32| {
+            window
+                - crate::ui::title_bar::BAR_HEIGHT
+                - action_strip_h(true, true)
+                - SECTION_HEAD_H * 2.
+                - SIDEBAR_FOOTER_H
+                - SIDEBAR_ROW_BORDERS
+        };
+        let default_window = folders_body_max_h(900., true, true);
+        let small_window = folders_body_max_h(600., true, true);
+
+        assert!((default_window - available(900.) * FOLDERS_BODY_SHARE).abs() < 0.01);
+        assert!((small_window - available(600.) * FOLDERS_BODY_SHARE).abs() < 0.01);
+        assert!(default_window > small_window, "a taller window shows more");
+        // Default 14 px type: a folder row is 12 px padding, a 22.6 px title
+        // line, a 1 px gap and a 19.4 px path line (~55 px), plus the list's
+        // 2 px row gap and 8 px bottom padding.
+        const ROW: f32 = 55.;
+        const GAP: f32 = 2.;
+        const PAD: f32 = 8.;
+        assert!(
+            default_window >= 5. * ROW + 4. * GAP + PAD,
+            "a 900 px window shows five folder rows, got {default_window}"
+        );
+        assert!(
+            small_window >= 3. * ROW + 2. * GAP + PAD,
+            "the smallest window still shows three rows, got {small_window}"
+        );
+        assert!(
+            default_window < available(900.) * 0.6,
+            "sessions keep their half of the leftover space"
+        );
+        assert_eq!(
+            folders_body_max_h(0., true, true),
+            FOLDERS_BODY_MIN_H,
+            "a window too short to divide keeps the old block height"
+        );
+    }
 }
