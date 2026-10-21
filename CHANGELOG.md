@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.19] - 2026-10-21
+
 ### Added
 
 - 输入框支持拖放附件：图片按多模态内容直接发给模型，代码/文本文件以 `File: <名称>` 围栏块随消息发送，用户消息下方列出每个附件名称。上限为 4 张图片（每张 3.75 MB，base64 后 5 MiB，合计 base64 不超过 6 MiB）、8 个文件（每个 256 KiB、合计 512 KiB），二进制文件和非 UTF-8 文本会被拒绝并说明原因；图片只发给目录里声明了图像输入的模型，发送前再检查一次，其他模型会提示换模型或去掉图片。欢迎页只拖入附件也能直接发送，用户消息里的附件说明只出现一次。
@@ -328,7 +330,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.18...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.19...HEAD
+[0.12.19]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.19
 [0.12.18]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.18
 [0.12.17]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.17
 [0.12.16]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.16
